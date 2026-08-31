@@ -41,7 +41,7 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 18 is the only accepted schema; version 17 and every older
+schema version 19 is the only accepted schema; version 18 and every older
 development schema fail explicitly at open and are not migrated. Version 10
 froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation
@@ -53,9 +53,10 @@ results. Version 15 adds the one-shot unresolved-output carryover pointer and
 the frozen request-only carryover/anchor fields in Request Snapshots. Version
 16 freezes typed compaction-summary metadata, version 17 freezes named-
 subagent ownership identity, and version 18 freezes subagent workspace
-snapshots and preserved-worktree handoffs. Version 17 and every older
-development schema are rejected rather than decoded with missing workspace
-facts. The review-only
+snapshots and preserved-worktree handoffs. Version 19 freezes the native
+Workflow execution fact vocabulary. Version 18 and every older development
+schema are rejected rather than decoded with missing Workflow facts. The
+review-only
 intermediate schema history was never a supported format.
 
 The durable request-start invariant is strict: the provider adapter cannot be
@@ -1565,7 +1566,7 @@ before restart.
   service.
 - **Anchor acknowledgements route by exact typed identity.** Two units with
   outstanding offers cannot open each other's start gates.
-- **The subagent IPC version is 6 and there is no compatibility decoding.** A
+- **The subagent IPC version is 7 and there is no compatibility decoding.** A
   peer that does not speak exactly this version exits before composing
   anything. The typed `Cancel` payload carries the parent registry's semantic
   `CancellationReason`; only pre-ownership preparation cancellation uses an
@@ -1741,6 +1742,87 @@ the launch-boundary policy inheritance.
   cancellation and runtime drain have exactly one winning cause — the
   first committed intent owns the record's cancel reason and the loser
   cannot rewrite it.
+
+## Issue #83: native YAML WorkflowRuntime
+
+- **YAML is serialization only.** A configured
+  `.rustx/workflows/<id>.yaml` deserializes into `WorkflowDefinition`, is
+  compiled and validated once into an immutable `WorkflowProgram`, and is
+  never interpreted by the execution path. The configured id is the only
+  identity; unregistered files and a YAML `name` field cannot create
+  admission.
+- **Definitions and admissions are independent.** `subagents.definitions`
+  is the one named-profile source of truth. `subagents.main` and
+  `subagents.workflow` are independent subsets, and
+  `workflows.definitions` and `workflows.main` are independent registration
+  and model-exposure sets. Unknown ids fail the candidate; a defined but
+  unadmitted profile remains valid and cannot be reached through either
+  domain.
+- **One candidate publishes atomically.** Exact YAML loading, program
+  compilation, profile admission, capability validation, and concrete
+  Workflow Tool registration occur off-side. One publication boundary makes
+  the generation visible; an invalid reload preserves the previous valid
+  generation. A run retains the immutable program snapshot it admitted.
+- **The compiler establishes a finite DAG contract.** There is exactly one
+  explicit entry, no dangling references, duplicate ids, cycles, unreachable
+  nodes, unterminated paths, incomplete Branch ports, invalid schemas,
+  use-before-definition values, path-dependent unavailable values, or
+  incompatible Return bindings. Workflow v1 schemas are a closed recursive
+  vocabulary of `type`, `properties`, `required`, boolean
+  `additionalProperties`, one-schema `items`, `enum`, and `const`; unsupported
+  constraints and unprovable compatibility are rejected for every input,
+  output, Agent, and Parallel schema. The only v1 nodes are Agent, Branch,
+  Parallel, and Return.
+- **Workflow-local data is explicit and typed.** Only committed
+  JSON-compatible values and explicit artifact/reference identities cross
+  nodes. An Agent's transcript, reasoning, diagnostics, provider/model
+  identity, usage, timing, and parent canonical history never propagate
+  implicitly. Agent tasks are fixed strings and references do not contain an
+  interpolation or expression language.
+- **Agent reasoning and control flow are separate.** Agent invokes one
+  Workflow-admitted named Subagent profile with its frozen native resources;
+  Branch consumes only a committed boolean and chooses one deterministic
+  successor. Parallel is a keyed finite set of one-Agent children, uses
+  native Subagent capacity, settles all admitted children, and reports
+  failures in definition-key order. It never turns execution failure into a
+  value.
+- **`workflow_output` is the only successful Workflow Agent terminal.** The
+  canonical Tool registry rejects the model-facing name for every ordinary
+  Tool origin, so a Workflow child receives exactly one reserved protocol
+  definition. The Agent Loop consumes it before ordinary Tool Plane dispatch.
+  Schema validation and the value commit are one exactly-once transition;
+  invalid output commits nothing and receives bounded feedback.
+  Ordinary final Assistant text is not success. A mixed or duplicate
+  terminal turn executes no ordinary side effect and commits no output.
+- **Cancellation/output has one winner.** The output latch and native
+  cancellation authority share an explicit linearization point. A later
+  output is stale after cancellation; a later cancellation cannot rewrite a
+  committed output. Workflow terminal settlement waits for all owned child
+  work to reach native quiescence, and runtime drain proves zero owned active
+  work.
+- **Tool exposure is per Workflow.** Every `workflows.main` id is one
+  independent concrete Tool named by the configured id, with its description
+  and input schema. There is no generic dispatcher and no implicit exposure
+  of registered Workflows or Subagents. Parent canonical history receives one
+  bounded terminal Workflow ToolResult, not intermediate values or child
+  transcripts.
+- **Native authorities remain native.** WorkflowRuntime composes the named
+  SubagentRuntime, frozen model/capability/Skill resources, retry/timeout,
+  ApprovalMode, ToolApprovalPolicy, InteractionCoordinator,
+  process containment, workspace/worktree acquisition, handoff, and physical
+  settlement. It creates no child scheduler, permission system, TUI path,
+  Tool Plane dispatch path, or second Agent Loop.
+- **Events are facts, not state authority.** Ordinary Workflow lifecycle and
+  join events use the existing Event Journal as explicitly best-effort
+  observability with deterministic ids/order; an append failure cannot change
+  control flow or terminal state. `WorkflowRun` owns dynamic values,
+  progression, children, cancellation, and terminal settlement. A successful
+  child’s validated value and native `SubagentTerminalSettled` fact commit as
+  one durable compound transition; non-success uses the dedicated
+  terminal-settlement transition. Neither creates a parent inbound delivery
+  phase. A crash does not replay a nonterminal WorkflowRun; durable Workflow
+  resume is intentionally absent. A future Canvas can edit the same canonical
+  Definition without adding layout metadata.
 
 ## Issue #96: Session/configuration and capability activation
 

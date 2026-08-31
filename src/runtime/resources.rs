@@ -17,7 +17,8 @@ use crate::capabilities::{
 };
 use crate::context::ContextAssembly;
 use crate::runtime::identity::{CapabilityRevision, RuntimeResourceRevision};
-use crate::runtime::subagent::catalog::SubagentCatalog;
+use crate::runtime::subagent::catalog::{SubagentCatalog, SubagentName};
+use crate::runtime::workflow::WorkflowCatalog;
 use crate::skills::SkillCatalogEntry;
 
 const PROJECT_CONTEXT_FILENAMES: [&str; 5] = [
@@ -58,6 +59,12 @@ pub struct RuntimeResourceSnapshot {
     /// The exact immutable named-subagent catalog admitted into this
     /// generation (Issue #144).
     subagents: Arc<SubagentCatalog>,
+    /// The profiles explicitly admitted to the main Agent domain.
+    subagent_main: BTreeSet<SubagentName>,
+    /// The profiles explicitly admitted to Workflow Agent nodes.
+    subagent_workflow: BTreeSet<SubagentName>,
+    /// The immutable registered Workflow programs of this generation.
+    workflows: Arc<WorkflowCatalog>,
     /// The capability-source availability state belonging to the *same*
     /// generation (Issue #144).
     ///
@@ -116,6 +123,9 @@ impl RuntimeResourceSnapshot {
             context_assembly,
             capability,
             subagents: Arc::new(SubagentCatalog::empty()),
+            subagent_main: BTreeSet::new(),
+            subagent_workflow: BTreeSet::new(),
+            workflows: Arc::new(WorkflowCatalog::empty()),
             capability_availability: CapabilityAvailability::new(),
         }
     }
@@ -124,6 +134,25 @@ impl RuntimeResourceSnapshot {
     #[must_use]
     pub fn with_subagent_catalog(mut self, catalog: SubagentCatalog) -> Self {
         self.subagents = Arc::new(catalog);
+        self
+    }
+
+    /// Freezes the independent main and Workflow profile admissions.
+    #[must_use]
+    pub fn with_subagent_admissions(
+        mut self,
+        main: BTreeSet<SubagentName>,
+        workflow: BTreeSet<SubagentName>,
+    ) -> Self {
+        self.subagent_main = main;
+        self.subagent_workflow = workflow;
+        self
+    }
+
+    /// Freezes the registered Workflow catalog for this generation.
+    #[must_use]
+    pub fn with_workflow_catalog(mut self, catalog: WorkflowCatalog) -> Self {
+        self.workflows = Arc::new(catalog);
         self
     }
 
@@ -171,6 +200,8 @@ impl RuntimeResourceSnapshot {
             capability,
         )
         .with_subagent_catalog(prepared.subagents)
+        .with_subagent_admissions(prepared.subagent_main, prepared.subagent_workflow)
+        .with_workflow_catalog(prepared.workflows)
         .with_capability_availability(prepared.capability_availability)
     }
 
@@ -239,6 +270,24 @@ impl RuntimeResourceSnapshot {
         &self.subagents
     }
 
+    /// The explicitly main-admitted profile ids.
+    #[must_use]
+    pub fn subagent_main_admission(&self) -> &BTreeSet<SubagentName> {
+        &self.subagent_main
+    }
+
+    /// The explicitly Workflow-admitted profile ids.
+    #[must_use]
+    pub fn subagent_workflow_admission(&self) -> &BTreeSet<SubagentName> {
+        &self.subagent_workflow
+    }
+
+    /// The immutable registered Workflow catalog.
+    #[must_use]
+    pub fn workflows(&self) -> &WorkflowCatalog {
+        &self.workflows
+    }
+
     /// The capability-source availability state of this exact generation.
     #[must_use]
     pub const fn capability_availability(&self) -> &CapabilityAvailability {
@@ -253,6 +302,9 @@ pub struct PreparedRuntimeResources {
     agent_profile: Option<String>,
     context_assembly: ContextAssembly,
     subagents: SubagentCatalog,
+    subagent_main: BTreeSet<SubagentName>,
+    subagent_workflow: BTreeSet<SubagentName>,
+    workflows: WorkflowCatalog,
     capability: PreparedCapabilityCandidate,
 }
 
@@ -263,6 +315,9 @@ pub(crate) struct PreparedRuntimeResourceData {
     agent_profile: Option<String>,
     context_assembly: ContextAssembly,
     subagents: SubagentCatalog,
+    subagent_main: BTreeSet<SubagentName>,
+    subagent_workflow: BTreeSet<SubagentName>,
+    workflows: WorkflowCatalog,
     capability_availability: CapabilityAvailability,
 }
 
@@ -280,6 +335,9 @@ impl PreparedRuntimeResources {
             agent_profile,
             context_assembly,
             subagents: SubagentCatalog::empty(),
+            subagent_main: BTreeSet::new(),
+            subagent_workflow: BTreeSet::new(),
+            workflows: WorkflowCatalog::empty(),
             capability,
         }
     }
@@ -293,6 +351,25 @@ impl PreparedRuntimeResources {
     #[must_use]
     pub fn with_subagent_catalog(mut self, catalog: SubagentCatalog) -> Self {
         self.subagents = catalog;
+        self
+    }
+
+    /// Adds the independent profile admissions to the candidate generation.
+    #[must_use]
+    pub fn with_subagent_admissions(
+        mut self,
+        main: BTreeSet<SubagentName>,
+        workflow: BTreeSet<SubagentName>,
+    ) -> Self {
+        self.subagent_main = main;
+        self.subagent_workflow = workflow;
+        self
+    }
+
+    /// Adds the compiled Workflow catalog to the candidate generation.
+    #[must_use]
+    pub fn with_workflow_catalog(mut self, catalog: WorkflowCatalog) -> Self {
+        self.workflows = catalog;
         self
     }
 
@@ -315,6 +392,9 @@ impl PreparedRuntimeResources {
             agent_profile,
             context_assembly,
             subagents,
+            subagent_main,
+            subagent_workflow,
+            workflows,
             capability,
         } = self;
         let capability_availability = capability.availability().clone();
@@ -325,6 +405,9 @@ impl PreparedRuntimeResources {
                 agent_profile,
                 context_assembly,
                 subagents,
+                subagent_main,
+                subagent_workflow,
+                workflows,
                 capability_availability,
             },
         )

@@ -561,6 +561,9 @@ pub struct RuntimeConversationConfig {
     /// composed without one, so recursive delegation is absent by
     /// construction.
     pub subagents: Option<crate::runtime::subagent::SubagentRegistry>,
+    /// The reserved Workflow Agent terminal protocol for a headless child,
+    /// when this runtime executes one Workflow-owned `AgentRun`.
+    pub workflow_output: Option<Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal>>,
 }
 
 /// The runtime-owned current attempt handle.
@@ -1119,6 +1122,9 @@ pub(crate) struct RuntimeInner {
     /// The conversation-owned subagent registry (Issue #60), when this
     /// runtime may delegate to child runtimes.
     subagents: Option<crate::runtime::subagent::SubagentRegistry>,
+    /// The frozen Workflow Agent output authority, if this is a Workflow
+    /// child runtime.
+    workflow_output: Option<Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal>>,
     /// It owns pending identity/state and terminal response coordination, but
     /// never owns Agent Loop execution or canonical history.
     interaction: Arc<InteractionCoordinator>,
@@ -2009,8 +2015,10 @@ impl RuntimeInner {
                         Arc::clone(&resources),
                         model_config,
                         models,
+                        approval_mode,
                     )
                 }),
+            workflow_output: self.workflow_output.clone(),
         };
         let request = AgentExecutionRequest {
             agent_id: self.agent_id.clone(),
@@ -3072,6 +3080,7 @@ impl ConversationRuntime {
             capability_publication,
             resource_loader: config.resource_loader,
             subagents: config.subagents,
+            workflow_output: config.workflow_output,
             interaction,
             lifecycle,
             clock,
@@ -5226,6 +5235,8 @@ mod tests {
     };
     use crate::model::adapter::ModelAdapter;
     use crate::runtime::ApprovalMode;
+    #[cfg(unix)]
+    use crate::runtime::cancellation::CancellationSignal;
     use crate::runtime::identity::{
         AgentId, AttemptId, ConversationId, SubagentId, ToolCallId, ToolId, TurnId,
     };
@@ -5328,6 +5339,7 @@ mod tests {
         >,
         capability_inputs: std::sync::Mutex<Option<crate::capabilities::CapabilityResourceInputs>>,
         context_assembly: std::sync::Mutex<crate::context::ContextAssembly>,
+        workflow_catalog: std::sync::Mutex<crate::runtime::WorkflowCatalog>,
         candidate_close_probe:
             std::sync::Mutex<Option<Arc<crate::tools::mcp::test_sync::CloseProbe>>>,
         prepare_count: std::sync::atomic::AtomicU64,
@@ -5339,6 +5351,7 @@ mod tests {
                 project_files: std::sync::Mutex::new(Ok(project_files)),
                 capability_inputs: std::sync::Mutex::new(None),
                 context_assembly: std::sync::Mutex::new(crate::context::ContextAssembly::new()),
+                workflow_catalog: std::sync::Mutex::new(crate::runtime::WorkflowCatalog::empty()),
                 candidate_close_probe: std::sync::Mutex::new(None),
                 prepare_count: std::sync::atomic::AtomicU64::new(0),
             }
@@ -5355,6 +5368,10 @@ mod tests {
 
         fn set_context_assembly(&self, assembly: crate::context::ContextAssembly) {
             *self.context_assembly.lock().expect("context assembly") = assembly;
+        }
+
+        fn set_workflow_catalog(&self, catalog: crate::runtime::WorkflowCatalog) {
+            *self.workflow_catalog.lock().expect("workflow catalog") = catalog;
         }
 
         fn set_candidate_close_probe(&self, probe: Arc<crate::tools::mcp::test_sync::CloseProbe>) {
@@ -5413,12 +5430,18 @@ mod tests {
                 // loading so a later project-file failure exercises the same
                 // candidate-retirement path as the production loader.
                 let project_files = self.project_files.lock().expect("project files").clone()?;
+                let workflow_catalog = self
+                    .workflow_catalog
+                    .lock()
+                    .expect("workflow catalog")
+                    .clone();
                 Ok(crate::runtime::PreparedRuntimeResources::new(
                     project_files,
                     None,
                     context_assembly,
                     candidate,
-                ))
+                )
+                .with_workflow_catalog(workflow_catalog))
             })
         }
     }
@@ -5556,6 +5579,7 @@ mod tests {
         project_context_files: Vec<crate::runtime::ProjectContextFile>,
         agent_profile: Option<String>,
         resource_loader: Option<Arc<dyn crate::runtime::RuntimeResourceLoader>>,
+        workflow_catalog: crate::runtime::WorkflowCatalog,
         mcp_servers: std::collections::BTreeMap<
             crate::runtime::identity::McpServerId,
             crate::tools::mcp::McpServerBinding,
@@ -5578,6 +5602,7 @@ mod tests {
                 project_context_files: Vec::new(),
                 agent_profile: None,
                 resource_loader: None,
+                workflow_catalog: crate::runtime::WorkflowCatalog::empty(),
                 mcp_servers: std::collections::BTreeMap::new(),
                 pre_activation_mcp_close_probe: None,
             }
@@ -5632,13 +5657,16 @@ mod tests {
         }
         let model = Arc::new(FakeModel::new(scripts));
         let adapter: Arc<dyn ModelAdapter> = model.clone();
-        let resources = Arc::new(crate::runtime::RuntimeResourceSnapshot::new(
-            crate::runtime::RuntimeResourceRevision::new(1),
-            options.project_context_files,
-            options.agent_profile,
-            crate::context::ContextAssembly::new(),
-            coordinator.current_snapshot(),
-        ));
+        let resources = Arc::new(
+            crate::runtime::RuntimeResourceSnapshot::new(
+                crate::runtime::RuntimeResourceRevision::new(1),
+                options.project_context_files,
+                options.agent_profile,
+                crate::context::ContextAssembly::new(),
+                coordinator.current_snapshot(),
+            )
+            .with_workflow_catalog(options.workflow_catalog),
+        );
         let resource_loader = options
             .resource_loader
             .unwrap_or_else(|| test_resource_loader(&coordinator));
@@ -5659,6 +5687,7 @@ mod tests {
             clock: None,
             initial_messages: options.initial_messages,
             subagents: None,
+            workflow_output: None,
         };
         let runtime = match probe {
             Some(probe) => ConversationRuntime::with_probe(config, probe).expect("runtime"),
@@ -5687,6 +5716,28 @@ mod tests {
         store: Arc<dyn ConversationStore>,
         scripts: Vec<Vec<FakeStep>>,
         probe: Option<CoordinatorProbe>,
+    ) -> (ConversationRuntime, Arc<FakeModel>) {
+        headless_runtime_over_store_with_policy(
+            dir,
+            conversation_id,
+            store,
+            scripts,
+            probe,
+            crate::model::ModelTimeoutPolicy::default(),
+        )
+        .await
+    }
+
+    /// The same durable-authority fixture with an explicit model deadline.
+    /// Long-lived parked-provider tests use this to keep their deterministic
+    /// channel/barrier ordering independent of full-suite wall-clock load.
+    async fn headless_runtime_over_store_with_policy(
+        dir: &tempfile::TempDir,
+        conversation_id: &str,
+        store: Arc<dyn ConversationStore>,
+        scripts: Vec<Vec<FakeStep>>,
+        probe: Option<CoordinatorProbe>,
+        model_timeout_policy: crate::model::ModelTimeoutPolicy,
     ) -> (ConversationRuntime, Arc<FakeModel>) {
         let conversation_id = ConversationId::new(conversation_id);
         let workspace = dir.path().join("workspace");
@@ -5725,7 +5776,7 @@ mod tests {
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter),
             approval_mode: ApprovalMode::Policy,
-            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+            model_timeout_policy,
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -5742,6 +5793,7 @@ mod tests {
             clock: None,
             initial_messages: Vec::new(),
             subagents: None,
+            workflow_output: None,
         };
         let runtime = match probe {
             Some(probe) => ConversationRuntime::with_probe(config, probe).expect("runtime"),
@@ -5840,6 +5892,7 @@ mod tests {
             clock: None,
             initial_messages: Vec::new(),
             subagents: Some(subagents.clone()),
+            workflow_output: None,
         };
         let runtime = match admission_gate {
             Some(admission_gate) => ConversationRuntime::with_probe(
@@ -5949,6 +6002,7 @@ mod tests {
             clock: None,
             initial_messages: Vec::new(),
             subagents: Some(subagents.clone()),
+            workflow_output: None,
         };
         (subagents, config)
     }
@@ -6048,9 +6102,11 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             resolved: test_resolved_subagent("explore"),
+                            approval_mode: crate::runtime::ApprovalMode::Policy,
                             task: "pre-constructed".to_owned(),
                             context: None,
                             tool_call_id: ToolCallId::new("call-pre-constructed"),
+                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
                         },
                         &crate::runtime::cancellation::CancellationSignal::new(),
                     )
@@ -6172,9 +6228,11 @@ mod tests {
                 .prepare(
                     &crate::runtime::subagent::SubagentStartSpec {
                         resolved: test_resolved_subagent("explore"),
+                        approval_mode: crate::runtime::ApprovalMode::Policy,
                         task: "transfer race".to_owned(),
                         context: None,
                         tool_call_id: ToolCallId::new("call-transfer-race"),
+                        terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
                     },
                     &crate::runtime::cancellation::CancellationSignal::new(),
                 )
@@ -6308,9 +6366,11 @@ mod tests {
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
                     resolved: test_resolved_subagent("explore"),
+                    approval_mode: crate::runtime::ApprovalMode::Policy,
                     task: "refused after claim".to_owned(),
                     context: None,
                     tool_call_id: ToolCallId::new("call-refused"),
+                    terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
                 },
                 &crate::runtime::cancellation::CancellationSignal::new(),
             )
@@ -7615,6 +7675,106 @@ mod tests {
         );
         assert_eq!(snapshots[0].runtime_resource_revision.get(), 1);
         assert_eq!(snapshots[1].runtime_resource_revision.get(), 2);
+    }
+
+    /// The Workflow catalog participates in the same complete resource
+    /// generation as project and capability resources. A successful reload
+    /// replaces it atomically, while a failed candidate leaves the previous
+    /// valid Workflow generation visible.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn reload_publishes_workflow_catalog_and_retains_it_on_candidate_failure() {
+        let empty_object = || {
+            serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+            })
+        };
+        let make_program = |description: &str| {
+            crate::runtime::WorkflowProgram::compile(
+                crate::runtime::WorkflowId::parse("reload_workflow").expect("workflow id"),
+                crate::runtime::WorkflowDefinition {
+                    description: description.to_owned(),
+                    input: empty_object(),
+                    output: empty_object(),
+                    entry: "done".to_owned(),
+                    nodes: std::collections::BTreeMap::from([(
+                        "done".to_owned(),
+                        crate::runtime::WorkflowNodeDefinition::Return {
+                            output: std::collections::BTreeMap::new(),
+                        },
+                    )]),
+                    edges: Vec::new(),
+                },
+                &std::collections::BTreeSet::new(),
+            )
+            .expect("workflow program")
+        };
+        let old_program = make_program("old generation");
+        let old_id = old_program.id().clone();
+        let old_catalog = crate::runtime::WorkflowCatalog::new([old_program], [old_id.clone()])
+            .expect("old workflow catalog");
+        let new_program = make_program("new generation");
+        let new_catalog = crate::runtime::WorkflowCatalog::new([new_program], [old_id.clone()])
+            .expect("new workflow catalog");
+        let loader = Arc::new(MutableResourceLoader::new(Vec::new()));
+        loader.set_workflow_catalog(old_catalog.clone());
+        let loader_trait: Arc<dyn crate::runtime::RuntimeResourceLoader> = loader.clone();
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (runtime, _model) = headless_runtime_with_options(
+            &dir,
+            Vec::new(),
+            None,
+            None,
+            HeadlessRuntimeOptions {
+                workflow_catalog: old_catalog,
+                resource_loader: Some(loader_trait),
+                ..HeadlessRuntimeOptions::default()
+            },
+        )
+        .await;
+        runtime.activate();
+        assert_eq!(runtime.runtime_resources().revision().get(), 1);
+        assert_eq!(
+            runtime
+                .runtime_resources()
+                .workflows()
+                .get(&old_id)
+                .expect("initial Workflow generation")
+                .description(),
+            "old generation"
+        );
+
+        loader.set_workflow_catalog(new_catalog);
+        let reloaded = runtime.reload_resources().await.expect("Workflow reload");
+        assert_eq!(reloaded.resource_revision.get(), 2);
+        assert_eq!(
+            runtime
+                .runtime_resources()
+                .workflows()
+                .get(&old_id)
+                .expect("reloaded Workflow generation")
+                .description(),
+            "new generation"
+        );
+
+        loader.fail("candidate Workflow generation is invalid");
+        assert!(matches!(
+            runtime.reload_resources().await,
+            Err(super::RuntimeResourceReloadError::Failed { .. })
+        ));
+        assert_eq!(runtime.runtime_resources().revision().get(), 2);
+        assert_eq!(
+            runtime
+                .runtime_resources()
+                .workflows()
+                .get(&old_id)
+                .expect("previous valid Workflow generation")
+                .description(),
+            "new generation"
+        );
+        runtime.shutdown().await.expect("runtime shutdown");
     }
 
     /// A cold reopen publishes current resource authority for a new attempt,
@@ -9520,6 +9680,7 @@ mod tests {
             clock: None,
             initial_messages: Vec::new(),
             subagents: None,
+            workflow_output: None,
         })
         .expect_err("mismatched ownership is rejected");
         assert!(matches!(
@@ -9582,6 +9743,7 @@ mod tests {
             clock: None,
             initial_messages: Vec::new(),
             subagents: None,
+            workflow_output: None,
         })
         .expect_err("construction outside Tokio is rejected");
         assert!(matches!(
@@ -11507,9 +11669,11 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             resolved: test_resolved_subagent("explore"),
+                            approval_mode: crate::runtime::ApprovalMode::Policy,
                             task: "first terminal".to_owned(),
                             context: None,
                             tool_call_id: ToolCallId::new("call-subagent-one"),
+                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
                         },
                         &crate::runtime::cancellation::CancellationSignal::new(),
                     )
@@ -11568,9 +11732,11 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             resolved: test_resolved_subagent("explore"),
+                            approval_mode: crate::runtime::ApprovalMode::Policy,
                             task: "second terminal".to_owned(),
                             context: None,
                             tool_call_id: ToolCallId::new("call-subagent-two"),
+                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
                         },
                         &crate::runtime::cancellation::CancellationSignal::new(),
                     )
@@ -11718,9 +11884,11 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             resolved: test_resolved_subagent("explore"),
+                            approval_mode: crate::runtime::ApprovalMode::Policy,
                             task: "owned child".to_owned(),
                             context: None,
                             tool_call_id: ToolCallId::new("call-owned"),
+                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
                         },
                         &crate::runtime::cancellation::CancellationSignal::new(),
                     )
@@ -11790,9 +11958,11 @@ mod tests {
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
                     resolved: test_resolved_subagent("explore"),
+                    approval_mode: crate::runtime::ApprovalMode::Policy,
                     task: "rejected after failure".to_owned(),
                     context: None,
                     tool_call_id: ToolCallId::new("call-rejected"),
+                    terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
                 },
                 &crate::runtime::cancellation::CancellationSignal::new(),
             )
@@ -11884,9 +12054,11 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             resolved: test_resolved_subagent("explore"),
+                            approval_mode: crate::runtime::ApprovalMode::Policy,
                             task: "owned".to_owned(),
                             context: None,
                             tool_call_id: ToolCallId::new("call-owned"),
+                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
                         },
                         &crate::runtime::cancellation::CancellationSignal::new(),
                     )
@@ -11988,9 +12160,11 @@ mod tests {
                 .prepare(
                     &crate::runtime::subagent::SubagentStartSpec {
                         resolved: test_resolved_subagent("explore"),
+                        approval_mode: crate::runtime::ApprovalMode::Policy,
                         task: "racing".to_owned(),
                         context: None,
                         tool_call_id: ToolCallId::new("call-racing"),
+                        terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
                     },
                     &crate::runtime::cancellation::CancellationSignal::new(),
                 )
@@ -12616,9 +12790,11 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             resolved: test_resolved_subagent("explore"),
+                            approval_mode: crate::runtime::ApprovalMode::Policy,
                             task: "owned".to_owned(),
                             context: None,
                             tool_call_id: ToolCallId::new("call-owned"),
+                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
                         },
                         &crate::runtime::cancellation::CancellationSignal::new(),
                     )
@@ -12714,9 +12890,11 @@ mod tests {
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
                     resolved: test_resolved_subagent("explore"),
+                    approval_mode: crate::runtime::ApprovalMode::Policy,
                     task: "rejected".to_owned(),
                     context: None,
                     tool_call_id: ToolCallId::new("call-rejected"),
+                    terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
                 },
                 &crate::runtime::cancellation::CancellationSignal::new(),
             )
@@ -13149,7 +13327,7 @@ mod tests {
             }),
         ];
         let drain_supervision = Arc::new(tokio::sync::Notify::new());
-        let (runtime, model) = headless_runtime_over_store_with(
+        let (runtime, model) = headless_runtime_over_store_with_policy(
             &dir,
             "conv-m9c-provider",
             store.clone(),
@@ -13158,6 +13336,10 @@ mod tests {
                 drain_supervision: Some(drain_supervision.clone()),
                 ..CoordinatorProbe::default()
             }),
+            crate::model::ModelTimeoutPolicy::new(
+                std::time::Duration::from_mins(5),
+                std::time::Duration::from_mins(5),
+            ),
         )
         .await;
         let pending = Arc::new(PendingObservations::new());
@@ -14010,6 +14192,142 @@ mod tests {
         assert_eq!(terminal_events, 1);
     }
 
+    /// Issue #83: conversation drain supervises a Workflow-owned native child
+    /// through the same `SubagentRegistry` boundary. Cancellation is observed
+    /// at the child control channel, while shutdown remains parked until the
+    /// child sends its native terminal frame and the registry proves reap and
+    /// durable settlement.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
+    async fn runtime_shutdown_waits_for_workflow_child_native_quiescence() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let conversation_id = ConversationId::new("conv-workflow-drain");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(conversation_id.clone())
+                .expect("store"),
+        );
+        let (runtime, _model, subagents) =
+            headless_runtime_over_store_with_subagents(&dir, conversation_id.as_str(), store, None)
+                .await;
+        runtime.activate();
+
+        let runtime_root = dir.path().join("subagents");
+        std::fs::create_dir_all(&runtime_root).expect("subagent runtime root");
+        let (driver_end, mut peer) = tokio::net::UnixStream::pair().expect("IPC pair");
+        let child = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg("true")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0)
+            .spawn()
+            .expect("staged native child");
+        let child_pid = child.id().expect("child pid");
+        let child_root = runtime_root.join(format!("test-child-{child_pid}"));
+        std::fs::create_dir_all(&child_root).expect("child runtime root");
+        subagents.push_staged_override(crate::runtime::subagent::process::StagedChild::for_test(
+            child,
+            driver_end,
+            child_root.clone(),
+        ));
+
+        let workflow_id =
+            crate::runtime::workflow::WorkflowId::parse("drain_workflow").expect("workflow id");
+        let run_id = ToolCallId::new("workflow-drain-run");
+        let prepared = subagents
+            .prepare(
+                &crate::runtime::subagent::SubagentStartSpec {
+                    resolved: test_resolved_subagent("reviewer"),
+                    approval_mode: ApprovalMode::Policy,
+                    task: "Produce the workflow result.".to_owned(),
+                    context: None,
+                    tool_call_id: ToolCallId::new("workflow:drain_workflow:review"),
+                    terminal: crate::runtime::subagent::SubagentTerminalMode::WorkflowOutput {
+                        output_schema: serde_json::json!({
+                            "type": "object",
+                            "properties": {"summary": {"type": "string"}},
+                            "required": ["summary"],
+                            "additionalProperties": false
+                        }),
+                        workflow_id,
+                        run_id,
+                        node_id: "review".to_owned(),
+                    },
+                },
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect("prepare workflow child");
+        let accepted = match subagents
+            .commit(prepared, &CancellationSignal::new())
+            .await
+            .expect("commit workflow child")
+        {
+            crate::runtime::subagent::SubagentStartOutcome::Accepted(accepted) => accepted,
+            crate::runtime::subagent::SubagentStartOutcome::RolledBack => {
+                panic!("workflow child was cancelled before admission")
+            }
+        };
+        assert!(matches!(
+            crate::runtime::subagent::ipc::read_parent_frame(&mut peer)
+                .await
+                .expect("delegate frame"),
+            Some(crate::runtime::subagent::ipc::ParentFrame::Delegate(_))
+        ));
+
+        let (done_tx, mut done_rx) = tokio::sync::oneshot::channel();
+        let shutdown_runtime = runtime.clone();
+        tokio::spawn(async move {
+            let _ = done_tx.send(shutdown_runtime.shutdown().await);
+        });
+
+        assert!(matches!(
+            crate::runtime::subagent::ipc::read_parent_frame(&mut peer)
+                .await
+                .expect("cancellation frame"),
+            Some(crate::runtime::subagent::ipc::ParentFrame::Cancel {
+                reason: Some(CancellationReason::RuntimeShutdown)
+            })
+        ));
+        assert!(matches!(
+            done_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        assert!(!runtime.is_quiescent());
+        assert_eq!(subagents.unsettled_snapshot().len(), 1);
+
+        crate::runtime::subagent::ipc::write_child_frame(
+            &mut peer,
+            &crate::runtime::subagent::ipc::ChildFrame::Result(
+                crate::runtime::subagent::ipc::ResultFrame {
+                    status: crate::runtime::subagent::ipc::ChildResultStatus::Cancelled,
+                    content: None,
+                    diagnostic: None,
+                },
+            ),
+        )
+        .await
+        .expect("native cancellation result");
+
+        done_rx
+            .await
+            .expect("shutdown result")
+            .expect("workflow child drain");
+        assert!(runtime.is_quiescent());
+        assert!(subagents.unsettled_snapshot().is_empty());
+        assert!(!child_root.exists());
+        let snapshot = subagents
+            .snapshot(&accepted.subagent_id)
+            .expect("retained child snapshot");
+        assert_eq!(
+            snapshot.state,
+            crate::runtime::subagent::SubagentState::Cancelled
+        );
+        assert!(snapshot.settled);
+    }
+
     /// M9c: the foreground Bash path composes its existing physical process
     /// proof into runtime quiescence. Drain requests cancellation while the
     /// supervised process is owned; the test observes the real process-group
@@ -14456,6 +14774,7 @@ mod tests {
                     clock: None,
                     initial_messages: Vec::new(),
                     subagents: None,
+                    workflow_output: None,
                 }
             }
         }
@@ -14592,6 +14911,7 @@ mod tests {
             clock: None,
             initial_messages,
             subagents: None,
+            workflow_output: None,
         };
         match probe {
             Some(probe) => ConversationRuntime::with_probe(config, probe),

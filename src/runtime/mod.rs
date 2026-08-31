@@ -126,6 +126,9 @@ pub(crate) mod supervised_unit;
 /// On-demand bounded derived transcript history over durable owners.
 pub mod transcript_history;
 pub mod types;
+/// Native bounded Workflow definitions, immutable compiled programs, and
+/// catalog admission (Issue #83).
+pub mod workflow;
 
 pub use cancellation::{CancellationCause, CancellationSignal, ExecutionCancellation};
 pub use continuation::{
@@ -169,4 +172,12 @@ pub use types::{
     ApprovalMode, ApprovalModeState, CancellationReason, ConversationLifecycle,
     ConversationLifecycleState, RuntimeClock, RuntimeError, SystemClock, TokenMeasurement,
     TokenMeasurementSource,
+};
+pub use workflow::{
+    WorkflowAgentProgram, WorkflowBinding, WorkflowCatalog, WorkflowCatalogError,
+    WorkflowCompileError, WorkflowDefinition, WorkflowEdgeDefinition, WorkflowEdgeProgram,
+    WorkflowId, WorkflowIdError, WorkflowNodeDefinition, WorkflowNodeProgram, WorkflowOutputLatch,
+    WorkflowOutputSubmission, WorkflowOutputTerminal, WorkflowParallelBranchDefinition,
+    WorkflowPort, WorkflowProgram, WorkflowRun, WorkflowRunError, WorkflowRuntime,
+    WorkflowTerminalState,
 };

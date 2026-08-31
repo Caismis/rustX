@@ -79,14 +79,16 @@ const SESSION_JSON: &str = r#"{
   "modelTimeoutPolicy": {"responseStartTimeoutMs": 300, "streamIdleTimeoutMs": 300},
   "subagents": {
     "maxConcurrent": 4,
-    "agents": {
+    "definitions": {
       "conformance": {
         "description": "Issue 138 named conformance child.",
         "instructionsFile": "subagents/conformance.md",
         "tools": {"builtin": ["read"]},
         "skills": ["conformance"]
       }
-    }
+    },
+    "main": ["conformance"],
+    "workflow": []
   }
 }"#;
 

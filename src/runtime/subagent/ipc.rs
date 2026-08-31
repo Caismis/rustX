@@ -39,7 +39,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::context::{AgentStatusConfig, SessionContextPolicy};
 use crate::model::deadline::ModelTimeoutPolicy;
 use crate::runtime::identity::{AgentId, ConversationId, ProcessUnitId, SubagentId};
-use crate::runtime::types::CancellationReason;
+use crate::runtime::types::{ApprovalMode, CancellationReason};
 
 use super::resolver::ResolvedSubagentSpec;
 use super::workspace::WorkspaceSnapshot;
@@ -53,10 +53,11 @@ use super::workspace::WorkspaceSnapshot;
 /// frozen `ModelTimeoutPolicy` and version 5 carries the parent registry's
 /// typed cancellation provenance (Issue #138). Version 6 carries the
 /// resolved workspace authority and immutable Git snapshot facts (Issue
-/// #146). There is no compatibility
-/// decoding: a peer that does not speak exactly this version exits before
-/// composing anything.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 6;
+/// #146). Version 7 carries the invoking attempt's effective `ApprovalMode`
+/// and the reserved Workflow Agent terminal protocol (Issue #83). There is no
+/// compatibility decoding: a peer that does not speak exactly this version
+/// exits before composing anything.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 7;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -118,6 +119,10 @@ pub(crate) struct SubagentChildSpec {
     /// The complete frozen named-agent specification resolved by the parent
     /// against the invoking attempt's runtime resource generation.
     pub resolved: ResolvedSubagentSpec,
+    /// The effective approval mode frozen by the invoking Agent attempt.
+    /// This can bypass approval only for the exact Tools in resolved and
+    /// never changes the child's capability or execution authority.
+    pub approval_mode: ApprovalMode,
     /// The parent runtime's frozen model timeout policy, inherited by the
     /// child unchanged (Issue #138): the child applies it to its own
     /// response-start deadlines, stream-idle deadlines, and model-backed
@@ -136,6 +141,23 @@ pub(crate) struct SubagentChildSpec {
     /// diagnostics, Skills, and private Python state). It is never the stable
     /// semantic `SubagentId` grouping path.
     pub runtime_root: PathBuf,
+    /// The child terminal protocol. Workflow-owned children receive a
+    /// frozen `workflow_output` schema; ordinary named subagents use the
+    /// normal parent-inbound answer protocol.
+    pub terminal: ChildTerminalMode,
+}
+
+/// The child-side terminal protocol selected by the parent registry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) enum ChildTerminalMode {
+    /// Publish an ordinary named-subagent answer candidate.
+    Normal,
+    /// Require the reserved Workflow Agent output protocol.
+    WorkflowOutput {
+        /// The frozen JSON Schema shown to the child model.
+        output_schema: serde_json::Value,
+    },
 }
 
 /// The delegated task envelope (`Delegate` frame payload).
@@ -614,6 +636,7 @@ mod tests {
             child_agent_id: AgentId::new("agent-subagent-1"),
             parent_agent_id: AgentId::new("agent-parent"),
             resolved: resolved_spec(),
+            approval_mode: ApprovalMode::FullAccess,
             model_timeout_policy: ModelTimeoutPolicy::default(),
             agent_status: AgentStatusConfig::default(),
             context: SessionContextPolicy {
@@ -623,6 +646,7 @@ mod tests {
             },
             workspace_snapshot: WorkspaceSnapshot::shared(PathBuf::from("/tmp/ws")),
             runtime_root: PathBuf::from("/tmp/rr"),
+            terminal: ChildTerminalMode::Normal,
         };
         write_parent_frame(&mut parent, &ParentFrame::Hello(Box::new(spec.clone())))
             .await
@@ -644,10 +668,15 @@ mod tests {
         )
         .await
         .expect("write cancel");
-        assert_eq!(
-            read_parent_frame(&mut child).await.expect("read hello"),
-            Some(ParentFrame::Hello(Box::new(spec)))
-        );
+        let decoded_hello = read_parent_frame(&mut child)
+            .await
+            .expect("read hello")
+            .expect("hello frame");
+        let ParentFrame::Hello(decoded_spec) = decoded_hello else {
+            panic!("hello frame");
+        };
+        assert_eq!(decoded_spec.approval_mode, ApprovalMode::FullAccess);
+        assert_eq!(*decoded_spec, spec);
         assert!(matches!(
             read_parent_frame(&mut child).await.expect("read delegate"),
             Some(ParentFrame::Delegate(_))
@@ -678,7 +707,7 @@ mod tests {
         ));
     }
 
-    /// IPC v5 does not decode the v4 empty Cancel payload. A stale peer is
+    /// IPC v7 does not decode obsolete pre-v7 Cancel payloads. A stale peer is
     /// rejected as malformed rather than silently losing cancellation
     /// provenance through a compatibility path.
     #[tokio::test]

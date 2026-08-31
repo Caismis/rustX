@@ -348,6 +348,10 @@ pub(crate) struct AgentExecutionRuntimePolicy {
     /// means the composition owns no subagent plane at all — a standalone
     /// execution fixture, or a subagent child itself.
     pub(crate) subagent_context: Option<crate::runtime::subagent::AttemptSubagentContext>,
+    /// The reserved Workflow Agent terminal protocol, when this execution
+    /// belongs to a Workflow-owned child. It is consumed before ordinary
+    /// Tool Plane preflight and dispatch.
+    pub(crate) workflow_output: Option<Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal>>,
 }
 
 /// One agent attempt execution.
@@ -394,6 +398,12 @@ pub struct AgentExecution<'a> {
     /// The attempt-scoped subagent resolution view, frozen at admission
     /// together with the attempt's model snapshot and capability lease.
     subagent_context: Option<crate::runtime::subagent::AttemptSubagentContext>,
+    /// The Workflow-owned terminal-output authority, when present.
+    workflow_output: Option<Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal>>,
+    /// Bounded feedback for the next child model turn after a protocol or
+    /// schema rejection. This is request-only context, never canonical
+    /// conversation history.
+    workflow_output_feedback: Option<String>,
     /// The transient accepted context for the current admitted logical model
     /// step. It is retained across every actual-request retry and discarded
     /// only when the next logical step begins.
@@ -976,6 +986,8 @@ impl<'a> AgentExecution<'a> {
             pending_post_tool_batch: None,
             context_runtime,
             subagent_context: runtime_policy.subagent_context,
+            workflow_output: runtime_policy.workflow_output,
+            workflow_output_feedback: None,
             accepted_context: None,
             frozen_agent_status: None,
             frozen_carryover: None,
@@ -1227,6 +1239,11 @@ impl<'a> AgentExecution<'a> {
     /// Settles the execution state machine for the computed terminal
     /// outcome, immediately before the terminal event is emitted.
     fn settle(&mut self, terminal: &Terminal) {
+        if let Terminal::Cancelled { reason } = terminal
+            && let Some(workflow_output) = self.workflow_output.as_ref()
+        {
+            let _ = workflow_output.cancel(*reason);
+        }
         let settlement = match terminal {
             Terminal::Completed { .. } => self.state.complete(),
             Terminal::Cancelled { .. } | Terminal::Failed { .. } => self.state.fail(),
@@ -1501,6 +1518,69 @@ impl<'a> AgentExecution<'a> {
                 failure: AttemptFailure::Runtime { error },
             });
         }
+        // A Workflow-owned Agent has one reserved terminal protocol. It is
+        // handled before ordinary Tool Plane preflight so a provider-shaped
+        // `workflow_output` call can never acquire a ToolExecutionId, reach
+        // an executor, or create a ToolResult. A mixed or duplicate turn is
+        // rejected as one structural unit: no ordinary side effect and no
+        // output commit are allowed from that turn.
+        if let Some(workflow_output) = self.workflow_output.clone() {
+            let protocol_calls = turn_assembly
+                .tool_calls
+                .iter()
+                .filter(|call| call.name == crate::runtime::workflow::WORKFLOW_OUTPUT_TOOL_NAME)
+                .collect::<Vec<_>>();
+            if !protocol_calls.is_empty() {
+                if protocol_calls.len() != 1 || turn_assembly.tool_calls.len() != 1 {
+                    self.reject_workflow_output_turn(
+                        "workflow_output must be the sole tool-shaped call in an Assistant turn",
+                        true,
+                    );
+                    return None;
+                }
+                if self.cancellation.is_cancelled() {
+                    let reason = self.cancellation.reason();
+                    let _ = workflow_output.cancel(reason);
+                    return Some(Terminal::Cancelled { reason });
+                }
+                match workflow_output.submit(protocol_calls[0].arguments.clone()) {
+                    crate::runtime::workflow::WorkflowOutputSubmission::Committed => {
+                        self.pending_continuation.take();
+                        self.continuation_owner.take();
+                        self.logical_model_step = LogicalModelStepState::CanonicalAccepted;
+                        if let Err(error) = self.state.tools_finished() {
+                            return Some(Terminal::Failed {
+                                failure: AttemptFailure::Runtime { error },
+                            });
+                        }
+                        self.emit(RuntimeEvent::TurnCompleted);
+                        return Some(Terminal::Completed { finish_reason });
+                    }
+                    crate::runtime::workflow::WorkflowOutputSubmission::Invalid(feedback) => {
+                        self.reject_workflow_output_turn(&feedback, true);
+                        return None;
+                    }
+                    crate::runtime::workflow::WorkflowOutputSubmission::Stale => {
+                        self.reject_workflow_output_turn(
+                            "workflow_output arrived after the AgentRun terminal state",
+                            true,
+                        );
+                        return None;
+                    }
+                }
+            }
+            if !has_tool_calls {
+                // Ordinary final Assistant text is not a successful
+                // Workflow Agent result. Keep the AgentRun alive for a
+                // normal corrective model turn, carrying only bounded
+                // request-time feedback; no assistant text enters history.
+                self.reject_workflow_output_turn(
+                    "Workflow Agent execution must terminate with workflow_output(value), not ordinary Assistant text",
+                    false,
+                );
+                return None;
+            }
+        }
         // M5 preflight boundary: every model-issued tool call of the turn
         // must resolve structurally (registry identity, execution-policy
         // resolution, runtime metadata extraction, business argument
@@ -1589,6 +1669,23 @@ impl<'a> AgentExecution<'a> {
         // an inbound batch to the continuation; the drain never splits the
         // tool-result batch.
         self.safe_boundary_drain().err()
+    }
+
+    /// Retains bounded request-time feedback for a Workflow Agent protocol
+    /// correction and, for a tool-shaped turn, completes the Agent Loop's
+    /// ordinary structural tool phase without dispatching anything.
+    fn reject_workflow_output_turn(&mut self, feedback: &str, had_tool_calls: bool) {
+        self.workflow_output_feedback = Some(crate::runtime::subagent::bound_utf8(
+            feedback.to_owned(),
+            2048,
+        ));
+        self.pending_continuation.take();
+        self.continuation_owner.take();
+        self.logical_model_step = LogicalModelStepState::CanonicalAccepted;
+        if had_tool_calls {
+            let _ = self.state.tools_finished();
+        }
+        self.emit(RuntimeEvent::TurnCompleted);
     }
 
     /// Preflights every model-issued tool call of the turn.
@@ -2275,7 +2372,13 @@ impl<'a> AgentExecution<'a> {
                 retry_number,
             },
             projection.surface_revision,
-            effective_system_prompt.clone(),
+            // `model_request_from_projection` may append request-scoped
+            // protocol feedback (for example, a rejected workflow_output).
+            // The snapshot must freeze the exact prompt sent to the provider,
+            // not the pre-feedback projection prompt, so durable
+            // reconstruction remains byte-for-byte identical on the next
+            // turn.
+            request.effective_system_prompt.clone(),
             accepted.system_sections.clone(),
             self.context_runtime.resource_revision,
             request.invocation.clone(),
@@ -2367,7 +2470,7 @@ impl<'a> AgentExecution<'a> {
         }
         let anchor = ObservedAnchor::of_model_input(
             &staged.request.messages,
-            &staged.projection.effective_system_prompt,
+            &staged.request.effective_system_prompt,
             &staged.request.tools,
         );
         let request_identity = crate::context::request_identity_fingerprint(
@@ -2407,24 +2510,16 @@ impl<'a> AgentExecution<'a> {
             None => None,
         };
         let request = staged.request;
-        // Preserve the existing canonical projection fingerprint when the
-        // provider-visible request contains no request-only item. A request
-        // that actually contains Carryover gets the mixed-input fingerprint,
-        // so a later canonical-only projection cannot reuse a measurement
-        // that included a noncanonical value.
-        let fingerprint = if request
-            .messages
-            .iter()
-            .any(|message| matches!(message, ModelInputMessage::RequestOnly(_)))
-        {
-            crate::context::model_input_fingerprint(
-                staged.projection.surface_revision,
-                &request.messages,
-                &staged.projection.effective_system_prompt,
-            )
-        } else {
-            staged.projection.fingerprint()
-        };
+        // Fingerprint the exact provider-visible request. Request-scoped
+        // protocol feedback is part of that request even when its messages
+        // remain canonical-only; carryover is likewise included when present.
+        // With no request-only additions and no feedback this is identical to
+        // the projection fingerprint.
+        let fingerprint = crate::context::model_input_fingerprint(
+            staged.projection.surface_revision,
+            &request.messages,
+            &request.effective_system_prompt,
+        );
         Ok(PreparedModelTurn {
             context,
             snapshot: staged.snapshot,
@@ -4414,7 +4509,7 @@ impl<'a> AgentExecution<'a> {
     /// request messages. The exact Effective System Prompt is carried as a
     /// provider-neutral request value and adapters only translate it.
     fn model_request_from_projection(
-        &self,
+        &mut self,
         projection: &ContextProjection,
         messages: Vec<ModelInputMessage>,
     ) -> ModelRequest {
@@ -4422,16 +4517,34 @@ impl<'a> AgentExecution<'a> {
         // Tool definitions are compiled only for a model whose effective
         // capabilities include tool calls: a text-only model is usable, it
         // simply never receives runtime tool definitions.
-        let tools = if primary.capabilities().tool_calls {
+        let mut tools = if primary.capabilities().tool_calls {
             self.tool_registry().model_definitions()
         } else {
             Vec::new()
         };
+        if primary.capabilities().tool_calls
+            && let Some(workflow_output) = self.workflow_output.as_ref()
+        {
+            tools.push(crate::tools::types::ModelToolDefinition {
+                id: ToolId::new("runtime-workflow-output"),
+                name: crate::runtime::workflow::WORKFLOW_OUTPUT_TOOL_NAME.to_owned(),
+                description: "Commit the structured terminal value of this Workflow AgentRun. It must be the sole tool-shaped call in the Assistant turn.".to_owned(),
+                input_schema: workflow_output.output_schema(),
+            });
+        }
+        let mut effective_system_prompt = projection.effective_system_prompt.clone();
+        if let Some(feedback) = self.workflow_output_feedback.take() {
+            if !effective_system_prompt.is_empty() {
+                effective_system_prompt.push('\n');
+            }
+            effective_system_prompt.push_str("[runtime Workflow output feedback]\n");
+            effective_system_prompt.push_str(&feedback);
+        }
         ModelRequest {
             invocation: primary.invocation_config(),
             messages,
             tools,
-            effective_system_prompt: projection.effective_system_prompt.clone(),
+            effective_system_prompt,
             continuation: self.pending_continuation.clone(),
         }
     }
@@ -6029,6 +6142,117 @@ mod tests {
         ]
     }
 
+    /// Builds one deterministic Workflow terminal-protocol model turn. The
+    /// helper uses the real normalized model-event assembler, so the tests
+    /// exercise the same call batching and argument assembly as a provider
+    /// adapter rather than calling `complete_turn` with an artificial value.
+    fn workflow_output_turn(calls: &[ToolCall], text: Option<&str>) -> Vec<ModelEvent> {
+        let mut events = vec![ModelEvent::Started];
+        if let Some(text) = text {
+            events.push(ModelEvent::TextDelta {
+                block_index: ContentBlockIndex::new(0),
+                text: text.to_owned(),
+            });
+        }
+        let block_offset = usize::from(text.is_some());
+        for (index, call) in calls.iter().enumerate() {
+            let block_index = ContentBlockIndex::new(
+                u32::try_from(block_offset + index).expect("test call count fits block index"),
+            );
+            events.push(ModelEvent::ToolCallStarted {
+                block_index,
+                call: ToolCallStart {
+                    id: call.id.clone(),
+                    tool_id: call.tool_id.clone(),
+                    name: call.name.clone(),
+                },
+            });
+            events.push(ModelEvent::ToolCallArgumentsDelta {
+                block_index,
+                call_id: call.id.clone(),
+                arguments_delta: serde_json::to_string(&call.arguments)
+                    .expect("workflow arguments are JSON"),
+            });
+            events.push(ModelEvent::ToolCallCompleted {
+                block_index,
+                call: call.clone(),
+            });
+        }
+        events.push(ModelEvent::Completed {
+            finish_reason: if calls.is_empty() {
+                ModelFinishReason::Stop
+            } else {
+                ModelFinishReason::ToolCalls
+            },
+            usage: None,
+        });
+        events
+    }
+
+    fn workflow_call(id: &str, name: &str, arguments: serde_json::Value) -> ToolCall {
+        ToolCall {
+            id: ToolCallId::new(id),
+            tool_id: ToolId::new(format!("runtime-{name}")),
+            name: name.to_owned(),
+            arguments,
+        }
+    }
+
+    fn workflow_output_schema() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "passed": {"type": "boolean"},
+                "summary": {"type": "string"}
+            },
+            "required": ["passed", "summary"],
+            "additionalProperties": false
+        })
+    }
+
+    /// Runs an in-process child Agent Loop with the reserved Workflow
+    /// terminal authority. The model adapter and durable store are returned so
+    /// protocol feedback, canonical-history isolation, and request counts can
+    /// be inspected without timing-based synchronization.
+    async fn run_workflow_output_script(
+        scripts: Vec<Vec<ModelEvent>>,
+    ) -> (
+        super::AgentExecutionResult,
+        Arc<crate::runtime::workflow::WorkflowOutputLatch>,
+        Arc<crate::durable::SqliteConversationStore>,
+        Arc<ScriptedAdapter>,
+    ) {
+        let adapter = Arc::new(ScriptedAdapter::new(scripts));
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
+                .expect("store"),
+        );
+        let tool_runtime = tool_runtime_with_store("conv-1", Some(store.clone()));
+        let (_dir, _coordinator, lease) =
+            capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        let latch = Arc::new(
+            crate::runtime::workflow::WorkflowOutputLatch::new(workflow_output_schema())
+                .expect("workflow output schema"),
+        );
+        let mut policy = crate::scripted_suites::support::default_execution_policy();
+        let terminal: Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal> = latch.clone();
+        policy.workflow_output = Some(terminal);
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let result = AgentExecution::new(
+            request(&adapter),
+            lease,
+            &cancellation,
+            policy,
+            runtime(&adapter),
+            &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
+        )
+        .expect("workflow execution construction")
+        .run()
+        .await;
+        (result, latch, store, adapter)
+    }
+
     /// The exact expected trace: one completed tool turn, then the generic
     /// pre-next-turn cancellation checkpoint settles the attempt cancelled
     /// before any second model turn.
@@ -6754,6 +6978,147 @@ mod tests {
             observed_events.last(),
             Some(RuntimeEvent::AttemptFailed { .. })
         ));
+    }
+
+    /// A Workflow Agent cannot settle from ordinary Assistant text. The
+    /// rejected turn stays out of canonical history, receives bounded
+    /// request-only feedback, and the later valid protocol turn settles the
+    /// child exactly once.
+    #[tokio::test]
+    async fn workflow_output_requires_the_reserved_terminal_protocol() {
+        let valid = workflow_call(
+            "workflow-valid",
+            "workflow_output",
+            serde_json::json!({
+                "passed": true,
+                "summary": "corrected output"
+            }),
+        );
+        let (result, latch, store, adapter) = run_workflow_output_script(vec![
+            workflow_output_turn(&[], Some("ordinary final")),
+            workflow_output_turn(&[valid], None),
+        ])
+        .await;
+
+        assert!(
+            matches!(
+                result.outcome,
+                AttemptOutcome::Completed {
+                    finish_reason: ModelFinishReason::ToolCalls
+                }
+            ),
+            "unexpected Workflow Agent outcome: {:?}",
+            result.outcome
+        );
+        assert_eq!(adapter.request_count(), 2);
+        assert_eq!(
+            latch.committed_value(),
+            Some(serde_json::json!({
+                "passed": true,
+                "summary": "corrected output"
+            }))
+        );
+        assert!(
+            store
+                .load_canonical()
+                .expect("canonical history")
+                .is_empty(),
+            "Workflow Agent text and terminal values are not parent history"
+        );
+        let requests = adapter.requests();
+        for request in &requests {
+            assert_eq!(
+                request
+                    .tools
+                    .iter()
+                    .filter(|tool| tool.name == crate::runtime::workflow::WORKFLOW_OUTPUT_TOOL_NAME)
+                    .count(),
+                1,
+                "a Workflow Agent request exposes exactly one reserved protocol definition"
+            );
+        }
+        assert!(
+            requests[1]
+                .effective_system_prompt
+                .contains("workflow_output(value)")
+        );
+        let events = event_history(store.as_ref());
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, RuntimeEvent::AssistantMessageCommitted { .. }))
+                .count(),
+            0
+        );
+    }
+
+    /// Invalid, mixed, and duplicate terminal-protocol turns are rejected as
+    /// whole structural units. In particular, an ordinary call in a mixed
+    /// turn never reaches preflight or an executor; a later valid turn can
+    /// still correct the child within the normal Agent Loop budget.
+    #[tokio::test]
+    async fn workflow_output_rejections_are_atomic_and_correctable() {
+        let invalid = workflow_call(
+            "workflow-invalid",
+            "workflow_output",
+            serde_json::json!({"passed": "not a boolean", "summary": "bad"}),
+        );
+        let ordinary = workflow_call("ordinary-side-effect", "write", serde_json::json!({}));
+        let terminal = workflow_call(
+            "workflow-terminal",
+            "workflow_output",
+            serde_json::json!({"passed": true, "summary": "committed"}),
+        );
+        let duplicate = workflow_call(
+            "workflow-duplicate",
+            "workflow_output",
+            serde_json::json!({"passed": false, "summary": "duplicate"}),
+        );
+        let (result, latch, store, adapter) = run_workflow_output_script(vec![
+            workflow_output_turn(&[invalid], None),
+            workflow_output_turn(&[ordinary, terminal.clone()], None),
+            workflow_output_turn(&[terminal.clone(), duplicate], None),
+            workflow_output_turn(&[terminal], None),
+        ])
+        .await;
+
+        assert!(
+            matches!(
+                result.outcome,
+                AttemptOutcome::Completed {
+                    finish_reason: ModelFinishReason::ToolCalls
+                }
+            ),
+            "unexpected Workflow Agent outcome: {:?}",
+            result.outcome
+        );
+        assert_eq!(adapter.request_count(), 4);
+        assert_eq!(
+            latch.committed_value(),
+            Some(serde_json::json!({
+                "passed": true,
+                "summary": "committed"
+            }))
+        );
+        let events = event_history(store.as_ref());
+        assert!(
+            events
+                .iter()
+                .all(|event| !matches!(event, RuntimeEvent::ToolExecutionStarted { .. }))
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, RuntimeEvent::ToolMessageCommitted { .. }))
+                .count(),
+            0,
+            "mixed and duplicate protocol turns dispatch no ordinary tool"
+        );
+        assert!(
+            adapter.requests()[1]
+                .effective_system_prompt
+                .contains("frozen Agent output schema")
+        );
     }
 
     #[tokio::test]

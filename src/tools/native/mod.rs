@@ -56,6 +56,7 @@ mod search;
 pub(crate) mod subagent;
 mod support;
 mod todo;
+mod workflow;
 mod write;
 
 #[cfg(test)]
@@ -79,6 +80,7 @@ pub use subagent::SUBAGENT_TOOL_NAME;
 #[doc(hidden)]
 pub use bash::supervisor as bash_supervisor;
 
+use crate::runtime::workflow::{WorkflowCatalog, WorkflowRuntime};
 use crate::tools::background::ConversationBackgroundRegistry;
 use crate::tools::executor::{ToolRegistry, ToolRegistryError};
 use crate::tools::types::{ToolCall, ToolInvocationPolicy};
@@ -221,6 +223,31 @@ pub fn register_native_tools(
     // tool-owned registration, and this list is the only place that knows
     // which native capabilities exist.
     for registration in native_tool_registrations(resources, policies) {
+        let NativeToolRegistration {
+            definition,
+            executor,
+            normalizer,
+            mandatory,
+        } = registration;
+        registry.register_with_activation_metadata(definition, executor, normalizer, mandatory)?;
+    }
+    Ok(())
+}
+
+/// Registers the concrete model-facing Workflow Tools of one immutable
+/// catalog generation.
+///
+/// Workflow admission is intentionally a separate composition step from the
+/// ordinary native plane: the catalog has already compiled and validated the
+/// programs, and each registration captures one immutable program snapshot.
+/// A reload therefore builds a new set off-side and a running invocation can
+/// never observe a later catalog generation.
+pub(crate) fn register_workflow_tools(
+    registry: &mut ToolRegistry,
+    runtime: &WorkflowRuntime,
+    catalog: &WorkflowCatalog,
+) -> Result<(), ToolRegistryError> {
+    for registration in workflow::registrations(runtime, catalog) {
         let NativeToolRegistration {
             definition,
             executor,

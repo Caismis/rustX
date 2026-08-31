@@ -217,9 +217,11 @@ impl Lab {
                 materialization:
                     crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
             },
+            approval_mode: crate::runtime::ApprovalMode::Policy,
             task: "inspect the repository".to_owned(),
             context: None,
             tool_call_id: crate::runtime::identity::ToolCallId::new("call-1"),
+            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
         }
     }
 

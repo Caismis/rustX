@@ -13,9 +13,11 @@
 //!
 //! The registry owns the definition/executor relationship: one
 //! [`ToolDefinition`] is paired with one `Arc<dyn ToolExecutor>` at
-//! registration. An executor object does not own its definition, so one
-//! implementation object may serve
-//! multiple registered definitions.
+//! registration. It also owns the global model-facing identity exclusion for
+//! runtime protocols such as `workflow_output`, so an ordinary Builtin,
+//! Python, or MCP registration cannot collide with a protocol consumed by the
+//! Agent Loop. An executor object does not own its definition, so one
+//! implementation object may serve multiple registered definitions.
 //!
 //! There is no plugin framework, no dynamic loading, and no speculative
 //! metadata subsystem: only the concrete contracts the current tool plane
@@ -293,6 +295,8 @@ pub enum ToolRegistryError {
     },
     /// The declared policies are invalid for this tool.
     InvalidPolicy(String),
+    /// The model-facing name belongs to a runtime-owned protocol.
+    ReservedName(String),
 }
 
 impl core::fmt::Display for ToolRegistryError {
@@ -311,6 +315,10 @@ impl core::fmt::Display for ToolRegistryError {
                 "tool {name:?} cannot be registered as ModelSelectable, because rustX must inject \
                  the model's per-invocation {EXECUTION_MODE_FIELD:?} selector into its root \
                  schema: {reason}"
+            ),
+            Self::ReservedName(name) => write!(
+                f,
+                "model-facing tool name {name:?} is reserved for Workflow Agent terminalization"
             ),
             Self::ReservedProperty(_) | Self::InvalidPolicy(_) => {
                 write!(f, "the tool registration violates a registry rule")
@@ -466,6 +474,19 @@ impl ToolRegistration {
 pub const EXECUTION_TOOL_NAME: &str = "execution";
 /// The native human-questionnaire tool.
 pub const ASK_USER_TOOL_NAME: &str = "ask_user";
+/// The model-facing name reserved for Workflow Agent terminalization.
+///
+/// This is a runtime protocol identity, not an ordinary Tool capability. It
+/// lives with the canonical Tool identity constants so every capability origin
+/// shares one collision rule before a definition can enter a catalog.
+pub const WORKFLOW_OUTPUT_TOOL_NAME: &str = "workflow_output";
+
+pub(crate) fn validate_model_facing_name(name: &str) -> Result<(), ToolRegistryError> {
+    if name == WORKFLOW_OUTPUT_TOOL_NAME {
+        return Err(ToolRegistryError::ReservedName(name.to_owned()));
+    }
+    Ok(())
+}
 
 impl ToolRegistry {
     /// Creates an empty registry.
@@ -485,8 +506,10 @@ impl ToolRegistry {
     /// identities are rejected, the canonical input schema must be a valid
     /// root object schema with no reserved `__rustx_*` property, a
     /// `ModelSelectable` tool may not claim the reserved `execution_mode`
-    /// property, and the runtime intrinsics are fixed to foreground-only,
-    /// sequential execution; `ask_user` is also fixed to approval-never.
+    /// property, `workflow_output` is reserved for Workflow Agent
+    /// terminalization, and the runtime intrinsics are fixed to
+    /// foreground-only, sequential execution; `ask_user` is also fixed to
+    /// approval-never.
     ///
     /// # Errors
     ///
@@ -538,6 +561,7 @@ impl ToolRegistry {
                 definition.id
             )));
         }
+        validate_model_facing_name(&definition.name)?;
         if self.by_id.contains_key(&definition.id) {
             return Err(ToolRegistryError::DuplicateToolId(definition.id.clone()));
         }
@@ -816,6 +840,7 @@ fn identity_arguments(arguments: &serde_json::Value) -> Result<serde_json::Value
 mod tests {
     use super::{
         EXECUTION_TOOL_NAME, PreflightOutcome, ToolPreflightError, ToolRegistry, ToolRegistryError,
+        WORKFLOW_OUTPUT_TOOL_NAME,
     };
     use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
     use crate::tools::artifacts::ArtifactStore;
@@ -1022,6 +1047,39 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// The Workflow terminal protocol owns its model-facing identity across
+    /// every ordinary Tool origin. Origin-specific composition must not be
+    /// able to register a colliding capability.
+    #[test]
+    fn workflow_output_is_reserved_for_every_ordinary_tool_origin() {
+        let origins = [
+            ToolOrigin::Builtin,
+            ToolOrigin::Python {
+                tool_version_id: crate::runtime::identity::ToolVersionId::new("version-1"),
+            },
+            ToolOrigin::Mcp {
+                server_id: crate::runtime::identity::McpServerId::new("server-1"),
+            },
+        ];
+        for (index, origin) in origins.into_iter().enumerate() {
+            let mut registry = ToolRegistry::new();
+            let mut candidate = definition(
+                &format!("tool-workflow-output-{index}"),
+                WORKFLOW_OUTPUT_TOOL_NAME,
+                ToolExecutionPolicy::ForegroundOnly,
+                ToolConcurrencyPolicy::Sequential,
+                object_schema(),
+            );
+            candidate.origin = origin;
+            let error = register(&mut registry, candidate).expect_err("reserved name");
+            assert!(matches!(
+                error,
+                ToolRegistryError::ReservedName(name) if name == WORKFLOW_OUTPUT_TOOL_NAME
+            ));
+            assert!(registry.is_empty());
+        }
     }
 
     /// The runtime intrinsic `execution` cannot be background-capable.

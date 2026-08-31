@@ -106,7 +106,7 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
         default_tools.push("todo");
     }
     serde_json::json!({
-        "schemaVersion": 4,
+        "schemaVersion": 5,
         "agentId": "agent-fnd06",
         "model": {"model": MODEL},
         "approvalMode": "policy",
@@ -121,13 +121,15 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
         // the child never reads this configuration.
         "subagents": {
             "maxConcurrent": 4,
-            "agents": {
+            "definitions": {
                 "explore": {
                     "description": "Read-only exploration of the shared workspace.",
                     "instructionsFile": "subagents/explore.md",
                     "tools": {"builtin": ["read"]}
                 }
-            }
+            },
+            "main": ["explore"],
+            "workflow": []
         }
     })
     .to_string()

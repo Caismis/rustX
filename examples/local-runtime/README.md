@@ -18,6 +18,8 @@ examples/local-runtime/
 ├── models.jsonc
 ├── rustx.jsonc
 ├── workspace/
+│   ├── .rustx/
+│   │   └── workflows/       # explicitly registered YAML programs
 │   └── .agents/
 │       └── tools/
 │           └── echo/
@@ -209,6 +211,45 @@ explicit `skills` paths in this file or repeatable `--skill` arguments.
 `disable-model-invocation: true`
 keeps a validated Skill in runtime resource state but omits it from the
 model-visible catalog.
+
+## Native YAML Workflows
+
+Workflows are registered explicitly in `rustx.jsonc`; the runtime does not
+discover every YAML file under the workspace. A registered id such as
+`review_pr` resolves exactly to:
+
+```text
+workspace/.rustx/workflows/review_pr.yaml
+```
+
+`workflows.definitions` is the registration set and `workflows.main` is the
+independent model-visible set. Every id in `workflows.main` becomes one
+concrete Tool named by that id, using the YAML `description` and `input`
+schema. A registered-but-not-main workflow remains available to native
+runtime composition but is not offered to the model.
+
+The YAML is serialization only. It deserializes into a `WorkflowDefinition`,
+which is statically checked and compiled into an immutable `WorkflowProgram`;
+`WorkflowRuntime` executes that program over the existing named
+`SubagentRuntime`. The bounded v1 vocabulary is `Agent`, `Branch`,
+`Parallel`, and `Return`. Agent tasks are fixed strings, data movement uses
+explicit typed `{ref: ...}` bindings, Branch consumes only a committed
+boolean, and Parallel is a keyed all-settle set of one-Agent branches.
+
+Workflow Agent children complete successfully only through the reserved
+`workflow_output` terminal protocol. It is not an ordinary Tool Plane call;
+the frozen output schema is validated before an exactly-once commit. A turn
+containing `workflow_output` must contain no ordinary tool call and no second
+terminal call. Invalid or mixed turns perform no ordinary side effect and
+receive bounded feedback so the child can continue. Workflow-local values and
+child transcripts do not enter the parent conversation history.
+
+Workflow subagent admission is independent from `subagents.main`: a profile
+must be listed in `subagents.workflow` to be usable by a Workflow Agent, and
+being main-visible does not grant Workflow admission. A reload constructs and
+validates the complete candidate, then publishes it atomically; an active run
+keeps the immutable program snapshot with which it started. Unfinished runs
+are not replayed after a crash.
 
 ## MCP servers
 

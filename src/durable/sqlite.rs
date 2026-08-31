@@ -172,9 +172,14 @@ use super::inbox::{
 /// distinguish the workspace authority, so it is rejected rather than decoded
 /// with invented shared-workspace defaults.
 ///
-/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13/v14/v15/v16/v17 database must fail
-/// at store open; there is no migration or compatibility path.
-pub const SQLITE_SCHEMA_VERSION: i64 = 18;
+/// Version 19 freezes Issue #83's native Workflow execution facts. A version
+/// 18 journal cannot decode the Workflow lifecycle vocabulary, and an older
+/// runtime must not open a store after those facts have been appended, so it
+/// is rejected rather than interpreted through a compatibility path.
+///
+/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13/v14/v15/v16/v17/v18 database must
+/// fail at store open; there is no migration or compatibility path.
+pub const SQLITE_SCHEMA_VERSION: i64 = 19;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -726,6 +731,43 @@ impl SqliteConversationStore {
                 [value],
             )
             .expect("force sequence");
+    }
+}
+
+impl SqliteConversationStore {
+    fn append_event_internal(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("event transaction: {error}")))?;
+        #[cfg(test)]
+        if matches!(
+            &event.event,
+            RuntimeEvent::AttemptCompleted { .. }
+                | RuntimeEvent::AttemptCancelled { .. }
+                | RuntimeEvent::AttemptTimedOut { .. }
+                | RuntimeEvent::AttemptLimitExceeded { .. }
+                | RuntimeEvent::AttemptFailed { .. }
+        ) {
+            self.terminal_event_attempts.fetch_add(1, Ordering::SeqCst);
+            if Self::consume(&self.fail_terminal_event_remaining) {
+                return Err(storage("fault injected: terminal event commit"));
+            }
+        }
+        #[cfg(test)]
+        if Self::consume(&self.fail_event_remaining) {
+            return Err(storage("fault injected: event commit"));
+        }
+        process_death::reach_event("before:event", &event.event);
+        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("event commit: {error}")))?;
+        process_death::reach_event("after:event", &persisted.event.event);
+        Ok(persisted.event)
     }
 }
 
@@ -1639,35 +1681,134 @@ impl ConversationStore for SqliteConversationStore {
                 "this event kind must use its specialized durable transition".to_owned(),
             ));
         }
+        self.append_event_internal(event)
+    }
+
+    fn commit_subagent_terminal(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        if !matches!(
+            &event.event,
+            RuntimeEvent::SubagentTerminalSettled {
+                state: crate::events::types::SubagentTerminalState::Failed
+                    | crate::events::types::SubagentTerminalState::Cancelled
+                    | crate::events::types::SubagentTerminalState::Interrupted,
+                ..
+            }
+        ) {
+            return Err(ConversationStoreError::InvalidReference(
+                "a direct Workflow child terminal transition accepts only non-success states"
+                    .to_owned(),
+            ));
+        }
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("event transaction: {error}")))?;
-        #[cfg(test)]
-        if matches!(
-            &event.event,
-            RuntimeEvent::AttemptCompleted { .. }
-                | RuntimeEvent::AttemptCancelled { .. }
-                | RuntimeEvent::AttemptTimedOut { .. }
-                | RuntimeEvent::AttemptLimitExceeded { .. }
-                | RuntimeEvent::AttemptFailed { .. }
-        ) {
-            self.terminal_event_attempts.fetch_add(1, Ordering::SeqCst);
-            if Self::consume(&self.fail_terminal_event_remaining) {
-                return Err(storage("fault injected: terminal event commit"));
+            .map_err(|error| storage(format!("Workflow child terminal transaction: {error}")))?;
+        if let Some(existing) = find_event_by_id(&transaction, &event.event_id)? {
+            if same_event_ignoring_sequence(&existing, &event) {
+                transaction.commit().map_err(|error| {
+                    storage(format!("Workflow child terminal retry commit: {error}"))
+                })?;
+                return Ok(existing);
             }
+            return Err(ConversationStoreError::TerminalViolation(
+                "Workflow child terminal retry conflicts with its durable fact".to_owned(),
+            ));
         }
         #[cfg(test)]
         if Self::consume(&self.fail_event_remaining) {
-            return Err(storage("fault injected: event commit"));
+            return Err(storage("fault injected: Workflow child terminal commit"));
         }
-        process_death::reach_event("before:event", &event.event);
+        process_death::reach_event("before:workflow_child_terminal", &event.event);
         let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
         transaction
             .commit()
-            .map_err(|error| storage(format!("event commit: {error}")))?;
-        process_death::reach_event("after:event", &persisted.event.event);
+            .map_err(|error| storage(format!("Workflow child terminal commit: {error}")))?;
+        process_death::reach_event("after:workflow_child_terminal", &persisted.event.event);
         Ok(persisted.event)
+    }
+
+    fn commit_workflow_agent_terminal(
+        &self,
+        terminal: RuntimeEventEnvelope,
+        output: RuntimeEventEnvelope,
+    ) -> Result<(RuntimeEventEnvelope, RuntimeEventEnvelope), ConversationStoreError> {
+        let valid_pair = matches!(
+            (&terminal.event, &output.event),
+            (
+                RuntimeEvent::SubagentTerminalSettled {
+                    subagent_id: terminal_subagent,
+                    state: crate::events::types::SubagentTerminalState::Succeeded,
+                    ..
+                },
+                RuntimeEvent::WorkflowAgentOutputCommitted {
+                    subagent_id: output_subagent,
+                    ..
+                }
+            ) if terminal_subagent == output_subagent
+        );
+        if !valid_pair {
+            return Err(ConversationStoreError::InvalidReference(
+                "the Workflow terminal transaction requires one matching successful child terminal and output fact".to_owned(),
+            ));
+        }
+        if terminal.conversation_id != output.conversation_id
+            || terminal.timestamp != output.timestamp
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "the Workflow terminal facts must share conversation and timestamp identity"
+                    .to_owned(),
+            ));
+        }
+
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("Workflow terminal transaction: {error}")))?;
+        let existing_terminal = find_event_by_id(&transaction, &terminal.event_id)?;
+        let existing_output = find_event_by_id(&transaction, &output.event_id)?;
+        match (existing_terminal, existing_output) {
+            (Some(existing_terminal), Some(existing_output)) => {
+                if !same_event_ignoring_sequence(&existing_terminal, &terminal)
+                    || !same_event_ignoring_sequence(&existing_output, &output)
+                {
+                    return Err(ConversationStoreError::InvalidReference(
+                        "Workflow terminal retry conflicts with its durable facts".to_owned(),
+                    ));
+                }
+                transaction
+                    .commit()
+                    .map_err(|error| storage(format!("Workflow terminal retry commit: {error}")))?;
+                Ok((existing_terminal, existing_output))
+            }
+            (Some(_), None) | (None, Some(_)) => Err(ConversationStoreError::TerminalViolation(
+                "Workflow terminal facts are only valid as an atomic pair".to_owned(),
+            )),
+            (None, None) => {
+                let persisted_terminal =
+                    persist_event_tx(&transaction, &self.conversation_id, terminal)?;
+                let persisted_output =
+                    persist_event_tx(&transaction, &self.conversation_id, output)?;
+                #[cfg(test)]
+                if Self::consume(&self.fail_event_remaining) {
+                    return Err(storage("fault injected: Workflow terminal commit"));
+                }
+                process_death::reach_event(
+                    "before:workflow_terminal",
+                    &persisted_output.event.event,
+                );
+                transaction
+                    .commit()
+                    .map_err(|error| storage(format!("Workflow terminal commit: {error}")))?;
+                process_death::reach_event(
+                    "after:workflow_terminal",
+                    &persisted_output.event.event,
+                );
+                Ok((persisted_terminal.event, persisted_output.event))
+            }
+        }
     }
 
     fn append_interaction_audit(
@@ -5745,6 +5886,22 @@ fn find_event_by_id(
     Ok(Some(decode(&json, "event identity")?))
 }
 
+/// Compares a retried event with its durable copy. Event Journal sequence is
+/// store-allocated and therefore intentionally excluded; every other field
+/// is part of the producer's frozen terminal transition identity.
+fn same_event_ignoring_sequence(
+    existing: &RuntimeEventEnvelope,
+    requested: &RuntimeEventEnvelope,
+) -> bool {
+    existing.schema_version == requested.schema_version
+        && existing.event_id == requested.event_id
+        && existing.conversation_id == requested.conversation_id
+        && existing.attempt_id == requested.attempt_id
+        && existing.turn_id == requested.turn_id
+        && existing.timestamp == requested.timestamp
+        && existing.event == requested.event
+}
+
 fn find_event_at_sequence(
     transaction: &Transaction<'_>,
     sequence: u64,
@@ -5974,7 +6131,14 @@ fn upsert_agent_status_head_tx(
 fn find_subagent_ownership(
     transaction: &Transaction<'_>,
     subagent_id: &crate::runtime::identity::SubagentId,
-) -> Result<(AgentId, crate::runtime::subagent::WorkspaceSnapshot), ConversationStoreError> {
+) -> Result<
+    (
+        AgentId,
+        crate::runtime::subagent::WorkspaceSnapshot,
+        crate::events::types::SubagentOwnershipKind,
+    ),
+    ConversationStoreError,
+> {
     let event_id = crate::runtime::subagent::subagent_ownership_event_id(subagent_id);
     let envelope = find_event_by_id(transaction, &event_id)?.ok_or_else(|| {
         ConversationStoreError::InvalidReference(format!(
@@ -5985,9 +6149,10 @@ fn find_subagent_ownership(
         RuntimeEvent::SubagentOwnershipCommitted {
             subagent_id: embedded,
             child_agent_id,
+            ownership,
             workspace,
             ..
-        } if embedded == *subagent_id => Ok((child_agent_id, workspace)),
+        } if embedded == *subagent_id => Ok((child_agent_id, workspace, ownership)),
         RuntimeEvent::SubagentOwnershipCommitted {
             subagent_id: embedded,
             ..
@@ -6500,8 +6665,13 @@ fn validate_event_reference(
             workspace_handoff,
             ..
         } => {
-            let (committed_child_agent_id, workspace) =
+            let (committed_child_agent_id, workspace, ownership) =
                 find_subagent_ownership(transaction, subagent_id)?;
+            if ownership != crate::events::types::SubagentOwnershipKind::Normal {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "subagent {subagent_id} Workflow ownership cannot use parent terminal publication"
+                )));
+            }
             if committed_child_agent_id != *child_agent_id {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "subagent {subagent_id} terminal claims child agent {child_agent_id}, but durable ownership committed {committed_child_agent_id}"
@@ -6538,6 +6708,77 @@ fn validate_event_reference(
             {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "subagent terminal handoff does not match the owned workspace snapshot for {subagent_id}"
+                )));
+            }
+        }
+        RuntimeEvent::SubagentTerminalSettled {
+            subagent_id,
+            child_agent_id,
+            workspace_handoff,
+            ..
+        } => {
+            let expected_event_id =
+                crate::runtime::subagent::terminal_settlement_event_id(subagent_id);
+            if envelope.event_id != expected_event_id {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "Workflow subagent terminal event identity {} does not match the canonical identity {expected_event_id}",
+                    envelope.event_id
+                )));
+            }
+            let (committed_child_agent_id, workspace, ownership) =
+                find_subagent_ownership(transaction, subagent_id)?;
+            if ownership != crate::events::types::SubagentOwnershipKind::Workflow {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "subagent {subagent_id} normal ownership cannot use Workflow terminal settlement"
+                )));
+            }
+            if committed_child_agent_id != *child_agent_id {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "Workflow subagent {subagent_id} terminal claims child agent {child_agent_id}, but durable ownership committed {committed_child_agent_id}"
+                )));
+            }
+            if let Some(handoff) = workspace_handoff
+                && (handoff.validate().is_err()
+                    || !workspace.isolated
+                    || handoff.workspace != workspace.workspace
+                    || handoff.branch.as_str() != workspace.branch.as_deref().unwrap_or_default()
+                    || handoff.base_commit.as_str()
+                        != workspace.base_commit.as_deref().unwrap_or_default())
+            {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "Workflow subagent terminal handoff does not match the owned workspace snapshot for {subagent_id}"
+                )));
+            }
+        }
+        RuntimeEvent::WorkflowAgentOutputCommitted {
+            subagent_id,
+            node_id,
+            output,
+            ..
+        } => {
+            let expected_event_id = crate::runtime::subagent::workflow_output_event_id(subagent_id);
+            if envelope.event_id != expected_event_id {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "Workflow output event identity {} does not match the canonical identity {expected_event_id}",
+                    envelope.event_id
+                )));
+            }
+            if node_id.is_empty() || node_id.len() > 64 || node_id.contains('.') {
+                return Err(ConversationStoreError::InvalidReference(
+                    "Workflow output event has an invalid node identity".to_owned(),
+                ));
+            }
+            let encoded = serde_json::to_vec(output)
+                .map_err(|error| storage(format!("Workflow output event encoding: {error}")))?;
+            if encoded.len() > crate::runtime::subagent::MAX_RESULT_CONTENT_BYTES {
+                return Err(ConversationStoreError::InvalidReference(
+                    "Workflow output event exceeds the bounded value size".to_owned(),
+                ));
+            }
+            let (_, _, ownership) = find_subagent_ownership(transaction, subagent_id)?;
+            if ownership != crate::events::types::SubagentOwnershipKind::Workflow {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "subagent {subagent_id} normal ownership cannot commit a Workflow output"
                 )));
             }
         }
@@ -6596,6 +6837,8 @@ fn requires_specialized_transition(event: &RuntimeEvent) -> bool {
             | RuntimeEvent::AgentStatusEmitted { .. }
             | RuntimeEvent::BackgroundTerminalPublished { .. }
             | RuntimeEvent::SubagentTerminalPublished { .. }
+            | RuntimeEvent::SubagentTerminalSettled { .. }
+            | RuntimeEvent::WorkflowAgentOutputCommitted { .. }
             | RuntimeEvent::InteractionRequested { .. }
             | RuntimeEvent::InteractionSettled { .. }
     )
@@ -6835,6 +7078,9 @@ fn lifecycle_keys(event: &RuntimeEventEnvelope) -> Vec<(String, bool)> {
     if let RuntimeEvent::SubagentTerminalPublished { subagent_id, .. } = &event.event {
         return vec![(format!("subagent:{subagent_id}"), true)];
     }
+    if let RuntimeEvent::SubagentTerminalSettled { subagent_id, .. } = &event.event {
+        return vec![(format!("subagent:{subagent_id}"), true)];
+    }
     // The interaction lifecycle (Issue #109) is the same shape: opened by the
     // requested fact — which commits before the prompt reaches a client — and
     // closed exactly once by the settled fact. It is deliberately its own
@@ -6886,6 +7132,7 @@ fn is_terminal(event: &RuntimeEvent) -> bool {
             | RuntimeEvent::AttemptFailed { .. }
             | RuntimeEvent::BackgroundTerminalPublished { .. }
             | RuntimeEvent::SubagentTerminalPublished { .. }
+            | RuntimeEvent::SubagentTerminalSettled { .. }
             | RuntimeEvent::InteractionSettled { .. }
     )
 }
@@ -8909,6 +9156,7 @@ mod tests {
                     tool_call_id: crate::runtime::identity::ToolCallId::new("call-sub"),
                     agent: "explore".to_owned(),
                     definition_digest: "sha256:definition".to_owned(),
+                    ownership: crate::events::types::SubagentOwnershipKind::Normal,
                     workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
                         std::path::PathBuf::from("<shared-workspace>"),
                     ),
@@ -9017,6 +9265,81 @@ mod tests {
     }
 
     #[test]
+    fn workflow_agent_value_and_child_terminal_are_one_atomic_transition() {
+        let store = store();
+        let conversation_id = store.conversation_id().clone();
+        let subagent_id =
+            crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
+        let child_agent_id = AgentId::new(format!("agent-{subagent_id}"));
+        let timestamp = Utc.with_ymd_and_hms(2026, 8, 31, 12, 0, 0).unwrap();
+        store
+            .append_event(envelope(
+                &conversation_id,
+                crate::runtime::subagent::subagent_ownership_event_id(&subagent_id).as_ref(),
+                None,
+                RuntimeEvent::SubagentOwnershipCommitted {
+                    subagent_id: subagent_id.clone(),
+                    child_agent_id: child_agent_id.clone(),
+                    child_conversation_id: ConversationId::new(subagent_id.as_str()),
+                    tool_call_id: ToolCallId::new("workflow-call"),
+                    agent: "reviewer".to_owned(),
+                    definition_digest: "sha256:definition".to_owned(),
+                    ownership: crate::events::types::SubagentOwnershipKind::Workflow,
+                    workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
+                        std::path::PathBuf::from("<shared-workspace>"),
+                    ),
+                },
+            ))
+            .expect("ownership fact");
+
+        let workflow_id =
+            crate::runtime::workflow::WorkflowId::parse("review_pr").expect("workflow id");
+        let run_id = ToolCallId::new("workflow-run");
+        let terminal = crate::runtime::subagent::terminal_settlement(
+            &conversation_id,
+            &subagent_id,
+            &child_agent_id,
+            crate::events::types::SubagentTerminalState::Succeeded,
+            None,
+            timestamp,
+        );
+        let output = crate::runtime::subagent::workflow_output_event(
+            &conversation_id,
+            &subagent_id,
+            &workflow_id,
+            &run_id,
+            "review",
+            serde_json::json!({"passed": true}),
+            timestamp,
+        );
+
+        // A fault after both event rows are staged must roll the pair back;
+        // the ownership fact is the only durable state left.
+        store.arm_fail_event_times(1);
+        assert!(
+            store
+                .commit_workflow_agent_terminal(terminal.clone(), output.clone())
+                .is_err()
+        );
+        assert_eq!(store.read_events(None, 10).unwrap().events.len(), 1);
+
+        let committed = store
+            .commit_workflow_agent_terminal(terminal.clone(), output.clone())
+            .expect("compound Workflow terminal");
+        assert_eq!(committed.0.sequence, 2);
+        assert_eq!(committed.1.sequence, 3);
+        assert_eq!(store.read_events(None, 10).unwrap().events.len(), 3);
+
+        // An ambiguous/idempotent retry returns the same two durable facts and
+        // cannot allocate another lifecycle terminal or value event.
+        let retried = store
+            .commit_workflow_agent_terminal(terminal, output)
+            .expect("idempotent compound retry");
+        assert_eq!(retried, committed);
+        assert_eq!(store.read_events(None, 10).unwrap().events.len(), 3);
+    }
+
+    #[test]
     fn subagent_terminal_persists_a_workspace_handoff_with_the_terminal_fact() {
         let store = store();
         let conversation_id = store.conversation_id().clone();
@@ -9052,6 +9375,7 @@ mod tests {
                     tool_call_id: crate::runtime::identity::ToolCallId::new("call-sub"),
                     agent: "worker".to_owned(),
                     definition_digest: "sha256:definition".to_owned(),
+                    ownership: crate::events::types::SubagentOwnershipKind::Normal,
                     workspace,
                 },
             ))
@@ -9122,6 +9446,7 @@ mod tests {
                         )),
                         agent: "explore".to_owned(),
                         definition_digest: "sha256:definition".to_owned(),
+                        ownership: crate::events::types::SubagentOwnershipKind::Normal,
                         workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
                             std::path::PathBuf::from("<shared-workspace>"),
                         ),
@@ -9281,6 +9606,7 @@ mod tests {
                 tool_call_id: crate::runtime::identity::ToolCallId::new("call-a"),
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
+                ownership: crate::events::types::SubagentOwnershipKind::Normal,
                 workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
                     std::path::PathBuf::from("<shared-workspace>"),
                 ),
@@ -9310,6 +9636,7 @@ mod tests {
                 tool_call_id: crate::runtime::identity::ToolCallId::new("call-a"),
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
+                ownership: crate::events::types::SubagentOwnershipKind::Normal,
                 workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
                     std::path::PathBuf::from("<shared-workspace>"),
                 ),
@@ -9346,6 +9673,7 @@ mod tests {
                 tool_call_id: crate::runtime::identity::ToolCallId::new("call-b"),
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
+                ownership: crate::events::types::SubagentOwnershipKind::Normal,
                 workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
                     std::path::PathBuf::from("<shared-workspace>"),
                 ),

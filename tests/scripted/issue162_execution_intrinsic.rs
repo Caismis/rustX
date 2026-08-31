@@ -129,9 +129,11 @@ fn resolved(agent: &str) -> ResolvedSubagentSpec {
 fn spec(task: &str) -> SubagentStartSpec {
     SubagentStartSpec {
         resolved: resolved("explore"),
+        approval_mode: rustx::runtime::ApprovalMode::Policy,
         task: task.to_owned(),
         context: None,
         tool_call_id: ToolCallId::new("call-162"),
+        terminal: rustx::runtime::subagent::SubagentTerminalMode::Normal,
     }
 }
 

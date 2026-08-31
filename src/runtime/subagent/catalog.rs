@@ -22,7 +22,7 @@
 //!
 //! [`RuntimeResourceSnapshot`]: crate::runtime::resources::RuntimeResourceSnapshot
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -525,6 +525,11 @@ pub enum SubagentDefinitionError {
         /// The offending count.
         count: usize,
     },
+    /// Two definitions use one canonical name.
+    DuplicateDefinition {
+        /// The repeated name.
+        name: SubagentName,
+    },
 }
 
 impl core::fmt::Display for SubagentDefinitionError {
@@ -569,6 +574,9 @@ impl core::fmt::Display for SubagentDefinitionError {
                 formatter,
                 "{count} subagent definitions exceed the {MAX_SUBAGENT_DEFINITIONS} bound"
             ),
+            Self::DuplicateDefinition { name } => {
+                write!(formatter, "duplicate subagent definition {name:?}")
+            }
         }
     }
 }
@@ -601,10 +609,13 @@ impl SubagentCatalog {
     pub fn new(
         definitions: impl IntoIterator<Item = SubagentDefinition>,
     ) -> Result<Self, SubagentDefinitionError> {
-        let agents: BTreeMap<SubagentName, Arc<SubagentDefinition>> = definitions
-            .into_iter()
-            .map(|definition| (definition.name.clone(), Arc::new(definition)))
-            .collect();
+        let mut agents = BTreeMap::new();
+        for definition in definitions {
+            let name = definition.name.clone();
+            if agents.insert(name.clone(), Arc::new(definition)).is_some() {
+                return Err(SubagentDefinitionError::DuplicateDefinition { name });
+            }
+        }
         if agents.len() > MAX_SUBAGENT_DEFINITIONS {
             return Err(SubagentDefinitionError::TooManyDefinitions {
                 count: agents.len(),
@@ -641,7 +652,49 @@ impl SubagentCatalog {
     pub fn names(&self) -> Vec<&SubagentName> {
         self.agents.keys().collect()
     }
+
+    /// Builds the immutable catalog visible to one explicit admission domain.
+    ///
+    /// The source definitions remain in one catalog; this method creates only
+    /// a read-only projection for a model-facing domain and rejects an
+    /// admission id that is not defined.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SubagentAdmissionError::Unknown`] when an admission name is
+    /// absent from the authoritative definitions catalog.
+    pub fn admitted(&self, names: &BTreeSet<SubagentName>) -> Result<Self, SubagentAdmissionError> {
+        let mut agents = BTreeMap::new();
+        for name in names {
+            let Some(definition) = self.agents.get(name) else {
+                return Err(SubagentAdmissionError::Unknown(name.clone()));
+            };
+            agents.insert(name.clone(), Arc::clone(definition));
+        }
+        Ok(Self { agents })
+    }
 }
+
+/// An admission set named a profile that is not present in the definitions
+/// catalog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubagentAdmissionError {
+    /// The undefined profile id.
+    Unknown(SubagentName),
+}
+
+impl core::fmt::Display for SubagentAdmissionError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Unknown(name) => write!(
+                formatter,
+                "subagent admission references undefined profile {name:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SubagentAdmissionError {}
 
 /// Computes the deterministic digest over the versioned canonical framing.
 ///

@@ -8,7 +8,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::tools::executor::{ToolRegistration, ToolRegistry};
+use crate::tools::executor::{ToolRegistration, ToolRegistry, validate_model_facing_name};
 use crate::tools::types::{ToolDefinition, ToolOrigin};
 
 /// Startup activation controls supplied by current runtime/project settings
@@ -85,6 +85,14 @@ pub(crate) fn select_tools(
     available: &[ToolRegistration],
     policy: &ToolActivationPolicy,
 ) -> Result<(AvailableToolCatalog, ToolRegistry), String> {
+    // Validate every candidate before projecting availability. Selection can
+    // intentionally hide ordinary tools (`no_tools`, exclusions, or a strict
+    // allowlist), but it must never hide an identity collision with a
+    // runtime-owned protocol name.
+    for registration in available {
+        validate_model_facing_name(&registration.definition.name)
+            .map_err(|error| format!("available Tool selection is invalid: {error}"))?;
+    }
     let available_catalog = AvailableToolCatalog::new(
         available
             .iter()
@@ -374,5 +382,33 @@ mod tests {
         )
         .expect_err("ambiguous identity");
         assert!(error.contains("ambiguous"));
+    }
+
+    /// Candidate availability is validated before activation filtering, so a
+    /// hidden ordinary capability cannot collide with a runtime protocol.
+    #[test]
+    fn reserved_workflow_output_is_rejected_before_no_tools_hides_it() {
+        for origin in [
+            ToolOrigin::Builtin,
+            ToolOrigin::Python {
+                tool_version_id: crate::runtime::identity::ToolVersionId::new("version-1"),
+            },
+            ToolOrigin::Mcp {
+                server_id: crate::runtime::identity::McpServerId::new("server-1"),
+            },
+        ] {
+            let error = select_tools(
+                &[ToolRegistration::plain(
+                    definition(crate::tools::executor::WORKFLOW_OUTPUT_TOOL_NAME, origin),
+                    Arc::new(NoopTool),
+                )],
+                &ToolActivationPolicy {
+                    no_tools: true,
+                    ..ToolActivationPolicy::default()
+                },
+            )
+            .expect_err("reserved candidate must be rejected before selection");
+            assert!(error.contains("workflow_output"));
+        }
     }
 }

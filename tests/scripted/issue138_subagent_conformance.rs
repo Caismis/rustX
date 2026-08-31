@@ -233,6 +233,7 @@ async fn child_fixture(
             // A child has no subagent registry: recursion is absent by
             // construction.
             subagents: None,
+            workflow_output: None,
         },
         Arc::clone(&clock) as Arc<dyn MonotonicClock>,
     )
@@ -418,6 +419,7 @@ async fn parent_runtime_plane(
         clock: None,
         initial_messages: Vec::new(),
         subagents: Some(registry.clone()),
+        workflow_output: None,
     })
     .expect("parent runtime composition");
     runtime.activate();
@@ -480,9 +482,11 @@ async fn launch_wired_child_with_shell(
         .prepare(
             &SubagentStartSpec {
                 resolved: resolved_child_spec("conformance"),
+                approval_mode: rustx::runtime::ApprovalMode::Policy,
                 task: task.to_owned(),
                 context: None,
                 tool_call_id: ToolCallId::new("call-138"),
+                terminal: rustx::runtime::subagent::SubagentTerminalMode::Normal,
             },
             &CancellationSignal::new(),
         )
@@ -512,6 +516,7 @@ async fn launch_wired_child_with_shell(
                 parent_agent_id,
                 child_runtime,
                 child_observations,
+                None,
             ) => result,
             _ = stop_receiver => Ok(()),
         };
@@ -690,8 +695,10 @@ async fn the_child_spec_carries_the_frozen_timeout_policy() {
         &AgentId::new("agent-child"),
         &AgentId::new("agent-parent"),
         &resolved_child_spec("conformance"),
+        rustx::runtime::ApprovalMode::Policy,
         &physical_root,
         &workspace,
+        &rustx::runtime::subagent::SubagentTerminalMode::Normal,
     );
     assert_eq!(spec.model_timeout_policy, inherited_policy());
     assert_ne!(

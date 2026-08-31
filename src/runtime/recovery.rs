@@ -117,7 +117,8 @@ use chrono::{DateTime, Utc};
 use crate::conversation::{RecoverySafetyError, recovery_safety};
 use crate::durable::{ConversationStore, ConversationStoreError, PendingInboundItem};
 use crate::events::types::{
-    AttemptFailure, RuntimeEvent, RuntimeEventEnvelope, SubagentTerminalState,
+    AttemptFailure, RuntimeEvent, RuntimeEventEnvelope, SubagentOwnershipKind,
+    SubagentTerminalState,
 };
 use crate::message::types::{AssistantContentBlock, MessageBlock, ToolMessageBlock};
 use crate::publication::{
@@ -360,6 +361,10 @@ pub struct SubagentEvidence {
     /// never the definition the current catalog happens to hold for that
     /// name.
     pub definition_digest: String,
+    /// The terminal domain frozen at child admission. Recovery must preserve
+    /// this boundary: a Workflow child is settled directly and never turned
+    /// into a parent inbound notification.
+    pub ownership: SubagentOwnershipKind,
     /// The ownership event timestamp, retained as the immutable start time
     /// of the recovered registry projection.
     pub started_at: DateTime<Utc>,
@@ -853,6 +858,7 @@ impl RecoveryEvidence {
                 tool_call_id,
                 agent,
                 definition_digest,
+                ownership,
                 workspace,
             } => {
                 if let Some(ordinal) = subagent_id.conversation_ordinal(&self.conversation_id) {
@@ -867,6 +873,7 @@ impl RecoveryEvidence {
                         tool_call_id: tool_call_id.clone(),
                         agent: agent.clone(),
                         definition_digest: definition_digest.clone(),
+                        ownership: *ownership,
                         started_at: envelope.timestamp,
                         workspace: workspace.clone(),
                     },
@@ -884,6 +891,32 @@ impl RecoveryEvidence {
                 // The terminal publication is absorbing. A retained handoff
                 // remains durable read-model evidence even though the live
                 // child lifecycle itself is closed.
+                if let Some(evidence) = subagents.remove(subagent_id)
+                    && let Some(handoff) = workspace_handoff
+                {
+                    settled_subagent_handoffs.insert(
+                        subagent_id.clone(),
+                        RecoveredSubagentHandoff {
+                            evidence,
+                            state: *state,
+                            handoff: handoff.clone(),
+                        },
+                    );
+                }
+            }
+            RuntimeEvent::SubagentTerminalSettled {
+                subagent_id,
+                state,
+                workspace_handoff,
+                ..
+            } => {
+                if let Some(ordinal) = subagent_id.conversation_ordinal(&self.conversation_id) {
+                    self.highest_subagent_ordinal = self.highest_subagent_ordinal.max(ordinal);
+                }
+                // A Workflow terminal-settlement fact closes the native child
+                // lifecycle without ever creating a parent notification. A
+                // retained handoff remains recoverable read-model evidence;
+                // the Workflow itself is never replayed.
                 if let Some(evidence) = subagents.remove(subagent_id)
                     && let Some(handoff) = workspace_handoff
                 {
@@ -1970,16 +2003,37 @@ impl RecoveryPlan {
             let workspace = crate::runtime::subagent::SubagentWorkspaceManager::inspect_recovered(
                 &class.evidence.workspace,
             );
-            let (draft, event) = crate::runtime::subagent::recovery_terminal_publication(
-                &self.conversation_id,
-                &class.evidence.subagent_id,
-                &class.evidence.child_agent_id,
-                &class.evidence.agent,
-                &class.evidence.definition_digest,
-                workspace.handoff.as_ref(),
-                clock.now(),
-            );
-            store.accept_inbound_with_event(draft, event)?;
+            let timestamp = clock.now();
+            match class.evidence.ownership {
+                SubagentOwnershipKind::Normal => {
+                    let (draft, event) = crate::runtime::subagent::recovery_terminal_publication(
+                        &self.conversation_id,
+                        &class.evidence.subagent_id,
+                        &class.evidence.child_agent_id,
+                        &class.evidence.agent,
+                        &class.evidence.definition_digest,
+                        workspace.handoff.as_ref(),
+                        timestamp,
+                    );
+                    store.accept_inbound_with_event(draft, event)?;
+                }
+                SubagentOwnershipKind::Workflow => {
+                    // Workflow children have no parent notification phase.
+                    // Their process-local run cannot be resumed after a
+                    // crash, so close native ownership directly as an honest
+                    // interruption without replaying any node or creating
+                    // Pending Inbound.
+                    let event = crate::runtime::subagent::terminal_settlement(
+                        &self.conversation_id,
+                        &class.evidence.subagent_id,
+                        &class.evidence.child_agent_id,
+                        SubagentTerminalState::Interrupted,
+                        workspace.handoff.as_ref(),
+                        timestamp,
+                    );
+                    store.commit_subagent_terminal(event)?;
+                }
+            }
             committed
                 .subagent_terminals
                 .push(class.evidence.subagent_id.clone());
@@ -2342,6 +2396,7 @@ mod tests {
                 tool_call_id: ToolCallId::new("call-child"),
                 agent: "worker".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
+                ownership: SubagentOwnershipKind::Normal,
                 workspace,
             },
             None,
@@ -2366,6 +2421,39 @@ mod tests {
             plan.settled_subagent_handoffs()[0].state,
             SubagentTerminalState::Succeeded
         );
+    }
+
+    #[test]
+    fn a_workflow_terminal_settlement_closes_recovery_lifecycle_without_notification() {
+        let mut evidence = base_evidence();
+        let subagent_id = SubagentId::for_conversation(&conversation(), 1);
+        let child_agent_id = crate::runtime::identity::AgentId::new("agent-child");
+        let ownership = envelope(
+            RuntimeEvent::SubagentOwnershipCommitted {
+                subagent_id: subagent_id.clone(),
+                child_agent_id: child_agent_id.clone(),
+                child_conversation_id: ConversationId::new(subagent_id.as_str()),
+                tool_call_id: ToolCallId::new("call-child"),
+                agent: "worker".to_owned(),
+                definition_digest: "sha256:definition".to_owned(),
+                ownership: SubagentOwnershipKind::Workflow,
+                workspace: WorkspaceSnapshot::shared(std::path::PathBuf::from("/tmp/workspace")),
+            },
+            None,
+        );
+        let terminal = envelope(
+            RuntimeEvent::SubagentTerminalSettled {
+                subagent_id: subagent_id.clone(),
+                child_agent_id,
+                state: SubagentTerminalState::Succeeded,
+                workspace_handoff: None,
+            },
+            None,
+        );
+
+        fold_all(&mut evidence, &[ownership, terminal]);
+        assert!(evidence.unsettled_subagents.is_empty());
+        assert!(evidence.settled_subagent_handoffs.is_empty());
     }
 
     fn trailing_human(id: &str) -> MessageBlock {

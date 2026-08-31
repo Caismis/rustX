@@ -97,6 +97,7 @@
 //! `HostConstructionError::RuntimeAlreadyActivated`. Runtime Client
 //! *attachments* remain fully dynamic after activation.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -126,6 +127,10 @@ use crate::runtime::subagent::{
     ResolvedSubagentTool, SubagentCatalog, SubagentDefinition, SubagentProjectInstructionPolicy,
     SubagentResolver, SubagentWorkspaceManager,
 };
+use crate::runtime::workflow::{
+    MAX_WORKFLOW_BYTES, WorkflowCatalog, WorkflowDefinition, WorkflowOutputLatch, WorkflowProgram,
+    WorkflowRuntime,
+};
 use crate::runtime_client::endpoint::RuntimeClientEndpoint;
 use crate::runtime_client::host::{
     HostConstructionError, RuntimeClientHost, RuntimeClientHostConfig, RuntimeClientSessionControl,
@@ -137,7 +142,9 @@ use crate::tools::native::{NativeToolResources, register_native_tools};
 use crate::tools::runtime::ConversationToolRuntime;
 use crate::tools::types::ToolDefinition;
 
-use super::config::{CurrentRuntimeConfig, CurrentRuntimeConfigError, SubagentsDocument};
+use super::config::{
+    CurrentRuntimeConfig, CurrentRuntimeConfigError, SubagentsDocument, WorkflowsDocument,
+};
 use super::session::{
     SessionCatalog, SessionError, SessionId, SessionNodeId, SessionNodeOrigin,
     SessionPersistentState,
@@ -251,6 +258,11 @@ pub struct LocalRuntimeDependencies {
     pub credentials: Arc<dyn CredentialEnvironment>,
     /// The deterministic token estimator.
     pub estimator: Arc<dyn TokenEstimator>,
+    /// Optional executable override for the native child process. Production
+    /// uses the current `rustx` executable; an explicit value lets an
+    /// integration harness point the same native boundary at that binary
+    /// when the parent is running inside a test executable.
+    pub child_program: Option<PathBuf>,
 }
 
 impl Default for LocalRuntimeDependencies {
@@ -258,6 +270,7 @@ impl Default for LocalRuntimeDependencies {
         Self {
             credentials: Arc::new(ProcessCredentialEnvironment),
             estimator: Arc::new(DefaultTokenEstimator),
+            child_program: None,
         }
     }
 }
@@ -275,6 +288,7 @@ impl std::fmt::Debug for LocalRuntimeDependencies {
 struct LocalRuntimeResourceLoader {
     paths: LocalRuntimePaths,
     native_resources: NativeToolResources,
+    workflow_runtime: WorkflowRuntime,
     /// The launch-scoped model authority. Reload re-reads `rustx.jsonc` but
     /// not `models.jsonc`, so an agent's explicit model reference is
     /// validated against exactly the catalog this process was launched with.
@@ -286,16 +300,19 @@ impl LocalRuntimeResourceLoader {
         paths: LocalRuntimePaths,
         native_resources: NativeToolResources,
         models: ModelBindingRegistry,
+        workflow_runtime: WorkflowRuntime,
     ) -> Self {
         Self {
             paths,
             native_resources,
+            workflow_runtime,
             models,
         }
     }
 }
 
 impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
+    #[allow(clippy::too_many_lines)] // one atomic candidate construction pipeline
     fn prepare<'a>(
         &'a self,
         capability: &'a CapabilityCoordinator,
@@ -317,11 +334,29 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             // `subagent` intrinsic's model-facing description is generated
             // from exactly the catalog this candidate generation admits.
             let subagents = load_subagent_catalog(&workspace, &config.subagents)?;
+            let main_admission = config
+                .subagents
+                .main
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            let workflow_admission = config
+                .subagents
+                .workflow
+                .iter()
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            let main_catalog = subagents
+                .admitted(&main_admission)
+                .map_err(|error| RuntimeResourceLoadError::new(format!("{error}")))?;
+            let workflows =
+                load_workflow_catalog(&workspace, &config.workflows, &workflow_admission)?;
+            let default_tools = default_tools_with_workflows(&config.default_tools, &workflows);
             let mut registry = ToolRegistry::new();
             register_native_tools(
                 &mut registry,
                 NativeToolResources {
-                    subagent_catalog: subagents.clone(),
+                    subagent_catalog: main_catalog,
                     ..self.native_resources.clone()
                 },
                 config.native_tools.to_policies(),
@@ -329,6 +364,16 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             .map_err(|error| {
                 RuntimeResourceLoadError::new(format!(
                     "cannot register reload-time native tools: {error}"
+                ))
+            })?;
+            crate::tools::native::register_workflow_tools(
+                &mut registry,
+                &self.workflow_runtime,
+                &workflows,
+            )
+            .map_err(|error| {
+                RuntimeResourceLoadError::new(format!(
+                    "cannot register reload-time Workflow Tools: {error}"
                 ))
             })?;
             let workspace_authority =
@@ -361,7 +406,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                 .prepare_candidate_with_inputs(CapabilityResourceInputs {
                     base_tool_registry: Arc::new(registry),
                     tool_activation: ToolActivationPolicy {
-                        default_tools: Some(config.default_tools.clone()),
+                        default_tools: Some(default_tools),
                         no_builtin_tools: self.paths.no_builtin_tools,
                         no_tools: self.paths.no_tools,
                         tools: self.paths.tools.clone(),
@@ -377,6 +422,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                         "cannot prepare reload capability resources: {error}"
                     ))
                 })?;
+            validate_workflow_tool_name_collisions(&candidate, &workflows)?;
             let prepared = PreparedRuntimeResources::new(
                 load_project_context_files(&workspace)?,
                 None,
@@ -384,6 +430,9 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                 candidate,
             )
             .with_subagent_catalog(subagents);
+            let prepared = prepared
+                .with_subagent_admissions(main_admission, workflow_admission)
+                .with_workflow_catalog(workflows);
             // The catalog is admitted against the very candidate that is
             // about to be published, and rejection happens entirely
             // off-side: nothing of this candidate generation — catalog,
@@ -877,8 +926,8 @@ fn load_subagent_catalog(
     workspace: &Path,
     document: &SubagentsDocument,
 ) -> Result<SubagentCatalog, RuntimeResourceLoadError> {
-    let mut definitions = Vec::with_capacity(document.agents.len());
-    for (name, agent) in &document.agents {
+    let mut definitions = Vec::with_capacity(document.definitions.len());
+    for (name, agent) in &document.definitions {
         let instructions_source = resolve_workspace_path(workspace, &agent.instructions_file);
         let instructions = read_resource(&instructions_source, name.as_str(), "instructionsFile")?;
         let mut files = Vec::with_capacity(agent.agents_md.files.len());
@@ -909,6 +958,74 @@ fn load_subagent_catalog(
         .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))
 }
 
+/// Loads and compiles exactly the configured Workflow definitions.
+///
+/// The configured id is the only filesystem identity: a registered `id` is
+/// read from `.rustx/workflows/{id}.yaml`. Directory contents are never
+/// scanned, so an unregistered YAML file cannot become model-visible by
+/// accident. Compilation happens before the candidate reaches the runtime
+/// resource publication boundary.
+fn load_workflow_catalog(
+    workspace: &Path,
+    document: &WorkflowsDocument,
+    workflow_profiles: &BTreeSet<crate::runtime::subagent::SubagentName>,
+) -> Result<WorkflowCatalog, RuntimeResourceLoadError> {
+    let workflow_root = workspace.join(".rustx").join("workflows");
+    let mut programs = Vec::with_capacity(document.definitions.len());
+    for id in &document.definitions {
+        let path = workflow_root.join(format!("{}.yaml", id.as_str()));
+        let bytes = std::fs::read(&path).map_err(|error| {
+            RuntimeResourceLoadError::new(format!(
+                "cannot read registered workflow {id} at {}: {error}",
+                path.display()
+            ))
+        })?;
+        if bytes.len() > MAX_WORKFLOW_BYTES {
+            return Err(RuntimeResourceLoadError::new(format!(
+                "workflow {id} at {} exceeds the {MAX_WORKFLOW_BYTES}-byte bound",
+                path.display()
+            )));
+        }
+        let definition: WorkflowDefinition = serde_yaml::from_slice(&bytes).map_err(|error| {
+            RuntimeResourceLoadError::new(format!(
+                "cannot deserialize registered workflow {id} at {}: {error}",
+                path.display()
+            ))
+        })?;
+        let program = WorkflowProgram::compile(id.clone(), definition, workflow_profiles).map_err(
+            |error| {
+                RuntimeResourceLoadError::new(format!(
+                    "cannot compile registered workflow {id} at {}: {error}",
+                    path.display()
+                ))
+            },
+        )?;
+        programs.push(program);
+    }
+    WorkflowCatalog::new(programs, document.main.clone()).map_err(|error| {
+        RuntimeResourceLoadError::new(format!("cannot admit Workflow catalog: {error}"))
+    })
+}
+
+/// Workflow `main` admission is model-facing capability admission. Include
+/// those concrete Tool names in the normal optional built-in default set so
+/// a registered Workflow is available without duplicating its id in the
+/// unrelated `defaultTools` selector. Explicit `--no-tools`,
+/// `--no-builtin-tools`, or a strict `--tools` allowlist still has the
+/// existing higher-priority meaning.
+fn default_tools_with_workflows(
+    default_tools: &[String],
+    workflows: &WorkflowCatalog,
+) -> Vec<String> {
+    let mut result = default_tools.to_vec();
+    for id in workflows.main() {
+        if !result.iter().any(|name| name == id.as_str()) {
+            result.push(id.to_string());
+        }
+    }
+    result
+}
+
 fn read_resource(
     path: &Path,
     agent: &str,
@@ -916,13 +1033,13 @@ fn read_resource(
 ) -> Result<String, RuntimeResourceLoadError> {
     let bytes = std::fs::read(path).map_err(|error| {
         RuntimeResourceLoadError::new(format!(
-            "cannot read subagents.agents.{agent}.{field} {}: {error}",
+            "cannot read subagents.definitions.{agent}.{field} {}: {error}",
             path.display()
         ))
     })?;
     let content = String::from_utf8(bytes).map_err(|error| {
         RuntimeResourceLoadError::new(format!(
-            "subagents.agents.{agent}.{field} {} is not UTF-8: {error}",
+            "subagents.definitions.{agent}.{field} {} is not UTF-8: {error}",
             path.display()
         ))
     })?;
@@ -948,8 +1065,36 @@ fn validate_subagent_catalog(
         models,
     )
     .map_err(|(agent, error)| {
-        RuntimeResourceLoadError::new(format!("subagents.agents.{agent}: {error}"))
+        RuntimeResourceLoadError::new(format!("subagents.definitions.{agent}: {error}"))
     })
+}
+
+/// Rejects a model-facing Workflow id that is already used by another
+/// capability in the same candidate generation. The active Tool selection can
+/// hide a duplicate under `noTools`, but hiding it must not turn an identity
+/// collision into a valid configuration.
+fn validate_workflow_tool_name_collisions(
+    candidate: &crate::capabilities::PreparedCapabilityCandidate,
+    workflows: &WorkflowCatalog,
+) -> Result<(), RuntimeResourceLoadError> {
+    for workflow_id in workflows.main() {
+        let expected_id = format!("tool-workflow-{workflow_id}");
+        if workflow_id.as_str() == crate::tools::native::SUBAGENT_TOOL_NAME {
+            return Err(RuntimeResourceLoadError::new(format!(
+                "Workflow id {workflow_id:?} is reserved by the native subagent Tool"
+            )));
+        }
+        if let Some(conflict) = candidate.available_tools().tools().iter().find(|tool| {
+            tool.definition.name == workflow_id.as_str()
+                && tool.definition.id.as_str() != expected_id
+        }) {
+            return Err(RuntimeResourceLoadError::new(format!(
+                "Workflow id {workflow_id:?} collides with Tool {} ({})",
+                conflict.definition.name, conflict.definition.id
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// The shared semantic composition of one local runtime (Issue #61).
@@ -967,6 +1112,7 @@ pub struct LocalConversationCore {
     runtime: ConversationRuntime,
     tool_runtime: ConversationToolRuntime,
     capability: CapabilityCoordinator,
+    workflow_output: Option<Arc<WorkflowOutputLatch>>,
 }
 
 impl std::fmt::Debug for LocalConversationCore {
@@ -1063,6 +1209,32 @@ impl LocalConversationCore {
             .map_err(|error| LocalRuntimeError::Capability {
             detail: error.to_string(),
         })?;
+        let main_admission = runtime_config
+            .subagents
+            .main
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let workflow_admission = runtime_config
+            .subagents
+            .workflow
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let main_catalog = subagent_catalog
+            .admitted(&main_admission)
+            .map_err(|error| LocalRuntimeError::Capability {
+                detail: error.to_string(),
+            })?;
+        let workflows = load_workflow_catalog(
+            &paths.workspace,
+            &runtime_config.workflows,
+            &workflow_admission,
+        )
+        .map_err(|error| LocalRuntimeError::Capability {
+            detail: error.to_string(),
+        })?;
+        let default_tools = default_tools_with_workflows(&runtime_config.default_tools, &workflows);
         //
         // The frozen model timeout policy is resolved once here so the
         // parent runtime and every launched subagent child share exactly
@@ -1076,10 +1248,13 @@ impl LocalConversationCore {
                 mailbox: tool_runtime.mailbox(),
                 clock: Arc::new(crate::runtime::types::SystemClock),
                 spawn: crate::runtime::subagent::SubagentSpawnPlan {
-                    program: std::env::current_exe().map_err(|error| LocalRuntimeError::Io {
-                        path: PathBuf::from("<current exe>"),
-                        detail: error.to_string(),
-                    })?,
+                    program: match dependencies.child_program.clone() {
+                        Some(program) => program,
+                        None => std::env::current_exe().map_err(|error| LocalRuntimeError::Io {
+                            path: PathBuf::from("<current exe>"),
+                            detail: error.to_string(),
+                        })?,
+                    },
                     runtime_root: artifacts_root.clone(),
                     model_timeout_policy,
                     agent_status: runtime_config.agent_status.clone(),
@@ -1094,16 +1269,26 @@ impl LocalConversationCore {
                 max_active: runtime_config.subagents.max_concurrent,
             },
         );
+        let workflow_runtime =
+            WorkflowRuntime::new(subagents.clone(), tool_runtime.durable_store());
         let mut base_registry = ToolRegistry::new();
         let native_resources = NativeToolResources {
             background: tool_runtime.background().clone(),
             subagents: Some(subagents.clone()),
-            subagent_catalog: subagent_catalog.clone(),
+            subagent_catalog: main_catalog,
         };
         register_native_tools(
             &mut base_registry,
             native_resources.clone(),
             runtime_config.native_tools.to_policies(),
+        )
+        .map_err(|error| LocalRuntimeError::NativeTools {
+            detail: format!("{error:?}"),
+        })?;
+        crate::tools::native::register_workflow_tools(
+            &mut base_registry,
+            &workflow_runtime,
+            &workflows,
         )
         .map_err(|error| LocalRuntimeError::NativeTools {
             detail: format!("{error:?}"),
@@ -1142,7 +1327,7 @@ impl LocalConversationCore {
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: Arc::new(base_registry),
             tool_activation: ToolActivationPolicy {
-                default_tools: Some(runtime_config.default_tools.clone()),
+                default_tools: Some(default_tools),
                 no_builtin_tools: paths.no_builtin_tools,
                 no_tools: paths.no_tools,
                 tools: paths.tools.clone(),
@@ -1160,61 +1345,66 @@ impl LocalConversationCore {
             detail: format!("{error:?}"),
         })?;
 
-        // 10-11. Prepare and commit the initial capability candidate before
-        // anything can serve protocol input. This is the startup capability
-        // commit: it happens *before* the conversation runtime exists, so
-        // it is not subject to the runtime's lifecycle gate (Issue #61).
-        // Optional-source failures (Python tools, any one MCP server) are
-        // already isolated into typed availability state inside
-        // `prepare_candidate` (Issue #81); an error here is a *base*
-        // capability-plane failure and stays fatal.
+        // 10-11. Build one complete candidate off-side before publishing any
+        // capability or resource state. The named-subagent catalog, its two
+        // admission domains, the registered Workflow programs, project
+        // instructions, and the capability candidate are validated as one
+        // coherent generation. Optional-source failures (Python tools and
+        // individual MCP servers) remain typed availability state inside
+        // `prepare_candidate` (Issue #81); base capability failures remain
+        // fatal.
         let candidate = capability.prepare_candidate().await.map_err(|error| {
             LocalRuntimeError::Capability {
                 detail: format!("{error:?}"),
             }
         })?;
-        capability
-            .commit(candidate)
-            .map_err(|error| LocalRuntimeError::Capability {
-                detail: format!("{error:?}"),
-            })?;
-        let resources = Arc::new(
-            RuntimeResourceSnapshot::new(
-                RuntimeResourceRevision::new(1),
-                load_project_context_files(tool_runtime.workspace().root()).map_err(|error| {
-                    LocalRuntimeError::Capability {
-                        detail: error.to_string(),
-                    }
-                })?,
-                None,
-                crate::context::ContextAssembly::new(),
-                capability.current_snapshot(),
-            )
-            .with_subagent_catalog(subagent_catalog)
-            .with_capability_availability(capability.availability()),
-        );
-        // The launch generation's catalog is admitted against the very
-        // capability/Skill/model authority just committed for it: a
-        // definition naming an unknown capability, Skill, or model fails
-        // startup rather than surfacing later as a broken invocation.
-        {
-            let skills = crate::skills::SkillSnapshot::new(
-                capability.current_snapshot().skills().packages().to_vec(),
-            );
-            SubagentResolver::validate_catalog(
-                resources.subagents(),
-                capability.current_snapshot().available_tools(),
-                resources.capability_availability(),
-                &skills,
-                &registry,
-            )
-            .map_err(|(agent, error)| LocalRuntimeError::Capability {
-                detail: format!("subagents.agents.{agent}: {error}"),
-            })?;
-        }
-        let resource_loader: Arc<dyn RuntimeResourceLoader> = Arc::new(
-            LocalRuntimeResourceLoader::new(paths.clone(), native_resources, registry),
-        );
+        validate_workflow_tool_name_collisions(&candidate, &workflows).map_err(|error| {
+            LocalRuntimeError::Capability {
+                detail: error.to_string(),
+            }
+        })?;
+        let prepared = PreparedRuntimeResources::new(
+            load_project_context_files(tool_runtime.workspace().root()).map_err(|error| {
+                LocalRuntimeError::Capability {
+                    detail: error.to_string(),
+                }
+            })?,
+            None,
+            crate::context::ContextAssembly::new(),
+            candidate,
+        )
+        .with_subagent_catalog(subagent_catalog)
+        .with_subagent_admissions(main_admission, workflow_admission)
+        .with_workflow_catalog(workflows);
+        validate_subagent_catalog(&prepared, &registry).map_err(|error| {
+            LocalRuntimeError::Capability {
+                detail: error.to_string(),
+            }
+        })?;
+
+        // This is the sole startup publication boundary. Every value below
+        // was admitted against the exact candidate that is now committed,
+        // so startup cannot expose a capability generation whose subagent or
+        // Workflow catalog belongs to another configuration generation.
+        let (candidate, resource_data) = prepared.into_parts();
+        let capability_snapshot =
+            capability
+                .commit(candidate)
+                .map_err(|error| LocalRuntimeError::Capability {
+                    detail: format!("{error:?}"),
+                })?;
+        let resources = Arc::new(RuntimeResourceSnapshot::from_prepared(
+            RuntimeResourceRevision::new(1),
+            resource_data,
+            capability_snapshot,
+        ));
+        let resource_loader: Arc<dyn RuntimeResourceLoader> =
+            Arc::new(LocalRuntimeResourceLoader::new(
+                paths.clone(),
+                native_resources,
+                registry,
+                workflow_runtime,
+            ));
 
         // Reopening a selected lineage must re-supply only its immutable
         // bootstrap prefix to ConversationRuntime. Later canonical turns are
@@ -1251,12 +1441,14 @@ impl LocalConversationCore {
             clock: None,
             initial_messages,
             subagents: Some(subagents),
+            workflow_output: None,
         })?;
 
         Ok(Self {
             runtime,
             tool_runtime,
             capability,
+            workflow_output: None,
         })
     }
 
@@ -1449,6 +1641,18 @@ impl LocalConversationCore {
             )
             .with_frozen_skill_catalog(&skills),
         );
+        let workflow_output_latch = match &spec.terminal {
+            crate::runtime::subagent::ipc::ChildTerminalMode::Normal => None,
+            crate::runtime::subagent::ipc::ChildTerminalMode::WorkflowOutput { output_schema } => {
+                Some(Arc::new(
+                    WorkflowOutputLatch::new(output_schema.clone())
+                        .map_err(|detail| LocalRuntimeError::Capability { detail })?,
+                ))
+            }
+        };
+        let workflow_output = workflow_output_latch
+            .clone()
+            .map(|latch| -> Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal> { latch });
         let resource_loader: Arc<dyn RuntimeResourceLoader> =
             Arc::new(FrozenSubagentResourceLoader {
                 resources: Arc::clone(&resources),
@@ -1460,7 +1664,7 @@ impl LocalConversationCore {
         let runtime = ConversationRuntime::new(RuntimeConversationConfig {
             agent_id: spec.child_agent_id.clone(),
             model,
-            approval_mode: crate::runtime::ApprovalMode::Policy,
+            approval_mode: spec.approval_mode,
             model_timeout_policy: spec.model_timeout_policy,
             context: ConversationContextConfig {
                 policy: spec.context,
@@ -1479,12 +1683,14 @@ impl LocalConversationCore {
             // A child runtime has no subagent registry: recursive
             // delegation is absent by construction.
             subagents: None,
+            workflow_output,
         })?;
 
         Ok(Self {
             runtime,
             tool_runtime,
             capability,
+            workflow_output: workflow_output_latch,
         })
     }
 
@@ -1504,6 +1710,12 @@ impl LocalConversationCore {
     #[must_use]
     pub const fn capability(&self) -> &CapabilityCoordinator {
         &self.capability
+    }
+
+    /// The child-local Workflow terminal latch, when this core was composed
+    /// for a Workflow-owned `AgentRun`.
+    pub(crate) fn workflow_output(&self) -> Option<Arc<WorkflowOutputLatch>> {
+        self.workflow_output.clone()
     }
 
     /// Finishes the composition as an **interactive** runtime: the Runtime
@@ -2161,6 +2373,7 @@ mod subagent_child_tests {
                 materialization:
                     crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
             },
+            approval_mode: crate::runtime::ApprovalMode::Policy,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             agent_status: crate::context::AgentStatusConfig::default(),
             context: crate::context::SessionContextPolicy {
@@ -2172,6 +2385,7 @@ mod subagent_child_tests {
                 root.join("workspace"),
             ),
             runtime_root: root.join("child"),
+            terminal: crate::runtime::subagent::ipc::ChildTerminalMode::Normal,
         }
     }
 
@@ -3104,7 +3318,7 @@ mod issue163_composition_tests {
         let echo_call_count_file = root.path().join("echo-call-count");
         let executable = std::env::current_exe().expect("test executable");
         let config_document = serde_json::json!({
-            "schemaVersion": 4,
+            "schemaVersion": 5,
             "agentId": "agent-parent",
             "model": {"model": "scripted/scripted"},
             "context": {"reserveTokens": 0, "keepRecentTokens": 0},
@@ -3123,13 +3337,15 @@ mod issue163_composition_tests {
             },
             "subagents": {
                 "maxConcurrent": 4,
-                "agents": {
+                "definitions": {
                     TEST_AGENT: {
                         "description": "Read the workspace",
                         "instructionsFile": "subagents/explore.md",
                         "tools": {"builtin": ["read"]},
                     },
                 },
+                "main": [TEST_AGENT],
+                "workflow": [],
             },
         });
         let config_bytes = serde_json::to_vec_pretty(&config_document).expect("runtime config");

@@ -792,6 +792,70 @@ fn commit_subagent_ownership_through(
     store.append_event(event)
 }
 
+/// Commits the durable terminal-settlement fact of a Workflow-owned child
+/// through a store handle. Unlike `SubagentTerminalPublished`, this fact has
+/// no inbound message: `WorkflowRuntime` consumes the child result directly and
+/// the durable transition exists only to close the ownership lifecycle and
+/// preserve terminal evidence.
+fn commit_subagent_terminal_through(
+    store: &(impl ConversationStore + ?Sized),
+    event: RuntimeEventEnvelope,
+) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+    let successful = matches!(
+        &event.event,
+        crate::events::types::RuntimeEvent::SubagentTerminalSettled {
+            state: crate::events::types::SubagentTerminalState::Succeeded,
+            ..
+        }
+    );
+    if successful {
+        return Err(ConversationStoreError::InvalidReference(
+            "a successful Workflow terminal must commit its value with the native child terminal fact".to_owned(),
+        ));
+    }
+    if !matches!(
+        event.event,
+        crate::events::types::RuntimeEvent::SubagentTerminalSettled { .. }
+    ) {
+        return Err(ConversationStoreError::InvalidReference(
+            "the subagent capability commits only a Workflow terminal-settlement fact".to_owned(),
+        ));
+    }
+    store.commit_subagent_terminal(event)
+}
+
+/// Commits a successful Workflow Agent's validated value and its native child
+/// terminal lifecycle fact in one durable transaction. The two facts are
+/// deliberately a narrow compound transition: a Workflow child has no
+/// parent inbound notification, and neither fact may become a separate
+/// settled/delivered authority phase.
+fn commit_workflow_agent_terminal_through(
+    store: &(impl ConversationStore + ?Sized),
+    terminal: RuntimeEventEnvelope,
+    output: RuntimeEventEnvelope,
+) -> Result<(RuntimeEventEnvelope, RuntimeEventEnvelope), ConversationStoreError> {
+    let valid_pair = matches!(
+        (&terminal.event, &output.event),
+        (
+            crate::events::types::RuntimeEvent::SubagentTerminalSettled {
+                subagent_id: terminal_subagent,
+                state: crate::events::types::SubagentTerminalState::Succeeded,
+                ..
+            },
+            crate::events::types::RuntimeEvent::WorkflowAgentOutputCommitted {
+                subagent_id: output_subagent,
+                ..
+            }
+        ) if terminal_subagent == output_subagent
+    );
+    if !valid_pair {
+        return Err(ConversationStoreError::InvalidReference(
+            "the Workflow terminal transition requires one successful SubagentTerminalSettled and its matching WorkflowAgentOutputCommitted fact".to_owned(),
+        ));
+    }
+    store.commit_workflow_agent_terminal(terminal, output)
+}
+
 /// Commits one durable interaction audit fact through a store handle,
 /// rejecting every other event payload.
 ///
@@ -866,7 +930,7 @@ pub trait ConversationInteractionAudit: Send + Sync + 'static {
 /// interface only; the conversation execution plane receives the full
 /// [`ConversationStore`] separately.
 ///
-/// Four — and only four — Event Journal facts are reachable here, all
+/// Six — and only six — Event Journal facts are reachable here, all
 /// because they are inseparable from a detached execution's own durable
 /// ownership:
 ///
@@ -875,6 +939,9 @@ pub trait ConversationInteractionAudit: Send + Sync + 'static {
 /// commit_subagent_ownership    -> SubagentOwnershipCommitted     (subagent start commit)
 /// accept_inbound_with_event    -> BackgroundTerminalPublished    (background terminal commit)
 /// accept_inbound_with_event    -> SubagentTerminalPublished      (subagent terminal commit)
+/// commit_subagent_terminal     -> SubagentTerminalSettled        (Workflow terminal commit)
+/// commit_workflow_agent_terminal -> SubagentTerminalSettled + WorkflowAgentOutputCommitted
+///                                  (successful Workflow terminal commit)
 /// ```
 ///
 /// Each is a typed single-purpose transition, never a generic event append.
@@ -922,6 +989,24 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
         &self,
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+
+    /// Commits the durable terminal-settlement fact of a Workflow-owned
+    /// child without creating a parent inbound notification. The payload
+    /// must be a [`RuntimeEvent::SubagentTerminalSettled`](crate::events::types::RuntimeEvent::SubagentTerminalSettled).
+    fn commit_subagent_terminal(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+
+    /// Commits a successful Workflow Agent's structured value together with
+    /// its native child terminal fact in one durable transaction. The payload
+    /// pair is validated as a single typed transition; no parent inbound
+    /// notification is created.
+    fn commit_workflow_agent_terminal(
+        &self,
+        terminal: RuntimeEventEnvelope,
+        output: RuntimeEventEnvelope,
+    ) -> Result<(RuntimeEventEnvelope, RuntimeEventEnvelope), ConversationStoreError>;
 
     /// Selects a finite pending batch without consuming it.
     fn select_pending_batch(&self) -> Result<Option<PendingBatch>, ConversationStoreError>;
@@ -1382,6 +1467,26 @@ pub trait ConversationStore: Send + Sync + 'static {
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
 
+    /// Commits a non-success Workflow-owned child terminal fact without a
+    /// parent inbound notification. Successful Workflow terminals must use
+    /// [`ConversationStore::commit_workflow_agent_terminal`] so their value
+    /// and lifecycle fact cannot split across durable transitions.
+    fn commit_subagent_terminal(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+
+    /// Commits a successful Workflow Agent's structured value and its native
+    /// `SubagentTerminalSettled` lifecycle fact in one durable transaction.
+    /// This specialized transition is the Workflow terminal boundary: it
+    /// records execution evidence without creating a parent message or a
+    /// durable `settled -> delivered` state.
+    fn commit_workflow_agent_terminal(
+        &self,
+        terminal: RuntimeEventEnvelope,
+        output: RuntimeEventEnvelope,
+    ) -> Result<(RuntimeEventEnvelope, RuntimeEventEnvelope), ConversationStoreError>;
+
     /// Commits one interaction audit event and returns the transcript
     /// position allocated in the same durable transaction.
     fn append_interaction_audit(
@@ -1540,6 +1645,21 @@ impl<T: ConversationStore + ?Sized> ConversationInboundCapability for T {
         commit_subagent_ownership_through(self, event)
     }
 
+    fn commit_subagent_terminal(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        commit_subagent_terminal_through(self, event)
+    }
+
+    fn commit_workflow_agent_terminal(
+        &self,
+        terminal: RuntimeEventEnvelope,
+        output: RuntimeEventEnvelope,
+    ) -> Result<(RuntimeEventEnvelope, RuntimeEventEnvelope), ConversationStoreError> {
+        commit_workflow_agent_terminal_through(self, terminal, output)
+    }
+
     fn select_pending_batch(&self) -> Result<Option<PendingBatch>, ConversationStoreError> {
         ConversationStore::select_pending_batch(self)
     }
@@ -1668,6 +1788,21 @@ impl ConversationInboundCapability for StoreInboundCapability {
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
         commit_subagent_ownership_through(self.store.as_ref(), event)
+    }
+
+    fn commit_subagent_terminal(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        commit_subagent_terminal_through(self.store.as_ref(), event)
+    }
+
+    fn commit_workflow_agent_terminal(
+        &self,
+        terminal: RuntimeEventEnvelope,
+        output: RuntimeEventEnvelope,
+    ) -> Result<(RuntimeEventEnvelope, RuntimeEventEnvelope), ConversationStoreError> {
+        commit_workflow_agent_terminal_through(self.store.as_ref(), terminal, output)
     }
 
     fn select_pending_batch(&self) -> Result<Option<PendingBatch>, ConversationStoreError> {

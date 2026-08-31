@@ -50,6 +50,13 @@
 //! same reference-ordering rule. Persist-before-publish appends the committed
 //! envelope before observers or external projections see it.
 //!
+//! Workflow lifecycle and join events are an explicit exception at their
+//! producer boundary: they are best-effort observability facts. When their
+//! append succeeds they are ordinary durable Journal rows, but an append
+//! failure does not alter Workflow control flow or terminal authority. The
+//! successful Workflow child value and native terminal fact remain a required
+//! atomic durable transition.
+//!
 //! ## What the Event Journal deliberately does not carry
 //!
 //! High-frequency Assistant streaming content is **not** an Event Journal
@@ -94,19 +101,34 @@ use crate::runtime::identity::{
     AgentId, AttemptId, ConversationId, EventId, InteractionId, MessageId, RequestId, SubagentId,
     ToolCallId, ToolExecutionId, ToolId, TurnId,
 };
-use crate::runtime::subagent::{WorkspaceHandoff, WorkspaceSnapshot};
+use crate::runtime::subagent::{SubagentName, WorkspaceHandoff, WorkspaceSnapshot};
 use crate::runtime::types::{CancellationReason, RuntimeError, TokenMeasurement};
+use crate::runtime::workflow::{WorkflowId, WorkflowPort};
 use crate::tools::types::{ToolExecutionResult, ToolProgress};
+
+/// The terminal domain that owns a committed subagent child.
+///
+/// Normal children settle through the native parent-inbound publication path.
+/// Workflow children settle directly into the `WorkflowRuntime` boundary and
+/// must never be recovered as parent notifications.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentOwnershipKind {
+    /// The ordinary named-Subagent parent-inbound protocol.
+    Normal,
+    /// The native Workflow Agent terminal protocol.
+    Workflow,
+}
 
 /// The current schema version of [`RuntimeEventEnvelope`].
 ///
 /// This version stamps the *envelope*, and it is deliberately independent of
 /// [`SQLITE_SCHEMA_VERSION`](crate::durable::SQLITE_SCHEMA_VERSION). Adding a
-/// new [`RuntimeEvent`] variant — Issue #111's `InboundTurnAdopted` is the
-/// latest — changes what a journal may *contain*, not how an envelope is
-/// framed, and a store whose journal predates a variant is refused wholesale
-/// by the database version gate rather than decoded under a compatibility
-/// rule. Bump this only when the envelope's own shape changes.
+/// new [`RuntimeEvent`] variant — including Issue #83's Workflow facts —
+/// changes what a journal may *contain*, not how an envelope is framed, and a
+/// store whose journal predates a variant is refused wholesale by the
+/// database version gate rather than decoded under a compatibility rule.
+/// Bump this only when the envelope's own shape changes.
 pub const EVENT_SCHEMA_VERSION: u16 = 1;
 
 /// The envelope around every durable runtime event.
@@ -412,7 +434,8 @@ pub enum RuntimeEvent {
     /// authority.
     ///
     /// The fact opens the `subagent:{subagent_id}` durable lifecycle;
-    /// [`RuntimeEvent::SubagentTerminalPublished`] closes it exactly once.
+    /// [`RuntimeEvent::SubagentTerminalPublished`] or
+    /// [`RuntimeEvent::SubagentTerminalSettled`] closes it exactly once.
     /// The fact carries no attempt identity: a committed child deliberately
     /// outlives the attempt that started it.
     SubagentOwnershipCommitted {
@@ -435,6 +458,10 @@ pub enum RuntimeEvent {
         /// already-committed child bound to the definition it actually
         /// started with.
         definition_digest: String,
+        /// The terminal domain that owns this child. This is frozen at
+        /// admission so restart recovery can preserve the native terminal
+        /// boundary without consulting current configuration.
+        ownership: SubagentOwnershipKind,
         /// The immutable project workspace authority selected before this
         /// ownership fact committed.
         workspace: WorkspaceSnapshot,
@@ -462,6 +489,124 @@ pub enum RuntimeEvent {
         /// model-authored output, and is committed with the terminal fact so
         /// a restart cannot make retained work undiscoverable.
         workspace_handoff: Option<WorkspaceHandoff>,
+    },
+
+    /// A Workflow-owned subagent reached native terminal settlement without
+    /// creating a parent inbound notification. This closes the durable
+    /// subagent ownership lifecycle while preserving the invariant that a
+    /// Workflow child has no `settled -> delivered` authority phase.
+    SubagentTerminalSettled {
+        /// The subagent identity.
+        subagent_id: SubagentId,
+        /// The child identity committed by the ownership fact.
+        child_agent_id: AgentId,
+        /// The terminal state reached by the native child.
+        state: SubagentTerminalState,
+        /// Runtime-observed retained work, when an isolated workspace was
+        /// preserved for handoff.
+        workspace_handoff: Option<WorkspaceHandoff>,
+    },
+
+    /// A native `WorkflowRun` began executing one immutable `WorkflowProgram`.
+    /// This is a best-effort observability fact only; the in-memory
+    /// `WorkflowRun` remains the execution authority and unfinished runs are
+    /// never reconstructed from this event. The successful child value and
+    /// native terminal pair use a separate durable transition.
+    WorkflowStarted {
+        /// The configured Workflow identity.
+        workflow_id: WorkflowId,
+        /// The bounded identity of this foreground invocation.
+        run_id: ToolCallId,
+    },
+    /// One named Subagent child was admitted to a Workflow Agent node.
+    WorkflowAgentAdmitted {
+        /// The configured Workflow identity.
+        workflow_id: WorkflowId,
+        /// The bounded identity of this foreground invocation.
+        run_id: ToolCallId,
+        /// The stable Workflow node identity.
+        node_id: String,
+        /// The native child identity.
+        subagent_id: SubagentId,
+        /// The frozen named profile selected by the program.
+        profile: SubagentName,
+    },
+    /// A Workflow Agent child committed its frozen `workflow_output` value.
+    WorkflowAgentOutputCommitted {
+        /// The configured Workflow identity.
+        workflow_id: WorkflowId,
+        /// The bounded identity of this foreground invocation.
+        run_id: ToolCallId,
+        /// The stable Workflow node identity.
+        node_id: String,
+        /// The native child identity.
+        subagent_id: SubagentId,
+        /// The validated structured value committed by the child terminal
+        /// protocol. It is durable execution evidence, not canonical parent
+        /// conversation content and not a resume instruction.
+        output: serde_json::Value,
+    },
+    /// A Branch consumed its committed boolean and selected one successor.
+    WorkflowBranchSelected {
+        /// The configured Workflow identity.
+        workflow_id: WorkflowId,
+        /// The bounded identity of this foreground invocation.
+        run_id: ToolCallId,
+        /// The stable Branch node identity.
+        node_id: String,
+        /// The deterministic selected port.
+        port: WorkflowPort,
+        /// The selected successor node identity.
+        successor: String,
+    },
+    /// All keyed children of a Parallel node were admitted.
+    WorkflowParallelAdmitted {
+        /// The configured Workflow identity.
+        workflow_id: WorkflowId,
+        /// The bounded identity of this foreground invocation.
+        run_id: ToolCallId,
+        /// The stable Parallel node identity.
+        node_id: String,
+        /// Branch keys in definition order.
+        branches: Vec<String>,
+    },
+    /// All admitted children of a Parallel node reached native settlement.
+    WorkflowParallelSettled {
+        /// The configured Workflow identity.
+        workflow_id: WorkflowId,
+        /// The bounded identity of this foreground invocation.
+        run_id: ToolCallId,
+        /// The stable Parallel node identity.
+        node_id: String,
+        /// Successful branch keys in definition order.
+        succeeded: Vec<String>,
+        /// Failed branch keys in definition order.
+        failed: Vec<String>,
+    },
+    /// A `WorkflowRun` committed its one successful result.
+    WorkflowCompleted {
+        /// The configured Workflow identity.
+        workflow_id: WorkflowId,
+        /// The bounded identity of this foreground invocation.
+        run_id: ToolCallId,
+    },
+    /// A `WorkflowRun` failed without producing a result.
+    WorkflowFailed {
+        /// The configured Workflow identity.
+        workflow_id: WorkflowId,
+        /// The bounded identity of this foreground invocation.
+        run_id: ToolCallId,
+        /// A bounded runtime diagnostic; it never contains child transcript.
+        diagnostic: String,
+    },
+    /// A `WorkflowRun` was cancelled after its owned children drained.
+    WorkflowCancelled {
+        /// The configured Workflow identity.
+        workflow_id: WorkflowId,
+        /// The bounded identity of this foreground invocation.
+        run_id: ToolCallId,
+        /// The native cancellation cause.
+        reason: CancellationReason,
     },
 
     /// One human interaction was requested (Issue #109).

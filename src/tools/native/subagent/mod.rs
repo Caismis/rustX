@@ -47,7 +47,8 @@ use futures_util::future::BoxFuture;
 use crate::runtime::subagent::catalog::{SubagentCatalog, SubagentName};
 use crate::runtime::subagent::resolver::render_agent_routing;
 use crate::runtime::subagent::{
-    SubagentAccepted, SubagentRegistry, SubagentStartError, SubagentStartOutcome, SubagentStartSpec,
+    SubagentAccepted, SubagentRegistry, SubagentStartError, SubagentStartOutcome,
+    SubagentStartSpec, SubagentTerminalMode,
 };
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
@@ -200,9 +201,11 @@ impl ToolExecutor for SubagentExecutor {
             };
             let spec = SubagentStartSpec {
                 resolved,
+                approval_mode: subagent_context.approval_mode(),
                 task: input.task,
                 context: input.context,
                 tool_call_id: invocation.call_id.clone(),
+                terminal: SubagentTerminalMode::Normal,
             };
             // One attempt-derived cancellation authority owns the whole
             // pre-commit lifecycle: preparation (identity, spawn, startup

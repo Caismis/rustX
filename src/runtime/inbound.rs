@@ -984,6 +984,31 @@ impl ConversationInboundMailbox {
         Ok(self.inbound.commit_subagent_ownership(event)?)
     }
 
+    /// Commits the durable terminal-settlement fact of a Workflow-owned
+    /// child without creating a parent inbound notification. This closes the
+    /// native subagent lifecycle while keeping Workflow child results inside
+    /// `WorkflowRuntime`.
+    pub(crate) fn commit_subagent_terminal(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, MailboxError> {
+        Ok(self.inbound.commit_subagent_terminal(event)?)
+    }
+
+    /// Commits a successful Workflow Agent value together with the native
+    /// child terminal fact in one durable transition. This is a direct
+    /// Workflow handoff: it creates no parent inbound notification and no
+    /// delivery phase.
+    pub(crate) fn commit_workflow_agent_terminal(
+        &self,
+        terminal: RuntimeEventEnvelope,
+        output: RuntimeEventEnvelope,
+    ) -> Result<(RuntimeEventEnvelope, RuntimeEventEnvelope), MailboxError> {
+        Ok(self
+            .inbound
+            .commit_workflow_agent_terminal(terminal, output)?)
+    }
+
     /// Selects the currently pending items as one finite watermark-bounded
     /// batch, without consuming them.
     ///
