@@ -3016,13 +3016,17 @@ All active skills in one conversation share one Python environment and one Node 
 
 The M6 implementation (`src/skills`) freezes the Skill plane boundary:
 
-- **Skill roots.** Current resource discovery is bounded to the user/global
-  `~/.agents/skills/` and project `<workspace>/.agents/skills/` roots, plus
-  explicit project-config and CLI paths. Configured and CLI paths may be
-  relative or otherwise non-canonical; discovery is the one place that
-  normalizes them, so an accepted package always has a canonical absolute
-  UTF-8 root and every consumer of the published location resolves the same
-  file. Missing automatic roots are empty;
+- **Skill roots.** `.agents/skills/` is the canonical project authoring
+  convention. Skill discovery retains its existing automatic roots:
+  `~/.rustx/skills/`, `~/.agents/skills/`,
+  `<workspace>/.rustx/skills/`, and `<workspace>/.agents/skills/`, plus
+  explicit project-config and CLI paths. The retained `.rustx/skills/` roots
+  are discovery behavior, not the canonical Issue #172 project layout.
+  Configured and CLI paths may be relative or otherwise non-canonical;
+  discovery is the one place that normalizes them, so an accepted package
+  always has a canonical absolute UTF-8 root and every consumer of the
+  published location resolves the same file. Missing automatic roots are
+  empty;
   missing explicit paths fail. Hidden root entries and unrelated files are
   ignored; results are deterministically ordered by validated Skill name;
   any malformed candidate fails the whole discovery transaction; symlinked

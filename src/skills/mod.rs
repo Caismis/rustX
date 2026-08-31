@@ -47,4 +47,6 @@ pub use environments::{
     PythonEnvironment, RuntimeVersions, SkillEnvironmentBackend, node_environment_digest,
     python_environment_digest,
 };
-pub use package::{SkillDiscovery, SkillDiscoveryConfig, SkillPackage, SkillPackageError};
+pub use package::{
+    RUSTX_SKILLS_DIRECTORY, SkillDiscovery, SkillDiscoveryConfig, SkillPackage, SkillPackageError,
+};

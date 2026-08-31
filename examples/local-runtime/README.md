@@ -46,7 +46,7 @@ examples/local-runtime/
 | `models.jsonc` | The runtime's provider/model authority: endpoint, credential source, model limits, capabilities, opaque request parameters, reasoning profiles, and protocol compatibility. |
 | `rustx.jsonc` | The current runtime/project configuration: default model for new Sessions, context, launch-scoped Agent Status modules/timezone, native-tool policy and activation, MCP sources, Skill roots, and authorized environment. |
 | `workspace/` | The authoritative execution cwd and conventional project/source tree, including Skills and editable custom Python tool packages. Relative native file-tool paths resolve here. This is not a general filesystem sandbox for Read/Write/Edit/Grep/Glob. |
-| `workspace/.agents/skills/*` | Automatically discovered project Skills. Skill discovery remains its own semantic activation path; a directory does not register a Workflow or Subagent. |
+| `workspace/.agents/skills/*` | Canonical project Skills, automatically discovered through the Skill plane's own semantics; a directory does not register a Workflow or Subagent. |
 | `workspace/.agents/tools/*` | Automatically discovered custom Python tool source packages; there is no separate registration entry in `rustx.jsonc`. |
 | `workspace/.agents/subagents/*` | Explicitly defined/admitted Subagent instruction and project-guidance sources. The config controls admission; filesystem presence alone does not expose a profile. |
 | `workspace/.agents/workflows/*` | Explicitly registered native Workflow YAML sources. The config controls both registration and model visibility; the directory is never scanned. |
@@ -221,6 +221,10 @@ forwards these controls, as well as repeatable `--skill <path>` and
 
 Skills are discovered from the current user/global and project roots, plus any
 explicit `skills` paths in this file or repeatable `--skill` arguments.
+`.agents/skills/` is the canonical project layout. The Skill plane retains its
+existing automatic roots, including `~/.rustx/skills/`, `~/.agents/skills/`,
+`<workspace>/.rustx/skills/`, and `<workspace>/.agents/skills/`; this example
+deliberately uses only `workspace/.agents/skills/`.
 `disable-model-invocation: true`
 keeps a validated Skill in runtime resource state but omits it from the
 model-visible catalog.

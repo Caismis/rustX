@@ -1752,10 +1752,14 @@ the launch-boundary policy inheritance.
   identity; unregistered files and a YAML `name` field cannot create
   admission.
 - **Project Agent resources have one ownership namespace.** Project-authored
-  Skills, Python tools, Subagent files, and native Workflow files belong under
-  the workspace-owned `.agents/` tree. The configured `.rustx/` or other
-  runtime root remains runtime-owned/generated state; it is not a fallback
-  project-resource root.
+  Skills, Python tools, Subagent files, and native Workflow files use the
+  workspace-owned `.agents/` tree as their canonical layout. Skill discovery
+  intentionally retains its pre-existing automatic roots
+  `~/.rustx/skills/`, `~/.agents/skills/`, `<workspace>/.rustx/skills/`, and
+  `<workspace>/.agents/skills/`; those lookup roots do not change the
+  canonical authoring rule. The configured `.rustx/` or other runtime root
+  remains runtime-owned/generated state and is not a Workflow, Subagent, or
+  general project-resource fallback.
 - **Workflow registration is path-deterministic.** Each id in
   `workflows.definitions` maps to exactly
   `<workspace>/.agents/workflows/<id>.yaml`; the loader never scans that

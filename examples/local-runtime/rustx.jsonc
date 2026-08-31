@@ -127,9 +127,10 @@
     "todo",
   ],
 
-  // Additional Skill roots/packages. The project workspace's
-  // `.agents/skills/` root is discovered automatically; Skills are not
-  // explicit Workflow-style registrations.
+  // Additional Skill roots/packages. `.agents/skills/` is the canonical
+  // project layout and is discovered automatically. Skill discovery also
+  // retains its existing `.rustx/skills` roots; this example does not rely on
+  // them. Skills are not explicit Workflow-style registrations.
   "skills": [],
 
   // Project-owned Subagent definitions live under workspace/.agents/subagents.

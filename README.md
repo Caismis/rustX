@@ -119,7 +119,11 @@ Project-authored Agent resources use the workspace-owned `.agents/` namespace:
 Skills and Python tools retain their discovery semantics, while Subagents and
 native Workflows are admitted explicitly by `rustx.jsonc`. The configured
 `--runtime-root` (often named `.rustx/`) is runtime-owned/generated state and
-is not a project-resource fallback.
+is not a project-resource fallback. `.agents/skills/` is the canonical project
+layout; Skill discovery retains its existing automatic roots, including
+`~/.rustx/skills/`, `~/.agents/skills/`, `<workspace>/.rustx/skills/`, and
+`<workspace>/.agents/skills/`. Retaining those Skill roots does not make
+`.rustx/skills/` the recommended project layout.
 
 For those native file tools, relative paths resolve from the execution cwd and
 absolute paths are valid host filesystem paths. `.` and `..` are resolved

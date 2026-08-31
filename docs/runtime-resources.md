@@ -183,6 +183,11 @@ be defined and admitted, and a Workflow id must be listed in
 runtime-owned/generated state and is not the canonical home for these
 project-authored resources.
 
+`.agents/skills/` is the canonical project layout. Skill discovery retains its
+pre-existing automatic roots `~/.rustx/skills/`, `~/.agents/skills/`,
+`<workspace>/.rustx/skills/`, and `<workspace>/.agents/skills/`; retaining the
+`.rustx/skills/` roots does not make them the canonical project layout.
+
 At runtime creation or explicit reload, applicable directories are traversed
 deterministically from filesystem root to the workspace/cwd. At most one file
 is selected per directory with this precedence:

@@ -140,7 +140,10 @@ fn conversation_with_options(
             base_tool_registry: Arc::new(base_tool_registry),
             tool_activation,
             skill_discovery: rustx::skills::SkillDiscoveryConfig {
-                automatic_roots: vec![workspace.root().join(".agents/skills")],
+                automatic_roots: vec![
+                    workspace.root().join(".rustx/skills"),
+                    workspace.root().join(".agents/skills"),
+                ],
                 explicit_paths: Vec::new(),
             },
             mcp_servers: std::collections::BTreeMap::new(),
