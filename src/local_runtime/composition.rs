@@ -3208,7 +3208,7 @@ mod subagent_child_tests {
 }
 
 #[cfg(all(test, feature = "mcp-fixture"))]
-mod issue163_composition_tests {
+mod composition_tests {
     use std::sync::Arc;
 
     use super::{LocalConversationCore, LocalRuntimeDependencies, LocalRuntimePaths};
@@ -3447,7 +3447,7 @@ mod issue163_composition_tests {
         if serve_if_fixture_mode(FixtureServer::from_env()).await {
             return;
         }
-        let test_name = "local_runtime::composition::issue163_composition_tests::named_subagent_and_mcp_share_one_frozen_parent_generation";
+        let test_name = "local_runtime::composition::composition_tests::named_subagent_and_mcp_share_one_frozen_parent_generation";
         let fixture = compose_fixture(test_name, serde_json::json!({})).await;
         settle(&fixture).await;
 
@@ -3553,7 +3553,7 @@ mod issue163_composition_tests {
         if serve_if_fixture_mode(FixtureServer::from_env()).await {
             return;
         }
-        let test_name = "local_runtime::composition::issue163_composition_tests::malformed_mcp_arguments_remain_a_normal_preflight_rejection";
+        let test_name = "local_runtime::composition::composition_tests::malformed_mcp_arguments_remain_a_normal_preflight_rejection";
         let fixture = compose_fixture(test_name, serde_json::json!({"unexpected": true})).await;
         settle(&fixture).await;
 

@@ -59,8 +59,7 @@ const LIVENESS: std::time::Duration = std::time::Duration::from_mins(1);
 const CHILD_ENTRY_ENV: &str = "RUSTX_ISSUE145_CHILD_ENTRY";
 
 /// The libtest path of the child entry point, used by the generated wrapper.
-const CHILD_ENTRY_TEST: &str =
-    "local_runtime::issue145_preparation_e2e::issue145_child_process_entry";
+const CHILD_ENTRY_TEST: &str = "local_runtime::preparation_e2e::child_process_entry";
 
 /// The gate socket env var (consumed by the composition seam).
 const GATE_ENV: &str = "RUSTX_ISSUE145_PREPARATION_GATE";
@@ -75,7 +74,7 @@ const READY_MARKER_ENV: &str = "RUSTX_ISSUE145_READY_MARKER";
 /// becomes a real subagent child running the production
 /// `run_subagent_child` stack.
 #[test]
-fn issue145_child_process_entry() {
+fn child_process_entry() {
     if std::env::var_os(CHILD_ENTRY_ENV).is_none() {
         return;
     }
