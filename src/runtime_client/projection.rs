@@ -957,7 +957,8 @@ impl RuntimeClientProjection {
             RuntimeEvent::BackgroundExecutionCommitted { .. }
             | RuntimeEvent::BackgroundTerminalPublished { .. }
             | RuntimeEvent::SubagentOwnershipCommitted { .. }
-            | RuntimeEvent::SubagentTerminalPublished { .. } => Vec::new(),
+            | RuntimeEvent::SubagentTerminalPublished { .. }
+            | RuntimeEvent::SubagentTerminalSettled { .. } => Vec::new(),
             // The interaction requested/settled facts are durable audit
             // evidence (Issue #109). The client already learns the live
             // pending/settled transitions from the coordinator's own
@@ -966,6 +967,19 @@ impl RuntimeClientProjection {
             RuntimeEvent::InteractionRequested { .. } | RuntimeEvent::InteractionSettled { .. } => {
                 Vec::new()
             }
+            // Workflow facts are durable observability evidence. The
+            // Runtime Client continues to project the bounded parent Tool
+            // call/result and does not expose workflow-local values or child
+            // transcripts as a second conversation surface.
+            RuntimeEvent::WorkflowStarted { .. }
+            | RuntimeEvent::WorkflowAgentAdmitted { .. }
+            | RuntimeEvent::WorkflowAgentOutputCommitted { .. }
+            | RuntimeEvent::WorkflowBranchSelected { .. }
+            | RuntimeEvent::WorkflowParallelAdmitted { .. }
+            | RuntimeEvent::WorkflowParallelSettled { .. }
+            | RuntimeEvent::WorkflowCompleted { .. }
+            | RuntimeEvent::WorkflowFailed { .. }
+            | RuntimeEvent::WorkflowCancelled { .. } => Vec::new(),
         }
     }
 

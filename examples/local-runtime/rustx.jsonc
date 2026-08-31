@@ -10,7 +10,7 @@
 // `runtime-root` and is never overwritten by this file.
 {
   // The only runtime configuration schema version this runtime accepts.
-  "schemaVersion": 4,
+  "schemaVersion": 5,
 
   // The agent identity recorded on this conversation's attempts and
   // inherited by its subagents. Any non-empty name.
@@ -183,7 +183,7 @@
     "glob",
     "grep",
     "bash",
-    // Add "subagent" when `subagents.agents` below contains at least one
+    // Add "subagent" when `subagents.definitions` below contains at least one
     // named agent; an empty catalog intentionally exposes no subagent tool.
     "todo",            // track multi-step work as a visible task list
   ],
@@ -212,7 +212,7 @@
     // startup, and resource reload deliberately never resizes it.
     "maxConcurrent": 4,
 
-    "agents": {
+    "definitions": {
       // "explore": {
       //   // The bounded routing description the model sees in the
       //   // `subagent` tool description.
@@ -276,6 +276,21 @@
       //   },
       // },
     },
+
+    // Definition and admission are separate. A profile may be main-only,
+    // Workflow-only, both, or defined but admitted to neither domain.
+    "main": [],
+    "workflow": [],
+  },
+
+  // Workflow YAML is registered explicitly by id. The id resolves exactly
+  // to `<workspace>/.rustx/workflows/<id>.yaml`; directory contents are not
+  // discovered, and `workflows.main` is the separate model-visible set.
+  // Each Workflow-main id becomes one concrete Tool with the YAML input
+  // schema and description.
+  "workflows": {
+    "definitions": [],
+    "main": [],
   },
 
   // The base authorized tool environment. Every entry is explicit: no

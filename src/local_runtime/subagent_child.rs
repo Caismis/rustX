@@ -204,6 +204,7 @@ async fn run_child(
         // physical outcome.
         return Ok(());
     };
+    let workflow_output = core.workflow_output();
     // The observation bridge is installed over the still-inactive runtime,
     // so the attempt's canonical terminal event can never be missed.
     let observations = Arc::new(PendingObservations::new());
@@ -226,6 +227,7 @@ async fn run_child(
         spec.parent_agent_id,
         runtime,
         observations,
+        workflow_output,
     )
     .await
 }
@@ -246,6 +248,7 @@ pub(crate) async fn serve_child_delegation(
     parent_agent_id: crate::runtime::identity::AgentId,
     runtime: crate::runtime::conversation_runtime::ConversationRuntime,
     observations: Arc<PendingObservations>,
+    workflow_output: Option<Arc<crate::runtime::workflow::WorkflowOutputLatch>>,
 ) -> Result<(), ChildExit> {
     // The start gate: no semantic work before the delegation arrives.
     let delegate = match dispatcher.next_event().await {
@@ -298,7 +301,16 @@ pub(crate) async fn serve_child_delegation(
     let terminal = await_terminal(dispatcher, &runtime, &observations).await?;
     let frame = match terminal {
         AttemptTerminal::Completed => {
-            let answer = final_answer(&runtime);
+            let answer = workflow_output.as_ref().and_then(|latch| {
+                latch
+                    .committed_value()
+                    .and_then(|value| serde_json::to_string(&value).ok())
+            });
+            let answer = if workflow_output.is_none() {
+                final_answer(&runtime)
+            } else {
+                answer
+            };
             match answer {
                 Some(answer) => ResultFrame {
                     status: ChildResultStatus::Succeeded,
@@ -308,7 +320,12 @@ pub(crate) async fn serve_child_delegation(
                 None => ResultFrame {
                     status: ChildResultStatus::Failed,
                     content: None,
-                    diagnostic: Some("the attempt completed without a final answer".to_owned()),
+                    diagnostic: Some(if workflow_output.is_some() {
+                        "the Workflow Agent completed without a valid workflow_output commit"
+                            .to_owned()
+                    } else {
+                        "the attempt completed without a final answer".to_owned()
+                    }),
                 },
             }
         }
@@ -709,6 +726,7 @@ mod tests {
                 clock: None,
                 initial_messages: Vec::new(),
                 subagents: None,
+                workflow_output: None,
             },
             CoordinatorProbe {
                 start_boundary_pause: start_pause,
@@ -1087,6 +1105,7 @@ mod tests {
                 materialization:
                     crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
             },
+            approval_mode: crate::runtime::ApprovalMode::Policy,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             agent_status: crate::context::AgentStatusConfig::default(),
             context: SessionContextPolicy {
@@ -1098,6 +1117,7 @@ mod tests {
                 workspace.clone(),
             ),
             runtime_root: runtime_root.clone(),
+            terminal: crate::runtime::subagent::ipc::ChildTerminalMode::Normal,
         };
         let gate = crate::local_runtime::composition::arm_test_preparation_gate(&runtime_root);
 

@@ -82,8 +82,9 @@ pub(crate) mod process;
 
 pub use catalog::{
     CHILD_UNSAFE_BUILTIN_TOOLS, MAX_SUBAGENT_DEFINITIONS, SUBAGENT_DEFINITION_DIGEST_VERSION,
-    SubagentCatalog, SubagentDefinition, SubagentDefinitionDigest, SubagentDefinitionError,
-    SubagentName, SubagentNameError, SubagentProjectInstructionPolicy, SubagentToolSelector,
+    SubagentAdmissionError, SubagentCatalog, SubagentDefinition, SubagentDefinitionDigest,
+    SubagentDefinitionError, SubagentName, SubagentNameError, SubagentProjectInstructionPolicy,
+    SubagentToolSelector,
 };
 pub use process::SubagentSpawnPlan;
 #[cfg(test)]
@@ -91,11 +92,11 @@ pub(crate) use registry::CommitBoundaryHook;
 pub use registry::{
     PreparedSubagent, SubagentAccepted, SubagentDurabilityFailureSink, SubagentObserver,
     SubagentRegistry, SubagentRegistryConfig, SubagentSnapshot, SubagentStartError,
-    SubagentStartOutcome, SubagentStartSpec, SubagentState,
+    SubagentStartOutcome, SubagentStartSpec, SubagentState, SubagentTerminalMode,
 };
 pub use resolver::{
-    ResolvedSubagentSkill, ResolvedSubagentSpec, ResolvedSubagentTool, SubagentResolutionError,
-    SubagentResolver,
+    ResolvedSubagentSkill, ResolvedSubagentSpec, ResolvedSubagentTool, SubagentDomain,
+    SubagentResolutionError, SubagentResolver,
 };
 pub use workspace::{
     SubagentWorkspaceManager, SubagentWorkspacePolicy, WorkspaceCleanup, WorkspaceHandoff,
@@ -108,13 +109,15 @@ use chrono::{DateTime, Utc};
 
 use crate::durable::inbox::InboundDraft;
 use crate::events::types::{
-    EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope, SubagentTerminalState,
+    EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope, SubagentOwnershipKind,
+    SubagentTerminalState,
 };
 use crate::message::content::TextBlock;
 use crate::message::types::{InboundKind, UserContentBlock, UserMessageBlock, UserSource};
 use crate::runtime::identity::{
     AgentId, ConversationId, EventId, MessageId, SubagentId, ToolCallId,
 };
+use crate::runtime::types::ApprovalMode;
 
 /// The attempt-scoped subagent resolution view (Issue #144).
 ///
@@ -160,6 +163,7 @@ struct AttemptSubagentContextInner {
     resources: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
     model: crate::model::session::SessionModelConfig,
     models: crate::model::invocation::ModelBindingRegistry,
+    approval_mode: ApprovalMode,
 }
 
 impl core::fmt::Debug for AttemptSubagentContext {
@@ -184,12 +188,14 @@ impl AttemptSubagentContext {
         resources: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
         model: crate::model::session::SessionModelConfig,
         models: crate::model::invocation::ModelBindingRegistry,
+        approval_mode: ApprovalMode,
     ) -> Self {
         Self {
             inner: Arc::new(AttemptSubagentContextInner {
                 resources,
                 model,
                 models,
+                approval_mode,
             }),
         }
     }
@@ -198,6 +204,16 @@ impl AttemptSubagentContext {
     #[must_use]
     pub fn resources(&self) -> &Arc<crate::runtime::resources::RuntimeResourceSnapshot> {
         &self.inner.resources
+    }
+
+    /// The effective approval mode frozen with the invoking Agent attempt.
+    ///
+    /// This value changes only whether an already-authorized child Tool enters
+    /// the native approval rendezvous. It does not alter the child's resolved
+    /// capability set, execution mode, concurrency, or interaction authority.
+    #[must_use]
+    pub fn approval_mode(&self) -> ApprovalMode {
+        self.inner.approval_mode
     }
 
     /// Resolves one named agent against exactly this attempt's generation.
@@ -209,18 +225,45 @@ impl AttemptSubagentContext {
         &self,
         agent: &SubagentName,
     ) -> Result<ResolvedSubagentSpec, SubagentResolutionError> {
-        SubagentResolver::resolve(
+        SubagentResolver::resolve_in_domain(
             &self.inner.resources,
             agent,
             &self.inner.model,
             &self.inner.models,
+            SubagentDomain::Main,
+        )
+    }
+
+    /// Resolves one named profile for a Workflow `AgentRun` using the
+    /// independent Workflow admission set.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SubagentResolutionError`] when the profile is not
+    /// Workflow-admitted or its frozen resources cannot be resolved.
+    pub fn resolve_workflow(
+        &self,
+        agent: &SubagentName,
+    ) -> Result<ResolvedSubagentSpec, SubagentResolutionError> {
+        SubagentResolver::resolve_in_domain(
+            &self.inner.resources,
+            agent,
+            &self.inner.model,
+            &self.inner.models,
+            SubagentDomain::Workflow,
         )
     }
 
     /// The bounded model-facing routing catalog of this generation.
     #[must_use]
     pub(crate) fn routing_description(&self) -> String {
-        resolver::render_agent_routing(self.inner.resources.subagents())
+        let catalog = self
+            .inner
+            .resources
+            .subagents()
+            .admitted(self.inner.resources.subagent_main_admission())
+            .unwrap_or_else(|_| SubagentCatalog::empty());
+        resolver::render_agent_routing(&catalog)
     }
 }
 
@@ -285,6 +328,7 @@ pub(crate) fn ownership_event(
     tool_call_id: &ToolCallId,
     agent: &SubagentName,
     definition_digest: &SubagentDefinitionDigest,
+    ownership: SubagentOwnershipKind,
     workspace: &WorkspaceSnapshot,
     timestamp: DateTime<Utc>,
 ) -> RuntimeEventEnvelope {
@@ -303,6 +347,7 @@ pub(crate) fn ownership_event(
             tool_call_id: tool_call_id.clone(),
             agent: agent.as_str().to_owned(),
             definition_digest: definition_digest.as_str().to_owned(),
+            ownership,
             workspace: workspace.clone(),
         },
     }
@@ -325,6 +370,80 @@ pub(crate) fn terminal_message_id(subagent_id: &SubagentId) -> MessageId {
 /// The deterministic event identity of a subagent terminal publication.
 pub(crate) fn terminal_event_id(subagent_id: &SubagentId) -> EventId {
     EventId::new(format!("subagent-terminal-event:{subagent_id}"))
+}
+
+/// The deterministic event identity of a Workflow-owned child terminal
+/// settlement. This is a lifecycle fact only: unlike a normal subagent
+/// terminal publication it has no parent message or delivery correlation.
+pub(crate) fn terminal_settlement_event_id(subagent_id: &SubagentId) -> EventId {
+    EventId::new(format!("subagent-terminal-settled-event:{subagent_id}"))
+}
+
+/// The deterministic event identity of a committed Workflow Agent value.
+/// This fact is committed in the same transaction as the corresponding
+/// `SubagentTerminalSettled` lifecycle fact.
+pub(crate) fn workflow_output_event_id(subagent_id: &SubagentId) -> EventId {
+    EventId::new(format!("workflow-agent-output-event:{subagent_id}"))
+}
+
+/// Builds the direct terminal-settlement fact used by a Workflow-owned child.
+/// The result is consumed by `WorkflowRuntime` through the native registry, so
+/// no parent inbound item is created and no notification-delivery phase is
+/// introduced.
+pub(crate) fn terminal_settlement(
+    conversation_id: &ConversationId,
+    subagent_id: &SubagentId,
+    child_agent_id: &AgentId,
+    state: SubagentTerminalState,
+    workspace_handoff: Option<&WorkspaceHandoff>,
+    timestamp: DateTime<Utc>,
+) -> RuntimeEventEnvelope {
+    RuntimeEventEnvelope {
+        schema_version: EVENT_SCHEMA_VERSION,
+        event_id: terminal_settlement_event_id(subagent_id),
+        sequence: 0,
+        conversation_id: conversation_id.clone(),
+        attempt_id: None,
+        turn_id: None,
+        timestamp,
+        event: RuntimeEvent::SubagentTerminalSettled {
+            subagent_id: subagent_id.clone(),
+            child_agent_id: child_agent_id.clone(),
+            state,
+            workspace_handoff: workspace_handoff.cloned(),
+        },
+    }
+}
+
+/// Builds the durable Workflow Agent value fact. The value is execution
+/// evidence for the immutable `WorkflowRun` snapshot; it is not canonical
+/// parent conversation content and never instructs recovery to replay a run.
+#[allow(clippy::too_many_arguments)] // one typed Workflow terminal fact
+pub(crate) fn workflow_output_event(
+    conversation_id: &ConversationId,
+    subagent_id: &SubagentId,
+    workflow_id: &crate::runtime::workflow::WorkflowId,
+    run_id: &ToolCallId,
+    node_id: &str,
+    output: serde_json::Value,
+    timestamp: DateTime<Utc>,
+) -> RuntimeEventEnvelope {
+    RuntimeEventEnvelope {
+        schema_version: EVENT_SCHEMA_VERSION,
+        event_id: workflow_output_event_id(subagent_id),
+        sequence: 0,
+        conversation_id: conversation_id.clone(),
+        attempt_id: None,
+        turn_id: None,
+        timestamp,
+        event: RuntimeEvent::WorkflowAgentOutputCommitted {
+            workflow_id: workflow_id.clone(),
+            run_id: run_id.clone(),
+            node_id: node_id.to_owned(),
+            subagent_id: subagent_id.clone(),
+            output,
+        },
+    }
 }
 
 /// Builds the terminal publication pair: the inbound draft (exactly-once

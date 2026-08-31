@@ -2238,6 +2238,7 @@ mod tests {
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
             subagents: None,
+            workflow_output: None,
         })
         .expect("conversation runtime");
         let host = RuntimeClientHost::new(RuntimeClientHostConfig {
@@ -2318,6 +2319,7 @@ mod tests {
                 clock: Some(Arc::new(FixedRuntimeClock)),
                 initial_messages: Vec::new(),
                 subagents: None,
+                workflow_output: None,
             },
             probe,
         )
@@ -5701,6 +5703,7 @@ mod tests {
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
             subagents: None,
+            workflow_output: None,
         })
         .expect("conversation runtime");
         let host = RuntimeClientHost::with_probe(
@@ -5785,6 +5788,7 @@ mod tests {
                 clock: Some(Arc::new(FixedRuntimeClock)),
                 initial_messages: Vec::new(),
                 subagents: None,
+                workflow_output: None,
             },
             runtime_probe,
         )
@@ -5895,6 +5899,7 @@ mod tests {
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
             subagents: None,
+            workflow_output: None,
         };
         let runtime = match probe {
             Some(probe) => ConversationRuntime::with_probe(config, probe).expect("runtime"),
@@ -7117,6 +7122,7 @@ mod tests {
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
             subagents: None,
+            workflow_output: None,
         }
     }
 

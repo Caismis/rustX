@@ -1041,6 +1041,7 @@ async fn runtime_fixture(conversation: &str, model: Arc<FakeModel>) -> RuntimeFi
         clock: None,
         initial_messages: Vec::new(),
         subagents: None,
+        workflow_output: None,
     })
     .expect("conversation runtime");
     runtime.activate();

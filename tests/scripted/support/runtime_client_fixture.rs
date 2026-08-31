@@ -341,6 +341,7 @@ impl RuntimeClientFixtureBuilder {
             clock: None,
             initial_messages: self.initial_messages,
             subagents: None,
+            workflow_output: None,
         })
         .expect("conversation runtime");
         let host = RuntimeClientHost::new(RuntimeClientHostConfig {

@@ -3095,12 +3095,35 @@ fn commit_subagent_ownership(store: &SqliteConversationStore, subagent: &Subagen
                 tool_call_id: ToolCallId::new("call-sub"),
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
+                ownership: rustx::events::types::SubagentOwnershipKind::Normal,
                 workspace: rustx::runtime::subagent::WorkspaceSnapshot::shared(
                     std::path::PathBuf::from("<shared-workspace>"),
                 ),
             },
         ))
         .expect("subagent ownership");
+}
+
+fn commit_workflow_ownership(store: &SqliteConversationStore, subagent: &SubagentId) {
+    store
+        .append_event(envelope(
+            &format!("subagent-committed-event:{subagent}"),
+            None,
+            None,
+            RuntimeEvent::SubagentOwnershipCommitted {
+                subagent_id: subagent.clone(),
+                child_agent_id: AgentId::new(format!("agent-{subagent}")),
+                child_conversation_id: ConversationId::new(subagent.as_str()),
+                tool_call_id: ToolCallId::new("workflow-call"),
+                agent: "reviewer".to_owned(),
+                definition_digest: "sha256:workflow-definition".to_owned(),
+                ownership: rustx::events::types::SubagentOwnershipKind::Workflow,
+                workspace: rustx::runtime::subagent::WorkspaceSnapshot::shared(
+                    std::path::PathBuf::from("<shared-workspace>"),
+                ),
+            },
+        ))
+        .expect("Workflow ownership");
 }
 
 /// A subagent child that was durably owned and never settled does not
@@ -3182,6 +3205,55 @@ fn nonterminal_subagent_work_is_terminalized_exactly_once_and_never_relaunched()
             "no duplicate terminal inbound after restart #{restart}"
         );
     }
+}
+
+/// A nonterminal Workflow child is recovered through the direct native
+/// terminal-settlement path: no parent Pending Inbound notice is created and
+/// no Workflow node is replayed.
+#[test]
+fn nonterminal_workflow_child_is_settled_without_parent_notification() {
+    let durable = Durable::new();
+    let subagent = SubagentId::for_conversation(&conversation_id(), 1);
+    {
+        let store = durable.open();
+        store.initialize(&[]).expect("bootstrap");
+        commit_workflow_ownership(&store, &subagent);
+    }
+
+    let report = recover_reopened(&durable);
+    assert_eq!(report.subagent_classes().len(), 1);
+    assert_eq!(
+        report.subagent_classes()[0].evidence.ownership,
+        rustx::events::types::SubagentOwnershipKind::Workflow
+    );
+    assert_eq!(
+        report.reconciliation().subagent_terminals,
+        vec![subagent.clone()]
+    );
+
+    let store = durable.open();
+    let events = all_events(&store);
+    assert!(events.iter().any(|event| matches!(
+        event,
+        RuntimeEvent::SubagentTerminalSettled {
+            subagent_id,
+            state: SubagentTerminalState::Interrupted,
+            ..
+        } if *subagent_id == subagent
+    )));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::SubagentTerminalPublished { .. }))
+    );
+    assert!(
+        store.load_pending().expect("pending").is_empty(),
+        "Workflow recovery never creates parent notification inbound"
+    );
+
+    let report = recover_reopened(&durable);
+    assert!(report.subagent_classes().is_empty());
+    assert!(report.reconciliation().is_empty());
 }
 
 /// A durably settled subagent (ownership + terminal) is not recovery work:

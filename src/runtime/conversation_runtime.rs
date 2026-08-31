@@ -561,6 +561,9 @@ pub struct RuntimeConversationConfig {
     /// composed without one, so recursive delegation is absent by
     /// construction.
     pub subagents: Option<crate::runtime::subagent::SubagentRegistry>,
+    /// The reserved Workflow Agent terminal protocol for a headless child,
+    /// when this runtime executes one Workflow-owned `AgentRun`.
+    pub workflow_output: Option<Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal>>,
 }
 
 /// The runtime-owned current attempt handle.
@@ -1119,6 +1122,9 @@ pub(crate) struct RuntimeInner {
     /// The conversation-owned subagent registry (Issue #60), when this
     /// runtime may delegate to child runtimes.
     subagents: Option<crate::runtime::subagent::SubagentRegistry>,
+    /// The frozen Workflow Agent output authority, if this is a Workflow
+    /// child runtime.
+    workflow_output: Option<Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal>>,
     /// It owns pending identity/state and terminal response coordination, but
     /// never owns Agent Loop execution or canonical history.
     interaction: Arc<InteractionCoordinator>,
@@ -2009,8 +2015,10 @@ impl RuntimeInner {
                         Arc::clone(&resources),
                         model_config,
                         models,
+                        approval_mode,
                     )
                 }),
+            workflow_output: self.workflow_output.clone(),
         };
         let request = AgentExecutionRequest {
             agent_id: self.agent_id.clone(),
@@ -3072,6 +3080,7 @@ impl ConversationRuntime {
             capability_publication,
             resource_loader: config.resource_loader,
             subagents: config.subagents,
+            workflow_output: config.workflow_output,
             interaction,
             lifecycle,
             clock,
@@ -5659,6 +5668,7 @@ mod tests {
             clock: None,
             initial_messages: options.initial_messages,
             subagents: None,
+            workflow_output: None,
         };
         let runtime = match probe {
             Some(probe) => ConversationRuntime::with_probe(config, probe).expect("runtime"),
@@ -5742,6 +5752,7 @@ mod tests {
             clock: None,
             initial_messages: Vec::new(),
             subagents: None,
+            workflow_output: None,
         };
         let runtime = match probe {
             Some(probe) => ConversationRuntime::with_probe(config, probe).expect("runtime"),
@@ -5840,6 +5851,7 @@ mod tests {
             clock: None,
             initial_messages: Vec::new(),
             subagents: Some(subagents.clone()),
+            workflow_output: None,
         };
         let runtime = match admission_gate {
             Some(admission_gate) => ConversationRuntime::with_probe(
@@ -5949,6 +5961,7 @@ mod tests {
             clock: None,
             initial_messages: Vec::new(),
             subagents: Some(subagents.clone()),
+            workflow_output: None,
         };
         (subagents, config)
     }
@@ -6048,9 +6061,11 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             resolved: test_resolved_subagent("explore"),
+                            approval_mode: crate::runtime::ApprovalMode::Policy,
                             task: "pre-constructed".to_owned(),
                             context: None,
                             tool_call_id: ToolCallId::new("call-pre-constructed"),
+                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
                         },
                         &crate::runtime::cancellation::CancellationSignal::new(),
                     )
@@ -6172,9 +6187,11 @@ mod tests {
                 .prepare(
                     &crate::runtime::subagent::SubagentStartSpec {
                         resolved: test_resolved_subagent("explore"),
+                        approval_mode: crate::runtime::ApprovalMode::Policy,
                         task: "transfer race".to_owned(),
                         context: None,
                         tool_call_id: ToolCallId::new("call-transfer-race"),
+                        terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
                     },
                     &crate::runtime::cancellation::CancellationSignal::new(),
                 )
@@ -6308,9 +6325,11 @@ mod tests {
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
                     resolved: test_resolved_subagent("explore"),
+                    approval_mode: crate::runtime::ApprovalMode::Policy,
                     task: "refused after claim".to_owned(),
                     context: None,
                     tool_call_id: ToolCallId::new("call-refused"),
+                    terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
                 },
                 &crate::runtime::cancellation::CancellationSignal::new(),
             )
@@ -9520,6 +9539,7 @@ mod tests {
             clock: None,
             initial_messages: Vec::new(),
             subagents: None,
+            workflow_output: None,
         })
         .expect_err("mismatched ownership is rejected");
         assert!(matches!(
@@ -9582,6 +9602,7 @@ mod tests {
             clock: None,
             initial_messages: Vec::new(),
             subagents: None,
+            workflow_output: None,
         })
         .expect_err("construction outside Tokio is rejected");
         assert!(matches!(
@@ -11507,9 +11528,11 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             resolved: test_resolved_subagent("explore"),
+                            approval_mode: crate::runtime::ApprovalMode::Policy,
                             task: "first terminal".to_owned(),
                             context: None,
                             tool_call_id: ToolCallId::new("call-subagent-one"),
+                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
                         },
                         &crate::runtime::cancellation::CancellationSignal::new(),
                     )
@@ -11568,9 +11591,11 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             resolved: test_resolved_subagent("explore"),
+                            approval_mode: crate::runtime::ApprovalMode::Policy,
                             task: "second terminal".to_owned(),
                             context: None,
                             tool_call_id: ToolCallId::new("call-subagent-two"),
+                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
                         },
                         &crate::runtime::cancellation::CancellationSignal::new(),
                     )
@@ -11718,9 +11743,11 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             resolved: test_resolved_subagent("explore"),
+                            approval_mode: crate::runtime::ApprovalMode::Policy,
                             task: "owned child".to_owned(),
                             context: None,
                             tool_call_id: ToolCallId::new("call-owned"),
+                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
                         },
                         &crate::runtime::cancellation::CancellationSignal::new(),
                     )
@@ -11790,9 +11817,11 @@ mod tests {
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
                     resolved: test_resolved_subagent("explore"),
+                    approval_mode: crate::runtime::ApprovalMode::Policy,
                     task: "rejected after failure".to_owned(),
                     context: None,
                     tool_call_id: ToolCallId::new("call-rejected"),
+                    terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
                 },
                 &crate::runtime::cancellation::CancellationSignal::new(),
             )
@@ -11884,9 +11913,11 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             resolved: test_resolved_subagent("explore"),
+                            approval_mode: crate::runtime::ApprovalMode::Policy,
                             task: "owned".to_owned(),
                             context: None,
                             tool_call_id: ToolCallId::new("call-owned"),
+                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
                         },
                         &crate::runtime::cancellation::CancellationSignal::new(),
                     )
@@ -11988,9 +12019,11 @@ mod tests {
                 .prepare(
                     &crate::runtime::subagent::SubagentStartSpec {
                         resolved: test_resolved_subagent("explore"),
+                        approval_mode: crate::runtime::ApprovalMode::Policy,
                         task: "racing".to_owned(),
                         context: None,
                         tool_call_id: ToolCallId::new("call-racing"),
+                        terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
                     },
                     &crate::runtime::cancellation::CancellationSignal::new(),
                 )
@@ -12616,9 +12649,11 @@ mod tests {
                     .prepare(
                         &crate::runtime::subagent::SubagentStartSpec {
                             resolved: test_resolved_subagent("explore"),
+                            approval_mode: crate::runtime::ApprovalMode::Policy,
                             task: "owned".to_owned(),
                             context: None,
                             tool_call_id: ToolCallId::new("call-owned"),
+                            terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
                         },
                         &crate::runtime::cancellation::CancellationSignal::new(),
                     )
@@ -12714,9 +12749,11 @@ mod tests {
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
                     resolved: test_resolved_subagent("explore"),
+                    approval_mode: crate::runtime::ApprovalMode::Policy,
                     task: "rejected".to_owned(),
                     context: None,
                     tool_call_id: ToolCallId::new("call-rejected"),
+                    terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
                 },
                 &crate::runtime::cancellation::CancellationSignal::new(),
             )
@@ -14456,6 +14493,7 @@ mod tests {
                     clock: None,
                     initial_messages: Vec::new(),
                     subagents: None,
+                    workflow_output: None,
                 }
             }
         }
@@ -14592,6 +14630,7 @@ mod tests {
             clock: None,
             initial_messages,
             subagents: None,
+            workflow_output: None,
         };
         match probe {
             Some(probe) => ConversationRuntime::with_probe(config, probe),

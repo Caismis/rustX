@@ -113,6 +113,7 @@ async fn make_execution<'a>(
         cancellation,
         crate::agent::execution::AgentExecutionRuntimePolicy {
             subagent_context: None,
+            workflow_output: None,
             model_timeout_policy: policy,
             monotonic_clock: Arc::clone(&clock) as Arc<dyn MonotonicClock>,
         },
@@ -263,6 +264,7 @@ async fn runtime_with_manual_clock(
             clock: None,
             initial_messages,
             subagents: None,
+            workflow_output: None,
         },
         Arc::clone(&clock) as Arc<dyn MonotonicClock>,
     )
@@ -638,6 +640,7 @@ async fn publication_flush_wins_before_timeout_at_the_same_cut_and_does_not_rese
         &cancellation,
         crate::agent::execution::AgentExecutionRuntimePolicy {
             subagent_context: None,
+            workflow_output: None,
             model_timeout_policy: timeout_policy(100, 5),
             monotonic_clock: Arc::clone(&clock) as Arc<dyn MonotonicClock>,
         },
@@ -734,6 +737,7 @@ async fn provider_progress_wins_when_ready_with_response_timeout() {
         &cancellation,
         crate::agent::execution::AgentExecutionRuntimePolicy {
             subagent_context: None,
+            workflow_output: None,
             model_timeout_policy: timeout_policy(10, 100),
             monotonic_clock: Arc::clone(&clock) as Arc<dyn MonotonicClock>,
         },
@@ -820,6 +824,7 @@ async fn cancellation_wins_same_cut_and_retains_cancellation_provenance() {
         &cancellation,
         crate::agent::execution::AgentExecutionRuntimePolicy {
             subagent_context: None,
+            workflow_output: None,
             model_timeout_policy: timeout_policy(10, 20),
             monotonic_clock: Arc::clone(&clock) as Arc<dyn MonotonicClock>,
         },

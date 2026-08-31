@@ -46,6 +46,7 @@ pub(crate) fn default_execution_policy() -> crate::agent::execution::AgentExecut
         // A direct in-crate execution fixture owns no runtime resource
         // generation, so it hands out no subagent resolution authority.
         subagent_context: None,
+        workflow_output: None,
     }
 }
 

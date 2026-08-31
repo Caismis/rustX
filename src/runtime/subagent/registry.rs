@@ -46,11 +46,13 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use chrono::{DateTime, Utc};
 
+use crate::events::types::SubagentOwnershipKind;
 use crate::runtime::RuntimeClock;
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::{AgentId, ConversationId, SubagentId, ToolCallId};
 use crate::runtime::inbound::ConversationInboundMailbox;
 use crate::runtime::types::{CancellationReason, DurabilityGate};
+use crate::runtime::workflow::WorkflowId;
 
 use super::catalog::{SubagentDefinitionDigest, SubagentName};
 use super::ipc::DelegationFrame;
@@ -61,7 +63,7 @@ use super::workspace::{
 };
 use super::{
     MAX_CONTEXT_PACKAGE_BYTES, MAX_RESULT_CONTENT_BYTES, MAX_TASK_BYTES, SubagentTerminalState,
-    bound_utf8, ownership_event, terminal_publication,
+    bound_utf8, ownership_event, terminal_publication, terminal_settlement, workflow_output_event,
 };
 
 /// The highest lifecycle state of one subagent child.
@@ -112,6 +114,10 @@ struct TerminalCandidate {
     state: TerminalState,
     /// The bounded result content (succeeded only).
     content: Option<String>,
+    /// The parent-validated Workflow value, when this is a successful
+    /// Workflow-owned child. Keeping the parsed value on the frozen terminal
+    /// candidate lets a retry rebuild the exact compound durable transition.
+    workflow_value: Option<serde_json::Value>,
     /// The bounded failure diagnostic (failed only).
     diagnostic: Option<String>,
     /// The cancellation detail (cancelled only).
@@ -128,6 +134,30 @@ enum TerminalState {
     Failed,
     Cancelled,
     Interrupted,
+}
+
+/// The parent-side terminal protocol selected for a child.
+///
+/// `Normal` preserves the asynchronous `subagent` intrinsic's ordinary
+/// parent-inbound result publication. `WorkflowOutput` routes the child's
+/// validated JSON terminal content to the `WorkflowRuntime` boundary instead;
+/// it never creates a normal parent `ToolResult` or inbound transcript fact.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum SubagentTerminalMode {
+    /// Publish the ordinary named-subagent result through its native path.
+    #[default]
+    Normal,
+    /// Require the reserved `workflow_output` protocol with this frozen schema.
+    WorkflowOutput {
+        /// The output contract the child Agent Loop must satisfy.
+        output_schema: serde_json::Value,
+        /// The immutable Workflow identity owning this `AgentRun`.
+        workflow_id: WorkflowId,
+        /// The immutable Workflow invocation identity.
+        run_id: ToolCallId,
+        /// The stable Workflow node identity owning this `AgentRun`.
+        node_id: String,
+    },
 }
 
 /// The notification-plane state of one terminal result, mirroring the
@@ -152,6 +182,7 @@ struct SubagentRecord {
     tool_call_id: ToolCallId,
     agent: SubagentName,
     definition_digest: SubagentDefinitionDigest,
+    terminal: SubagentTerminalMode,
     workspace: WorkspaceSnapshot,
     handoff: Option<WorkspaceHandoff>,
     lifecycle: SubagentLifecycle,
@@ -296,12 +327,18 @@ pub struct SubagentSnapshot {
 pub struct SubagentStartSpec {
     /// The frozen named-agent specification of the child.
     pub resolved: ResolvedSubagentSpec,
+    /// The effective approval mode frozen by the invoking Agent attempt.
+    /// This changes approval decisions only for Tools already present in
+    /// resolved; it never widens the child's capability set.
+    pub approval_mode: crate::runtime::types::ApprovalMode,
     /// The delegated task.
     pub task: String,
     /// The explicit bounded context package.
     pub context: Option<String>,
     /// The delegating tool call.
     pub tool_call_id: ToolCallId,
+    /// The child terminal protocol owned by the caller.
+    pub terminal: SubagentTerminalMode,
 }
 
 /// A privately prepared subagent start: everything fallible already
@@ -314,6 +351,7 @@ pub struct PreparedSubagent {
     tool_call_id: ToolCallId,
     agent: SubagentName,
     definition_digest: SubagentDefinitionDigest,
+    terminal: SubagentTerminalMode,
     task: String,
     context: Option<String>,
     staged: StagedChild,
@@ -623,6 +661,7 @@ impl SubagentRegistry {
                 recovered.evidence.definition_digest.clone(),
             ))
             .expect("durable subagent digest is validated before recovery"),
+            terminal: SubagentTerminalMode::Normal,
             workspace: recovered.evidence.workspace.clone(),
             handoff: Some(recovered.handoff.clone()),
             lifecycle,
@@ -749,6 +788,7 @@ impl SubagentRegistry {
                         tool_call_id: spec.tool_call_id.clone(),
                         agent: spec.resolved.agent.clone(),
                         definition_digest: spec.resolved.definition_digest.clone(),
+                        terminal: spec.terminal.clone(),
                         task: spec.task.clone(),
                         context: spec.context.clone(),
                         staged: staged.with_workspace(workspace_lease),
@@ -773,8 +813,10 @@ impl SubagentRegistry {
                 &child_agent_id,
                 &self.config.agent_id,
                 &spec.resolved,
+                spec.approval_mode,
                 &runtime_root,
                 &workspace_lease,
+                &spec.terminal,
             );
             let staged = super::process::spawn_staged(
                 &self.config.spawn,
@@ -804,6 +846,7 @@ impl SubagentRegistry {
             tool_call_id: spec.tool_call_id.clone(),
             agent: spec.resolved.agent.clone(),
             definition_digest: spec.resolved.definition_digest.clone(),
+            terminal: spec.terminal.clone(),
             task: spec.task.clone(),
             context: spec.context.clone(),
             staged,
@@ -864,6 +907,7 @@ impl SubagentRegistry {
             tool_call_id,
             agent,
             definition_digest,
+            terminal,
             task,
             context,
             staged,
@@ -935,6 +979,12 @@ impl SubagentRegistry {
                         &tool_call_id,
                         &agent,
                         &definition_digest,
+                        match &terminal {
+                            SubagentTerminalMode::Normal => SubagentOwnershipKind::Normal,
+                            SubagentTerminalMode::WorkflowOutput { .. } => {
+                                SubagentOwnershipKind::Workflow
+                            }
+                        },
                         &workspace,
                         started_at,
                     )) {
@@ -955,6 +1005,7 @@ impl SubagentRegistry {
                         tool_call_id,
                         agent: agent.clone(),
                         definition_digest: definition_digest.clone(),
+                        terminal: terminal.clone(),
                         workspace: workspace.clone(),
                         handoff: None,
                         lifecycle: SubagentLifecycle::Running,
@@ -1277,55 +1328,75 @@ impl SubagentRegistry {
             }
             record.handoff = workspace_handoff;
             let cancelling = matches!(record.lifecycle, SubagentLifecycle::Cancelling);
+            let workflow_output = matches!(
+                &record.terminal,
+                SubagentTerminalMode::WorkflowOutput { .. }
+            );
             // The publication timestamp freezes at canonicalization: every
             // later bounded retry rebuilds the byte-identical draft, so an
             // ambiguous commit resolves as the idempotent correlation
             // retry, never a conflict.
             let timestamp = self.config.clock.now();
             let candidate = match outcome {
-                PhysicalOutcome::Completed(frame) => match (cancelling, frame.status) {
-                    (false, super::ipc::ChildResultStatus::Succeeded) => TerminalCandidate {
-                        state: TerminalState::Succeeded,
-                        content: Some(bound_utf8(
-                            frame.content.unwrap_or_default(),
-                            MAX_RESULT_CONTENT_BYTES,
-                        )),
-                        diagnostic: None,
-                        reason: None,
-                        timestamp,
-                    },
-                    (false, super::ipc::ChildResultStatus::Failed) => TerminalCandidate {
-                        state: TerminalState::Failed,
-                        content: None,
-                        diagnostic: Some(bound_utf8(
-                            frame
-                                .diagnostic
-                                .unwrap_or_else(|| "the child attempt failed".to_owned()),
-                            MAX_RESULT_CONTENT_BYTES,
-                        )),
-                        reason: None,
-                        timestamp,
-                    },
-                    (false, super::ipc::ChildResultStatus::Cancelled) => TerminalCandidate {
-                        state: TerminalState::Cancelled,
-                        content: None,
-                        diagnostic: None,
-                        // A child result without a committed parent
-                        // cancellation has no semantic reason in its wire
-                        // envelope. Do not fabricate UserRequested.
-                        reason: None,
-                        timestamp,
-                    },
-                    // Cancellation intent is canonical: a completed frame
-                    // after the intent settles as cancelled.
-                    (true, _) => TerminalCandidate {
-                        state: TerminalState::Cancelled,
-                        content: None,
-                        diagnostic: None,
-                        reason: record.cancel_reason,
-                        timestamp,
-                    },
-                },
+                PhysicalOutcome::Completed(frame) => {
+                    match (workflow_output, cancelling, frame.status) {
+                        // A Workflow Agent can report `Succeeded` only after the
+                        // child Agent Loop has committed the reserved
+                        // `workflow_output` latch. That frame is the
+                        // cross-process observation of the output/cancellation
+                        // linearization point, so a cancellation request that
+                        // arrived while the frame was in flight cannot rewrite
+                        // the committed value.
+                        (true, _, super::ipc::ChildResultStatus::Succeeded)
+                        | (false, false, super::ipc::ChildResultStatus::Succeeded) => {
+                            TerminalCandidate {
+                                state: TerminalState::Succeeded,
+                                content: Some(bound_utf8(
+                                    frame.content.unwrap_or_default(),
+                                    MAX_RESULT_CONTENT_BYTES,
+                                )),
+                                workflow_value: None,
+                                diagnostic: None,
+                                reason: None,
+                                timestamp,
+                            }
+                        }
+                        (_, false, super::ipc::ChildResultStatus::Failed) => TerminalCandidate {
+                            state: TerminalState::Failed,
+                            content: None,
+                            workflow_value: None,
+                            diagnostic: Some(bound_utf8(
+                                frame
+                                    .diagnostic
+                                    .unwrap_or_else(|| "the child attempt failed".to_owned()),
+                                MAX_RESULT_CONTENT_BYTES,
+                            )),
+                            reason: None,
+                            timestamp,
+                        },
+                        (_, false, super::ipc::ChildResultStatus::Cancelled) => TerminalCandidate {
+                            state: TerminalState::Cancelled,
+                            content: None,
+                            workflow_value: None,
+                            diagnostic: None,
+                            // A child result without a committed parent
+                            // cancellation has no semantic reason in its wire
+                            // envelope. Do not fabricate UserRequested.
+                            reason: None,
+                            timestamp,
+                        },
+                        // Cancellation intent is canonical: a completed frame
+                        // after the intent settles as cancelled.
+                        (_, true, _) => TerminalCandidate {
+                            state: TerminalState::Cancelled,
+                            content: None,
+                            workflow_value: None,
+                            diagnostic: None,
+                            reason: record.cancel_reason,
+                            timestamp,
+                        },
+                    }
+                }
                 PhysicalOutcome::Lost {
                     diagnostic,
                     cancellation_delivered,
@@ -1339,6 +1410,7 @@ impl SubagentRegistry {
                         TerminalCandidate {
                             state: TerminalState::Failed,
                             content: None,
+                            workflow_value: None,
                             diagnostic: Some(bound_utf8(diagnostic, MAX_RESULT_CONTENT_BYTES)),
                             reason: None,
                             timestamp,
@@ -1351,6 +1423,7 @@ impl SubagentRegistry {
                         TerminalCandidate {
                             state: TerminalState::Cancelled,
                             content: None,
+                            workflow_value: None,
                             diagnostic: None,
                             reason: record.cancel_reason,
                             timestamp,
@@ -1362,6 +1435,7 @@ impl SubagentRegistry {
                         TerminalCandidate {
                             state: TerminalState::Interrupted,
                             content: None,
+                            workflow_value: None,
                             diagnostic: Some(bound_utf8(diagnostic, MAX_RESULT_CONTENT_BYTES)),
                             reason: None,
                             timestamp,
@@ -1374,6 +1448,7 @@ impl SubagentRegistry {
                     // after a cancellation intent.
                     state: TerminalState::Failed,
                     content: None,
+                    workflow_value: None,
                     diagnostic: Some(bound_utf8(diagnostic, MAX_RESULT_CONTENT_BYTES)),
                     reason: None,
                     timestamp,
@@ -1393,6 +1468,7 @@ impl SubagentRegistry {
                     TerminalCandidate {
                         state: TerminalState::Failed,
                         content: None,
+                        workflow_value: None,
                         diagnostic: Some(bound_utf8(
                             format!(
                                 "required child physical settlement was not proven: {diagnostic}"
@@ -1414,6 +1490,7 @@ impl SubagentRegistry {
                     ..candidate
                 },
             };
+            let candidate = validate_workflow_candidate(&record.terminal, candidate);
             record.pending_terminal = Some(candidate.clone());
             record.detail = candidate
                 .content
@@ -1431,6 +1508,7 @@ impl SubagentRegistry {
 
     /// Attempts the durable terminal publication; on failure, enters
     /// `PublishingTerminal` and schedules the bounded retry.
+    #[allow(clippy::too_many_lines)] // terminal publication is one native linearization boundary
     fn publish_terminal(&self, subagent_id: &SubagentId, candidate: &TerminalCandidate) {
         let initial_failure = {
             let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1438,36 +1516,125 @@ impl SubagentRegistry {
                 return;
             };
             let record = &state.records[index];
-            let (draft, event) = terminal_publication(
-                &self.config.conversation_id,
-                subagent_id,
-                &record.child_agent_id,
-                candidate_state(candidate),
-                terminal_blocks(record, candidate),
-                record.handoff.as_ref(),
-                candidate.timestamp,
-            );
-            let result = self.config.mailbox.accept_draft_with_event(draft, event);
-            let record = &mut state.records[index];
-            match result {
-                Ok(_) => {
-                    record.lifecycle = match candidate.state {
-                        TerminalState::Succeeded => SubagentLifecycle::Succeeded,
-                        TerminalState::Failed => SubagentLifecycle::Failed,
-                        TerminalState::Cancelled => SubagentLifecycle::Cancelled,
-                        TerminalState::Interrupted => SubagentLifecycle::Interrupted,
-                    };
-                    record.pending_terminal = None;
-                    record.notification = NotificationState::Delivered;
-                    publish_snapshot(&mut state, &self.state_version, index);
-                    None
+            // A Workflow-owned child has no parent Conversation mailbox
+            // result. Its physical terminal candidate is already the native
+            // WorkflowRuntime handoff: publication below commits the
+            // registry lifecycle and wakes waiters, but deliberately does
+            // not create a normal ToolResult/inbound message.
+            if matches!(
+                &record.terminal,
+                SubagentTerminalMode::WorkflowOutput { .. }
+            ) {
+                let event = terminal_settlement(
+                    &self.config.conversation_id,
+                    subagent_id,
+                    &record.child_agent_id,
+                    candidate_state(candidate),
+                    record.handoff.as_ref(),
+                    candidate.timestamp,
+                );
+                let result = if candidate.state == TerminalState::Succeeded {
+                    match (candidate.workflow_value.clone(), &record.terminal) {
+                        (
+                            Some(value),
+                            SubagentTerminalMode::WorkflowOutput {
+                                workflow_id,
+                                run_id,
+                                node_id,
+                                ..
+                            },
+                        ) => self
+                            .config
+                            .mailbox
+                            .commit_workflow_agent_terminal(
+                                event,
+                                workflow_output_event(
+                                    &self.config.conversation_id,
+                                    subagent_id,
+                                    workflow_id,
+                                    run_id,
+                                    node_id,
+                                    value,
+                                    candidate.timestamp,
+                                ),
+                            )
+                            .map(|_| ())
+                            .map_err(|error| error.to_string()),
+                        (None, _) => Err(
+                            "a successful Workflow terminal candidate has no validated value"
+                                .to_owned(),
+                        ),
+                        (_, _) => Err(
+                            "a successful Workflow terminal candidate has no Workflow protocol"
+                                .to_owned(),
+                        ),
+                    }
+                } else {
+                    self.config
+                        .mailbox
+                        .commit_subagent_terminal(event)
+                        .map(|_| ())
+                        .map_err(|error| error.to_string())
+                };
+                match result {
+                    Ok(()) => {
+                        let record = &mut state.records[index];
+                        record.lifecycle = match candidate.state {
+                            TerminalState::Succeeded => SubagentLifecycle::Succeeded,
+                            TerminalState::Failed => SubagentLifecycle::Failed,
+                            TerminalState::Cancelled => SubagentLifecycle::Cancelled,
+                            TerminalState::Interrupted => SubagentLifecycle::Interrupted,
+                        };
+                        record.pending_terminal = None;
+                        // Workflow terminalization is a direct native handoff
+                        // to the waiting WorkflowRuntime. There is no parent
+                        // mailbox delivery phase to represent, so the
+                        // ordinary `settled -> delivered` notification state
+                        // is deliberately not entered.
+                        record.notification = NotificationState::None;
+                        publish_snapshot(&mut state, &self.state_version, index);
+                        None
+                    }
+                    Err(error) => {
+                        let record = &mut state.records[index];
+                        record.lifecycle = SubagentLifecycle::PublishingTerminal;
+                        record.notification = NotificationState::Failed;
+                        publish_snapshot(&mut state, &self.state_version, index);
+                        Some(error)
+                    }
                 }
-                Err(error) => {
-                    record.lifecycle = SubagentLifecycle::PublishingTerminal;
-                    record.notification = NotificationState::Failed;
-                    let diagnostic = error.to_string();
-                    publish_snapshot(&mut state, &self.state_version, index);
-                    Some(diagnostic)
+            } else {
+                let (draft, event) = terminal_publication(
+                    &self.config.conversation_id,
+                    subagent_id,
+                    &record.child_agent_id,
+                    candidate_state(candidate),
+                    terminal_blocks(record, candidate),
+                    record.handoff.as_ref(),
+                    candidate.timestamp,
+                );
+                let result = self.config.mailbox.accept_draft_with_event(draft, event);
+                let record = &mut state.records[index];
+                match result {
+                    Ok(_) => {
+                        record.lifecycle = match candidate.state {
+                            TerminalState::Succeeded => SubagentLifecycle::Succeeded,
+                            TerminalState::Failed => SubagentLifecycle::Failed,
+                            TerminalState::Cancelled => SubagentLifecycle::Cancelled,
+                            TerminalState::Interrupted => SubagentLifecycle::Interrupted,
+                        };
+                        record.pending_terminal = None;
+                        record.notification = NotificationState::Delivered;
+                        publish_snapshot(&mut state, &self.state_version, index);
+                        None
+                    }
+                    Err(error) => {
+                        record.lifecycle = SubagentLifecycle::PublishingTerminal;
+                        record.notification = NotificationState::Failed;
+                        let diagnostic = error.to_string();
+                        publish_snapshot(&mut state, &self.state_version, index);
+                        Some(diagnostic)
+                    }
                 }
             }
         };
@@ -1497,6 +1664,7 @@ impl SubagentRegistry {
 
     /// One bounded publication retry. Returns whether the terminal is now
     /// durably committed.
+    #[allow(clippy::too_many_lines)] // retry preserves the same terminal boundary and state machine
     fn retry_terminal_publication(&self, subagent_id: &SubagentId) -> Result<bool, String> {
         let _settlement = self
             .config
@@ -1522,17 +1690,77 @@ impl SubagentRegistry {
             return Ok(true);
         };
         let record = &state.records[index];
-        let (draft, event) = terminal_publication(
-            &self.config.conversation_id,
-            subagent_id,
-            &record.child_agent_id,
-            candidate_state(&candidate),
-            terminal_blocks(record, &candidate),
-            record.handoff.as_ref(),
-            candidate.timestamp,
-        );
-        match self.config.mailbox.accept_draft_with_event(draft, event) {
-            Ok(_) => {
+        let result = if matches!(
+            &record.terminal,
+            SubagentTerminalMode::WorkflowOutput { .. }
+        ) {
+            let event = terminal_settlement(
+                &self.config.conversation_id,
+                subagent_id,
+                &record.child_agent_id,
+                candidate_state(&candidate),
+                record.handoff.as_ref(),
+                candidate.timestamp,
+            );
+            if candidate.state == TerminalState::Succeeded {
+                match (candidate.workflow_value.clone(), &record.terminal) {
+                    (
+                        Some(value),
+                        SubagentTerminalMode::WorkflowOutput {
+                            workflow_id,
+                            run_id,
+                            node_id,
+                            ..
+                        },
+                    ) => self
+                        .config
+                        .mailbox
+                        .commit_workflow_agent_terminal(
+                            event,
+                            workflow_output_event(
+                                &self.config.conversation_id,
+                                subagent_id,
+                                workflow_id,
+                                run_id,
+                                node_id,
+                                value,
+                                candidate.timestamp,
+                            ),
+                        )
+                        .map(|_| ())
+                        .map_err(|error| error.to_string()),
+                    _ => {
+                        return Err(
+                            "a successful Workflow terminal candidate has no validated value"
+                                .to_owned(),
+                        );
+                    }
+                }
+            } else {
+                self.config
+                    .mailbox
+                    .commit_subagent_terminal(event)
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            }
+        } else {
+            let (draft, event) = terminal_publication(
+                &self.config.conversation_id,
+                subagent_id,
+                &record.child_agent_id,
+                candidate_state(&candidate),
+                terminal_blocks(record, &candidate),
+                record.handoff.as_ref(),
+                candidate.timestamp,
+            );
+            self.config
+                .mailbox
+                .accept_draft_with_event(draft, event)
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        };
+        match result {
+            Ok(()) => {
                 let record = &mut state.records[index];
                 record.lifecycle = match candidate.state {
                     TerminalState::Succeeded => SubagentLifecycle::Succeeded,
@@ -1542,14 +1770,21 @@ impl SubagentRegistry {
                 };
                 record.pending_terminal = None;
                 record.publication_abandoned = false;
-                record.notification = NotificationState::Delivered;
+                record.notification = if matches!(
+                    &record.terminal,
+                    SubagentTerminalMode::WorkflowOutput { .. }
+                ) {
+                    NotificationState::None
+                } else {
+                    NotificationState::Delivered
+                };
                 publish_snapshot(&mut state, &self.state_version, index);
                 Ok(true)
             }
             Err(error) => {
                 state.records[index].notification = NotificationState::Failed;
                 publish_snapshot(&mut state, &self.state_version, index);
-                Err(error.to_string())
+                Err(error)
             }
         }
     }
@@ -1622,6 +1857,57 @@ async fn settle_staged_workspace(
         Ok(_) => original,
         Err(error) => SubagentStartError::Rollback {
             detail: format!("{original}; {}", error.detail),
+        },
+    }
+}
+
+/// Revalidates a Workflow terminal candidate at the parent boundary before
+/// it is durably accepted. The child already validates against its frozen
+/// latch, but the parent owns the cross-process result and must not commit a
+/// malformed or schema-invalid value merely because a peer sent a successful
+/// frame.
+fn validate_workflow_candidate(
+    terminal: &SubagentTerminalMode,
+    candidate: TerminalCandidate,
+) -> TerminalCandidate {
+    let SubagentTerminalMode::WorkflowOutput { output_schema, .. } = terminal else {
+        return candidate;
+    };
+    if candidate.state != TerminalState::Succeeded {
+        return candidate;
+    }
+    let value = candidate
+        .content
+        .as_deref()
+        .ok_or_else(|| "the Workflow Agent returned no terminal value".to_owned())
+        .and_then(|content| {
+            serde_json::from_str::<serde_json::Value>(content)
+                .map_err(|error| format!("the Workflow Agent terminal value was not JSON: {error}"))
+        })
+        .and_then(|value| {
+            let validator = jsonschema::Validator::new(output_schema)
+                .map_err(|error| format!("the Workflow Agent output schema is invalid: {error}"))?;
+            if validator.is_valid(&value) {
+                Ok(value)
+            } else {
+                Err(
+                    "the Workflow Agent terminal value violated its frozen output schema"
+                        .to_owned(),
+                )
+            }
+        });
+    match value {
+        Ok(value) => TerminalCandidate {
+            workflow_value: Some(value),
+            ..candidate
+        },
+        Err(diagnostic) => TerminalCandidate {
+            state: TerminalState::Failed,
+            content: None,
+            workflow_value: None,
+            diagnostic: Some(bound_utf8(diagnostic, MAX_RESULT_CONTENT_BYTES)),
+            reason: None,
+            ..candidate
         },
     }
 }
@@ -2019,9 +2305,29 @@ mod tests {
     fn spec(task: &str) -> SubagentStartSpec {
         SubagentStartSpec {
             resolved: resolved("explore"),
+            approval_mode: crate::runtime::ApprovalMode::Policy,
             task: task.to_owned(),
             context: None,
             tool_call_id: ToolCallId::new("call-1"),
+            terminal: SubagentTerminalMode::Normal,
+        }
+    }
+
+    fn workflow_spec(task: &str) -> SubagentStartSpec {
+        SubagentStartSpec {
+            terminal: SubagentTerminalMode::WorkflowOutput {
+                output_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {"summary": {"type": "string"}},
+                    "required": ["summary"],
+                    "additionalProperties": false
+                }),
+                workflow_id: crate::runtime::workflow::WorkflowId::parse("test_workflow")
+                    .expect("workflow id"),
+                run_id: ToolCallId::new("workflow-run"),
+                node_id: "agent".to_owned(),
+            },
+            ..spec(task)
         }
     }
 
@@ -2209,6 +2515,62 @@ mod tests {
                 .as_deref()
                 .is_none_or(|detail| !detail.contains("physical settlement")),
             "a clean semantic success has no settlement diagnostic"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_workflow_child_closes_native_lifecycle_without_parent_inbound() {
+        let plane = plane(4);
+        let child = stage_exit0(&plane);
+        let accepted = start(&plane, &workflow_spec("return a structured result")).await;
+        child
+            .complete(
+                ChildResultStatus::Succeeded,
+                Some(r#"{"summary":"answer"}"#),
+            )
+            .await;
+
+        let settled = plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
+        assert_eq!(settled.state, SubagentState::Succeeded);
+        assert!(
+            plane
+                .store
+                .select_pending_batch()
+                .expect("pending")
+                .is_none()
+        );
+        let journal = events(&plane);
+        assert!(journal.iter().any(|event| matches!(
+            event,
+            crate::events::types::RuntimeEvent::SubagentTerminalSettled {
+                subagent_id,
+                state: SubagentTerminalState::Succeeded,
+                ..
+            } if *subagent_id == accepted.subagent_id
+        )));
+        assert!(!journal.iter().any(|event| matches!(
+            event,
+            crate::events::types::RuntimeEvent::SubagentTerminalPublished {
+                subagent_id, ..
+            } if *subagent_id == accepted.subagent_id
+        )));
+        assert_eq!(
+            journal
+                .iter()
+                .filter(|event| matches!(
+                    event,
+                    crate::events::types::RuntimeEvent::WorkflowAgentOutputCommitted {
+                        subagent_id, output, ..
+                    } if *subagent_id == accepted.subagent_id
+                        && *output == serde_json::json!({"summary": "answer"})
+                ))
+                .count(),
+            1,
+            "the Workflow value is committed exactly once with the child terminal fact"
         );
     }
 

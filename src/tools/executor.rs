@@ -538,6 +538,11 @@ impl ToolRegistry {
                 definition.id
             )));
         }
+        if definition.name == "workflow_output" {
+            return Err(ToolRegistryError::InvalidIdentity(
+                "workflow_output is reserved for Workflow Agent terminalization".to_owned(),
+            ));
+        }
         if self.by_id.contains_key(&definition.id) {
             return Err(ToolRegistryError::DuplicateToolId(definition.id.clone()));
         }

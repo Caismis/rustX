@@ -40,9 +40,10 @@ use crate::runtime::types::CancellationReason;
 
 use super::anchors::{NestedUnitSettlement, RetainedProcessUnits, contain_retained};
 use super::ipc::{
-    ChildFrame, ParentFrame, ProcessUnitAckFrame, ProcessUnitRefusalFrame, ResultFrame,
-    SubagentChildSpec, read_child_frame, write_parent_frame,
+    ChildFrame, ChildTerminalMode, ParentFrame, ProcessUnitAckFrame, ProcessUnitRefusalFrame,
+    ResultFrame, SubagentChildSpec, read_child_frame, write_parent_frame,
 };
+use super::registry::SubagentTerminalMode;
 use super::resolver::ResolvedSubagentSpec;
 use super::workspace::{WorkspaceLease, WorkspaceSnapshot};
 
@@ -138,8 +139,10 @@ impl SubagentSpawnPlan {
         child_agent_id: &crate::runtime::identity::AgentId,
         parent_agent_id: &crate::runtime::identity::AgentId,
         resolved: &ResolvedSubagentSpec,
+        approval_mode: crate::runtime::types::ApprovalMode,
         runtime_root: &PhysicalChildRuntimeRoot,
         workspace: &WorkspaceLease,
+        terminal: &SubagentTerminalMode,
     ) -> SubagentChildSpec {
         SubagentChildSpec {
             protocol_version: super::ipc::SUBAGENT_IPC_VERSION,
@@ -148,11 +151,20 @@ impl SubagentSpawnPlan {
             child_agent_id: child_agent_id.clone(),
             parent_agent_id: parent_agent_id.clone(),
             resolved: resolved.clone(),
+            approval_mode,
             model_timeout_policy: self.model_timeout_policy,
             agent_status: self.agent_status.clone(),
             context: self.context,
             workspace_snapshot: workspace.snapshot().clone(),
             runtime_root: runtime_root.path().to_path_buf(),
+            terminal: match terminal {
+                SubagentTerminalMode::Normal => ChildTerminalMode::Normal,
+                SubagentTerminalMode::WorkflowOutput { output_schema, .. } => {
+                    ChildTerminalMode::WorkflowOutput {
+                        output_schema: output_schema.clone(),
+                    }
+                }
+            },
         }
     }
 }
@@ -1906,6 +1918,7 @@ mod tests {
                 materialization:
                     crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
             },
+            approval_mode: crate::runtime::ApprovalMode::Policy,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             agent_status: crate::context::AgentStatusConfig::default(),
             context: crate::context::SessionContextPolicy {
@@ -1917,6 +1930,7 @@ mod tests {
                 dir.path().join("workspace"),
             ),
             runtime_root: dir.path().join("runtime"),
+            terminal: crate::runtime::subagent::ipc::ChildTerminalMode::Normal,
         };
         let runtime_root = plan
             .allocate_child_runtime_root(&spec.subagent_id)

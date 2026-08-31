@@ -416,6 +416,15 @@ impl std::error::Error for SubagentResolutionError {}
 /// validation of a prepared generation).
 pub struct SubagentResolver;
 
+/// The independent profile-admission domains.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubagentDomain {
+    /// Profiles callable by the main Agent's `subagent` capability.
+    Main,
+    /// Profiles callable by Workflow Agent and Parallel nodes.
+    Workflow,
+}
+
 impl SubagentResolver {
     /// Resolves one named agent against the runtime generation owned by the
     /// invoking attempt.
@@ -434,18 +443,44 @@ impl SubagentResolver {
         attempt_model: &SessionModelConfig,
         models: &ModelBindingRegistry,
     ) -> Result<ResolvedSubagentSpec, SubagentResolutionError> {
+        Self::resolve_in_domain(
+            resources,
+            agent,
+            attempt_model,
+            models,
+            SubagentDomain::Main,
+        )
+    }
+
+    /// Resolves one named profile after checking an explicit admission domain.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SubagentResolutionError`] when the profile is not admitted
+    /// or one of its frozen model, capability, Skill, or workspace resources
+    /// cannot be resolved.
+    pub fn resolve_in_domain(
+        resources: &RuntimeResourceSnapshot,
+        agent: &SubagentName,
+        attempt_model: &SessionModelConfig,
+        models: &ModelBindingRegistry,
+        domain: SubagentDomain,
+    ) -> Result<ResolvedSubagentSpec, SubagentResolutionError> {
         let catalog = resources.subagents();
-        let definition =
-            catalog
-                .get(agent)
-                .ok_or_else(|| SubagentResolutionError::UnknownAgent {
-                    agent: agent.as_str().to_owned(),
-                    available: catalog
-                        .names()
-                        .into_iter()
-                        .map(|name| name.as_str().to_owned())
-                        .collect(),
-                })?;
+        let admission = match domain {
+            SubagentDomain::Main => resources.subagent_main_admission(),
+            SubagentDomain::Workflow => resources.subagent_workflow_admission(),
+        };
+        let definition = catalog
+            .get(agent)
+            .filter(|_| admission.contains(agent))
+            .ok_or_else(|| SubagentResolutionError::UnknownAgent {
+                agent: agent.as_str().to_owned(),
+                available: admission
+                    .iter()
+                    .map(|name| name.as_str().to_owned())
+                    .collect(),
+            })?;
         let capability = resources.capability();
         let tools = resolve_tools(
             definition,
@@ -615,6 +650,17 @@ fn optional_source(selector: &SubagentToolSelector) -> Option<CapabilitySourceId
 /// names. Origin identity participates, so a Builtin `read` and an MCP
 /// server's `read` are never interchangeable.
 fn matches_selector(definition: &ToolDefinition, selector: &SubagentToolSelector) -> bool {
+    // A Workflow is a parent-plane orchestration capability, not a child
+    // capability. Its reserved identity is excluded before ordinary Builtin
+    // selector matching, so a named profile cannot create recursive
+    // Workflow-to-Workflow composition through the child Tool Plane.
+    if definition
+        .id
+        .as_str()
+        .starts_with(crate::runtime::workflow::WORKFLOW_TOOL_ID_PREFIX)
+    {
+        return false;
+    }
     match (selector, &definition.origin) {
         (SubagentToolSelector::Builtin { name }, ToolOrigin::Builtin) => definition.name == *name,
         (

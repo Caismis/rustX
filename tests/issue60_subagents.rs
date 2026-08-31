@@ -67,15 +67,17 @@ const SESSION_JSON: &str = r#"{
   "agentId": "agent-parent",
   "model": {"model": "fixture/subagent-model"},
   "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
-  "subagents": {
+    "subagents": {
     "maxConcurrent": 4,
-    "agents": {
+    "definitions": {
       "explore": {
         "description": "Read-only repository exploration.",
         "instructionsFile": "subagents/explore.md",
         "tools": {"builtin": ["read", "glob", "grep"]}
       }
-    }
+    },
+    "main": ["explore"],
+    "workflow": []
   }
 }"#;
 

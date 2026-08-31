@@ -1359,6 +1359,47 @@ containment and repeated idempotent restart. No durable workflow, no
 subagent definition configuration surface (Issue #144 added it),
 cross-conversation children, or recursion were added.
 
+### M9.5 — Native YAML WorkflowRuntime (Issue #83, delivered)
+
+M9.5 adds the bounded native Workflow layer over named SubagentRuntime. The
+authoring surface is `.rustx/workflows/<configured-id>.yaml`, but YAML is only
+serialization. Configuration registers exact ids and separately admits
+`workflows.main`; `subagents.definitions` remains the one profile source of
+truth, with independent `subagents.main` and `subagents.workflow` domains.
+
+The loader compiles each registered definition into an immutable
+`WorkflowProgram`. The compiler enforces one explicit-entry finite DAG,
+reachability/termination, explicit typed references, path availability,
+schema compatibility, complete Branch ports, and workflow profile admission.
+`WorkflowRuntime` owns only per-run values, deterministic progression,
+keyed all-settle Parallel joins, cancellation/drain, and terminal settlement;
+the existing SubagentRuntime continues to own child Agent loops, tools,
+capabilities, approval/interaction, workspaces, retries, and physical
+settlement.
+
+The v1 language is deliberately limited to Agent, Branch, Parallel, and
+Return. Agent tasks are static, Branch consumes a committed boolean, Parallel
+uses definition keys and native capacity, and Return validates one explicit
+result. Workflow Agent success is exclusively the reserved
+`workflow_output` protocol: schema validation, exactly-once commit,
+same-turn exclusivity, bounded correction feedback, and cancellation/output
+linearization are all deterministic. A Workflow is exposed as one concrete
+Tool per `workflows.main` id, with no generic dispatcher and no intermediate
+parent-history injection.
+
+Reload builds the complete capability/subagent/Workflow candidate off-side
+and publishes it atomically; active runs retain their program snapshot.
+Workflow events use the existing journal as observability only. A successful
+Workflow child atomically records its validated value with the native child
+terminal fact, while failed/cancelled children use the dedicated terminal
+settlement transition; neither creates parent delivery. The durable SQLite
+schema is intentionally bumped to version 19 so older runtimes cannot decode
+the new event vocabulary. There is no
+durable Workflow resume, crash replay, Workflow-local scheduler, Canvas, or
+generic DSL. Deterministic unit and real-provider conformance tests cover
+admission, compilation, output terminalization, Branch/Parallel semantics,
+isolation, cancellation/drain, Tool exposure, and reload behavior.
+
 ## Milestone 10 — Local runtime product
 
 The spawnable local runtime *process* and its composition ownership already

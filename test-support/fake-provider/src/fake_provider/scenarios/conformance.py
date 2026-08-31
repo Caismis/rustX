@@ -32,6 +32,7 @@ from fake_provider.scenario import (
 # -- the catalog the Rust driver publishes ---------------------------------
 
 CHAT_MODEL = "chat-model"
+WORKFLOW_MODEL = "workflow-model"
 RESPONSES_MODEL = "responses-model"
 ANTHROPIC_MODEL = "anthropic-model"
 SUMMARY_MODEL = "summary-model"
@@ -206,6 +207,63 @@ def skill_read_turn() -> Scenario:
                 body_contains=("call-skill-1", SKILL_BODY_MARKER),
             ),
             Stream(Text("the skill instructions were read"), Finish("stop")),
+        ),
+    )
+
+
+def workflow_output() -> Scenario:
+    """A concrete Workflow Tool runs one native Workflow Agent child.
+
+    The first request is the parent selecting the independently model-visible
+    Workflow Tool. The second request is the child, which receives only the
+    frozen named profile and the reserved ``workflow_output`` protocol. The
+    final request is the parent's ordinary continuation over one bounded
+    Workflow ToolResult.
+    """
+    return Scenario(
+        "workflow_output",
+        Step(
+            Expect(
+                protocol=OPENAI_CHAT_COMPLETIONS,
+                model=WORKFLOW_MODEL,
+                body_contains=("workflow conformance request",),
+                tools_include=("review_pr",),
+            ),
+            Stream(
+                ToolCall(
+                    "call-review-pr",
+                    "review_pr",
+                    '{"task":"workflow conformance request"}',
+                ),
+                Finish("tool_calls"),
+            ),
+        ),
+        Step(
+            Expect(
+                protocol=OPENAI_CHAT_COMPLETIONS,
+                model=WORKFLOW_MODEL,
+                body_contains=("workflow conformance request", "Review the request"),
+                body_excludes=("review_pr",),
+                tools_include=("workflow_output",),
+            ),
+            Stream(
+                ToolCall(
+                    "call-workflow-output",
+                    "workflow_output",
+                    '{"passed":true,"summary":"native workflow child committed"}',
+                ),
+                Finish("tool_calls"),
+            ),
+        ),
+        Step(
+            Expect(
+                protocol=OPENAI_CHAT_COMPLETIONS,
+                model=WORKFLOW_MODEL,
+                body_contains=("native workflow child committed",),
+                tools_include=("review_pr",),
+                body_excludes=("workflow_output",),
+            ),
+            Stream(Text("workflow conformance complete"), Finish("stop")),
         ),
     )
 
@@ -453,6 +511,7 @@ SCENARIOS = {
     "anthropic_streamed_turn": anthropic_streamed_turn,
     "tool_call_continuation": tool_call_continuation,
     "skill_read_turn": skill_read_turn,
+    "workflow_output": workflow_output,
     "provider_http_error": provider_http_error,
     "gated_stream_cancellation": gated_stream_cancellation,
     "restart_after_request_start": restart_after_request_start,

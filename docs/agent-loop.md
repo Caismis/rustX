@@ -1180,6 +1180,35 @@ the terminal event append is attempted. A failed append leaves the machine
 terminal and the execution result with its settlement candidate, but no
 terminal Journal fact or observer event.
 
+## 6.1 Workflow Agent terminal protocol (Issue #83)
+
+A Workflow Agent is an ordinary named Subagent child with one additional
+frozen terminal contract supplied by `WorkflowRuntime`: the Agent Loop adds
+the reserved `workflow_output` declaration to the child request. The model
+may submit exactly one successful protocol call containing the
+schema-bound value. The Loop consumes that call before ordinary Tool Plane
+preflight or dispatch, so it allocates no ordinary `ToolExecutionId`, runs no
+business tool, and does not create a normal child ToolResult followed by
+another model turn.
+
+The protocol call must be the sole tool-shaped call in its Assistant turn.
+Mixed ordinary calls and `workflow_output`, duplicate protocol calls, invalid
+JSON/schema values, and a normal final Assistant message without the protocol
+are all nonterminal protocol outcomes. The Loop executes no ordinary side
+effect for those turns, commits no Workflow value, emits bounded feedback in
+the next model request, and lets the child continue while its ordinary model,
+turn, and retry budgets permit. A valid value is checked against the frozen
+Agent output schema and commits exactly once; the first successful terminal
+transition wins.
+
+The output latch is linearized against the existing child cancellation
+authority. Cancellation winning first makes later output stale; a valid
+output commit winning first leaves the child completed and prevents later
+cancellation from rewriting it. The child transcript and protocol feedback
+remain child-local. WorkflowRuntime receives only the committed structured
+fact through the native child settlement boundary, and the parent receives
+only the bounded Workflow ToolResult.
+
 ## 7. Cancellation
 
 Cancellation is observed at deterministic check points (before each model
