@@ -24,6 +24,38 @@
 //! uncertain and keeps the in-memory document aligned with the visible file.
 //! A failed preparation or catalog write cannot leave a visible catalog entry
 //! pointing at an unusable conversation.
+//!
+//! # Session lifecycle: internal shell vs. resume-visible history
+//!
+//! A published Session is durable immediately, but it is not automatically
+//! *history*. The one lifecycle predicate `SessionCatalog::is_unused`
+//! classifies every persisted Session, and startup, `/new`, and `/resume` all
+//! derive their behavior from it:
+//!
+//! ```text
+//! Session shell created/published
+//!     |
+//!     | metadata only (name, Session-local model choice)
+//!     v
+//! unused internal shell -- hidden from `/resume`, reused by startup and `/new`
+//!     |
+//!     | durable Pending Inbound acceptance of user work
+//!     v
+//! used Session -- immediately resume-visible
+//! ```
+//!
+//! The transition point is durable acceptance of user work into Pending
+//! Inbound, never canonical adoption, model invocation, or assistant output:
+//! an accepted-but-unadopted prompt is work the Session already owns, and
+//! recovery is what adopts it. The transition is monotonic — once used, a
+//! Session never classifies as unused again — because the classifier reads
+//! the conversation store's monotonic acceptance watermark
+//! (`ConversationStore::has_accepted_inbound`) rather than combining the
+//! independently changing Surface and Pending-Inbox projections, whose
+//! interleaved reads could otherwise hide already-accepted work while the
+//! Agent Loop adopts it. Session-local metadata alone never crosses the
+//! line, so naming or configuring an otherwise untouched shell does not make
+//! it history.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
@@ -188,7 +220,11 @@ pub struct SessionSnapshot {
     pub node_count: usize,
 }
 
-/// A bounded page of persisted Session summaries.
+/// A bounded page of resume-visible Session summaries.
+///
+/// The page is a view over Sessions that own durable user work (see
+/// `SessionCatalog::is_unused`); untouched empty internal shells are
+/// persisted but never listed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionListPage {
     /// Rows in deterministic Session-id order.
@@ -438,6 +474,11 @@ pub struct SessionCatalog {
     published: bool,
     #[cfg(test)]
     write_fault: Arc<Mutex<Option<CatalogWriteFault>>>,
+    /// Test-only gate parked between the Surface-head observation and the
+    /// acceptance-watermark read of `is_unused`, so a race regression can
+    /// replay the exact adoption interleaving against the classifier.
+    #[cfg(test)]
+    classification_gate: Option<Arc<crate::runtime::conversation_runtime::Gate>>,
 }
 
 impl SessionCatalog {
@@ -477,6 +518,8 @@ impl SessionCatalog {
             published: true,
             #[cfg(test)]
             write_fault: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            classification_gate: None,
         }))
     }
 
@@ -592,6 +635,8 @@ impl SessionCatalog {
             published: false,
             #[cfg(test)]
             write_fault: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            classification_gate: None,
         })
     }
 
@@ -614,7 +659,15 @@ impl SessionCatalog {
             .expect("catalog write fault lock poisoned") = Some(CatalogWriteFault::AfterRename);
     }
 
-    /// Returns one bounded, searchable Session-list page.
+    /// Returns one bounded, searchable page of **resume-visible** Sessions.
+    ///
+    /// Visibility is a Session lifecycle fact, not a presentation rule: a
+    /// persisted Session that is still an untouched empty shell (see
+    /// `Self::is_unused`) is internal durable state, not historical user
+    /// work, and never appears here. Classification happens before search and
+    /// pagination, so the offset and `next_offset` continuation describe the
+    /// visible matching set alone — hidden shells can never open a hole in a
+    /// page, shift an offset, or duplicate a row across continuations.
     ///
     /// Ordering is ascending Session identity. The offset is a domain-specific
     /// continuation: there is no global maximum number of Sessions, and
@@ -624,7 +677,7 @@ impl SessionCatalog {
     /// # Errors
     ///
     /// Returns [`SessionError`] when the requested page size is outside the
-    /// native bound.
+    /// native bound or a durable conversation cannot be read.
     pub fn list_page(
         &self,
         query: Option<&str>,
@@ -637,6 +690,9 @@ impl SessionCatalog {
         let mut page = Vec::with_capacity(limit);
         let mut has_more = false;
         for session in self.document.sessions.values() {
+            if self.is_unused(session)? {
+                continue;
+            }
             // A row is searched by what it shows. An unnamed Session shows
             // its first user message, so matching only identity and name
             // would hide exactly the rows a user has to recognize by their
@@ -680,6 +736,19 @@ impl SessionCatalog {
         })
     }
 
+    /// Returns every persisted Session identity in deterministic catalog
+    /// order, including unused internal shells that [`Self::list_page`] does
+    /// not list.
+    ///
+    /// This is the raw reachability view of the catalog, for callers that
+    /// audit durable publication itself rather than resume-visible history —
+    /// crash/recovery diagnostics and lifecycle tests. Product surfaces that
+    /// show Sessions to a user use [`Self::list_page`].
+    #[must_use]
+    pub fn persisted_session_ids(&self) -> Vec<SessionId> {
+        self.document.sessions.keys().cloned().collect()
+    }
+
     /// Returns the active Session snapshot.
     ///
     /// # Errors
@@ -692,18 +761,12 @@ impl SessionCatalog {
 
     /// Whether the active Session has never been used.
     ///
-    /// An unused Session is exactly the Session a launch would otherwise
-    /// have to publish: one `New` root node whose durable conversation is
-    /// still at its initial Surface revision, with no canonical message and
-    /// nothing accepted into its Pending Inbound. Startup reuses that Session
-    /// instead of publishing another empty one, so repeated launches cannot
-    /// accumulate empty rows in `/resume`.
-    ///
-    /// Pending Inbound is part of the question, not a detail: a message that
-    /// was accepted durably but never adopted is work this Session owns, and
-    /// composing that lineage again is what adopts it. Treating it as unused
-    /// would resurrect a previous launch's prompt inside what the user asked
-    /// to be an empty Session.
+    /// This is [`Self::is_unused`] over the active selection — the one
+    /// Session lifecycle predicate, applied to the Session a launch or a
+    /// `/new` would otherwise have to replace. Startup reuses an unused
+    /// active Session instead of publishing another empty shell, and `/new`
+    /// over one is a semantic no-op, so neither path can accumulate empty
+    /// internal shells beside it.
     ///
     /// # Errors
     ///
@@ -717,6 +780,47 @@ impl SessionCatalog {
             .ok_or_else(|| SessionError::UnknownSession {
                 session_id: self.document.active_session.clone(),
             })?;
+        self.is_unused(session)
+    }
+
+    /// Whether one persisted Session is an untouched empty shell.
+    ///
+    /// This is the single Session-used predicate of the product. Startup,
+    /// `/new`, and `/resume` all derive from it: an unused Session is an
+    /// internal durable shell that exists for crash-safe composition, never
+    /// historical user work, so `/resume` does not list it and startup/`/new`
+    /// reuse it rather than manufacturing another one beside it.
+    ///
+    /// The classification is deliberately narrow. A Session is unused only
+    /// when *all* of the following hold:
+    ///
+    /// - it has exactly one root node, created as [`SessionNodeOrigin::New`]
+    ///   with no parent/branch lineage;
+    /// - that node's durable conversation is still at its initial Surface
+    ///   revision, with no canonical message;
+    /// - that conversation has never committed a durable inbound acceptance.
+    ///
+    /// The last condition is the monotonic usage fact owned by the
+    /// conversation's durable authority (`ConversationStore::has_accepted_inbound`),
+    /// not a pair of independently changing projections. Reading the current
+    /// Surface head and the current Pending Inbox separately could assemble a
+    /// state that never existed — a pre-adoption head plus a post-adoption
+    /// empty inbox — and classify a Session whose prompt was already durably
+    /// accepted as unused. The acceptance watermark cannot do that: durable
+    /// acceptance is the used transition, adoption never rewinds it, and once
+    /// a Session is used it never classifies as unused again.
+    ///
+    /// Provenance is equally decisive: a clone, fork, or tree branch is user
+    /// work by construction, so it is used even when its destination
+    /// conversation is legitimately empty at the selected cut (a fork at the
+    /// very first user message seeds the empty lineage). Session-local
+    /// metadata — a name, a model choice — never counts as use.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError`] when the Session's durable conversation
+    /// cannot be read.
+    fn is_unused(&self, session: &PersistedSession) -> Result<bool, SessionError> {
         if session.nodes.len() != 1 {
             return Ok(false);
         }
@@ -733,8 +837,29 @@ impl SessionCatalog {
         if head.revision != SurfaceRevision::INITIAL || !head.active_message_ids.is_empty() {
             return Ok(false);
         }
-        let pending = store.load_pending().map_err(SessionError::Store)?;
-        Ok(pending.is_empty())
+        #[cfg(test)]
+        if let Some(gate) = &self.classification_gate {
+            gate.enter();
+        }
+        // The decisive read is last and is a single atomic query against a
+        // monotonic watermark: every acceptance committed before this read
+        // is observed, however adoption raced the head read above, and an
+        // acceptance committed only after it legitimately postdates this
+        // classification.
+        Ok(!store.has_accepted_inbound().map_err(SessionError::Store)?)
+    }
+
+    /// Arms the test-only classification boundary gate, parking the next
+    /// `is_unused` read between its Surface-head observation and its
+    /// acceptance-watermark read.
+    #[cfg(test)]
+    pub(crate) fn arm_classification_gate(
+        &mut self,
+    ) -> Arc<crate::runtime::conversation_runtime::Gate> {
+        let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        gate.arm();
+        self.classification_gate = Some(gate.clone());
+        gate
     }
 
     /// Returns one Session snapshot.
@@ -2371,20 +2496,40 @@ mod tests {
         }
     }
 
-    /// The "unused Session" predicate startup reuses is exactly one `New`
-    /// root node whose conversation has no canonical history. Any committed
-    /// message disqualifies the Session, and so does a branch node — even a
-    /// branch whose own conversation seed is empty.
+    /// The one Session lifecycle classification every product path shares:
+    /// startup reuse, `/new`, and `/resume` visibility. An unused Session is
+    /// exactly one untouched `New` root node — no canonical history, no
+    /// durable Pending Inbound — and `/resume` never lists it. Any committed
+    /// message disqualifies the Session, and so does durable acceptance of a
+    /// prompt that was never adopted, a branch node, or clone/fork
+    /// provenance — even when the node's own conversation seed is empty.
     #[test]
     fn only_an_untouched_root_session_counts_as_unused() {
-        let (_directory, mut catalog, _config) = open_catalog();
+        let (directory, mut catalog, _config) = open_catalog();
+        let visible = |catalog: &SessionCatalog| {
+            catalog
+                .list_page(None, 0, super::SESSION_LIST_PAGE_LIMIT)
+                .expect("resume page")
+                .sessions
+                .into_iter()
+                .map(|summary| summary.id)
+                .collect::<Vec<_>>()
+        };
         assert!(catalog.active_is_unused().expect("fresh catalog"));
+        assert!(
+            visible(&catalog).is_empty(),
+            "a fresh catalog has zero resume-visible Sessions"
+        );
 
         // A Session-local model choice is metadata, not use.
         catalog
             .persist_active_model(config().model)
             .expect("persist Session model");
         assert!(catalog.active_is_unused().expect("model choice only"));
+        assert!(
+            visible(&catalog).is_empty(),
+            "Session-local metadata alone never becomes resume-visible"
+        );
 
         // A message that was accepted durably but never adopted is already
         // this Session's work, however empty the canonical history still is.
@@ -2401,7 +2546,24 @@ mod tests {
             })
             .expect("accept pending inbound");
         assert!(!catalog.active_is_unused().expect("pending inbound"));
+        assert_eq!(
+            visible(&catalog),
+            vec![session_id.clone()],
+            "durable Pending Inbound acceptance is immediately resume-visible, \
+             before canonical adoption, model start, or assistant output"
+        );
         drop(pending_store);
+
+        // A restart reads the same classification back while the prompt is
+        // still only pending.
+        let reopened = reopen_catalog(directory.path());
+        assert!(
+            !reopened
+                .active_is_unused()
+                .expect("reopened pending inbound")
+        );
+        assert_eq!(visible(&reopened), vec![session_id.clone()]);
+        drop(reopened);
 
         let history = source_history();
         let (source_conversation, source_session, source_node) = append_history(&catalog, &history);
@@ -2430,7 +2592,8 @@ mod tests {
             .expect("publish branch node");
         assert!(!catalog.active_is_unused().expect("branched session"));
 
-        // A newly published Session is unused again.
+        // A newly published Session is unused again: an internal durable
+        // shell beside the used one, persisted but not resume-visible.
         let prepared = catalog
             .prepare_session(&state(), &[])
             .expect("prepare new session");
@@ -2438,6 +2601,200 @@ mod tests {
             .publish_session(&prepared, SessionNodeOrigin::New)
             .expect("publish new session");
         assert!(catalog.active_is_unused().expect("new session"));
+        assert_eq!(
+            visible(&catalog),
+            vec![source_session.clone()],
+            "the new empty shell is hidden; the used Session stays listed"
+        );
+        assert_eq!(
+            catalog.persisted_session_ids().len(),
+            2,
+            "the shell is still durable catalog state"
+        );
+
+        // A restart preserves the used/unused classification exactly.
+        let reopened = reopen_catalog(directory.path());
+        assert!(reopened.active_is_unused().expect("reopened new session"));
+        assert_eq!(visible(&reopened), vec![source_session]);
+    }
+
+    /// The Issue #167 race regression. The classification used to combine
+    /// two independent durable reads — the current Surface head and the
+    /// current Pending Inbox — and adoption commits between them produced a
+    /// state that never existed: pre-adoption head + post-adoption empty
+    /// inbox = a false "unused". This test forces exactly that interleaving
+    /// through the real classifier: it parks `is_unused` after the
+    /// pre-adoption head observation, runs the Agent Loop's atomic adoption,
+    /// and then lets the classification finish. The monotonic acceptance
+    /// watermark must still settle it as used.
+    #[test]
+    fn adoption_racing_classification_cannot_hide_accepted_work() {
+        let (directory, mut catalog, _config) = open_catalog();
+        let (session_id, node, _) = catalog.active_lineage().expect("root lineage");
+        let store = store_for(&catalog, &session_id, &node.conversation_id);
+
+        // Durable acceptance of user work, not yet adopted: the state the
+        // race starts from.
+        let accepted = store
+            .accept_inbound(crate::durable::InboundDraft {
+                message_id: None,
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                content: vec![text("racing prompt")],
+                timestamp: Utc::now(),
+                correlation: None,
+            })
+            .expect("accept user work");
+        assert_eq!(
+            store.load_head().expect("head before adoption").revision,
+            SurfaceRevision::INITIAL
+        );
+
+        // Park the classifier between its Surface-head observation and its
+        // acceptance-watermark read: it has provably observed the
+        // pre-adoption half of the durable state.
+        let gate = catalog.arm_classification_gate();
+        let classifying = {
+            let catalog = catalog.clone();
+            std::thread::spawn(move || catalog.active_is_unused())
+        };
+        gate.wait_entered();
+
+        // The Agent Loop's atomic adoption transition: canonical append,
+        // Surface advance, and Pending removal in one commit.
+        let adopted = store
+            .adopt_pending_batch(
+                accepted.sequence,
+                crate::durable::inbox::inbound_adoption_event(
+                    store.conversation_id(),
+                    None,
+                    vec![accepted.message_id.clone()],
+                ),
+            )
+            .expect("adopt pending inbound");
+        assert_eq!(adopted.len(), 1);
+        assert!(
+            store
+                .load_pending()
+                .expect("pending after adopt")
+                .is_empty(),
+            "the old torn read would now observe an empty Pending Inbox"
+        );
+
+        gate.release();
+        let unused = classifying
+            .join()
+            .expect("classification thread")
+            .expect("classification");
+        assert!(
+            !unused,
+            "durable acceptance is monotonic: adoption can never make an accepted Session unused"
+        );
+
+        // The classification stays used after the adoption and across a
+        // restart.
+        assert!(!catalog.active_is_unused().expect("post-adoption"));
+        let reopened = reopen_catalog(directory.path());
+        assert!(!reopened.active_is_unused().expect("reopened"));
+    }
+
+    /// Provenance is user work even when the destination conversation is
+    /// legitimately empty. A fork at the very first user message cuts to the
+    /// empty lineage, and a clone of an untouched lineage carries nothing —
+    /// yet both are used and resume-visible, because the unused
+    /// classification only ever fits the untouched root-`New` shell.
+    #[test]
+    fn clone_and_fork_with_empty_destinations_are_still_resume_visible() {
+        let (_directory, mut catalog, _config) = open_catalog();
+        let visible = |catalog: &SessionCatalog| {
+            catalog
+                .list_page(None, 0, super::SESSION_LIST_PAGE_LIMIT)
+                .expect("resume page")
+                .sessions
+        };
+
+        // Clone the still-unused root lineage: an empty copy of an empty
+        // conversation, but an explicit user lineage operation.
+        let (root_session, root_node, _) = catalog.active_lineage().expect("root lineage");
+        let root_store = store_for(&catalog, &root_session, &root_node.conversation_id);
+        let root_revision = root_store.load_head().expect("root head").revision;
+        let source = lineage_at(&root_store, &root_node.conversation_id, root_revision);
+        let clone = catalog
+            .prepare_clone_session(&state(), &source)
+            .expect("prepare empty clone");
+        let clone_id = clone.session_id.clone();
+        catalog
+            .publish_session(
+                &clone,
+                SessionNodeOrigin::Clone {
+                    source_session: root_session,
+                    source_node: root_node.id.clone(),
+                    source_surface_revision: root_revision,
+                },
+            )
+            .expect("publish empty clone");
+        assert!(
+            !catalog.active_is_unused().expect("empty clone"),
+            "an empty clone destination is used by provenance"
+        );
+        let page = visible(&catalog);
+        assert_eq!(page.len(), 1, "the unused root shell stays hidden");
+        assert_eq!(page[0].id, clone_id);
+        assert_eq!(
+            page[0].preview, None,
+            "an empty destination has no first-message line, yet the row exists"
+        );
+
+        // Fork the clone at its very first user message: the destination
+        // seed is the empty prefix before that boundary.
+        let (clone_session, clone_node, _) = catalog.active_lineage().expect("clone lineage");
+        append_history(&catalog, &[user("only-prompt", "the first prompt")]);
+        let clone_store = store_for(&catalog, &clone_session, &clone_node.conversation_id);
+        let revision = clone_store.load_head().expect("clone head").revision;
+        let source = lineage_at(&clone_store, &clone_node.conversation_id, revision);
+        let (fork, _editor) = catalog
+            .prepare_fork_session(&state(), &source, &MessageId::new("only-prompt"))
+            .expect("prepare fork at the first user message");
+        let fork_id = fork.session_id.clone();
+        let fork_conversation = fork.conversation_id.clone();
+        catalog
+            .publish_session(
+                &fork,
+                SessionNodeOrigin::Fork {
+                    source_session: clone_session,
+                    source_node: clone_node.id.clone(),
+                    source_surface_revision: revision,
+                    source_user_message: MessageId::new("only-prompt"),
+                },
+            )
+            .expect("publish empty fork");
+
+        // The fork destination is genuinely empty — initial Surface, no
+        // canonical message, no Pending Inbound — and used anyway.
+        let fork_store = store_for(&catalog, &fork_id, &fork_conversation);
+        assert!(
+            fork_store
+                .load_canonical()
+                .expect("fork canonical")
+                .is_empty()
+        );
+        assert_eq!(
+            fork_store.load_head().expect("fork head").revision,
+            SurfaceRevision::INITIAL
+        );
+        assert!(
+            !catalog.active_is_unused().expect("empty fork"),
+            "an empty fork destination is used by provenance"
+        );
+        let ids = visible(&catalog)
+            .into_iter()
+            .map(|summary| summary.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            vec![clone_id, fork_id],
+            "empty clone and empty fork are both resume-visible; the root shell is not"
+        );
     }
 
     #[test]
@@ -2472,7 +2829,13 @@ mod tests {
                 .expect("list page")
                 .sessions
                 .len(),
-            2
+            1,
+            "the used source is the only resume-visible Session"
+        );
+        assert_eq!(
+            catalog.persisted_session_ids().len(),
+            2,
+            "the new empty shell is persisted without becoming history"
         );
         assert_eq!(
             source_store
@@ -2515,7 +2878,9 @@ mod tests {
     /// A Session carries no name until a user gives it one, so a `/resume`
     /// row identifies it by what it opened with. Naming replaces that line
     /// and nothing else: the identity, the lineage, and the conversation are
-    /// untouched, and the row remains searchable by either.
+    /// untouched, and the row remains searchable by either. A Session that
+    /// owns no durable user work yet has no row at all — it is an internal
+    /// shell, not history.
     #[test]
     fn an_unnamed_session_is_listed_by_its_first_user_message() {
         let (_directory, mut catalog, _config) = open_catalog();
@@ -2526,14 +2891,16 @@ mod tests {
                 .sessions
                 .into_iter()
                 .next()
-                .expect("the active Session is listed")
+                .expect("the used Session is listed")
         };
 
-        let empty = row(&catalog);
-        assert_eq!(empty.name, None, "a Session is born unnamed");
-        assert_eq!(
-            empty.preview, None,
-            "a Session that was never used has no first message to show either"
+        assert!(
+            catalog
+                .list_page(None, 0, super::SESSION_LIST_PAGE_LIMIT)
+                .expect("session page")
+                .sessions
+                .is_empty(),
+            "a Session that was never used is an internal shell, not a `/resume` row"
         );
 
         append_history(
@@ -2621,20 +2988,42 @@ mod tests {
         );
     }
 
+    /// `/resume` pages and searches the resume-visible set only. Hidden
+    /// unused shells interspersed between used Sessions open no holes, shift
+    /// no offsets, duplicate no continuation rows, and are never matched by
+    /// a query — even when they carry a name.
     #[test]
     fn session_list_projection_is_bounded_searchable_and_continuable() {
         let (_directory, mut catalog, _config) = open_catalog();
-        for index in 0..3 {
-            let prepared = catalog
-                .prepare_session(&state(), &[])
-                .expect("prepare paged session");
-            let published = catalog
-                .publish_session(&prepared, SessionNodeOrigin::New)
-                .expect("publish paged session");
-            catalog
-                .rename(&published.id, &format!("paged session {index}"))
-                .expect("name paged session");
+        // Alternate used and untouched Sessions: session-1/3/5 own durable
+        // user work; session-2/4 are internal shells that stay hidden.
+        for index in 0..5 {
+            if index > 0 {
+                let prepared = catalog
+                    .prepare_session(&state(), &[])
+                    .expect("prepare paged session");
+                catalog
+                    .publish_session(&prepared, SessionNodeOrigin::New)
+                    .expect("publish paged session");
+            }
+            if index % 2 == 0 {
+                append_history(
+                    &catalog,
+                    &[user(
+                        &format!("paged-user-{index}"),
+                        &format!("paged session {index}"),
+                    )],
+                );
+                let id = catalog.active_snapshot().expect("active snapshot").id;
+                catalog
+                    .rename(&id, &format!("paged session {index}"))
+                    .expect("name paged session");
+            }
         }
+        catalog
+            .rename(&SessionId::new("session-2"), "hidden shell")
+            .expect("name a hidden shell");
+        assert_eq!(catalog.persisted_session_ids().len(), 5);
 
         let first = catalog
             .list_page(None, 0, 2)
@@ -2644,28 +3033,61 @@ mod tests {
         let second = catalog
             .list_page(None, first.next_offset.expect("continuation"), 2)
             .expect("second bounded Session page");
-        assert_eq!(second.sessions.len(), 2);
+        assert_eq!(second.sessions.len(), 1);
         assert_eq!(second.next_offset, None);
         let ids = first
             .sessions
             .into_iter()
             .chain(second.sessions)
             .map(|summary| summary.id)
-            .collect::<BTreeSet<_>>();
+            .collect::<Vec<_>>();
         assert_eq!(
-            ids.len(),
-            4,
-            "older Sessions remain reachable by continuation"
+            ids,
+            vec![
+                SessionId::new("session-1"),
+                SessionId::new("session-3"),
+                SessionId::new("session-5")
+            ],
+            "offsets and next_offset describe the visible set: no holes, no duplicates"
         );
 
         let filtered = catalog
-            .list_page(Some("paged session 1"), 0, 2)
+            .list_page(Some("paged session 2"), 0, 2)
             .expect("searchable bounded Session page");
         assert_eq!(filtered.sessions.len(), 1);
         assert_eq!(
             filtered.sessions[0].name.as_deref(),
-            Some("paged session 1")
+            Some("paged session 2")
         );
+        assert_eq!(filtered.next_offset, None);
+
+        // A query that only a hidden shell could match returns nothing.
+        assert!(
+            catalog
+                .list_page(Some("hidden shell"), 0, 2)
+                .expect("hidden search page")
+                .sessions
+                .is_empty(),
+            "search never reaches into hidden internal shells"
+        );
+
+        // Search paginates the visible matching set with the same
+        // continuation contract.
+        let searched = catalog
+            .list_page(Some("paged session"), 0, 2)
+            .expect("first searched page");
+        assert_eq!(searched.sessions.len(), 2);
+        assert_eq!(searched.next_offset, Some(2));
+        let searched_next = catalog
+            .list_page(
+                Some("paged session"),
+                searched.next_offset.expect("search continuation"),
+                2,
+            )
+            .expect("second searched page");
+        assert_eq!(searched_next.sessions.len(), 1);
+        assert_eq!(searched_next.next_offset, None);
+
         assert!(matches!(
             catalog.list_page(None, 0, 0),
             Err(SessionError::Catalog { .. })
@@ -4009,7 +4431,13 @@ mod tests {
                 .expect("list page")
                 .sessions
                 .len(),
-            2
+            1,
+            "the new Session is an unused internal shell: persisted, not listed"
+        );
+        assert_eq!(
+            catalog.persisted_session_ids().len(),
+            2,
+            "both Sessions remain durable catalog state"
         );
     }
 

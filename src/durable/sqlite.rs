@@ -924,6 +924,23 @@ impl ConversationStore for SqliteConversationStore {
         load_pending_rows(&connection)
     }
 
+    fn has_accepted_inbound(&self) -> Result<bool, ConversationStoreError> {
+        // The durable acceptance watermark. `accept_inbound` advances it in
+        // the acceptance commit, adoption never touches it, and lineage
+        // seeding initializes it to zero without an acceptance, so a
+        // nonzero value is permanent proof that user work was durably
+        // accepted into this conversation.
+        let connection = self.lock()?;
+        let watermark: i64 = connection
+            .query_row(
+                "SELECT next_inbound_sequence FROM rustx_store WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| storage(format!("read inbound acceptance watermark: {error}")))?;
+        Ok(watermark > 0)
+    }
+
     fn initialize_lineage(&self, seed: &LineageSeed) -> Result<(), ConversationStoreError> {
         let messages = seed.canonical();
         let mut connection = self.lock()?;
@@ -7179,6 +7196,64 @@ mod tests {
         assert_eq!(adopted.len(), 1);
         assert!(store.load_pending().unwrap().is_empty());
         assert_eq!(store.load_head().unwrap().active_message_ids.len(), 1);
+    }
+
+    /// The Session lifecycle classification fact: durable acceptance is a
+    /// monotonic watermark. Adoption moves the accepted work from Pending
+    /// Inbound into the canonical Ledger and Surface, but never rewinds the
+    /// acceptance itself — once a conversation has accepted user work, it
+    /// has accepted user work forever.
+    #[test]
+    fn acceptance_watermark_is_monotonic_across_adoption() {
+        let store = store();
+        assert!(
+            !store.has_accepted_inbound().unwrap(),
+            "a fresh conversation has never accepted work"
+        );
+
+        let accepted = store.accept_inbound(draft("work")).unwrap();
+        assert!(
+            store.has_accepted_inbound().unwrap(),
+            "the acceptance commit advances the watermark"
+        );
+
+        let adopted = store
+            .adopt_pending_batch(
+                accepted.sequence,
+                crate::durable::inbox::inbound_adoption_event(
+                    store.conversation_id(),
+                    None,
+                    vec![accepted.message_id.clone()],
+                ),
+            )
+            .unwrap();
+        assert_eq!(adopted.len(), 1);
+        assert!(store.load_pending().unwrap().is_empty());
+        assert!(
+            store.has_accepted_inbound().unwrap(),
+            "adoption cannot rewind the acceptance fact"
+        );
+    }
+
+    /// Seeding a lineage writes canonical and Surface history directly; it
+    /// is not an inbound acceptance and must not raise the watermark. This
+    /// is what keeps a lineage cut at an empty boundary honest: usage
+    /// classification for those destinations is the catalog's provenance
+    /// decision, never a store artifact.
+    #[test]
+    fn lineage_seeding_is_not_an_acceptance() {
+        let store = store();
+        store
+            .initialize_lineage(&crate::durable::LineageSeed::history(vec![user_message(
+                "seeded-user",
+                "seeded history",
+            )]))
+            .unwrap();
+        assert_eq!(store.load_canonical().unwrap().len(), 1);
+        assert!(
+            !store.has_accepted_inbound().unwrap(),
+            "a seeded lineage carries history without any acceptance"
+        );
     }
 
     #[test]

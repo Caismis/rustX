@@ -958,6 +958,10 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
 ///   canonical ledger and removes their pending records in one transaction,
 ///   so a crash can never observe a pending record whose canonical message is
 ///   absent, nor a canonical message that remains independently re-adoptable.
+/// - [`ConversationStore::has_accepted_inbound`] is monotonic: the durable
+///   acceptance watermark advances inside the acceptance commit and no later
+///   transition — adoption included — ever rewinds it, so once user work has
+///   been durably accepted the answer stays `true` forever.
 #[allow(clippy::missing_errors_doc)]
 pub trait ConversationStore: Send + Sync + 'static {
     /// The conversation this store is the durable inbound authority of.
@@ -1028,6 +1032,28 @@ pub trait ConversationStore: Send + Sync + 'static {
     ///
     /// Returns [`ConversationStoreError::Storage`] on a backend read failure.
     fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError>;
+
+    /// Whether this conversation has ever committed one durable inbound
+    /// acceptance.
+    ///
+    /// This is the monotonic usage fact Session lifecycle classification is
+    /// built on. The acceptance transaction advances the durable inbound
+    /// sequence watermark in the same commit as the pending record, and
+    /// nothing ever rewinds it: adoption moves the accepted work from Pending
+    /// Inbound into the canonical Ledger without touching the watermark, and
+    /// lineage seeding writes canonical/Surface history without any
+    /// acceptance at all. One atomic read therefore answers "has user work
+    /// been durably accepted here" directly, instead of combining two
+    /// independently changing projections (current Surface, current Pending
+    /// Inbox) whose interleaved reads could assemble a state that never
+    /// existed. A conversation with a pending prompt and the same
+    /// conversation one adoption later both answer `true`; once `true`, the
+    /// answer never becomes `false` again.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConversationStoreError::Storage`] on a backend read failure.
+    fn has_accepted_inbound(&self) -> Result<bool, ConversationStoreError>;
 
     /// Initializes the durable Ledger and Surface from one immutable
     /// [`LineageSeed`] and establishes its exact immutable bootstrap
