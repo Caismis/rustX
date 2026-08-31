@@ -35,19 +35,17 @@ jobs:
       - name: Check whitespace
         run: git diff --check
 
-  # One `cargo test` run per OS covers the whole suite — the in-crate
-  # scripted contract suites (compiled into the lib test binary), every
-  # integration target, and the provider-emulator conformance target — so no
-  # target is ever executed twice by the same job. The environment variable
-  # turns a missing Python toolchain into a hard failure instead of a
-  # silent skip: emulator conformance is mandatory, never best-effort.
-  rust:
-    name: Test (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  # Fast deterministic contracts: the crate's own test build (unit tests
+  # plus the scripted contract suites that need the cfg(test) seams) and
+  # the pure contract targets. Nothing here needs a real process, a
+  # provider, or a network beyond loopback fixture servers.
+  #
+  # `cargo build --bins` comes first because the lib test binary's scripted
+  # boundary regressions exec the `bash-supervisor`/`rustx` binaries by path
+  # and `cargo test --lib` does not build them.
+  rust-contracts:
+    name: Deterministic contracts (Linux)
+    runs-on: ubuntu-latest
     timeout-minutes: 25
 
     steps:
@@ -57,8 +55,41 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # The provider emulator (Issue #47) is an external process the
-      # conformance target launches with `uv run`.
+      - name: Build the binaries the scripted boundary regressions exec
+        run: cargo build --bins
+
+      # Unit tests, bin unit tests, and the in-crate scripted contract
+      # suites (agent/, context/, runtime_client/, capability/, interaction/,
+      # background/, subagent/, tools/, durable/ process-death).
+      - name: Run the in-crate contract suites
+        run: cargo test --lib --bins --examples --all-features
+
+      # contracts/: pure serialization/configuration fixture contracts.
+      # provider/: adapter request serialization, stream parsing, error
+      # normalization over the in-process FixtureServer. The provider
+      # target also carries the #[ignore]d opt-in live smoke tests, which
+      # never run here.
+      - name: Run the pure contract targets
+        run: cargo test --test contracts --test provider --all-features
+
+  # Real boundaries: SQLite durability/recovery, the spawned rustx process
+  # and stdio/IPC transport, the subagent child-process boundary, the tool
+  # plane (shell, filesystem, executable discovery), and composed
+  # provider-emulator conformance. The emulator is mandatory:
+  # RUSTX_REQUIRE_PROVIDER_EMULATOR=1 turns a missing toolchain into a hard
+  # failure instead of a silent skip.
+  rust-boundaries:
+    name: Boundary suites (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install Python 3.12
         uses: actions/setup-python@v5
         with:
@@ -71,40 +102,74 @@ jobs:
         working-directory: test-support/fake-provider
         run: uv sync --frozen
 
+      # The emulator's own pytest suite is platform-independent Python and
+      # runs in this job only.
       - name: Run the provider-emulator tests
         working-directory: test-support/fake-provider
         run: uv run --frozen pytest
 
-      # Platform coverage is intentional, not duplicated by habit:
-      #
-      # - Both OSes run the in-crate scripted contracts, the durable SQLite
-      #   boundary, the real-process/composition boundary, the subagent
-      #   process boundary, the tool plane (shell, filesystem, executable
-      #   discovery), and provider-emulator conformance: process, IPC,
-      #   stdio, filesystem, and SQLite behavior genuinely differ across
-      #   platforms.
-      # - The provider adapter translation targets (`provider`) and the pure
-      #   serialization/configuration contract target (`contracts`) assert
-      #   deterministic JSON/SSE translation over loopback HTTP with no
-      #   process or filesystem semantics, so they run on Linux only.
-      - name: Run the full suite (Linux)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Run the boundary targets
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: cargo test --all-targets --all-features
+        run: >-
+          cargo test --all-features
+          --test durable
+          --test process
+          --test subagent
+          --test tools
+          --test conformance
 
-      - name: Run the platform-sensitive suite (macOS)
-        if: matrix.os == 'macos-latest'
+  # Platform coverage is intentional, not duplicated by habit. macOS runs
+  # exactly the classes where OS semantics matter:
+  #
+  # - the lib test binary, because the scripted boundary suites inside it
+  #   (process-death conformance with real SIGKILL, bash background
+  #   supervision, SQLite-backed execution fixtures) are platform-sensitive,
+  #   and the binary is one compilation unit — filtering by module prefix
+  #   would be brittle. Its pure-contract majority costs seconds.
+  # - durable (SQLite/filesystem), process (spawned binary, stdio/IPC),
+  #   subagent (child process/control socket), tools (shell, filesystem,
+  #   executable discovery), conformance (external emulator process).
+  #
+  # The contracts and provider targets assert deterministic JSON/SSE
+  # translation with no process or filesystem semantics, so they are
+  # Linux-only.
+  rust-platform-boundaries:
+    name: Platform-sensitive boundaries (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # The conformance target launches the provider emulator with `uv run`.
+      - name: Install Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync the provider emulator environment
+        working-directory: test-support/fake-provider
+        run: uv sync --frozen
+
+      - name: Run the platform-sensitive suite
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: >-
           cargo test --all-features
           --lib --bins
-          --test conformance
           --test durable
           --test process
           --test subagent
           --test tools
+          --test conformance
 
   # The TUI is a separate job on purpose: the Rust suites must never depend on
   # Node being present.

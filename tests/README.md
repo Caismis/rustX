@@ -63,11 +63,19 @@ that need a `cfg(test)` seam live in `tests/scripted/support/`.
   canonical result ordering, cancellation arbitration and structural
   settlement, transient retry with frozen replay, model deadlines,
   unresolved-output carryover, publication interaction at the loop boundary.
-- `context/` — provider-independent projection, token accounting, and
-  compaction planning (`engine`); the committed compaction pipeline
-  transition — plan → summarize → validate exact post-summary fit → durable
-  commit → hot-state installation — with failure atomicity and lineage
-  metadata (`multi_compaction`, `compaction_metadata`).
+- `context/` — layered context ownership: `engine` (provider-independent
+  projection, token accounting, compaction planning/span selection, driven
+  through `ContextEngine` directly), `compaction_pipeline` (the shared
+  committed transition — plan → summarize → validate exact post-summary fit
+  → durable commit → hot-state installation — driven through
+  `execute_compaction` against a real `SQLite` store, with the full
+  failure-atomicity matrix), `compaction_metadata` (summary lineage
+  metadata extraction), `runtime_integration` (`AgentExecution` ↔ context
+  boundary composition: proactive compaction, overflow compact-and-retry,
+  failure classification, cancellation, continuation invalidation), and
+  `runtime_multi_compaction` (multi-attempt `ConversationRuntime`
+  composition: request reconstruction, client detach/reattach, frozen
+  session summary model).
 - `runtime_client/` — host/endpoint/protocol/transport contracts, including
   the transport-independent conformance matrix run through the direct
   endpoint and the stdio/JSONL framing.
@@ -101,11 +109,12 @@ that need a `cfg(test)` seam live in `tests/scripted/support/`.
   + reopen) unless it needs the scripted seams, in which case the runtime
   half belongs to the owning scripted domain.
 - **Context planning/projection**: `tests/scripted/context/engine.rs`.
-  **Compaction pipeline atomicity**: `tests/scripted/context/`. **Runtime
-  integration** (proactive compaction, overflow recovery, continuation
-  invalidation): prove the invocation at the boundary in the owning
-  integration suite — do not re-run the compaction algorithm through every
-  runtime scenario.
+  **Compaction pipeline atomicity**: `tests/scripted/context/compaction_pipeline.rs`.
+  **Runtime integration** (proactive compaction, overflow recovery,
+  continuation invalidation): `tests/scripted/context/runtime_integration.rs`
+  — prove the invocation at the boundary and rely on the pipeline owner for
+  the internal transition; do not re-run the compaction algorithm through
+  every runtime scenario.
 - **A Subagent test**: only if it proves a boundary the Agent Loop suites
   cannot see (authority crossing, registry lifecycle, terminal notice,
   cross-boundary cancellation/drain, real process handshake). If the same
@@ -137,8 +146,24 @@ feature suite.
 
 ## Running
 
+The CI jobs mirror the test classes (see `.github/workflows/ci.yml`):
+
 ```bash
-# Everything, with provider-emulator conformance mandatory:
+# Fast deterministic contracts (CI: rust-contracts):
+cargo build --bins   # the lib test binary execs bash-supervisor/rustx by path
+cargo test --lib --bins --examples --all-features
+cargo test --test contracts --test provider --all-features
+
+# Real boundaries (CI: rust-boundaries); the emulator is mandatory:
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features \
+  --test durable --test process --test subagent --test tools --test conformance
+
+# Platform-sensitive classes on macOS (CI: rust-platform-boundaries):
+# the lib binary (process-death/bash/SQLite-touching scripted suites) plus
+# the five boundary targets. contracts/provider are Linux-only: deterministic
+# JSON/SSE translation with no process or filesystem semantics.
+
+# Everything, the safety net:
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features
 
 # One domain target:

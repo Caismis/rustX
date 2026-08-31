@@ -6,8 +6,8 @@
 //! - exactly one attempt terminal ([`assert_single_terminal`]);
 //! - the terminal event is the last event of the trace;
 //! - the platform `AttemptOutcome` corresponds to the terminal fact
-//!   ([`assert_outcome`] for the durable audit view,
-//!   [`assert_result_outcome`] for the in-memory execution result);
+//!   ([`assert_outcome`] over the durable audit view, which derefs to the
+//!   in-memory execution result);
 //! - exact recorded traces ([`assert_trace`]).
 
 use rustx::events::types::{AttemptOutcome, RuntimeEvent};

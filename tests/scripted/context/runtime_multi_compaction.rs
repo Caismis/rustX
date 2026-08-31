@@ -1,11 +1,18 @@
-//! Issue #27: deterministic multi-compaction validation through the final
-//! durable `ConversationRuntime` path.
+//! Issue #27: multi-attempt compaction validation through the final durable
+//! `ConversationRuntime` path — the multi-attempt **runtime integration**
+//! complement to `runtime_integration.rs`.
 //!
 //! Every test here drives at least two committed compactions through the
 //! production `ConversationRuntime` → `AgentExecution` → `ContextRuntime`
-//! pipeline
-//! — never against the context engine or `ConversationState` in isolation —
-//! and asserts the Issue #27 contract byte for byte:
+//! composition — never against the context engine or `ConversationState` in
+//! isolation — because the contracts under test are composition facts:
+//! historical request reconstruction across later compactions, Runtime
+//! Client detach/reattach projection ownership, continuation ownership
+//! across attempts, and the frozen session summary model. The internal
+//! pipeline transition they exercise is owned by `compaction_pipeline.rs`;
+//! nothing here re-proves its state machine.
+//!
+//! The Issue #27 evidence asserted byte for byte:
 //!
 //! - the Message Ledger retains everything, including both compaction
 //!   summaries and every retired message, while each rebuilt request
