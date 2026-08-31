@@ -206,6 +206,10 @@ pub struct FixtureServer {
     /// A client that installed more than one invalidation mechanism per
     /// connection shows up here as a count above one.
     pub listen_calls: Arc<std::sync::atomic::AtomicUsize>,
+    /// Fired after a `subscriptions/listen` handler has installed its sink.
+    /// Tests use this to distinguish connection completion from server-side
+    /// subscription-handler delivery.
+    pub listen_ready: Arc<tokio::sync::Notify>,
     /// When set, `tools/list` fails with a correlated error message of
     /// exactly this many bytes (the oversized-diagnostic seam).
     pub list_tools_error_bytes: Option<usize>,
@@ -339,6 +343,7 @@ impl ServerHandler for FixtureServer {
     async fn listen(&self, context: SubscriptionContext) -> Result<(), rmcp::ErrorData> {
         self.listen_calls.fetch_add(1, Ordering::Release);
         *self.sink.lock().await = Some(context.sink().clone());
+        self.listen_ready.notify_one();
         context.cancelled().await;
         Ok(())
     }

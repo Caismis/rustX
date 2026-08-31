@@ -1,0 +1,5 @@
+data: {"id":"chatcmpl-snapshot-late","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"type":"function","function":{"arguments":"{\"path\":"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-snapshot-late","object":"chat.completion","created":1,"model":"gpt-test","choices":[{"index":0,"delta":null,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-snapshot-late","type":"function","function":{"name":"list_directory","arguments":"{\"path\":\".\"}"}}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]

@@ -79,7 +79,7 @@ enum AssemblyTerminal {
     Failed,
 }
 
-/// Assemblies one canonical `ModelEvent` stream into an ordered message.
+/// Assemblies one canonical `ModelEvent` sequence into an ordered message.
 ///
 /// The assembler owns no runtime event emission and no identities; the loop
 /// maps stream facts to runtime events and assigns message identities.

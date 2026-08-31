@@ -1,7 +1,8 @@
 //! The deterministic agent execution loop (M3 + M4 context integration).
 //!
-//! The loop turns one canonical `ModelEvent` stream into an attempt
-//! execution:
+//! The loop turns one provider-independent `ModelStreamItem` stream into an
+//! attempt execution. Canonical `Event(ModelEvent)` items enter assembly;
+//! ephemeral `Progress` items only advance request-local deadlines:
 //!
 //! ```text
 //! input
@@ -21,9 +22,9 @@
 //!  ↓
 //! provider invocation
 //!  ↓
-//! canonical model events
-//!  ↓
-//! message assembly + RuntimeEvent emission
+//! ModelStreamItem (canonical Event or ephemeral Progress)
+//!  ├─ Progress → request deadline state only
+//!  └─ Event → message assembly + RuntimeEvent emission
 //!  ↓
 //! tool calls (if requested): resolve, execute, record
 //!  ↓
@@ -98,7 +99,7 @@ use crate::events::types::{
 use crate::message::types::{
     AgentStatusEmission, AgentStatusModuleId, AssistantMessageBlock, MessageBlock, ToolMessageBlock,
 };
-use crate::model::adapter::ModelEventStream;
+use crate::model::adapter::{ModelStream, ModelStreamItem};
 use crate::model::deadline::{ModelDeadlinePhase, ModelRequestDeadline, ModelTimeoutPolicy};
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;
@@ -513,11 +514,11 @@ pub struct AgentExecution<'a> {
     /// sleeping.
     #[cfg(test)]
     retry_backoff_pause: std::sync::Mutex<Option<test_sync::RetryBackoffPause>>,
-    /// Test-only control point after one provider event has been classified,
-    /// assembled, and published. It makes exact provider/deadline and
+    /// Test-only control point after one provider stream item has been
+    /// classified and fully processed. It makes exact provider/deadline and
     /// publication/deadline cuts observable without scheduler timing.
     #[cfg(test)]
-    model_event_pause: std::sync::Mutex<Option<test_sync::ModelEventPause>>,
+    model_stream_item_pause: std::sync::Mutex<Option<test_sync::ModelStreamItemPause>>,
     /// Test-only control point immediately before one provider arbitration.
     /// The controller can make multiple branches ready while the execution is
     /// parked, then release it to prove the explicit biased precedence.
@@ -1005,7 +1006,7 @@ impl<'a> AgentExecution<'a> {
             #[cfg(test)]
             retry_backoff_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
-            model_event_pause: std::sync::Mutex::new(None),
+            model_stream_item_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
             model_arbitration_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
@@ -1074,13 +1075,16 @@ impl<'a> AgentExecution<'a> {
             .expect("retry backoff pause lock") = Some(pause);
     }
 
-    /// Installs the deterministic post-provider-event synchronization hook.
+    /// Installs the deterministic post-provider-stream-item synchronization hook.
     #[cfg(test)]
-    pub(crate) fn install_model_event_pause(&mut self, pause: test_sync::ModelEventPause) {
+    pub(crate) fn install_model_stream_item_pause(
+        &mut self,
+        pause: test_sync::ModelStreamItemPause,
+    ) {
         *self
-            .model_event_pause
+            .model_stream_item_pause
             .lock()
-            .expect("model event pause lock") = Some(pause);
+            .expect("model stream item pause lock") = Some(pause);
     }
 
     /// Installs the deterministic pre-arbitration synchronization hook.
@@ -3329,7 +3333,7 @@ impl<'a> AgentExecution<'a> {
         &mut self,
         assembler: &mut ModelEventAssembler,
         assistant_message_id: &MessageId,
-        mut stream: ModelEventStream,
+        mut stream: ModelStream,
         mut deadline: ModelRequestDeadline,
     ) -> Result<StreamTerminal, Terminal> {
         // The response-start deadline was created at the dispatch frontier,
@@ -3338,8 +3342,9 @@ impl<'a> AgentExecution<'a> {
         // exact actual request; retries create another one at their own
         // frontier.
         let mut stream_terminal = None;
+        let mut stream_started = false;
         #[cfg(test)]
-        let mut model_event_count = 0_u32;
+        let mut model_stream_item_count = 0_u32;
         loop {
             // Every provider wait has the same four-way arbitration. An
             // empty publication buffer contributes a permanently pending
@@ -3355,9 +3360,9 @@ impl<'a> AgentExecution<'a> {
             };
             let next = tokio::select! {
                 biased;
-                // This order is contractual: provider event > attempt
+                // This order is contractual: provider stream item > attempt
                 // cancellation > publication flush > request timeout.
-                event = stream.next() => event,
+                item = stream.next() => item,
                 () = self.cancellation.cancelled() => {
                     if let Some(terminal) = stream_terminal.take() {
                         return Ok(terminal);
@@ -3385,7 +3390,7 @@ impl<'a> AgentExecution<'a> {
                     return Ok(StreamTerminal::Failed { error });
                 }
             };
-            let Some(event) = next else {
+            let Some(item) = next else {
                 if let Some(terminal) = stream_terminal.take() {
                     return Ok(terminal);
                 }
@@ -3393,64 +3398,88 @@ impl<'a> AgentExecution<'a> {
             };
             #[cfg(test)]
             {
-                model_event_count = model_event_count.saturating_add(1);
+                model_stream_item_count = model_stream_item_count.saturating_add(1);
+            }
+            if stream_terminal.is_some() {
+                return Err(Terminal::Failed {
+                    failure: AttemptFailure::Runtime {
+                        error: RuntimeError::ContractViolation {
+                            message: "model stream item after the terminal event".to_owned(),
+                        },
+                    },
+                });
             }
             // The provider branch is intentionally ahead of cancellation in
             // the biased select. Do not perform a second cancellation check
-            // here: doing so would make an event ready at the same cut lose
-            // to cancellation after the arbitration already chose it.
-            // The one exception is the adapter's normalized cancellation
-            // terminal: it is evidence that the attempt cancellation caused
-            // this event, so preserve the attempt-level provenance without
-            // recording a model failure.
-            if stream_terminal.is_none()
-                && matches!(
-                    &event,
-                    ModelEvent::Failed { error }
-                        if error.kind == ModelErrorKind::Cancelled
-                            && self.cancellation.is_cancelled()
-                )
-            {
+            // here: doing so would make an item ready at the same cut lose to
+            // cancellation after arbitration already chose it. The one
+            // exception is the adapter's normalized cancellation terminal.
+            if matches!(
+                &item,
+                ModelStreamItem::Event(ModelEvent::Failed { error })
+                    if error.kind == ModelErrorKind::Cancelled
+                        && self.cancellation.is_cancelled()
+            ) {
                 return Err(self.cancelled_terminal());
             }
-            deadline.observe(&event, self.monotonic_clock.now_millis());
-            if let Err(error) = assembler.push(&event) {
+            if matches!(&item, ModelStreamItem::Progress(_)) && !stream_started {
                 return Err(Terminal::Failed {
-                    failure: AttemptFailure::Runtime { error },
+                    failure: AttemptFailure::Runtime {
+                        error: RuntimeError::ContractViolation {
+                            message: "model stream progress before Started".to_owned(),
+                        },
+                    },
                 });
             }
-            match &event {
-                ModelEvent::Completed { .. } => {
-                    stream_terminal = Some(StreamTerminal::Completed);
+            deadline.observe(&item, self.monotonic_clock.now_millis());
+            match item {
+                ModelStreamItem::Progress(_) => {
+                    // Progress is provider-derived execution state only. It
+                    // participates in deadline observation but never enters
+                    // canonical assembly, publication, or durable history.
                 }
-                ModelEvent::Failed { error } => {
-                    self.settle_model_request_failure(assembler, error)?;
-                    stream_terminal = Some(StreamTerminal::Failed {
-                        error: error.clone(),
-                    });
-                }
-                ModelEvent::Started => {
-                    // The provider stream physically began: the publication
-                    // stream opens durably before any of its output can be
-                    // staged, so a crash always leaves either no stream at
-                    // all or a stream recovery can classify.
-                    self.open_publication(assistant_message_id);
-                    if let Some(terminal) = self.durable_failure_terminal_from_state() {
-                        return Err(terminal);
+                ModelStreamItem::Event(event) => {
+                    if let Err(error) = assembler.push(&event) {
+                        return Err(Terminal::Failed {
+                            failure: AttemptFailure::Runtime { error },
+                        });
                     }
-                }
-                _ => {
-                    self.publish_model_event(&event);
-                    if let Some(terminal) = self.durable_failure_terminal_from_state() {
-                        return Err(terminal);
+                    match &event {
+                        ModelEvent::Completed { .. } => {
+                            stream_terminal = Some(StreamTerminal::Completed);
+                        }
+                        ModelEvent::Failed { error } => {
+                            self.settle_model_request_failure(assembler, error)?;
+                            stream_terminal = Some(StreamTerminal::Failed {
+                                error: error.clone(),
+                            });
+                        }
+                        ModelEvent::Started => {
+                            stream_started = true;
+                            // The provider stream physically began: the
+                            // publication stream opens durably before any of
+                            // its output can be staged, so a crash always
+                            // leaves either no stream at all or a stream
+                            // recovery can classify.
+                            self.open_publication(assistant_message_id);
+                            if let Some(terminal) = self.durable_failure_terminal_from_state() {
+                                return Err(terminal);
+                            }
+                        }
+                        _ => {
+                            self.publish_model_event(&event);
+                            if let Some(terminal) = self.durable_failure_terminal_from_state() {
+                                return Err(terminal);
+                            }
+                        }
                     }
                 }
             }
             #[cfg(test)]
             if let Some(pause) = self
-                .model_event_pause
+                .model_stream_item_pause
                 .lock()
-                .expect("model event pause lock")
+                .expect("model stream item pause lock")
                 .as_ref()
             {
                 pause.park();
@@ -3463,7 +3492,7 @@ impl<'a> AgentExecution<'a> {
                     .expect("model arbitration pause lock")
                     .take();
                 if let Some(pause) = arbitration_pause {
-                    if pause.after_events() == model_event_count {
+                    if pause.after_items() == model_stream_item_count {
                         // This one-shot hook is after event processing and
                         // before the next provider wait. The controller can
                         // make every competing readiness source observable
@@ -5174,16 +5203,16 @@ pub(crate) mod test_sync {
         }
     }
 
-    /// A test-only control point after one provider event has completed all
+    /// A test-only control point after one provider stream item has completed all
     /// Agent-Loop processing. It is used to synchronize exact readiness cuts
-    /// between provider events, publication flushes, and request deadlines.
+    /// between provider stream items, publication flushes, and request deadlines.
     #[derive(Debug)]
-    pub(crate) struct ModelEventPause {
+    pub(crate) struct ModelStreamItemPause {
         reached: watch::Sender<u32>,
         release: mpsc::Receiver<()>,
     }
 
-    impl ModelEventPause {
+    impl ModelStreamItemPause {
         /// Creates the pause and its observation/release handles.
         #[must_use]
         pub(crate) fn install() -> (Self, watch::Receiver<u32>, mpsc::Sender<()>) {
@@ -5213,7 +5242,7 @@ pub(crate) mod test_sync {
     /// precedence tests do not depend on executor scheduling.
     #[derive(Debug)]
     pub(crate) struct ModelArbitrationPause {
-        after_events: u32,
+        after_items: u32,
         reached: watch::Sender<bool>,
         release: oneshot::Receiver<()>,
     }
@@ -5222,13 +5251,13 @@ pub(crate) mod test_sync {
         /// Creates the pause and its observation/release handles.
         #[must_use]
         pub(crate) fn install(
-            after_events: u32,
+            after_items: u32,
         ) -> (Self, watch::Receiver<bool>, oneshot::Sender<()>) {
             let (reached, reached_rx) = watch::channel(false);
             let (release_tx, release_rx) = oneshot::channel();
             (
                 Self {
-                    after_events,
+                    after_items,
                     reached,
                     release: release_rx,
                 },
@@ -5237,9 +5266,9 @@ pub(crate) mod test_sync {
             )
         }
 
-        /// The provider-event count at which this pause is eligible.
-        pub(super) const fn after_events(&self) -> u32 {
-            self.after_events
+        /// The provider-stream-item count at which this pause is eligible.
+        pub(super) const fn after_items(&self) -> u32 {
+            self.after_items
         }
 
         /// Announces that the arbitration boundary was reached, then waits
@@ -5496,7 +5525,7 @@ mod tests {
         ContentBlockIndex, ContextKind, InboundKind, MessageBlock, UserContentBlock,
         UserMessageBlock, UserSource,
     };
-    use crate::model::adapter::{ModelAdapter, ModelEventStream};
+    use crate::model::adapter::{ModelAdapter, ModelStream, ModelStreamItem};
     use crate::model::chat_protocol;
     use crate::model::error::ModelErrorKind;
     use crate::model::event::ModelEvent;
@@ -5692,11 +5721,7 @@ mod tests {
             chat_protocol()
         }
 
-        fn stream(
-            &self,
-            request: ModelRequest,
-            _cancellation: CancellationSignal,
-        ) -> ModelEventStream {
+        fn stream(&self, request: ModelRequest, _cancellation: CancellationSignal) -> ModelStream {
             self.requests
                 .lock()
                 .expect("scripted adapter request lock")
@@ -5707,7 +5732,9 @@ mod tests {
                 .expect("scripted adapter script lock")
                 .pop_front()
                 .unwrap_or_default();
-            Box::pin(futures_util::stream::iter(script))
+            Box::pin(futures_util::stream::iter(
+                script.into_iter().map(ModelStreamItem::Event),
+            ))
         }
     }
 
@@ -7453,15 +7480,11 @@ mod tests {
             chat_protocol()
         }
 
-        fn stream(
-            &self,
-            request: ModelRequest,
-            cancellation: CancellationSignal,
-        ) -> ModelEventStream {
+        fn stream(&self, request: ModelRequest, cancellation: CancellationSignal) -> ModelStream {
             self.requests.lock().expect("request lock").push(request);
             Box::pin(futures_util::stream::once(async move {
                 cancellation.cancelled().await;
-                ModelEvent::Failed {
+                ModelStreamItem::Event(ModelEvent::Failed {
                     error: crate::model::error::ModelError {
                         kind: ModelErrorKind::Cancelled,
                         message: "cancelled".to_owned(),
@@ -7470,7 +7493,7 @@ mod tests {
                         provider_code: None,
                         context_overflow: None,
                     },
-                }
+                })
             }))
         }
     }

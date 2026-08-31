@@ -255,7 +255,7 @@ impl SubagentWorktreeDocument {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct ModelTimeoutPolicyDocument {
-    /// Maximum time to observe the first generation event.
+    /// Maximum time to observe the first generation progress.
     pub response_start_timeout_ms: u64,
     /// Maximum time between generation/liveness events after generation has
     /// begun.

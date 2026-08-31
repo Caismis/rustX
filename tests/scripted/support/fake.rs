@@ -1,14 +1,15 @@
 //! Deterministic fixture model and tool executors for M3 loop tests.
 //!
 //! A [`FakeModel`] is a scripted `ModelAdapter`: each invocation consumes the
-//! next script of [`FakeStep`]s and yields the scripted canonical events,
+//! next script of [`FakeStep`]s and yields the scripted canonical events or
+//! provider-derived progress,
 //! optionally parking until the invocation's cancellation signal fires. A
 //! [`FakeTool`] records its calls and returns one fixed normalized result,
 //! optionally parking until the test releases it.
 //!
 //! All observation is through `tokio::sync::watch` channels, so tests can
 //! deterministically wait until a scripted model emitted a known number of
-//! events or parked, without timing races.
+//! stream items or parked, without timing races.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -18,6 +19,7 @@ use futures_util::future::BoxFuture;
 use futures_util::stream::unfold;
 use rustx::model::{
     ModelAdapter, ModelError, ModelErrorKind, ModelEvent, ModelProtocol, ModelRequest,
+    ModelStreamItem, ModelStreamProgress,
 };
 use rustx::runtime::CancellationSignal;
 use rustx::runtime::identity::ToolCallId;
@@ -32,11 +34,13 @@ use tokio::sync::watch;
 pub enum FakeStep {
     /// Yield one canonical model event.
     Emit(ModelEvent),
+    /// Yield one ephemeral provider-derived progress item.
+    Progress(ModelStreamProgress),
     /// Wait until the invocation's cancellation signal fires, then fail
     /// with a cancelled model error, exactly like a real adapter.
     ParkUntilCancelled,
     /// Wait until the test releases the invocation through the shared watch
-    /// channel, then continue the script without yielding an event. The
+    /// channel, then continue the script without yielding an item. The
     /// watch retains its value, so a release signalled before the park is
     /// observed is never lost.
     ParkUntilReleased(tokio::sync::watch::Receiver<bool>),
@@ -74,6 +78,7 @@ pub struct FakeModel {
     requests: Arc<Mutex<Vec<ModelRequest>>>,
     emitted: watch::Sender<u64>,
     parked: watch::Sender<bool>,
+    parks: watch::Sender<u64>,
     streams_started: watch::Sender<u64>,
     /// The number of invocation streams whose owner has left: the stream ran
     /// to completion or the loop dropped it. Once this reaches the number of
@@ -104,6 +109,7 @@ impl FakeModel {
             requests: Arc::new(Mutex::new(Vec::new())),
             emitted: watch::Sender::new(0),
             parked: watch::Sender::new(false),
+            parks: watch::Sender::new(0),
             streams_started: watch::Sender::new(0),
             streams_exited: watch::Sender::new(0),
         }
@@ -130,7 +136,7 @@ impl FakeModel {
             .clone()
     }
 
-    /// A receiver observing the number of events yielded so far.
+    /// A receiver observing the number of stream items yielded so far.
     #[must_use]
     pub fn emitted(&self) -> watch::Receiver<u64> {
         self.emitted.subscribe()
@@ -143,13 +149,21 @@ impl FakeModel {
         self.parked.subscribe()
     }
 
+    /// A receiver observing the ordinal of each deterministic park in the
+    /// current invocation. This is useful when a script has several release
+    /// frontiers and a boolean parked state would lose an edge.
+    #[must_use]
+    pub fn parks(&self) -> watch::Receiver<u64> {
+        self.parks.subscribe()
+    }
+
     /// A receiver observing how many invocation streams have opened.
     #[must_use]
     pub fn streams_started(&self) -> watch::Receiver<u64> {
         self.streams_started.subscribe()
     }
 
-    /// The number of events yielded so far.
+    /// The number of stream items yielded so far.
     #[must_use]
     pub fn emitted_count(&self) -> u64 {
         *self.emitted.borrow()
@@ -184,11 +198,12 @@ impl ModelAdapter for FakeModel {
         &self,
         request: ModelRequest,
         cancellation: CancellationSignal,
-    ) -> rustx::model::ModelEventStream {
+    ) -> rustx::model::ModelStream {
         // The watch describes the current invocation. Reset it before the
         // next stream so sequential tests can use the parked frontier for
         // each request rather than inheriting a previous invocation's state.
         self.parked.send_replace(false);
+        self.parks.send_replace(0);
         self.streams_started.send_modify(|count| *count += 1);
         self.requests
             .lock()
@@ -197,6 +212,7 @@ impl ModelAdapter for FakeModel {
         let script = self.pop_script();
         let emitted = self.emitted.clone();
         let parked = self.parked.clone();
+        let parks = self.parks.clone();
         let exit_guard = Arc::new(StreamExitGuard {
             exited: self.streams_exited.clone(),
         });
@@ -207,6 +223,7 @@ impl ModelAdapter for FakeModel {
             let _keep_owner_alive = &exit_guard;
             let emitted = emitted.clone();
             let parked = parked.clone();
+            let parks = parks.clone();
             let cancellation = cancellation.clone();
             async move {
                 loop {
@@ -217,13 +234,18 @@ impl ModelAdapter for FakeModel {
                     match step {
                         FakeStep::Emit(event) => {
                             emitted.send_modify(|count| *count += 1);
-                            return Some((event, script));
+                            return Some((ModelStreamItem::Event(event), script));
+                        }
+                        FakeStep::Progress(progress) => {
+                            emitted.send_modify(|count| *count += 1);
+                            return Some((ModelStreamItem::Progress(progress), script));
                         }
                         FakeStep::ParkUntilCancelled => {
                             parked.send_replace(true);
+                            parks.send_modify(|count| *count += 1);
                             cancellation.cancelled().await;
                             return Some((
-                                ModelEvent::Failed {
+                                ModelStreamItem::Event(ModelEvent::Failed {
                                     error: ModelError {
                                         kind: ModelErrorKind::Cancelled,
                                         message: "fake model cancelled".to_owned(),
@@ -233,12 +255,13 @@ impl ModelAdapter for FakeModel {
                                         provider_code: None,
                                         context_overflow: None,
                                     },
-                                },
+                                }),
                                 script,
                             ));
                         }
                         FakeStep::ParkUntilReleased(mut release) => {
                             parked.send_replace(true);
+                            parks.send_modify(|count| *count += 1);
                             release
                                 .wait_for(|released| *released)
                                 .await

@@ -128,6 +128,17 @@ mod unix_tests {
             result.content.first(),
             Some(rustx::tools::types::ToolResultContent::Text(text)) if text.text == "fixture changed"
         ));
+        // The MCP server sends progress and the final tools/call response on
+        // independent protocol messages. Wait for the client handler's
+        // acknowledgement before inspecting the recorded value; receiving
+        // the result does not linearize delivery of the preceding progress
+        // notification.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            progress.notified.notified(),
+        )
+        .await
+        .expect("mutate progress notification must be delivered");
         let progress_values = progress.values.lock().expect("progress lock").clone();
         assert!(
             progress_values

@@ -26,8 +26,9 @@
 
 use rustx::model::{
     AnthropicAdapterConfig, AnthropicMessagesAdapter, ModelAdapter, ModelCapabilities, ModelCompat,
-    ModelEvent, ModelInvocationConfig, ModelProtocol, ModelRequest, OpenAiAdapterConfig,
-    OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter, RequestParams, ResponsesStorageMode,
+    ModelEvent, ModelInvocationConfig, ModelProtocol, ModelRequest, ModelStreamItem,
+    OpenAiAdapterConfig, OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter, RequestParams,
+    ResponsesStorageMode,
 };
 
 /// The explicit `OpenAI`-compatible endpoint of a live run.
@@ -121,7 +122,10 @@ async fn run_live(adapter: &dyn ModelAdapter, request: ModelRequest) {
     let mut started = false;
     let mut saw_content = false;
     let mut terminal = None;
-    while let Some(event) = stream.next().await {
+    while let Some(item) = stream.next().await {
+        let ModelStreamItem::Event(event) = item else {
+            continue;
+        };
         match &event {
             ModelEvent::Started => started = true,
             ModelEvent::TextDelta { .. }
@@ -286,7 +290,10 @@ async fn live_openai_chat_tool_call() {
     let mut stream = adapter.stream(request, cancellation);
     let mut saw_tool_call = false;
     let mut terminal = None;
-    while let Some(event) = stream.next().await {
+    while let Some(item) = stream.next().await {
+        let ModelStreamItem::Event(event) = item else {
+            continue;
+        };
         if matches!(event, ModelEvent::ToolCallStarted { .. }) {
             saw_tool_call = true;
         }

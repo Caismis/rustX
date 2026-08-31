@@ -1823,7 +1823,7 @@ mod tests {
         ContentBlockIndex, InboundKind, MessageBlock, UserContentBlock, UserMessageBlock,
         UserSource,
     };
-    use crate::model::adapter::{ModelAdapter, ModelEventStream};
+    use crate::model::adapter::{ModelAdapter, ModelStream};
     use crate::model::error::{ModelError, ModelErrorKind};
     use crate::model::event::ModelEvent;
     use crate::model::finish::ModelFinishReason;
@@ -1933,11 +1933,7 @@ mod tests {
             ModelProtocol::OpenAiChatCompletions
         }
 
-        fn stream(
-            &self,
-            request: ModelRequest,
-            cancellation: CancellationSignal,
-        ) -> ModelEventStream {
+        fn stream(&self, request: ModelRequest, cancellation: CancellationSignal) -> ModelStream {
             let request_count = {
                 let mut requests = self.requests.lock().expect("requests lock");
                 requests.push(request);
@@ -1957,13 +1953,16 @@ mod tests {
                         match script.pop_front() {
                             None => return None,
                             Some(GatedStep::Emit(event)) => {
-                                return Some((event, (script, cancellation)));
+                                return Some((
+                                    crate::model::adapter::ModelStreamItem::Event(event),
+                                    (script, cancellation),
+                                ));
                             }
                             Some(GatedStep::ParkUntilReleased(mut release)) => {
                                 tokio::select! {
                                     biased;
                                     () = cancellation.cancelled() => {
-                                        return Some((ModelEvent::Failed {
+                                        return Some((crate::model::adapter::ModelStreamItem::Event(ModelEvent::Failed {
                                             error: ModelError {
                                                 kind: ModelErrorKind::Cancelled,
                                                 message: "cancelled while parked".to_owned(),
@@ -1972,7 +1971,7 @@ mod tests {
                                                 provider_code: None,
                                                 context_overflow: None,
                                             },
-                                        }, (VecDeque::new(), cancellation)));
+                                        }), (VecDeque::new(), cancellation)));
                                     }
                                     result = release.wait_for(|released| *released) => {
                                         result.expect("release channel stays open");

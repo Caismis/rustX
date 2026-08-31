@@ -2,7 +2,7 @@
 //!
 //! This is a developer/example executable, not a model gateway: it
 //! instantiates the same production adapters and consumes the common
-//! `ModelEvent` interface. It never executes tools, never implements an agent
+//! `ModelStreamItem` interface. It never executes tools, never implements an agent
 //! loop, never retries, never persists messages, never starts a server, and
 //! never routes among providers automatically.
 //!
@@ -24,8 +24,8 @@
 use futures_util::StreamExt;
 use rustx::model::{
     AnthropicAdapterConfig, AnthropicMessagesAdapter, ModelAdapter, ModelCapabilities, ModelCompat,
-    ModelEvent, ModelInvocationConfig, ModelProtocol, ModelRequest, OpenAiAdapterConfig,
-    OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter, RequestParams,
+    ModelEvent, ModelInvocationConfig, ModelProtocol, ModelRequest, ModelStreamItem,
+    OpenAiAdapterConfig, OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter, RequestParams,
 };
 use rustx::runtime::CancellationSignal;
 
@@ -62,45 +62,48 @@ fn main() {
     runtime.block_on(async move {
         let cancellation = CancellationSignal::new();
         let mut stream = adapter.stream(request, cancellation);
-        while let Some(event) = stream.next().await {
-            match &event {
-                ModelEvent::Started => println!("[started]"),
-                ModelEvent::TextDelta { text, .. } => print!("{text}"),
-                ModelEvent::ReasoningDelta { text, .. } => {
-                    println!();
-                    println!("[reasoning] {text}");
-                }
-                ModelEvent::RefusalDelta { text, .. } => {
-                    println!();
-                    println!("[refusal] {text}");
-                }
-                ModelEvent::ToolCallStarted { call, .. } => {
-                    println!();
-                    println!("[tool call] {} ({})", call.name, call.id);
-                }
-                ModelEvent::ToolCallArgumentsDelta {
-                    arguments_delta, ..
-                } => print!("{arguments_delta}"),
-                ModelEvent::ToolCallCompleted { call, .. } => {
-                    println!();
-                    println!("[tool completed] {} -> {}", call.name, call.arguments);
-                }
-                ModelEvent::UsageUpdate { usage } => {
-                    println!();
-                    println!("[usage] {usage:?}");
-                }
-                ModelEvent::ContinuationState { .. } => {}
-                ModelEvent::Completed {
-                    finish_reason,
-                    usage,
-                } => {
-                    println!();
-                    println!("[completed] finish_reason={finish_reason:?} usage={usage:?}");
-                }
-                ModelEvent::Failed { error } => {
-                    println!();
-                    println!("[failed] {:?}: {}", error.kind, error.message);
-                }
+        while let Some(item) = stream.next().await {
+            match &item {
+                ModelStreamItem::Progress(progress) => println!("[progress] {progress:?}"),
+                ModelStreamItem::Event(event) => match event {
+                    ModelEvent::Started => println!("[started]"),
+                    ModelEvent::TextDelta { text, .. } => print!("{text}"),
+                    ModelEvent::ReasoningDelta { text, .. } => {
+                        println!();
+                        println!("[reasoning] {text}");
+                    }
+                    ModelEvent::RefusalDelta { text, .. } => {
+                        println!();
+                        println!("[refusal] {text}");
+                    }
+                    ModelEvent::ToolCallStarted { call, .. } => {
+                        println!();
+                        println!("[tool call] {} ({})", call.name, call.id);
+                    }
+                    ModelEvent::ToolCallArgumentsDelta {
+                        arguments_delta, ..
+                    } => print!("{arguments_delta}"),
+                    ModelEvent::ToolCallCompleted { call, .. } => {
+                        println!();
+                        println!("[tool completed] {} -> {}", call.name, call.arguments);
+                    }
+                    ModelEvent::UsageUpdate { usage } => {
+                        println!();
+                        println!("[usage] {usage:?}");
+                    }
+                    ModelEvent::ContinuationState { .. } => {}
+                    ModelEvent::Completed {
+                        finish_reason,
+                        usage,
+                    } => {
+                        println!();
+                        println!("[completed] finish_reason={finish_reason:?} usage={usage:?}");
+                    }
+                    ModelEvent::Failed { error } => {
+                        println!();
+                        println!("[failed] {:?}: {}", error.kind, error.message);
+                    }
+                },
             }
         }
     });

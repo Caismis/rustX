@@ -106,7 +106,7 @@ impl ModelAdapter for NullAdapter {
         &self,
         _request: crate::model::types::ModelRequest,
         _cancellation: crate::runtime::cancellation::CancellationSignal,
-    ) -> crate::model::adapter::ModelEventStream {
+    ) -> crate::model::adapter::ModelStream {
         unreachable!("the null fixture adapter is never invoked")
     }
 }

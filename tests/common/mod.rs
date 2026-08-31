@@ -318,21 +318,38 @@ fn parse_content_length(head: &str) -> usize {
         .unwrap_or(0)
 }
 
-/// Collects a canonical event stream into a vector.
+/// Collects one provider-independent model stream into a vector.
+pub async fn collect_items(
+    adapter: &dyn rustx::model::ModelAdapter,
+    request: rustx::model::ModelRequest,
+) -> Vec<rustx::model::ModelStreamItem> {
+    let cancellation = rustx::runtime::CancellationSignal::new();
+    let mut stream = adapter.stream(request, cancellation);
+    let mut items = Vec::new();
+    while let Some(item) = stream.next().await {
+        items.push(item);
+    }
+    items
+}
+
+/// Collects only canonical events from one provider-independent model stream.
+/// Ephemeral progress is intentionally discarded by this canonical test
+/// helper, just as it is absent from history and publication.
 pub async fn collect_events(
     adapter: &dyn rustx::model::ModelAdapter,
     request: rustx::model::ModelRequest,
 ) -> Vec<rustx::model::ModelEvent> {
-    let cancellation = rustx::runtime::CancellationSignal::new();
-    let mut stream = adapter.stream(request, cancellation);
-    let mut events = Vec::new();
-    while let Some(event) = stream.next().await {
-        events.push(event);
-    }
-    events
+    collect_items(adapter, request)
+        .await
+        .into_iter()
+        .filter_map(|item| match item {
+            rustx::model::ModelStreamItem::Event(event) => Some(event),
+            rustx::model::ModelStreamItem::Progress(_) => None,
+        })
+        .collect()
 }
 
-/// Collects a canonical event stream with a caller-controlled cancellation.
+/// Collects canonical events with a caller-controlled cancellation.
 pub async fn collect_events_with_cancellation(
     adapter: &dyn rustx::model::ModelAdapter,
     request: rustx::model::ModelRequest,
@@ -340,8 +357,10 @@ pub async fn collect_events_with_cancellation(
 ) -> Vec<rustx::model::ModelEvent> {
     let mut stream = adapter.stream(request, cancellation);
     let mut events = Vec::new();
-    while let Some(event) = stream.next().await {
-        events.push(event);
+    while let Some(item) = stream.next().await {
+        if let rustx::model::ModelStreamItem::Event(event) = item {
+            events.push(event);
+        }
     }
     events
 }

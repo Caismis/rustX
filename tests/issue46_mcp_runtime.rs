@@ -765,6 +765,7 @@ mod unix_tests {
         server_config.sse_keep_alive = None;
         let served = FixtureServer::with_list_changed();
         let listen_calls = served.listen_calls.clone();
+        let listen_ready = served.listen_ready.clone();
         let service = StreamableHttpService::<FixtureServer, LocalSessionManager>::new(
             move || Ok(served.clone()),
             Arc::default(),
@@ -794,6 +795,10 @@ mod unix_tests {
         )
         .await
         .expect("HTTP MCP connect");
+        // Connection completion does not itself linearize delivery of the
+        // server-side subscription handler. Await its explicit fixture
+        // acknowledgement before inspecting the exact-once counter.
+        listen_ready.notified().await;
         assert_eq!(runtime.protocol_version(), &ProtocolVersion::V_2026_07_28);
         assert_eq!(
             listen_calls.load(std::sync::atomic::Ordering::Acquire),

@@ -3,8 +3,8 @@
 //! M3 implements the deterministic agent execution loop on top of the
 //! canonical runtime contracts:
 //!
-//! - [`AgentExecution`] executes one attempt: model request → canonical
-//!   `ModelEvent` stream → message assembly → optional tool execution →
+//! - [`AgentExecution`] executes one attempt: model request → provider-independent
+//!   `ModelStreamItem` stream → canonical-event assembly → optional tool execution →
 //!   continuation → one terminal settlement candidate, normally committed as
 //!   exactly one terminal `RuntimeEvent`.
 //! - [`ExecutionStateMachine`] makes the attempt lifecycle explicit
