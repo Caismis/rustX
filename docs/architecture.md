@@ -5681,11 +5681,26 @@ failure is decided. Execution failures remain failures and are never normal
 Workflow values. Return resolves explicit bindings, validates the frozen
 Workflow output schema, and commits one immutable terminal result.
 
+Workflow v1 uses a deliberately closed recursive JSON Schema vocabulary. A
+schema must declare one of `array`, `boolean`, `integer`, `null`, `number`,
+`object`, or `string`, and may use only `type`, `properties`, `required`,
+`additionalProperties` (boolean), `items` (one nested schema), `enum`, and
+`const`. These rules apply identically to Workflow input/output schemas,
+Agent output contracts, and Parallel branch outputs. Unsupported
+value-constraining keywords—including length/range/item constraints and
+`oneOf`/`anyOf`/`allOf`—are rejected recursively. Compatibility is proven
+conservatively over this vocabulary; finite `enum`/`const` producers are
+checked value-by-value, and an unknown or unprovable relationship rejects the
+program rather than relying on runtime validation.
+
 ### `workflow_output` and terminality
 
 `workflow_output(value)` is a reserved Workflow/Agent terminal protocol. It
-may be represented as a tool-shaped provider call, but the Agent Loop
-consumes it before ordinary Tool Plane preflight or dispatch, so it has no
+may be represented as a tool-shaped provider call, but the canonical Tool
+registry rejects that model-facing name for every ordinary Builtin, Python,
+and MCP registration. A Workflow child therefore receives exactly one
+provider-visible `workflow_output` definition. The Agent Loop consumes it
+before ordinary Tool Plane preflight or dispatch, so it has no
 ordinary `ToolExecutionId`, no business-tool side effect, and no normal child
 ToolResult continuation. A valid value is checked against the frozen Agent
 output schema and commits exactly once; a normal final Assistant message is
@@ -5713,22 +5728,22 @@ Workflow Tool captures the immutable program at registration; a run therefore
 retains its program snapshot across later reloads, while reload affects only
 future runs.
 
-Workflow events (`started`, child admission/output commit, Branch selection,
-Parallel admission/settlement, and terminal completion/failure/cancellation)
-are observability facts in the existing Event Journal. They are not the
-WorkflowRun state machine or a second durable authority. The Workflow Tool
-returns one bounded parent ToolResult; intermediate values and child
-transcripts are not injected into parent canonical history. There is no
-durable Workflow resume or crash replay: a pre-crash nonterminal run is not
-silently rerun, because Agent and Tool work may be non-idempotent.
-
-A successful Workflow child closes its native lifecycle and records its
-validated Workflow value through one durable compound transition containing
-`SubagentTerminalSettled` and `WorkflowAgentOutputCommitted`. A failed or
-cancelled child uses the dedicated terminal-settlement transition. Neither
-path creates a parent inbound notification or a durable `settled -> delivered`
-phase; the facts are lifecycle evidence for recovery, while the live
-`WorkflowRun` remains the execution authority.
+Ordinary Workflow lifecycle and join events (`started`, child admission,
+Branch selection, Parallel admission/settlement, and terminal
+completion/failure/cancellation) are best-effort observability facts appended
+through the existing Event Journal. An ordinary lifecycle/join append failure
+does not become Workflow state authority, change control flow, or rewrite a
+terminal result. The successful child value is different: its
+`WorkflowAgentOutputCommitted` fact is committed atomically with
+`SubagentTerminalSettled`; a failed or cancelled child uses the dedicated
+terminal-settlement transition. Neither path creates a parent inbound
+notification or a durable `settled -> delivered` phase; the facts are
+lifecycle evidence for recovery, while the live `WorkflowRun` remains the
+execution authority. The Workflow Tool returns one bounded parent ToolResult;
+intermediate values and child transcripts are not injected into parent
+canonical history. There is no durable Workflow resume or crash replay: a
+pre-crash nonterminal run is not silently rerun, because Agent and Tool work
+may be non-idempotent.
 
 Workflow child composition uses the existing capability projection,
 `ApprovalMode`, `ToolApprovalPolicy`, and `InteractionCoordinator`. FullAccess

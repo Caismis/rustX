@@ -1079,13 +1079,9 @@ fn validate_workflow_tool_name_collisions(
 ) -> Result<(), RuntimeResourceLoadError> {
     for workflow_id in workflows.main() {
         let expected_id = format!("tool-workflow-{workflow_id}");
-        if matches!(
-            workflow_id.as_str(),
-            crate::tools::native::SUBAGENT_TOOL_NAME
-                | crate::runtime::workflow::WORKFLOW_OUTPUT_TOOL_NAME
-        ) {
+        if workflow_id.as_str() == crate::tools::native::SUBAGENT_TOOL_NAME {
             return Err(RuntimeResourceLoadError::new(format!(
-                "Workflow id {workflow_id:?} is reserved by the native Workflow/subagent terminal protocol"
+                "Workflow id {workflow_id:?} is reserved by the native subagent Tool"
             )));
         }
         if let Some(conflict) = candidate.available_tools().tools().iter().find(|tool| {

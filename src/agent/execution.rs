@@ -7026,6 +7026,17 @@ mod tests {
             "Workflow Agent text and terminal values are not parent history"
         );
         let requests = adapter.requests();
+        for request in &requests {
+            assert_eq!(
+                request
+                    .tools
+                    .iter()
+                    .filter(|tool| tool.name == crate::runtime::workflow::WORKFLOW_OUTPUT_TOOL_NAME)
+                    .count(),
+                1,
+                "a Workflow Agent request exposes exactly one reserved protocol definition"
+            );
+        }
         assert!(
             requests[1]
                 .effective_system_prompt

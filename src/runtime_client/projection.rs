@@ -967,10 +967,12 @@ impl RuntimeClientProjection {
             RuntimeEvent::InteractionRequested { .. } | RuntimeEvent::InteractionSettled { .. } => {
                 Vec::new()
             }
-            // Workflow facts are durable observability evidence. The
-            // Runtime Client continues to project the bounded parent Tool
-            // call/result and does not expose workflow-local values or child
-            // transcripts as a second conversation surface.
+            // Workflow lifecycle/join facts are best-effort observability;
+            // the successful child value and native terminal pair are the
+            // separate durable authority. The Runtime Client continues to
+            // project the bounded parent Tool call/result and does not expose
+            // workflow-local values or child transcripts as a second
+            // conversation surface.
             RuntimeEvent::WorkflowStarted { .. }
             | RuntimeEvent::WorkflowAgentAdmitted { .. }
             | RuntimeEvent::WorkflowAgentOutputCommitted { .. }

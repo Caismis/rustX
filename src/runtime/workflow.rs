@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 use crate::durable::ConversationStore;
 use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use crate::runtime::identity::{EventId, SubagentId, ToolCallId};
+pub use crate::tools::executor::WORKFLOW_OUTPUT_TOOL_NAME;
 
 use super::subagent::SubagentName;
 
@@ -33,9 +34,6 @@ pub const MAX_WORKFLOW_DEFINITIONS: usize = 64;
 pub const MAX_PARALLEL_BRANCHES: usize = 32;
 /// The maximum number of path components in one explicit reference.
 pub const MAX_REFERENCE_COMPONENTS: usize = 32;
-/// The reserved model-facing name consumed by a Workflow-owned `AgentRun`'s
-/// terminal protocol. A Workflow cannot claim this name as a parent Tool.
-pub const WORKFLOW_OUTPUT_TOOL_NAME: &str = "workflow_output";
 /// The reserved Tool-id namespace of model-facing Workflow Tools.
 ///
 /// Workflow Tools are concrete parent-plane capabilities, but they are not
@@ -65,6 +63,9 @@ impl WorkflowId {
         }
         if value.len() > 64 {
             return Err(WorkflowIdError::TooLong(value.len()));
+        }
+        if value == WORKFLOW_OUTPUT_TOOL_NAME {
+            return Err(WorkflowIdError::ReservedModelName);
         }
         let Some(first) = value.chars().next() else {
             return Err(WorkflowIdError::Empty);
@@ -110,6 +111,8 @@ pub enum WorkflowIdError {
     TooLong(usize),
     /// The identity contains an unsupported character.
     InvalidCharacter(char),
+    /// The identity is reserved for the Workflow Agent terminal protocol.
+    ReservedModelName,
 }
 
 impl fmt::Display for WorkflowIdError {
@@ -120,6 +123,10 @@ impl fmt::Display for WorkflowIdError {
             Self::InvalidCharacter(character) => write!(
                 formatter,
                 "workflow id accepts lowercase [a-z0-9_-] and found {character:?}"
+            ),
+            Self::ReservedModelName => write!(
+                formatter,
+                "workflow id {WORKFLOW_OUTPUT_TOOL_NAME:?} is reserved for Workflow Agent terminalization"
             ),
         }
     }
@@ -687,7 +694,7 @@ fn compile_program(
                 };
                 available_after.insert(
                     node_id.clone(),
-                    available_before.with_prefix(&node_id, &SchemaMap::from_schema(output)),
+                    available_before.with_prefix(&node_id, output),
                 );
                 WorkflowNodeProgram::Agent(agent)
             }
@@ -758,7 +765,7 @@ fn compile_program(
                 });
                 available_after.insert(
                     node_id.clone(),
-                    available_before.with_prefix(&node_id, &SchemaMap::from_schema(&output_schema)),
+                    available_before.with_prefix(&node_id, &output_schema),
                 );
                 WorkflowNodeProgram::Parallel {
                     branches: compiled_branches,
@@ -860,12 +867,8 @@ where
 }
 
 fn validate_root_schema(schema: &Value, label: &str) -> Result<(), WorkflowCompileError> {
-    let Some(object) = schema.as_object() else {
-        return Err(WorkflowCompileError::InvalidSchema(format!(
-            "workflow {label} schema must be an object"
-        )));
-    };
-    if object.get("type").and_then(Value::as_str) != Some("object") {
+    validate_workflow_schema(schema, label)?;
+    if schema_type(schema) != Some("object") {
         return Err(WorkflowCompileError::InvalidSchema(format!(
             "workflow {label} schema must have root type object"
         )));
@@ -873,6 +876,166 @@ fn validate_root_schema(schema: &Value, label: &str) -> Result<(), WorkflowCompi
     jsonschema::Validator::new(schema).map_err(|error| {
         WorkflowCompileError::InvalidSchema(format!("workflow {label}: {error}"))
     })?;
+    Ok(())
+}
+
+/// The deliberately closed JSON Schema vocabulary accepted by Workflow v1.
+///
+/// This is not the general JSON Schema language. The compiler's compatibility
+/// proof is sound because every value-constraining keyword it admits is handled
+/// recursively by [`schemas_compatible`]. A new keyword must be added here and
+/// to that proof together, otherwise it is rejected as an unsupported schema.
+const WORKFLOW_SCHEMA_KEYWORDS: &[&str] = &[
+    "additionalProperties",
+    "const",
+    "enum",
+    "items",
+    "properties",
+    "required",
+    "type",
+];
+
+const WORKFLOW_SCHEMA_TYPES: &[&str] = &[
+    "array", "boolean", "integer", "null", "number", "object", "string",
+];
+
+#[allow(clippy::too_many_lines)] // one recursive closed-vocabulary schema validator
+fn validate_workflow_schema(schema: &Value, path: &str) -> Result<(), WorkflowCompileError> {
+    let Some(object) = schema.as_object() else {
+        return Err(WorkflowCompileError::InvalidSchema(format!(
+            "workflow schema {path:?} must be an object"
+        )));
+    };
+    if let Some(unsupported) = object
+        .keys()
+        .find(|keyword| !WORKFLOW_SCHEMA_KEYWORDS.contains(&keyword.as_str()))
+    {
+        return Err(WorkflowCompileError::InvalidSchema(format!(
+            "workflow schema {path:?} uses unsupported keyword {unsupported:?}; Workflow v1 accepts only {}",
+            WORKFLOW_SCHEMA_KEYWORDS.join(", ")
+        )));
+    }
+    let Some(kind) = object.get("type").and_then(Value::as_str) else {
+        return Err(WorkflowCompileError::InvalidSchema(format!(
+            "workflow schema {path:?} must declare one string type"
+        )));
+    };
+    if !WORKFLOW_SCHEMA_TYPES.contains(&kind) {
+        return Err(WorkflowCompileError::InvalidSchema(format!(
+            "workflow schema {path:?} has unsupported type {kind:?}"
+        )));
+    }
+
+    if let Some(enum_values) = object.get("enum") {
+        let Some(enum_values) = enum_values.as_array() else {
+            return Err(WorkflowCompileError::InvalidSchema(format!(
+                "workflow schema {path:?} enum must be a non-empty array"
+            )));
+        };
+        if enum_values.is_empty()
+            || enum_values
+                .iter()
+                .enumerate()
+                .any(|(index, value)| enum_values[..index].contains(value))
+        {
+            return Err(WorkflowCompileError::InvalidSchema(format!(
+                "workflow schema {path:?} enum must contain unique values"
+            )));
+        }
+    }
+    if let (Some(constant), Some(Value::Array(enum_values))) =
+        (object.get("const"), object.get("enum"))
+        && !enum_values.contains(constant)
+    {
+        return Err(WorkflowCompileError::InvalidSchema(format!(
+            "workflow schema {path:?} const must be included in enum"
+        )));
+    }
+
+    match kind {
+        "object" => {
+            if let Some(properties) = object.get("properties") {
+                let Some(properties) = properties.as_object() else {
+                    return Err(WorkflowCompileError::InvalidSchema(format!(
+                        "workflow schema {path:?} properties must be an object"
+                    )));
+                };
+                for (name, property) in properties {
+                    validate_workflow_schema(property, &format!("{path}.properties.{name}"))?;
+                }
+            }
+            if let Some(required) = object.get("required") {
+                let Some(required) = required.as_array() else {
+                    return Err(WorkflowCompileError::InvalidSchema(format!(
+                        "workflow schema {path:?} required must be an array of property names"
+                    )));
+                };
+                let properties = object
+                    .get("properties")
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default();
+                for (index, name) in required.iter().enumerate() {
+                    let Some(name) = name.as_str() else {
+                        return Err(WorkflowCompileError::InvalidSchema(format!(
+                            "workflow schema {path}.required[{index}] must be a string"
+                        )));
+                    };
+                    if !properties.contains_key(name) {
+                        return Err(WorkflowCompileError::InvalidSchema(format!(
+                            "workflow schema {path:?} required field {name:?} has no property schema"
+                        )));
+                    }
+                    if required[..index]
+                        .iter()
+                        .any(|prior| prior.as_str() == Some(name))
+                    {
+                        return Err(WorkflowCompileError::InvalidSchema(format!(
+                            "workflow schema {path:?} required contains duplicate field {name:?}"
+                        )));
+                    }
+                }
+            }
+            if let Some(additional) = object.get("additionalProperties")
+                && !additional.is_boolean()
+            {
+                return Err(WorkflowCompileError::InvalidSchema(format!(
+                    "workflow schema {path:?} additionalProperties must be boolean"
+                )));
+            }
+            if object.contains_key("items") {
+                return Err(WorkflowCompileError::InvalidSchema(format!(
+                    "workflow schema {path:?} items is only valid for array schemas"
+                )));
+            }
+        }
+        "array" => {
+            if let Some(items) = object.get("items") {
+                if !items.is_object() {
+                    return Err(WorkflowCompileError::InvalidSchema(format!(
+                        "workflow schema {path:?} items must be one schema object"
+                    )));
+                }
+                validate_workflow_schema(items, &format!("{path}.items"))?;
+            }
+            for keyword in ["properties", "required", "additionalProperties"] {
+                if object.contains_key(keyword) {
+                    return Err(WorkflowCompileError::InvalidSchema(format!(
+                        "workflow schema {path:?} {keyword} is only valid for object schemas"
+                    )));
+                }
+            }
+        }
+        _ => {
+            for keyword in ["properties", "required", "additionalProperties", "items"] {
+                if object.contains_key(keyword) {
+                    return Err(WorkflowCompileError::InvalidSchema(format!(
+                        "workflow schema {path:?} {keyword} is incompatible with scalar type {kind:?}"
+                    )));
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1043,18 +1206,12 @@ impl SchemaMap {
         Self(map)
     }
 
-    fn with_prefix(&self, prefix: &str, schema: &Self) -> Self {
-        let required = schema.0.keys().cloned().collect::<Vec<_>>();
+    fn with_prefix(&self, prefix: &str, schema: &Value) -> Self {
         let mut result = self.clone();
-        result.0.insert(
-            prefix.to_owned(),
-            serde_json::json!({
-                "type": "object",
-                "properties": schema.0,
-                "required": required,
-                "additionalProperties": true
-            }),
-        );
+        // Keep the complete frozen producer schema. Reducing it to required
+        // fields would erase constraints such as enum/const and make a later
+        // binding appear compatible merely because both values are objects.
+        result.0.insert(prefix.to_owned(), schema.clone());
         result
     }
 }
@@ -1168,20 +1325,6 @@ fn schema_type(schema: &Value) -> Option<&str> {
     schema.get("type").and_then(Value::as_str)
 }
 
-fn schema_types(schema: &Value) -> Option<BTreeSet<&str>> {
-    match schema.get("type") {
-        Some(Value::String(kind)) => Some(BTreeSet::from([kind.as_str()])),
-        Some(Value::Array(kinds)) => {
-            let kinds = kinds
-                .iter()
-                .map(Value::as_str)
-                .collect::<Option<Vec<_>>>()?;
-            Some(kinds.into_iter().collect())
-        }
-        _ => None,
-    }
-}
-
 fn schema_required(schema: &Value) -> BTreeSet<&str> {
     schema
         .get("required")
@@ -1192,54 +1335,50 @@ fn schema_required(schema: &Value) -> BTreeSet<&str> {
         .collect()
 }
 
+fn finite_schema_values(schema: &Value) -> Option<Vec<Value>> {
+    if let Some(constant) = schema.get("const") {
+        if let Some(Value::Array(enum_values)) = schema.get("enum") {
+            return enum_values
+                .contains(constant)
+                .then(|| vec![constant.clone()]);
+        }
+        return Some(vec![constant.clone()]);
+    }
+    schema.get("enum").and_then(Value::as_array).cloned()
+}
+
 #[allow(clippy::too_many_lines)] // one bounded structural schema compatibility check
 fn schemas_compatible(actual: &Value, expected: &Value) -> bool {
-    if let Some(expected_types) = schema_types(expected) {
-        let Some(actual_types) = schema_types(actual) else {
+    // Finite producer schemas can be checked exactly against the complete
+    // consumer schema. This is also the sound path for enum/const narrowing.
+    if let Some(values) = finite_schema_values(actual) {
+        if values.is_empty() {
+            return false;
+        }
+        let Ok(expected_validator) = jsonschema::Validator::new(expected) else {
             return false;
         };
-        if !actual_types.is_subset(&expected_types) {
-            return false;
-        }
+        return values
+            .iter()
+            .all(|value| expected_validator.is_valid(value));
+    }
+    if finite_schema_values(expected).is_some() {
+        // An unrestricted producer is not statically known to satisfy a
+        // finite consumer contract.
+        return false;
     }
 
-    if let Some(expected_const) = expected.get("const") {
-        match (actual.get("const"), actual.get("enum")) {
-            (Some(actual_const), _) => {
-                if actual_const != expected_const {
-                    return false;
-                }
-            }
-            (_, Some(Value::Array(actual_enum))) => {
-                if actual_enum.iter().any(|value| value != expected_const) {
-                    return false;
-                }
-            }
-            _ => return false,
-        }
-    }
-    if let Some(Value::Array(expected_enum)) = expected.get("enum") {
-        match (actual.get("const"), actual.get("enum")) {
-            (Some(actual_const), _) => {
-                if !expected_enum.iter().any(|value| value == actual_const) {
-                    return false;
-                }
-            }
-            (_, Some(Value::Array(actual_enum))) => {
-                if actual_enum
-                    .iter()
-                    .any(|value| !expected_enum.iter().any(|expected| expected == value))
-                {
-                    return false;
-                }
-            }
-            _ => return false,
-        }
+    let Some(actual_type) = schema_type(actual) else {
+        return false;
+    };
+    let Some(expected_type) = schema_type(expected) else {
+        return false;
+    };
+    if actual_type != expected_type && !(actual_type == "integer" && expected_type == "number") {
+        return false;
     }
 
-    let expected_is_object = schema_types(expected).is_some_and(|types| types.contains("object"));
-    let actual_is_object = schema_types(actual).is_some_and(|types| types.contains("object"));
-    if expected_is_object && actual_is_object {
+    if expected_type == "object" {
         let expected_properties = expected
             .get("properties")
             .and_then(Value::as_object)
@@ -1259,18 +1398,29 @@ fn schemas_compatible(actual: &Value, expected: &Value) -> bool {
             let Some(expected_property) = expected_properties.get(*key) else {
                 return false;
             };
-            if !actual_required.contains(key) {
-                return false;
-            }
-            if !schemas_compatible(actual_property, expected_property) {
+            if !actual_required.contains(key)
+                || !schemas_compatible(actual_property, expected_property)
+            {
                 return false;
             }
         }
         for (key, expected_property) in &expected_properties {
-            if let Some(actual_property) = actual_properties.get(key)
-                && !schemas_compatible(actual_property, expected_property)
-            {
-                return false;
+            match actual_properties.get(key) {
+                Some(actual_property)
+                    if !schemas_compatible(actual_property, expected_property) =>
+                {
+                    return false;
+                }
+                None if !actual
+                    .get("additionalProperties")
+                    .is_some_and(|value| value == &Value::Bool(false)) =>
+                {
+                    // An undeclared producer property can still be emitted
+                    // through additionalProperties and violate this consumer
+                    // property's schema.
+                    return false;
+                }
+                Some(_) | None => {}
             }
         }
         if expected
@@ -1287,9 +1437,7 @@ fn schemas_compatible(actual: &Value, expected: &Value) -> bool {
         }
     }
 
-    let expected_is_array = schema_types(expected).is_some_and(|types| types.contains("array"));
-    let actual_is_array = schema_types(actual).is_some_and(|types| types.contains("array"));
-    if expected_is_array && actual_is_array {
+    if expected_type == "array" {
         match (actual.get("items"), expected.get("items")) {
             (Some(actual_items), Some(expected_items))
                 if !schemas_compatible(actual_items, expected_items) =>
@@ -1369,8 +1517,10 @@ impl WorkflowOutputLatch {
     /// # Errors
     ///
     /// Returns an error if the supplied schema cannot be compiled by the
-    /// JSON Schema validator.
+    /// Workflow v1 compiler and JSON Schema validator.
     pub fn new(schema: Value) -> Result<Self, String> {
+        validate_root_schema(&schema, "Workflow Agent output")
+            .map_err(|error| error.to_string())?;
         let validator = jsonschema::Validator::new(&schema)
             .map_err(|error| format!("invalid workflow Agent output schema: {error}"))?;
         Ok(Self {
@@ -1522,8 +1672,9 @@ impl WorkflowRun {
 #[derive(Clone)]
 pub struct WorkflowRuntime {
     subagents: crate::runtime::subagent::SubagentRegistry,
-    /// The existing conversation Event Journal. It records execution facts
-    /// but never becomes the `WorkflowRun` state authority.
+    /// The existing conversation Event Journal. Workflow lifecycle facts are
+    /// best-effort observability here; the journal never becomes the
+    /// `WorkflowRun` state authority.
     event_store: Arc<dyn ConversationStore>,
 }
 
@@ -1539,10 +1690,10 @@ impl fmt::Debug for WorkflowRuntime {
 
 /// Derives a stable, conversation-local identity for a Workflow fact.
 ///
-/// Workflow events are observability evidence rather than execution
-/// authority, but they still cross the durable Event Journal boundary. The
-/// complete event payload includes the run and node identities, so hashing it
-/// prevents distinct facts from colliding while keeping the event ID bounded.
+/// Workflow events are best-effort observability evidence rather than
+/// execution authority. The complete event payload includes the run and node
+/// identities, so hashing it prevents distinct facts from colliding while
+/// keeping the event ID bounded.
 fn workflow_event_id(event: &RuntimeEvent) -> EventId {
     let encoded = serde_json::to_vec(event).expect("Workflow runtime events are serializable");
     let digest = Sha256::digest(encoded);
@@ -1582,7 +1733,7 @@ impl WorkflowRuntime {
         cancellation: crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<Value, WorkflowRunError> {
         let mut run = WorkflowRun::new(program.clone(), run_id);
-        self.emit(
+        self.emit_observability(
             &run,
             RuntimeEvent::WorkflowStarted {
                 workflow_id: program.id().clone(),
@@ -1625,7 +1776,7 @@ impl WorkflowRuntime {
                     return self.finish_cancelled(&mut run, &cancellation).await;
                 }
                 run.settle(WorkflowTerminalState::Completed(value.clone()))?;
-                self.emit(
+                self.emit_observability(
                     &run,
                     RuntimeEvent::WorkflowCompleted {
                         workflow_id: program.id().clone(),
@@ -1644,7 +1795,7 @@ impl WorkflowRuntime {
                 };
                 run.settle(terminal)?;
                 match &error {
-                    WorkflowRunError::Cancelled(reason) => self.emit(
+                    WorkflowRunError::Cancelled(reason) => self.emit_observability(
                         &run,
                         RuntimeEvent::WorkflowCancelled {
                             workflow_id: program.id().clone(),
@@ -1652,7 +1803,7 @@ impl WorkflowRuntime {
                             reason: *reason,
                         },
                     ),
-                    _ => self.emit(
+                    _ => self.emit_observability(
                         &run,
                         RuntimeEvent::WorkflowFailed {
                             workflow_id: program.id().clone(),
@@ -1672,7 +1823,7 @@ impl WorkflowRuntime {
         error: WorkflowRunError,
     ) -> Result<Value, WorkflowRunError> {
         run.settle(WorkflowTerminalState::Failed(error.to_string()))?;
-        self.emit(
+        self.emit_observability(
             run,
             RuntimeEvent::WorkflowFailed {
                 workflow_id: run.program.id().clone(),
@@ -1692,7 +1843,7 @@ impl WorkflowRuntime {
         self.cancel_and_drain(run, cancellation).await;
         let error = WorkflowRunError::Cancelled(reason);
         run.settle(WorkflowTerminalState::Cancelled(reason))?;
-        self.emit(
+        self.emit_observability(
             run,
             RuntimeEvent::WorkflowCancelled {
                 workflow_id: run.program.id().clone(),
@@ -1703,12 +1854,13 @@ impl WorkflowRuntime {
         Err(error)
     }
 
-    /// Appends one bounded observability fact to the conversation's existing
-    /// Event Journal. The journal is intentionally best-effort here: it
-    /// records Workflow facts but never decides control flow or terminal
+    /// Appends one bounded best-effort observability fact to the conversation's
+    /// existing Event Journal. A failure is intentionally ignored: ordinary
+    /// Workflow lifecycle/join events never decide control flow or terminal
     /// state, which remain owned by this `WorkflowRun` and its native child
-    /// registry.
-    fn emit(&self, _run: &WorkflowRun, event: RuntimeEvent) {
+    /// registry. The successful child value and native terminal lifecycle fact
+    /// use the separate durable compound transition in `SubagentRegistry`.
+    fn emit_observability(&self, _run: &WorkflowRun, event: RuntimeEvent) {
         let event_id = workflow_event_id(&event);
         let envelope = RuntimeEventEnvelope {
             schema_version: EVENT_SCHEMA_VERSION,
@@ -1768,7 +1920,7 @@ impl WorkflowRuntime {
                         .find(|edge| edge.port == port)
                         .map(|edge| edge.to.clone())
                         .ok_or_else(|| WorkflowRunError::InvalidProgram(node_id.clone()))?;
-                    self.emit(
+                    self.emit_observability(
                         run,
                         RuntimeEvent::WorkflowBranchSelected {
                             workflow_id: run.program.id().clone(),
@@ -1811,7 +1963,7 @@ impl WorkflowRuntime {
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<Value, WorkflowRunError> {
         let subagent_id = self
-            .admit_agent(run, context, input, node_id, agent, cancellation)
+            .admit_agent(run, context, input, node_id, node_id, agent, cancellation)
             .await?;
         self.settle_agent(
             run,
@@ -1823,12 +1975,14 @@ impl WorkflowRuntime {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)] // the explicit child admission boundary
     async fn admit_agent(
         &self,
         run: &mut WorkflowRun,
         context: &crate::runtime::subagent::AttemptSubagentContext,
         input: &Value,
         node_id: &str,
+        event_node_id: &str,
         agent: &WorkflowAgentProgram,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<crate::runtime::identity::SubagentId, WorkflowRunError> {
@@ -1877,7 +2031,7 @@ impl WorkflowRuntime {
                 output_schema: agent.output_schema.clone(),
                 workflow_id: run.program.id().clone(),
                 run_id: run.run_id.clone(),
-                node_id: node_id.to_owned(),
+                node_id: event_node_id.to_owned(),
             },
         };
         let child_cancellation = cancellation.child_signal();
@@ -1911,12 +2065,12 @@ impl WorkflowRuntime {
             return Err(WorkflowRunError::Cancelled(cancellation.reason()));
         };
         run.active_children.insert(accepted.subagent_id.clone());
-        self.emit(
+        self.emit_observability(
             run,
             RuntimeEvent::WorkflowAgentAdmitted {
                 workflow_id: run.program.id().clone(),
                 run_id: run.run_id.clone(),
-                node_id: node_id.to_owned(),
+                node_id: event_node_id.to_owned(),
                 subagent_id: accepted.subagent_id.clone(),
                 profile: agent.profile.clone(),
             },
@@ -2038,6 +2192,7 @@ impl WorkflowRuntime {
                     context,
                     input,
                     &format!("{node_id}.{key}"),
+                    node_id,
                     branch,
                     cancellation,
                 )
@@ -2055,7 +2210,7 @@ impl WorkflowRuntime {
             }
         }
         if !admitted.is_empty() {
-            self.emit(
+            self.emit_observability(
                 run,
                 RuntimeEvent::WorkflowParallelAdmitted {
                     workflow_id: run.program.id().clone(),
@@ -2088,7 +2243,7 @@ impl WorkflowRuntime {
                 }
             }
         }
-        self.emit(
+        self.emit_observability(
             run,
             RuntimeEvent::WorkflowParallelSettled {
                 workflow_id: run.program.id().clone(),
@@ -2249,6 +2404,43 @@ mod tests {
     use std::sync::{Arc, Barrier};
     use std::thread;
 
+    #[cfg(unix)]
+    use crate::capabilities::CapabilitySnapshot;
+    #[cfg(unix)]
+    use crate::context::SessionContextPolicy;
+    #[cfg(unix)]
+    use crate::durable::ConversationStore;
+    #[cfg(unix)]
+    use crate::model::catalog::{MapCredentialEnvironment, ModelCatalog, ModelRef};
+    #[cfg(unix)]
+    use crate::model::invocation::ModelBindingRegistry;
+    #[cfg(unix)]
+    use crate::model::session::SessionModelConfig;
+    #[cfg(unix)]
+    use crate::runtime::cancellation::{CancellationSignal, ExecutionCancellation};
+    #[cfg(unix)]
+    use crate::runtime::identity::{
+        AgentId, CapabilityRevision, ConversationId, RuntimeResourceRevision,
+    };
+    #[cfg(unix)]
+    use crate::runtime::subagent::process::StagedChild;
+    #[cfg(unix)]
+    use crate::runtime::subagent::{
+        SubagentDefinition, SubagentProjectInstructionPolicy, SubagentRegistry,
+        SubagentRegistryConfig, SubagentSpawnPlan, SubagentWorkspaceManager,
+        SubagentWorkspacePolicy,
+    };
+    #[cfg(unix)]
+    use crate::runtime::types::{ApprovalMode, CancellationReason, SystemClock};
+    #[cfg(unix)]
+    use crate::skills::SkillSnapshot;
+    #[cfg(unix)]
+    use crate::tools::environment::ToolEnvironment;
+    #[cfg(unix)]
+    use crate::tools::executor::ToolRegistry;
+    #[cfg(unix)]
+    use crate::tools::mcp::McpRuntimeLeaseAuthority;
+
     #[allow(clippy::needless_pass_by_value)]
     fn schema(properties: Value, required: &[&str]) -> Value {
         json!({
@@ -2323,6 +2515,768 @@ mod tests {
         )
     }
 
+    #[cfg(unix)]
+    const WORKFLOW_TEST_MODELS: &str = r#"{
+      "providers": {
+        "local": {
+          "baseUrl": "http://127.0.0.1:9/v1",
+          "apiKey": "test-only-secret",
+          "models": [{
+            "id": "model",
+            "protocol": "openai_chat_completions",
+            "contextWindow": 128000,
+            "maxOutputTokens": 512,
+            "capabilities": {
+              "inputModalities": ["text"],
+              "outputModalities": ["text"],
+              "toolCalls": true,
+              "reasoning": false
+            },
+            "compat": {"chatReasoningReplay": "omit"}
+          }]
+        }
+      }
+    }"#;
+
+    #[cfg(unix)]
+    struct WorkflowTestPlane {
+        dir: tempfile::TempDir,
+        registry: SubagentRegistry,
+        store: Arc<crate::durable::SqliteConversationStore>,
+        conversation_id: ConversationId,
+        runtime_root: std::path::PathBuf,
+    }
+
+    #[cfg(unix)]
+    fn workflow_test_plane(max_active: usize) -> WorkflowTestPlane {
+        let dir = tempfile::tempdir().expect("workflow test temp dir");
+        let workspace = dir.path().join("workspace");
+        let runtime_root = dir.path().join("subagents");
+        std::fs::create_dir_all(&workspace).expect("workflow workspace");
+        std::fs::create_dir_all(&runtime_root).expect("workflow runtime root");
+        let conversation_id = ConversationId::new("workflow-test-conversation");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(conversation_id.clone())
+                .expect("workflow store"),
+        );
+        let mailbox =
+            crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
+        let registry = SubagentRegistry::new(SubagentRegistryConfig {
+            conversation_id: conversation_id.clone(),
+            agent_id: AgentId::new("workflow-test-parent"),
+            mailbox,
+            clock: Arc::new(SystemClock),
+            spawn: SubagentSpawnPlan {
+                program: std::path::PathBuf::from("/nonexistent/rustx"),
+                runtime_root: runtime_root.clone(),
+                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+                agent_status: crate::context::AgentStatusConfig::default(),
+                context: SessionContextPolicy {
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 0,
+                    summary_output_cap: None,
+                },
+            },
+            workspace: SubagentWorkspaceManager::new(&workspace, &runtime_root),
+            max_active,
+        });
+        WorkflowTestPlane {
+            dir,
+            registry,
+            store,
+            conversation_id,
+            runtime_root,
+        }
+    }
+
+    #[cfg(unix)]
+    fn workflow_test_context(
+        plane: &WorkflowTestPlane,
+    ) -> crate::runtime::subagent::AttemptSubagentContext {
+        workflow_test_context_for_generation(
+            plane,
+            1,
+            "Workflow test instructions",
+            WorkflowCatalog::empty(),
+        )
+    }
+
+    #[cfg(unix)]
+    fn workflow_test_context_for_generation(
+        plane: &WorkflowTestPlane,
+        revision: u64,
+        instructions: &str,
+        workflow_catalog: WorkflowCatalog,
+    ) -> crate::runtime::subagent::AttemptSubagentContext {
+        let model_catalog = ModelCatalog::from_jsonc_slice(WORKFLOW_TEST_MODELS.as_bytes())
+            .expect("workflow test model catalog");
+        let models = ModelBindingRegistry::new(
+            model_catalog
+                .resolve(&MapCredentialEnvironment::default())
+                .expect("workflow test model resolution"),
+        )
+        .expect("workflow test model bindings");
+        let model = ModelRef::parse("local/model").expect("workflow test model");
+        let reviewer = profile("reviewer");
+        let definition = SubagentDefinition::new(
+            reviewer.clone(),
+            "Workflow test reviewer".to_owned(),
+            instructions.to_owned(),
+            plane.dir.path().join("reviewer.md"),
+            Some(model.clone()),
+            Vec::new(),
+            Vec::new(),
+            SubagentProjectInstructionPolicy {
+                inherit: false,
+                files: Vec::new(),
+            },
+            SubagentWorkspacePolicy::SharedWorkspace,
+        )
+        .expect("workflow test subagent definition");
+        let catalog = crate::runtime::subagent::SubagentCatalog::new([definition])
+            .expect("workflow test subagent catalog");
+        let capabilities = Arc::new(CapabilitySnapshot::new(
+            plane.conversation_id.clone(),
+            plane.dir.path().join("workspace"),
+            CapabilityRevision::new(1),
+            Arc::new(ToolRegistry::new()),
+            Arc::new(crate::capabilities::AvailableToolCatalog::default()),
+            Arc::new(SkillSnapshot::new(Vec::new())),
+            None,
+            None,
+            ToolEnvironment::new(),
+            Arc::new(McpRuntimeLeaseAuthority::empty()),
+            Arc::new(std::collections::BTreeMap::new()),
+            None,
+        ));
+        let resources = Arc::new(
+            crate::runtime::RuntimeResourceSnapshot::new(
+                RuntimeResourceRevision::new(revision),
+                Vec::new(),
+                None,
+                crate::context::ContextAssembly::new(),
+                capabilities,
+            )
+            .with_subagent_catalog(catalog)
+            .with_subagent_admissions(BTreeSet::new(), BTreeSet::from([reviewer]))
+            .with_workflow_catalog(workflow_catalog),
+        );
+        crate::runtime::subagent::AttemptSubagentContext::new(
+            resources,
+            SessionModelConfig::of(model),
+            models,
+            ApprovalMode::Policy,
+        )
+    }
+
+    #[cfg(unix)]
+    struct ScriptedWorkflowChild {
+        peer: tokio::net::UnixStream,
+        root: std::path::PathBuf,
+    }
+
+    #[cfg(unix)]
+    fn stage_workflow_child(plane: &WorkflowTestPlane) -> ScriptedWorkflowChild {
+        let (driver_end, test_end) = tokio::net::UnixStream::pair().expect("workflow IPC pair");
+        let child = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg("true")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0)
+            .spawn()
+            .expect("workflow scripted child");
+        let pid = child.id().expect("workflow scripted child pid");
+        let root = plane.runtime_root.join(format!("test-child-{pid}"));
+        std::fs::create_dir_all(&root).expect("workflow child runtime root");
+        plane
+            .registry
+            .push_staged_override(StagedChild::for_test(child, driver_end, root.clone()));
+        ScriptedWorkflowChild {
+            peer: test_end,
+            root,
+        }
+    }
+
+    #[cfg(unix)]
+    impl ScriptedWorkflowChild {
+        async fn expect_delegate(&mut self) {
+            let frame = crate::runtime::subagent::ipc::read_parent_frame(&mut self.peer)
+                .await
+                .expect("workflow delegate frame");
+            assert!(matches!(
+                frame,
+                Some(crate::runtime::subagent::ipc::ParentFrame::Delegate(_))
+            ));
+        }
+
+        async fn send_result(
+            &mut self,
+            status: crate::runtime::subagent::ipc::ChildResultStatus,
+            content: Option<&str>,
+        ) {
+            crate::runtime::subagent::ipc::write_child_frame(
+                &mut self.peer,
+                &crate::runtime::subagent::ipc::ChildFrame::Result(
+                    crate::runtime::subagent::ipc::ResultFrame {
+                        status,
+                        content: content.map(str::to_owned),
+                        diagnostic: None,
+                    },
+                ),
+            )
+            .await
+            .expect("workflow child result frame");
+        }
+
+        async fn cancel_after_delegate(&mut self) {
+            let frame = crate::runtime::subagent::ipc::read_parent_frame(&mut self.peer)
+                .await
+                .expect("workflow cancel frame");
+            assert!(matches!(
+                frame,
+                Some(crate::runtime::subagent::ipc::ParentFrame::Cancel {
+                    reason: Some(CancellationReason::UserRequested)
+                })
+            ));
+            crate::runtime::subagent::ipc::write_child_frame(
+                &mut self.peer,
+                &crate::runtime::subagent::ipc::ChildFrame::Result(
+                    crate::runtime::subagent::ipc::ResultFrame {
+                        status: crate::runtime::subagent::ipc::ChildResultStatus::Cancelled,
+                        content: None,
+                        diagnostic: None,
+                    },
+                ),
+            )
+            .await
+            .expect("workflow cancellation result frame");
+        }
+    }
+
+    #[cfg(unix)]
+    fn parallel_test_program(keys: &[&str]) -> Arc<WorkflowProgram> {
+        let branch_output = schema(json!({"summary": {"type": "string"}}), &["summary"]);
+        let mut branches = BTreeMap::new();
+        let mut returned = BTreeMap::new();
+        let mut output_properties = serde_json::Map::new();
+        for key in keys {
+            branches.insert(
+                (*key).to_owned(),
+                WorkflowParallelBranchDefinition {
+                    profile: profile("reviewer"),
+                    task: format!("Run the {key} workflow branch."),
+                    input: BTreeMap::new(),
+                    output: branch_output.clone(),
+                },
+            );
+            returned.insert(
+                (*key).to_owned(),
+                WorkflowBinding {
+                    reference: format!("fanout.{key}"),
+                },
+            );
+            output_properties.insert((*key).to_owned(), branch_output.clone());
+        }
+        let definition = base_definition(
+            "fanout",
+            BTreeMap::from([
+                (
+                    "fanout".to_owned(),
+                    WorkflowNodeDefinition::Parallel { branches },
+                ),
+                ("done".to_owned(), return_node(returned)),
+            ]),
+            vec![edge("fanout", "done")],
+            schema(Value::Object(output_properties), keys),
+        );
+        Arc::new(compile_test(definition).expect("parallel runtime program"))
+    }
+
+    #[cfg(unix)]
+    fn snapshot_test_program(result_field: &str, description: &str) -> Arc<WorkflowProgram> {
+        let branch_output = schema(json!({"summary": {"type": "string"}}), &["summary"]);
+        let definition = WorkflowDefinition {
+            description: description.to_owned(),
+            input: schema(json!({}), &[]),
+            output: schema(
+                json!({result_field: branch_output.clone()}),
+                &[result_field],
+            ),
+            entry: "fanout".to_owned(),
+            nodes: BTreeMap::from([
+                (
+                    "fanout".to_owned(),
+                    WorkflowNodeDefinition::Parallel {
+                        branches: BTreeMap::from([(
+                            "alpha".to_owned(),
+                            WorkflowParallelBranchDefinition {
+                                profile: profile("reviewer"),
+                                task: format!("Run the {description} branch."),
+                                input: BTreeMap::new(),
+                                output: branch_output,
+                            },
+                        )]),
+                    },
+                ),
+                (
+                    "done".to_owned(),
+                    return_node(BTreeMap::from([(
+                        result_field.to_owned(),
+                        WorkflowBinding {
+                            reference: "fanout.alpha".to_owned(),
+                        },
+                    )])),
+                ),
+            ]),
+            edges: vec![edge("fanout", "done")],
+        };
+        Arc::new(
+            WorkflowProgram::compile(
+                WorkflowId::parse("snapshot_workflow").expect("snapshot workflow id"),
+                definition,
+                &BTreeSet::from([profile("reviewer")]),
+            )
+            .expect("snapshot workflow program"),
+        )
+    }
+
+    #[cfg(unix)]
+    fn return_only_program() -> Arc<WorkflowProgram> {
+        let output = schema(json!({"value": {"type": "string"}}), &["value"]);
+        Arc::new(
+            WorkflowProgram::compile(
+                WorkflowId::parse("event_journal_workflow").expect("event workflow id"),
+                WorkflowDefinition {
+                    description: "Event journal test workflow".to_owned(),
+                    input: output.clone(),
+                    output: output.clone(),
+                    entry: "done".to_owned(),
+                    nodes: BTreeMap::from([(
+                        "done".to_owned(),
+                        return_node(BTreeMap::from([(
+                            "value".to_owned(),
+                            WorkflowBinding {
+                                reference: "args.value".to_owned(),
+                            },
+                        )])),
+                    )]),
+                    edges: Vec::new(),
+                },
+                &BTreeSet::new(),
+            )
+            .expect("return-only workflow program"),
+        )
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn parallel_runtime_keys_results_by_definition_when_completion_is_reversed() {
+        let plane = workflow_test_plane(2);
+        let mut alpha = stage_workflow_child(&plane);
+        let mut zulu = stage_workflow_child(&plane);
+        let runtime = workflow_runtime(&plane);
+        let context = workflow_test_context(&plane);
+        let program = parallel_test_program(&["alpha", "zulu"]);
+        let (_, cancellation) = workflow_cancellation();
+        let (result_tx, mut result_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let result = runtime
+                .run_foreground(
+                    program,
+                    ToolCallId::new("parallel-reversed"),
+                    context,
+                    json!({"task": "parallel"}),
+                    cancellation,
+                )
+                .await;
+            result_tx
+                .send(result.clone())
+                .expect("workflow result receiver");
+            result
+        });
+
+        // Admission is definition-key ordered, but both children are owned
+        // before settlement begins. The test holds both Delegate frames so
+        // physical result order is controlled independently of that order.
+        alpha.expect_delegate().await;
+        zulu.expect_delegate().await;
+        zulu.send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some(r#"{"summary":"zulu"}"#),
+        )
+        .await;
+        let zulu_id = SubagentId::for_conversation(&plane.conversation_id, 2);
+        assert_eq!(
+            plane
+                .registry
+                .wait_until_settled(&zulu_id)
+                .await
+                .expect("zulu settles first")
+                .state,
+            crate::runtime::subagent::SubagentState::Succeeded
+        );
+        assert!(matches!(
+            result_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+
+        alpha
+            .send_result(
+                crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+                Some(r#"{"summary":"alpha"}"#),
+            )
+            .await;
+        let result = task
+            .await
+            .expect("workflow task")
+            .expect("workflow success");
+        assert_eq!(
+            result,
+            json!({
+                "alpha": {"summary": "alpha"},
+                "zulu": {"summary": "zulu"}
+            })
+        );
+        assert!(plane.registry.unsettled_snapshot().is_empty());
+        assert!(!alpha.root.exists());
+        assert!(!zulu.root.exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn parallel_runtime_all_settles_multiple_failures_in_definition_order() {
+        let plane = workflow_test_plane(2);
+        let mut alpha = stage_workflow_child(&plane);
+        let mut zulu = stage_workflow_child(&plane);
+        let runtime = workflow_runtime(&plane);
+        let context = workflow_test_context(&plane);
+        let program = parallel_test_program(&["alpha", "zulu"]);
+        let (_, cancellation) = workflow_cancellation();
+        let (result_tx, mut result_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let result = runtime
+                .run_foreground(
+                    program,
+                    ToolCallId::new("parallel-failures"),
+                    context,
+                    json!({"task": "parallel"}),
+                    cancellation,
+                )
+                .await;
+            result_tx
+                .send(result.clone())
+                .expect("workflow result receiver");
+            result
+        });
+
+        alpha.expect_delegate().await;
+        zulu.expect_delegate().await;
+        zulu.send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Failed,
+            None,
+        )
+        .await;
+        let zulu_id = SubagentId::for_conversation(&plane.conversation_id, 2);
+        assert_eq!(
+            plane
+                .registry
+                .wait_until_settled(&zulu_id)
+                .await
+                .expect("zulu failure settles first")
+                .state,
+            crate::runtime::subagent::SubagentState::Failed
+        );
+        assert!(matches!(
+            result_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+
+        alpha
+            .send_result(
+                crate::runtime::subagent::ipc::ChildResultStatus::Failed,
+                None,
+            )
+            .await;
+        let error = task
+            .await
+            .expect("workflow task")
+            .expect_err("parallel failure");
+        let WorkflowRunError::ParallelFailed { detail, .. } = error else {
+            panic!("expected keyed parallel failure");
+        };
+        assert!(
+            detail.find("fanout.alpha").expect("alpha diagnostic")
+                < detail.find("fanout.zulu").expect("zulu diagnostic")
+        );
+        assert!(plane.registry.unsettled_snapshot().is_empty());
+        assert!(!alpha.root.exists());
+        assert!(!zulu.root.exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn parallel_runtime_capacity_failure_rolls_back_partial_admission() {
+        let plane = workflow_test_plane(1);
+        let mut alpha = stage_workflow_child(&plane);
+        let zulu = stage_workflow_child(&plane);
+        let runtime = workflow_runtime(&plane);
+        let context = workflow_test_context(&plane);
+        let program = parallel_test_program(&["alpha", "zulu"]);
+        let (_, cancellation) = workflow_cancellation();
+        let task = tokio::spawn(async move {
+            runtime
+                .run_foreground(
+                    program,
+                    ToolCallId::new("parallel-capacity"),
+                    context,
+                    json!({"task": "parallel"}),
+                    cancellation,
+                )
+                .await
+        });
+
+        alpha.expect_delegate().await;
+        alpha
+            .send_result(
+                crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+                Some(r#"{"summary":"alpha"}"#),
+            )
+            .await;
+        let error = task
+            .await
+            .expect("workflow task")
+            .expect_err("capacity failure");
+        let WorkflowRunError::ParallelFailed { detail, .. } = error else {
+            panic!("expected keyed parallel capacity failure");
+        };
+        assert!(detail.contains("per-conversation subagent bound (1) is reached"));
+        assert_eq!(plane.registry.all_snapshots().len(), 1);
+        assert!(plane.registry.unsettled_snapshot().is_empty());
+        assert!(!alpha.root.exists());
+        assert!(!zulu.root.exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn parallel_runtime_cancellation_drains_every_admitted_child() {
+        let plane = workflow_test_plane(2);
+        let mut alpha = stage_workflow_child(&plane);
+        let mut zulu = stage_workflow_child(&plane);
+        let runtime = workflow_runtime(&plane);
+        let context = workflow_test_context(&plane);
+        let program = parallel_test_program(&["alpha", "zulu"]);
+        let (signal, cancellation) = workflow_cancellation();
+        let task = tokio::spawn(async move {
+            runtime
+                .run_foreground(
+                    program,
+                    ToolCallId::new("parallel-cancel"),
+                    context,
+                    json!({"task": "parallel"}),
+                    cancellation,
+                )
+                .await
+        });
+
+        alpha.expect_delegate().await;
+        zulu.expect_delegate().await;
+        signal.cancel();
+        alpha.cancel_after_delegate().await;
+        zulu.cancel_after_delegate().await;
+
+        let error = task
+            .await
+            .expect("workflow task")
+            .expect_err("workflow cancellation");
+        assert!(error.is_cancelled());
+        let snapshots = plane.registry.all_snapshots();
+        assert_eq!(snapshots.len(), 2);
+        assert!(snapshots.iter().all(|snapshot| {
+            snapshot.state == crate::runtime::subagent::SubagentState::Cancelled && snapshot.settled
+        }));
+        assert!(plane.registry.unsettled_snapshot().is_empty());
+        assert!(!alpha.root.exists());
+        assert!(!zulu.root.exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
+    async fn workflow_run_and_future_invocation_keep_separate_program_snapshots() {
+        let plane = workflow_test_plane(1);
+        let mut old_child = stage_workflow_child(&plane);
+        let runtime = workflow_runtime(&plane);
+        let old_program = snapshot_test_program("old", "old generation");
+        let old_catalog =
+            WorkflowCatalog::new([(*old_program).clone()], [old_program.id().clone()])
+                .expect("old workflow catalog");
+        let old_snapshot = Arc::clone(
+            old_catalog
+                .get(old_program.id())
+                .expect("old catalog snapshot"),
+        );
+        let old_context = workflow_test_context_for_generation(
+            &plane,
+            1,
+            "old generation instructions",
+            old_catalog.clone(),
+        );
+        assert_eq!(old_context.resources().revision().get(), 1);
+        assert_eq!(
+            old_context
+                .resources()
+                .workflows()
+                .get(old_program.id())
+                .expect("old workflow resource")
+                .description(),
+            "old generation"
+        );
+
+        let (_, old_cancellation) = workflow_cancellation();
+        let old_task = tokio::spawn({
+            let runtime = runtime.clone();
+            async move {
+                runtime
+                    .run_foreground(
+                        old_snapshot,
+                        ToolCallId::new("snapshot-old"),
+                        old_context.clone(),
+                        json!({}),
+                        old_cancellation,
+                    )
+                    .await
+            }
+        });
+        old_child.expect_delegate().await;
+
+        // Construct the replacement immutable generation while the first run
+        // is still parked at its native child. The run owns the old Arc and
+        // cannot observe this future-invocation program.
+        let new_program = snapshot_test_program("new", "new generation");
+        let new_catalog =
+            WorkflowCatalog::new([(*new_program).clone()], [new_program.id().clone()])
+                .expect("new workflow catalog");
+        let new_snapshot = Arc::clone(
+            new_catalog
+                .get(new_program.id())
+                .expect("new catalog snapshot"),
+        );
+        let new_context = workflow_test_context_for_generation(
+            &plane,
+            2,
+            "new generation instructions",
+            new_catalog.clone(),
+        );
+        assert_eq!(new_context.resources().revision().get(), 2);
+        assert_eq!(
+            new_context
+                .resources()
+                .workflows()
+                .get(new_program.id())
+                .expect("new workflow resource")
+                .description(),
+            "new generation"
+        );
+        old_child
+            .send_result(
+                crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+                Some(r#"{"summary":"old"}"#),
+            )
+            .await;
+        let old_result = old_task
+            .await
+            .expect("old workflow task")
+            .expect("old workflow success");
+        assert_eq!(old_result, json!({"old": {"summary": "old"}}));
+
+        let mut new_child = stage_workflow_child(&plane);
+        let (_, new_cancellation) = workflow_cancellation();
+        let new_task = tokio::spawn({
+            let runtime = runtime.clone();
+            async move {
+                runtime
+                    .run_foreground(
+                        new_snapshot,
+                        ToolCallId::new("snapshot-new"),
+                        new_context,
+                        json!({}),
+                        new_cancellation,
+                    )
+                    .await
+            }
+        });
+        new_child.expect_delegate().await;
+        new_child
+            .send_result(
+                crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+                Some(r#"{"summary":"new"}"#),
+            )
+            .await;
+        let new_result = new_task
+            .await
+            .expect("new workflow task")
+            .expect("new workflow success");
+        assert_eq!(new_result, json!({"new": {"summary": "new"}}));
+        let snapshots = plane.registry.all_snapshots();
+        assert!(plane.registry.unsettled_snapshot().is_empty());
+        assert_eq!(snapshots.len(), 2);
+        assert_ne!(
+            snapshots[0].definition_digest, snapshots[1].definition_digest,
+            "each child retains the named-profile definition from its generation"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn workflow_lifecycle_event_append_is_best_effort_observability() {
+        let plane = workflow_test_plane(1);
+        plane.store.arm_fail_event_times(1);
+        let runtime = workflow_runtime(&plane);
+        let context = workflow_test_context(&plane);
+        let (_, cancellation) = workflow_cancellation();
+        let result = runtime
+            .run_foreground(
+                return_only_program(),
+                ToolCallId::new("event-best-effort"),
+                context,
+                json!({"value": "kept"}),
+                cancellation,
+            )
+            .await
+            .expect("observability failure does not change workflow authority");
+        assert_eq!(result, json!({"value": "kept"}));
+        let events = plane
+            .store
+            .read_events(None, 32)
+            .expect("journal read")
+            .events;
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event.event, RuntimeEvent::WorkflowStarted { .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event.event, RuntimeEvent::WorkflowCompleted { .. }))
+        );
+    }
+
+    #[cfg(unix)]
+    fn workflow_runtime(plane: &WorkflowTestPlane) -> WorkflowRuntime {
+        WorkflowRuntime::new(plane.registry.clone(), plane.store.clone())
+    }
+
+    #[cfg(unix)]
+    fn workflow_cancellation() -> (CancellationSignal, ExecutionCancellation) {
+        let signal = CancellationSignal::new();
+        let cancellation =
+            ExecutionCancellation::detached(signal.clone(), CancellationReason::UserRequested);
+        (signal, cancellation)
+    }
+
     #[test]
     fn compiles_an_agent_branch_return_dag() {
         let output = schema(
@@ -2365,6 +3319,14 @@ mod tests {
         .expect("program");
         assert_eq!(program.entry(), "review");
         assert_eq!(program.nodes().len(), 2);
+    }
+
+    #[test]
+    fn workflow_output_is_not_a_valid_workflow_identity() {
+        assert_eq!(
+            WorkflowId::parse(WORKFLOW_OUTPUT_TOOL_NAME),
+            Err(WorkflowIdError::ReservedModelName)
+        );
     }
 
     #[test]
@@ -2714,6 +3676,228 @@ edges: []
             compile_test(optional_input),
             Err(WorkflowCompileError::InvalidReference(_))
         ));
+    }
+
+    fn single_agent_return_definition(
+        agent_output: Value,
+        workflow_output: Value,
+    ) -> WorkflowDefinition {
+        base_definition(
+            "review",
+            BTreeMap::from([
+                ("review".to_owned(), agent(agent_output)),
+                (
+                    "done".to_owned(),
+                    return_node(BTreeMap::from([(
+                        "result".to_owned(),
+                        WorkflowBinding {
+                            reference: "review.result".to_owned(),
+                        },
+                    )])),
+                ),
+            ]),
+            vec![edge("review", "done")],
+            workflow_output,
+        )
+    }
+
+    #[test]
+    fn workflow_v1_schema_language_rejects_unsupported_constraints_recursively() {
+        let root = |nested: Value| schema(json!({"result": nested}), &["result"]);
+        let unsupported = [
+            ("minLength", json!({"type": "string", "minLength": 5})),
+            ("minimum", json!({"type": "number", "minimum": 1})),
+            (
+                "minItems",
+                json!({
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1
+                }),
+            ),
+            (
+                "oneOf",
+                json!({
+                    "type": "string",
+                    "oneOf": [{"type": "string"}, {"type": "null"}]
+                }),
+            ),
+            (
+                "anyOf",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "nested": {
+                            "type": "string",
+                            "anyOf": [{"type": "string"}]
+                        }
+                    },
+                    "required": ["nested"]
+                }),
+            ),
+        ];
+        for (keyword, nested) in unsupported {
+            let error = compile_test(single_agent_return_definition(
+                root(nested.clone()),
+                root(json!({"type": "string"})),
+            ))
+            .expect_err("unsupported Workflow schema constraint");
+            assert!(
+                matches!(error, WorkflowCompileError::InvalidSchema(ref detail) if detail.contains(keyword)),
+                "{keyword} should be named in the schema rejection: {error:?}"
+            );
+        }
+
+        let mut input_constraint = single_agent_return_definition(
+            root(json!({"type": "string"})),
+            root(json!({"type": "string"})),
+        );
+        input_constraint.input = root(json!({"type": "string", "pattern": "x"}));
+        assert!(matches!(
+            compile_test(input_constraint),
+            Err(WorkflowCompileError::InvalidSchema(detail)) if detail.contains("pattern")
+        ));
+
+        let output_constraint = single_agent_return_definition(
+            root(json!({"type": "string"})),
+            root(json!({"type": "string", "maximum": 2})),
+        );
+        assert!(matches!(
+            compile_test(output_constraint),
+            Err(WorkflowCompileError::InvalidSchema(detail)) if detail.contains("maximum")
+        ));
+
+        let branch_output = root(json!({"type": "string", "maxLength": 8}));
+        let parallel = base_definition(
+            "fanout",
+            BTreeMap::from([
+                (
+                    "fanout".to_owned(),
+                    WorkflowNodeDefinition::Parallel {
+                        branches: BTreeMap::from([(
+                            "alpha".to_owned(),
+                            WorkflowParallelBranchDefinition {
+                                profile: profile("reviewer"),
+                                task: "Review alpha.".to_owned(),
+                                input: BTreeMap::new(),
+                                output: branch_output,
+                            },
+                        )]),
+                    },
+                ),
+                ("done".to_owned(), return_node(BTreeMap::new())),
+            ]),
+            vec![edge("fanout", "done")],
+            schema(json!({}), &[]),
+        );
+        assert!(matches!(
+            compile_test(parallel),
+            Err(WorkflowCompileError::InvalidSchema(detail)) if detail.contains("maxLength")
+        ));
+        assert!(
+            WorkflowOutputLatch::new(root(json!({
+                "type": "string",
+                "minLength": 1
+            })))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn workflow_schema_compilation_rejects_unsupported_narrowing_and_accepts_safe_subset_values() {
+        let plain_string = single_agent_return_definition(
+            schema(json!({"result": {"type": "string"}}), &["result"]),
+            schema(
+                json!({"result": {"type": "string", "minLength": 5}}),
+                &["result"],
+            ),
+        );
+        assert!(matches!(
+            compile_test(plain_string),
+            Err(WorkflowCompileError::InvalidSchema(detail)) if detail.contains("minLength")
+        ));
+
+        let plain_number = single_agent_return_definition(
+            schema(json!({"result": {"type": "number"}}), &["result"]),
+            schema(
+                json!({"result": {"type": "number", "minimum": 1}}),
+                &["result"],
+            ),
+        );
+        assert!(matches!(
+            compile_test(plain_number),
+            Err(WorkflowCompileError::InvalidSchema(detail)) if detail.contains("minimum")
+        ));
+
+        let plain_array = single_agent_return_definition(
+            schema(
+                json!({
+                    "result": {"type": "array", "items": {"type": "string"}}
+                }),
+                &["result"],
+            ),
+            schema(
+                json!({
+                    "result": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1
+                    }
+                }),
+                &["result"],
+            ),
+        );
+        assert!(matches!(
+            compile_test(plain_array),
+            Err(WorkflowCompileError::InvalidSchema(detail)) if detail.contains("minItems")
+        ));
+
+        let enum_producer = schema(
+            json!({"result": {"type": "string", "enum": ["a", "b"]}}),
+            &["result"],
+        );
+        let enum_consumer = schema(
+            json!({"result": {"type": "string", "enum": ["a"]}}),
+            &["result"],
+        );
+        assert!(matches!(
+            compile_test(single_agent_return_definition(enum_producer, enum_consumer)),
+            Err(WorkflowCompileError::IncompatibleReference(_))
+        ));
+
+        let const_producer = schema(
+            json!({"result": {"type": "string", "const": "a"}}),
+            &["result"],
+        );
+        let const_consumer = schema(
+            json!({"result": {"type": "string", "const": "b"}}),
+            &["result"],
+        );
+        assert!(matches!(
+            compile_test(single_agent_return_definition(
+                const_producer,
+                const_consumer
+            )),
+            Err(WorkflowCompileError::IncompatibleReference(_))
+        ));
+
+        let nested = json!({
+            "type": "object",
+            "properties": {
+                "mode": {"type": "string", "const": "ready"},
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["a", "b"]}
+                }
+            },
+            "required": ["mode", "tags"],
+            "additionalProperties": false
+        });
+        let safe = single_agent_return_definition(
+            schema(json!({"result": nested.clone()}), &["result"]),
+            schema(json!({"result": nested}), &["result"]),
+        );
+        compile_test(safe).expect("supported object/array/enum/const schemas are compatible");
     }
 
     #[test]

@@ -1767,7 +1767,11 @@ the launch-boundary policy inheritance.
   explicit entry, no dangling references, duplicate ids, cycles, unreachable
   nodes, unterminated paths, incomplete Branch ports, invalid schemas,
   use-before-definition values, path-dependent unavailable values, or
-  incompatible Return bindings. The only v1 nodes are Agent, Branch,
+  incompatible Return bindings. Workflow v1 schemas are a closed recursive
+  vocabulary of `type`, `properties`, `required`, boolean
+  `additionalProperties`, one-schema `items`, `enum`, and `const`; unsupported
+  constraints and unprovable compatibility are rejected for every input,
+  output, Agent, and Parallel schema. The only v1 nodes are Agent, Branch,
   Parallel, and Return.
 - **Workflow-local data is explicit and typed.** Only committed
   JSON-compatible values and explicit artifact/reference identities cross
@@ -1783,9 +1787,11 @@ the launch-boundary policy inheritance.
   failures in definition-key order. It never turns execution failure into a
   value.
 - **`workflow_output` is the only successful Workflow Agent terminal.** The
-  Agent Loop consumes the reserved protocol before ordinary Tool Plane
-  dispatch. Schema validation and the value commit are one exactly-once
-  transition; invalid output commits nothing and receives bounded feedback.
+  canonical Tool registry rejects the model-facing name for every ordinary
+  Tool origin, so a Workflow child receives exactly one reserved protocol
+  definition. The Agent Loop consumes it before ordinary Tool Plane dispatch.
+  Schema validation and the value commit are one exactly-once transition;
+  invalid output commits nothing and receives bounded feedback.
   Ordinary final Assistant text is not success. A mixed or duplicate
   terminal turn executes no ordinary side effect and commits no output.
 - **Cancellation/output has one winner.** The output latch and native
@@ -1806,16 +1812,17 @@ the launch-boundary policy inheritance.
   process containment, workspace/worktree acquisition, handoff, and physical
   settlement. It creates no child scheduler, permission system, TUI path,
   Tool Plane dispatch path, or second Agent Loop.
-- **Events are facts, not state authority.** Workflow lifecycle and join
-  facts use the existing Event Journal and deterministic ids/order, while
-  `WorkflowRun` owns dynamic values, progression, children, cancellation, and
-  terminal settlement. A successful child’s validated value and native
-  `SubagentTerminalSettled` fact commit as one durable compound transition;
-  non-success uses the dedicated terminal-settlement transition. Neither
-  creates a parent inbound delivery phase. A crash does not replay a
-  nonterminal WorkflowRun; durable Workflow resume is intentionally absent. A
-  future Canvas can edit the same canonical Definition without adding layout
-  metadata.
+- **Events are facts, not state authority.** Ordinary Workflow lifecycle and
+  join events use the existing Event Journal as explicitly best-effort
+  observability with deterministic ids/order; an append failure cannot change
+  control flow or terminal state. `WorkflowRun` owns dynamic values,
+  progression, children, cancellation, and terminal settlement. A successful
+  child’s validated value and native `SubagentTerminalSettled` fact commit as
+  one durable compound transition; non-success uses the dedicated
+  terminal-settlement transition. Neither creates a parent inbound delivery
+  phase. A crash does not replay a nonterminal WorkflowRun; durable Workflow
+  resume is intentionally absent. A future Canvas can edit the same canonical
+  Definition without adding layout metadata.
 
 ## Issue #96: Session/configuration and capability activation
 

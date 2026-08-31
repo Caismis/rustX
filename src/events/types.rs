@@ -50,6 +50,13 @@
 //! same reference-ordering rule. Persist-before-publish appends the committed
 //! envelope before observers or external projections see it.
 //!
+//! Workflow lifecycle and join events are an explicit exception at their
+//! producer boundary: they are best-effort observability facts. When their
+//! append succeeds they are ordinary durable Journal rows, but an append
+//! failure does not alter Workflow control flow or terminal authority. The
+//! successful Workflow child value and native terminal fact remain a required
+//! atomic durable transition.
+//!
 //! ## What the Event Journal deliberately does not carry
 //!
 //! High-frequency Assistant streaming content is **not** an Event Journal
@@ -501,9 +508,10 @@ pub enum RuntimeEvent {
     },
 
     /// A native `WorkflowRun` began executing one immutable `WorkflowProgram`.
-    /// This is an observability fact only; the in-memory `WorkflowRun` remains
-    /// the execution authority and unfinished runs are never reconstructed
-    /// from this event.
+    /// This is a best-effort observability fact only; the in-memory
+    /// `WorkflowRun` remains the execution authority and unfinished runs are
+    /// never reconstructed from this event. The successful child value and
+    /// native terminal pair use a separate durable transition.
     WorkflowStarted {
         /// The configured Workflow identity.
         workflow_id: WorkflowId,

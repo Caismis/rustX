@@ -1184,7 +1184,10 @@ terminal Journal fact or observer event.
 
 A Workflow Agent is an ordinary named Subagent child with one additional
 frozen terminal contract supplied by `WorkflowRuntime`: the Agent Loop adds
-the reserved `workflow_output` declaration to the child request. The model
+the reserved `workflow_output` declaration to the child request. The canonical
+Tool registry rejects that model-facing name for every ordinary Builtin,
+Python, or MCP capability, so the child request contains exactly one provider-
+visible definition with that name. The model
 may submit exactly one successful protocol call containing the
 schema-bound value. The Loop consumes that call before ordinary Tool Plane
 preflight or dispatch, so it allocates no ordinary `ToolExecutionId`, runs no

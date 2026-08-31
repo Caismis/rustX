@@ -1389,10 +1389,12 @@ parent-history injection.
 
 Reload builds the complete capability/subagent/Workflow candidate off-side
 and publishes it atomically; active runs retain their program snapshot.
-Workflow events use the existing journal as observability only. A successful
-Workflow child atomically records its validated value with the native child
-terminal fact, while failed/cancelled children use the dedicated terminal
-settlement transition; neither creates parent delivery. The durable SQLite
+Ordinary Workflow lifecycle and join events use the existing journal as
+explicitly best-effort observability only: an append failure does not alter
+Workflow control flow or terminal authority. A successful Workflow child
+atomically records its validated value with the native child terminal fact,
+while failed/cancelled children use the dedicated terminal settlement
+transition; neither creates parent delivery. The durable SQLite
 schema is intentionally bumped to version 19 so older runtimes cannot decode
 the new event vocabulary. There is no
 durable Workflow resume, crash replay, Workflow-local scheduler, Canvas, or
