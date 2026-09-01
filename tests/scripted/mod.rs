@@ -1,5 +1,16 @@
-//! The deterministic scripted regression suites, compiled into the crate's
-//! own test build.
+//! The deterministic scripted contract suites, compiled into the crate's own
+//! test build.
+//!
+//! # Semantic class
+//!
+//! Every suite here is a **deterministic contract test**: driven by scripted
+//! model adapters, scripted tools, manual clocks, channels, barriers,
+//! watches, and deterministic `#[cfg(test)]` hooks. No suite in this tree
+//! spawns or kills a real process, crosses a real stdio/IPC boundary, or
+//! depends on filesystem/process/platform semantics as the invariant under
+//! test. Suites whose invariant *is* such a boundary live in
+//! [`super::boundary_suites`] — even though they share the same lib test
+//! binary and the same `cfg(test)` seams.
 //!
 //! # Why these suites are in-crate
 //!
@@ -39,7 +50,9 @@
 //!
 //! The suites are written against the published `rustx::` paths, exactly as
 //! an external consumer would write them; only [`support`] reaches into the
-//! `cfg(test)`-only `crate::` seams.
+//! `cfg(test)`-only `crate::` seams. [`support`] is the shared in-crate
+//! fixture layer: it physically lives at `tests/support/` and is also used
+//! by the boundary conformance suites.
 //!
 //! # Domain ownership
 //!
@@ -56,13 +69,9 @@
 //! - [`capability`] — capability snapshots, quiescent commits,
 //!   materialization.
 //! - [`interaction`] — the durable interaction audit's runtime half.
-//! - [`background`] — the background registry and the `execution`
-//!   intrinsic control plane.
-//! - [`subagent`] — the child ownership boundary only; generic execution
-//!   semantics stay in [`agent`].
+//! - [`background`] — the background registry and the deterministic half of
+//!   the `execution` intrinsic control plane.
 //! - [`tools`] — native registry contracts and the conversation task list.
-//! - [`durable`] — real process-death conformance over the durable
-//!   authority.
 //!
 //! See `tests/README.md` for the full test architecture.
 
@@ -72,15 +81,16 @@
 #[path = "../common/mod.rs"]
 pub(crate) mod common;
 
-/// The fixtures that need a `cfg(test)`-only seam.
+/// The fixtures that need a `cfg(test)`-only seam. Shared with
+/// `boundary_suites` (which re-exports this module); physically at
+/// `tests/support/`.
+#[path = "../support/mod.rs"]
 pub(crate) mod support;
 
 mod agent;
 mod background;
 mod capability;
 mod context;
-mod durable;
 mod interaction;
 mod runtime_client;
-mod subagent;
 mod tools;

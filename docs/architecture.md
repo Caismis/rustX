@@ -1262,7 +1262,7 @@ is an explicit durable failure, not a fabricated event. See
 `docs/agent-loop.md` for the full boundary description.
 
 The Agent Loop test suites drive the loop with scripted fixture models and
-tools (`tests/scripted/support/fake.rs`), assert behavior through the
+tools (`tests/support/fake.rs`), assert behavior through the
 recorded `RuntimeEvent` trace and the platform `AttemptOutcome`, and
 reconstruct execution phases from traces and durable audits
 (`tests/common/mod.rs`). See `tests/README.md` for the full test
@@ -1285,16 +1285,20 @@ An external test binary can only reach `pub` items, so a seam usable from
 hides it from documentation without removing it. The suites that need a
 scripted `ModelAdapter` or a scripted `ContextSummarizer` therefore compile
 into the crate's own test build through `src/lib.rs`, with their sources
-under `tests/scripted/` so `src/` carries production code only. The
+under `tests/` so `src/` carries production code only. Compilation placement
+is not the semantic class: the deterministic contract suites live under
+`tests/scripted/` (`scripted_suites::`), while in-crate suites whose
+invariant is a real OS/process boundary live under `tests/boundary/`
+(`boundary_suites::`) and are selected by that prefix in CI. The
 integration targets under `tests/*/main.rs` use published API exclusively;
 fixtures shared by both live in `tests/common/`, and fixtures that need a
-seam live in `tests/scripted/support/`. `tests/README.md` documents the
-domain ownership and target topology.
+seam live in `tests/support/`. `tests/README.md` documents the
+domain ownership, the class/placement model, and the target topology.
 
 ### Three provider fixtures, three bounded purposes
 
 ```text
-tests/scripted/support/model.rs    a scripted injected `ModelAdapter` behind
+tests/support/model.rs             a scripted injected `ModelAdapter` behind
                                    a validated catalog binding. Internal
                                    state machines and units that need no
                                    network and no provider boundary.
@@ -3974,7 +3978,7 @@ means adding a sibling module there; no semantic module moves.
   operator logging to its output sink — failures are returned to the
   caller for a process-composition layer to report.
 - **Conformance is transport-independent.** The Issue #38 scenario suite
-  (`tests/scripted/support/runtime_client_conformance.rs`) drives one set of
+  (`tests/support/runtime_client_conformance.rs`) drives one set of
   semantic scenarios through a direct-endpoint driver and the stdio
   driver. Issue #36 adds a WebSocket driver and inherits every scenario
   unchanged; byte-level framing tests stay transport-specific.

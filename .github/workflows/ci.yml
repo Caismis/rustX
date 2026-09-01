@@ -35,14 +35,18 @@ jobs:
       - name: Check whitespace
         run: git diff --check
 
-  # Fast deterministic contracts: the crate's own test build (unit tests
-  # plus the scripted contract suites that need the cfg(test) seams) and
-  # the pure contract targets. Nothing here needs a real process, a
-  # provider, or a network beyond loopback fixture servers.
+  # Fast deterministic classes: source-module unit tests, the in-crate
+  # scripted contract suites, and the pure contract targets. No cross-module
+  # boundary conformance suite runs here: none needs a real process, a
+  # provider, or a network beyond loopback fixture servers. (Unit tests of
+  # boundary-owning modules still exercise their module's own primitive —
+  # the bash tool's unit tests spawn bash, the uv backend's run uv — which
+  # is what `--bins` is for: it builds the `bash-supervisor` binary those
+  # unit tests exec.)
   #
-  # `cargo build --bins` comes first because the lib test binary's scripted
-  # boundary regressions exec the `bash-supervisor`/`rustx` binaries by path
-  # and `cargo test --lib` does not build them.
+  # Semantic class and compilation placement are different axes: the lib
+  # test binary also contains the in-crate *boundary conformance* suites, so
+  # they are excluded by their stable name prefix.
   rust-contracts:
     name: Deterministic contracts (Linux)
     runs-on: ubuntu-latest
@@ -55,14 +59,14 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build the binaries the scripted boundary regressions exec
-        run: cargo build --bins
-
-      # Unit tests, bin unit tests, and the in-crate scripted contract
-      # suites (agent/, context/, runtime_client/, capability/, interaction/,
-      # background/, subagent/, tools/, durable/ process-death).
-      - name: Run the in-crate contract suites
-        run: cargo test --lib --bins --examples --all-features
+      # Source-module unit tests + bin unit tests + examples + the scripted
+      # contract suites (agent/, context/, runtime_client/, capability/,
+      # interaction/, background/, tools/). The in-crate boundary
+      # conformance suites are selected OUT by their `boundary_suites::`
+      # prefix; they run in the boundary jobs. `--bins` also makes the
+      # `bash-supervisor` binary available to the bash tool's unit tests.
+      - name: Run unit tests and the in-crate contract suites
+        run: cargo test --lib --bins --examples --all-features -- --skip boundary_suites::
 
       # contracts/: pure serialization/configuration fixture contracts.
       # provider/: adapter request serialization, stream parsing, error
@@ -108,7 +112,18 @@ jobs:
         working-directory: test-support/fake-provider
         run: uv run --frozen pytest
 
-      - name: Run the boundary targets
+      # The in-crate boundary conformance suites (real process death, real
+      # bash supervision, staged subagent children, real MCP stdio fixture
+      # children), selected by their stable name prefix. `cargo build --bins`
+      # comes first: the text_spill suite execs the `bash-supervisor` binary
+      # by path and `cargo test --lib` does not build it.
+      - name: Build the binaries the in-crate boundary suites exec
+        run: cargo build --bins
+
+      - name: Run the in-crate boundary suites
+        run: cargo test --lib --all-features -- boundary_suites::
+
+      - name: Run the external boundary targets
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: >-
@@ -122,14 +137,18 @@ jobs:
   # Platform coverage is intentional, not duplicated by habit. macOS runs
   # exactly the classes where OS semantics matter:
   #
-  # - the lib test binary, because the scripted boundary suites inside it
-  #   (process-death conformance with real SIGKILL, bash background
-  #   supervision, SQLite-backed execution fixtures) are platform-sensitive,
-  #   and the binary is one compilation unit — filtering by module prefix
-  #   would be brittle. Its pure-contract majority costs seconds.
-  # - durable (SQLite/filesystem), process (spawned binary, stdio/IPC),
-  #   subagent (child process/control socket), tools (shell, filesystem,
-  #   executable discovery), conformance (external emulator process).
+  # - from the lib test binary: the source-module unit tests plus the
+  #   in-crate boundary conformance suites (`boundary_suites::` — real
+  #   SIGKILL process death, bash supervision, staged subagent children,
+  #   MCP stdio fixture children). The deterministic scripted contract
+  #   suites are selected OUT by their `scripted_suites::` prefix: they are
+  #   pure state-machine/planning/manual-clock contracts whose invariants
+  #   carry no OS semantics, so rerunning them on macOS would be duplication
+  #   without platform value.
+  # - external targets: durable (SQLite/filesystem), process (spawned
+  #   binary, stdio/IPC), subagent (child process/control socket), tools
+  #   (shell, filesystem, executable discovery), conformance (external
+  #   emulator process).
   #
   # The contracts and provider targets assert deterministic JSON/SSE
   # translation with no process or filesystem semantics, so they are
@@ -159,12 +178,19 @@ jobs:
         working-directory: test-support/fake-provider
         run: uv sync --frozen
 
-      - name: Run the platform-sensitive suite
+      # Lib test binary: source-module unit tests (including the bash/uv
+      # boundary-owning modules, whose OS primitives are platform-sensitive)
+      # + the in-crate boundary conformance suites; the deterministic
+      # scripted contract suites are skipped by prefix. `--bins` builds the
+      # `bash-supervisor`/`rustx` binaries these tests exec.
+      - name: Run unit tests and the in-crate boundary suites
+        run: cargo test --lib --bins --all-features -- --skip scripted_suites::
+
+      - name: Run the external boundary targets
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: >-
           cargo test --all-features
-          --lib --bins
           --test durable
           --test process
           --test subagent

@@ -17,6 +17,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use super::super::super::support::fake::{
+    FakeModel, FakeStep, ScriptedCall, model_release, tool_call_events,
+};
+use super::super::super::support::model::{FixtureModel, ScriptedAdapterFactory, fixture_registry};
 use crate::conversation::SurfaceRevision;
 use crate::events::types::RuntimeEvent;
 use crate::local_runtime::composition::{
@@ -37,12 +41,6 @@ use crate::runtime::identity::{ConversationId, MessageId, ToolCallId, ToolId};
 use crate::runtime::interaction::InteractionResponse;
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::process_death;
-use crate::scripted_suites::support::fake::{
-    FakeModel, FakeStep, ScriptedCall, model_release, tool_call_events,
-};
-use crate::scripted_suites::support::model::{
-    FixtureModel, ScriptedAdapterFactory, fixture_registry,
-};
 use crate::tools::types::ToolCallStart;
 
 use super::ROOT_ENV;

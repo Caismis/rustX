@@ -16,6 +16,10 @@
 //! Byte-level framing, record limits, stdout purity, EOF/broken-pipe
 //! lifecycle, and backpressure are transport-specific and live in
 //! `stdio_transport.rs` (same directory) instead.
+//!
+//! The MCP capability projection spawns this binary as a real fixture child
+//! and is therefore boundary conformance: it lives in
+//! `boundary_suites::runtime_client::mcp_capability`.
 
 use super::super::support::runtime_client_conformance as conformance;
 
@@ -63,29 +67,3 @@ conformance_scenarios!(
     snapshot_and_cursor_linearize,
     resync_required_and_snapshot_repair,
 );
-
-/// The MCP capability projection, driven through both transports.
-///
-/// Written out rather than generated because the MCP fixture re-runs this
-/// binary as its own server child and therefore needs each test's exact
-/// name.
-#[cfg(all(unix, feature = "mcp-fixture"))]
-mod capability_projection_covers_mcp_origins {
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn direct() {
-        super::conformance::capability_projection_covers_mcp_origins(
-            &super::conformance::DirectDriverFactory,
-            "scripted_suites::runtime_client::conformance::capability_projection_covers_mcp_origins::direct",
-        )
-        .await;
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn stdio_jsonl() {
-        super::conformance::capability_projection_covers_mcp_origins(
-            &super::conformance::StdioJsonlDriverFactory,
-            "scripted_suites::runtime_client::conformance::capability_projection_covers_mcp_origins::stdio_jsonl",
-        )
-        .await;
-    }
-}

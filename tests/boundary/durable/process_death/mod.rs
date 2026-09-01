@@ -41,7 +41,7 @@
 //! the real Tool Plane, the real publication plane, and the real filesystem
 //! resource loader — while also using two `cfg(test)`-only seams: the
 //! process-death boundaries and the scripted provider adapter. Neither seam
-//! may exist in the published API (see `tests/scripted/mod.rs`), so the child
+//! may exist in the published API (see `tests/boundary/mod.rs`), so the child
 //! is this crate's own test binary re-executed in child mode, exactly like the
 //! M7 MCP stdio fixture in [`crate::tools::mcp::fixture`]. Everything below
 //! the seam — composition, admission, the Agent Loop, durability — is the same
@@ -70,7 +70,7 @@ pub(crate) const ROOT_ENV: &str = "RUSTX_FND06_ROOT";
 /// The libtest path of [`fnd06_child_runtime_process`], used to re-execute
 /// this binary in child mode.
 pub(crate) const CHILD_TEST: &str =
-    "scripted_suites::durable::process_death::fnd06_child_runtime_process";
+    "boundary_suites::durable::process_death::fnd06_child_runtime_process";
 
 /// The one child entry point of this suite.
 ///

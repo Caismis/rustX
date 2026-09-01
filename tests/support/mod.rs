@@ -18,6 +18,7 @@ use std::sync::{Arc, OnceLock};
 
 pub(crate) mod audit;
 pub(crate) mod context;
+pub(crate) mod execution;
 pub(crate) mod fake;
 pub(crate) mod model;
 pub(crate) mod runtime_client_conformance;

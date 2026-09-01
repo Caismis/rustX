@@ -5,9 +5,10 @@ their proof against **real process death**: a real child process running the
 real runtime stack over a real durable file, frozen at a named durable
 boundary, ended with an uncatchable `SIGKILL`, then reopened and recovered.
 
-The suite is `tests/scripted/durable/process_death/` (60 conformance tests
-plus the child entry point). Every row of the tables below names the test that
-proves it.
+The suite is `tests/boundary/durable/process_death/` (65 conformance tests
+plus the child entry point): in-crate **boundary conformance**, selected in CI
+by its `boundary_suites::durable::process_death` prefix. Every row of the
+tables below names the test that proves it.
 
 ## Why the child is the crate's own test binary
 
@@ -22,7 +23,7 @@ exist in the published API:
 - `SubagentRegistry::push_staged_override`, for the subagent rows only (see
   §8), which replaces the spawn and startup handshake and nothing else.
 
-`tests/scripted/mod.rs` already explains why such suites compile into the
+`tests/boundary/mod.rs` explains why such boundary suites compile into the
 crate's own test build. FND-06 follows the same rule and the same
 re-execute-the-test-binary pattern the M7 MCP stdio fixture uses: the parent
 spawns `current_exe()` selecting one child entry point. Everything below the
