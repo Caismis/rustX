@@ -17,6 +17,7 @@ mod common;
 
 mod capability_startup;
 mod composition;
+mod examples;
 mod runtime_config;
 mod runtime_process;
 mod sessions;
