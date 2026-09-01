@@ -207,8 +207,10 @@ canonical boundary in `src/tools/executor.rs`:
 
 - The validating [`ToolRegistry`] pairs one canonical `ToolDefinition` with
   one `Arc<dyn ToolExecutor>`; an executor object does not own its
-  definition, so one implementation may serve many registrations. Native,
-  MCP, and custom Python executors all enter through this same boundary.
+  definition, so one implementation may serve many registrations. Native and
+  MCP executors — custom Python tool packages included, since each package is
+  served as one synthesized MCP server (`python:<folder>`) — all enter
+  through this same boundary.
 - A `ToolExecutor` executes an already-resolved, already-validated
   `ToolInvocation` (call id, tool id, model-facing name, resolved
   foreground/background mode, and the stripped business arguments) inside a
@@ -254,8 +256,9 @@ its subordinate operation, and physically settles (for example Bash
 terminates its owned process group); the loop never drops a pending tool
 future and leaves external work running.
 
-The loop does not branch on `ToolOrigin`: MCP transport ownership,
-Python-version publication, and native process details terminate behind the
+The loop does not branch on `ToolOrigin`: MCP transport ownership (managed
+Python package preparation and server launch included) and native process
+details terminate behind the
 executor/subsystem boundary. Background dispatch clones the exact executor
 before ownership transfer, so later capability revisions cannot redirect an
 old execution to a current registry.
@@ -669,8 +672,9 @@ already canonical, with no interior mutability and no execution handle. An
 observer cannot re-run, rewrite, or replay the invocation.
 
 The model-facing tool **name** is deliberately not part of the observation.
-Capability recognition uses `ToolId` + `ToolOrigin` only, so an MCP or Python
-tool whose public name happens to be `read` can never be mistaken for the
+Capability recognition uses `ToolId` + `ToolOrigin` only, so an MCP tool (a
+managed Python package's tool
+included) whose public name happens to be `read` can never be mistaken for the
 native rustX Read capability (`tool-read`, `ToolOrigin::Builtin`). Making the
 name unavailable turns that discipline into a structural property rather than
 advice. Both `PreflightOutcome` variants carry the registry-resolved `ToolId`
@@ -1185,8 +1189,8 @@ terminal Journal fact or observer event.
 A Workflow Agent is an ordinary named Subagent child with one additional
 frozen terminal contract supplied by `WorkflowRuntime`: the Agent Loop adds
 the reserved `workflow_output` declaration to the child request. The canonical
-Tool registry rejects that model-facing name for every ordinary Builtin,
-Python, or MCP capability, so the child request contains exactly one provider-
+Tool registry rejects that model-facing name for every ordinary Builtin
+or MCP capability, so the child request contains exactly one provider-
 visible definition with that name. The model
 may submit exactly one successful protocol call containing the
 schema-bound value. The Loop consumes that call before ordinary Tool Plane
@@ -1435,8 +1439,9 @@ projection is filtered by Skill metadata such as
 `disable-model-invocation`, not by a downstream optional-Read predicate.
 
 For M7 the pinned snapshot also owns the exact composed registry. Its MCP
-executors retain their `McpServerRuntime`; its Python executors retain their
-published ToolVersion source and PythonToolEnvironment. `tools/list_changed`
+executors retain their `McpServerRuntime` — a managed Python tool's executor
+included, since its synthesized server is one such runtime.
+`tools/list_changed`
 only invalidates future preparation and never changes the tools visible to an
 active attempt.
 

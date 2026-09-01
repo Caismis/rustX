@@ -1267,7 +1267,7 @@ before restart.
 - **Optional-source tolerance never short-circuits admission.** Admission
   inspects *every* selector of a definition: an unavailable source is
   tolerated for that individual selector and validation continues, so an
-  offline MCP server listed before a misspelled Builtin/Python/MCP selector
+  offline MCP server listed before a misspelled Builtin/MCP selector
   cannot smuggle a statically invalid definition into a published
   generation. Invocation-time resolution stays fail-fast on the first
   unsatisfiable selector. Both callers share one per-selector,
@@ -1320,11 +1320,13 @@ before restart.
   snapshot, recovery diagnostic, and Runtime Client projection all carry both
   fields, so a later reload that redefines the same agent name can never
   reinterpret an already-running child by name alone.
-- **Builtin/MCP/Python selectors use one source-qualified semantic capability
+- **Builtin/MCP selectors use one source-qualified semantic capability
   model.** One selection vocabulary and one resolution core produce frozen
   identities that keep exact source identity: Builtin freezes its `ToolId`
   and definition; MCP freezes `server_id` plus the canonical name and exact
-  definition; Python freezes `ToolId` plus the exact `ToolVersionId`. There
+  definition. Managed Python tools are selected through the same `mcp`
+  namespace under their synthesized `python:<folder>` server identities —
+  there is no Python selector namespace. There
   is no parallel per-origin registry and no wildcard selector.
 - **MCP selections additionally freeze a deterministic cross-process
   identity.** `McpToolIdentity` (`MCP_TOOL_IDENTITY_V1`) is what a separate
@@ -1353,12 +1355,14 @@ before restart.
 - **The child materializes the frozen selected set and nothing else.**
   `prepare_selected_candidate` is a separate physical path, not the parent's
   discovery pipeline with a filter: no Skill discovery, no workspace Python
-  discovery, no "every configured server", and no activation-policy pass —
+  discovery (a selected Python tool arrives as a frozen `python:<folder>` MCP
+  binding), no "every configured server", and no activation-policy pass —
   the frozen set *is* the active set.
 - **Only the required sources cross the boundary at all.**
   `ResolvedSubagentMaterialization` carries exactly the MCP server bindings
-  the selection needs and a Python shared store root only when a Python tool
-  is selected. An agent that selects one GitHub MCP tool has no second
+  the selection needs — a selected Python tool contributes its synthesized
+  server's binding like any MCP server, and no Python store root crosses at
+  all. An agent that selects one GitHub MCP tool has no second
   binding to widen to, so "connect only the required servers" is structural
   rather than a rule to remember.
 - **A required externally sourced capability is never optional in a child.**
@@ -1394,25 +1398,33 @@ before restart.
 
 ### Python store ownership
 
-- **`tool-versions/` and `uv-cache/` are shared; every mutable rustX
-  execution root is process-private.** `tool-versions/` is immutable and
-  content-addressed with atomic publication and digest revalidation on every
-  read. `uv-cache/` is shared because uv supports concurrent readers/writers
-  against one cache and owns its own locking — a statement about uv, **not**
-  a claim that rustX's mutable environment-publication state is cross-process
-  safe.
-- **`python-tool-envs/`, `python-tool-bindings/`, and `python-invocations/`
-  stay private.** The build coalescing that publishes environments is one
-  `Arc<Mutex<..>>` inside one process, which is not cross-process
-  synchronization; #145 does not add a cross-process lock to pretend
-  otherwise. Two children therefore never share rustX process-local Python
-  environment or invocation-scratch ownership. The Issue #153 deterministic
-  waiter/owner contract is unchanged and remains process-local.
-- **A workspace is not `ToolVersion` authority after resolution.** The child
-  opens the exact frozen `ToolVersionId`, recomputes its canonical source
-  digest, and fails closed if it is missing or corrupted. A newer same-named
-  version published in the meantime can never substitute the frozen one, and
-  there is no "latest by name" fallback.
+- **The managed Python store is one runtime-private preparation store, rooted
+  at `<environment store>/python-tools`.** It holds `packages/<fingerprint>/`
+  prepared states — each an immutable `source/` copy, the rustX-generated
+  `pyproject.toml`/`uv.lock`, the `venv/`, and the rustX-owned
+  `manifest.json` — plus the shared `uv-cache/` scratch directory. There is
+  no shared/child-private split: a subagent child never opens this store.
+- **Publication is atomic and reads fail closed.** A build stages in a
+  sibling directory and publishes with one atomic `rename`; every read
+  revalidates the manifest, the recorded identity inputs (fingerprint,
+  FastMCP pin, OS/arch), the frozen source digest, and the venv interpreter,
+  and a state that does not verify is an explicit preparation failure —
+  never a silent reuse, never a repair, never a "latest by name" fallback.
+- **Build coalescing is process-local by construction.** The in-flight map
+  behind one store is one `Arc<Mutex<..>>` inside one process, which is not
+  cross-process synchronization; rustX does not add a cross-process lock to
+  pretend otherwise. `uv-cache/` is shared within the store because uv
+  supports concurrent readers/writers against one cache and owns its own
+  locking — a statement about uv, **not** a claim that rustX's publication
+  state is cross-process safe. The Issue #153 deterministic waiter/owner
+  contract is unchanged and remains process-local.
+- **A workspace is not prepared-state authority after resolution.** A
+  selected Python tool crosses to a child only as the frozen
+  `McpServerBinding` of its synthesized `python:<folder>` server; the child
+  reconnects that binding and re-verifies the tool's `McpToolIdentity`
+  exactly like any MCP server. A workspace edit or a removed prepared state
+  after the parent froze the binding fails child preparation closed instead
+  of substituting a different server.
 
 ### Skills and frozen resources
 
@@ -1435,19 +1447,21 @@ before restart.
   raced against two authorities that are futures rather than polled mutable
   state: the invoking attempt's cancellation and parent control-channel EOF.
   Parent EOF is observable *while* composition is in progress, so a child
-  never finishes a long MCP/uv preparation for a parent that is already gone.
+  never finishes a long MCP preparation for a parent that is already gone.
 - **There is exactly one cancellation authority of a pre-commit
   preparation.** The invoking attempt's `ToolExecutionContext` cancellation
   derives the one preparation `CancellationSignal` (parent side), the
   `ParentFrame::Cancel` consumed during composition cancels the child's one
   preparation signal, and parent control-channel EOF is itself a physical
   cancellation authority that fires the same signal. That authority reaches
-  every supervised process unit of preparation — the Python runtime-identity
-  probes, the uv lock/sync build (whose owner task captures the establishing
-  preparation's authority, so #153 waiters never cancel shared builds), and
-  the MCP connect owners — so cancellation is never inferred from a dropped
+  every supervised process unit of preparation — the MCP connect owners,
+  including a synthesized `python:<folder>` server's supervised stdio launch
+  — so cancellation is never inferred from a dropped
   future: the unit is physically cancelled and settled, and only then does
-  the preparation outcome arrive.
+  the preparation outcome arrive. (The parent runtime's candidate preparation
+  applies the same discipline to its Python runtime-identity probes and uv
+  lock/sync builds, whose owner task captures the establishing preparation's
+  authority, so #153 waiters never cancel shared builds.)
 - **Once pre-commit cancellation has won, `Ready` is impossible.** A Cancel
   event sets the child's preparation signal before any settlement decision;
   the guarded preparation path then refuses to publish a candidate from a
@@ -1475,8 +1489,8 @@ before restart.
   the durable ordinal and is not user-visible semantic state.
 - **All mutable child-local state is incarnation-private.**
   The exact physical incarnation path is the `SubagentChildSpec.runtime_root`
-  passed to the child and is the root for artifacts, diagnostics, Skill
-  copies, Python private environments, bindings, and invocation scratch. A
+  passed to the child and is the root for artifacts, diagnostics, and Skill
+  copies. A
   stale old incarnation may remain on disk while its process settles, but a
   later reuse of the same semantic `SubagentId` receives a different sibling
   path, so the old writer cannot contaminate the new child.
@@ -1497,9 +1511,10 @@ before restart.
   `START`, so the semantic command was never spawned; after the ACK the
   parent holds the exact `pgid` and owns catastrophic containment for it.
 - **One containment abstraction covers every supervised unit.** Native Bash,
-  MCP stdio, Python uv/environment materialization, Python Tool execution,
-  and Skill environment subprocesses all enter the same `AnchorGate`. There
-  is no `McpSubagentAnchor`, `PythonSubagentAnchor`, or `BashSubagentAnchor`.
+  MCP stdio (a synthesized Python tool server's venv interpreter included),
+  the parent runtime's Python uv builds, and Skill environment
+  subprocesses all enter the same `AnchorGate`. There
+  is no `McpSubagentAnchor` or `BashSubagentAnchor`.
 - **The top-level process is unchanged.** With no authority installed the
   gate resolves immediately, so the existing single-level lifecycle is
   bit-for-bit the same.
@@ -1603,9 +1618,8 @@ before restart.
   The acquired path is the child process cwd and the root for native
   filesystem tools, Bash, and workspace-relative process setup. It does not
   become authority for the already-frozen model, project-instruction chain,
-  Skills/resources, MCP definitions, Builtin definitions, or Python
-  `ToolVersionId`. The child performs no ancestor project-instruction
-  discovery, Skill discovery, same-name Python-tool discovery, or arbitrary
+  Skills/resources, MCP definitions, or Builtin definitions. The child performs no ancestor project-instruction
+  discovery, Skill discovery, Python-package discovery, or arbitrary
   configuration rediscovery from the worktree.
 - **The default dirty-parent path is intentionally isolated.** A dirty parent
   is allowed when `require_clean_parent` is false; the child sees the
@@ -1680,7 +1694,7 @@ the launch-boundary policy inheritance.
 - **A named child is an ordinary conversation runtime.** Named-definition
   resolution freezes the full `ResolvedSubagentSpec` before launch, and the
   child-owned preparation/materialization boundary supplies the exact
-  Builtin, MCP, Python, and Skill identities. The named subagent then runs
+  Builtin, MCP (managed Python packages included), and Skill identities. The named subagent then runs
   retry, timeout, tool-cancellation, terminal publication, and unresolved
   output carryover in its own ordinary `ConversationRuntime`/Agent Loop.
   Retry state, publication audit, and pending Carryover are conversation-
@@ -1885,7 +1899,8 @@ the launch-boundary policy inheritance.
   is persisted and wins when that Session resumes. Clone/fork/tree creation
   copies only Session-local state; it never copies runtime capability or
   environment settings.
-- **Available and active Tools are different facts.** Native, MCP, Python,
+- **Available and active Tools are different facts.** Native, MCP (managed
+  Python packages included),
   and future source registrations form the runtime-owned available catalog
   after hard eligibility. Startup activation then derives the immutable active
   `ToolRegistry`. Inactive definitions remain available for truthful
@@ -1983,7 +1998,8 @@ hold attempt leases and never block a capability commit.
   Skill change yields a new Skill version and a new capability revision
   without changing environment identities when dependency inputs are
   unchanged.
-- Skill, native-tool, MCP, and Python capability mutations in a live product
+- Skill, native-tool, and MCP capability mutations (a Python tool package's
+  included, since it is an MCP source) in a live product
   runtime occur through its explicit resource reload and only while the
   conversation runtime is quiescent in the M6 sense. After the runtime claim,
   the ordinary `CapabilityCoordinator::commit` API is rejected; only the
@@ -2049,7 +2065,8 @@ A package rewrite is observed only at the next quiescent re-discovery.
 
 - One immutable `ToolRegistry` belongs to one `CapabilitySnapshot`. Candidate
   preparation composes a new registry from the deterministic base/native
-  registry, sorted MCP catalogs, and sorted Python definitions; active
+  registry and the sorted MCP catalogs (the synthesized `python:<folder>`
+  servers are entries of the same sorted server map); active
   registries are never mutated in place. Global model-facing name collisions
   reject the whole candidate.
 - `ToolOrigin` identifies provenance only. Execution ownership and batch
@@ -2118,71 +2135,49 @@ A package rewrite is observed only at the next quiescent re-discovery.
   cancellation is advisory: rustX cannot prove an arbitrary server stopped
   all physical side effects.
 - Python candidate preparation snapshots every package-owned byte before
-  commit, publishes the snapshot immutably, and binds the executor to that
-  `ToolVersionId`. Background calls never resolve source through the current
-  capability pointer and never execute mutable workspace source.
-- `ToolVersionId` and `PythonToolEnvironmentDigest` are distinct. Published
-  environments have an exact ready manifest and are never mutated or synced
-  in place; same-digest in-flight builds coalesce behind store-owned work
-  (one store-owned logical build owns a digest until terminal publication;
-  candidate callers only wait, dropping a waiter never releases ownership,
-  and owner failure always publishes a terminal error and removes the
-  in-flight entry). The environment is a dependency-isolation boundary, not
-  a security sandbox. Deterministic GC metadata exists; no collector or
-  retention task exists in M7.
-- **Python ToolVersion publication.** The published shape is
-  `tool-versions/<ToolVersionId>/source/` plus
-  `RUSTX_TOOL_VERSION.json`; every uv preparation command uses exactly
-  `.../source/` as its root. On reuse the published `source/` content
-  digest is recomputed and compared against the claimed identity — a marker
-  string alone never validates a ToolVersion — and a corrupt publication
-  fails preparation explicitly; a valid published ToolVersion is never
-  mutated.
-- **Python ToolVersion execution immutability.** The published `source/`
-  directory is the immutable canonical authority and is never an execution
-  working directory. One `CapabilityCoordinator` lazily owns one stable
-  `PythonToolStore` identity for its lifetime — lazy because Python is
-  optional (a failed initialization is retryable and never poisons the
-  slot), stable because the store is the single process-local coordination
-  domain for environment/build coalescing and invocation allocation. Each
-  invocation claims a unique execution bundle
-  `python-invocations/execution-N/` from the store's monotonic allocator —
-  strictly increasing, never reused, exhaustion fails the invocation
-  explicitly — and materializes three separated ownership domains:
-  `execution-N/source/` (the writable copy of the canonical ToolVersion
-  bytes, module root and cwd), `execution-N/harness.py` (runtime-owned
-  harness bytes, written per invocation so no shared writable executable
-  path exists across capability generations), and `execution-N/input.json`
-  (runtime-owned arguments). Package-owned files named `input.json` or
-  `harness.py` are canonical content inside `source/` and are never
-  overwritten. The bundle is removed only by its own invocation at
-  settlement; a live invocation's bundle is never reused or deleted by
-  another invocation or a later capability revision (a detached background
-  execution holds its executor across refresh safely). An already-existing
-  `execution-N/` is stale scratch from a previous process lifetime: the
-  allocator skips it and it is never deleted or reused — there is no
-  scratch GC. Ordinary tool writes — relative paths or
-  `__file__` — land in the invocation-private `source/` copy, so the
-  canonical bytes cannot drift across executions or restarts (the harness
-  additionally disables bytecode caches so imports never write
-  `__pycache__` into any runtime-owned directory).
-- **Environment identity input lock.** A published Python environment is
-  reusable only when its ready marker matches every deterministic input that
-  derives the identity: format domain, OS, architecture, digest, lock
-  digest, Python runtime identity, and uv identity. Each
-  `ToolVersion -> environment digest` binding is recorded deterministically
-  outside the environment's immutable dependency identity, so a reusable
-  environment never claims one ToolVersion as complete GC reference
-  metadata.
+  commit, computes one fingerprint over those bytes (including
+  `requirements.txt`), the probed interpreter and uv identities, the
+  rustX-pinned FastMCP build, and OS/arch, and binds the resulting prepared
+  state to one synthesized MCP server identity (`python:<folder>`). Calls
+  never resolve source through the current
+  capability pointer and never execute mutable workspace source: the server
+  runs the frozen `source/` copy of its state directory.
+- **Python prepared-state publication.** The published shape is
+  `packages/<fingerprint>/` — the frozen `source/` copy, the rustX-generated
+  `pyproject.toml` and `uv.lock`, the `venv/`, and the rustX-owned
+  `manifest.json` — staged in a sibling directory and published with one
+  atomic rename. On reuse the manifest, the recorded identity inputs, the
+  frozen source digest, and the venv interpreter all re-verify — a directory
+  name alone never validates a state — and a corrupt publication
+  fails preparation explicitly; a valid published state is never
+  mutated. A changed fingerprint prepares a new state directory and the old
+  one is left untouched; no collector or retention task exists.
+- **Python prepared-state ownership.** One `CapabilityCoordinator` lazily
+  owns one stable `PythonToolStore` identity for its lifetime — lazy because
+  Python is optional (a failed initialization is retryable and never poisons
+  the slot), stable because the store is the single process-local
+  coordination domain for build coalescing: one store-owned logical build
+  owns a fingerprint until terminal publication, candidate callers only wait,
+  dropping a waiter never releases ownership, and owner failure always
+  publishes a terminal error and removes the in-flight entry. The prepared
+  environment is a dependency-isolation boundary, not a security sandbox.
+- **Environment identity input lock.** A published state is reusable only
+  when its manifest matches every deterministic input that derives the
+  fingerprint: source digest, FastMCP pin, probed Python runtime identity,
+  probed uv identity, OS, and architecture.
 - **Runtime selection pinning.** The interpreter whose identity enters the
-  environment digest is the exact executable passed to uv (`UV_PYTHON`), so
+  fingerprint is the exact executable passed to uv (`UV_PYTHON`), so
   project-local interpreter selection or uv heuristics can never silently
-  choose another Python while the digest claims the probed identity.
+  choose another Python while the fingerprint claims the probed identity.
   Managed Python downloads stay disabled (`UV_NO_PYTHON_DOWNLOADS=1`,
-  `UV_PYTHON_DOWNLOADS=0`). Every M7 preparation command (runtime identity
-  probes, `uv lock --check`, `uv sync`, post-materialization validation) has
+  `UV_PYTHON_DOWNLOADS=0`). Every preparation command (runtime identity
+  probes, `uv lock`, `uv sync`) has
   a finite deadline; a timeout is an explicit preparation failure that
-  leaves the active capability unchanged, and no retries are added.
+  leaves the active capability unchanged, and no retries are added. The
+  synthesized server launch never re-resolves dependencies: it names the
+  prepared venv interpreter directly (`--skip-env`, never `uv run`), so no uv
+  command and no per-call process re-entry happens after preparation, and
+  stdout stays reserved for the MCP wire.
 - **Canonical progress finite-value invariant.** Every origin's progress
   passes through the shared normalization boundary (`bound_tool_progress`),
   which drops non-finite `completed`/`total` values (`NaN`, `±inf`) so a
@@ -2431,8 +2426,10 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   schema constraints belong to the input contract; workspace permission,
   filesystem existence, pattern compilation, and process lifecycle rules
   remain execution concerns. A rejected input is a normal failed result and
-  never reaches the tool's work. MCP and Python schemas keep arriving
-  externally; all sources converge on the same `ToolDefinition`.
+  never reaches the tool's work. MCP schemas keep arriving
+  externally (a managed Python package's schemas arrive the same way,
+  generated by FastMCP from the server's decorated functions); all sources
+  converge on the same `ToolDefinition`.
 - Tool outputs stay untyped: `ToolExecutionResult` is the only tool result
   contract, so no tool-specific output type or generic result parameter
   ever reaches the agent loop.
@@ -2651,7 +2648,8 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   registry's authoritative read model at response time; it is not a
   second lifecycle record or authority.
 - Model-facing output is bounded by named limits. Text overflow is not an
-  artifact (Issue #86): native Bash, MCP, and Python logical results all
+  artifact (Issue #86): native Bash and MCP logical results (a managed
+  Python tool's results included — Python tools are MCP tools) all
   cross the shared Tool Plane normalization seam in `tools/output.rs`. The
   managed tool-output store owns two deliberately distinct lifecycles over
   one authorized read-only root. `FOREGROUND_TOOL_RESULT_PREVIEW_BYTES`
@@ -2681,14 +2679,14 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   failure policy or truncate independently. The bounded preview is the
   canonical replayable record and the model can Read/Grep the complete
   auxiliary path explicitly.
-  MCP content blocks are budgeted collectively, and Python's logical return
-  transport is streamed so UTF-8/JSON framing is never delegated to bounded
+  MCP content blocks — a managed Python tool's results included — are
+  budgeted collectively, so UTF-8/JSON framing is never delegated to bounded
   subprocess stdout capture.
   A **background** execution instead owns one live-output channel from the
   dispatch commit point on (`tool-output/tasks/exec_N.output`): the file is
   allocated before the accepted result advertises its absolute path
   (`output_path`) with Read/Grep continuation guidance. Bash appends from the
-  first byte; MCP and Python write their final complete deterministic result
+  first byte; MCP writes its final complete deterministic result
   there when it becomes available. Accepted and terminal messages reuse the
   exact same path, no secondary `results/result_N.txt` is created, and the
   terminal canonical projection remains bounded while structurally retaining
@@ -2699,7 +2697,7 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   allocation precedes accepted publication; the origin owns its sink until
   its executor future returns; the runner invokes terminal settlement only
   after that return; and registry terminal publication is the structural
-  settlement winner. No MCP/Python writer remains after settlement can win,
+  settlement winner. No MCP writer remains after settlement can win,
   so cancellation cannot be followed by a late result write that mutates
   settled output/result state. The complete managed payload remains auxiliary
   output only; canonical history contains the bounded projection and typed
@@ -2743,7 +2741,7 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   `ToolResultContent::Json` is arbitrary tool-owned structured data:
   rustX reserves NO ordinary JSON field names, and no generic runtime
   code may infer semantics from properties that happen to be named
-  `full_output`, `partial_output`, or `note` — an MCP, Python, or future
+  `full_output`, `partial_output`, or `note` — an MCP or future
   plugin tool may legally return such properties as ordinary business
   data, and they project verbatim. Managed textual-output continuation
   (the absolute read-only locator, the typed complete-vs-partial state,
@@ -3468,8 +3466,10 @@ Core invariant:
   execution handle, so an observer cannot re-run, rewrite, or replay the
   invocation.
 - The model-facing tool **name** is not part of the observation. Capability
-  recognition uses `ToolId` + `ToolOrigin` only, so an MCP or Python tool
-  whose public name is `read` can never be classified as the native rustX
+  recognition uses `ToolId` + `ToolOrigin` only, so an MCP tool (a managed
+  Python package's tool
+  included) whose public name is `read` can never be classified as the native
+  rustX
   Read capability. Both `PreflightOutcome` variants carry the
   registry-resolved `ToolId` and `ToolOrigin` from the same resolved
   `ToolDefinition`, so no second stored identity can disagree with the
@@ -4656,7 +4656,8 @@ runtime supervision/quiescence contract.
 
 - a committed background execution survives its starting *attempt*, not the
   *process*. Recovery never assumes the old task/process is alive and never
-  relaunches a shell command, MCP call, or Python tool. A durably owned,
+  relaunches a shell command or MCP call (a managed Python tool's call
+  included). A durably owned,
   unpublished execution is terminalized as
   `BackgroundTerminalState::Interrupted` (never `Failed`), and its
   model-visible notification is published through the one Pending Inbound
@@ -5002,7 +5003,8 @@ contracts and provider protocols. These invariants are frozen by M2:
   Client, and no renderer receives the lifecycle it would need in order to
   contradict one. Status is never read out of output text, never inferred
   from an absent result, and never inferred from a missing output. Every
-  tool — native, MCP, Python, or unknown — has a generic fallback renderer,
+  tool — native, MCP (managed Python included), or unknown — has a generic
+  fallback renderer,
   and a specialized renderer that does not recognise a shape degrades to it.
 
 - **One tool call is one visual entity.** The assistant `tool_call` block,
@@ -5157,7 +5159,7 @@ contracts and provider protocols. These invariants are frozen by M2:
 
 - **No bypass of rustX.** There is no client-side shell, no filesystem read
   that injects content into a prompt, no client-side Skill execution, no
-  client-side MCP or Python tool execution, no provider HTTP call, no
+  client-side MCP tool execution (managed Python packages included), no provider HTTP call, no
   credential resolution, no context compaction, no mailbox drain inference,
   and no Agent Status synthesis.
 
@@ -5171,7 +5173,7 @@ contracts and provider protocols. These invariants are frozen by M2:
 
 Cancellation is hierarchical.
 
-Attempt cancellation propagates to model requests, MCP calls, Python tools, and foreground Bash processes owned by the attempt.
+Attempt cancellation propagates to model requests, MCP calls (managed Python tool calls included), and foreground Bash processes owned by the attempt.
 
 Conversation-owned background Bash processes are not cancelled merely because one attempt ends or is cancelled. They terminate when explicitly stopped or when the conversation runtime is stopped or removed.
 

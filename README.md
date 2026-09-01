@@ -49,8 +49,8 @@ value it configures. Nothing else is relaxed — unknown fields, unquoted keys,
 and single-quoted strings still fail startup loudly.
 
 The copyable example requires the Rust toolchain, Node LTS with nvm and
-Corepack/pnpm, and `uv` on `PATH` because its workspace includes a discovered
-custom Python tool.
+Corepack/pnpm, and `uv` plus a `python3` interpreter on `PATH` because its
+workspace includes a discovered custom Python tool package.
 
 Set the credential referenced by the example catalog, then build the runtime
 and install the locked TUI dependencies:

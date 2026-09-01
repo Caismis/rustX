@@ -413,38 +413,47 @@ Implement:
 
 Implement:
 
-- Immutable one-level packages at `<workspace>/.agents/tools/`
-- Content-derived `ToolVersionId` plus separate
-  `PythonToolEnvironmentDigest`
-- Immutable source publication (`tool-versions/<id>/source/` + version
-  marker; reuse validates the published source content digest against the
-  claimed identity), checked `uv.lock`, and store-owned coalesced
-  frozen `uv` materialization with ready metadata that locks every
-  deterministic identity input; per-ToolVersion environment bindings are
-  recorded outside the environment's immutable dependency identity
+- Managed FastMCP packages at `<workspace>/.agents/tools/<package>/`: one
+  folder is one package, contracted as `server.py` (the FastMCP server,
+  launched through the fixed entrypoint `server.py:mcp`) plus a required
+  `requirements.txt`; a package may expose several `@mcp.tool` functions, and
+  declaring `fastmcp` itself is rejected because the managed FastMCP build is
+  rustX-pinned
+- One preparation fingerprint per package over every package byte
+  (`requirements.txt` included), the probed interpreter and uv identities,
+  the FastMCP pin, and OS/arch; one immutable prepared state per fingerprint
+  under `<environment-store>/python-tools/packages/<fingerprint>/` (frozen
+  source copy, rustX-generated `pyproject.toml`/`uv.lock`, `venv/`,
+  `manifest.json`), staged and published with one atomic rename, with
+  fail-closed reuse validation and store-owned coalesced `uv`
+  materialization
 - The exact probed interpreter is pinned to uv (`UV_PYTHON`), managed Python
   downloads stay disabled, and every preparation command has a finite
   deadline (timeout = explicit preparation failure)
-- Canonical schema preflight, private-file invocation harness, supervised
-  process execution, and bounded JSON result normalization
-- The M6 environment build-owner coordination pattern for same-digest
-  builds: one store-owned logical owner per digest until terminal
+- Each prepared package synthesizes one generic MCP server binding
+  (`python:<folder>`: a stdio launch of the prepared venv interpreter running
+  the FastMCP CLI against the frozen source); connect, `tools/list`,
+  `tools/call`, epochs, availability, commit, leases, and the subagent frozen
+  crossing are the unmodified generic MCP machinery — no per-call uv or
+  process spawn
+- The M6 environment build-owner coordination pattern for same-fingerprint
+  builds: one store-owned logical owner per fingerprint until terminal
   publication, no-lost-wakeup waiters, RAII owner guard, pointer-identity
   in-flight removal, and no overlap between retry and a previous owner
 
 Exit criteria:
 
-- MCP and Python tools are indistinguishable from native tools to the agent kernel.
+- MCP and Python tools are indistinguishable from native tools to the agent kernel — a Python package is one MCP server to the kernel.
 - A capability revision owns one immutable composed registry. Background
-  executions retain exact MCP runtimes or Python source/environment handles
-  across later revisions.
-- M7 raises rustX's MSRV to Rust 1.88 for the current rmcp release. Python
-  environments isolate dependencies but are not security sandboxes; metadata
-  for future GC is written, but no GC runs.
+  executions retain exact MCP runtimes (a Python tool's synthesized server
+  runtime included) across later revisions.
+- M7 raises rustX's MSRV to Rust 1.88 for the current rmcp release. Prepared Python
+  environments isolate dependencies but are not security sandboxes; no GC
+  runs.
 - Issue #10 acceptance criteria are complete: a fully local/offline fixture
-  proves that two tools depending on conflicting versions of the same local
-  package materialize distinct environments, both execute, and each observes
-  its own version with no public PyPI access; coordinator-level MCP
+  proves that two packages depending on conflicting versions of the same
+  local dependency materialize distinct environments, both execute, and each
+  observes its own version with no public PyPI access; coordinator-level MCP
   list-change race regressions prove the Busy/Stale/commit interleavings;
   stdio and Streamable HTTP cancellation prove server-side observation of
   the cancellation notification; and an official-rmcp paginated fixture
