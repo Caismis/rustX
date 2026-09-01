@@ -1,172 +1,107 @@
-//! Immutable custom Python `ToolVersion`s and their canonical executor.
+//! Managed Python tool packages (Issue #174).
 //!
-//! A package is discovered from exactly one Workspace-local root. Discovery
-//! reads every package-owned byte before capability commit, publishes that
-//! finite snapshot into the private runtime store, and only then constructs
-//! the executor. Workspace edits therefore cannot change an old foreground or
-//! detached background call.
+//! A Python tool package is a workspace folder that compiles into the
+//! generic MCP runtime: it is **not** a second runtime protocol.
+//!
+//! ```text
+//! <workspace>/.agents/tools/<package>/     one folder = one package
+//! ├── server.py                            the `FastMCP` server (entrypoint
+//! │                                        is fixed: server.py:mcp)
+//! ├── requirements.txt                     REQUIRED, even when empty
+//! └── *.py                                 supporting modules
+//! ```
+//!
+//! rustX discovers each package, freezes its bytes into a fingerprint,
+//! prepares an isolated uv environment in the runtime-private store, and
+//! synthesizes one [`McpServerBinding`] per package. From there everything
+//! — connect, `tools/list`, `tools/call`, epochs, availability, commit,
+//! leases, subagent crossing — is the generic MCP machinery of
+//! [`crate::tools::mcp`]; this module ends at the launch specification.
 //!
 //! # Store shape and ownership
 //!
 //! ```text
-//! <store-root>/
-//! ├── tool-versions/<ToolVersionId>/
-//! │   ├── source/                     # canonical ToolVersion source (immutable)
-//! │   │   ├── TOOL.toml
-//! │   │   ├── input.schema.json
-//! │   │   ├── pyproject.toml
-//! │   │   ├── uv.lock
-//! │   │   └── ...                     # may include package-owned input.json/harness.py
-//! │   └── RUSTX_TOOL_VERSION.json     # format + claimed ToolVersionId
-//! ├── python-tool-envs/<PythonToolEnvironmentDigest>/
-//! │   └── RUSTX_ENV_MANIFEST.json     # exact deterministic input lock
-//! ├── python-tool-bindings/<ToolVersionId>/<PythonToolEnvironmentDigest>.json
-//! ├── uv-cache/                       # store-private uv cache (scratch state)
-//! └── python-invocations/execution-N/ # one invocation-private execution bundle
-//!     ├── source/                     # writable copy of the canonical source
-//!     ├── harness.py                  # runtime-owned harness bytes
-//!     ├── input.json                  # runtime-owned invocation arguments
-//!     ├── status.json                 # runtime-owned small completion protocol
-//!     └── result.json                 # runtime-owned logical return transport
+//! <store-root>/                                     (under the runtime's
+//! ├── packages/<fingerprint>/                        environment store)
+//! │   ├── source/                    # immutable frozen package source copy
+//! │   ├── pyproject.toml             # rustX-generated project stub
+//! │   ├── uv.lock                    # rustX-generated lock
+//! │   ├── venv/                      # UV_PROJECT_ENVIRONMENT target
+//! │   └── manifest.json              # rustX frozen manifest
+//! └── uv-cache/                      # shared uv cache (scratch state)
 //! ```
 //!
-//! On reuse a published `ToolVersion` is validated by recomputing the
-//! deterministic content digest over its `source/` files and comparing it
-//! against the claimed identity — never by trusting a marker string alone.
-//! A corrupt published `ToolVersion` fails preparation explicitly and is
-//! never mutated. There is exactly one identity authority:
-//! `ToolVersionId` is derived once from the canonical source bytes
-//! (sorted package-relative paths, lengths, and raw bytes). The published
-//! `source/` directory is the **immutable canonical authority**: no
-//! execution ever uses it as a working directory. Each invocation claims a
-//! unique execution bundle from the store's monotonic allocation domain —
-//! the store is a coordinator-lifetime-stable identity, so two executor
-//! generations can never collide — and materializes its own `source/`
-//! copy, `harness.py`, and `input.json` inside it. The three ownership
-//! domains never share a namespace: runtime-owned invocation files live
-//! outside `source/`, so package-owned files named `input.json` or
-//! `harness.py` are copied and preserved like any other canonical byte.
-//! The Python process runs with the bundle's `source/` as module root and
-//! working directory, and the bundle is removed when that invocation — and
-//! only that invocation — settles; a bundle left behind by a crash is
-//! stale scratch that is never reused or deleted (no GC exists). The
-//! harness additionally disables bytecode caches so imports never write
-//! `__pycache__` into any runtime-owned directory. Ordinary
-//! tool writes — relative paths or `__file__` — therefore land in the
-//! invocation-private `source/` copy and can never drift the canonical
-//! bytes, so the persisted representation always validates identically
-//! across executions and restarts. The environment marker records
-//! every deterministic input that derives the environment identity
-//! (format, OS, architecture, digest, lock digest, Python runtime
-//! identity, uv identity); each `ToolVersion -> environment digest`
-//! binding is recorded deterministically outside the environment's
-//! immutable dependency identity, so a reusable environment never claims
-//! one `ToolVersion` as complete GC reference metadata. No GC exists in
-//! M7.
+//! The fingerprint covers exactly the material inputs: every package source
+//! file (path and bytes, sorted — this includes `requirements.txt`), the
+//! probed Python interpreter identity (path + version), the probed uv
+//! identity (path + version), [`MANAGED_FASTMCP_VERSION`], and OS/arch. No
+//! timestamps. The same fingerprint reuses the prepared state after
+//! validating the manifest and re-hashing the frozen source; a corrupt
+//! state fails closed and is never mutated. A changed fingerprint prepares
+//! a new state directory; the old one is left untouched (no GC exists).
+//!
+//! The managed `FastMCP` build is pinned to exactly one version
+//! ([`MANAGED_FASTMCP_VERSION`]) and a package may never declare `fastmcp`
+//! itself: the dependency identity of the MCP wire implementation is
+//! rustX-owned, so a workspace edit cannot silently change the protocol
+//! peer.
 
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
-use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
-use crate::runtime::identity::{PythonToolEnvironmentDigest, ToolVersionId};
+use crate::runtime::identity::McpServerId;
 use crate::runtime::process_runner::{
-    CapturedProcessResult, ProcessOutcomeIntent, RunnerBackedProcessRunner, SupervisedCommandSpec,
-    SupervisedProcessRunner,
+    ProcessOutcomeIntent, RunnerBackedProcessRunner, SupervisedCommandSpec, SupervisedProcessRunner,
 };
 use crate::skills::environments::{ENVIRONMENT_COMMAND_TIMEOUT, RUNTIME_PROBE_TIMEOUT};
-use crate::tools::environment::{ToolEnvironment, ToolEnvironmentOverlay};
-use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
-use crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES;
-use crate::tools::output::{ToolOutputCapture, continuation_for_capture, truncation_for_capture};
-use crate::tools::types::{
-    ManagedOutputContinuation, ToolApprovalPolicy, ToolCancellationPhase, ToolConcurrencyPolicy,
-    ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
-    ToolInvocationPolicy, ToolResultContent,
-};
+use crate::tools::environment::ToolEnvironment;
+use crate::tools::mcp::{McpServerBinding, McpTransportConfig};
+use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::workspace::Workspace;
+
+/// The exact `FastMCP` build every managed Python package is prepared with.
+///
+/// Pinned exactly: the `FastMCP` SDK is rustX's MCP protocol peer, so its
+/// identity is a fingerprint input, never a workspace-declared dependency.
+/// Verified against the rustX MCP client (rmcp) before pinning: a real
+/// `FastMCP` 3.4.7 stdio server negotiates the `2025-11-25` revision with the
+/// legacy `initialize` handshake and serves `tools/list`/`tools/call`.
+pub const MANAGED_FASTMCP_VERSION: &str = "3.4.7";
 
 /// The fixed custom tool root below a Workspace.
 pub const TOOLS_DIRECTORY: &str = ".agents";
+/// The fixed package container below [`TOOLS_DIRECTORY`].
 pub const TOOLS_ROOT: &str = "tools";
-pub const TOOL_MANIFEST_FILE: &str = "TOOL.toml";
-pub const INPUT_SCHEMA_FILE: &str = "input.schema.json";
-pub const PYPROJECT_FILE: &str = "pyproject.toml";
-pub const UV_LOCK_FILE: &str = "uv.lock";
-const TOOL_VERSION_MARKER: &str = "RUSTX_TOOL_VERSION.json";
-const TOOL_SOURCE_DIRECTORY: &str = "source";
-const ENVIRONMENT_MARKER: &str = "RUSTX_ENV_MANIFEST.json";
-const ENVIRONMENT_MARKER_FORMAT: &str = "rustx-python-tool-environment-v1";
-const TOOL_VERSION_MARKER_FORMAT: u32 = 1;
-const BINDING_FORMAT: u32 = 1;
+/// The fixed `FastMCP` server module of a package.
+pub const SERVER_FILE: &str = "server.py";
+/// The fixed dependency manifest of a package (required, even when empty).
+pub const REQUIREMENTS_FILE: &str = "requirements.txt";
+
+/// The fixed entrypoint every managed server is launched with.
+const ENTRYPOINT: &str = "server.py:mcp";
+const PACKAGES_DIRECTORY: &str = "packages";
+const UV_CACHE_DIRECTORY: &str = "uv-cache";
+const SOURCE_DIRECTORY: &str = "source";
+const VENV_DIRECTORY: &str = "venv";
+const MANIFEST_FILE: &str = "manifest.json";
+const MANIFEST_FORMAT: &str = "rustx-managed-python-package-v1";
 /// The finite deadline of one runtime identity probe (mirrors the M6
 /// `RUNTIME_PROBE_TIMEOUT`).
-const PYTHON_TOOL_PROBE_TIMEOUT: Duration = RUNTIME_PROBE_TIMEOUT;
+const PYTHON_TOOL_PROBE_TIMEOUT: std::time::Duration = RUNTIME_PROBE_TIMEOUT;
 /// The finite deadline of one uv lock/materialization command (mirrors the
 /// M6 `ENVIRONMENT_COMMAND_TIMEOUT`).
-const PYTHON_TOOL_UV_TIMEOUT: Duration = ENVIRONMENT_COMMAND_TIMEOUT;
-/// The status transport is a fixed-size runtime protocol. Logical return
-/// values never use this bound; they are streamed from their separate file.
-const PYTHON_STATUS_MAX_BYTES: usize = 8 * 1024;
+const PYTHON_TOOL_UV_TIMEOUT: std::time::Duration = ENVIRONMENT_COMMAND_TIMEOUT;
 
-const PYTHON_HARNESS: &str = r#"import contextlib
-import importlib
-import json
-import pathlib
-import sys
-
-source_root = pathlib.Path(sys.argv[1]).resolve()
-entrypoint = sys.argv[2]
-input_path = pathlib.Path(sys.argv[3]).resolve()
-status_path = pathlib.Path(sys.argv[4]).resolve()
-result_path = pathlib.Path(sys.argv[5]).resolve()
-sys.path.insert(0, str(source_root))
-
-# The source root the harness receives is the invocation-private
-# `source/` copy inside this invocation's own execution bundle, and it is
-# also the process working directory: ordinary tool writes may mutate the
-# private copy but can never reach the canonical published source. The
-# harness itself is runtime-owned code materialized per invocation beside
-# (never inside) `source/`. Bytecode caches stay disabled so imports never
-# write `__pycache__` into the private copy or the immutable dependency
-# environment.
-sys.dont_write_bytecode = True
-
-def write_status(value):
-    status_path.write_text(
-        json.dumps(value, separators=(",", ":"), ensure_ascii=False),
-        encoding="utf-8",
-    )
-
-try:
-    module_name, function_name = entrypoint.split(":", 1)
-    arguments = json.loads(input_path.read_text(encoding="utf-8"))
-    with contextlib.redirect_stdout(sys.stderr):
-        module = importlib.import_module(module_name)
-        function = getattr(module, function_name)
-        value = function(arguments)
-    # The logical return value never crosses stdout. json.dump streams the
-    # value to the invocation-private transport, so the generic supervised
-    # process diagnostic capture remains bounded and cannot corrupt framing.
-    with result_path.open("w", encoding="utf-8", newline="") as result_file:
-        json.dump(value, result_file, separators=(",", ":"), ensure_ascii=False)
-    write_status({"ok": True})
-except BaseException as error:
-    write_status({"ok": False, "error": f"{type(error).__name__}: {error}"})
-"#;
-
-/// A package discovery/publication failure.
+/// A package discovery/preparation failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PythonToolError {
     /// The package is malformed.
     InvalidPackage(String),
-    /// A source snapshot could not be read or published.
+    /// Prepared state could not be read or published.
     Storage(String),
     /// The dependency environment could not be checked or materialized.
     Environment(String),
@@ -188,176 +123,119 @@ impl std::fmt::Display for PythonToolError {
 
 impl std::error::Error for PythonToolError {}
 
-/// The manifest accepted by M7.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ToolManifest {
-    schema_version: u32,
-    name: String,
-    description: String,
-    entrypoint: String,
-    execution: String,
-    concurrency: String,
-    #[serde(default = "default_approval_policy")]
-    approval: String,
-}
-
-fn default_approval_policy() -> String {
-    "never".to_owned()
-}
-
-/// An immutable finite package snapshot.
+/// One discovered package: the frozen in-memory snapshot of every package
+/// byte, already validated against the package contract.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PythonToolPackage {
-    /// Logical model-facing name.
+    /// The package name: its folder name, validated identifier-safe.
     pub name: String,
-    /// Model-facing description.
-    pub description: String,
-    /// Python module/function entrypoint.
-    pub entrypoint: String,
-    /// Canonical invocation policy.
-    pub policy: ToolInvocationPolicy,
-    /// Content identity of the complete package snapshot.
-    pub tool_version_id: ToolVersionId,
-    /// Sorted package-relative files and exact bytes.
+    /// The workspace folder the snapshot was read from (diagnostics only;
+    /// the server never runs from this live root).
+    pub root: PathBuf,
+    /// Every package file, sorted by package-relative path.
     pub files: Vec<(PathBuf, Vec<u8>)>,
-    /// Canonical model-call input schema from `input.schema.json`.
-    pub input_schema: serde_json::Value,
-    /// Dependency-relevant project and lock inputs.
-    pyproject: Vec<u8>,
-    uv_lock: Vec<u8>,
+    /// The normalized dependency lines of `requirements.txt` (comments and
+    /// blank lines removed), in file order.
+    pub requirements: Vec<String>,
 }
 
-/// Discovers one-level packages under `<workspace>/.agents/tools/`.
-#[derive(Debug, Clone)]
-pub struct PythonToolDiscovery {
-    workspace: Workspace,
+/// The discovery outcome of one folder below `.agents/tools/`: either the
+/// validated frozen package or its package-identifying diagnostic.
+#[derive(Debug)]
+pub struct DiscoveredPythonPackage {
+    /// The synthesized MCP server identity of this folder
+    /// (`python:<folder-name>`), present even when the package is invalid so
+    /// the failure lands on the folder's own availability state.
+    pub server_id: McpServerId,
+    /// The validated package, or the diagnostic rejecting it.
+    pub outcome: Result<PythonToolPackage, PythonToolError>,
 }
 
-impl PythonToolDiscovery {
-    /// Creates Workspace-anchored discovery.
-    #[must_use]
-    pub fn new(workspace: &Workspace) -> Self {
-        Self {
-            workspace: workspace.clone(),
-        }
-    }
-
-    /// Reads and validates every candidate atomically as a complete result.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the tools root, any package, or any package-owned
-    /// file is malformed, symlinked, or unreadable.
-    pub fn discover(&self) -> Result<Vec<PythonToolPackage>, PythonToolError> {
-        let root = self.workspace.root().join(TOOLS_DIRECTORY).join(TOOLS_ROOT);
-        if !root.exists() {
-            return Ok(Vec::new());
-        }
-        if !root.is_dir() {
-            return Err(PythonToolError::InvalidPackage(
-                "the tools root is not a directory".to_owned(),
-            ));
-        }
-        let mut candidates = Vec::new();
-        for entry in std::fs::read_dir(&root).map_err(io_error)? {
-            let entry = entry.map_err(io_error)?;
-            let metadata = std::fs::symlink_metadata(entry.path()).map_err(io_error)?;
-            if metadata.file_type().is_symlink() {
-                return Err(PythonToolError::InvalidPackage(format!(
-                    "symlinked tool package is rejected: {}",
-                    entry.path().display()
-                )));
-            }
-            if metadata.is_dir() {
-                candidates.push((
-                    entry.file_name().to_string_lossy().into_owned(),
-                    entry.path(),
-                ));
-            }
-        }
-        candidates.sort_by(|left, right| left.0.cmp(&right.0));
-        let mut packages = candidates
-            .into_iter()
-            .map(|(directory, root)| discover_package(&directory, &root))
-            .collect::<Result<Vec<_>, _>>()?;
-        packages.sort_by(|left, right| left.name.cmp(&right.name));
-        let mut names = std::collections::BTreeSet::new();
-        for package in &packages {
-            if !names.insert(package.name.clone()) {
-                return Err(PythonToolError::InvalidPackage(format!(
-                    "duplicate Python model-facing name {:?}",
-                    package.name
-                )));
-            }
-        }
-        Ok(packages)
-    }
+/// The synthesized MCP server identity of one package folder.
+#[must_use]
+pub fn python_server_id(folder_name: &str) -> McpServerId {
+    McpServerId::new(format!("python:{folder_name}"))
 }
 
-fn discover_package(directory: &str, root: &Path) -> Result<PythonToolPackage, PythonToolError> {
-    validate_identifier(directory)?;
-    let manifest_bytes = regular_file(root, TOOL_MANIFEST_FILE)?;
-    let input_schema = regular_file(root, INPUT_SCHEMA_FILE)?;
-    let pyproject = regular_file(root, PYPROJECT_FILE)?;
-    let uv_lock = regular_file(root, UV_LOCK_FILE)?;
-    let manifest: ToolManifest =
-        toml::from_str(std::str::from_utf8(&manifest_bytes).map_err(|error| {
-            PythonToolError::InvalidPackage(format!("TOOL.toml is not UTF-8: {error}"))
-        })?)
-        .map_err(|error| PythonToolError::InvalidPackage(format!("TOOL.toml: {error}")))?;
-    if manifest.schema_version != 1 || manifest.name != directory {
-        return Err(PythonToolError::InvalidPackage(
-            "TOOL.toml schema_version/name does not match the package".to_owned(),
-        ));
+/// Discovers every Python tool package of the Workspace, in deterministic
+/// folder-name order.
+///
+/// Per-folder failures are returned in place (`DiscoveredPythonPackage`):
+/// one malformed package never suppresses its siblings. Only walking the
+/// container itself can fail the whole call (the same layering the Skill
+/// discovery already has).
+///
+/// # Errors
+///
+/// Returns [`PythonToolError::Storage`] when `.agents/tools/` exists but
+/// cannot be walked.
+pub fn discover_python_packages(
+    workspace: &Workspace,
+) -> Result<Vec<DiscoveredPythonPackage>, PythonToolError> {
+    let tools_root = workspace.root().join(TOOLS_DIRECTORY).join(TOOLS_ROOT);
+    if !tools_root.exists() {
+        return Ok(Vec::new());
     }
-    if manifest.description.trim().is_empty() {
-        return Err(PythonToolError::InvalidPackage(
-            "description must be non-empty".to_owned(),
-        ));
+    let mut entries = std::fs::read_dir(&tools_root)
+        .map_err(io_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(io_error)?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    let mut discovered = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let folder_name = entry.file_name().to_string_lossy().into_owned();
+        let server_id = python_server_id(&folder_name);
+        discovered.push(DiscoveredPythonPackage {
+            server_id,
+            outcome: discover_package(&entry.path(), &folder_name),
+        });
     }
-    validate_entrypoint(root, &manifest.entrypoint)?;
-    let policy = ToolInvocationPolicy::new(
-        parse_execution(&manifest.execution)?,
-        parse_concurrency(&manifest.concurrency)?,
-        parse_approval(&manifest.approval)?,
-    );
-    let schema: serde_json::Value = serde_json::from_slice(&input_schema)
-        .map_err(|error| PythonToolError::InvalidPackage(format!("input.schema.json: {error}")))?;
-    crate::tools::schema::validate_canonical_schema(&schema)
-        .map_err(|error| PythonToolError::InvalidPackage(format!("input.schema.json: {error}")))?;
-    // The manifest declares the effective execution policy next to the
-    // schema, so a `model_selectable` package that also claims the reserved
-    // `execution_mode` property is rejected here rather than at registration.
-    crate::tools::schema::validate_execution_metadata_contract(policy.execution, &schema)
-        .map_err(|error| PythonToolError::InvalidPackage(format!("input.schema.json: {error}")))?;
+    Ok(discovered)
+}
+
+fn discover_package(root: &Path, name: &str) -> Result<PythonToolPackage, PythonToolError> {
+    let invalid = |message: String| {
+        PythonToolError::InvalidPackage(format!("package {name:?} ({}): {message}", root.display()))
+    };
+    let metadata = std::fs::symlink_metadata(root).map_err(io_error)?;
+    if metadata.file_type().is_symlink() {
+        return Err(invalid(format!(
+            "package symlink is rejected: {}",
+            root.display()
+        )));
+    }
+    if !metadata.is_dir() {
+        return Err(invalid("package entry is not a directory".to_owned()));
+    }
+    validate_identifier(name).map_err(|error| match error {
+        PythonToolError::InvalidPackage(message) => invalid(message),
+        other => other,
+    })?;
     let files = collect_files(root)?;
-    let tool_version_id = tool_version_id(&files);
+    let server_key = Path::new(SERVER_FILE);
+    if !files.iter().any(|(path, _)| path == server_key) {
+        return Err(invalid(format!(
+            "the package has no {SERVER_FILE} (the managed FastMCP server)"
+        )));
+    }
+    let requirements_key = Path::new(REQUIREMENTS_FILE);
+    let Some((_, requirements_bytes)) = files.iter().find(|(path, _)| path == requirements_key)
+    else {
+        return Err(invalid(format!(
+            "the package has no {REQUIREMENTS_FILE} (required, even when empty)"
+        )));
+    };
+    let requirements = parse_requirements(requirements_bytes)
+        .map_err(|message| invalid(format!("{REQUIREMENTS_FILE}: {message}")))?;
     Ok(PythonToolPackage {
-        name: manifest.name,
-        description: manifest.description,
-        entrypoint: manifest.entrypoint,
-        policy,
-        tool_version_id,
+        name: name.to_owned(),
+        root: root.to_path_buf(),
         files,
-        input_schema: schema,
-        pyproject,
-        uv_lock,
+        requirements,
     })
 }
 
-fn regular_file(root: &Path, name: &str) -> Result<Vec<u8>, PythonToolError> {
-    let path = root.join(name);
-    let metadata = std::fs::symlink_metadata(&path)
-        .map_err(|error| PythonToolError::InvalidPackage(format!("missing {name}: {error}")))?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() {
-        return Err(PythonToolError::InvalidPackage(format!(
-            "{name} must be a regular non-symlink file"
-        )));
-    }
-    std::fs::read(&path).map_err(io_error)
-}
-
+/// Reads one package tree into memory: sorted, deterministic, symlink-free.
 fn collect_files(root: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>, PythonToolError> {
     fn walk(
         root: &Path,
@@ -403,37 +281,6 @@ fn collect_files(root: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>, PythonToolError
     Ok(output)
 }
 
-fn validate_entrypoint(root: &Path, entrypoint: &str) -> Result<(), PythonToolError> {
-    let Some((module, function)) = entrypoint.split_once(':') else {
-        return Err(PythonToolError::InvalidPackage(
-            "entrypoint must be module:function".to_owned(),
-        ));
-    };
-    if module.is_empty()
-        || function.is_empty()
-        || !function
-            .chars()
-            .all(|character| character == '_' || character.is_ascii_alphanumeric())
-        || module.split('.').any(|part| {
-            part.is_empty()
-                || !part
-                    .chars()
-                    .all(|character| character == '_' || character.is_ascii_alphanumeric())
-        })
-    {
-        return Err(PythonToolError::InvalidPackage(
-            "entrypoint contains an invalid Python identifier".to_owned(),
-        ));
-    }
-    let module_path = root.join(module.replace('.', "/") + ".py");
-    if !module_path.is_file() {
-        return Err(PythonToolError::InvalidPackage(format!(
-            "entrypoint module is not present: {module}"
-        )));
-    }
-    Ok(())
-}
-
 fn validate_identifier(identifier: &str) -> Result<(), PythonToolError> {
     if identifier.is_empty()
         || identifier.starts_with('-')
@@ -450,88 +297,102 @@ fn validate_identifier(identifier: &str) -> Result<(), PythonToolError> {
     Ok(())
 }
 
-fn parse_execution(value: &str) -> Result<ToolExecutionPolicy, PythonToolError> {
-    match value {
-        "foreground_only" => Ok(ToolExecutionPolicy::ForegroundOnly),
-        "background_only" => Ok(ToolExecutionPolicy::BackgroundOnly),
-        "model_selectable" => Ok(ToolExecutionPolicy::ModelSelectable),
-        _ => Err(PythonToolError::InvalidPackage(format!(
-            "invalid execution policy {value:?}"
-        ))),
+/// Parses the normalized requirement lines of one `requirements.txt`.
+///
+/// This is deliberately conservative: the only dependency semantics rustX
+/// must own is the `fastmcp` conflict check — the managed `FastMCP` build is
+/// rustX-pinned, so a package may never declare it. Everything else is
+/// validated only far enough to become a `pyproject.toml` dependency entry;
+/// real dependency semantics (resolution, markers, indexes) belong to uv.
+fn parse_requirements(bytes: &[u8]) -> Result<Vec<String>, String> {
+    let text = std::str::from_utf8(bytes).map_err(|_| "the file is not valid UTF-8".to_owned())?;
+    let mut requirements = Vec::new();
+    for (index, raw_line) in text.lines().enumerate() {
+        // Strip end-of-line comments the way pip does (a `#` preceded by
+        // whitespace or at line start).
+        let line = strip_requirement_comment(raw_line).trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with('-') {
+            return Err(format!(
+                "line {}: option lines are not supported; declare PEP 508 dependencies only",
+                index + 1
+            ));
+        }
+        let name = requirement_name(line)
+            .ok_or_else(|| format!("line {}: not a requirement line: {line:?}", index + 1))?;
+        if name.eq_ignore_ascii_case("fastmcp") {
+            return Err(format!(
+                "line {}: the `fastmcp` dependency is managed by rustX \
+                 (pinned to fastmcp=={MANAGED_FASTMCP_VERSION}); remove it",
+                index + 1
+            ));
+        }
+        requirements.push(line.to_owned());
     }
+    Ok(requirements)
 }
 
-fn parse_concurrency(value: &str) -> Result<ToolConcurrencyPolicy, PythonToolError> {
-    match value {
-        "sequential" => Ok(ToolConcurrencyPolicy::Sequential),
-        "parallel" => Ok(ToolConcurrencyPolicy::Parallel),
-        _ => Err(PythonToolError::InvalidPackage(format!(
-            "invalid concurrency policy {value:?}"
-        ))),
+fn strip_requirement_comment(line: &str) -> &str {
+    let mut previous: Option<char> = None;
+    for (index, character) in line.char_indices() {
+        if character == '#' && (index == 0 || previous.is_some_and(char::is_whitespace)) {
+            return &line[..index];
+        }
+        previous = Some(character);
     }
+    line
 }
 
-fn parse_approval(value: &str) -> Result<ToolApprovalPolicy, PythonToolError> {
-    match value {
-        "never" => Ok(ToolApprovalPolicy::Never),
-        "always" => Ok(ToolApprovalPolicy::Always),
-        _ => Err(PythonToolError::InvalidPackage(format!(
-            "invalid approval policy {value:?}"
-        ))),
+/// The requirement name of one PEP 508 line: everything before the extras,
+/// version specifier, direct reference, or environment marker.
+fn requirement_name(line: &str) -> Option<&str> {
+    let end = line
+        .find(|character: char| {
+            matches!(character, '[' | '=' | '<' | '>' | '!' | '~' | ';' | '@')
+                || character.is_whitespace()
+        })
+        .unwrap_or(line.len());
+    let name = &line[..end];
+    if name.is_empty()
+        || !name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+        })
+    {
+        return None;
     }
+    Some(name)
 }
 
-fn tool_version_id(files: &[(PathBuf, Vec<u8>)]) -> ToolVersionId {
+/// The deterministic content digest of the package source bytes alone.
+fn source_digest(files: &[(PathBuf, Vec<u8>)]) -> String {
     let mut canonical = Vec::new();
-    canonical.extend_from_slice(b"rustx:python-tool-version:v1\0");
+    canonical.extend_from_slice(b"rustx:managed-python-source:v1\0");
     for (path, bytes) in files {
         append_bytes(&mut canonical, path.to_string_lossy().as_bytes());
         append_bytes(&mut canonical, bytes);
     }
-    ToolVersionId::new(format!(
-        "sha256:{}",
-        hex_digest(&sha2::Sha256::digest(canonical))
-    ))
+    format!("sha256:{}", hex_digest(&sha2::Sha256::digest(canonical)))
 }
 
-/// Generates the logical Python tool identity independently of its version.
-#[must_use]
-pub fn python_tool_id(name: &str) -> String {
-    let mut canonical = Vec::new();
-    canonical.extend_from_slice(b"rustx:python-tool-id:v1\0");
-    append_bytes(&mut canonical, name.as_bytes());
-    format!(
-        "python:sha256:{}",
-        hex_digest(&sha2::Sha256::digest(canonical))
-    )
-}
-
-/// Computes the dependency environment identity from only material inputs.
-#[must_use]
-pub fn python_tool_environment_digest(
-    os: &str,
-    architecture: &str,
+/// The full preparation fingerprint: source bytes (including
+/// `requirements.txt`), the probed interpreter and uv identities, the
+/// managed `FastMCP` pin, and the platform. No timestamps.
+fn package_fingerprint(
+    package: &PythonToolPackage,
     python_identity: &str,
     uv_identity: &str,
-    pyproject: &[u8],
-    uv_lock: &[u8],
-) -> PythonToolEnvironmentDigest {
+) -> String {
     let mut canonical = Vec::new();
-    canonical.extend_from_slice(b"rustx:python-tool-environment:v1\0");
-    for value in [
-        os.as_bytes(),
-        architecture.as_bytes(),
-        python_identity.as_bytes(),
-        uv_identity.as_bytes(),
-        pyproject,
-        uv_lock,
-    ] {
-        append_bytes(&mut canonical, value);
-    }
-    PythonToolEnvironmentDigest::new(format!(
-        "sha256:{}",
-        hex_digest(&sha2::Sha256::digest(canonical))
-    ))
+    canonical.extend_from_slice(b"rustx:managed-python-package:v1\0");
+    append_bytes(&mut canonical, source_digest(&package.files).as_bytes());
+    append_bytes(&mut canonical, python_identity.as_bytes());
+    append_bytes(&mut canonical, uv_identity.as_bytes());
+    append_bytes(&mut canonical, MANAGED_FASTMCP_VERSION.as_bytes());
+    append_bytes(&mut canonical, std::env::consts::OS.as_bytes());
+    append_bytes(&mut canonical, std::env::consts::ARCH.as_bytes());
+    format!("sha256:{}", hex_digest(&sha2::Sha256::digest(canonical)))
 }
 
 fn append_bytes(target: &mut Vec<u8>, bytes: &[u8]) {
@@ -552,52 +413,67 @@ fn io_error(error: impl std::fmt::Display) -> PythonToolError {
     PythonToolError::Storage(error.to_string())
 }
 
-/// A published immutable `ToolVersion` source snapshot.
-#[derive(Debug, Clone)]
-pub struct PublishedPythonTool {
-    /// Original package metadata and identity.
-    pub package: PythonToolPackage,
-    /// Private immutable source root (`tool-versions/<id>/source/`): the
-    /// canonical authority. Every uv preparation command uses it as its
-    /// root; the executor reads it only to materialize each
-    /// invocation-private execution copy — it is never an execution
-    /// working directory.
-    pub root: PathBuf,
+fn resolve_executable(name: &str) -> PathBuf {
+    if let Some(path) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&path) {
+            let candidate = directory.join(name);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    // The child environment uses the fixed runtime-approved PATH; resolve
+    // there so the probed identity and the `UV_PYTHON` pin always name the
+    // exact same binary.
+    for directory in ["/usr/local/bin", "/usr/bin", "/bin"] {
+        let candidate = std::path::Path::new(directory).join(name);
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    PathBuf::from(name)
 }
 
-/// A published immutable Python environment.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PythonToolEnvironment {
-    /// Environment identity.
-    pub digest: PythonToolEnvironmentDigest,
-    /// Final immutable environment path.
-    pub root: PathBuf,
+fn shell_quote(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
 
-/// The shared in-flight build state of one environment digest.
+fn bounded_output(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(&bytes[..bytes.len().min(4096)]).into_owned()
+}
+
+/// The rustX-owned frozen manifest of one prepared package state
+/// (`manifest.json`): everything needed to explain the state and to prove
+/// on reopen that it still is what it claims to be.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PreparedManifest {
+    format: String,
+    /// The full preparation fingerprint this state answers to.
+    fingerprint: String,
+    /// The package (folder) name of the preparing discovery.
+    package: String,
+    /// The workspace folder the frozen source was read from.
+    origin: String,
+    /// The fixed managed entrypoint (`server.py:mcp`).
+    entrypoint: String,
+    /// The rustX-pinned `FastMCP` build this environment contains.
+    fastmcp: String,
+    /// The probed Python interpreter identity (path + version).
+    python: String,
+    /// The probed uv identity (path + version).
+    uv: String,
+    os: String,
+    arch: String,
+    /// The content digest of the frozen `source/` copy.
+    source_digest: String,
+}
+
+/// The shared in-flight build state of one fingerprint.
 #[derive(Debug)]
 struct BuildState {
-    result: Mutex<Option<Result<PythonToolEnvironment, PythonToolError>>>,
+    result: Mutex<Option<Result<PreparedPythonPackage, PythonToolError>>>,
     notify: tokio::sync::Notify,
-}
-
-/// Test-only waiter-attachment probe: counts callers that selected an
-/// existing in-flight `BuildState` while holding the in-flight ownership
-/// lock. It observes the ownership decision; it never influences it, and
-/// it does not exist in non-test builds.
-#[cfg(test)]
-#[derive(Debug, Default)]
-struct WaiterAttachments {
-    count: std::sync::atomic::AtomicUsize,
-    notify: tokio::sync::Notify,
-}
-
-#[cfg(test)]
-impl WaiterAttachments {
-    fn record(&self) {
-        self.count.fetch_add(1, Ordering::Release);
-        self.notify.notify_waiters();
-    }
 }
 
 /// Completes a process-local build entry if its store-owned task exits
@@ -612,7 +488,7 @@ struct BuildOwnerGuard {
 }
 
 impl BuildOwnerGuard {
-    fn finish(&mut self, result: Result<PythonToolEnvironment, PythonToolError>) {
+    fn finish(&mut self, result: Result<PreparedPythonPackage, PythonToolError>) {
         *self.state.result.lock().expect("Python build result lock") = Some(result);
         let mut in_flight = self.in_flight.lock().expect("Python build lock");
         if in_flight
@@ -638,92 +514,21 @@ impl Drop for BuildOwnerGuard {
     }
 }
 
-/// The two ownership domains of one Python tool store (Issue #145).
-///
-/// ```text
-/// shared root                       process-private root
-///   tool-versions/                    python-tool-envs/
-///   uv-cache/                         python-tool-bindings/
-///                                     python-invocations/
-/// ```
-///
-/// **Shared** holds only data whose correctness does not depend on a rustX
-/// process-local ownership domain:
-///
-/// - `tool-versions/` is immutable and content-addressed. Publication is a
-///   staging directory plus one atomic `rename`, with the concurrent-winner
-///   path validating the installed marker, and every read revalidates the
-///   source digest against the claimed identity. Two rustX processes may
-///   therefore publish and read the same versions safely.
-/// - `uv-cache/` is owned by `uv`, which supports concurrent readers and
-///   writers against one cache and performs its own cache/target locking.
-///   Sharing it means a subagent child never pays for a cold cache.
-///
-/// **Private** holds every root whose rustX-side ownership is process-local:
-///
-/// - `python-tool-envs/` and `python-tool-bindings/` are published by the
-///   store's in-flight build coalescing, whose ownership domain is one
-///   `Arc<Mutex<..>>` inside one process. That is not cross-process
-///   synchronization, and #145 deliberately does not add a cross-process
-///   lock to pretend otherwise: each process builds into its own root.
-/// - `python-invocations/` is per-invocation scratch allocated from one
-///   process-local monotonic counter. There is no product requirement for
-///   sharing a scratch namespace across processes.
-///
-/// Sharing `uv-cache/` is safe **because of uv's own contract**; it says
-/// nothing about rustX's environment-publication ownership, which stays
-/// private.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PythonToolStoreRoots {
-    /// The cross-process shared immutable/cache root.
-    pub shared: PathBuf,
-    /// The process-private mutable execution root.
-    pub private: PathBuf,
-}
-
-impl PythonToolStoreRoots {
-    /// The top-level runtime shape: one process owns both domains, so they
-    /// are the same directory and the on-disk layout is unchanged.
-    #[must_use]
-    pub fn unified(root: PathBuf) -> Self {
-        Self {
-            shared: root.clone(),
-            private: root,
-        }
-    }
-
-    /// The subagent-child shape: the parent's shared root plus a
-    /// child-private mutable root.
-    #[must_use]
-    pub fn split(shared: PathBuf, private: PathBuf) -> Self {
-        Self { shared, private }
-    }
-
-    /// Creates every root this store owns.
-    fn establish(&self) -> Result<(), PythonToolError> {
-        std::fs::create_dir_all(self.shared.join("tool-versions")).map_err(io_error)?;
-        std::fs::create_dir_all(self.shared.join("uv-cache")).map_err(io_error)?;
-        std::fs::create_dir_all(self.private.join("python-tool-envs")).map_err(io_error)?;
-        std::fs::create_dir_all(self.private.join("python-tool-bindings")).map_err(io_error)?;
-        std::fs::create_dir_all(self.private.join("python-invocations")).map_err(io_error)?;
-        Ok(())
-    }
-}
-
 #[derive(Clone)]
 struct PythonToolStoreInner {
-    roots: PythonToolStoreRoots,
+    root: PathBuf,
     runner: Arc<dyn SupervisedProcessRunner>,
     uv_binary: PathBuf,
     python_binary: PathBuf,
     in_flight: Arc<Mutex<BTreeMap<String, Arc<BuildState>>>>,
-    /// Test-only observation of the waiter-attachment ownership decision.
-    #[cfg(test)]
-    waiter_attachments: Arc<WaiterAttachments>,
-    next_invocation: Arc<AtomicU64>,
 }
 
-/// Runtime-private source/environment store for custom Python tools.
+/// The runtime-private prepared-environment store of managed Python tool
+/// packages.
+///
+/// The store is a coordinator-lifetime-stable identity: its in-flight map
+/// is the one process-local coordination domain that coalesces concurrent
+/// preparations of the same fingerprint onto a single physical build.
 #[derive(Clone)]
 pub struct PythonToolStore {
     inner: Arc<PythonToolStoreInner>,
@@ -733,438 +538,108 @@ impl std::fmt::Debug for PythonToolStore {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("PythonToolStore")
-            .field("shared_root", &self.inner.roots.shared)
-            .field("private_root", &self.inner.roots.private)
+            .field("root", &self.inner.root)
             .finish()
     }
 }
 
 impl PythonToolStore {
-    /// Creates the production store whose shared and process-private roots
-    /// are the same directory.
-    ///
-    /// This is the top-level runtime shape: one runtime process owns the
-    /// whole store, so both ownership domains live under one root and the
-    /// on-disk layout is exactly the M7 layout.
+    /// Creates the production store rooted at `root`
+    /// (`<environment-store>/python-tools`).
     ///
     /// # Errors
     ///
-    /// Returns an error if the store directories cannot be created.
+    /// Returns [`PythonToolError::Storage`] if the store directories cannot
+    /// be created.
     pub fn new(root: PathBuf) -> Result<Self, PythonToolError> {
-        Self::with_roots(PythonToolStoreRoots::unified(root))
-    }
-
-    /// Creates the production store over an explicit shared/private root
-    /// split.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the store directories cannot be created.
-    pub fn with_roots(roots: PythonToolStoreRoots) -> Result<Self, PythonToolError> {
-        roots.establish()?;
+        Self::establish(&root)?;
         Ok(Self {
             inner: Arc::new(PythonToolStoreInner {
-                roots,
+                root,
                 runner: Arc::new(RunnerBackedProcessRunner::default()),
                 uv_binary: resolve_executable("uv"),
                 python_binary: resolve_executable("python3"),
                 in_flight: Arc::new(Mutex::new(BTreeMap::new())),
-                #[cfg(test)]
-                waiter_attachments: Arc::new(WaiterAttachments::default()),
-                next_invocation: Arc::new(AtomicU64::new(0)),
             }),
         })
     }
 
     /// Test constructor for deterministic recorded process backends.
     #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) fn with_runner(
-        root: PathBuf,
-        runner: Arc<dyn SupervisedProcessRunner>,
-    ) -> Result<Self, PythonToolError> {
-        Self::with_roots_and_runner(PythonToolStoreRoots::unified(root), runner)
-    }
-
-    /// Test constructor for an explicit root split and a recorded backend.
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) fn with_roots_and_runner(
-        roots: PythonToolStoreRoots,
-        runner: Arc<dyn SupervisedProcessRunner>,
-    ) -> Result<Self, PythonToolError> {
-        roots.establish()?;
-        Ok(Self {
-            inner: Arc::new(PythonToolStoreInner {
-                roots,
-                runner,
-                uv_binary: resolve_executable("uv"),
-                python_binary: resolve_executable("python3"),
-                in_flight: Arc::new(Mutex::new(BTreeMap::new())),
-                waiter_attachments: Arc::new(WaiterAttachments::default()),
-                next_invocation: Arc::new(AtomicU64::new(0)),
-            }),
-        })
-    }
-
-    /// Test constructor with explicit `uv`/`python3` binaries: the physical
-    /// settlement regressions run a real supervised runner against scripted
-    /// stand-in binaries rather than a real toolchain.
-    #[cfg(test)]
     pub(crate) fn with_binaries_and_runner(
-        roots: PythonToolStoreRoots,
+        root: PathBuf,
         uv_binary: PathBuf,
         python_binary: PathBuf,
         runner: Arc<dyn SupervisedProcessRunner>,
     ) -> Result<Self, PythonToolError> {
-        roots.establish()?;
+        Self::establish(&root)?;
         Ok(Self {
             inner: Arc::new(PythonToolStoreInner {
-                roots,
+                root,
                 runner,
                 uv_binary,
                 python_binary,
                 in_flight: Arc::new(Mutex::new(BTreeMap::new())),
-                waiter_attachments: Arc::new(WaiterAttachments::default()),
-                next_invocation: Arc::new(AtomicU64::new(0)),
             }),
         })
     }
 
-    /// The shared immutable/cache root of this store.
+    fn establish(root: &Path) -> Result<(), PythonToolError> {
+        std::fs::create_dir_all(root.join(PACKAGES_DIRECTORY)).map_err(io_error)?;
+        std::fs::create_dir_all(root.join(UV_CACHE_DIRECTORY)).map_err(io_error)?;
+        Ok(())
+    }
+
+    /// The root of this store.
     #[must_use]
-    pub fn shared_root(&self) -> &Path {
-        &self.inner.roots.shared
+    pub fn root(&self) -> &Path {
+        &self.inner.root
     }
 
-    /// The process-private mutable root of this store.
-    #[must_use]
-    pub fn private_root(&self) -> &Path {
-        &self.inner.roots.private
-    }
-
-    /// Opens the exact immutable published `ToolVersion` named by a frozen
-    /// specification (Issue #145).
-    ///
-    /// This is the child-side counterpart of [`PythonToolStore::publish`]
-    /// and the one authority a subagent child may use to obtain a Python
-    /// Tool: it opens `tool-versions/<id>/`, revalidates the marker,
-    /// re-reads and re-validates the canonical source through exactly the
-    /// ordinary package validation, and recomputes the content identity
-    /// from those bytes. A workspace is never consulted, and a same-named
-    /// package of a different version can never be substituted, because the
-    /// only input is the `ToolVersionId` itself.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PythonToolError::Storage`] if the version is absent, its
-    /// marker is invalid, or its published source does not hash back to the
-    /// requested identity, and [`PythonToolError::InvalidPackage`] if the
-    /// published source is not a valid package.
-    pub fn open_published_version(
-        &self,
-        tool_version_id: &ToolVersionId,
-    ) -> Result<PublishedPythonTool, PythonToolError> {
-        let destination = self
-            .inner
-            .roots
-            .shared
-            .join("tool-versions")
-            .join(tool_version_id.as_str());
-        if !destination.is_dir() {
-            return Err(PythonToolError::Storage(format!(
-                "the frozen Python ToolVersion {} is not present in the shared store",
-                tool_version_id.as_str()
-            )));
-        }
-        let marker = destination.join(TOOL_VERSION_MARKER);
-        let marker_bytes = std::fs::read(&marker).map_err(io_error)?;
-        let marker_value: serde_json::Value =
-            serde_json::from_slice(&marker_bytes).map_err(|error| {
-                PythonToolError::Storage(format!(
-                    "published ToolVersion marker is invalid: {error}"
-                ))
-            })?;
-        let valid = marker_value.get("format")
-            == Some(&serde_json::json!(TOOL_VERSION_MARKER_FORMAT))
-            && marker_value
-                .get("tool_version_id")
-                .and_then(serde_json::Value::as_str)
-                == Some(tool_version_id.as_str());
-        if !valid {
-            return Err(PythonToolError::Storage(
-                "published ToolVersion marker is invalid".to_owned(),
-            ));
-        }
-        let source_root = destination.join(TOOL_SOURCE_DIRECTORY);
-        // The package name is the manifest's own declaration; the ordinary
-        // validator then re-checks that the manifest agrees with it, so a
-        // published source cannot claim one name in the manifest and be
-        // opened under another.
-        let manifest_bytes = regular_file(&source_root, TOOL_MANIFEST_FILE)?;
-        let manifest: ToolManifest =
-            toml::from_str(std::str::from_utf8(&manifest_bytes).map_err(|error| {
-                PythonToolError::InvalidPackage(format!("TOOL.toml is not UTF-8: {error}"))
-            })?)
-            .map_err(|error| PythonToolError::InvalidPackage(format!("TOOL.toml: {error}")))?;
-        let package = discover_package(&manifest.name.clone(), &source_root)?;
-        if package.tool_version_id != *tool_version_id {
-            return Err(PythonToolError::Storage(format!(
-                "published ToolVersion source does not match its claimed identity: \
-                 marker claims {}, published source digest is {}",
-                tool_version_id.as_str(),
-                package.tool_version_id.as_str(),
-            )));
-        }
-        Ok(PublishedPythonTool {
-            package,
-            root: source_root,
-        })
-    }
-
-    /// Test-only identity token of this store's process-local coordination
-    /// domain: two handles over the same coordination identity return the
-    /// same token.
+    /// Test-only observation of the store identity: distinguishes a reused
+    /// store from a re-initialized one.
     #[cfg(test)]
     pub(crate) fn identity_token(&self) -> usize {
         Arc::as_ptr(&self.inner) as usize
     }
 
-    /// Allocates one unique, freshly claimed execution bundle directory for
-    /// one invocation: `python-invocations/execution-N/`.
+    /// Ensures the prepared environment state of one frozen package:
+    /// probes the runtime identities, computes the fingerprint, reuses a
+    /// valid published state, or builds and publishes a new one.
     ///
-    /// The store is the single process-local allocation domain (Issue #81):
-    /// one coordinator-lifetime-stable store hands out strictly monotonically
-    /// increasing identifiers, so two executors from different capability
-    /// generations can never claim the same bundle. The claim is the
-    /// atomic `create_dir` itself: an already-existing path is **never
-    /// deleted or reused** — it is stale scratch from a previous process
-    /// lifetime (there is deliberately no scratch GC), so the allocator
-    /// skips it. Identifier exhaustion is an **absorbing terminal state**
-    /// for this store identity: the counter is never allowed to transition
-    /// `MAX -> 0`, so no later invocation can wrap, reuse an identifier, or
-    /// create a lower-numbered bundle — every later allocation attempt
-    /// fails with the same explicit exhaustion error.
-    ///
-    /// The atomic counter only allocates unique, monotonically increasing
-    /// names within this process-local store domain — `Ordering::Relaxed`
-    /// is sufficient for that; the actual bundle-ownership claim is the
-    /// filesystem `create_dir`.
-    fn allocate_execution_bundle(&self) -> Result<PathBuf, PythonToolError> {
-        let root = self.inner.roots.private.join("python-invocations");
-        let exhausted = || {
-            PythonToolError::Storage(
-                "the Python invocation identifier space is exhausted".to_owned(),
-            )
-        };
-        loop {
-            // Checked claim: at `u64::MAX` the counter stays at `MAX`
-            // (absorbing) and allocation fails; it never wraps to 0.
-            let number = self
-                .inner
-                .next_invocation
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                    current.checked_add(1)
-                })
-                .map_err(|_| exhausted())?;
-            let bundle = root.join(format!("execution-{number}"));
-            match std::fs::create_dir(&bundle) {
-                Ok(()) => return Ok(bundle),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    // Stale scratch from a previous process lifetime:
-                    // unknown ownership, never destroyed — skip to the next
-                    // monotonic identifier.
-                }
-                Err(error) => return Err(io_error(error)),
-            }
-        }
-    }
-
-    /// Publishes exact package bytes by content identity.
-    ///
-    /// The published shape is `tool-versions/<ToolVersionId>/source/...`
-    /// plus the version marker; the executor's source root is exactly
-    /// `.../source/`. On reuse the published `source/` content digest is
-    /// recomputed and compared against the claimed identity, so a marker
-    /// string alone never validates a `ToolVersion`; a corrupt publication
-    /// fails preparation explicitly and is never mutated.
+    /// The server is deliberately **not** validate-launched here: the
+    /// generic MCP connect + `tools/list` that immediately follows is the
+    /// validation, and the candidate-generation machinery already
+    /// guarantees a failure leaves the previously committed generation
+    /// intact.
     ///
     /// # Errors
     ///
-    /// Returns an error if the immutable snapshot cannot be staged, written,
-    /// validated, or atomically installed.
-    pub fn publish(
-        &self,
-        package: &PythonToolPackage,
-    ) -> Result<PublishedPythonTool, PythonToolError> {
-        static NEXT_STAGING: AtomicU64 = AtomicU64::new(0);
-        let destination = self
-            .inner
-            .roots
-            .shared
-            .join("tool-versions")
-            .join(package.tool_version_id.as_str());
-        let source_root = destination.join(TOOL_SOURCE_DIRECTORY);
-        if destination.exists() {
-            let marker = destination.join(TOOL_VERSION_MARKER);
-            let marker_value = serde_json::from_slice::<serde_json::Value>(
-                &std::fs::read(&marker).map_err(io_error)?,
-            )
-            .map_err(|error| {
-                PythonToolError::Storage(format!(
-                    "published ToolVersion marker is invalid: {error}"
-                ))
-            })?;
-            let valid = marker_value.get("format")
-                == Some(&serde_json::json!(TOOL_VERSION_MARKER_FORMAT))
-                && marker_value
-                    .get("tool_version_id")
-                    .and_then(serde_json::Value::as_str)
-                    == Some(package.tool_version_id.as_str());
-            if !valid {
-                return Err(PythonToolError::Storage(
-                    "published ToolVersion marker is invalid".to_owned(),
-                ));
-            }
-            let published_digest = published_source_digest(&source_root)?;
-            if published_digest != package.tool_version_id {
-                return Err(PythonToolError::Storage(format!(
-                    "published ToolVersion source does not match its claimed identity: \
-                     marker claims {}, published source digest is {}",
-                    package.tool_version_id.as_str(),
-                    published_digest.as_str(),
-                )));
-            }
-            return Ok(PublishedPythonTool {
-                package: package.clone(),
-                root: source_root,
-            });
-        }
-        let staging = self.inner.roots.shared.join(format!(
-            ".tool-version-{}-{}-{}",
-            package.tool_version_id.as_str(),
-            std::process::id(),
-            NEXT_STAGING.fetch_add(1, Ordering::Relaxed)
-        ));
-        if staging.exists() {
-            std::fs::remove_dir_all(&staging).map_err(io_error)?;
-        }
-        let staging_source = staging.join(TOOL_SOURCE_DIRECTORY);
-        std::fs::create_dir_all(&staging_source).map_err(io_error)?;
-        for (relative, bytes) in &package.files {
-            let path = staging_source.join(relative);
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).map_err(io_error)?;
-            }
-            std::fs::write(path, bytes).map_err(io_error)?;
-        }
-        let marker = serde_json::json!({
-            "format": TOOL_VERSION_MARKER_FORMAT,
-            "tool_version_id": package.tool_version_id,
-        });
-        let marker_bytes = serde_json::to_vec(&marker).map_err(io_error)?;
-        std::fs::write(staging.join(TOOL_VERSION_MARKER), marker_bytes).map_err(io_error)?;
-        match std::fs::rename(&staging, &destination) {
-            Ok(()) => {}
-            Err(_error) if destination.exists() => {
-                std::fs::remove_dir_all(&staging).map_err(io_error)?;
-                if !destination.join(TOOL_VERSION_MARKER).is_file() {
-                    return Err(PythonToolError::Storage(
-                        "concurrent ToolVersion publication produced an invalid marker".to_owned(),
-                    ));
-                }
-            }
-            Err(error) => return Err(io_error(error)),
-        }
-        Ok(PublishedPythonTool {
-            package: package.clone(),
-            root: source_root,
-        })
-    }
-
-    /// Ensures one immutable environment, coalescing concurrent same-digest
-    /// builds behind one store-owned task.
-    ///
-    /// Exactly one store-owned logical build owns a digest until terminal
-    /// publication. Candidate callers only wait for the result; dropping a
-    /// waiter never releases ownership, and owner failure always publishes a
-    /// terminal error and removes the in-flight entry.
-    ///
-    /// # Lifecycle cancellation (Issue #145)
-    ///
-    /// `cancellation` is the **lifecycle cancellation authority** of the
-    /// calling ownership domain (a child preparation's pre-commit authority,
-    /// or the conversation-owned preparation root). It is a different
-    /// concern from the process-local build ownership above:
-    ///
-    /// - this caller's own runtime identity probes observe it directly;
-    /// - when this call establishes the build, the store-owned owner task
-    ///   drives the physical uv materialization with it, so cancelling the
-    ///   owning domain's authority cancels the physical supervised unit
-    ///   and the owner publishes its terminal error only after that unit
-    ///   has settled;
-    /// - a waiter never cancels a shared build: its wait ends with the
-    ///   owner's terminal publication, never with the waiter's own
-    ///   cancellation or disappearance (Issue #153).
-    ///
-    /// Callers attaching to one in-flight build must pass authorities of
-    /// the same lifecycle domain; both production call sites satisfy this
-    /// (the child preparation passes its one pre-commit authority, the
-    /// conversation path passes children of the one preparation root).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if runtime probes, lock validation, frozen
-    /// materialization, validation, or publication fails.
+    /// Returns [`PythonToolError::Environment`] when the runtime identities
+    /// cannot be probed or the uv build fails, and
+    /// [`PythonToolError::Storage`] when existing state claims the
+    /// fingerprint but fails verification (fail closed, never repaired).
     ///
     /// # Panics
     ///
-    /// Panics only if the store's internal synchronization lock is poisoned.
-    #[allow(clippy::too_many_lines)] // one coherent probe/coalesce/wait/publish pipeline
-    pub async fn ensure_environment(
+    /// Panics if the process-internal build coordination lock is poisoned.
+    pub async fn ensure_prepared(
         &self,
-        tool: &PublishedPythonTool,
+        package: &PythonToolPackage,
         cancellation: &crate::runtime::CancellationSignal,
-    ) -> Result<PythonToolEnvironment, PythonToolError> {
-        let (python_runtime, uv_identity) =
-            probe_runtime_identity(&self.inner, tool, cancellation).await?;
-        let digest = python_tool_environment_digest(
-            std::env::consts::OS,
-            std::env::consts::ARCH,
-            &python_runtime,
-            &uv_identity,
-            &tool.package.pyproject,
-            &tool.package.uv_lock,
-        );
-        let final_root = self
-            .inner
-            .roots
-            .private
-            .join("python-tool-envs")
-            .join(digest.as_str());
-        if let Some(environment) = Self::read_published_environment(
-            &final_root,
-            &digest,
-            &python_runtime,
-            &uv_identity,
-            &tool.package.uv_lock,
-        )? {
-            Self::record_tool_version_binding(&self.inner, tool, &digest)?;
-            return Ok(environment);
+    ) -> Result<PreparedPythonPackage, PythonToolError> {
+        let (python_identity, uv_identity) =
+            probe_runtime_identity(&self.inner, cancellation).await?;
+        let fingerprint = package_fingerprint(package, &python_identity, &uv_identity);
+        let state_dir = self.inner.root.join(PACKAGES_DIRECTORY).join(&fingerprint);
+        if let Some(prepared) = read_prepared_state(&state_dir, package, &fingerprint)? {
+            return Ok(prepared);
         }
-        let key = digest.as_str().to_owned();
+        let key = fingerprint.clone();
         let (state, owner) = {
             let mut builds = self.inner.in_flight.lock().expect("Python build lock");
             if let Some(state) = builds.get(&key) {
-                let state = state.clone();
-                // The caller is now irrevocably attached to this existing
-                // build: it selected the in-flight `BuildState` while
-                // holding the ownership lock, so it can never become a
-                // second owner of the digest. The probe only observes this
-                // decision; it never influences it.
-                #[cfg(test)]
-                self.inner.waiter_attachments.record();
-                (state, false)
+                (state.clone(), false)
             } else {
                 let state = Arc::new(BuildState {
                     result: Mutex::new(None),
@@ -1182,11 +657,9 @@ impl PythonToolStore {
                 completed: false,
             };
             let inner = self.inner.clone();
-            let tool = tool.clone();
-            let build_digest = digest.clone();
-            let build_root = final_root.clone();
-            let build_python = python_runtime.clone();
-            let build_uv = uv_identity.clone();
+            let package = package.clone();
+            let build_fingerprint = fingerprint.clone();
+            let build_dir = state_dir.clone();
             // The physical build observes the lifecycle cancellation
             // authority of the caller that established it: cancelling the
             // owning domain's authority cancels the uv units themselves.
@@ -1196,28 +669,16 @@ impl PythonToolStore {
             // owner merely by being cancelled while waiting below.
             std::mem::drop(tokio::spawn(async move {
                 let mut owner_guard = owner_guard;
-                let result = materialize_environment(
+                let result = materialize_package(
                     &inner,
-                    &tool,
-                    &build_root,
-                    &build_digest,
-                    &build_python,
-                    &build_uv,
+                    &package,
+                    &build_dir,
+                    &build_fingerprint,
+                    &python_identity,
+                    &uv_identity,
                     &build_cancellation,
                 )
                 .await;
-                let result = match result {
-                    Ok(environment) => {
-                        if let Err(error) =
-                            Self::record_tool_version_binding(&inner, &tool, &build_digest)
-                        {
-                            Err(error)
-                        } else {
-                            Ok(environment)
-                        }
-                    }
-                    Err(error) => Err(error),
-                };
                 owner_guard.finish(result);
             }));
         }
@@ -1247,105 +708,147 @@ impl PythonToolStore {
             notified = Box::pin(state.notify.notified());
         }
     }
+}
 
-    /// Records the deterministic `ToolVersion -> environment digest` binding
-    /// outside the environment's immutable dependency identity. The write is
-    /// idempotent (same inputs produce the same record); a conflicting record
-    /// is an explicit storage failure.
-    fn record_tool_version_binding(
-        inner: &PythonToolStoreInner,
-        tool: &PublishedPythonTool,
-        digest: &PythonToolEnvironmentDigest,
-    ) -> Result<(), PythonToolError> {
-        let directory = inner
-            .roots
-            .private
-            .join("python-tool-bindings")
-            .join(tool.package.tool_version_id.as_str());
-        std::fs::create_dir_all(&directory).map_err(io_error)?;
-        let record = serde_json::json!({
-            "format": BINDING_FORMAT,
-            "tool_version_id": tool.package.tool_version_id,
-            "environment_digest": digest,
-        });
-        let bytes = serde_json::to_vec(&record).map_err(io_error)?;
-        let path = directory.join(format!("{}.json", digest.as_str()));
-        if path.exists() {
-            let existing = std::fs::read(&path).map_err(io_error)?;
-            if existing != bytes {
-                return Err(PythonToolError::Storage(format!(
-                    "conflicting ToolVersion binding record for {}",
-                    digest.as_str()
-                )));
-            }
-            return Ok(());
-        }
-        let temporary = path.with_extension("json.tmp");
-        std::fs::write(&temporary, &bytes).map_err(io_error)?;
-        std::fs::rename(&temporary, &path).map_err(|error| {
-            let _ = std::fs::remove_file(&temporary);
-            io_error(error)
-        })?;
-        Ok(())
-    }
+/// One prepared managed package: the fingerprint-keyed immutable state the
+/// synthesized MCP binding launches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedPythonPackage {
+    /// The preparation fingerprint of this state.
+    pub fingerprint: String,
+    /// The state directory (`packages/<fingerprint>/`).
+    pub state_dir: PathBuf,
+}
 
-    /// Validates a published environment marker against the exact
-    /// deterministic inputs that derive the environment identity, and
-    /// returns the environment handle. A marker that does not match every
-    /// input is an explicit preparation failure, never a silent reuse.
-    #[allow(clippy::too_many_arguments)] // one deterministic marker boundary
-    fn read_published_environment(
-        root: &Path,
-        digest: &PythonToolEnvironmentDigest,
-        python_runtime: &str,
-        uv_identity: &str,
-        lock_bytes: &[u8],
-    ) -> Result<Option<PythonToolEnvironment>, PythonToolError> {
-        let marker = root.join(ENVIRONMENT_MARKER);
-        if !marker.exists() {
-            return Ok(None);
+impl PreparedPythonPackage {
+    /// The synthesized MCP server binding of this prepared package: a stdio
+    /// launch of the prepared virtualenv's interpreter running the `FastMCP`
+    /// CLI module against the frozen source copy, with the default
+    /// unconfigured-server invocation policy.
+    ///
+    /// The launch never re-resolves dependencies: it names the prepared
+    /// venv's interpreter directly (never `uv run`), and `--skip-env` pins
+    /// that decision inside the CLI. It runs the interpreter with
+    /// `-m fastmcp.cli` rather than the venv's `fastmcp` console script
+    /// because uv writes the script's shebang with the build-time (staging)
+    /// path, which the atomic publication rename invalidates; the
+    /// interpreter itself is a symlink to the probed base runtime and stays
+    /// valid. `cwd` stays `None` (the workspace root, per the generic stdio
+    /// launch rules); the `fastmcp run <file>:<object>` resolution puts the
+    /// frozen source directory on `sys.path` itself, so sibling package
+    /// modules import regardless of cwd. The environment keeps stdout clean
+    /// for the MCP wire (banner and update check silenced, bytecode caches
+    /// disabled).
+    #[must_use]
+    pub fn server_binding(&self) -> McpServerBinding {
+        let program = venv_python(&self.state_dir);
+        let server = self.state_dir.join(SOURCE_DIRECTORY).join(SERVER_FILE);
+        let mut environment = BTreeMap::new();
+        environment.insert("FASTMCP_SHOW_SERVER_BANNER".to_owned(), "false".to_owned());
+        environment.insert("FASTMCP_CHECK_FOR_UPDATES".to_owned(), "off".to_owned());
+        environment.insert("PYTHONDONTWRITEBYTECODE".to_owned(), "1".to_owned());
+        McpServerBinding {
+            transport: McpTransportConfig::Stdio {
+                program: program.display().to_string(),
+                args: vec![
+                    "-m".to_owned(),
+                    "fastmcp.cli".to_owned(),
+                    "run".to_owned(),
+                    format!("{}:mcp", server.display()),
+                    "--skip-env".to_owned(),
+                    "--no-banner".to_owned(),
+                ],
+                cwd: None,
+                environment,
+            },
+            policy: ToolInvocationPolicy::default(),
         }
-        let bytes = std::fs::read(&marker).map_err(io_error)?;
-        let value: EnvironmentMarker = serde_json::from_slice(&bytes).map_err(|error| {
-            PythonToolError::Environment(format!("invalid environment marker: {error}"))
-        })?;
-        let valid = value.format == ENVIRONMENT_MARKER_FORMAT
-            && value.ready
-            && value.os == std::env::consts::OS
-            && value.arch == std::env::consts::ARCH
-            && value.digest == digest.as_str()
-            && value.lock_digest == lock_digest_bytes(lock_bytes)
-            && value.python_runtime == python_runtime
-            && value.uv == uv_identity;
-        if !valid {
-            return Err(PythonToolError::Environment(
-                "published environment marker does not match the expected digest inputs".to_owned(),
-            ));
-        }
-        if !root.join("bin/python").is_file() {
-            return Err(PythonToolError::Environment(
-                "published environment marker has no Python interpreter".to_owned(),
-            ));
-        }
-        Ok(Some(PythonToolEnvironment {
-            digest: digest.clone(),
-            root: root.to_path_buf(),
-        }))
     }
+}
+
+/// The prepared virtualenv's interpreter: the launch executable of a
+/// prepared package.
+fn venv_python(state_dir: &Path) -> PathBuf {
+    state_dir.join(VENV_DIRECTORY).join(if cfg!(windows) {
+        "Scripts/python.exe"
+    } else {
+        "bin/python"
+    })
+}
+
+/// Validates a published state against the exact deterministic inputs that
+/// derive it, and returns the handle. A state whose directory exists but
+/// does not verify — missing/invalid manifest, mismatched identity inputs,
+/// frozen source that no longer hashes to the manifest, missing launch
+/// executable — is an explicit preparation failure, never a silent reuse
+/// and never a rebuild.
+fn read_prepared_state(
+    state_dir: &Path,
+    package: &PythonToolPackage,
+    fingerprint: &str,
+) -> Result<Option<PreparedPythonPackage>, PythonToolError> {
+    if !state_dir.exists() {
+        return Ok(None);
+    }
+    let manifest_path = state_dir.join(MANIFEST_FILE);
+    let bytes = std::fs::read(&manifest_path).map_err(io_error)?;
+    let manifest: PreparedManifest = serde_json::from_slice(&bytes).map_err(|error| {
+        PythonToolError::Storage(format!(
+            "invalid prepared-state manifest {}: {error}",
+            manifest_path.display()
+        ))
+    })?;
+    let valid = manifest.format == MANIFEST_FORMAT
+        && manifest.fingerprint == fingerprint
+        && manifest.fastmcp == MANAGED_FASTMCP_VERSION
+        && manifest.os == std::env::consts::OS
+        && manifest.arch == std::env::consts::ARCH;
+    if !valid {
+        return Err(PythonToolError::Storage(format!(
+            "prepared state {} does not match its claimed identity inputs",
+            state_dir.display()
+        )));
+    }
+    let source_root = state_dir.join(SOURCE_DIRECTORY);
+    let files = collect_files(&source_root)?;
+    if source_digest(&files) != manifest.source_digest {
+        return Err(PythonToolError::Storage(format!(
+            "prepared state source {} does not hash back to its manifest",
+            source_root.display()
+        )));
+    }
+    // The reopened package must be the one whose fingerprint this state
+    // answers to: same source digest.
+    if source_digest(&package.files) != manifest.source_digest {
+        return Err(PythonToolError::Storage(format!(
+            "prepared state {} source digest does not match the discovered package",
+            state_dir.display()
+        )));
+    }
+    let program = venv_python(state_dir);
+    if !program.is_file() {
+        return Err(PythonToolError::Storage(format!(
+            "prepared state {} has no venv interpreter",
+            state_dir.display()
+        )));
+    }
+    Ok(Some(PreparedPythonPackage {
+        fingerprint: fingerprint.to_owned(),
+        state_dir: state_dir.to_path_buf(),
+    }))
 }
 
 async fn probe_runtime_identity(
     inner: &PythonToolStoreInner,
-    tool: &PublishedPythonTool,
     cancellation: &crate::runtime::CancellationSignal,
 ) -> Result<(String, String), PythonToolError> {
     let environment = ToolEnvironment::new();
-    let child_environment = environment.child_environment(&tool.root);
+    let child_environment = environment.child_environment(&inner.root);
     let uv_command = format!("{} --version", shell_quote(&inner.uv_binary));
     let python_command = format!("{} --version", shell_quote(&inner.python_binary));
     let run = |command: String| {
         let runner = inner.runner.clone();
-        let cwd = tool.root.clone();
+        let cwd = inner.root.clone();
         let environment = child_environment.clone();
         let cancellation = cancellation.clone();
         async move {
@@ -1392,32 +895,165 @@ async fn probe_runtime_identity(
             return Err(PythonToolError::Environment(failure));
         }
     }
-    let uv_identity = bounded_output(&uv.stdout).trim().to_owned();
-    let python_identity = bounded_output(&python.stdout).trim().to_owned();
-    if uv_identity.is_empty() || python_identity.is_empty() {
+    // The identity pins path *and* version: a reinstalled interpreter of the
+    // same version at a different path is a different runtime.
+    let uv_version = bounded_output(&uv.stdout).trim().to_owned();
+    let python_version = bounded_output(&python.stdout).trim().to_owned();
+    if uv_version.is_empty() || python_version.is_empty() {
         return Err(PythonToolError::Environment(
             "runtime identity probe returned empty output".to_owned(),
         ));
     }
+    let uv_identity = format!("{} ({uv_version})", inner.uv_binary.display());
+    let python_identity = format!("{} ({python_version})", inner.python_binary.display());
     Ok((python_identity, uv_identity))
 }
 
-async fn materialize_environment(
+/// The rustX-generated `pyproject.toml` of one package: the project stub
+/// that lets uv lock/sync, with the package's declared dependencies plus
+/// the rustX-pinned `FastMCP` build.
+fn generated_pyproject(package: &PythonToolPackage, python_identity: &str) -> String {
+    use std::fmt::Write as _;
+    // `python_identity` is `<path> (Python X.Y.Z)`; requires-python tracks
+    // the probed interpreter's minor series, and the interpreter identity
+    // is itself a fingerprint input, so a toolchain change re-prepares.
+    let requires_python = probed_python_series(python_identity).map_or_else(
+        || toml_basic_string(">=3.10"),
+        |series| toml_basic_string(&format!("=={series}.*")),
+    );
+    let mut dependencies = String::new();
+    for requirement in &package.requirements {
+        let _ = writeln!(dependencies, "    {},", toml_basic_string(requirement));
+    }
+    let _ = writeln!(
+        dependencies,
+        "    {},",
+        toml_basic_string(&format!("fastmcp=={MANAGED_FASTMCP_VERSION}"))
+    );
+    format!(
+        "[project]\nname = {}\nversion = \"0.0.0\"\nrequires-python = {requires_python}\ndependencies = [\n{dependencies}]\n",
+        toml_basic_string(&format!("rustx-python-tool-{}", package.name)),
+    )
+}
+
+/// The `<major>.<minor>` series of the probed interpreter identity
+/// (`<path> (Python X.Y.Z)`), when it parses.
+fn probed_python_series(python_identity: &str) -> Option<String> {
+    let version = python_identity
+        .rsplit("(Python ")
+        .next()?
+        .trim_end_matches(')');
+    let mut parts = version.split('.');
+    let major = parts.next()?;
+    let minor = parts.next()?;
+    if major.chars().all(|c| c.is_ascii_digit()) && minor.chars().all(|c| c.is_ascii_digit()) {
+        Some(format!("{major}.{minor}"))
+    } else {
+        None
+    }
+}
+
+fn toml_basic_string(value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
+/// Builds one package state in a sibling staging directory and publishes it
+/// with one atomic rename.
+async fn materialize_package(
     inner: &PythonToolStoreInner,
-    tool: &PublishedPythonTool,
-    final_root: &Path,
-    digest: &PythonToolEnvironmentDigest,
-    python_runtime: &str,
+    package: &PythonToolPackage,
+    state_dir: &Path,
+    fingerprint: &str,
+    python_identity: &str,
     uv_identity: &str,
     cancellation: &crate::runtime::CancellationSignal,
-) -> Result<PythonToolEnvironment, PythonToolError> {
-    if final_root.exists() {
-        std::fs::remove_dir_all(final_root).map_err(io_error)?;
+) -> Result<PreparedPythonPackage, PythonToolError> {
+    let staging =
+        state_dir.with_file_name(format!(".build-{}-{}", fingerprint, std::process::id()));
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging).map_err(io_error)?;
     }
+    // On every failure below the staging directory is scratch: it is never
+    // renamed into place, so a failed build can never publish a partial
+    // state. A crashed process may leave the staging directory behind; it
+    // is removed by the next build attempt of the same fingerprint.
+    let result = stage_and_build(
+        inner,
+        package,
+        &staging,
+        fingerprint,
+        python_identity,
+        uv_identity,
+        cancellation,
+    )
+    .await;
+    let staging_result = match result {
+        Ok(manifest) => {
+            let manifest_bytes = serde_json::to_vec(&manifest).map_err(io_error)?;
+            std::fs::write(staging.join(MANIFEST_FILE), manifest_bytes).map_err(io_error)?;
+            match std::fs::rename(&staging, state_dir) {
+                Ok(()) => Ok(()),
+                Err(error) if state_dir.exists() => {
+                    // A concurrent builder won the publish. The staging
+                    // scratch is removed and the winner's state is validated
+                    // by the caller-side reopen, exactly as if this process
+                    // had found it published.
+                    let _ = std::fs::remove_dir_all(&staging);
+                    let _ = error;
+                    Ok(())
+                }
+                Err(error) => Err(io_error(error)),
+            }
+        }
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            Err(error)
+        }
+    };
+    staging_result?;
+    // Publish through validation, never through trust: the handle returned
+    // is the re-validated on-disk state, whoever built it.
+    read_prepared_state(state_dir, package, fingerprint)?.ok_or_else(|| {
+        PythonToolError::Storage(format!(
+            "prepared state {} did not materialize",
+            state_dir.display()
+        ))
+    })
+}
+
+async fn stage_and_build(
+    inner: &PythonToolStoreInner,
+    package: &PythonToolPackage,
+    staging: &Path,
+    fingerprint: &str,
+    python_identity: &str,
+    uv_identity: &str,
+    cancellation: &crate::runtime::CancellationSignal,
+) -> Result<PreparedManifest, PythonToolError> {
+    let source_root = staging.join(SOURCE_DIRECTORY);
+    std::fs::create_dir_all(&source_root).map_err(io_error)?;
+    // The frozen source copy: the server runs these snapshotted bytes,
+    // never the live workspace files.
+    for (relative, bytes) in &package.files {
+        let destination = source_root.join(relative);
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent).map_err(io_error)?;
+        }
+        std::fs::write(&destination, bytes).map_err(io_error)?;
+    }
+    std::fs::write(
+        staging.join("pyproject.toml"),
+        generated_pyproject(package, python_identity),
+    )
+    .map_err(io_error)?;
+
     let environment = ToolEnvironment::new();
-    let child_environment = environment.child_environment(&tool.root);
+    let child_environment = environment.child_environment(&inner.root);
     let commands = [
-        format!("{} lock --check --no-config", shell_quote(&inner.uv_binary)),
+        // rustX generates the lock: `--check` would require a package-owned
+        // uv.lock, which the contract deliberately does not have.
+        format!("{} lock --no-config", shell_quote(&inner.uv_binary)),
         format!(
             "{} sync --frozen --no-install-project --no-default-groups --no-config",
             shell_quote(&inner.uv_binary)
@@ -1427,20 +1063,19 @@ async fn materialize_environment(
         let mut environment_entries = child_environment.clone();
         environment_entries.push((
             "UV_PROJECT_ENVIRONMENT".to_owned(),
-            final_root.display().to_string(),
+            staging.join(VENV_DIRECTORY).display().to_string(),
         ));
-        // The uv cache is store-private scratch state: without this pin,
-        // a cache lookup could resolve relative to the working directory
-        // and write `.cache/uv` into the immutable published ToolVersion
-        // source, corrupting its canonical bytes.
+        // The uv cache is store-owned scratch state: without this pin, a
+        // cache lookup could resolve relative to the working directory and
+        // write `.cache/uv` into the staging source.
         environment_entries.push((
             "UV_CACHE_DIR".to_owned(),
-            inner.roots.shared.join("uv-cache").display().to_string(),
+            inner.root.join(UV_CACHE_DIRECTORY).display().to_string(),
         ));
         // The exact interpreter selection: uv must materialize with the same
-        // runtime whose identity entered the environment digest. Project-local
+        // runtime whose identity entered the fingerprint. Project-local
         // interpreter selection and uv heuristics are never permitted to pick
-        // another Python while retaining the probed identity in the digest.
+        // another Python while retaining the probed identity.
         environment_entries.push((
             "UV_PYTHON".to_owned(),
             inner.python_binary.display().to_string(),
@@ -1453,12 +1088,12 @@ async fn materialize_environment(
             .run(
                 SupervisedCommandSpec {
                     command: command.clone(),
-                    cwd: tool.root.clone(),
+                    cwd: staging.to_path_buf(),
                     environment: environment_entries,
                     timeout: Some(PYTHON_TOOL_UV_TIMEOUT),
                     // The build-owner domain's lifecycle authority: its
-                    // cancellation physically cancels this uv unit, and
-                    // the result resolves only after the unit settled.
+                    // cancellation physically cancels this uv unit, and the
+                    // result resolves only after the unit settled.
                     cancellation: cancellation.clone(),
                 },
                 None,
@@ -1486,3783 +1121,534 @@ async fn materialize_environment(
             return Err(PythonToolError::Environment(failure));
         }
     }
-    let marker = EnvironmentMarker {
-        format: ENVIRONMENT_MARKER_FORMAT.to_owned(),
-        ready: true,
+    Ok(PreparedManifest {
+        format: MANIFEST_FORMAT.to_owned(),
+        fingerprint: fingerprint.to_owned(),
+        package: package.name.clone(),
+        origin: package.root.display().to_string(),
+        entrypoint: ENTRYPOINT.to_owned(),
+        fastmcp: MANAGED_FASTMCP_VERSION.to_owned(),
+        python: python_identity.to_owned(),
+        uv: uv_identity.to_owned(),
         os: std::env::consts::OS.to_owned(),
         arch: std::env::consts::ARCH.to_owned(),
-        digest: digest.as_str().to_owned(),
-        lock_digest: lock_digest_bytes(&tool.package.uv_lock),
-        python_runtime: python_runtime.to_owned(),
-        uv: uv_identity.to_owned(),
-    };
-    std::fs::create_dir_all(final_root).map_err(io_error)?;
-    let temporary = final_root.with_extension("incomplete");
-    if temporary.exists() {
-        std::fs::remove_dir_all(&temporary).map_err(io_error)?;
-    }
-    std::fs::create_dir_all(&temporary).map_err(io_error)?;
-    std::fs::write(
-        temporary.join(ENVIRONMENT_MARKER),
-        serde_json::to_vec(&marker).map_err(io_error)?,
-    )
-    .map_err(io_error)?;
-    std::fs::rename(
-        temporary.join(ENVIRONMENT_MARKER),
-        final_root.join(ENVIRONMENT_MARKER),
-    )
-    .map_err(io_error)?;
-    std::fs::remove_dir_all(temporary).map_err(io_error)?;
-    Ok(PythonToolEnvironment {
-        digest: digest.clone(),
-        root: final_root.to_path_buf(),
+        source_digest: source_digest(&package.files),
     })
-}
-
-/// The deterministic environment marker: every input that derives the
-/// environment identity, plus the `ready` publication gate.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct EnvironmentMarker {
-    format: String,
-    ready: bool,
-    os: String,
-    arch: String,
-    digest: String,
-    lock_digest: String,
-    python_runtime: String,
-    uv: String,
-}
-
-/// Recomputes the `ToolVersion` identity over a published `source/` directory:
-/// sorted relative paths, lengths, and raw bytes — the same canonical input
-/// as [`tool_version_id`].
-fn published_source_digest(source_root: &Path) -> Result<ToolVersionId, PythonToolError> {
-    let files = collect_files(source_root)?;
-    Ok(tool_version_id(&files))
-}
-
-fn lock_digest_bytes(lock: &[u8]) -> String {
-    format!("sha256:{}", hex_digest(&sha2::Sha256::digest(lock)))
-}
-
-/// Canonical Python executor using the immutable `ToolVersion` source and
-/// environment handles captured at candidate preparation.
-///
-/// The canonical published source is the immutable authority and is never
-/// a working directory: every invocation claims a unique execution bundle
-/// from the stable store's allocation domain and materializes its own
-/// private source copy, harness, and input there (see
-/// [`PythonToolStore::allocate_execution_bundle`]).
-pub struct PythonToolExecutor {
-    tool: PublishedPythonTool,
-    environment: PythonToolEnvironment,
-    store: PythonToolStore,
-}
-
-impl std::fmt::Debug for PythonToolExecutor {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("PythonToolExecutor")
-            .field("tool_version_id", &self.tool.package.tool_version_id)
-            .field("environment_digest", &self.environment.digest)
-            .finish_non_exhaustive()
-    }
-}
-
-impl PythonToolExecutor {
-    /// Creates an executor from published immutable handles.
-    ///
-    /// The constructor performs no filesystem writes: the harness is
-    /// runtime-owned executable code materialized into each invocation's
-    /// own execution bundle, so preparing a new executor generation can
-    /// never rewrite executable bytes an older detached execution is about
-    /// to launch.
-    #[must_use]
-    pub fn new(
-        store: &PythonToolStore,
-        tool: PublishedPythonTool,
-        environment: PythonToolEnvironment,
-    ) -> Self {
-        Self {
-            tool,
-            environment,
-            store: store.clone(),
-        }
-    }
-}
-
-impl ToolExecutor for PythonToolExecutor {
-    fn execute<'a>(
-        &'a self,
-        invocation: ToolInvocation,
-        context: ToolExecutionContext<'a>,
-    ) -> BoxFuture<'a, ToolExecutionResult> {
-        Box::pin(async move {
-            let started = Instant::now();
-            // The invocation-private execution bundle:
-            //
-            //   python-invocations/execution-N/
-            //       source/     the writable copy of the immutable
-            //                   canonical ToolVersion source — the module
-            //                   root *and* the working directory
-            //       harness.py  the runtime-owned harness bytes
-            //       input.json  the runtime-owned invocation arguments
-            //
-            // The three ownership domains never share a namespace: a
-            // package-owned `input.json` or `harness.py` inside the
-            // ToolVersion source is copied into `source/` like any other
-            // canonical file and is never overwritten by runtime-owned
-            // invocation files. Ordinary tool writes (relative paths,
-            // `__file__`) land in `source/` and can never mutate the
-            // published ToolVersion. The bundle is this invocation's own
-            // claim; it is removed when the invocation settles, and no
-            // other invocation or capability generation can reuse or
-            // delete it while it is live.
-            let bundle = match self.store.allocate_execution_bundle() {
-                Ok(bundle) => bundle,
-                Err(error) => {
-                    return python_empty_terminal(
-                        ToolExecutionStatus::Failed {
-                            error: error.to_string(),
-                        },
-                        None,
-                        &context,
-                        started,
-                    );
-                }
-            };
-            let source_dir = bundle.join("source");
-            let harness_path = bundle.join("harness.py");
-            let input_path = bundle.join("input.json");
-            let status_path = bundle.join("status.json");
-            let result_path = bundle.join("result.json");
-            let materialization = (|| -> Result<(), PythonToolError> {
-                materialize_invocation_source(&self.tool.root, &source_dir)?;
-                std::fs::write(&harness_path, PYTHON_HARNESS).map_err(io_error)?;
-                write_private_input(&input_path, &invocation.arguments)?;
-                Ok(())
-            })();
-            if let Err(error) = materialization {
-                // The bundle is this invocation's own freshly claimed
-                // directory, so settling it is always safe.
-                let _ = std::fs::remove_dir_all(&bundle);
-                return python_empty_terminal(
-                    ToolExecutionStatus::Failed {
-                        error: error.to_string(),
-                    },
-                    None,
-                    &context,
-                    started,
-                );
-            }
-            let python = self.environment.root.join("bin/python");
-            let command = format!(
-                "{} {} {} {} {} {} {}",
-                shell_quote(&python),
-                shell_quote(&harness_path),
-                shell_quote(&source_dir),
-                shell_quote_str(&self.tool.package.entrypoint),
-                shell_quote(&input_path),
-                shell_quote(&status_path),
-                shell_quote(&result_path),
-            );
-            let runtime_environment = context
-                .environment
-                .with_replacement_overlay(&ToolEnvironmentOverlay::python(&self.environment.root));
-            let result = self
-                .store
-                .inner
-                .runner
-                .run(
-                    SupervisedCommandSpec {
-                        command,
-                        cwd: source_dir,
-                        environment: runtime_environment
-                            .child_environment(context.workspace.root()),
-                        timeout: None,
-                        cancellation: context.cancellation.child_signal(),
-                    },
-                    None,
-                )
-                .await;
-            match result {
-                Ok(result) => {
-                    let translated = translate_python_result(
-                        result,
-                        &status_path,
-                        &result_path,
-                        &context,
-                        started,
-                    );
-                    let _ = std::fs::remove_dir_all(&bundle);
-                    translated
-                }
-                Err(error) => {
-                    let _ = std::fs::remove_dir_all(&bundle);
-                    python_empty_terminal(
-                        ToolExecutionStatus::Failed { error },
-                        None,
-                        &context,
-                        started,
-                    )
-                }
-            }
-        })
-    }
-}
-
-/// Materializes the invocation-private source copy of one immutable
-/// published `ToolVersion`: a deterministic recursive copy of every regular
-/// file, preserving the package-relative layout.
-///
-/// The destination is the `source/` directory inside the caller's freshly
-/// claimed execution bundle, so it is expected not to exist; an unexpected
-/// pre-existing destination is a storage failure, never a reason to delete
-/// unknown state.
-///
-/// The published source was validated at discovery to contain only
-/// directories and regular non-symlink files; anything else here means the
-/// canonical store was tampered with and fails the invocation explicitly
-/// rather than following a link outside the store.
-fn materialize_invocation_source(
-    source_root: &Path,
-    destination: &Path,
-) -> Result<(), PythonToolError> {
-    if destination.exists() {
-        return Err(PythonToolError::Storage(format!(
-            "the invocation source directory already exists: {}",
-            destination.display()
-        )));
-    }
-    copy_invocation_tree(source_root, destination)
-}
-
-/// The deterministic recursive copy behind
-/// [`materialize_invocation_source`].
-fn copy_invocation_tree(source: &Path, destination: &Path) -> Result<(), PythonToolError> {
-    std::fs::create_dir_all(destination).map_err(io_error)?;
-    let mut entries = std::fs::read_dir(source)
-        .map_err(io_error)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(io_error)?;
-    entries.sort_by_key(std::fs::DirEntry::file_name);
-    for entry in entries {
-        let metadata = std::fs::symlink_metadata(entry.path()).map_err(io_error)?;
-        let target = destination.join(entry.file_name());
-        if metadata.is_dir() {
-            copy_invocation_tree(&entry.path(), &target)?;
-        } else if metadata.is_file() && !metadata.file_type().is_symlink() {
-            std::fs::copy(entry.path(), &target).map_err(io_error)?;
-        } else {
-            return Err(PythonToolError::Storage(format!(
-                "the published ToolVersion source contains a non-regular entry: {}",
-                entry.path().display()
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn write_private_input(path: &Path, arguments: &serde_json::Value) -> Result<(), PythonToolError> {
-    let bytes = serde_json::to_vec(arguments)
-        .map_err(|error| PythonToolError::Storage(error.to_string()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut options = std::fs::OpenOptions::new();
-        options.create_new(true).write(true).mode(0o600);
-        let mut file = options.open(path).map_err(io_error)?;
-        file.write_all(&bytes).map_err(io_error)?;
-    }
-    #[cfg(not(unix))]
-    std::fs::write(path, bytes).map_err(io_error)?;
-    Ok(())
-}
-
-#[derive(Debug, Deserialize)]
-struct PythonStatusEnvelope {
-    ok: bool,
-    #[serde(default)]
-    error: Option<String>,
-}
-
-fn translate_python_result(
-    result: CapturedProcessResult,
-    status_path: &Path,
-    result_path: &Path,
-    context: &ToolExecutionContext<'_>,
-    started: Instant,
-) -> ToolExecutionResult {
-    let background = context.execution_id.is_some();
-    let cancellation_reason = context.cancellation.reason();
-    match result.intent {
-        ProcessOutcomeIntent::Cancelled => {
-            return python_empty_terminal(
-                ToolExecutionStatus::Cancelled {
-                    reason: cancellation_reason,
-                    phase: ToolCancellationPhase::DuringExecution,
-                },
-                result.exit_code,
-                context,
-                started,
-            );
-        }
-        ProcessOutcomeIntent::TimedOut => {
-            return python_empty_terminal(
-                ToolExecutionStatus::TimedOut,
-                result.exit_code,
-                context,
-                started,
-            );
-        }
-        ProcessOutcomeIntent::ProcessControlFailed(error) => {
-            return python_empty_terminal(
-                ToolExecutionStatus::Failed { error },
-                result.exit_code,
-                context,
-                started,
-            );
-        }
-        ProcessOutcomeIntent::Completed if result.exit_code != Some(0) => {
-            return python_empty_terminal(
-                ToolExecutionStatus::Failed {
-                    error: bounded_output(&result.stderr),
-                },
-                result.exit_code,
-                context,
-                started,
-            );
-        }
-        ProcessOutcomeIntent::Completed => {}
-    }
-
-    let envelope = match read_python_status(status_path) {
-        Ok(envelope) => envelope,
-        Err(error) => {
-            return python_empty_terminal(
-                ToolExecutionStatus::Failed { error },
-                result.exit_code,
-                context,
-                started,
-            );
-        }
-    };
-    if !envelope.ok {
-        return python_empty_terminal(
-            ToolExecutionStatus::Failed {
-                error: bound_error(envelope.error.as_deref().unwrap_or("Python tool failed")),
-            },
-            result.exit_code,
-            context,
-            started,
-        );
-    }
-
-    normalize_python_success(result_path, result.exit_code, context, started, background)
-}
-
-fn read_python_status(path: &Path) -> Result<PythonStatusEnvelope, String> {
-    let file = std::fs::File::open(path)
-        .map_err(|error| format!("cannot read the Python runtime status transport: {error}"))?;
-    let mut limited = file.take((PYTHON_STATUS_MAX_BYTES + 1) as u64);
-    let mut bytes = Vec::new();
-    limited
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("cannot read the Python runtime status transport: {error}"))?;
-    if bytes.len() > PYTHON_STATUS_MAX_BYTES {
-        return Err(format!(
-            "the Python runtime status transport exceeds {PYTHON_STATUS_MAX_BYTES} bytes"
-        ));
-    }
-    serde_json::from_slice(&bytes)
-        .map_err(|error| format!("invalid Python runtime status transport: {error}"))
-}
-
-fn normalize_python_success(
-    result_path: &Path,
-    exit_code: Option<i32>,
-    context: &ToolExecutionContext<'_>,
-    started: Instant,
-    background: bool,
-) -> ToolExecutionResult {
-    let small = match read_small_json_transport(result_path) {
-        Ok(Some(value)) => Some(value),
-        Ok(None) => None,
-        Err(error) => {
-            if background {
-                return python_storage_failure(
-                    &format!("Python logical result storage failed: {error}"),
-                    exit_code,
-                    context,
-                    started,
-                );
-            }
-            return python_empty_terminal(
-                ToolExecutionStatus::Failed { error },
-                exit_code,
-                context,
-                started,
-            );
-        }
-    };
-
-    if let Some((value, bytes)) = small {
-        return normalize_small_python_value(
-            value, &bytes, exit_code, context, started, background,
-        );
-    }
-
-    let mut capture = if background {
-        let Some(execution_id) = context.execution_id else {
-            return python_empty_terminal(
-                ToolExecutionStatus::Failed {
-                    error: "a background Python result requires an execution identity".to_owned(),
-                },
-                None,
-                context,
-                started,
-            );
-        };
-        let sink = match context
-            .tool_output
-            .open_background_output_sink(execution_id)
-        {
-            Ok(sink) => sink,
-            Err(error) => {
-                return python_storage_failure(
-                    &format!("cannot open the background Python result output: {error}"),
-                    exit_code,
-                    context,
-                    started,
-                );
-            }
-        };
-        ToolOutputCapture::background(sink, None)
-    } else {
-        ToolOutputCapture::foreground()
-    };
-
-    let read_result = std::fs::File::open(result_path)
-        .map_err(|error| format!("cannot open the Python logical result transport: {error}"))
-        .and_then(|file| {
-            let foreground_store = (!capture.is_background()).then_some(context.tool_output);
-            capture.push_reader(file, foreground_store)
-        });
-    let capture_result = capture.finish(read_result.is_ok());
-    if let Err(error) = read_result {
-        return python_capture_result(
-            ToolExecutionStatus::Failed {
-                error: format!("Python logical result storage failed: {error}"),
-            },
-            capture_result,
-            exit_code,
-            context,
-            started,
-            background,
-            Some(error.as_str()),
-        );
-    }
-    if let Err(error) = validate_json_transport(result_path) {
-        return python_capture_result(
-            ToolExecutionStatus::Failed {
-                error: format!("invalid Python logical result transport: {error}"),
-            },
-            capture_result,
-            exit_code,
-            context,
-            started,
-            background,
-            Some(error.as_str()),
-        );
-    }
-
-    python_capture_result(
-        ToolExecutionStatus::Success,
-        capture_result,
-        exit_code,
-        context,
-        started,
-        background,
-        None,
-    )
-}
-
-fn read_small_json_transport(path: &Path) -> Result<Option<(serde_json::Value, String)>, String> {
-    let file = std::fs::File::open(path)
-        .map_err(|error| format!("cannot open the Python logical result transport: {error}"))?;
-    let mut limited = file.take((FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1) as u64);
-    let mut bytes = Vec::new();
-    limited
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("cannot read the Python logical result transport: {error}"))?;
-    if bytes.len() > FOREGROUND_TOOL_RESULT_PREVIEW_BYTES {
-        return Ok(None);
-    }
-    let text = String::from_utf8(bytes.clone())
-        .map_err(|error| format!("Python logical result is not valid UTF-8: {error}"))?;
-    let value = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("invalid Python logical result JSON: {error}"))?;
-    Ok(Some((value, text)))
-}
-
-fn validate_json_transport(path: &Path) -> Result<(), String> {
-    let file = std::fs::File::open(path)
-        .map_err(|error| format!("cannot reopen the Python logical result transport: {error}"))?;
-    let mut deserializer = serde_json::Deserializer::from_reader(file);
-    serde::de::IgnoredAny::deserialize(&mut deserializer).map_err(|error| error.to_string())?;
-    deserializer.end().map_err(|error| error.to_string())
-}
-
-fn normalize_small_python_value(
-    value: serde_json::Value,
-    bytes: &str,
-    exit_code: Option<i32>,
-    context: &ToolExecutionContext<'_>,
-    started: Instant,
-    background: bool,
-) -> ToolExecutionResult {
-    if !background {
-        return ToolExecutionResult {
-            status: ToolExecutionStatus::Success,
-            content: vec![ToolResultContent::Json { value }],
-            duration_ms: duration_ms(started),
-            exit_code,
-            artifacts: Vec::new(),
-            truncation: None,
-            managed_output: None,
-        };
-    }
-    let Some(execution_id) = context.execution_id else {
-        return python_empty_terminal(
-            ToolExecutionStatus::Failed {
-                error: "a background Python result requires an execution identity".to_owned(),
-            },
-            exit_code,
-            context,
-            started,
-        );
-    };
-    let sink = match context
-        .tool_output
-        .open_background_output_sink(execution_id)
-    {
-        Ok(sink) => sink,
-        Err(error) => {
-            return python_storage_failure(
-                &format!("cannot open the background Python result output: {error}"),
-                exit_code,
-                context,
-                started,
-            );
-        }
-    };
-    let mut capture = ToolOutputCapture::background(sink, None);
-    if let Err(error) = capture.push(bytes, None) {
-        let captured = capture.finish(false);
-        return python_capture_result(
-            ToolExecutionStatus::Failed {
-                error: format!("Python logical result storage failed: {error}"),
-            },
-            captured,
-            exit_code,
-            context,
-            started,
-            true,
-            Some(error.as_str()),
-        );
-    }
-    let captured = capture.finish(true);
-    python_capture_result(
-        ToolExecutionStatus::Success,
-        captured,
-        exit_code,
-        context,
-        started,
-        true,
-        None,
-    )
-    .with_json_content(value)
-}
-
-fn python_capture_result(
-    status: ToolExecutionStatus,
-    captured: crate::tools::output::CapturedOutput,
-    exit_code: Option<i32>,
-    _context: &ToolExecutionContext<'_>,
-    started: Instant,
-    background: bool,
-    diagnostic: Option<&str>,
-) -> ToolExecutionResult {
-    let status = bound_status(status);
-    let continuation = continuation_for_capture(&captured, background, diagnostic);
-    let truncation = truncation_for_capture(&captured);
-    let content = vec![ToolResultContent::Text(
-        crate::message::content::TextBlock {
-            text: captured.preview,
-        },
-    )];
-    ToolExecutionResult {
-        status,
-        content,
-        duration_ms: duration_ms(started),
-        exit_code,
-        artifacts: Vec::new(),
-        truncation,
-        managed_output: continuation,
-    }
-}
-
-trait PythonResultContentExt {
-    fn with_json_content(self, value: serde_json::Value) -> Self;
-}
-
-impl PythonResultContentExt for ToolExecutionResult {
-    fn with_json_content(mut self, value: serde_json::Value) -> Self {
-        self.content = vec![ToolResultContent::Json { value }];
-        self
-    }
-}
-
-fn python_empty_terminal(
-    status: ToolExecutionStatus,
-    exit_code: Option<i32>,
-    context: &ToolExecutionContext<'_>,
-    started: Instant,
-) -> ToolExecutionResult {
-    let status = bound_status(status);
-    if context.execution_id.is_none() {
-        return ToolExecutionResult {
-            status,
-            content: Vec::new(),
-            duration_ms: duration_ms(started),
-            exit_code,
-            artifacts: Vec::new(),
-            truncation: None,
-            managed_output: None,
-        };
-    }
-    let Some(execution_id) = context.execution_id else {
-        unreachable!();
-    };
-    let locator = context.tool_output.background_output_path(execution_id);
-    match context
-        .tool_output
-        .open_background_output_sink(execution_id)
-    {
-        Ok(sink) => {
-            drop(sink);
-            ToolExecutionResult {
-                status,
-                content: Vec::new(),
-                duration_ms: duration_ms(started),
-                exit_code,
-                artifacts: Vec::new(),
-                truncation: None,
-                managed_output: Some(ManagedOutputContinuation::Complete { locator }),
-            }
-        }
-        Err(error) => python_storage_failure(
-            &format!("cannot open the background Python result output: {error}"),
-            exit_code,
-            context,
-            started,
-        ),
-    }
-}
-
-fn python_storage_failure(
-    error: &str,
-    exit_code: Option<i32>,
-    context: &ToolExecutionContext<'_>,
-    started: Instant,
-) -> ToolExecutionResult {
-    let error = bound_error(error);
-    let continuation =
-        context
-            .execution_id
-            .map(|execution_id| ManagedOutputContinuation::Partial {
-                locator: context.tool_output.background_output_path(execution_id),
-                diagnostic: error.clone(),
-            });
-    ToolExecutionResult {
-        status: ToolExecutionStatus::Failed {
-            error: error.clone(),
-        },
-        content: Vec::new(),
-        duration_ms: duration_ms(started),
-        exit_code,
-        artifacts: Vec::new(),
-        truncation: None,
-        managed_output: continuation,
-    }
-}
-
-fn duration_ms(started: Instant) -> u64 {
-    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
-}
-
-fn bounded_output(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(&bytes[..bytes.len().min(4096)]).into_owned()
-}
-
-fn bound_status(status: ToolExecutionStatus) -> ToolExecutionStatus {
-    match status {
-        ToolExecutionStatus::Failed { error } => ToolExecutionStatus::Failed {
-            error: bound_error(&error),
-        },
-        status => status,
-    }
-}
-
-fn bound_error(message: &str) -> String {
-    crate::tools::limits::bound_utf8_text(message.to_owned(), 1024)
-}
-
-fn shell_quote(path: &Path) -> String {
-    let value = path.to_string_lossy();
-    shell_quote_str(&value)
-}
-
-fn resolve_executable(name: &str) -> PathBuf {
-    if let Some(path) = std::env::var_os("PATH") {
-        for directory in std::env::split_paths(&path) {
-            let candidate = directory.join(name);
-            if candidate.is_file() {
-                return candidate;
-            }
-        }
-    }
-    // The child environment uses the fixed runtime-approved PATH; resolve
-    // there so the probed identity and the `UV_PYTHON` pin always name the
-    // exact same binary.
-    for directory in ["/usr/local/bin", "/usr/bin", "/bin"] {
-        let candidate = std::path::Path::new(directory).join(name);
-        if candidate.is_file() {
-            return candidate;
-        }
-    }
-    PathBuf::from(name)
-}
-
-fn shell_quote_str(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
+    use super::*;
+    use crate::runtime::CancellationSignal;
+    use crate::runtime::process_runner::CapturedProcessResult;
 
-    use super::{
-        BuildOwnerGuard, BuildState, PublishedPythonTool, PythonToolPackage, PythonToolStore,
-        PythonToolStoreInner, python_tool_environment_digest,
-    };
-    use crate::runtime::identity::ToolVersionId;
-    use crate::runtime::process_runner::{
-        CapturedProcessResult, ProcessOutcomeIntent, SupervisedCommandSpec, SupervisedProcessRunner,
-    };
-    use crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES;
-    use crate::tools::types::{ToolExecutionStatus, ToolInvocationPolicy, ToolResultContent};
-    use futures_util::future::BoxFuture;
-    use std::collections::BTreeMap;
-    use std::path::PathBuf;
-    use std::sync::{Arc, Mutex};
-    use std::time::Duration;
+    type PackageFiles = (&'static str, &'static [u8]);
 
-    #[test]
-    fn environment_identity_excludes_source_description() {
-        let first = python_tool_environment_digest(
-            "linux",
-            "x86_64",
-            "Python 3.13",
-            "uv 0.9",
-            b"deps",
-            b"lock",
-        );
-        let second = python_tool_environment_digest(
-            "linux",
-            "x86_64",
-            "Python 3.13",
-            "uv 0.9",
-            b"deps",
-            b"lock",
-        );
-        assert_eq!(first, second);
-        assert_ne!(
-            first,
-            python_tool_environment_digest(
-                "linux",
-                "x86_64",
-                "Python 3.13",
-                "uv 0.9",
-                b"other",
-                b"lock"
-            )
-        );
-        assert_ne!(
-            first,
-            python_tool_environment_digest(
-                "linux",
-                "aarch64",
-                "Python 3.13",
-                "uv 0.9",
-                b"deps",
-                b"lock"
-            )
-        );
-    }
-
-    /// A scripted runner that deterministically dispatches results by
-    /// command, parks materialization commands behind a gate the test
-    /// controls, records every invocation with its finite deadline, and
-    /// materializes the `bin/python` fixture for successful sync results so
-    /// the reuse path observes a real published environment. Result dispatch
-    /// by command makes concurrent callers deterministic: probes always
-    /// resolve the same identities regardless of interleaving.
-    /// One recorded invocation: the program, its explicit environment, and
-    /// the finite deadline it was given.
-    type RecordedCommand = (String, Vec<(String, String)>, Option<Duration>);
-
-    #[derive(Clone)]
-    struct ScriptedRunner {
-        materialization_results: Arc<Mutex<VecDeque<Result<CapturedProcessResult, String>>>>,
-        fail_probes: Arc<std::sync::atomic::AtomicBool>,
-        started: Arc<tokio::sync::Notify>,
-        started_count: Arc<std::sync::atomic::AtomicUsize>,
-        materialization_count: Arc<std::sync::atomic::AtomicUsize>,
-        gate_tx: tokio::sync::watch::Sender<bool>,
-        gate_rx: tokio::sync::watch::Receiver<bool>,
-        commands: Arc<Mutex<Vec<RecordedCommand>>>,
-    }
-
-    impl ScriptedRunner {
-        fn new(materialization_results: Vec<Result<CapturedProcessResult, String>>) -> Self {
-            let (gate_tx, gate_rx) = tokio::sync::watch::channel(false);
-            Self {
-                materialization_results: Arc::new(Mutex::new(VecDeque::from(
-                    materialization_results,
-                ))),
-                fail_probes: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                started: Arc::new(tokio::sync::Notify::new()),
-                started_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-                materialization_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-                gate_tx,
-                gate_rx,
-                commands: Arc::new(Mutex::new(Vec::new())),
+    fn workspace_with(packages: &[(&str, &[PackageFiles])]) -> (tempfile::TempDir, Workspace) {
+        let directory = tempfile::tempdir().expect("workspace");
+        for (name, files) in packages {
+            let root = directory.path().join(".agents/tools").join(name);
+            std::fs::create_dir_all(&root).expect("package directory");
+            for (relative, bytes) in *files {
+                std::fs::write(root.join(relative), bytes).expect("package file");
             }
         }
-
-        fn set_probe_timeout(&self) {
-            self.fail_probes
-                .store(true, std::sync::atomic::Ordering::Release);
-        }
-
-        fn release_gate(&self) {
-            let _ = self.gate_tx.send(true);
-        }
-
-        fn wait_for_runs(&self, count: usize) {
-            tokio::task::block_in_place(|| {
-                loop {
-                    if self
-                        .started_count
-                        .load(std::sync::atomic::Ordering::Acquire)
-                        >= count
-                    {
-                        return;
-                    }
-                    let notified = self.started.notified();
-                    tokio::runtime::Handle::current().block_on(async {
-                        tokio::time::timeout(std::time::Duration::from_secs(15), notified)
-                            .await
-                            .expect("the scripted runner must progress");
-                    });
-                }
-            });
-        }
-
-        fn wait_for_materializations(&self, count: usize) {
-            tokio::task::block_in_place(|| {
-                loop {
-                    if self
-                        .materialization_count
-                        .load(std::sync::atomic::Ordering::Acquire)
-                        >= count
-                    {
-                        return;
-                    }
-                    let notified = self.started.notified();
-                    tokio::runtime::Handle::current().block_on(async {
-                        tokio::time::timeout(std::time::Duration::from_secs(15), notified)
-                            .await
-                            .expect("the scripted runner must progress");
-                    });
-                }
-            });
-        }
-
-        fn materialization_count(&self) -> usize {
-            self.materialization_count
-                .load(std::sync::atomic::Ordering::Acquire)
-        }
-
-        /// The full environment of the first recorded `sync` invocation.
-        fn sync_environment(&self) -> Option<Vec<(String, String)>> {
-            self.commands
-                .lock()
-                .expect("recorded commands lock")
-                .iter()
-                .find(|(command, _, _)| command.contains(" sync --frozen "))
-                .map(|(_, environment, _)| environment.clone())
-        }
+        let workspace = Workspace::new(directory.path()).expect("workspace");
+        (directory, workspace)
     }
 
-    impl SupervisedProcessRunner for ScriptedRunner {
-        fn run(
-            &self,
-            spec: SupervisedCommandSpec,
-            _control: Option<crate::runtime::process_runner::RunnerTestControl>,
-        ) -> BoxFuture<'_, Result<CapturedProcessResult, String>> {
-            let is_materialization =
-                spec.command.contains(" lock --check ") || spec.command.contains(" sync --frozen ");
-            self.commands.lock().expect("recorded commands lock").push((
-                spec.command.clone(),
-                spec.environment.clone(),
-                spec.timeout,
-            ));
-            let started_count = self.started_count.clone();
-            let materialization_count = self.materialization_count.clone();
-            let started = self.started.clone();
-            let gate_rx = self.gate_rx.clone();
-            let fail_probes = self.fail_probes.clone();
-            let result = if is_materialization {
-                self.materialization_results
-                    .lock()
-                    .expect("scripted result lock")
-                    .pop_front()
-                    .expect("scripted materialization result")
-            } else if fail_probes.load(std::sync::atomic::Ordering::Acquire) {
-                Ok(CapturedProcessResult {
-                    exit_code: None,
-                    intent: ProcessOutcomeIntent::TimedOut,
-                    stdout: Vec::new(),
-                    stderr: Vec::new(),
-                })
-            } else if spec.command.contains("python") {
-                Ok(ok_output("Python 3.12.3\n"))
-            } else {
-                Ok(ok_output("uv 0.8.22\n"))
-            };
-            Box::pin(async move {
-                let _ = started_count.fetch_add(1, std::sync::atomic::Ordering::Release);
-                started.notify_waiters();
-                if is_materialization {
-                    let _ =
-                        materialization_count.fetch_add(1, std::sync::atomic::Ordering::Release);
-                    started.notify_waiters();
-                    // Park every materialization command until the test
-                    // releases the gate; probes pass through immediately.
-                    let mut gate_rx = gate_rx;
-                    if !*gate_rx.borrow() {
-                        let _ = gate_rx.changed().await;
-                    }
-                    if spec.command.contains(" sync --frozen ") && result.as_ref().is_ok() {
-                        // Materialize the environment fixture so the reuse
-                        // path observes a real published environment.
-                        let final_root = spec
-                            .environment
-                            .iter()
-                            .find(|(key, _)| key == "UV_PROJECT_ENVIRONMENT")
-                            .map(|(_, value)| std::path::PathBuf::from(value));
-                        if let Some(final_root) = final_root {
-                            let _ = std::fs::create_dir_all(final_root.join("bin"));
-                            let _ = std::fs::write(final_root.join("bin/python"), b"#!/bin/sh\n");
-                        }
-                    }
-                }
-                result
-            })
-        }
-    }
-
-    fn ok_output(stdout: &str) -> CapturedProcessResult {
-        CapturedProcessResult {
-            exit_code: Some(0),
-            intent: ProcessOutcomeIntent::Completed,
-            stdout: stdout.as_bytes().to_vec(),
-            stderr: Vec::new(),
-        }
-    }
-
-    fn test_package() -> PythonToolPackage {
-        let files = vec![
+    fn valid_package_files() -> Vec<PackageFiles> {
+        vec![
             (
-                PathBuf::from("TOOL.toml"),
-                b"schema_version = 1\nname = \"alpha\"\ndescription = \"Alpha\"\nentrypoint = \"tool:main\"\nexecution = \"foreground_only\"\nconcurrency = \"sequential\"\n"
-                    .to_vec(),
+                SERVER_FILE,
+                b"from fastmcp import FastMCP\nmcp = FastMCP('demo')\n",
             ),
-            (
-                PathBuf::from("input.schema.json"),
-                br#"{"type":"object","properties":{},"additionalProperties":false}"#.to_vec(),
-            ),
-            (
-                PathBuf::from("pyproject.toml"),
-                b"[project]\nname = \"alpha\"\nversion = \"0.1.0\"\nrequires-python = \">=3.11\"\n"
-                    .to_vec(),
-            ),
-            (
-                PathBuf::from("tool.py"),
-                b"def main(arguments):\n    return arguments\n".to_vec(),
-            ),
-            (PathBuf::from("uv.lock"), b"version = 1\nrevision = 1\n".to_vec()),
-        ];
-        PythonToolPackage {
-            name: "alpha".to_owned(),
-            description: "Alpha".to_owned(),
-            entrypoint: "tool:main".to_owned(),
-            policy: ToolInvocationPolicy::default(),
-            tool_version_id: super::tool_version_id(&files),
-            files,
-            input_schema: serde_json::json!({"type":"object","properties":{},"additionalProperties":false}),
-            pyproject: b"[project]\nname = \"alpha\"\nversion = \"0.1.0\"\n".to_vec(),
-            uv_lock: b"version = 1\nrevision = 1\n".to_vec(),
-        }
+            (REQUIREMENTS_FILE, b"# none\n"),
+        ]
     }
 
-    fn store_with(
-        runner: Arc<dyn SupervisedProcessRunner>,
-    ) -> (tempfile::TempDir, PythonToolStore) {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let store = PythonToolStore::with_runner(dir.path().join("store"), runner).expect("store");
-        (dir, store)
+    fn package(name: &str) -> PythonToolPackage {
+        let (_directory, workspace) = workspace_with(&[(name, &valid_package_files())]);
+        let discovered = discover_python_packages(&workspace).expect("discover");
+        discovered
+            .into_iter()
+            .next()
+            .expect("one package")
+            .outcome
+            .expect("valid package")
     }
 
-    /// Waits until `count` callers of `store` have selected an existing
-    /// in-flight `BuildState` under the ownership lock — the precise point
-    /// at which a caller is irrevocably committed to that build's terminal
-    /// result and can never become a second owner of the digest. The
-    /// timeout is only a finite deadlock guard; the ordering itself comes
-    /// from the attachment counter.
-    fn wait_for_attached_waiters(store: &PythonToolStore, count: usize) {
-        let probe = store.inner.waiter_attachments.clone();
-        tokio::task::block_in_place(|| {
-            loop {
-                // Register the notification interest BEFORE checking the
-                // count: `notify_waiters()` only wakes registered waiters,
-                // so a merely created (never polled/enabled) `Notified`
-                // would leave a check-then-register hole. `enable()` is
-                // the same no-lost-wakeup pattern the production waiter
-                // loop in `ensure_environment` uses. An attachment recorded
-                // before the count check is observed in the count; an
-                // attachment recorded after `enable()` wakes this
-                // `Notified` through `notify_waiters()`.
-                let mut notified = Box::pin(probe.notify.notified());
-                notified.as_mut().enable();
-                if probe.count.load(std::sync::atomic::Ordering::Acquire) >= count {
-                    return;
-                }
-                tokio::runtime::Handle::current()
-                    .block_on(tokio::time::timeout(Duration::from_secs(15), notified))
-                    .expect("the waiters must attach to the in-flight build");
-            }
-        });
-    }
-
-    /// Concurrent same-digest callers coalesce behind exactly one
-    /// store-owned owner: while the first materialization is parked, a
-    /// second caller waits on the same build and never starts a second
-    /// materialization sequence.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn same_digest_concurrent_callers_coalesce_behind_one_owner() {
-        let scripted = Arc::new(ScriptedRunner::new(vec![
-            Ok(ok_output("resolved 2 packages")),
-            Ok(ok_output("installed 1 package")),
-        ]));
-        let (_dir, store) = store_with(scripted.clone());
-        let published = store.publish(&test_package()).expect("publish");
-
-        let first_store = store.clone();
-        let first_published = published.clone();
-        let first = tokio::spawn(async move {
-            first_store
-                .ensure_environment(&first_published, &crate::runtime::CancellationSignal::new())
-                .await
-        });
-        // The owner is inside the materialization while the gate is closed.
-        scripted.wait_for_materializations(1);
-
-        let second_store = store.clone();
-        let second_published = published.clone();
-        let second = tokio::spawn(async move {
-            second_store
-                .ensure_environment(
-                    &second_published,
-                    &crate::runtime::CancellationSignal::new(),
-                )
-                .await
-        });
-        // Let the second caller finish its probes and reach the in-flight
-        // coordination point, then assert it did not start a second
-        // materialization sequence.
-        // Runs: owner probes (2) + parked lock --check (1) + waiter probes
-        // (2) = 5; the gated sync never starts before the release.
-        scripted.wait_for_runs(5);
-        assert_eq!(
-            scripted.materialization_count(),
-            1,
-            "a second owner must never overlap an in-flight build"
-        );
-
-        scripted.release_gate();
-        let first_result = first.await.expect("first caller task").expect("first env");
-        let second_result = second
-            .await
-            .expect("second caller task")
-            .expect("second env");
-        assert_eq!(first_result.digest, second_result.digest);
-        assert_eq!(first_result.root, second_result.root);
-        assert_eq!(
-            scripted.materialization_count(),
-            2,
-            "exactly one materialization sequence ran"
-        );
-    }
-
-    /// Dropping a waiter while the build continues never releases the
-    /// in-flight entry: the owner completes, publishes, and a later call
-    /// observes the published environment without any new build.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn dropped_waiter_does_not_release_ownership_while_build_continues() {
-        let scripted = Arc::new(ScriptedRunner::new(vec![
-            Ok(ok_output("resolved 2 packages")),
-            Ok(ok_output("installed 1 package")),
-        ]));
-        let (_dir, store) = store_with(scripted.clone());
-        let published = store.publish(&test_package()).expect("publish");
-
-        let waiter_store = store.clone();
-        let waiter_published = published.clone();
-        let waiter = tokio::spawn(async move {
-            waiter_store
-                .ensure_environment(
-                    &waiter_published,
-                    &crate::runtime::CancellationSignal::new(),
-                )
-                .await
-        });
-        scripted.wait_for_materializations(1);
-        waiter.abort();
-        let _ = waiter.await;
-
-        scripted.release_gate();
-        scripted.wait_for_materializations(2);
-
-        // The dropped waiter never released the in-flight entry: a retry
-        // must coalesce with the still-published result instead of starting
-        // a second build.
-        let retry_store = store.clone();
-        let retry_published = published.clone();
-        let environment = retry_store
-            .ensure_environment(&retry_published, &crate::runtime::CancellationSignal::new())
-            .await
-            .expect("the owner's result is still observed");
-        assert_eq!(environment.digest.as_str().len(), 7 + 64);
-        assert_eq!(
-            scripted.materialization_count(),
-            2,
-            "no second build after waiter drop"
-        );
-    }
-
-    // ---- Issue #145, Blocker 2: preparation cancellation is physical ----
-
-    /// A Python store whose `uv`/`python3` are scripted stand-ins over the
-    /// REAL supervised runner: the identity probes answer instantly, and
-    /// every materialization subcommand announces its physical start through
-    /// a FIFO rendezvous and then parks, so the test can prove the exact
-    /// ordering without any sleep.
-    ///
-    /// Returns the store, the `RunnerTestControl` of the real runner, the
-    /// anchor-pgid file, and the start-rendezvous FIFO path.
-    #[cfg(unix)]
-    fn gated_physical_store(
-        dir: &tempfile::TempDir,
-    ) -> (
-        PythonToolStore,
-        crate::runtime::process_runner::RunnerTestControl,
-        PathBuf,
-        PathBuf,
-    ) {
-        use std::os::unix::fs::PermissionsExt;
-
-        let gate = dir.path().join("uv-started.fifo");
-        nix::unistd::mkfifo(&gate, nix::sys::stat::Mode::S_IRWXU).expect("fifo");
-        let uv = dir.path().join("uv");
-        std::fs::write(
-            &uv,
-            format!(
-                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'uv 0.9.9'; exit 0; fi\nprintf started > \"{}\"\nexec sleep 300\n",
-                gate.display()
-            ),
-        )
-        .expect("uv stand-in");
-        std::fs::set_permissions(&uv, std::fs::Permissions::from_mode(0o755)).expect("chmod uv");
-        let python = dir.path().join("python3");
-        std::fs::write(&python, "#!/bin/sh\necho 'Python 3.12.0'\n").expect("python stand-in");
-        std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755))
-            .expect("chmod python");
-
-        let anchor_pid = dir.path().join("anchor-pgid");
-        let mut control = crate::runtime::process_runner::RunnerTestControl::new();
-        control.anchor_pid_file = Some(anchor_pid.clone());
-        let runner: Arc<dyn SupervisedProcessRunner> = Arc::new(
-            crate::runtime::process_runner::RunnerBackedProcessRunner::with_test_control(
-                control.clone(),
-            ),
-        );
-        let store = PythonToolStore::with_binaries_and_runner(
-            super::PythonToolStoreRoots::unified(dir.path().join("store")),
-            uv,
-            python,
-            runner,
-        )
-        .expect("store");
-        (store, control, anchor_pid, gate)
-    }
-
-    /// Deterministic proof that the gated uv process physically started:
-    /// opening the FIFO for reading completes only when the uv process
-    /// opened it for writing, and the bytes arrive when it wrote them.
-    #[cfg(unix)]
-    async fn await_uv_started(gate: PathBuf) {
-        let announced = tokio::task::spawn_blocking(move || std::fs::read(gate))
-            .await
-            .expect("rendezvous task")
-            .expect("the uv process announced its start");
-        assert_eq!(announced, b"started");
-    }
-
-    /// The recorded anchor pgid of the parked uv unit. Written by the inner
-    /// supervisor strictly before the unit's `START`, so after the FIFO
-    /// rendezvous the file provably names this unit's process group.
-    #[cfg(unix)]
-    fn anchor_pgid(anchor_pid: &std::path::Path) -> i32 {
-        std::fs::read_to_string(anchor_pid)
-            .expect("the unit's anchor pgid was recorded")
-            .trim()
-            .parse()
-            .expect("a process-group id")
-    }
-
-    /// The parked uv unit's process group is physically gone.
-    #[cfg(unix)]
-    fn assert_group_terminal(pgid: i32) {
-        assert!(
-            matches!(
-                nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), None),
-                Err(nix::errno::Errno::ESRCH)
-            ),
-            "the preparatory unit's process group is physically terminal"
-        );
-    }
-
-    /// Attempt-style cancellation of a Python preparation must reach the
-    /// PHYSICAL supervised unit of the in-flight uv build: the unit
-    /// receives the cancellation, its process group becomes physically
-    /// terminal, and only then does the preparation observe its outcome.
-    ///
-    /// Under the old ownership (a fresh detached `CancellationSignal` per
-    /// command) the parked unit never observed any cancellation and this
-    /// test would hang at the liveness guard.
-    #[cfg(unix)]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn preparation_cancellation_physically_settles_an_in_flight_uv_build() {
-        let dir = tempfile::tempdir().expect("lab");
-        let (store, control, anchor_pid, gate) = gated_physical_store(&dir);
-        let published = store.publish(&test_package()).expect("publish");
-        let cancellation = crate::runtime::CancellationSignal::new();
-        let ensure = tokio::spawn({
-            let store = store.clone();
-            let cancellation = cancellation.clone();
-            async move { store.ensure_environment(&published, &cancellation).await }
-        });
-
-        // 1. The physical uv preparatory process has actually started.
-        await_uv_started(gate).await;
-        let pgid = anchor_pgid(&anchor_pid);
-
-        // 2. The preparation's lifecycle cancellation authority fires.
-        cancellation.cancel();
-
-        // 3. The physical supervised process receives the cancellation and
-        //    its group becomes physically terminal; only then does the
-        //    preparation outcome arrive.
-        let outcome = tokio::time::timeout(Duration::from_secs(30), ensure)
-            .await
-            .expect("liveness: the cancelled build must settle")
-            .expect("the build task must not panic");
-        let error = outcome.expect_err("a cancelled build is an error, never an environment");
-        assert!(
-            format!("{error}").contains("cancelled"),
-            "the uv unit was cancelled: {error}"
-        );
-        // Settlement was physical BEFORE the outcome was published: the
-        // group is already gone at this point.
-        assert_group_terminal(pgid);
-        assert!(
-            control
-                .recorded_signals()
-                .iter()
-                .any(|signal| signal.pgid == pgid && signal.signal == "SIGTERM"),
-            "the unit's group received the termination signal: {:?}",
-            control.recorded_signals()
-        );
-    }
-
-    /// Parent control-channel EOF during a real uv build is a physical
-    /// cancellation authority (Issue #145): the dispatcher's parent-loss
-    /// publication fires the one preparation signal, the parked uv unit is
-    /// physically cancelled and settled, and only then does the guarded
-    /// preparation settle. Nothing is inferred from dropping a future.
-    #[cfg(unix)]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn parent_eof_physically_settles_an_in_flight_uv_build() {
-        let dir = tempfile::tempdir().expect("lab");
-        let (store, control, anchor_pid, gate) = gated_physical_store(&dir);
-        let published = store.publish(&test_package()).expect("publish");
-
-        let (parent, child) = tokio::net::UnixStream::pair().expect("control pair");
-        let dispatcher = crate::local_runtime::dispatcher::ChildControlDispatcher::start(child);
-        let handle = dispatcher.handle();
-        let preparation = crate::local_runtime::composition::ChildPreparation::new(
-            crate::runtime::CancellationSignal::new(),
-            handle.clone(),
-        );
-        let preparation_signal = preparation.cancellation();
-        let guard = tokio::spawn(async move {
-            let signal = preparation.cancellation();
-            let step = async move {
-                store
-                    .ensure_environment(&published, &signal)
-                    .await
-                    .map_err(|error| {
-                        crate::capabilities::CapabilityPreparationError::PreparationSettled(
-                            error.to_string(),
-                        )
-                    })
-            };
-            preparation.guard(step).await
-        });
-
-        // 1. The physical uv preparatory process has actually started.
-        await_uv_started(gate).await;
-        let pgid = anchor_pgid(&anchor_pid);
-
-        // 2. The parent control channel reaches EOF while the build is
-        //    parked. The dispatcher publishes parent loss before the guard
-        //    can observe it.
-        drop(parent);
-        handle.parent_lost_signal().await;
-
-        // 3. The guard fires the one preparation signal (a physical
-        //    cancellation authority), the uv unit settles physically, and
-        //    only then does the preparation settle.
-        let outcome = tokio::time::timeout(Duration::from_secs(30), guard)
-            .await
-            .expect("liveness: the settled preparation must complete")
-            .expect("the guard task must not panic");
-        assert!(
-            matches!(
-                outcome,
-                Err(crate::capabilities::CapabilityPreparationError::PreparationSettled(_))
-            ),
-            "parent EOF settles the preparation: {outcome:?}"
-        );
-        assert!(
-            preparation_signal.is_cancelled(),
-            "parent EOF fired the preparation's physical cancellation authority"
-        );
-        assert_group_terminal(pgid);
-        assert!(
-            control
-                .recorded_signals()
-                .iter()
-                .any(|signal| signal.pgid == pgid && signal.signal == "SIGTERM"),
-            "the unit's group received the termination signal: {:?}",
-            control.recorded_signals()
-        );
-    }
-
-    /// An owner failure publishes one terminal error to every caller
-    /// already attached to the in-flight build and removes the in-flight
-    /// entry before waking anyone, so a later retry acquires fresh
-    /// ownership without overlapping the failed owner.
-    ///
-    /// Every ordering edge is explicit synchronization, never scheduler
-    /// progress: `wait_for_materializations(1)` proves the owner holds the
-    /// digest inside its gated materialization; and
-    /// `wait_for_attached_waiters(2)` proves both waiters selected that
-    /// same `BuildState` under the ownership lock before the owner is
-    /// allowed to fail. Attached waiters are committed to that state and
-    /// therefore observe the same terminal result; their observation is
-    /// NOT ordered against ownership removal (a waiter may read the
-    /// published result while the owner is still removing the entry), so
-    /// release-before-retry is proven separately by the explicit
-    /// `in_flight` inspection below.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn owner_error_wakes_all_waiters_and_retry_does_not_overlap() {
-        let scripted = Arc::new(ScriptedRunner::new(vec![
-            Ok(ok_output("resolved 2 packages")),
-            Err("injected sync failure".to_owned()),
-        ]));
-        let (_dir, store) = store_with(scripted.clone());
-        let published = store.publish(&test_package()).expect("publish");
-
-        // The owner owns the digest and parks inside its gated first
-        // materialization command.
-        let owner_store = store.clone();
-        let owner_published = published.clone();
-        let owner = tokio::spawn(async move {
-            owner_store
-                .ensure_environment(&owner_published, &crate::runtime::CancellationSignal::new())
-                .await
-        });
-        scripted.wait_for_materializations(1);
-
-        // Both waiters attach to the owner's in-flight `BuildState` before
-        // the owner is allowed to fail: the attachment probe fires while
-        // the caller holds the ownership lock after cloning the existing
-        // state, so each waiter is irrevocably committed to the owner's
-        // terminal result and can never start a second owner.
-        let waiter_alpha_store = store.clone();
-        let waiter_alpha_published = published.clone();
-        let waiter_alpha = tokio::spawn(async move {
-            waiter_alpha_store
-                .ensure_environment(
-                    &waiter_alpha_published,
-                    &crate::runtime::CancellationSignal::new(),
-                )
-                .await
-        });
-        let waiter_beta_store = store.clone();
-        let waiter_beta_published = published.clone();
-        let waiter_beta = tokio::spawn(async move {
-            waiter_beta_store
-                .ensure_environment(
-                    &waiter_beta_published,
-                    &crate::runtime::CancellationSignal::new(),
-                )
-                .await
-        });
-        wait_for_attached_waiters(&store, 2);
-        assert_eq!(
-            scripted.materialization_count(),
-            1,
-            "attached waiters must not start a second owner"
-        );
-
-        // Releasing the gate lets the owner fail; `BuildOwnerGuard::finish`
-        // then publishes the terminal error, removes the in-flight entry,
-        // and only then notifies the attached waiters.
-        scripted.release_gate();
-
-        let owner_error = owner.await.expect("owner task").expect_err("owner fails");
-        let waiter_alpha_error = waiter_alpha
-            .await
-            .expect("waiter alpha task")
-            .expect_err("waiter alpha fails");
-        let waiter_beta_error = waiter_beta
-            .await
-            .expect("waiter beta task")
-            .expect_err("waiter beta fails");
-        assert!(owner_error.to_string().contains("injected sync failure"));
-        assert_eq!(
-            owner_error, waiter_alpha_error,
-            "waiter alpha observes the owner's terminal error"
-        );
-        assert_eq!(
-            owner_error, waiter_beta_error,
-            "waiter beta observes the owner's terminal error"
-        );
-        assert_eq!(
-            scripted.materialization_count(),
-            2,
-            "exactly one materialization sequence ran"
-        );
-
-        // The owner task has completed, so `BuildOwnerGuard::finish` ran
-        // to completion: terminal publication, in-flight removal, and
-        // notification all happened. Prove the ownership release
-        // explicitly before the retry starts: fresh ownership is
-        // serialized through the `in_flight` mutex, so the retry can only
-        // become the next owner because the previous entry is gone.
-        assert!(
-            store
-                .inner
-                .in_flight
-                .lock()
-                .expect("in-flight lock")
-                .is_empty(),
-            "the failed owner released ownership before the retry"
-        );
-        *scripted
-            .materialization_results
-            .lock()
-            .expect("scripted results lock") = VecDeque::from(vec![
-            Ok(ok_output("resolved 2 packages")),
-            Ok(ok_output("installed 1 package")),
-        ]);
-        let retry_store = store.clone();
-        let retry_published = published.clone();
-        let retry_environment = retry_store
-            .ensure_environment(&retry_published, &crate::runtime::CancellationSignal::new())
-            .await
-            .expect("the retry acquires ownership after the failed owner published");
-        assert_eq!(retry_environment.digest.as_str().len(), 7 + 64);
-        assert_eq!(
-            scripted.materialization_count(),
-            4,
-            "the retry ran exactly one fresh materialization sequence"
-        );
-    }
-
-    /// The RAII owner guard: if the detached owner task exits before
-    /// terminal publication, the in-flight entry is removed by
-    /// pointer identity and every waiter receives a terminal error.
     #[test]
-    fn owner_guard_early_exit_cannot_strand_an_in_flight_entry() {
-        let in_flight: Arc<Mutex<BTreeMap<String, Arc<BuildState>>>> =
-            Arc::new(Mutex::new(BTreeMap::new()));
-        let state = Arc::new(BuildState {
-            result: Mutex::new(None),
-            notify: tokio::sync::Notify::new(),
-        });
-        let key = "digest-key".to_owned();
-        in_flight
-            .lock()
-            .expect("in-flight lock")
-            .insert(key.clone(), state.clone());
-        {
-            let guard = BuildOwnerGuard {
-                in_flight: in_flight.clone(),
-                key: key.clone(),
-                state: state.clone(),
-                completed: false,
-            };
-            drop(guard);
-        }
+    fn discovery_rejects_a_folder_without_server_py_in_place() {
+        let (_directory, workspace) =
+            workspace_with(&[("demo", &[(REQUIREMENTS_FILE, b"# none\n".as_slice())])]);
+        let discovered = discover_python_packages(&workspace).expect("discover");
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].server_id, python_server_id("demo"));
+        let Err(PythonToolError::InvalidPackage(message)) = &discovered[0].outcome else {
+            panic!(
+                "missing server.py rejects the package: {:?}",
+                discovered[0].outcome
+            );
+        };
         assert!(
-            in_flight.lock().expect("in-flight lock").is_empty(),
-            "the early-exited owner must remove its in-flight entry"
+            message.contains("\"demo\""),
+            "the diagnostic names the package: {message}"
         );
-        let result = state
-            .result
-            .lock()
-            .expect("result lock")
-            .clone()
-            .expect("terminal result");
-        assert!(result.is_err());
+        assert!(
+            message.contains(SERVER_FILE),
+            "the diagnostic names the contract: {message}"
+        );
     }
 
-    /// A foreign state for the same key is never removed by another owner's
-    /// guard: removal is pointer-identity safe.
     #[test]
-    fn owner_guard_removal_is_pointer_identity_safe() {
-        let in_flight: Arc<Mutex<BTreeMap<String, Arc<BuildState>>>> =
-            Arc::new(Mutex::new(BTreeMap::new()));
-        let foreign = Arc::new(BuildState {
-            result: Mutex::new(None),
-            notify: tokio::sync::Notify::new(),
-        });
-        let key = "digest-key".to_owned();
-        in_flight
-            .lock()
-            .expect("in-flight lock")
-            .insert(key.clone(), foreign.clone());
-        let own = Arc::new(BuildState {
-            result: Mutex::new(None),
-            notify: tokio::sync::Notify::new(),
-        });
-        {
-            let mut guard = BuildOwnerGuard {
-                in_flight: in_flight.clone(),
-                key: key.clone(),
-                state: own.clone(),
-                completed: false,
-            };
-            guard.finish(Ok(crate::tools::python::PythonToolEnvironment {
-                digest: crate::runtime::identity::PythonToolEnvironmentDigest::new(
-                    "sha256:deadbeef".to_owned(),
-                ),
-                root: PathBuf::from("/unused"),
-            }));
-        }
-        assert_eq!(
-            in_flight.lock().expect("in-flight lock").len(),
-            1,
-            "a stale guard must never remove a newer owner's entry"
+    fn discovery_rejects_a_folder_without_requirements_txt_in_place() {
+        let (_directory, workspace) =
+            workspace_with(&[("demo", &[(SERVER_FILE, b"mcp = None\n".as_slice())])]);
+        let discovered = discover_python_packages(&workspace).expect("discover");
+        let Err(PythonToolError::InvalidPackage(message)) = &discovered[0].outcome else {
+            panic!("missing requirements.txt rejects the package");
+        };
+        assert!(
+            message.contains("\"demo\""),
+            "the diagnostic names the package: {message}"
         );
         assert!(
-            in_flight
-                .lock()
-                .expect("in-flight lock")
-                .get(&key)
-                .is_some_and(|current| Arc::ptr_eq(current, &foreign))
+            message.contains(REQUIREMENTS_FILE),
+            "the diagnostic names the contract: {message}"
         );
     }
 
-    /// The timeout of every materialization/probe command is finite, so a
-    /// stuck package manager surfaces as an explicit preparation failure.
-    #[tokio::test]
-    async fn environment_commands_have_finite_deadlines() {
-        let scripted = Arc::new(ScriptedRunner::new(vec![
-            Ok(ok_output("resolved 2 packages")),
-            Ok(ok_output("installed 1 package")),
-        ]));
-        scripted.release_gate();
-        let (_dir, store) = store_with(scripted.clone());
-        let published = store.publish(&test_package()).expect("publish");
-        let _ = store
-            .ensure_environment(&published, &crate::runtime::CancellationSignal::new())
-            .await;
-        let recorded = scripted
-            .commands
-            .lock()
-            .expect("recorded commands lock")
-            .clone();
-        assert_eq!(recorded.len(), 4, "two probes plus two uv commands");
-        for (command, _, timeout) in &recorded {
+    #[test]
+    fn discovery_rejects_invalid_folder_names() {
+        for name in ["Bad", "under_score", "-lead", "trail-", "double--dash"] {
+            let (_directory, workspace) = workspace_with(&[(name, &valid_package_files())]);
+            let discovered = discover_python_packages(&workspace).expect("discover");
             assert!(
-                timeout.is_some(),
-                "every M7 preparation command needs a finite deadline: {command}"
+                matches!(
+                    &discovered[0].outcome,
+                    Err(PythonToolError::InvalidPackage(message))
+                        if message.contains("invalid package name")
+                ),
+                "{name:?} is rejected: {:?}",
+                discovered[0].outcome
             );
         }
     }
 
-    /// The exact interpreter whose identity enters the environment digest is
-    /// pinned to uv via `UV_PYTHON`, so uv cannot silently select another
-    /// interpreter while the digest claims the probed identity.
-    #[tokio::test]
-    async fn uv_is_pinned_to_the_probed_interpreter() {
-        let scripted = Arc::new(ScriptedRunner::new(vec![
-            Ok(ok_output("resolved 2 packages")),
-            Ok(ok_output("installed 1 package")),
-        ]));
-        scripted.release_gate();
-        let (_dir, store) = store_with(scripted.clone());
-        let published = store.publish(&test_package()).expect("publish");
-        let _ = store
-            .ensure_environment(&published, &crate::runtime::CancellationSignal::new())
-            .await;
-
-        let sync_env = scripted
-            .sync_environment()
-            .expect("sync command environment");
-        let uv_python = sync_env
-            .iter()
-            .find(|(key, _)| key == "UV_PYTHON")
-            .map(|(_, value)| value.clone())
-            .expect("UV_PYTHON must pin the interpreter selection");
-        let probes = sync_env
-            .iter()
-            .filter(|(key, _)| key == "UV_NO_PYTHON_DOWNLOADS" || key == "UV_PYTHON_DOWNLOADS")
-            .collect::<Vec<_>>();
-        assert!(
-            probes
+    #[test]
+    fn one_malformed_package_never_suppresses_its_siblings() {
+        let (_directory, workspace) = workspace_with(&[
+            ("alpha", &valid_package_files()),
+            ("broken", &[(SERVER_FILE, b"mcp = None\n".as_slice())]),
+            ("zeta", &valid_package_files()),
+        ]);
+        let discovered = discover_python_packages(&workspace).expect("discover");
+        assert_eq!(
+            discovered
                 .iter()
-                .any(|(key, value)| { key == "UV_NO_PYTHON_DOWNLOADS" && value == "1" })
-                && probes
-                    .iter()
-                    .any(|(key, value)| { key == "UV_PYTHON_DOWNLOADS" && value == "0" }),
-            "managed Python downloads stay disabled"
+                .map(|entry| entry.server_id.as_str().to_owned())
+                .collect::<Vec<_>>(),
+            ["python:alpha", "python:broken", "python:zeta"]
         );
-        assert!(
-            !uv_python.is_empty() && !uv_python.contains(' '),
-            "UV_PYTHON must name one exact executable"
-        );
-        assert!(
-            std::path::Path::new(&uv_python).is_absolute(),
-            "UV_PYTHON must be an absolute executable path"
-        );
+        assert!(discovered[0].outcome.is_ok());
+        assert!(discovered[1].outcome.is_err());
+        assert!(discovered[2].outcome.is_ok());
     }
 
-    /// A child store's uv commands use the **shared** cache while every
-    /// mutable rustX environment root stays child-private (Issue #145).
-    ///
-    /// Sharing the cache is safe because uv owns its own cache/target
-    /// locking; it says nothing about rustX's environment publication, which
-    /// is exactly why the environment root is not shared with it.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_child_store_shares_the_uv_cache_but_not_its_environment_root() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let shared = dir.path().join("shared");
-        let private = dir.path().join("child-private");
-        let scripted = Arc::new(ScriptedRunner::new(vec![
-            Ok(ok_output("resolved 2 packages")),
-            Ok(ok_output("installed 1 package")),
-        ]));
-        scripted.release_gate();
-        let store = PythonToolStore::with_roots_and_runner(
-            super::PythonToolStoreRoots::split(shared.clone(), private.clone()),
-            scripted.clone(),
-        )
-        .expect("child store");
-        let published = store.publish(&test_package()).expect("publish");
-        let _ = store
-            .ensure_environment(&published, &crate::runtime::CancellationSignal::new())
-            .await;
-
-        let sync_env = scripted
-            .sync_environment()
-            .expect("sync command environment");
-        let cache = sync_env
-            .iter()
-            .find(|(key, _)| key == "UV_CACHE_DIR")
-            .map(|(_, value)| value.clone())
-            .expect("UV_CACHE_DIR must be set");
-        assert_eq!(
-            cache,
-            shared.join("uv-cache").display().to_string(),
-            "the child uses the parent's uv cache rather than a cold private one"
-        );
-        assert!(
-            !std::path::Path::new(&cache).starts_with(&private),
-            "the uv cache is never allocated under the child-private root"
-        );
-        // The environment publication root, by contrast, is child-private.
-        assert!(private.join("python-tool-envs").is_dir());
-        assert!(!shared.join("python-tool-envs").exists());
-    }
-
-    /// A different interpreter-selection input cannot alias to the same
-    /// environment identity: the digest includes the probed Python identity,
-    /// so a runtime selection change produces a different digest.
     #[test]
-    fn different_interpreter_selection_cannot_alias_the_environment_identity() {
-        let v1 = python_tool_environment_digest(
-            std::env::consts::OS,
-            std::env::consts::ARCH,
-            "Python 3.12.3",
-            "uv 0.8.22",
-            b"pyproject",
-            b"lock",
+    fn requirements_parse_normalizes_comments_and_blank_lines() {
+        let parsed = parse_requirements(
+            b"# heading\n\nsix==1.16.0  # pinned\nrequests[socks]>=2 ; python_version >= '3.10'\n",
+        )
+        .expect("valid requirements");
+        assert_eq!(
+            parsed,
+            [
+                "six==1.16.0",
+                "requests[socks]>=2 ; python_version >= '3.10'"
+            ]
         );
-        let v2 = python_tool_environment_digest(
-            std::env::consts::OS,
-            std::env::consts::ARCH,
-            "Python 3.13.1",
-            "uv 0.8.22",
-            b"pyproject",
-            b"lock",
-        );
-        assert_ne!(v1, v2);
     }
 
-    // ---- Issue #145: shared immutable roots, private mutable roots ----
-
-    /// A same-named package whose bytes changed produces a **different**
-    /// `ToolVersionId`, which is what makes exact-version selection
-    /// meaningful in the first place.
-    fn test_package_v2() -> PythonToolPackage {
-        let mut package = test_package();
-        let mut files = package.files.clone();
-        for (path, bytes) in &mut files {
-            if path == std::path::Path::new("tool.py") {
-                *bytes = b"def main(arguments):\n    return {\"v\": 2}\n".to_vec();
-            }
+    #[test]
+    fn requirements_reject_the_managed_fastmcp_dependency() {
+        for line in ["fastmcp", "fastmcp==3.4.7", "FastMCP[cli]>=2"] {
+            let error = parse_requirements(line.as_bytes()).expect_err("fastmcp is managed");
+            assert!(
+                error.contains(MANAGED_FASTMCP_VERSION),
+                "the diagnostic names the managed pin: {error}"
+            );
         }
-        package.tool_version_id = super::tool_version_id(&files);
-        package.files = files;
-        package
     }
 
-    /// The store's two ownership domains land in the roots they belong to:
-    /// the immutable content-addressed authority and the uv cache in the
-    /// shared root, every mutable rustX execution domain in the private one.
     #[test]
-    fn the_store_splits_shared_immutable_roots_from_private_mutable_roots() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let shared = dir.path().join("shared");
-        let private = dir.path().join("child-private");
-        let store = PythonToolStore::with_roots(super::PythonToolStoreRoots::split(
-            shared.clone(),
-            private.clone(),
-        ))
-        .expect("store");
-        assert_eq!(store.shared_root(), shared);
-        assert_eq!(store.private_root(), private);
-        assert!(shared.join("tool-versions").is_dir());
-        assert!(shared.join("uv-cache").is_dir());
-        assert!(private.join("python-tool-envs").is_dir());
-        assert!(private.join("python-tool-bindings").is_dir());
-        assert!(private.join("python-invocations").is_dir());
-        // The mutable roots are never created under the shared authority,
-        // and the immutable authority is never created under a private root.
-        assert!(!shared.join("python-tool-envs").exists());
-        assert!(!shared.join("python-invocations").exists());
-        assert!(!private.join("tool-versions").exists());
-        assert!(!private.join("uv-cache").exists());
-    }
-
-    /// A publication made by one process is readable by another process's
-    /// store over the same shared root, while each keeps its own private
-    /// mutable roots. This is the parent/child shape.
-    #[test]
-    fn a_child_store_opens_the_exact_version_its_parent_published() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let shared = dir.path().join("shared");
-        let parent =
-            PythonToolStore::with_roots(super::PythonToolStoreRoots::unified(shared.clone()))
-                .expect("parent store");
-        let package = test_package();
-        parent.publish(&package).expect("publish");
-
-        let child = PythonToolStore::with_roots(super::PythonToolStoreRoots::split(
-            shared.clone(),
-            dir.path().join("child-private"),
-        ))
-        .expect("child store");
-        let opened = child
-            .open_published_version(&package.tool_version_id)
-            .expect("the child opens the exact frozen version");
-        assert_eq!(opened.package.tool_version_id, package.tool_version_id);
-        assert_eq!(opened.package.name, "alpha");
-        assert_eq!(
-            opened.root,
-            shared
-                .join("tool-versions")
-                .join(package.tool_version_id.as_str())
-                .join("source"),
-            "the child reads the shared immutable authority directly"
+    fn requirements_reject_option_lines_and_unparseable_lines() {
+        let error = parse_requirements(b"-r other.txt\n").expect_err("option line");
+        assert!(
+            error.contains("line 1"),
+            "the diagnostic locates the line: {error}"
         );
+        assert!(error.contains("option lines"), "{error}");
+        let error =
+            parse_requirements(b"\nsix==1.16.0\n=== garbage ===\n").expect_err("unparseable");
+        assert!(
+            error.contains("line 3"),
+            "the diagnostic locates the line: {error}"
+        );
+        let error = parse_requirements(b"\xff\xfe").expect_err("not UTF-8");
+        assert!(error.contains("UTF-8"), "{error}");
     }
 
-    /// **The exact-version invariant.** A workspace is not `ToolVersion`
-    /// authority after resolution: with a newer same-named version already
-    /// published, opening the frozen identity still yields the frozen bytes.
     #[test]
-    fn a_newer_same_named_version_never_substitutes_the_frozen_one() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let shared = dir.path().join("shared");
-        let parent =
-            PythonToolStore::with_roots(super::PythonToolStoreRoots::unified(shared.clone()))
-                .expect("parent store");
-        let frozen = test_package();
-        let newer = test_package_v2();
+    fn the_fingerprint_is_stable_and_tracks_every_material_input() {
+        let package = package("demo");
+        let python_identity = "/usr/bin/python3 (Python 3.12.13)";
+        let uv_identity = "/usr/bin/uv (uv 0.11.12)";
+        let fingerprint = package_fingerprint(&package, python_identity, uv_identity);
+        assert!(fingerprint.starts_with("sha256:"));
+        assert_eq!(
+            fingerprint,
+            package_fingerprint(&package, python_identity, uv_identity),
+            "the fingerprint is deterministic"
+        );
+
+        let mut renamed = package.clone();
+        renamed.name = "renamed".to_owned();
+        renamed.root = PathBuf::from("/elsewhere");
+        assert_eq!(
+            fingerprint,
+            package_fingerprint(&renamed, python_identity, uv_identity),
+            "the package name and live path are not fingerprint inputs (identical content shares state)"
+        );
+
+        let mut changed_bytes = package.clone();
+        changed_bytes.files[0].1.push(b'\n');
         assert_ne!(
-            frozen.tool_version_id, newer.tool_version_id,
-            "the two versions are genuinely different content"
+            fingerprint,
+            package_fingerprint(&changed_bytes, python_identity, uv_identity)
         );
-        parent.publish(&frozen).expect("publish the frozen version");
-        parent.publish(&newer).expect("publish the newer version");
-
-        let child = PythonToolStore::with_roots(super::PythonToolStoreRoots::split(
-            shared,
-            dir.path().join("child-private"),
-        ))
-        .expect("child store");
-        let opened = child
-            .open_published_version(&frozen.tool_version_id)
-            .expect("the frozen version opens");
-        assert_eq!(opened.package.tool_version_id, frozen.tool_version_id);
-        assert_eq!(
-            std::fs::read(opened.root.join("tool.py")).expect("source"),
-            b"def main(arguments):\n    return arguments\n".to_vec(),
-            "the frozen bytes execute, not the newer same-named ones"
-        );
-    }
-
-    /// A frozen version that is absent fails closed instead of falling back
-    /// to rediscovery.
-    #[test]
-    fn a_missing_frozen_version_fails_closed() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
-        let error = store
-            .open_published_version(&ToolVersionId::new("sha256:absent"))
-            .expect_err("an absent version cannot be materialized");
-        assert!(
-            format!("{error}").contains("not present in the shared store"),
-            "unexpected failure: {error}"
-        );
-    }
-
-    /// A frozen version whose published source was mutated after
-    /// publication fails closed: the digest is recomputed, never trusted
-    /// from the marker.
-    #[test]
-    fn a_corrupt_frozen_version_fails_closed() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let root = dir.path().join("store");
-        let store = PythonToolStore::new(root.clone()).expect("store");
-        let package = test_package();
-        store.publish(&package).expect("publish");
-        std::fs::write(
-            root.join("tool-versions")
-                .join(package.tool_version_id.as_str())
-                .join("source/tool.py"),
-            b"def main(arguments):\n    return \"tampered\"\n",
-        )
-        .expect("tamper");
-        let error = store
-            .open_published_version(&package.tool_version_id)
-            .expect_err("a corrupt version cannot be materialized");
-        assert!(
-            format!("{error}").contains("does not match its claimed identity"),
-            "unexpected failure: {error}"
-        );
-    }
-
-    /// Two child stores over the same shared authority are **separate**
-    /// process-local ownership domains: they never share the in-flight
-    /// environment-build coalescing or the invocation allocation domain.
-    ///
-    /// This is exactly why the mutable roots stay private: an
-    /// `Arc<Mutex<..>>` is not cross-process synchronization, and #145
-    /// deliberately does not pretend otherwise.
-    #[test]
-    fn two_child_stores_never_share_process_local_ownership() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let shared = dir.path().join("shared");
-        let first = PythonToolStore::with_roots(super::PythonToolStoreRoots::split(
-            shared.clone(),
-            dir.path().join("child-a"),
-        ))
-        .expect("first child store");
-        let second = PythonToolStore::with_roots(super::PythonToolStoreRoots::split(
-            shared.clone(),
-            dir.path().join("child-b"),
-        ))
-        .expect("second child store");
         assert_ne!(
-            first.identity_token(),
-            second.identity_token(),
-            "two child stores are two process-local coordination domains"
+            fingerprint,
+            package_fingerprint(&package, "/usr/bin/python3 (Python 3.13.0)", uv_identity),
+            "the interpreter identity is a fingerprint input"
         );
-        assert_eq!(first.shared_root(), second.shared_root());
-        assert_ne!(first.private_root(), second.private_root());
-        // Each child allocates invocation scratch from its own root, so the
-        // scratch namespaces cannot collide.
-        let first_bundle = first.allocate_execution_bundle().expect("first bundle");
-        let second_bundle = second.allocate_execution_bundle().expect("second bundle");
-        assert!(first_bundle.starts_with(dir.path().join("child-a")));
-        assert!(second_bundle.starts_with(dir.path().join("child-b")));
+        assert_ne!(
+            fingerprint,
+            package_fingerprint(&package, python_identity, "/usr/bin/uv (uv 0.12.0)"),
+            "the uv identity is a fingerprint input"
+        );
     }
 
-    /// The published `ToolVersion` shape is `tool-versions/<id>/source/` plus
-    /// the version marker; the executor source root is exactly the
-    /// `source/` directory.
     #[test]
-    fn published_tool_version_uses_the_source_directory_shape() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
-        let package = test_package();
-        let published = store.publish(&package).expect("publish");
+    fn the_generated_pyproject_pins_the_probed_series_and_the_managed_fastmcp() {
+        let mut package = package("demo");
+        package.requirements = vec!["six==1.16.0".to_owned()];
+        let pyproject = generated_pyproject(&package, "/usr/bin/python3 (Python 3.12.13)");
+        assert!(
+            pyproject.contains("name = \"rustx-python-tool-demo\""),
+            "{pyproject}"
+        );
+        assert!(
+            pyproject.contains("requires-python = \"==3.12.*\""),
+            "{pyproject}"
+        );
+        assert!(pyproject.contains("\"six==1.16.0\""), "{pyproject}");
+        assert!(
+            pyproject.contains(&format!("\"fastmcp=={MANAGED_FASTMCP_VERSION}\"")),
+            "{pyproject}"
+        );
         assert_eq!(
-            published.root,
-            dir.path()
-                .join("store/tool-versions")
-                .join(package.tool_version_id.as_str())
-                .join("source")
-        );
-        assert!(published.root.join("TOOL.toml").is_file());
-        assert!(published.root.join("uv.lock").is_file());
-        let marker = dir
-            .path()
-            .join("store/tool-versions")
-            .join(package.tool_version_id.as_str())
-            .join("RUSTX_TOOL_VERSION.json");
-        assert!(
-            marker.is_file(),
-            "the marker sits beside source/, never inside"
+            probed_python_series("/opt/py (not a version)"),
+            None,
+            "an unparseable identity degrades to the fallback bound"
         );
     }
 
-    /// A corrupt published `ToolVersion` — source mutated after publication —
-    /// fails the reuse preparation explicitly instead of being trusted by
-    /// its marker string.
     #[test]
-    fn corrupt_published_tool_version_fails_reuse_explicitly() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
-        let package = test_package();
-        let _ = store.publish(&package).expect("publish");
-        let published_source = dir
-            .path()
-            .join("store/tool-versions")
-            .join(package.tool_version_id.as_str())
-            .join("source");
-        std::fs::write(
-            published_source.join("tool.py"),
-            b"def main(arguments):\n    return \"tampered\"\n",
-        )
-        .expect("tamper with the published source");
-        let error = store
-            .publish(&package)
-            .expect_err("corrupt reuse must fail");
-        assert!(
-            error
-                .to_string()
-                .contains("does not match its claimed identity"),
-            "unexpected error: {error}"
+    fn the_server_binding_launches_the_prepared_venv_interpreter_directly() {
+        let prepared = PreparedPythonPackage {
+            fingerprint: "sha256:abc".to_owned(),
+            state_dir: PathBuf::from("/state/sha256:abc"),
+        };
+        let binding = prepared.server_binding();
+        let McpTransportConfig::Stdio {
+            program,
+            args,
+            cwd,
+            environment,
+        } = &binding.transport
+        else {
+            panic!("the binding is a stdio launch");
+        };
+        if cfg!(windows) {
+            assert_eq!(program, "/state/sha256:abc/venv/Scripts/python.exe");
+        } else {
+            assert_eq!(program, "/state/sha256:abc/venv/bin/python");
+        }
+        assert_eq!(
+            args,
+            &[
+                "-m".to_owned(),
+                "fastmcp.cli".to_owned(),
+                "run".to_owned(),
+                "/state/sha256:abc/source/server.py:mcp".to_owned(),
+                "--skip-env".to_owned(),
+                "--no-banner".to_owned(),
+            ]
         );
-        // The corrupt publication is never mutated into validity.
-        let tampered = std::fs::read_to_string(published_source.join("tool.py")).expect("read");
-        assert!(tampered.contains("tampered"));
+        assert!(cwd.is_none());
+        assert_eq!(
+            environment
+                .get("FASTMCP_SHOW_SERVER_BANNER")
+                .map(String::as_str),
+            Some("false")
+        );
+        assert_eq!(
+            environment
+                .get("FASTMCP_CHECK_FOR_UPDATES")
+                .map(String::as_str),
+            Some("off")
+        );
+        assert_eq!(
+            environment
+                .get("PYTHONDONTWRITEBYTECODE")
+                .map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(binding.policy, ToolInvocationPolicy::default());
     }
 
-    /// A valid published `ToolVersion` is reused without mutation and without
-    /// re-staging.
-    #[test]
-    fn valid_published_tool_version_is_reused_unchanged() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
-        let package = test_package();
-        let first = store.publish(&package).expect("first publish");
-        let second = store.publish(&package).expect("second publish");
-        assert_eq!(first.root, second.root);
-        let source_files = std::fs::read_dir(&first.root).expect("source dir").count();
-        assert_eq!(source_files, 5, "all package files published");
-    }
-
-    /// The environment ready marker locks every deterministic input of the
-    /// environment identity; a marker that was written for a different
-    /// Python runtime is rejected on reuse.
-    #[test]
-    fn environment_marker_locks_all_digest_inputs() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
-        let package = test_package();
-        let published = store.publish(&package).expect("publish");
-        let digest = python_tool_environment_digest(
-            std::env::consts::OS,
-            std::env::consts::ARCH,
-            "Python 3.12.3",
-            "uv 0.8.22",
-            &published.package.pyproject,
-            &published.package.uv_lock,
-        );
-        let root = dir
-            .path()
-            .join("store/python-tool-envs")
-            .join(digest.as_str());
-        std::fs::create_dir_all(root.join("bin")).expect("bin dir");
-        std::fs::write(root.join("bin/python"), b"#!/bin/sh\n").expect("python");
-        let marker = super::EnvironmentMarker {
-            format: super::ENVIRONMENT_MARKER_FORMAT.to_owned(),
-            ready: true,
+    /// One fully valid on-disk prepared state of `package` under
+    /// `packages/<fingerprint>` (with a stub `venv/bin/python`).
+    fn seed_prepared_state(
+        store_root: &Path,
+        package: &PythonToolPackage,
+        python_identity: &str,
+        uv_identity: &str,
+    ) -> (String, PathBuf) {
+        let fingerprint = package_fingerprint(package, python_identity, uv_identity);
+        let state_dir = store_root.join(PACKAGES_DIRECTORY).join(&fingerprint);
+        let source_root = state_dir.join(SOURCE_DIRECTORY);
+        std::fs::create_dir_all(&source_root).expect("source root");
+        for (relative, bytes) in &package.files {
+            std::fs::write(source_root.join(relative), bytes).expect("frozen source");
+        }
+        let program = venv_python(&state_dir);
+        std::fs::create_dir_all(program.parent().expect("bin")).expect("venv bin");
+        std::fs::write(&program, b"#!/bin/sh\n").expect("interpreter stub");
+        let manifest = PreparedManifest {
+            format: MANIFEST_FORMAT.to_owned(),
+            fingerprint: fingerprint.clone(),
+            package: package.name.clone(),
+            origin: package.root.display().to_string(),
+            entrypoint: ENTRYPOINT.to_owned(),
+            fastmcp: MANAGED_FASTMCP_VERSION.to_owned(),
+            python: python_identity.to_owned(),
+            uv: uv_identity.to_owned(),
             os: std::env::consts::OS.to_owned(),
             arch: std::env::consts::ARCH.to_owned(),
-            digest: digest.as_str().to_owned(),
-            lock_digest: super::lock_digest_bytes(&package.uv_lock),
-            python_runtime: "Python 9.9.9".to_owned(),
-            uv: "uv 0.8.22".to_owned(),
+            source_digest: source_digest(&package.files),
         };
         std::fs::write(
-            root.join(super::ENVIRONMENT_MARKER),
-            serde_json::to_vec(&marker).expect("marker"),
+            state_dir.join(MANIFEST_FILE),
+            serde_json::to_vec(&manifest).expect("manifest"),
         )
-        .expect("marker write");
-        let error = PythonToolStore::read_published_environment(
-            &root,
-            &digest,
-            "Python 3.12.3",
-            "uv 0.8.22",
-            &package.uv_lock,
-        )
-        .expect_err("a marker with a different Python runtime must be rejected");
-        assert!(
-            error
-                .to_string()
-                .contains("does not match the expected digest inputs")
-        );
+        .expect("manifest write");
+        (fingerprint, state_dir)
     }
 
-    /// Each `ToolVersion` -> environment binding is recorded deterministically
-    /// outside the environment's immutable identity; a second `ToolVersion`
-    /// reusing the same digest records its own binding.
     #[test]
-    fn tool_version_environment_bindings_are_recorded_per_tool_version() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
-        let package = test_package();
-        let digest = crate::runtime::identity::PythonToolEnvironmentDigest::new(
-            "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".to_owned(),
-        );
-        PythonToolStore::record_tool_version_binding(
-            &store.inner,
-            &PublishedPythonTool {
-                package: package.clone(),
-                root: PathBuf::from("/unused"),
-            },
-            &digest,
-        )
-        .expect("first binding");
-        let other = PythonToolPackage {
-            name: "beta".to_owned(),
-            tool_version_id: ToolVersionId::new("sha256:other".to_owned()),
-            ..package.clone()
-        };
-        PythonToolStore::record_tool_version_binding(
-            &store.inner,
-            &PublishedPythonTool {
-                package: other.clone(),
-                root: PathBuf::from("/unused"),
-            },
-            &digest,
-        )
-        .expect("second binding");
-        let first_record = dir
-            .path()
-            .join("store/python-tool-bindings")
-            .join(package.tool_version_id.as_str())
-            .join(format!("{}.json", digest.as_str()));
-        let second_record = dir
-            .path()
-            .join("store/python-tool-bindings")
-            .join(other.tool_version_id.as_str())
-            .join(format!("{}.json", digest.as_str()));
-        assert!(first_record.is_file(), "first binding recorded");
-        assert!(second_record.is_file(), "second binding recorded");
-        assert_ne!(first_record, second_record);
-        let environment_marker = dir
-            .path()
-            .join("store/python-tool-envs")
-            .join(digest.as_str())
-            .join(super::ENVIRONMENT_MARKER);
-        assert!(
-            !environment_marker.exists(),
-            "the environment's immutable identity never claims a ToolVersion"
+    fn a_published_state_reopens_only_when_every_claim_verifies() {
+        let directory = tempfile::tempdir().expect("store");
+        let package = package("demo");
+        let (fingerprint, state_dir) = seed_prepared_state(directory.path(), &package, "py", "uv");
+
+        let reopened = read_prepared_state(&state_dir, &package, &fingerprint)
+            .expect("valid state")
+            .expect("state exists");
+        assert_eq!(reopened.fingerprint, fingerprint);
+        assert_eq!(reopened.state_dir, state_dir);
+
+        // An unknown fingerprint directory is simply absent, not an error.
+        assert_eq!(
+            read_prepared_state(
+                &directory
+                    .path()
+                    .join(PACKAGES_DIRECTORY)
+                    .join("sha256:other"),
+                &package,
+                "sha256:other",
+            )
+            .expect("absent state"),
+            None
         );
     }
 
-    /// The `PythonToolStoreInner` construction keeps all coordination handles.
     #[test]
-    fn store_inner_is_constructible() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
-        assert!(store.inner.roots.shared.join("tool-versions").is_dir());
-        assert!(store.inner.roots.private.join("python-tool-envs").is_dir());
+    fn a_tampered_published_state_fails_closed() {
+        let directory = tempfile::tempdir().expect("store");
+        let package = package("demo");
+        let (fingerprint, state_dir) = seed_prepared_state(directory.path(), &package, "py", "uv");
+
+        // A tampered manifest (a different claimed fingerprint).
+        let manifest_path = state_dir.join(MANIFEST_FILE);
+        let original = std::fs::read(&manifest_path).expect("manifest");
+        let mut manifest: PreparedManifest =
+            serde_json::from_slice(&original).expect("manifest parses");
+        manifest.package = "impostor".to_owned();
+        // The manifest claim check covers the fingerprint/format/platform;
+        // a source-digest-consistent but fingerprint-foreign manifest fails.
+        manifest.fingerprint = "sha256:foreign".to_owned();
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_vec(&manifest).expect("manifest"),
+        )
+        .expect("tamper");
+        let error = read_prepared_state(&state_dir, &package, &fingerprint)
+            .expect_err("a tampered manifest fails closed");
         assert!(
-            store
-                .inner
-                .roots
-                .private
-                .join("python-tool-bindings")
-                .is_dir()
+            matches!(&error, PythonToolError::Storage(message) if message.contains("does not match its claimed identity")),
+            "{error}"
         );
+
+        // Restored manifest, tampered frozen source.
+        std::fs::write(&manifest_path, &original).expect("restore manifest");
+        std::fs::write(
+            state_dir.join(SOURCE_DIRECTORY).join(SERVER_FILE),
+            b"mcp = 'tampered'\n",
+        )
+        .expect("tamper source");
+        let error = read_prepared_state(&state_dir, &package, &fingerprint)
+            .expect_err("a tampered source fails closed");
         assert!(
-            store
-                .inner
-                .roots
-                .private
-                .join("python-invocations")
-                .is_dir()
+            matches!(&error, PythonToolError::Storage(message) if message.contains("does not hash back")),
+            "{error}"
         );
-        let _ = PythonToolStoreInner {
-            roots: super::PythonToolStoreRoots::unified(dir.path().join("other")),
-            runner: Arc::new(ScriptedRunner::new(Vec::new())),
-            uv_binary: PathBuf::from("uv"),
-            python_binary: PathBuf::from("python3"),
-            in_flight: Arc::new(Mutex::new(BTreeMap::new())),
-            waiter_attachments: Arc::new(super::WaiterAttachments::default()),
-            next_invocation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-        };
+
+        // The tampered bytes are never mutated into looking valid.
+        let persisted =
+            std::fs::read(state_dir.join(SOURCE_DIRECTORY).join(SERVER_FILE)).expect("persisted");
+        assert_eq!(persisted, b"mcp = 'tampered'\n");
     }
 
-    /// Returns the shell arguments of the private Python invocation command.
-    /// Test runners use this only to emulate the runtime-owned result
-    /// transport at the same boundary as the production harness.
-    fn private_python_arguments(command: &str) -> Vec<String> {
-        let mut arguments = Vec::new();
-        let mut current = String::new();
-        let mut quoted = false;
-        let mut escaped = false;
-        for character in command.chars() {
-            if escaped {
-                current.push(character);
-                escaped = false;
-            } else if character == '\\' && quoted {
-                escaped = true;
-            } else if character == '\'' {
-                quoted = !quoted;
-            } else if character.is_whitespace() && !quoted {
-                if !current.is_empty() {
-                    arguments.push(std::mem::take(&mut current));
-                }
+    #[test]
+    fn a_published_state_without_the_launch_executable_fails_closed() {
+        let directory = tempfile::tempdir().expect("store");
+        let package = package("demo");
+        let (fingerprint, state_dir) = seed_prepared_state(directory.path(), &package, "py", "uv");
+        std::fs::remove_file(venv_python(&state_dir)).expect("remove the interpreter");
+        let error = read_prepared_state(&state_dir, &package, &fingerprint)
+            .expect_err("a missing venv interpreter fails closed");
+        assert!(
+            matches!(&error, PythonToolError::Storage(message) if message.contains("no venv interpreter")),
+            "{error}"
+        );
+    }
+
+    /// A recorded process backend: probes succeed with fixed versions, and
+    /// the `uv sync` command materializes the stub `venv/bin/python` launch
+    /// executable inside the staging directory it runs in.
+    #[derive(Debug, Default)]
+    struct FakeRunner {
+        commands: Mutex<Vec<String>>,
+    }
+
+    impl SupervisedProcessRunner for FakeRunner {
+        fn run(
+            &self,
+            spec: SupervisedCommandSpec,
+            _control: Option<crate::runtime::process_runner::RunnerTestControl>,
+        ) -> futures_util::future::BoxFuture<'_, Result<CapturedProcessResult, String>> {
+            self.commands
+                .lock()
+                .expect("commands")
+                .push(spec.command.clone());
+            if spec.command.contains("sync") {
+                let program = venv_python(&spec.cwd);
+                std::fs::create_dir_all(program.parent().expect("bin")).expect("venv bin");
+                std::fs::write(program, b"#!/bin/sh\n").expect("interpreter stub");
+            }
+            let stdout = if spec.command.contains("python3") {
+                b"Python 3.12.13\n".to_vec()
+            } else if spec.command.contains("uv") && spec.command.contains("--version") {
+                b"uv 0.11.12\n".to_vec()
             } else {
-                current.push(character);
-            }
-        }
-        if !current.is_empty() {
-            arguments.push(current);
-        }
-        arguments
-    }
-
-    fn write_private_python_success(spec: &SupervisedCommandSpec, value: &str) {
-        let arguments = private_python_arguments(&spec.command);
-        assert_eq!(arguments.len(), 7, "private Python command arguments");
-        std::fs::write(&arguments[5], br#"{"ok":true}"#).expect("status transport");
-        std::fs::write(&arguments[6], value).expect("logical result transport");
-    }
-
-    /// A scripted execution runner that reproduces the tool's own
-    /// filesystem behavior at whatever writable working directory the
-    /// executor gave it — one relative write and one self-modification of
-    /// the module file — then answers with the private status/result transport. It
-    /// records every command with its cwd.
-    #[derive(Clone, Default)]
-    struct ToolWriteSimulatingRunner {
-        commands: Arc<Mutex<Vec<(String, PathBuf)>>>,
-    }
-
-    impl SupervisedProcessRunner for ToolWriteSimulatingRunner {
-        fn run(
-            &self,
-            spec: SupervisedCommandSpec,
-            _control: Option<crate::runtime::process_runner::RunnerTestControl>,
-        ) -> BoxFuture<'_, Result<CapturedProcessResult, String>> {
-            self.commands
-                .lock()
-                .expect("recorded commands lock")
-                .push((spec.command.clone(), spec.cwd.clone()));
-            // The tool's ordinary writes land wherever its working
-            // directory and module root are.
-            std::fs::write(spec.cwd.join("runtime-cache.txt"), b"changed")
-                .expect("the simulated relative write");
-            std::fs::write(
-                spec.cwd.join("tool.py"),
-                b"def main(arguments):\n    return 'tampered'\n",
-            )
-            .expect("the simulated self-modification");
-            write_private_python_success(&spec, r#""ok""#);
+                Vec::new()
+            };
             Box::pin(async move {
                 Ok(CapturedProcessResult {
                     exit_code: Some(0),
                     intent: ProcessOutcomeIntent::Completed,
-                    stdout: b"diagnostic output\n".to_vec(),
+                    stdout,
                     stderr: Vec::new(),
                 })
             })
         }
     }
 
-    /// A process-boundary fixture that writes the private status/result
-    /// transports exactly where the production harness writes them. Stdout
-    /// is deliberately only diagnostic bytes, proving that the logical
-    /// result no longer depends on generic process capture.
-    #[derive(Clone)]
-    struct LogicalResultRunner {
-        result: Arc<Vec<u8>>,
-        status: &'static [u8],
-    }
-
-    impl LogicalResultRunner {
-        fn success(result: impl Into<Vec<u8>>) -> Self {
-            Self {
-                result: Arc::new(result.into()),
-                status: br#"{"ok":true}"#,
-            }
-        }
-    }
-
-    impl SupervisedProcessRunner for LogicalResultRunner {
-        fn run(
-            &self,
-            spec: SupervisedCommandSpec,
-            _control: Option<crate::runtime::process_runner::RunnerTestControl>,
-        ) -> BoxFuture<'_, Result<CapturedProcessResult, String>> {
-            let arguments = private_python_arguments(&spec.command);
-            assert_eq!(arguments.len(), 7, "private Python command arguments");
-            std::fs::write(&arguments[5], self.status).expect("status transport");
-            std::fs::write(&arguments[6], self.result.as_ref()).expect("result transport");
-            Box::pin(async {
-                Ok(CapturedProcessResult {
-                    exit_code: Some(0),
-                    intent: ProcessOutcomeIntent::Completed,
-                    stdout: b"diagnostic bytes that are independent of the result\n".to_vec(),
-                    stderr: Vec::new(),
-                })
-            })
-        }
-    }
-
-    /// A deterministic process-boundary gate. The private transports are
-    /// ready, but the supervised command does not return until the test
-    /// releases it; this lets cancellation win before Python normalization
-    /// writes the final result to the dispatch-owned background sink.
-    #[derive(Clone)]
-    struct GatedLogicalResultRunner {
-        result: Arc<Vec<u8>>,
-        started: tokio::sync::watch::Sender<bool>,
-        release: tokio::sync::watch::Sender<bool>,
-    }
-
-    impl GatedLogicalResultRunner {
-        fn new(
-            result: Vec<u8>,
-        ) -> (
-            Self,
-            tokio::sync::watch::Receiver<bool>,
-            tokio::sync::watch::Sender<bool>,
-        ) {
-            let (started, started_receiver) = tokio::sync::watch::channel(false);
-            let (release, _) = tokio::sync::watch::channel(false);
-            (
-                Self {
-                    result: Arc::new(result),
-                    started,
-                    release: release.clone(),
-                },
-                started_receiver,
-                release,
-            )
-        }
-    }
-
-    impl SupervisedProcessRunner for GatedLogicalResultRunner {
-        fn run(
-            &self,
-            spec: SupervisedCommandSpec,
-            _control: Option<crate::runtime::process_runner::RunnerTestControl>,
-        ) -> BoxFuture<'_, Result<CapturedProcessResult, String>> {
-            let arguments = private_python_arguments(&spec.command);
-            assert_eq!(arguments.len(), 7, "private Python command arguments");
-            std::fs::write(&arguments[5], br#"{"ok":true}"#).expect("status transport");
-            std::fs::write(&arguments[6], self.result.as_ref()).expect("result transport");
-            let started = self.started.clone();
-            let mut release = self.release.subscribe();
-            Box::pin(async move {
-                started.send_replace(true);
-                release
-                    .wait_for(|released| *released)
-                    .await
-                    .expect("release channel stays open");
-                Ok(CapturedProcessResult {
-                    exit_code: Some(0),
-                    intent: ProcessOutcomeIntent::Completed,
-                    stdout: b"diagnostic bytes independent of logical result\n".to_vec(),
-                    stderr: Vec::new(),
-                })
-            })
-        }
-    }
-
-    struct NoProgress;
-    impl crate::tools::executor::ProgressReporter for NoProgress {
-        fn report(&self, _progress: crate::tools::types::ToolProgress) {}
-    }
-
-    /// Builds an executor over a store with the given runner plus the
-    /// conversation tool runtime the execution context borrows from.
-    fn executor_fixture(
-        dir: &tempfile::TempDir,
-        runner: Arc<dyn SupervisedProcessRunner>,
-        package: &PythonToolPackage,
-    ) -> (
-        PythonToolStore,
-        PublishedPythonTool,
-        crate::tools::python::PythonToolExecutor,
-        crate::tools::runtime::ConversationToolRuntime,
-    ) {
-        let store = PythonToolStore::with_runner(dir.path().join("store"), runner).expect("store");
-        let published = store.publish(package).expect("publish");
-        let environment = crate::tools::python::PythonToolEnvironment {
-            digest: crate::runtime::identity::PythonToolEnvironmentDigest::new(
-                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                    .to_owned(),
-            ),
-            root: dir.path().join("env"),
-        };
-        let executor =
-            crate::tools::python::PythonToolExecutor::new(&store, published.clone(), environment);
-        std::fs::create_dir_all(dir.path().join("workspace")).expect("workspace");
-        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
-            crate::runtime::identity::ConversationId::new("conv-python-immutability"),
-            dir.path().join("workspace"),
-            dir.path().join("artifacts"),
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_preparations_coalesce_onto_one_physical_build() {
+        let directory = tempfile::tempdir().expect("store");
+        let runner = Arc::new(FakeRunner::default());
+        let store = PythonToolStore::with_binaries_and_runner(
+            directory.path().to_path_buf(),
+            PathBuf::from("/usr/bin/uv"),
+            PathBuf::from("/usr/bin/python3"),
+            runner.clone(),
         )
-        .expect("tool runtime");
-        (store, published, executor, tool_runtime)
-    }
+        .expect("store");
+        let package = package("demo");
 
-    async fn execute_once(
-        executor: &crate::tools::python::PythonToolExecutor,
-        tool_runtime: &crate::tools::runtime::ConversationToolRuntime,
-    ) -> crate::tools::types::ToolExecutionResult {
-        crate::tools::executor::ToolExecutor::execute(
-            executor,
-            crate::tools::types::ToolInvocation {
-                call_id: crate::runtime::identity::ToolCallId::new("call-1"),
-                tool_id: crate::runtime::identity::ToolId::new("tool-alpha"),
-                tool_name: "alpha".to_owned(),
-                mode: crate::tools::types::ToolInvocationMode::Foreground,
-                arguments: serde_json::json!({}),
-            },
-            crate::tools::executor::ToolExecutionContext {
-                conversation_id: tool_runtime.conversation_id(),
-                execution_id: None,
-                cancellation: crate::runtime::ExecutionCancellation::detached(
-                    crate::runtime::CancellationSignal::new(),
-                    crate::runtime::types::CancellationReason::UserRequested,
-                ),
-                workspace: tool_runtime.workspace(),
-                progress: &NoProgress,
-                artifacts: tool_runtime.artifacts(),
-                tool_output: tool_runtime.tool_output(),
-                environment: tool_runtime.environment(),
-                questionnaire_requester: None,
-                todos: None,
-                subagent: None,
-            },
-        )
-        .await
-    }
-
-    async fn execute_mode(
-        executor: &crate::tools::python::PythonToolExecutor,
-        tool_runtime: &crate::tools::runtime::ConversationToolRuntime,
-        mode: crate::tools::types::ToolInvocationMode,
-        execution_id: Option<&crate::runtime::identity::ToolExecutionId>,
-    ) -> crate::tools::types::ToolExecutionResult {
-        crate::tools::executor::ToolExecutor::execute(
-            executor,
-            crate::tools::types::ToolInvocation {
-                call_id: crate::runtime::identity::ToolCallId::new("call-mode"),
-                tool_id: crate::runtime::identity::ToolId::new("tool-alpha"),
-                tool_name: "alpha".to_owned(),
-                mode,
-                arguments: serde_json::json!({}),
-            },
-            crate::tools::executor::ToolExecutionContext::new(
-                tool_runtime.conversation_id(),
-                execution_id,
-                crate::runtime::ExecutionCancellation::detached(
-                    crate::runtime::CancellationSignal::new(),
-                    crate::runtime::types::CancellationReason::UserRequested,
-                ),
-                tool_runtime.workspace(),
-                &NoProgress,
-                tool_runtime.artifacts(),
-                tool_runtime.tool_output(),
-                tool_runtime.environment(),
-            ),
-        )
-        .await
-    }
-
-    fn json_string_with_exact_bytes(bytes: usize) -> Vec<u8> {
-        assert!(bytes >= 2);
-        format!("\"{}\"", "x".repeat(bytes - 2)).into_bytes()
-    }
-
-    fn assert_no_foreground_spill(runtime: &crate::tools::runtime::ConversationToolRuntime) {
-        assert_eq!(
-            std::fs::read_dir(runtime.tool_output().root().join("results"))
-                .expect("results directory")
-                .count(),
-            0,
-            "small foreground Python results allocate no spill"
+        let cancellation = CancellationSignal::new();
+        let (first, second) = tokio::join!(
+            store.ensure_prepared(&package, &cancellation),
+            store.ensure_prepared(&package, &cancellation),
         );
-    }
-
-    /// The exact foreground preview boundary keeps Python's normal JSON
-    /// result semantics and does not allocate a spill.
-    #[tokio::test]
-    async fn foreground_python_result_at_preview_boundary_is_direct_json() {
-        let directory = tempfile::tempdir().expect("directory");
-        let raw = json_string_with_exact_bytes(FOREGROUND_TOOL_RESULT_PREVIEW_BYTES);
-        let runner = Arc::new(LogicalResultRunner::success(raw));
-        let package = test_package();
-        let (_store, _published, executor, runtime) =
-            executor_fixture(&directory, runner, &package);
-        let result = execute_once(&executor, &runtime).await;
-        assert_eq!(result.status, ToolExecutionStatus::Success);
-        assert!(matches!(
-            result.content.first(),
-            Some(ToolResultContent::Json { .. })
-        ));
-        assert!(result.managed_output.is_none());
-        assert!(result.truncation.is_none());
-        assert_no_foreground_spill(&runtime);
-    }
-
-    /// One byte over the same boundary remains semantic success but becomes
-    /// a single complete managed-output spill with a bounded typed preview.
-    #[tokio::test]
-    async fn foreground_python_result_one_byte_over_boundary_spills_once() {
-        let directory = tempfile::tempdir().expect("directory");
-        let raw = json_string_with_exact_bytes(FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1);
-        let expected = raw.clone();
-        let runner = Arc::new(LogicalResultRunner::success(raw));
-        let package = test_package();
-        let (_store, _published, executor, runtime) =
-            executor_fixture(&directory, runner, &package);
-        let result = execute_once(&executor, &runtime).await;
-        assert_eq!(result.status, ToolExecutionStatus::Success);
-        let Some(crate::tools::types::ManagedOutputContinuation::Complete { locator }) =
-            &result.managed_output
-        else {
-            panic!("oversized Python result must retain Complete output: {result:?}");
-        };
-        assert_eq!(std::fs::read(locator).expect("complete spill"), expected);
-        assert_eq!(
-            std::fs::read_dir(runtime.tool_output().root().join("results"))
-                .expect("results directory")
-                .count(),
-            1,
-            "exactly one foreground Python spill is allocated"
-        );
-        assert!(matches!(
-            result.content.first(),
-            Some(ToolResultContent::Text(text)) if text.text.len() <= FOREGROUND_TOOL_RESULT_PREVIEW_BYTES
-        ));
-        assert!(
-            result
-                .model_facing_projection()
-                .as_text()
-                .contains("Read or Grep")
-        );
-        assert_eq!(
-            result
-                .truncation
-                .as_ref()
-                .and_then(|state| state.original_bytes),
-            Some((FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1) as u64)
-        );
-    }
-
-    /// Escaped JSON and multibyte Unicode stay valid at the real executor
-    /// boundary; the oversized preview never splits a code point while the
-    /// spill preserves the exact transport bytes.
-    #[tokio::test]
-    async fn foreground_python_json_escaping_and_unicode_are_valid() {
-        let directory = tempfile::tempdir().expect("directory");
-        // Include JSON escape sequences as well as a multibyte scalar close
-        // to the byte boundary. The transport itself is valid JSON; only its
-        // bounded model-facing projection is allowed to be textual preview.
-        let mut value = String::from("\"line\\n\\\"");
-        while value.len() <= FOREGROUND_TOOL_RESULT_PREVIEW_BYTES {
-            value.push('😀');
-        }
-        value.push('"');
-        let raw = value.into_bytes();
-        assert!(raw.len() > FOREGROUND_TOOL_RESULT_PREVIEW_BYTES);
-        let runner = Arc::new(LogicalResultRunner::success(raw.clone()));
-        let package = test_package();
-        let (_store, _published, executor, runtime) =
-            executor_fixture(&directory, runner, &package);
-        let result = execute_once(&executor, &runtime).await;
-        assert_eq!(result.status, ToolExecutionStatus::Success);
-        assert!(result.content.iter().all(|content| match content {
-            ToolResultContent::Text(text) => std::str::from_utf8(text.text.as_bytes()).is_ok(),
-            _ => true,
-        }));
-        let Some(crate::tools::types::ManagedOutputContinuation::Complete { locator }) =
-            &result.managed_output
-        else {
-            panic!("Unicode JSON result must be complete in managed output");
-        };
-        assert_eq!(std::fs::read(locator).expect("Unicode spill"), raw);
-        assert!(
-            serde_json::from_slice::<serde_json::Value>(
-                &std::fs::read(locator).expect("Unicode spill")
-            )
-            .is_ok()
-        );
-    }
-
-    /// A successful result much larger than the old 64 KiB process-capture
-    /// ceiling is still Success because the logical transport is a file,
-    /// while Rust streams it into the one managed spill.
-    #[tokio::test]
-    async fn foreground_python_result_over_old_process_capture_limit_stays_successful() {
-        let directory = tempfile::tempdir().expect("directory");
-        let raw = json_string_with_exact_bytes(100_000);
-        let runner = Arc::new(LogicalResultRunner::success(raw.clone()));
-        let package = test_package();
-        let (_store, _published, executor, runtime) =
-            executor_fixture(&directory, runner, &package);
-        let result = execute_once(&executor, &runtime).await;
-        assert_eq!(result.status, ToolExecutionStatus::Success);
-        let Some(crate::tools::types::ManagedOutputContinuation::Complete { locator }) =
-            &result.managed_output
-        else {
-            panic!("large Python result must remain retrievable");
-        };
-        assert_eq!(std::fs::read(locator).expect("large spill"), raw);
-    }
-
-    /// Foreground storage failures are explicit: allocation has no locator,
-    /// while a write failure retains only a typed Partial locator.
-    #[tokio::test]
-    async fn foreground_python_storage_failures_never_claim_complete() {
-        let package = test_package();
-        let raw = json_string_with_exact_bytes(FOREGROUND_TOOL_RESULT_PREVIEW_BYTES + 1);
-
-        let allocation_directory = tempfile::tempdir().expect("allocation directory");
-        let allocation_runner = Arc::new(LogicalResultRunner::success(raw.clone()));
-        let (_store, _published, allocation_executor, allocation_runtime) =
-            executor_fixture(&allocation_directory, allocation_runner, &package);
-        allocation_runtime
-            .tool_output()
-            .set_force_open_failures(true);
-        let allocation_result = execute_once(&allocation_executor, &allocation_runtime).await;
-        assert!(matches!(
-            allocation_result.status,
-            ToolExecutionStatus::Failed { .. }
-        ));
-        assert!(matches!(
-            allocation_result.managed_output,
-            Some(crate::tools::types::ManagedOutputContinuation::Unavailable { .. })
-        ));
-
-        let write_directory = tempfile::tempdir().expect("write directory");
-        let write_runner = Arc::new(LogicalResultRunner::success(raw));
-        let (_store, _published, write_executor, write_runtime) =
-            executor_fixture(&write_directory, write_runner, &package);
-        write_runtime.tool_output().fail_writes_after(0);
-        let write_result = execute_once(&write_executor, &write_runtime).await;
-        assert!(matches!(
-            write_result.status,
-            ToolExecutionStatus::Failed { .. }
-        ));
-        assert!(matches!(
-            write_result.managed_output,
-            Some(crate::tools::types::ManagedOutputContinuation::Partial { .. })
-        ));
-    }
-
-    /// Background Python uses the path allocated before dispatch as its only
-    /// result identity; even an oversized final value never creates a
-    /// secondary `results/result_N.txt` spill.
-    #[tokio::test]
-    async fn background_python_reuses_the_dispatch_owned_locator() {
-        let directory = tempfile::tempdir().expect("directory");
-        let raw = json_string_with_exact_bytes(100_000);
-        let runner = Arc::new(LogicalResultRunner::success(raw.clone()));
-        let package = test_package();
-        let (_store, _published, executor, runtime) =
-            executor_fixture(&directory, runner, &package);
-        let execution_id = crate::runtime::identity::ToolExecutionId::background(1);
-        let advertised = runtime
-            .tool_output()
-            .allocate_background_output(&execution_id)
-            .expect("dispatch-owned output");
-        let result = execute_mode(
-            &executor,
-            &runtime,
-            crate::tools::types::ToolInvocationMode::Background,
-            Some(&execution_id),
-        )
-        .await;
-        assert_eq!(result.status, ToolExecutionStatus::Success);
-        assert_eq!(
-            result.managed_output,
-            Some(crate::tools::types::ManagedOutputContinuation::Complete {
-                locator: advertised.clone(),
-            })
-        );
-        assert_eq!(std::fs::read(&advertised).expect("background output"), raw);
-        assert_eq!(
-            std::fs::read_dir(runtime.tool_output().root().join("results"))
-                .expect("results directory")
-                .count(),
-            0,
-            "background result normalization never allocates a secondary spill"
-        );
-        assert_eq!(
-            std::fs::read_dir(runtime.tool_output().root().join("tasks"))
-                .expect("tasks directory")
-                .count(),
-            1,
-            "the dispatch-owned task output is the only managed file"
-        );
-    }
-
-    /// The real background registry path proves the accepted locator exists
-    /// before the runner starts and that terminal publication carries the
-    /// same typed locator without allocating a result spill.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn background_python_registry_reuses_one_locator_through_settlement() {
-        let directory = tempfile::tempdir().expect("directory");
-        let raw = json_string_with_exact_bytes(100_000);
-        let runner = Arc::new(LogicalResultRunner::success(raw.clone()));
-        let package = test_package();
-        let (_store, _published, executor, runtime) =
-            executor_fixture(&directory, runner, &package);
-        let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
-        let invocation = crate::tools::types::ToolInvocation {
-            call_id: crate::runtime::identity::ToolCallId::new("background-python-call"),
-            tool_id: crate::runtime::identity::ToolId::new("tool-alpha"),
-            tool_name: "alpha".to_owned(),
-            mode: crate::tools::types::ToolInvocationMode::Background,
-            arguments: serde_json::json!({}),
-        };
-        let prepared = runtime
-            .background()
-            .prepare_dispatch(
-                &invocation,
-                &executor,
-                crate::tools::environment::ToolEnvironment::new(),
-            )
-            .expect("prepare background Python dispatch");
-        let crate::tools::background::BackgroundDispatchOutcome::Accepted {
-            execution_id,
-            result: accepted,
-        } = runtime
-            .background()
-            .commit_dispatch(prepared, &crate::runtime::CancellationSignal::new())
-            .expect("commit background Python dispatch")
-        else {
-            panic!("background Python dispatch was not accepted");
-        };
-        let advertised = match &accepted.content[0] {
-            ToolResultContent::Json { value } => value["output_path"]
-                .as_str()
-                .expect("accepted output path")
-                .to_owned(),
-            content => panic!("accepted result is JSON: {content:?}"),
-        };
-        assert!(std::path::Path::new(&advertised).exists());
-        let terminal = runtime
-            .background()
-            .wait_until_terminal(&execution_id)
-            .await
-            .expect("terminal Python result");
-        let terminal_result = terminal.result.expect("terminal result");
-        assert_eq!(
-            terminal.state,
-            crate::tools::background::BackgroundLifecycle::Succeeded
-        );
-        assert_eq!(
-            terminal_result.managed_output,
-            Some(crate::tools::types::ManagedOutputContinuation::Complete {
-                locator: std::path::PathBuf::from(&advertised),
-            })
-        );
-        assert_eq!(
-            std::fs::read(&advertised).expect("complete background result"),
-            raw
-        );
-        assert_eq!(
-            std::fs::read_dir(runtime.tool_output().root().join("results"))
-                .expect("results directory")
-                .count(),
-            0,
-            "terminal Python publication creates no secondary result spill"
-        );
-        let batch = runtime
-            .mailbox()
-            .select_pending_batch()
-            .expect("terminal mailbox")
-            .expect("terminal inbound");
-        let crate::message::types::UserContentBlock::Text(text) =
-            &batch.items()[0].message().content[0]
-        else {
-            panic!("terminal Python publication is text-only");
-        };
-        assert!(text.text.len() <= crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES + 256);
-        assert!(text.text.contains(&advertised));
-        assert!(text.text.contains("Read or Grep"));
-    }
-
-    /// Cancellation can win while a Python process is still running, but the
-    /// registry settles only after the executor returns and the final logical
-    /// result has been written. The result therefore remains on the one
-    /// dispatch-owned path, and no post-settlement writer exists.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn background_python_cancellation_waits_for_final_result_write() {
-        let directory = tempfile::tempdir().expect("directory");
-        let raw = json_string_with_exact_bytes(100_000);
-        let (runner, mut started, release) = GatedLogicalResultRunner::new(raw.clone());
-        let package = test_package();
-        let (_store, _published, executor, runtime) =
-            executor_fixture(&directory, Arc::new(runner), &package);
-        let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
-        let invocation = crate::tools::types::ToolInvocation {
-            call_id: crate::runtime::identity::ToolCallId::new("background-python-cancel-call"),
-            tool_id: crate::runtime::identity::ToolId::new("tool-alpha"),
-            tool_name: "alpha".to_owned(),
-            mode: crate::tools::types::ToolInvocationMode::Background,
-            arguments: serde_json::json!({}),
-        };
-        let prepared = runtime
-            .background()
-            .prepare_dispatch(
-                &invocation,
-                &executor,
-                crate::tools::environment::ToolEnvironment::new(),
-            )
-            .expect("prepare background Python dispatch");
-        let crate::tools::background::BackgroundDispatchOutcome::Accepted {
-            execution_id,
-            result: accepted,
-        } = runtime
-            .background()
-            .commit_dispatch(prepared, &crate::runtime::CancellationSignal::new())
-            .expect("commit background Python dispatch")
-        else {
-            panic!("background Python dispatch was not accepted");
-        };
-        let advertised = match &accepted.content[0] {
-            ToolResultContent::Json { value } => value["output_path"]
-                .as_str()
-                .expect("accepted output path")
-                .to_owned(),
-            content => panic!("accepted result is JSON: {content:?}"),
-        };
-        assert!(std::path::Path::new(&advertised).exists());
-        started
-            .wait_for(|is_started| *is_started)
-            .await
-            .expect("gated Python process started");
-
-        let cancelling = runtime
-            .background()
-            .cancel(&execution_id)
-            .expect("cancel running Python execution");
-        assert_eq!(
-            cancelling.state,
-            crate::tools::background::BackgroundLifecycle::Cancelling
-        );
-        release.send_replace(true);
-
-        let terminal = runtime
-            .background()
-            .wait_until_terminal(&execution_id)
-            .await
-            .expect("terminal Python result");
-        assert_eq!(
-            terminal.state,
-            crate::tools::background::BackgroundLifecycle::Cancelled
-        );
-        let terminal_result = terminal.result.expect("terminal result");
-        assert_eq!(
-            terminal_result.managed_output,
-            Some(crate::tools::types::ManagedOutputContinuation::Complete {
-                locator: std::path::PathBuf::from(&advertised),
-            })
-        );
-        assert_eq!(
-            std::fs::read(&advertised).expect("complete Python output"),
-            raw
-        );
-        assert_eq!(
-            std::fs::read_dir(runtime.tool_output().root().join("results"))
-                .expect("results directory")
-                .count(),
-            0,
-            "cancellation does not create a foreground result spill"
-        );
-    }
-
-    /// A write failure after background dispatch has advertised its path is
-    /// retained as Partial at that same path; settlement never upgrades it
-    /// to Complete and never creates a second spill.
-    #[tokio::test]
-    async fn background_python_write_failure_is_partial_at_the_same_locator() {
-        let directory = tempfile::tempdir().expect("directory");
-        let raw = json_string_with_exact_bytes(100_000);
-        let runner = Arc::new(LogicalResultRunner::success(raw));
-        let package = test_package();
-        let (_store, _published, executor, runtime) =
-            executor_fixture(&directory, runner, &package);
-        let execution_id = crate::runtime::identity::ToolExecutionId::background(7);
-        let advertised = runtime
-            .tool_output()
-            .allocate_background_output(&execution_id)
-            .expect("dispatch-owned output");
-        runtime.tool_output().fail_writes_after(0);
-        let result = execute_mode(
-            &executor,
-            &runtime,
-            crate::tools::types::ToolInvocationMode::Background,
-            Some(&execution_id),
-        )
-        .await;
-        assert!(matches!(result.status, ToolExecutionStatus::Failed { .. }));
-        let Some(crate::tools::types::ManagedOutputContinuation::Partial {
-            locator,
-            diagnostic,
-        }) = result.managed_output
-        else {
-            panic!("background write failure must be Partial: {result:?}");
-        };
-        assert_eq!(locator, advertised);
-        assert!(diagnostic.contains("background result output"));
-        assert!(advertised.exists());
-        assert_eq!(
-            std::fs::read_dir(runtime.tool_output().root().join("results"))
-                .expect("results directory")
-                .count(),
-            0
-        );
-    }
-
-    /// `ToolVersion` immutability at execution (Issue #81): a tool that
-    /// performs ordinary filesystem writes — a relative `cwd` write and a
-    /// self-modification through `__file__`'s location — mutates only its
-    /// invocation-private materialization. The canonical published source
-    /// keeps its exact bytes, no extra file appears in it, the recomputed
-    /// content digest still matches the committed `ToolVersionId`, and the
-    /// invocation-private directory is settled after the execution.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn tool_execution_cannot_mutate_the_canonical_published_source() {
-        let runner = Arc::new(ToolWriteSimulatingRunner::default());
-        let dir = tempfile::tempdir().expect("temp dir");
-        let package = test_package();
-        let original_tool_bytes = package
-            .files
-            .iter()
-            .find(|(path, _)| path == &PathBuf::from("tool.py"))
-            .expect("tool.py")
-            .1
-            .clone();
-        let (store, published, executor, tool_runtime) =
-            executor_fixture(&dir, runner.clone(), &package);
-
-        let result = execute_once(&executor, &tool_runtime).await;
-        assert!(
-            matches!(
-                result.status,
-                crate::tools::types::ToolExecutionStatus::Success
-            ),
-            "the tool executed: {:?}",
-            result.status
-        );
-
-        // The execution ran against an invocation-private materialization,
-        // never against the canonical published root.
-        let recorded = runner.commands.lock().expect("recorded commands lock");
-        assert_eq!(recorded.len(), 1, "exactly one execution command ran");
-        let (command, cwd) = &recorded[0];
-        let invocation_root = store.inner.roots.private.join("python-invocations");
-        let bundle = cwd.parent().expect("the source directory's bundle");
-        assert_eq!(
-            cwd.file_name().expect("source dir name"),
-            "source",
-            "the execution cwd is the bundle's private source copy: {cwd:?}"
-        );
-        assert!(
-            bundle.starts_with(&invocation_root) && *cwd != published.root,
-            "the execution bundle is invocation-private: {bundle:?}"
-        );
-        assert!(
-            command.contains(&cwd.display().to_string()),
-            "the harness received the private source copy as its source root"
-        );
-        assert!(
-            command.contains(&bundle.join("harness.py").display().to_string()),
-            "each invocation executes its own bundle-private harness"
-        );
-        assert!(
-            command.contains(&bundle.join("input.json").display().to_string()),
-            "the runtime-owned input lives outside the source namespace"
-        );
-        assert!(
-            !store
-                .inner
-                .roots
-                .private
-                .join("python-tool-harness.py")
-                .exists(),
-            "no shared writable harness path exists across executor generations"
-        );
-        drop(recorded);
-
-        // The relative write never reached the canonical source.
-        assert!(
-            !published.root.join("runtime-cache.txt").exists(),
-            "no tool-created file appears in the canonical published source"
-        );
-        // The self-modification never reached the canonical source.
-        assert_eq!(
-            std::fs::read(published.root.join("tool.py")).expect("canonical tool.py"),
-            original_tool_bytes,
-            "the canonical tool.py bytes are unchanged"
-        );
-        // The recomputed canonical digest still matches the committed
-        // identity.
-        assert_eq!(
-            super::published_source_digest(&published.root).expect("canonical digest"),
-            package.tool_version_id,
-            "the published ToolVersion identity is stable after execution"
-        );
-        // The invocation-private materialization was settled.
-        assert_eq!(
-            std::fs::read_dir(&invocation_root)
-                .expect("invocation root")
-                .count(),
-            0,
-            "the invocation-private directory is removed after the execution"
-        );
-    }
-
-    /// A gated execution runner: the first invocation records its command
-    /// and cwd, signals that its execution bundle is live, then parks until
-    /// the test releases it; every later invocation passes through. Both
-    /// publish the private status/result transport. All synchronization is explicit —
-    /// no sleeps.
-    #[derive(Default)]
-    struct FirstParkingRunner {
-        entered: tokio::sync::Notify,
-        release: tokio::sync::Notify,
-        seen: std::sync::atomic::AtomicUsize,
-        commands: Mutex<Vec<(String, PathBuf)>>,
-    }
-
-    impl SupervisedProcessRunner for FirstParkingRunner {
-        fn run(
-            &self,
-            spec: SupervisedCommandSpec,
-            _control: Option<crate::runtime::process_runner::RunnerTestControl>,
-        ) -> BoxFuture<'_, Result<CapturedProcessResult, String>> {
-            self.commands
-                .lock()
-                .expect("recorded commands lock")
-                .push((spec.command.clone(), spec.cwd.clone()));
-            let first = self.seen.fetch_add(1, std::sync::atomic::Ordering::AcqRel) == 0;
-            Box::pin(async move {
-                if first {
-                    self.entered.notify_one();
-                    self.release.notified().await;
-                }
-                write_private_python_success(&spec, r#""ok""#);
-                Ok(CapturedProcessResult {
-                    exit_code: Some(0),
-                    intent: ProcessOutcomeIntent::Completed,
-                    stdout: b"diagnostic output\n".to_vec(),
-                    stderr: Vec::new(),
-                })
-            })
-        }
-    }
-
-    /// Invocation ownership across executor generations (Issue #81): an
-    /// invocation from an older executor generation stays live — the exact
-    /// condition of a detached background execution outliving its
-    /// attempt's capability revision — while a new generation (what a
-    /// capability refresh derives from the coordinator's one stable store)
-    /// executes concurrently.
-    ///
-    /// This is the same lifetime condition as the
-    /// `ConversationBackgroundRegistry` path — a detached execution holds
-    /// its `Arc<dyn ToolExecutor>` beyond the attempt, and the next
-    /// preparation constructs new executors — exercised here at the level
-    /// where the ownership domain lives (the store's allocation domain),
-    /// without mocking the ownership away: both executors allocate real
-    /// bundles from the real store.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_live_older_generation_bundle_is_never_reused_or_deleted() {
-        let runner = Arc::new(FirstParkingRunner::default());
-        let dir = tempfile::tempdir().expect("temp dir");
-        let package = test_package();
-        let store =
-            PythonToolStore::with_runner(dir.path().join("store"), runner.clone()).expect("store");
-        let published = store.publish(&package).expect("publish");
-        let environment = crate::tools::python::PythonToolEnvironment {
-            digest: crate::runtime::identity::PythonToolEnvironmentDigest::new(
-                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                    .to_owned(),
-            ),
-            root: dir.path().join("env"),
-        };
-        std::fs::create_dir_all(dir.path().join("workspace")).expect("workspace");
-        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
-            crate::runtime::identity::ConversationId::new("conv-python-generations"),
-            dir.path().join("workspace"),
-            dir.path().join("artifacts"),
-        )
-        .expect("tool runtime");
-
-        // R1: the older executor generation; its invocation is parked with
-        // its execution bundle live.
-        let executor_r1 = crate::tools::python::PythonToolExecutor::new(
-            &store,
-            published.clone(),
-            environment.clone(),
-        );
-        let r1_runtime = tool_runtime.clone();
-        let r1_task = tokio::spawn(async move { execute_once(&executor_r1, &r1_runtime).await });
-        tokio::time::timeout(std::time::Duration::from_mins(1), runner.entered.notified())
-            .await
-            .expect("the R1 execution bundle is live");
-        let r1_cwd = runner.commands.lock().expect("commands lock")[0].1.clone();
-        let r1_bundle = r1_cwd.parent().expect("R1 bundle").to_path_buf();
-        assert!(r1_bundle.join("source/tool.py").is_file());
-        assert!(r1_bundle.join("harness.py").is_file());
-        assert!(r1_bundle.join("input.json").is_file());
-
-        // R2: a new executor generation over the same stable store — what
-        // the next capability preparation derives while R1 runs.
-        let executor_r2 =
-            crate::tools::python::PythonToolExecutor::new(&store, published.clone(), environment);
-        let r2 = execute_once(&executor_r2, &tool_runtime).await;
-        assert!(
-            matches!(r2.status, crate::tools::types::ToolExecutionStatus::Success),
-            "R2 executed: {:?}",
-            r2.status
-        );
-        let r2_cwd = runner.commands.lock().expect("commands lock")[1].1.clone();
-        let r2_bundle = r2_cwd.parent().expect("R2 bundle").to_path_buf();
-        assert_ne!(
-            r1_bundle, r2_bundle,
-            "two executor generations never claim the same bundle"
-        );
-        assert!(
-            r1_bundle.join("source/tool.py").is_file(),
-            "R2 never deleted R1's live bundle"
-        );
-        assert!(!r2_bundle.exists(), "R2 settled its own bundle");
-
-        // Releasing R1 settles it independently and removes only its own
-        // bundle; the canonical published source is untouched throughout.
-        runner.release.notify_one();
-        let r1 = tokio::time::timeout(std::time::Duration::from_mins(1), r1_task)
-            .await
-            .expect("R1 settles")
-            .expect("R1 task");
-        assert!(matches!(
-            r1.status,
-            crate::tools::types::ToolExecutionStatus::Success
-        ));
-        assert!(!r1_bundle.exists(), "R1 settled its own bundle");
-        assert_eq!(
-            super::published_source_digest(&published.root).expect("canonical digest"),
-            package.tool_version_id,
-            "the canonical ToolVersion identity is unchanged across both generations"
-        );
-    }
-
-    /// Namespace separation (Issue #81): a package-owned `input.json` and
-    /// `harness.py` are canonical `ToolVersion` content copied into the
-    /// bundle's `source/`; the runtime-owned harness and arguments live
-    /// outside `source/` and never overwrite package content.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn package_owned_runtime_named_files_are_never_overwritten() {
-        /// Inspects the live execution bundle during the run: the
-        /// package-owned files must be intact inside `source/`, and the
-        /// runtime-owned files must exist beside it with runtime content.
-        struct BundleInspector;
-        impl SupervisedProcessRunner for BundleInspector {
-            fn run(
-                &self,
-                spec: SupervisedCommandSpec,
-                _control: Option<crate::runtime::process_runner::RunnerTestControl>,
-            ) -> BoxFuture<'_, Result<CapturedProcessResult, String>> {
-                let source = spec.cwd.clone();
-                let bundle = source.parent().expect("bundle").to_path_buf();
-                assert_eq!(
-                    std::fs::read(source.join("input.json")).expect("packaged input"),
-                    br#"{"packaged": true}"#,
-                    "the package-owned input.json reached the invocation source copy intact"
-                );
-                assert_eq!(
-                    std::fs::read(source.join("harness.py")).expect("packaged harness"),
-                    b"# package-owned harness\n",
-                    "the package-owned harness.py reached the invocation source copy intact"
-                );
-                let runtime_input =
-                    std::fs::read(bundle.join("input.json")).expect("runtime arguments");
-                assert_ne!(
-                    runtime_input, br#"{"packaged": true}"#,
-                    "the runtime-owned arguments are a different file outside source/"
-                );
-                let runtime_harness =
-                    std::fs::read_to_string(bundle.join("harness.py")).expect("runtime harness");
-                assert!(
-                    runtime_harness.contains("dont_write_bytecode"),
-                    "the runtime-owned harness is the current harness bytes"
-                );
-                assert!(
-                    spec.command
-                        .contains(&bundle.join("harness.py").display().to_string()),
-                    "the executed harness is the bundle's runtime-owned one"
-                );
-                write_private_python_success(&spec, r#""ok""#);
-                Box::pin(async move {
-                    Ok(CapturedProcessResult {
-                        exit_code: Some(0),
-                        intent: ProcessOutcomeIntent::Completed,
-                        stdout: b"diagnostic output\n".to_vec(),
-                        stderr: Vec::new(),
-                    })
-                })
-            }
-        }
-
-        let mut package = test_package();
-        package.files.push((
-            PathBuf::from("input.json"),
-            br#"{"packaged": true}"#.to_vec(),
-        ));
-        package.files.push((
-            PathBuf::from("harness.py"),
-            b"# package-owned harness\n".to_vec(),
-        ));
-        package.files.sort_by(|left, right| left.0.cmp(&right.0));
-        package.tool_version_id = super::tool_version_id(&package.files);
-        let dir = tempfile::tempdir().expect("temp dir");
-        let (store, published, executor, tool_runtime) =
-            executor_fixture(&dir, Arc::new(BundleInspector), &package);
-
-        let result = execute_once(&executor, &tool_runtime).await;
-        assert!(matches!(
-            result.status,
-            crate::tools::types::ToolExecutionStatus::Success
-        ));
-        // The canonical published package-owned files are byte-identical
-        // and the identity still validates.
-        assert_eq!(
-            std::fs::read(published.root.join("input.json")).expect("canonical input"),
-            br#"{"packaged": true}"#
-        );
-        assert_eq!(
-            std::fs::read(published.root.join("harness.py")).expect("canonical harness"),
-            b"# package-owned harness\n"
-        );
-        assert_eq!(
-            super::published_source_digest(&published.root).expect("canonical digest"),
-            package.tool_version_id
-        );
-        let _ = store;
-    }
-
-    /// Stale scratch safety (Issue #81): after a process restart the
-    /// allocator may start from zero while unknown `execution-N/`
-    /// directories remain. An existing path is stale scratch of unknown
-    /// ownership — the allocator skips it and never deletes or reuses it.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn stale_scratch_from_a_previous_process_is_never_reused_or_deleted() {
-        let runner = Arc::new(ToolWriteSimulatingRunner::default());
-        let dir = tempfile::tempdir().expect("temp dir");
-        let package = test_package();
-        let (store, _published, executor, tool_runtime) =
-            executor_fixture(&dir, runner.clone(), &package);
-        let stale = store
-            .inner
-            .roots
-            .private
-            .join("python-invocations/execution-0");
-        std::fs::create_dir_all(&stale).expect("stale scratch");
-        std::fs::write(stale.join("marker.txt"), b"unknown ownership").expect("marker");
-
-        let result = execute_once(&executor, &tool_runtime).await;
-        assert!(matches!(
-            result.status,
-            crate::tools::types::ToolExecutionStatus::Success
-        ));
-        let (_, cwd) = runner.commands.lock().expect("commands lock")[0].clone();
-        assert!(
-            !cwd.starts_with(&stale),
-            "the allocator skipped the stale scratch directory: {cwd:?}"
-        );
-        assert!(
-            stale.join("marker.txt").is_file(),
-            "the unknown stale scratch was never deleted"
-        );
-    }
-
-    /// Terminal exhaustion (Issue #81): once the allocator reaches
-    /// exhaustion it remains exhausted forever for this store identity —
-    /// the counter never transitions `MAX -> 0`, so no later call can
-    /// succeed, wrap, or recreate `execution-0`.
-    #[test]
-    fn allocator_exhaustion_is_absorbing() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
-        store
-            .inner
-            .next_invocation
-            .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
-
-        for attempt in ["first", "second"] {
-            let Err(super::PythonToolError::Storage(reason)) = store.allocate_execution_bundle()
-            else {
-                panic!("the {attempt} allocation must fail as exhausted");
-            };
-            assert!(
-                reason.contains("identifier space is exhausted"),
-                "the {attempt} allocation reports exhaustion: {reason}"
-            );
-        }
-        assert_eq!(
-            store
-                .inner
-                .next_invocation
-                .load(std::sync::atomic::Ordering::Relaxed),
-            u64::MAX,
-            "the counter stays at MAX: exhaustion is absorbing"
-        );
-        assert!(
-            !store
-                .inner
-                .roots
-                .private
-                .join("python-invocations/execution-0")
-                .exists(),
-            "no lower-numbered bundle was ever created"
-        );
-    }
-
-    /// The last valid identifier still allocates, then every later attempt
-    /// fails — the terminal transition is `MAX - 1 -> MAX`, never a wrap.
-    #[test]
-    fn last_identifier_then_exhaustion_never_wraps() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
-        store
-            .inner
-            .next_invocation
-            .store(u64::MAX - 1, std::sync::atomic::Ordering::Relaxed);
-
-        let bundle = store
-            .allocate_execution_bundle()
-            .expect("the last valid identifier still allocates");
-        assert_eq!(
-            bundle,
-            store
-                .inner
-                .roots
-                .private
-                .join("python-invocations/execution-18446744073709551614"),
-            "the final identifier names its bundle"
-        );
-
-        for attempt in ["second", "third"] {
-            let Err(super::PythonToolError::Storage(reason)) = store.allocate_execution_bundle()
-            else {
-                panic!("the {attempt} allocation must fail as exhausted");
-            };
-            assert!(
-                reason.contains("identifier space is exhausted"),
-                "the {attempt} allocation reports exhaustion: {reason}"
-            );
-        }
-        assert_eq!(
-            store
-                .inner
-                .next_invocation
-                .load(std::sync::atomic::Ordering::Relaxed),
-            u64::MAX
-        );
-        assert!(
-            !store
-                .inner
-                .roots
-                .private
-                .join("python-invocations/execution-0")
-                .exists(),
-            "the allocator never wrapped to execution-0"
-        );
-        std::fs::remove_dir_all(&bundle).expect("remove the bundle this test owns");
-    }
-
-    /// Stale scratch and terminal exhaustion compose: skipping an
-    /// already-existing final identifier consumes the last claim, and the
-    /// next checked claim observes `MAX` and fails — never a wrap.
-    #[test]
-    fn stale_last_identifier_does_not_wrap() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
-        let stale = store
-            .inner
-            .roots
-            .private
-            .join("python-invocations/execution-18446744073709551614");
-        std::fs::create_dir_all(&stale).expect("stale final-identifier scratch");
-        std::fs::write(stale.join("marker.txt"), b"unknown ownership").expect("marker");
-        store
-            .inner
-            .next_invocation
-            .store(u64::MAX - 1, std::sync::atomic::Ordering::Relaxed);
-
-        let Err(super::PythonToolError::Storage(reason)) = store.allocate_execution_bundle() else {
-            panic!("allocation past the stale final identifier must fail as exhausted");
-        };
-        assert!(
-            reason.contains("identifier space is exhausted"),
-            "the skip loop ends in explicit exhaustion: {reason}"
-        );
-        assert_eq!(
-            store
-                .inner
-                .next_invocation
-                .load(std::sync::atomic::Ordering::Relaxed),
-            u64::MAX
-        );
-        assert!(
-            !store
-                .inner
-                .roots
-                .private
-                .join("python-invocations/execution-0")
-                .exists(),
-            "stale-scratch skipping never wrapped to execution-0"
-        );
-        assert!(
-            stale.join("marker.txt").is_file(),
-            "the stale scratch was never deleted"
-        );
-    }
-
-    /// Reopen/restart validation (Issue #81): after a real execution the
-    /// store instance is dropped, a fresh store over the same root
-    /// revalidates the persisted `ToolVersion` from its bytes alone, and
-    /// the identity is unchanged — execution left no drift.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn execution_then_store_reopen_revalidates_the_same_tool_version_identity() {
-        let runner = Arc::new(ToolWriteSimulatingRunner::default());
-        let dir = tempfile::tempdir().expect("temp dir");
-        let package = test_package();
-        let root = dir.path().join("store");
-        let published_root = {
-            let store = PythonToolStore::with_runner(root.clone(), runner).expect("first store");
-            let published = store.publish(&package).expect("publish");
-            let environment = crate::tools::python::PythonToolEnvironment {
-                digest: crate::runtime::identity::PythonToolEnvironmentDigest::new(
-                    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                        .to_owned(),
-                ),
-                root: dir.path().join("env"),
-            };
-            let executor = crate::tools::python::PythonToolExecutor::new(
-                &store,
-                published.clone(),
-                environment,
-            );
-            std::fs::create_dir_all(dir.path().join("workspace")).expect("workspace");
-            let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
-                crate::runtime::identity::ConversationId::new("conv-python-reopen"),
-                dir.path().join("workspace"),
-                dir.path().join("artifacts"),
-            )
-            .expect("tool runtime");
-            let result = execute_once(&executor, &tool_runtime).await;
-            assert!(matches!(
-                result.status,
-                crate::tools::types::ToolExecutionStatus::Success
-            ));
-            published.root
-            // `store` and `executor` drop here: no in-memory handle remains.
-        };
-        let reopened =
-            PythonToolStore::with_runner(root, Arc::new(ToolWriteSimulatingRunner::default()))
-                .expect("reopened store");
-        let republished = reopened
-            .publish(&package)
-            .expect("reuse must revalidate the persisted source after execution");
-        assert_eq!(republished.root, published_root);
-        assert_eq!(
-            republished.package.tool_version_id, package.tool_version_id,
-            "the persisted ToolVersion identity is unchanged across execution and reopen"
-        );
-    }
-
-    /// The end-to-end execution architecture with a real interpreter
-    /// (Issue #81): a tool that writes `runtime-cache.txt` relative to its
-    /// cwd and rewrites `__file__` executes successfully against its
-    /// invocation-private materialization while the canonical published
-    /// source stays byte-identical.
-    ///
-    /// Opt-in by availability, mirroring the `m7_uv` pattern: without a
-    /// real `python3` the acceptance is not exercised.
-    #[cfg(unix)]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_real_execution_materializes_an_invocation_private_copy() {
-        let python = super::resolve_executable("python3");
-        if !python.is_file() {
-            eprintln!("python3 unavailable; the real execution materialization is not exercised");
-            return;
-        }
-        let dir = tempfile::tempdir().expect("temp dir");
-        let mut package = test_package();
-        let tool_source = b"from pathlib import Path\n\ndef main(arguments):\n    Path(\"runtime-cache.txt\").write_text(\"changed\")\n    Path(__file__).write_text(\"def main(arguments):\\n    return 'tampered'\\n\")\n    return \"ok\"\n".to_vec();
-        for (path, bytes) in &mut package.files {
-            if path == &PathBuf::from("tool.py") {
-                *bytes = tool_source.clone();
-            }
-        }
-        package.tool_version_id = super::tool_version_id(&package.files);
-        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
-        let published = store.publish(&package).expect("publish");
-        let environment_root = dir.path().join("env");
-        std::fs::create_dir_all(environment_root.join("bin")).expect("env bin");
-        std::os::unix::fs::symlink(&python, environment_root.join("bin/python"))
-            .expect("interpreter link");
-        let executor = crate::tools::python::PythonToolExecutor::new(
-            &store,
-            published.clone(),
-            crate::tools::python::PythonToolEnvironment {
-                digest: crate::runtime::identity::PythonToolEnvironmentDigest::new(
-                    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                        .to_owned(),
-                ),
-                root: environment_root,
-            },
-        );
-        std::fs::create_dir_all(dir.path().join("workspace")).expect("workspace");
-        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
-            crate::runtime::identity::ConversationId::new("conv-python-real"),
-            dir.path().join("workspace"),
-            dir.path().join("artifacts"),
-        )
-        .expect("tool runtime");
-
-        let result = execute_once(&executor, &tool_runtime).await;
-        assert!(
-            matches!(
-                result.status,
-                crate::tools::types::ToolExecutionStatus::Success
-            ),
-            "the real tool executed: {:?}",
-            result.status
-        );
-        assert!(
-            !published.root.join("runtime-cache.txt").exists(),
-            "the relative write stayed inside the invocation-private copy"
-        );
-        assert_eq!(
-            std::fs::read(published.root.join("tool.py")).expect("canonical tool.py"),
-            tool_source,
-            "the __file__ self-modification stayed inside the invocation-private copy"
-        );
-        assert_eq!(
-            super::published_source_digest(&published.root).expect("canonical digest"),
-            package.tool_version_id,
-            "the canonical ToolVersion identity survived a real mutating execution"
-        );
-    }
-
-    /// The end-to-end namespace separation with a real interpreter (Issue
-    /// #81): a tool whose package ships its own `input.json` reads exactly
-    /// its packaged bytes from its working directory, while the
-    /// runtime-owned invocation arguments live outside `source/`.
-    ///
-    /// Opt-in by availability, mirroring the `m7_uv` pattern: without a
-    /// real `python3` the acceptance is not exercised.
-    #[cfg(unix)]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_real_execution_reads_the_packaged_input_json_from_source() {
-        let python = super::resolve_executable("python3");
-        if !python.is_file() {
-            eprintln!("python3 unavailable; the packaged-input acceptance is not exercised");
-            return;
-        }
-        let dir = tempfile::tempdir().expect("temp dir");
-        let mut package = test_package();
-        let tool_source = b"from pathlib import Path\n\ndef main(arguments):\n    return {\"packaged\": Path(\"input.json\").read_text(), \"arguments\": arguments}\n".to_vec();
-        for (path, bytes) in &mut package.files {
-            if path == &PathBuf::from("tool.py") {
-                *bytes = tool_source.clone();
-            }
-        }
-        package.files.push((
-            PathBuf::from("input.json"),
-            br#"{"packaged": true}"#.to_vec(),
-        ));
-        package.files.sort_by(|left, right| left.0.cmp(&right.0));
-        package.tool_version_id = super::tool_version_id(&package.files);
-        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
-        let published = store.publish(&package).expect("publish");
-        let environment_root = dir.path().join("env");
-        std::fs::create_dir_all(environment_root.join("bin")).expect("env bin");
-        std::os::unix::fs::symlink(&python, environment_root.join("bin/python"))
-            .expect("interpreter link");
-        let executor = crate::tools::python::PythonToolExecutor::new(
-            &store,
-            published.clone(),
-            crate::tools::python::PythonToolEnvironment {
-                digest: crate::runtime::identity::PythonToolEnvironmentDigest::new(
-                    "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                        .to_owned(),
-                ),
-                root: environment_root,
-            },
-        );
-        std::fs::create_dir_all(dir.path().join("workspace")).expect("workspace");
-        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
-            crate::runtime::identity::ConversationId::new("conv-python-packaged-input"),
-            dir.path().join("workspace"),
-            dir.path().join("artifacts"),
-        )
-        .expect("tool runtime");
-
-        let result = execute_once(&executor, &tool_runtime).await;
-        let crate::tools::types::ToolExecutionStatus::Success = result.status else {
-            panic!("the real tool executed: {:?}", result.status);
-        };
-        let Some(crate::tools::types::ToolResultContent::Json { value }) = result.content.first()
-        else {
-            panic!("the tool returned a JSON result: {:?}", result.content);
-        };
-        assert_eq!(
-            value.get("packaged").and_then(serde_json::Value::as_str),
-            Some(r#"{"packaged": true}"#),
-            "the tool read its own packaged input.json, not the runtime arguments: {value}"
-        );
-        assert_eq!(
-            value.get("arguments"),
-            Some(&serde_json::json!({})),
-            "the runtime-owned arguments arrived separately: {value}"
-        );
-        assert_eq!(
-            std::fs::read(published.root.join("input.json")).expect("canonical input"),
-            br#"{"packaged": true}"#,
-            "the canonical package-owned input.json is byte-identical"
-        );
-        assert_eq!(
-            super::published_source_digest(&published.root).expect("canonical digest"),
-            package.tool_version_id
-        );
-    }
-
-    /// A timeout on a package-manager command is an explicit preparation
-    /// failure.
-    #[tokio::test]
-    async fn timed_out_probe_is_an_explicit_preparation_failure() {
-        let scripted = Arc::new(ScriptedRunner::new(Vec::new()));
-        scripted.set_probe_timeout();
-        scripted.release_gate();
-        let (_dir, store) = store_with(scripted);
-        let published = store.publish(&test_package()).expect("publish");
-        let error = store
-            .ensure_environment(&published, &crate::runtime::CancellationSignal::new())
-            .await
-            .expect_err("a timed-out probe must fail preparation");
-        assert!(error.to_string().contains("timed out"));
-    }
-
-    /// Stable identity (Issue #81): the one canonical derivation produces
-    /// exactly the same `ToolVersionId` for the same canonical source
-    /// bytes, and any accepted source-content change produces a different
-    /// identity.
-    #[test]
-    fn tool_version_identity_is_stable_and_content_sensitive() {
-        let files = test_package().files;
-        let first = super::tool_version_id(&files);
-        let second = super::tool_version_id(&files);
+        let first = first.expect("first preparation");
+        let second = second.expect("second preparation");
         assert_eq!(
             first, second,
-            "identical canonical source bytes derive an identical identity"
+            "both callers observe the same published state"
         );
-        // The canonical representation is the path-sorted file list: the
-        // collector sorts before deriving, so a reordered discovery reads
-        // the same canonical bytes.
-        let mut reordered = files.clone();
-        reordered.reverse();
-        reordered.sort_by(|left, right| left.0.cmp(&right.0));
-        assert_eq!(first, super::tool_version_id(&reordered));
+        assert!(venv_python(&first.state_dir).is_file());
+        assert!(first.state_dir.join(MANIFEST_FILE).is_file());
+        assert!(first.state_dir.join("source").join(SERVER_FILE).is_file());
 
-        let mut changed = files.clone();
-        let tool = changed
-            .iter_mut()
-            .find(|(path, _)| path == &PathBuf::from("tool.py"))
-            .expect("tool.py");
-        tool.1.extend_from_slice(b"# changed\n");
-        assert_ne!(
-            first,
-            super::tool_version_id(&changed),
-            "an accepted source-content change must change the identity"
-        );
-        let mut renamed = files.clone();
-        renamed[3].0 = PathBuf::from("renamed.py");
-        assert_ne!(
-            first,
-            super::tool_version_id(&renamed),
-            "a relative-path change must change the identity"
-        );
-    }
-
-    /// Publication round-trip (Issue #81): a `ToolVersion` published by one
-    /// store instance revalidates — from the persisted representation, not
-    /// from in-memory state — under a fresh store over the same root, with
-    /// the same identity.
-    #[test]
-    fn published_tool_version_revalidates_identically_across_a_store_reopen() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let root = dir.path().join("store");
-        let package = test_package();
-        let first = PythonToolStore::new(root.clone())
-            .expect("first store")
-            .publish(&package)
-            .expect("first publish");
-        assert_eq!(first.package.tool_version_id, package.tool_version_id);
-        // The store instance is dropped: the reuse path must validate the
-        // persisted bytes alone.
-        let reopened = PythonToolStore::new(root).expect("reopened store");
-        let second = reopened
-            .publish(&package)
-            .expect("reuse must revalidate the persisted source");
-        assert_eq!(second.root, first.root);
-        assert_eq!(second.package.tool_version_id, package.tool_version_id);
-    }
-
-    /// The harness never mutates the source root it is given (Issue #81):
-    /// importing the tool module must not write `__pycache__` bytecode
-    /// caches. The executor additionally never hands the harness the
-    /// canonical published root — it passes an invocation-private
-    /// materialization — so this test is the second line of defense: even
-    /// the copy must stay free of interpreter cache writes.
-    ///
-    /// Opt-in by availability, mirroring the `m7_uv` pattern: without a
-    /// real `python3` the acceptance is not exercised.
-    #[test]
-    fn the_harness_leaves_the_published_source_root_pristine() {
-        let python = super::resolve_executable("python3");
-        if !python.is_file() {
-            eprintln!("python3 unavailable; harness pristineness not exercised");
-            return;
-        }
-        let dir = tempfile::tempdir().expect("temp dir");
-        let source = dir.path().join("source");
-        std::fs::create_dir_all(&source).expect("source dir");
-        std::fs::write(
-            source.join("tool.py"),
-            "def main(arguments):\n    return {\"echo\": arguments}\n",
-        )
-        .expect("tool source");
-        let harness = dir.path().join("harness.py");
-        std::fs::write(&harness, super::PYTHON_HARNESS).expect("harness");
-        let input = dir.path().join("input.json");
-        std::fs::write(&input, br#"{"question": 42}"#).expect("input");
-        let status = dir.path().join("status.json");
-        let result = dir.path().join("result.json");
-        let output = std::process::Command::new(&python)
-            .arg(&harness)
-            .arg(&source)
-            .arg("tool:main")
-            .arg(&input)
-            .arg(&status)
-            .arg(&result)
-            .current_dir(&source)
-            .output()
-            .expect("run the harness");
-        assert!(
-            output.status.success(),
-            "harness failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let commands = runner.commands.lock().expect("commands").clone();
         assert_eq!(
-            std::fs::read(&status).expect("harness status"),
-            br#"{"ok":true}"#,
-            "the harness published the small completion protocol"
-        );
-        assert_eq!(
-            std::fs::read(&result).expect("harness result"),
-            br#"{"echo":{"question":42}}"#,
-            "the harness published the logical result separately from stdout"
-        );
-        assert!(output.stdout.is_empty(), "stdout remains diagnostics only");
-        let entries = super::collect_files(&source).expect("source files");
-        assert_eq!(
-            entries
+            commands
                 .iter()
-                .map(|(path, _)| path.display().to_string())
-                .collect::<Vec<_>>(),
-            ["tool.py"],
-            "the published source root must remain exactly the ToolVersion content"
+                .filter(|command| command.contains(" lock "))
+                .count(),
+            1,
+            "concurrent builds of one fingerprint coalesce: {commands:?}"
         );
+
+        // A later preparation of the unchanged package reuses the validated
+        // state: no further uv lock runs.
+        let reused = store
+            .ensure_prepared(&package, &CancellationSignal::new())
+            .await
+            .expect("reuse");
+        assert_eq!(reused, first);
+        let commands = runner.commands.lock().expect("commands").clone();
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| command.contains(" lock "))
+                .count(),
+            1,
+            "a valid published state is reused without rebuilding: {commands:?}"
+        );
+
+        // A changed package is a new fingerprint and a new build.
+        let mut changed = package.clone();
+        changed.files[0].1.push(b'\n');
+        let rebuilt = store
+            .ensure_prepared(&changed, &CancellationSignal::new())
+            .await
+            .expect("rebuild");
+        assert_ne!(rebuilt.fingerprint, first.fingerprint);
     }
 }

@@ -298,8 +298,9 @@ export function formatJson(value: unknown): string[] {
 /**
  * The renderer every unknown tool gets, and the fallback for every known one.
  *
- * rustX already has heterogeneous tool sources — native, MCP, Python, and
- * whatever a future extension registers — so this is not a courtesy path. It
+ * rustX already has heterogeneous tool sources — native and MCP (managed
+ * Python tool packages surface as MCP-origin tools), plus whatever a future
+ * extension registers — so this is not a courtesy path. It
  * is the normal path, and it must stay good: a readable title, deterministic
  * argument formatting, and a bounded result preview.
  */
@@ -318,7 +319,8 @@ export const genericRenderer: ToolPresentationRenderer = {
     if (keys.length === 0) {
       return { title: "" };
     }
-    // Arbitrarily large argument objects are normal for MCP and Python tools.
+    // Arbitrarily large argument objects are normal for MCP tools (including
+    // managed Python tool packages, which surface as MCP-origin).
     // The whole object is formatted here and bounded by the card shell, so a
     // few hundred lines of JSON never dominate a collapsed card.
     return { title: "", detail: formatJson(fields) };
@@ -608,8 +610,9 @@ const todoRenderer: ToolPresentationRenderer = {
  *
  * Small on purpose. A tool without an entry is not degraded — it renders
  * through {@link genericRenderer}, which is a first-class presentation, not a
- * placeholder. Python, MCP, and future tool sources are expected to live
- * here forever.
+ * placeholder. MCP tools — including managed Python tool packages, which
+ * surface as MCP-origin — and future tool sources are expected to live here
+ * forever.
  */
 const RENDERERS: ReadonlyMap<ToolId, ToolPresentationRenderer> = new Map([
   ["tool-bash", bashRenderer],

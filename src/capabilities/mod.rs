@@ -36,11 +36,12 @@
 //!
 //! # Optional-source availability (Issue #81)
 //!
-//! Failure of an optional capability source (the custom Python tool plane,
-//! or any one configured MCP server) is not a preparation error: it is
-//! recorded as typed [`CapabilitySourceState::Unavailable`] state keyed by
-//! stable [`CapabilitySourceId`], and preparation continues with every
-//! other source. Only successfully prepared capability objects enter the
+//! Failure of an optional capability source (any one configured MCP server,
+//! or any one managed Python tool package compiled into the MCP plane) is
+//! not a preparation error: it is recorded as typed
+//! [`CapabilitySourceState::Unavailable`] state keyed by stable
+//! [`CapabilitySourceId`], and preparation continues with every other
+//! source. Only successfully prepared capability objects enter the
 //! committed active snapshot, and `CapabilityRevision` advances only when
 //! the effective committed executable set changes — never because a
 //! diagnostic reason changed.
@@ -62,9 +63,7 @@ pub use coordinator::{
     CapabilityResourceInputs, PreparedCapabilityCandidate,
 };
 pub use error::{CapabilityCommitError, CapabilityPreparationError};
-pub use selected::{
-    SelectedCapabilityPlan, SelectedMaterializationError, SelectedMcpTool, SelectedPythonTool,
-};
+pub use selected::{SelectedCapabilityPlan, SelectedMaterializationError, SelectedMcpTool};
 pub use snapshot::CapabilitySnapshot;
 pub use tools::{AvailableTool, AvailableToolCatalog, ToolActivationPolicy};
 

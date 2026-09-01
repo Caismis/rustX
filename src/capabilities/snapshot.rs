@@ -45,8 +45,9 @@ pub struct CapabilitySnapshot {
     /// rather than read from mutable coordinator-current state at attempt
     /// admission.
     mcp_lease_authority: Arc<McpRuntimeLeaseAuthority>,
-    /// The **configured** MCP server bindings of this exact generation
-    /// (Issue #145).
+    /// The MCP server bindings of this exact generation (Issue #145): the
+    /// configured set plus the synthesized managed-Python-package bindings
+    /// (Issue #174).
     ///
     /// This is source authority, not live runtime state: it is what a
     /// subagent resolution freezes so a child can establish its own
@@ -56,13 +57,6 @@ pub struct CapabilitySnapshot {
     /// freeze and the child's materialization cannot change the transport
     /// the child connects.
     mcp_servers: Arc<McpServerBindings>,
-    /// The **shared immutable** Python tool-store root of this generation
-    /// (Issue #145), when the runtime has a Python store location at all.
-    ///
-    /// A child opens the exact frozen `ToolVersionId` under this root and
-    /// keeps its own private mutable roots; see
-    /// [`PythonToolStoreRoots`](crate::tools::python::PythonToolStoreRoots).
-    python_store_root: Option<PathBuf>,
 }
 
 /// Two snapshots are equal when their capability content is equal: the
@@ -114,7 +108,6 @@ impl CapabilitySnapshot {
         effective_environment: ToolEnvironment,
         mcp_lease_authority: Arc<McpRuntimeLeaseAuthority>,
         mcp_servers: Arc<McpServerBindings>,
-        python_store_root: Option<PathBuf>,
     ) -> Self {
         Self {
             conversation_id,
@@ -128,7 +121,6 @@ impl CapabilitySnapshot {
             effective_environment,
             mcp_lease_authority,
             mcp_servers,
-            python_store_root,
         }
     }
 
@@ -136,12 +128,6 @@ impl CapabilitySnapshot {
     #[must_use]
     pub fn mcp_servers(&self) -> &McpServerBindings {
         &self.mcp_servers
-    }
-
-    /// The shared immutable Python tool-store root of this generation.
-    #[must_use]
-    pub fn python_store_root(&self) -> Option<&Path> {
-        self.python_store_root.as_deref()
     }
 
     /// The conversation owner of this immutable capability snapshot.
@@ -243,7 +229,7 @@ impl CapabilitySnapshot {
                 .into_iter()
                 .filter_map(|definition| match definition.origin {
                     crate::tools::types::ToolOrigin::Mcp { server_id } => Some(server_id),
-                    _ => None,
+                    crate::tools::types::ToolOrigin::Builtin => None,
                 })
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()

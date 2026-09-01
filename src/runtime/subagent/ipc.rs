@@ -496,7 +496,7 @@ pub(crate) async fn read_parent_frame<R: tokio::io::AsyncRead + Unpin + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::identity::{McpServerId, ToolId, ToolVersionId};
+    use crate::runtime::identity::{McpServerId, ToolId};
     use crate::runtime::subagent::catalog::SubagentName;
     use crate::runtime::subagent::resolver::ResolvedSubagentTool;
     use crate::tools::types::{
@@ -522,8 +522,10 @@ mod tests {
         }
     }
 
-    /// A frozen spec exercising all three capability origins, so the wire
-    /// contract is proven to preserve exact source/version identity.
+    /// A frozen spec exercising both capability origins, so the wire
+    /// contract is proven to preserve exact source identity. Managed Python
+    /// packages ride the MCP origin under their synthesized server identity
+    /// (Issue #174).
     fn resolved_spec() -> ResolvedSubagentSpec {
         ResolvedSubagentSpec {
             agent: SubagentName::parse("explore").expect("name"),
@@ -558,14 +560,21 @@ mod tests {
                         },
                     ),
                 },
-                ResolvedSubagentTool::Python {
+                ResolvedSubagentTool::Mcp {
+                    server_id: McpServerId::new("python:symbols"),
                     tool_id: ToolId::new("tool-symbols"),
-                    tool_version_id: ToolVersionId::new("sha256:v1"),
                     name: "repository_symbols".to_owned(),
+                    identity: crate::tools::mcp::identity::definition_identity(&tool_definition(
+                        "repository_symbols",
+                        ToolOrigin::Mcp {
+                            server_id: McpServerId::new("python:symbols"),
+                        },
+                    ))
+                    .expect("an MCP definition has an MCP identity"),
                     definition: tool_definition(
                         "repository_symbols",
-                        ToolOrigin::Python {
-                            tool_version_id: ToolVersionId::new("sha256:v1"),
+                        ToolOrigin::Mcp {
+                            server_id: McpServerId::new("python:symbols"),
                         },
                     ),
                 },
@@ -604,13 +613,12 @@ mod tests {
                 )]
                 .into_iter()
                 .collect(),
-                python_shared_store_root: Some(PathBuf::from("/rr/environments/m7-tools")),
             },
         }
     }
 
     #[test]
-    fn the_three_origin_resolved_identity_survives_serialization() {
+    fn the_resolved_source_identity_survives_serialization() {
         let spec = resolved_spec();
         let encoded = serde_json::to_vec(&spec).expect("encode");
         let decoded: ResolvedSubagentSpec = serde_json::from_slice(&encoded).expect("decode");
@@ -621,8 +629,8 @@ mod tests {
         ));
         assert!(matches!(
             &decoded.tools[2],
-            ResolvedSubagentTool::Python { tool_version_id, .. }
-                if tool_version_id.as_str() == "sha256:v1"
+            ResolvedSubagentTool::Mcp { server_id, .. }
+                if server_id.as_str() == "python:symbols"
         ));
     }
 

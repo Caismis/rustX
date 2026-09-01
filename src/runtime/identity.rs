@@ -167,11 +167,6 @@ id_type! {
 }
 
 id_type! {
-    /// Identifies an immutable version of a custom Python tool.
-    ToolVersionId
-}
-
-id_type! {
     /// Identifies an MCP server bound to the runtime.
     McpServerId
 }
@@ -347,14 +342,6 @@ id_type! {
     /// [`SkillVersionId`]: a description-only Skill change can produce a new
     /// Skill version without changing the Python environment identity.
     PythonEnvironmentDigest
-}
-
-id_type! {
-    /// Identifies an immutable environment owned by custom Python tools.
-    ///
-    /// This identity is intentionally separate from the M6 shared Skill
-    /// environment identity even when both happen to contain Python.
-    PythonToolEnvironmentDigest
 }
 
 id_type! {
@@ -579,9 +566,8 @@ impl RuntimeResourceRevision {
 mod tests {
     use super::{
         AgentId, AgentVersionId, ArtifactId, AttemptId, CapabilityRevision, ConversationId,
-        EventId, McpServerId, MessageId, NodeEnvironmentDigest, PythonEnvironmentDigest,
-        PythonToolEnvironmentDigest, SkillId, SkillVersionId, SubagentId, ToolCallId,
-        ToolExecutionId, ToolId, ToolVersionId, TurnId,
+        EventId, McpServerId, MessageId, NodeEnvironmentDigest, PythonEnvironmentDigest, SkillId,
+        SkillVersionId, SubagentId, ToolCallId, ToolExecutionId, ToolId, TurnId,
     };
 
     /// Strong identifiers serialize as plain strings, not as structs.
@@ -617,16 +603,12 @@ mod tests {
         let _ = round_trip(&ToolId::new("tool-bash"));
         let _ = round_trip(&ToolCallId::new("call_01"));
         let _ = round_trip(&ToolExecutionId::new("exec_1"));
-        let _ = round_trip(&ToolVersionId::new("tool-v2"));
         let _ = round_trip(&McpServerId::new("mcp-fs"));
         let _ = round_trip(&SkillId::new("skill-readme"));
         let _ = round_trip(&SkillVersionId::new(
             "sha256:0000000000000000000000000000000000000000000000000000000000000000",
         ));
         let _ = round_trip(&PythonEnvironmentDigest::new(
-            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-        ));
-        let _ = round_trip(&PythonToolEnvironmentDigest::new(
             "sha256:0000000000000000000000000000000000000000000000000000000000000000",
         ));
         let _ = round_trip(&NodeEnvironmentDigest::new(

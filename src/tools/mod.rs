@@ -1,12 +1,13 @@
-//! Canonical tool registry and executor contracts for native, MCP, and Python tools.
+//! Canonical tool registry and executor contracts for native and MCP tools.
 //!
 //! The tool plane owns the canonical [`ToolDefinition`] contract, the
 //! validating [`ToolRegistry`], the [`ToolExecutor`] boundary, the JSON
 //! Schema validation and the model-facing schema compiler, the workspace
 //! boundary, the managed tool-output store, the artifact store, the explicit
 //! tool environment, the conversation-owned background registry, and the
-//! conversation-owned task list. Native,
-//! MCP, and Python executor implementations share exactly this contract.
+//! conversation-owned task list. Native and MCP executor implementations
+//! share exactly this contract; managed Python tool packages compile into
+//! the MCP runtime (`python` module, Issue #174).
 //! Native Read/Write/Edit/Grep/Glob use the workspace root as their cwd and
 //! accept ordinary absolute host paths. The locator remains the runtime's
 //! read-only resolver for advertised managed-output paths; `ManagedToolOutput`

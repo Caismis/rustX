@@ -182,12 +182,14 @@ pub struct SubagentDocument {
     pub worktree: SubagentWorktreeDocument,
 }
 
-/// The three-origin capability selection of one named definition.
+/// The source-qualified capability selection of one named definition.
 ///
 /// Origins are named explicitly rather than collapsed into bare strings, so
 /// a Builtin `read` and an MCP server's `read` are never interchangeable and
 /// resolution keeps exact source identity. Wildcards are deliberately
-/// absent: a selection is an exact list.
+/// absent: a selection is an exact list. Managed Python tool packages are
+/// selected through the `mcp` map under their synthesized server identity
+/// (`python:<folder>`, Issue #174).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct SubagentToolsDocument {
@@ -195,8 +197,6 @@ pub struct SubagentToolsDocument {
     pub builtin: Vec<String>,
     /// MCP capabilities, keyed by server identity.
     pub mcp: BTreeMap<McpServerId, Vec<String>>,
-    /// Custom Python capabilities, by canonical model-facing name.
-    pub python: Vec<String>,
 }
 
 impl SubagentToolsDocument {
@@ -214,11 +214,6 @@ impl SubagentToolsDocument {
                 name: name.clone(),
             }));
         }
-        selectors.extend(
-            self.python
-                .iter()
-                .map(|name| SubagentToolSelector::Python { name: name.clone() }),
-        );
         selectors
     }
 }
@@ -441,8 +436,7 @@ impl CurrentRuntimeConfig {
             }
             for selector in document.tools.selectors() {
                 let empty = match &selector {
-                    SubagentToolSelector::Builtin { name }
-                    | SubagentToolSelector::Python { name } => name.trim().is_empty(),
+                    SubagentToolSelector::Builtin { name } => name.trim().is_empty(),
                     SubagentToolSelector::Mcp { server_id, name } => {
                         server_id.as_str().is_empty() || name.trim().is_empty()
                     }

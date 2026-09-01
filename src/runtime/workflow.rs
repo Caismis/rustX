@@ -2647,7 +2647,6 @@ mod tests {
             ToolEnvironment::new(),
             Arc::new(McpRuntimeLeaseAuthority::empty()),
             Arc::new(std::collections::BTreeMap::new()),
-            None,
         ));
         let resources = Arc::new(
             crate::runtime::RuntimeResourceSnapshot::new(

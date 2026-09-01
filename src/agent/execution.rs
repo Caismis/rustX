@@ -6398,7 +6398,6 @@ mod tests {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("env-store"),
-                python_store_roots: None,
             },
         )
         .expect("capability coordinator");

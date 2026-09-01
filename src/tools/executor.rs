@@ -3,7 +3,8 @@
 //! M1 defined the declarative tool data contracts in [`crate::tools::types`];
 //! M3 added the runtime-owned execution contract; M5 replaces the
 //! provisional `Tool` trait with the canonical [`ToolExecutor`] boundary that
-//! native, MCP, and Python tools share this boundary. The agent loop
+//! native and MCP tools share (managed Python tool packages are MCP tools,
+//! Issue #174). The agent loop
 //! (M3) owns scheduling: it preflights every model-issued [`ToolCall`]
 //! against the [`ToolRegistry`] (identity resolution, execution-policy
 //! resolution, runtime metadata extraction, business argument validation)
@@ -14,8 +15,8 @@
 //! The registry owns the definition/executor relationship: one
 //! [`ToolDefinition`] is paired with one `Arc<dyn ToolExecutor>` at
 //! registration. It also owns the global model-facing identity exclusion for
-//! runtime protocols such as `workflow_output`, so an ordinary Builtin,
-//! Python, or MCP registration cannot collide with a protocol consumed by the
+//! runtime protocols such as `workflow_output`, so an ordinary Builtin or
+//! MCP registration cannot collide with a protocol consumed by the
 //! Agent Loop. An executor object does not own its definition, so one
 //! implementation object may serve multiple registered definitions.
 //!
@@ -68,8 +69,8 @@ pub trait ProgressReporter: Send + Sync {
 /// authorized environment. The native `ask_user` executor additionally
 /// receives one crate-private, attempt-bound Questionnaire requester. It cannot
 /// obtain the Agent Loop's cancellation authority or any generic interaction
-/// extension seam. Executor-specific resources (process ids, MCP SDK types,
-/// Python runtime objects) belong inside executor implementations and never
+/// extension seam. Executor-specific resources (process ids, MCP SDK types)
+/// belong inside executor implementations and never
 /// appear here.
 pub struct ToolExecutionContext<'a> {
     /// The owning conversation of the invocation.
@@ -1056,9 +1057,6 @@ mod tests {
     fn workflow_output_is_reserved_for_every_ordinary_tool_origin() {
         let origins = [
             ToolOrigin::Builtin,
-            ToolOrigin::Python {
-                tool_version_id: crate::runtime::identity::ToolVersionId::new("version-1"),
-            },
             ToolOrigin::Mcp {
                 server_id: crate::runtime::identity::McpServerId::new("server-1"),
             },

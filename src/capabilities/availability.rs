@@ -29,17 +29,15 @@ use crate::runtime::identity::McpServerId;
 /// availability state.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CapabilitySourceId {
-    /// The custom Python tool plane of the Workspace
-    /// (`.agents/tools/`).
-    Python,
-    /// One configured MCP server, keyed by its authoritative identity.
+    /// One MCP server, keyed by its authoritative identity: a configured
+    /// server or a synthesized managed Python package (`python:<folder>`,
+    /// Issue #174).
     Mcp(McpServerId),
 }
 
 impl core::fmt::Display for CapabilitySourceId {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Python => formatter.write_str("python"),
             Self::Mcp(server_id) => write!(formatter, "mcp:{server_id}"),
         }
     }
@@ -79,8 +77,9 @@ impl CapabilitySourceState {
 /// diagnostic (`CapabilitySourceState::Unavailable::reason`), including
 /// the truncation marker.
 ///
-/// An optional capability source is an external peer (an MCP server) or an
-/// external toolchain (the Python plane): its error payloads are
+/// An optional capability source is an external peer (an MCP server,
+/// including a managed Python package's synthesized server): its error
+/// payloads are
 /// attacker-influenceable and arbitrarily large. Every diagnostic is
 /// normalized through [`capability_failure_reason`] at the
 /// capability-owning boundary *before* it is committed into the

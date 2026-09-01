@@ -931,9 +931,8 @@ pub struct CapabilityView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CapabilitySourceDescriptor {
-    /// The custom Python tool plane.
-    Python,
-    /// One configured MCP server.
+    /// One MCP server, configured or synthesized from a managed Python
+    /// tool package (`python:<folder>`, Issue #174).
     Mcp {
         /// The authoritative server identity.
         server_id: crate::runtime::identity::McpServerId,
