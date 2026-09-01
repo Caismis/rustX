@@ -10,14 +10,12 @@ permissions:
   contents: read
 
 jobs:
+  # Static checks get their own job so formatting/lint failures report in
+  # about two minutes instead of after a full test build.
   quality:
-    name: Format, lint, and test (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    name: Format, lint, and whitespace
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -28,10 +26,79 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      # The provider emulator (Issue #47) is an external process the
-      # conformance suite launches with `uv run`. Without it those tests skip
-      # themselves, which is why the run below also sets
-      # RUSTX_REQUIRE_PROVIDER_EMULATOR.
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Check whitespace
+        run: git diff --check
+
+  # Fast deterministic classes: source-module unit tests, the in-crate
+  # scripted contract suites, and the pure contract targets. No cross-module
+  # boundary conformance suite runs here: none needs a real process, a
+  # provider, or a network beyond loopback fixture servers. (Unit tests of
+  # boundary-owning modules still exercise their module's own primitive —
+  # the bash tool's unit tests spawn bash, the uv backend's run uv — which
+  # is what `--bins` is for: it builds the `bash-supervisor` binary those
+  # unit tests exec.)
+  #
+  # Semantic class and compilation placement are different axes: the lib
+  # test binary also contains the in-crate *boundary conformance* suites, so
+  # they are excluded by their stable name prefix.
+  rust-contracts:
+    name: Deterministic contracts (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # `cargo test --bins` builds the bin *test harnesses* but does not
+      # place the binaries at `target/debug/`, where the bash tool's unit
+      # tests look for `bash-supervisor` at runtime — so build them first.
+      - name: Build the binaries the boundary-owning unit tests exec
+        run: cargo build --bins
+
+      # Source-module unit tests + bin unit tests + examples + the scripted
+      # contract suites (agent/, context/, runtime_client/, capability/,
+      # interaction/, background/, tools/). The in-crate boundary
+      # conformance suites are selected OUT by their `boundary_suites::`
+      # prefix; they run in the boundary jobs.
+      - name: Run unit tests and the in-crate contract suites
+        run: 'cargo test --lib --bins --examples --all-features -- --skip boundary_suites::'
+
+      # contracts/: pure serialization/configuration fixture contracts.
+      # provider/: adapter request serialization, stream parsing, error
+      # normalization over the in-process FixtureServer. The provider
+      # target also carries the #[ignore]d opt-in live smoke tests, which
+      # never run here.
+      - name: Run the pure contract targets
+        run: cargo test --test contracts --test provider --all-features
+
+  # Real boundaries: SQLite durability/recovery, the spawned rustx process
+  # and stdio/IPC transport, the subagent child-process boundary, the tool
+  # plane (shell, filesystem, executable discovery), and composed
+  # provider-emulator conformance. The emulator is mandatory:
+  # RUSTX_REQUIRE_PROVIDER_EMULATOR=1 turns a missing toolchain into a hard
+  # failure instead of a silent skip.
+  rust-boundaries:
+    name: Boundary suites (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install Python 3.12
         uses: actions/setup-python@v5
         with:
@@ -44,31 +111,100 @@ jobs:
         working-directory: test-support/fake-provider
         run: uv sync --frozen
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Run Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
+      # The emulator's own pytest suite is platform-independent Python and
+      # runs in this job only.
       - name: Run the provider-emulator tests
         working-directory: test-support/fake-provider
         run: uv run --frozen pytest
 
-      # One `cargo test` run covers the whole suite, conformance included, so
-      # the workspace is compiled once. The environment variable turns a
-      # missing Python toolchain into a hard failure instead of a silent skip.
-      - name: Run tests
+      # The in-crate boundary conformance suites (real process death, real
+      # bash supervision, staged subagent children, real MCP stdio fixture
+      # children), selected by their stable name prefix. `cargo build --bins`
+      # comes first: the text_spill suite execs the `bash-supervisor` binary
+      # by path and `cargo test --lib` does not build it.
+      - name: Build the binaries the in-crate boundary suites exec
+        run: cargo build --bins
+
+      - name: Run the in-crate boundary suites
+        run: 'cargo test --lib --all-features -- boundary_suites::'
+
+      - name: Run the external boundary targets
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: cargo test --all-targets --all-features
+        run: >-
+          cargo test --all-features
+          --test durable
+          --test process
+          --test subagent
+          --test tools
+          --test conformance
 
-      - name: Run the Agent Loop conformance suite explicitly
+  # Platform coverage is intentional, not duplicated by habit. macOS runs
+  # exactly the classes where OS semantics matter:
+  #
+  # - from the lib test binary: the source-module unit tests plus the
+  #   in-crate boundary conformance suites (`boundary_suites::` — real
+  #   SIGKILL process death, bash supervision, staged subagent children,
+  #   MCP stdio fixture children). The deterministic scripted contract
+  #   suites are selected OUT by their `scripted_suites::` prefix: they are
+  #   pure state-machine/planning/manual-clock contracts whose invariants
+  #   carry no OS semantics, so rerunning them on macOS would be duplication
+  #   without platform value.
+  # - external targets: durable (SQLite/filesystem), process (spawned
+  #   binary, stdio/IPC), subagent (child process/control socket), tools
+  #   (shell, filesystem, executable discovery), conformance (external
+  #   emulator process).
+  #
+  # The contracts and provider targets assert deterministic JSON/SSE
+  # translation with no process or filesystem semantics, so they are
+  # Linux-only.
+  rust-platform-boundaries:
+    name: Platform-sensitive boundaries (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # The conformance target launches the provider emulator with `uv run`.
+      - name: Install Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync the provider emulator environment
+        working-directory: test-support/fake-provider
+        run: uv sync --frozen
+
+      # Lib test binary: source-module unit tests (including the bash/uv
+      # boundary-owning modules, whose OS primitives are platform-sensitive)
+      # + the in-crate boundary conformance suites; the deterministic
+      # scripted contract suites are skipped by prefix. The explicit bin
+      # build is required: `cargo test --bins` alone does not place
+      # `bash-supervisor` at `target/debug/` where the tests look for it.
+      - name: Build the binaries the boundary tests exec
+        run: cargo build --bins
+
+      - name: Run unit tests and the in-crate boundary suites
+        run: 'cargo test --lib --bins --all-features -- --skip scripted_suites::'
+
+      - name: Run the external boundary targets
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: cargo test --test issue47_conformance --all-features
-
-      - name: Check whitespace
-        run: git diff --check
+        run: >-
+          cargo test --all-features
+          --test durable
+          --test process
+          --test subagent
+          --test tools
+          --test conformance
 
   # The TUI is a separate job on purpose: the Rust suites must never depend on
   # Node being present.

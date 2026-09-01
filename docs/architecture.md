@@ -1261,10 +1261,12 @@ attempt commits exactly one terminal `RuntimeEvent`. A failed terminal append
 is an explicit durable failure, not a fabricated event. See
 `docs/agent-loop.md` for the full boundary description.
 
-The M3 test suite drives the loop with scripted fixture models and tools
-(`tests/common/fake.rs`), asserts behavior through the recorded
-`RuntimeEvent` trace and the platform `AttemptOutcome`, and reconstructs
-execution phases from traces (`tests/common/mod.rs`).
+The Agent Loop test suites drive the loop with scripted fixture models and
+tools (`tests/support/fake.rs`), assert behavior through the
+recorded `RuntimeEvent` trace and the platform `AttemptOutcome`, and
+reconstruct execution phases from traces and durable audits
+(`tests/common/mod.rs`). See `tests/README.md` for the full test
+architecture.
 
 ### Test seams are not published API
 
@@ -1283,15 +1285,20 @@ An external test binary can only reach `pub` items, so a seam usable from
 hides it from documentation without removing it. The suites that need a
 scripted `ModelAdapter` or a scripted `ContextSummarizer` therefore compile
 into the crate's own test build through `src/lib.rs`, with their sources
-under `tests/scripted/` so `src/` carries production code only. The
-remaining `tests/*.rs` binaries use published API exclusively; fixtures
-shared by both live in `tests/common/`, and fixtures that need a seam live
-in `tests/scripted/support/`.
+under `tests/` so `src/` carries production code only. Compilation placement
+is not the semantic class: the deterministic contract suites live under
+`tests/scripted/` (`scripted_suites::`), while in-crate suites whose
+invariant is a real OS/process boundary live under `tests/boundary/`
+(`boundary_suites::`) and are selected by that prefix in CI. The
+integration targets under `tests/*/main.rs` use published API exclusively;
+fixtures shared by both live in `tests/common/`, and fixtures that need a
+seam live in `tests/support/`. `tests/README.md` documents the
+domain ownership, the class/placement model, and the target topology.
 
 ### Three provider fixtures, three bounded purposes
 
 ```text
-tests/scripted/support/model.rs    a scripted injected `ModelAdapter` behind
+tests/support/model.rs             a scripted injected `ModelAdapter` behind
                                    a validated catalog binding. Internal
                                    state machines and units that need no
                                    network and no provider boundary.
@@ -1309,9 +1316,9 @@ test-support/fake-provider         the canonical external provider-emulation
 
 The third is the one that decides what "conformance" means. It is an
 external Python 3.12 process (managed by uv, never a production runtime
-dependency) that speaks the real HTTP/SSE provider protocols, and
-`tests/issue47_conformance.rs` composes the real `LocalConversationRuntime`
-against it:
+dependency) that speaks the real HTTP/SSE provider protocols, and the
+`conformance` integration target (`tests/conformance/`) composes the real
+`LocalConversationRuntime` against it:
 
 ```text
 test driver -> real catalog, binding, adapter, HTTP client, stream parser,
@@ -3971,7 +3978,7 @@ means adding a sibling module there; no semantic module moves.
   operator logging to its output sink — failures are returned to the
   caller for a process-composition layer to report.
 - **Conformance is transport-independent.** The Issue #38 scenario suite
-  (`tests/scripted/support/runtime_client_conformance.rs`) drives one set of
+  (`tests/support/runtime_client_conformance.rs`) drives one set of
   semantic scenarios through a direct-endpoint driver and the stdio
   driver. Issue #36 adds a WebSocket driver and inherits every scenario
   unchanged; byte-level framing tests stay transport-specific.

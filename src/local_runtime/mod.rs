@@ -24,7 +24,7 @@ pub mod composition;
 pub mod config;
 pub(crate) mod dispatcher;
 #[cfg(all(test, unix))]
-mod issue145_preparation_e2e;
+mod preparation_e2e;
 pub mod serve;
 pub mod session;
 pub mod subagent_child;

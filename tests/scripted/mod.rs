@@ -1,5 +1,16 @@
-//! The deterministic scripted regression suites, compiled into the crate's
-//! own test build.
+//! The deterministic scripted contract suites, compiled into the crate's own
+//! test build.
+//!
+//! # Semantic class
+//!
+//! Every suite here is a **deterministic contract test**: driven by scripted
+//! model adapters, scripted tools, manual clocks, channels, barriers,
+//! watches, and deterministic `#[cfg(test)]` hooks. No suite in this tree
+//! spawns or kills a real process, crosses a real stdio/IPC boundary, or
+//! depends on filesystem/process/platform semantics as the invariant under
+//! test. Suites whose invariant *is* such a boundary live in
+//! [`super::boundary_suites`] — even though they share the same lib test
+//! binary and the same `cfg(test)` seams.
 //!
 //! # Why these suites are in-crate
 //!
@@ -39,7 +50,30 @@
 //!
 //! The suites are written against the published `rustx::` paths, exactly as
 //! an external consumer would write them; only [`support`] reaches into the
-//! `cfg(test)`-only `crate::` seams.
+//! `cfg(test)`-only `crate::` seams. [`support`] is the shared in-crate
+//! fixture layer: it physically lives at `tests/support/` and is also used
+//! by the boundary conformance suites.
+//!
+//! # Domain ownership
+//!
+//! Suites are grouped by the runtime layer that owns the invariant under
+//! test, never by the issue or milestone that introduced them:
+//!
+//! - [`agent`] — generic execution semantics: the attempt state machine,
+//!   settlement/terminal contracts, request lifecycle and ordinals,
+//!   canonical commit rules, tool lifecycle and ordering, cancellation
+//!   arbitration, retry, deadlines, carryover, and publication interaction.
+//! - [`context`] — provider-independent projection/planning and the
+//!   committed compaction pipeline transition.
+//! - [`runtime_client`] — the host/endpoint/protocol/transport contracts.
+//! - [`capability`] — capability snapshots, quiescent commits,
+//!   materialization.
+//! - [`interaction`] — the durable interaction audit's runtime half.
+//! - [`background`] — the background registry and the deterministic half of
+//!   the `execution` intrinsic control plane.
+//! - [`tools`] — native registry contracts and the conversation task list.
+//!
+//! See `tests/README.md` for the full test architecture.
 
 #![allow(clippy::too_many_lines)] // scenario bodies are deliberately linear
 
@@ -47,39 +81,16 @@
 #[path = "../common/mod.rs"]
 pub(crate) mod common;
 
-/// The fixtures that need a `cfg(test)`-only seam.
+/// The fixtures that need a `cfg(test)`-only seam. Shared with
+/// `boundary_suites` (which re-exports this module); physically at
+/// `tests/support/`.
+#[path = "../support/mod.rs"]
 pub(crate) mod support;
 
-mod issue108_publication;
-mod issue109_interaction_audit;
-mod issue111_process_death;
-mod issue127_todo_plane;
-mod issue127_todo_transaction;
-mod issue130_agent_status;
-mod issue134_model_retry;
-mod issue135_model_deadlines;
-mod issue136_tool_cancellation_phase;
-mod issue137_unresolved_output_carryover;
-mod issue138_subagent_conformance;
-mod issue140_compaction_metadata;
-mod issue162_execution_intrinsic;
-mod issue168_provider_stream_progress;
-mod issue27_multi_compaction;
-mod issue37_binding;
-mod issue37_capability;
-mod issue37_endpoint;
-mod issue37_protocol;
-mod issue37_runtime_client;
-mod issue38_conformance;
-mod issue38_stdio_transport;
-mod issue42_runtime_client_model;
-mod issue42_session_model;
-mod issue56_lifecycle;
-mod issue86_text_spill;
-mod m3_agent_loop;
-mod m4_context_engine;
-mod m5_agent_loop;
-mod m5_background;
-mod m6_capabilities;
-mod native_tool_contracts;
-mod tool_progress_bounds;
+mod agent;
+mod background;
+mod capability;
+mod context;
+mod interaction;
+mod runtime_client;
+mod tools;

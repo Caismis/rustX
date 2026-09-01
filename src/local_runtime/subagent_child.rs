@@ -1068,7 +1068,7 @@ mod tests {
 
     /// The Issue #145 local race, deterministically in-process (the e2e
     /// module covers the cross-process ordering; see
-    /// `local_runtime::issue145_preparation_e2e`): a `Cancel` event sets
+    /// `local_runtime::preparation_e2e`): a `Cancel` event sets
     /// the one preparation cancellation signal, and only THEN the guarded
     /// external-preparation step completes. The gate is deliberately
     /// biased to let the completed step win its internal race, so the
