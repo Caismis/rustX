@@ -159,8 +159,9 @@ The CI jobs (`.github/workflows/ci.yml`) mirror the semantic classes:
   contracts + pure contract targets:
   `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::`
   and `cargo test --test contracts --test provider --all-features`.
-  (`--bins` builds the `bash-supervisor` binary that the bash tool's unit
-  tests exec; no separate build step is needed.)
+  A `cargo build --bins` step comes first: the bash tool's unit tests exec
+  `target/debug/bash-supervisor`, and `cargo test --bins` builds the bin
+  test harnesses but does not place the executable there.
 - **rust-boundaries** (ubuntu) — in-crate boundary suites + external
   boundary targets + the provider emulator's pytest suite:
   `cargo build --bins` (the text_spill suite execs `bash-supervisor`),
