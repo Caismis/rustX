@@ -2130,6 +2130,31 @@ A package rewrite is observed only at the next quiescent re-discovery.
   a subscription, or a published tool. There is no user-facing knob for
   selecting a revision: protocol compatibility is not session product
   configuration.
+- **MCP protocol-corruption observability (stdio).** A stdio server's
+  stdout is protocol-owned — it is the MCP wire and nothing else — and
+  stderr is the diagnostics channel. The generic rmcp transport framing
+  remains the one protocol authority over those bytes. Plain non-JSON
+  noise (serde `Syntax`/`Eof` class) is deliberately ignored by that
+  framing as an implementation characteristic of the transport; it is not
+  a supported logging contract. A confirmed structurally invalid
+  MCP/JSON-RPC message — well-formed JSON that does not decode as an MCP
+  message (serde `Data` class) — is a rustX runtime fact, never peer-only
+  traffic: rmcp's bounded `Invalid Request` reply to the peer still goes
+  out, and rustX's generic observation seam (`src/tools/mcp/framing.rs`, a
+  read-side tee that classifies completed lines with rmcp's own codec —
+  never a second MCP implementation, never a per-server special case)
+  records the violation and ends the byte stream immediately after the
+  offending line. The connection generation is then protocol-poisoned:
+  the in-flight connect, discovery, or `tools/call` operation fails with a
+  bounded `McpError::ProtocolViolation` naming the server identity, the
+  poisoned generation never serves another call as healthy, no catalog is
+  frozen from a violated connection, and physical settlement still goes
+  through the ordinary runtime close/generation-retirement ownership. The
+  capability plane attributes the failure to
+  `CapabilitySourceId::Mcp(server_id)` — for a managed Python package that
+  is its synthesized `python:<folder>` identity, so package stdout
+  corruption is diagnosed with the package identity through the generic
+  path alone.
 - A capability revision freezes rustX's observed name, description, schema,
   policy, id, server identity, and executor binding; it cannot byte-snapshot
   or make deterministic the external server behavior behind that binding.

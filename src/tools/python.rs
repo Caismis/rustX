@@ -50,6 +50,15 @@
 //! itself: the dependency identity of the MCP wire implementation is
 //! rustX-owned, so a workspace edit cannot silently change the protocol
 //! peer.
+//!
+//! # Wire ownership
+//!
+//! Package stdout is protocol-owned — it is the MCP wire and nothing
+//! else — and stderr is the supported diagnostics channel. A package whose
+//! stdout violates the protocol is diagnosed by the **generic** MCP
+//! runtime's corruption observation seam through the package's synthesized
+//! `python:<folder>` MCP server identity; this module contains no
+//! Python-specific framing, parsing, or recovery.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

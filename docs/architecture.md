@@ -930,7 +930,8 @@ tools/native/bash/        the Bash subsystem: registration (mod.rs), the
 tools/mcp/                MCP adapter: protocol-revision negotiation,
                            configured server runtime, paginated discovery,
                            list-change invalidation, canonical calls,
-                           progress, cancellation
+                           progress, cancellation, stdio
+                           protocol-corruption observation (`framing.rs`)
 tools/python.rs           managed FastMCP package discovery, fingerprint-keyed
                            uv environment preparation, and synthesis of the
                            generic MCP server bindings (`python:<folder>`)
@@ -2879,6 +2880,26 @@ also selects the invalidation mechanism: `subscriptions/listen` from
 callback before it. At most one invalidation mechanism is installed per
 connection; when the server advertises `tools.listChanged`, exactly one
 revision-appropriate mechanism is installed.
+
+Stdio protocol corruption is a rustX runtime fact, not peer-only traffic.
+rmcp's stdio framing deliberately keeps decode failures to itself — plain
+non-JSON noise is ignored, and well-formed JSON that is not a valid
+MCP/JSON-RPC message earns only a bounded `Invalid Request` reply to the
+peer — so rustX installs a narrow observation seam around the unmodified
+rmcp transport (`src/tools/mcp/framing.rs`): a read-side tee on the child
+stdout pipe that classifies each completed line with rmcp's own codec
+(same accept set, one framing authority — the tee never delivers,
+correlates, or handles a message itself). On a confirmed structurally
+invalid message the seam records a bounded `McpError::ProtocolViolation`
+fact and ends the byte stream right after the offending line, which fails
+the in-flight connect/discovery/`tools/call` operation structurally and
+poisons the connection generation: it never serves another call as
+healthy, and physical settlement still belongs to the ordinary runtime
+close and generation-retirement machinery. The capability plane records
+the failure on `CapabilitySourceId::Mcp(server_id)`, so a managed Python
+package's stdout corruption is diagnosed through its synthesized
+`python:<folder>` identity by the generic runtime — there is no
+Python-specific parser and FastMCP has no separate framing contract.
 Executors capture an `Arc` to that runtime. The observed remote tool surface
 and binding are immutable for a capability revision, but rustX does not claim
 to snapshot the implementation behavior of the independent remote server.

@@ -14,17 +14,23 @@
 //!
 //! - `noise` ([`CORRUPTION_NOISE`]): a plain non-JSON line. Per the rmcp
 //!   stdio framing this is deliberately ignored (serde `Syntax` category),
-//!   and the exchange continues without any protocol-level reply.
+//!   and the exchange continues without any protocol-level reply. This is
+//!   an implementation characteristic of the transport, not a supported
+//!   logging contract.
 //! - `invalid` ([`CORRUPTION_INVALID`]): a well-formed JSON line that is
 //!   not a valid MCP message (`{"jsonrpc":"2.0","id":1,"method":123}` — a
-//!   numeric `method`). This is a real protocol error (serde `Data`
-//!   category), and the framing answers it with a bounded `Invalid Request`
-//!   error reply instead of silently dropping it.
+//!   numeric `method`). This is a confirmed protocol violation (serde
+//!   `Data` category): rmcp answers it with a bounded `Invalid Request`
+//!   reply to the peer, and rustX's generic observation seam additionally
+//!   records it as a rustX protocol fact, fails the in-flight operation,
+//!   ends the stream, and poisons the connection generation.
 //!
-//! The corrupt line is written right after the client's `initialize`
-//! request arrives (before the real result, so the client processes it
-//! while awaiting the handshake) and, in `noise` mode, again before the
-//! `tools/call` reply (mid-exchange).
+//! The `noise` line is written right after the client's `initialize`
+//! request arrives and again before the `tools/call` reply. The `invalid`
+//! line is written at exactly one deterministic phase selected by
+//! [`RAW_INVALID_PHASE_ENV`]: [`INVALID_PHASE_INITIALIZE`] (before the
+//! `initialize` result, while the handshake is pending) or
+//! [`INVALID_PHASE_CALL`] (before the `tools/call` reply, mid-exchange).
 //!
 //! **This is a test fixture, not an MCP server implementation, and must not
 //! grow into one.**
@@ -44,6 +50,9 @@ use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 pub const RAW_FIXTURE_MODE_ENV: &str = "RUSTX_M7_RAW_MCP_FIXTURE";
 /// The environment variable selecting the corruption kind.
 pub const RAW_CORRUPTION_ENV: &str = "RUSTX_M7_RAW_FIXTURE_CORRUPTION";
+/// The environment variable selecting the phase at which an `invalid`
+/// corruption is emitted.
+pub const RAW_INVALID_PHASE_ENV: &str = "RUSTX_M7_RAW_FIXTURE_INVALID_PHASE";
 /// The environment variable naming the journal file the fixture appends one
 /// line per observed inbound message to (the cross-process observation
 /// seam).
@@ -53,6 +62,12 @@ pub const CORRUPTION_NOISE: &str = "noise";
 /// The `RAW_CORRUPTION_ENV` value writing a well-formed-JSON wrong-shape
 /// message.
 pub const CORRUPTION_INVALID: &str = "invalid";
+/// The `RAW_INVALID_PHASE_ENV` value emitting the invalid message before
+/// the `initialize` result, while the handshake is pending.
+pub const INVALID_PHASE_INITIALIZE: &str = "initialize";
+/// The `RAW_INVALID_PHASE_ENV` value emitting the invalid message before
+/// the `tools/call` reply, mid-exchange.
+pub const INVALID_PHASE_CALL: &str = "call";
 
 /// The journal entry prefix written for every inbound line the fixture
 /// observes; the suffix is the truncated raw line.
@@ -99,11 +114,17 @@ fn catalog() -> Vec<Tool> {
 /// <- initialize (legacy revision)    -> [corrupt line], InitializeResult
 /// <- notifications/initialized       (no reply)
 /// <- tools/list                      -> [echo]
-/// <- tools/call echo                 -> [noise line (noise mode)], success
+/// <- tools/call echo                 -> [corrupt line], success
 /// ```
+///
+/// The `invalid` corrupt line appears at exactly one of the two bracketed
+/// points, selected by [`RAW_INVALID_PHASE_ENV`]; the `noise` line appears
+/// at both.
 async fn serve(journal: Option<&PathBuf>) {
     let corruption =
         std::env::var(RAW_CORRUPTION_ENV).unwrap_or_else(|_| CORRUPTION_NOISE.to_owned());
+    let invalid_phase = std::env::var(RAW_INVALID_PHASE_ENV)
+        .unwrap_or_else(|_| INVALID_PHASE_INITIALIZE.to_owned());
     let mut input = BufReader::new(tokio::io::stdin());
     let mut output = tokio::io::stdout();
     let mut line = String::new();
@@ -130,7 +151,9 @@ async fn serve(journal: Option<&PathBuf>) {
         match message {
             ClientJsonRpcMessage::Request(request) => {
                 let id = request.id.clone();
-                for output_line in handle_request(request.request, id, journal, &corruption) {
+                for output_line in
+                    handle_request(request.request, id, journal, &corruption, &invalid_phase)
+                {
                     write_line(&mut output, output_line).await;
                 }
             }
@@ -141,13 +164,16 @@ async fn serve(journal: Option<&PathBuf>) {
     }
 }
 
-/// Answers one request. The corrupt line is emitted *before* the `initialize`
-/// result, so the client parses it while the handshake response is pending.
+/// Answers one request. The `invalid` corrupt line is emitted at exactly
+/// one deterministic phase: before the `initialize` result (while the
+/// handshake response is pending) or before the `tools/call` reply
+/// (mid-exchange). `noise` corrupts both phases.
 fn handle_request(
     request: ClientRequest,
     id: RequestId,
     journal: Option<&PathBuf>,
     corruption: &str,
+    invalid_phase: &str,
 ) -> Vec<WireOutput> {
     match request {
         ClientRequest::DiscoverRequest(_) => {
@@ -169,13 +195,15 @@ fn handle_request(
             );
             result.protocol_version = ProtocolVersion::V_2025_06_18;
             result.server_info = Implementation::new("rustx-raw-fixture", "0.0.0");
-            vec![
-                WireOutput::Raw(corrupt_line(corruption)),
-                WireOutput::Message(Box::new(legacy_response(
-                    ServerResult::InitializeResult(result),
-                    id,
-                ))),
-            ]
+            let mut outputs = Vec::new();
+            if corruption == CORRUPTION_NOISE || invalid_phase == INVALID_PHASE_INITIALIZE {
+                outputs.push(WireOutput::Raw(corrupt_line(corruption)));
+            }
+            outputs.push(WireOutput::Message(Box::new(legacy_response(
+                ServerResult::InitializeResult(result),
+                id,
+            ))));
+            outputs
         }
         ClientRequest::ListToolsRequest(_) => {
             record(journal, JOURNAL_TOOLS_LIST);
@@ -191,10 +219,8 @@ fn handle_request(
         ClientRequest::CallToolRequest(request) if request.params.name == "echo" => {
             record(journal, JOURNAL_ECHO);
             let mut outputs = Vec::new();
-            if corruption == CORRUPTION_NOISE {
-                outputs.push(WireOutput::Raw(
-                    "plain non-protocol noise on the wire".to_owned(),
-                ));
+            if corruption == CORRUPTION_NOISE || invalid_phase == INVALID_PHASE_CALL {
+                outputs.push(WireOutput::Raw(corrupt_line(corruption)));
             }
             outputs.push(WireOutput::Message(Box::new(legacy_response(
                 ServerResult::CallToolResult(CallToolResult::success(vec![ContentBlock::text(
@@ -228,8 +254,8 @@ fn handle_request(
     }
 }
 
-/// The corrupt line to write before the `initialize` answer: plain noise or
-/// a well-formed JSON line that is not a valid MCP message (a numeric
+/// The corrupt line to write at the selected phase: plain noise or a
+/// well-formed JSON line that is not a valid MCP message (a numeric
 /// `method` field).
 fn corrupt_line(corruption: &str) -> String {
     match corruption {
