@@ -31,11 +31,16 @@
 //! └── uv-cache/                      # shared uv cache (scratch state)
 //! ```
 //!
-//! The fingerprint covers exactly the material inputs: every package source
-//! file (path and bytes, sorted — this includes `requirements.txt`), the
-//! probed Python interpreter identity (path + version), the probed uv
+//! The fingerprint covers exactly the material inputs: the package identity
+//! (the synthesized `python:<folder>` MCP server identity), every package
+//! source file (path and bytes, sorted — this includes `requirements.txt`),
+//! the probed Python interpreter identity (path + version), the probed uv
 //! identity (path + version), [`MANAGED_FASTMCP_VERSION`], and OS/arch. No
-//! timestamps. The same fingerprint reuses the prepared state after
+//! timestamps and no host paths: the package folder name is the logical
+//! identity, so moving the whole workspace to another host path never
+//! changes a package's prepared identity, while two distinct folders can
+//! never share one prepared environment even when every user-authored byte
+//! is identical. The same fingerprint reuses the prepared state after
 //! validating the manifest and re-hashing the frozen source; a corrupt
 //! state fails closed and is never mutated. A changed fingerprint prepares
 //! a new state directory; the old one is left untouched (no GC exists).
@@ -74,6 +79,14 @@ pub const MANAGED_FASTMCP_VERSION: &str = "3.4.7";
 
 /// The fixed custom tool root below a Workspace.
 pub const TOOLS_DIRECTORY: &str = ".agents";
+/// The reserved `mcpServers` namespace owned by rustX-managed Python
+/// packages (Issue #174).
+///
+/// Every synthesized package server identity is `python:<folder>`; a
+/// configured `mcpServers` entry may never claim this namespace (rejected
+/// at configuration validation), so one [`McpServerId`] can never have two
+/// owners.
+pub const MANAGED_MCP_NAMESPACE: &str = "python:";
 /// The fixed package container below [`TOOLS_DIRECTORY`].
 pub const TOOLS_ROOT: &str = "tools";
 /// The fixed `FastMCP` server module of a package.
@@ -154,7 +167,7 @@ pub struct DiscoveredPythonPackage {
 /// The synthesized MCP server identity of one package folder.
 #[must_use]
 pub fn python_server_id(folder_name: &str) -> McpServerId {
-    McpServerId::new(format!("python:{folder_name}"))
+    McpServerId::new(format!("{MANAGED_MCP_NAMESPACE}{folder_name}"))
 }
 
 /// Discovers every Python tool package of the Workspace, in deterministic
@@ -376,16 +389,30 @@ fn source_digest(files: &[(PathBuf, Vec<u8>)]) -> String {
     format!("sha256:{}", hex_digest(&sha2::Sha256::digest(canonical)))
 }
 
-/// The full preparation fingerprint: source bytes (including
+/// The full preparation fingerprint: the package identity (the synthesized
+/// `python:<folder>` MCP server identity), the source bytes (including
 /// `requirements.txt`), the probed interpreter and uv identities, the
-/// managed `FastMCP` pin, and the platform. No timestamps.
+/// managed `FastMCP` pin, and the platform. No timestamps, no host paths.
+///
+/// The package identity is a first-class input (Issue #174 invariant):
+/// «different Python package identities always have different prepared
+/// environment identities, even when every user-authored source byte is
+/// identical». Two distinct folders must never collapse into one prepared
+/// environment merely because their bytes happen to match — cross-package
+/// environment deduplication is explicitly out of scope. The folder name
+/// (not the absolute path) is the identity, so relocating the workspace
+/// never changes a package's logical identity.
 fn package_fingerprint(
     package: &PythonToolPackage,
     python_identity: &str,
     uv_identity: &str,
 ) -> String {
     let mut canonical = Vec::new();
-    canonical.extend_from_slice(b"rustx:managed-python-package:v1\0");
+    canonical.extend_from_slice(b"rustx:managed-python-package:v2\0");
+    append_bytes(
+        &mut canonical,
+        python_server_id(&package.name).as_str().as_bytes(),
+    );
     append_bytes(&mut canonical, source_digest(&package.files).as_bytes());
     append_bytes(&mut canonical, python_identity.as_bytes());
     append_bytes(&mut canonical, uv_identity.as_bytes());
@@ -445,6 +472,15 @@ fn bounded_output(bytes: &[u8]) -> String {
 /// The rustX-owned frozen manifest of one prepared package state
 /// (`manifest.json`): everything needed to explain the state and to prove
 /// on reopen that it still is what it claims to be.
+///
+/// Authoritative identity fields — verified verbatim by
+/// [`read_prepared_state`] against the live discovery and the probed
+/// runtime identities: `format`, `fingerprint`, `package`, `entrypoint`,
+/// `fastmcp`, `python`, `uv`, `os`, `arch`, `source_digest`. `origin` is
+/// deliberately non-authoritative: it records which workspace folder the
+/// frozen source was read from for diagnostics only, and reuse must not
+/// depend on it (relocating the workspace must not invalidate an
+/// otherwise-identical prepared state).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PreparedManifest {
@@ -632,7 +668,13 @@ impl PythonToolStore {
             probe_runtime_identity(&self.inner, cancellation).await?;
         let fingerprint = package_fingerprint(package, &python_identity, &uv_identity);
         let state_dir = self.inner.root.join(PACKAGES_DIRECTORY).join(&fingerprint);
-        if let Some(prepared) = read_prepared_state(&state_dir, package, &fingerprint)? {
+        if let Some(prepared) = read_prepared_state(
+            &state_dir,
+            package,
+            &fingerprint,
+            &python_identity,
+            &uv_identity,
+        )? {
             return Ok(prepared);
         }
         let key = fingerprint.clone();
@@ -778,14 +820,22 @@ fn venv_python(state_dir: &Path) -> PathBuf {
 
 /// Validates a published state against the exact deterministic inputs that
 /// derive it, and returns the handle. A state whose directory exists but
-/// does not verify — missing/invalid manifest, mismatched identity inputs,
-/// frozen source that no longer hashes to the manifest, missing launch
-/// executable — is an explicit preparation failure, never a silent reuse
-/// and never a rebuild.
+/// does not verify — missing/invalid manifest, mismatched identity inputs
+/// (fingerprint, package identity, fixed entrypoint, managed `FastMCP` pin,
+/// probed Python/uv identities, OS/arch), frozen source that no longer
+/// hashes to the manifest, missing launch executable — is an explicit
+/// preparation failure, never a silent reuse and never a rebuild.
+///
+/// Every identity-bearing manifest claim is verified: a frozen manifest
+/// must not record semantic claims that reuse does not check. The
+/// `origin` field is the one deliberately non-authoritative record (host
+/// provenance for diagnostics; reuse must not depend on it).
 fn read_prepared_state(
     state_dir: &Path,
     package: &PythonToolPackage,
     fingerprint: &str,
+    python_identity: &str,
+    uv_identity: &str,
 ) -> Result<Option<PreparedPythonPackage>, PythonToolError> {
     if !state_dir.exists() {
         return Ok(None);
@@ -800,13 +850,21 @@ fn read_prepared_state(
     })?;
     let valid = manifest.format == MANIFEST_FORMAT
         && manifest.fingerprint == fingerprint
+        && manifest.package == package.name
+        && manifest.entrypoint == ENTRYPOINT
         && manifest.fastmcp == MANAGED_FASTMCP_VERSION
+        && manifest.python == python_identity
+        && manifest.uv == uv_identity
         && manifest.os == std::env::consts::OS
         && manifest.arch == std::env::consts::ARCH;
     if !valid {
         return Err(PythonToolError::Storage(format!(
-            "prepared state {} does not match its claimed identity inputs",
-            state_dir.display()
+            "prepared state {} does not match its claimed identity inputs \
+             (fingerprint={fingerprint}, package={:?}, entrypoint={ENTRYPOINT}, \
+             fastmcp={MANAGED_FASTMCP_VERSION}, python={python_identity:?}, \
+             uv={uv_identity:?})",
+            state_dir.display(),
+            package.name
         )));
     }
     let source_root = state_dir.join(SOURCE_DIRECTORY);
@@ -1014,7 +1072,14 @@ async fn materialize_package(
     staging_result?;
     // Publish through validation, never through trust: the handle returned
     // is the re-validated on-disk state, whoever built it.
-    read_prepared_state(state_dir, package, fingerprint)?.ok_or_else(|| {
+    read_prepared_state(
+        state_dir,
+        package,
+        fingerprint,
+        python_identity,
+        uv_identity,
+    )?
+    .ok_or_else(|| {
         PythonToolError::Storage(format!(
             "prepared state {} did not materialize",
             state_dir.display()
@@ -1313,20 +1378,41 @@ mod tests {
             "the fingerprint is deterministic"
         );
 
+        // The package identity (the synthesized `python:<folder>` server
+        // identity) is a first-class fingerprint input: renaming the folder
+        // is a new environment identity even with byte-identical content.
         let mut renamed = package.clone();
         renamed.name = "renamed".to_owned();
-        renamed.root = PathBuf::from("/elsewhere");
-        assert_eq!(
+        assert_ne!(
             fingerprint,
             package_fingerprint(&renamed, python_identity, uv_identity),
-            "the package name and live path are not fingerprint inputs (identical content shares state)"
+            "the package identity is a fingerprint input"
+        );
+        // Relocating the workspace on the host is not: the live path is
+        // deliberately excluded so moving the workspace never changes a
+        // package's logical identity.
+        let mut relocated = package.clone();
+        relocated.root = PathBuf::from("/elsewhere/workspace");
+        assert_eq!(
+            fingerprint,
+            package_fingerprint(&relocated, python_identity, uv_identity),
+            "the live host path is not a fingerprint input"
         );
 
         let mut changed_bytes = package.clone();
         changed_bytes.files[0].1.push(b'\n');
         assert_ne!(
             fingerprint,
-            package_fingerprint(&changed_bytes, python_identity, uv_identity)
+            package_fingerprint(&changed_bytes, python_identity, uv_identity),
+            "a source edit is a new fingerprint"
+        );
+        let mut changed_requirements = package.clone();
+        changed_requirements.files[1] =
+            (PathBuf::from(REQUIREMENTS_FILE), b"six==1.16.0\n".to_vec());
+        assert_ne!(
+            fingerprint,
+            package_fingerprint(&changed_requirements, python_identity, uv_identity),
+            "a requirements edit is a new fingerprint"
         );
         assert_ne!(
             fingerprint,
@@ -1337,6 +1423,34 @@ mod tests {
             fingerprint,
             package_fingerprint(&package, python_identity, "/usr/bin/uv (uv 0.12.0)"),
             "the uv identity is a fingerprint input"
+        );
+    }
+
+    /// Issue #174 environment-identity invariant: two distinct package
+    /// folders with byte-identical contents must still receive distinct
+    /// fingerprints (and therefore distinct state directories and distinct
+    /// environment identities). Cross-package environment deduplication is
+    /// explicitly out of scope.
+    #[test]
+    fn byte_identical_folders_have_distinct_environment_identities() {
+        let alpha = package("alpha");
+        let beta = package("beta");
+        assert_eq!(
+            alpha.files, beta.files,
+            "the fixture writes byte-identical package contents"
+        );
+        assert_eq!(
+            alpha.requirements, beta.requirements,
+            "byte-identical requirements"
+        );
+        assert_ne!(alpha.name, beta.name);
+        let python_identity = "/usr/bin/python3 (Python 3.12.13)";
+        let uv_identity = "/usr/bin/uv (uv 0.11.12)";
+        let alpha_fingerprint = package_fingerprint(&alpha, python_identity, uv_identity);
+        let beta_fingerprint = package_fingerprint(&beta, python_identity, uv_identity);
+        assert_ne!(
+            alpha_fingerprint, beta_fingerprint,
+            "byte-identical folders never share one environment identity"
         );
     }
 
@@ -1464,7 +1578,7 @@ mod tests {
         let package = package("demo");
         let (fingerprint, state_dir) = seed_prepared_state(directory.path(), &package, "py", "uv");
 
-        let reopened = read_prepared_state(&state_dir, &package, &fingerprint)
+        let reopened = read_prepared_state(&state_dir, &package, &fingerprint, "py", "uv")
             .expect("valid state")
             .expect("state exists");
         assert_eq!(reopened.fingerprint, fingerprint);
@@ -1479,6 +1593,8 @@ mod tests {
                     .join("sha256:other"),
                 &package,
                 "sha256:other",
+                "py",
+                "uv",
             )
             .expect("absent state"),
             None
@@ -1505,7 +1621,7 @@ mod tests {
             serde_json::to_vec(&manifest).expect("manifest"),
         )
         .expect("tamper");
-        let error = read_prepared_state(&state_dir, &package, &fingerprint)
+        let error = read_prepared_state(&state_dir, &package, &fingerprint, "py", "uv")
             .expect_err("a tampered manifest fails closed");
         assert!(
             matches!(&error, PythonToolError::Storage(message) if message.contains("does not match its claimed identity")),
@@ -1519,7 +1635,7 @@ mod tests {
             b"mcp = 'tampered'\n",
         )
         .expect("tamper source");
-        let error = read_prepared_state(&state_dir, &package, &fingerprint)
+        let error = read_prepared_state(&state_dir, &package, &fingerprint, "py", "uv")
             .expect_err("a tampered source fails closed");
         assert!(
             matches!(&error, PythonToolError::Storage(message) if message.contains("does not hash back")),
@@ -1532,13 +1648,65 @@ mod tests {
         assert_eq!(persisted, b"mcp = 'tampered'\n");
     }
 
+    /// Every identity-bearing manifest claim is verified on reopen: a frozen
+    /// manifest must not record semantic claims that reuse does not check.
+    /// A contradicting `package`, `entrypoint`, `python`, or `uv` claim fails
+    /// closed even when the fingerprint itself matches.
+    #[test]
+    fn a_manifest_claiming_identity_inputs_that_reuse_does_not_verify_fails_closed() {
+        let directory = tempfile::tempdir().expect("store");
+        let package = package("demo");
+        let (fingerprint, state_dir) = seed_prepared_state(directory.path(), &package, "py", "uv");
+        let manifest_path = state_dir.join(MANIFEST_FILE);
+        let original = std::fs::read(&manifest_path).expect("manifest");
+
+        let tamper = |mutate: &dyn Fn(&mut PreparedManifest)| {
+            let mut manifest: PreparedManifest =
+                serde_json::from_slice(&original).expect("manifest parses");
+            mutate(&mut manifest);
+            std::fs::write(
+                &manifest_path,
+                serde_json::to_vec(&manifest).expect("manifest"),
+            )
+            .expect("tamper");
+        };
+        let expect_rejection = |label: &str| {
+            let error = read_prepared_state(&state_dir, &package, &fingerprint, "py", "uv")
+                .expect_err(label);
+            assert!(
+                matches!(&error, PythonToolError::Storage(message) if message.contains("does not match its claimed identity")),
+                "{label}: {error}"
+            );
+        };
+
+        tamper(&|manifest| manifest.package = "other-package".to_owned());
+        expect_rejection("a foreign package claim fails closed");
+
+        tamper(&|manifest| manifest.entrypoint = "tool.py:run".to_owned());
+        expect_rejection("a foreign entrypoint claim fails closed");
+
+        tamper(&|manifest| manifest.python = "other-python".to_owned());
+        expect_rejection("a foreign Python identity claim fails closed");
+
+        tamper(&|manifest| manifest.uv = "other-uv".to_owned());
+        expect_rejection("a foreign uv identity claim fails closed");
+
+        // The last tampered claim is never repaired into looking valid: the
+        // on-disk manifest still carries the foreign uv claim.
+        let persisted = std::fs::read_to_string(&manifest_path).expect("persisted manifest");
+        assert!(
+            persisted.contains("\"uv\":\"other-uv\""),
+            "the manifest is never rewritten by validation: {persisted}"
+        );
+    }
+
     #[test]
     fn a_published_state_without_the_launch_executable_fails_closed() {
         let directory = tempfile::tempdir().expect("store");
         let package = package("demo");
         let (fingerprint, state_dir) = seed_prepared_state(directory.path(), &package, "py", "uv");
         std::fs::remove_file(venv_python(&state_dir)).expect("remove the interpreter");
-        let error = read_prepared_state(&state_dir, &package, &fingerprint)
+        let error = read_prepared_state(&state_dir, &package, &fingerprint, "py", "uv")
             .expect_err("a missing venv interpreter fails closed");
         assert!(
             matches!(&error, PythonToolError::Storage(message) if message.contains("no venv interpreter")),

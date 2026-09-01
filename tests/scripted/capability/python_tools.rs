@@ -128,13 +128,26 @@ fn fixture() -> Fixture {
 }
 
 fn fixture_with_servers(mcp_servers: rustx::tools::mcp::McpServerBindings) -> Fixture {
+    fixture_with_packages(&[("demo", SERVER_V1)], mcp_servers)
+}
+
+/// One coordinator fixture over the given package folders
+/// (`(folder_name, server.py contents)`, `requirements.txt` = `# none`)
+/// and configured MCP servers, with the Python store installed on the
+/// recorded process backend.
+fn fixture_with_packages(
+    packages: &[(&str, &str)],
+    mcp_servers: rustx::tools::mcp::McpServerBindings,
+) -> Fixture {
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
-    let package_root = workspace_root.join(".agents/tools/demo");
-    std::fs::create_dir_all(&package_root).expect("package folder");
-    std::fs::write(package_root.join("server.py"), SERVER_V1).expect("server source");
-    std::fs::write(package_root.join("requirements.txt"), "# none\n").expect("requirements");
+    for (name, server) in packages {
+        let package_root = workspace_root.join(".agents/tools").join(name);
+        std::fs::create_dir_all(&package_root).expect("package folder");
+        std::fs::write(package_root.join("server.py"), server).expect("server source");
+        std::fs::write(package_root.join("requirements.txt"), "# none\n").expect("requirements");
+    }
     let coordinator = CapabilityCoordinator::with_backend(
         CapabilityCoordinatorConfig {
             conversation_id: ConversationId::new("conv-python-tools"),
@@ -416,15 +429,15 @@ async fn a_failed_build_preserves_the_prior_published_state() {
     );
 }
 
-/// A managed package never shadows a configured MCP server: a folder named
-/// after an existing server identity is rejected with a diagnostic naming
-/// the collision, recorded on that source's availability.
-///
-/// The configured server's program does not exist, so its own connect fails
-/// deterministically at spawn (ENOENT) with no real process; the collision
-/// diagnostic must win over that connect failure in the recorded state.
+/// The `python:` namespace is structurally reserved for managed packages:
+/// a configured `mcpServers` entry may never claim it (rejected at
+/// configuration validation), so one `McpServerId` can never have two
+/// owners. The coordinator guard is a defensive internal invariant: a
+/// configured `python:<folder>` identity colliding with a discovered
+/// package is a candidate preparation failure — not an availability state,
+/// not a precedence rule, not a second supported semantic path.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_package_never_shadows_a_configured_server_identity() {
+async fn a_configured_python_identity_collision_is_an_internal_invariant_violation() {
     let server_id = python_server_id("demo");
     let fixture = fixture_with_servers(std::collections::BTreeMap::from([(
         server_id,
@@ -439,22 +452,111 @@ async fn a_package_never_shadows_a_configured_server_identity() {
         },
     )]));
 
+    let error = fixture
+        .coordinator
+        .prepare_candidate()
+        .await
+        .expect_err("the impossible collision is a hard candidate failure");
+    assert!(
+        format!("{error}").contains("internal invariant")
+            && format!("{error}").contains("python:demo"),
+        "the invariant violation names the colliding identity: {error}"
+    );
+}
+
+/// Blocker 1 environment identity through the real coordinator: two distinct
+/// folders with **byte-identical** package contents prepare two distinct
+/// fingerprint-keyed state directories. The package/folder identity is an
+/// environment identity input, so identical bytes never collapse two
+/// folders into one prepared environment.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn byte_identical_folders_never_share_a_prepared_environment() {
+    let fixture = fixture_with_packages(
+        &[("alpha", SERVER_V1), ("beta", SERVER_V1)],
+        std::collections::BTreeMap::new(),
+    );
+
     let candidate = fixture
         .coordinator
         .prepare_candidate()
         .await
         .expect("prepare");
-    let Some(CapabilitySourceState::Unavailable { reason }) =
-        candidate.availability().get(&demo_source())
-    else {
-        panic!(
-            "the colliding source is evaluated: {:?}",
-            candidate.availability()
+    for name in ["alpha", "beta"] {
+        let source = CapabilitySourceId::Mcp(python_server_id(name));
+        let Some(CapabilitySourceState::Unavailable { reason }) =
+            candidate.availability().get(&source)
+        else {
+            panic!(
+                "the {name} source is evaluated: {:?}",
+                candidate.availability()
+            );
+        };
+        assert!(
+            reason.contains("MCP discovery failed"),
+            "{name} fails its scripted connect: {reason}"
         );
+    }
+    let states = state_dirs(&fixture.store_root);
+    assert_eq!(
+        states.len(),
+        2,
+        "byte-identical folders never share one prepared environment: {states:?}"
+    );
+    // Each state carries its own package identity in its frozen manifest.
+    let manifests = states
+        .iter()
+        .map(|state| {
+            let manifest: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(state.join("manifest.json")).expect("manifest"),
+            )
+            .expect("manifest parses");
+            manifest["package"]
+                .as_str()
+                .expect("package name")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(manifests, ["alpha", "beta"]);
+}
+
+/// A `requirements.txt` edit is a new environment identity: the same folder
+/// with the same `server.py` but a different dependency manifest prepares a
+/// new fingerprint-keyed state.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_requirements_edit_prepares_a_new_environment() {
+    let fixture = fixture();
+    let candidate = fixture
+        .coordinator
+        .prepare_candidate()
+        .await
+        .expect("first prepare");
+    fixture.coordinator.commit(candidate).expect("first commit");
+    let states = state_dirs(&fixture.store_root);
+    let [state_v1] = states.as_slice() else {
+        panic!("exactly one published state: {states:?}");
     };
+
+    std::fs::write(
+        fixture
+            .workspace_root
+            .join(".agents/tools/demo/requirements.txt"),
+        "six==1.16.0\n",
+    )
+    .expect("edit requirements");
+    fixture
+        .coordinator
+        .prepare_candidate()
+        .await
+        .expect("second prepare");
+    assert_eq!(
+        fixture.runner.lock_command_count(),
+        2,
+        "a changed dependency manifest prepares anew"
+    );
+    let states = state_dirs(&fixture.store_root);
+    assert_eq!(states.len(), 2, "a requirements edit is a new state");
     assert!(
-        reason.contains("python:demo") && reason.contains("already uses"),
-        "the rejection names the identity collision, not the configured \
-         server's connect failure: {reason}"
+        states.contains(state_v1),
+        "the prior state is retained (no GC)"
     );
 }
