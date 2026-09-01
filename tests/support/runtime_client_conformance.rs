@@ -1711,41 +1711,80 @@ pub async fn capability_projection_is_deterministic(factory: &dyn DriverFactory)
     }
 }
 
-/// Python tool packages are projected with typed Python origin metadata.
+/// Managed Python tool packages (Issue #174) are projected with typed MCP
+/// origin metadata carrying the synthesized server identity
+/// (`python:<folder>`).
+///
+/// Unlike the macro-driven scenarios this one is deliberately **not** run
+/// once per driver with a fresh fixture each time: preparing the package's
+/// isolated uv environment is the expensive, network-bound step, and two
+/// concurrent fixture builds of the same pinned `FastMCP` environment
+/// contend for exactly the same package index work. One fixture is built
+/// first — the uv build and the managed server's connect both complete
+/// before any transport is involved — and both drivers then observe the
+/// same committed capability generation sequentially. The projection is
+/// transport-independent, so `direct` and `stdio-jsonl` must return
+/// byte-identical capability views.
 ///
 /// Opt-in by `uv` availability, mirroring the existing Issue #37 capability
 /// fixture: a missing `uv` skips the environment step entirely.
-pub async fn capability_projection_covers_python_origins(factory: &dyn DriverFactory) {
+pub async fn capability_projection_covers_python_origins() {
     if !uv_available() {
         eprintln!("uv unavailable; the Python capability origin is not exercised");
         return;
     }
-    let fixture = ConformanceFixture::builder(&conversation(factory, "python"))
+    let fixture = ConformanceFixture::builder("conv-38-python")
         .workspace_fixture(|workspace| {
             write_python_package(workspace, "py-echo", "Echoes arguments");
         })
         .build()
         .await;
-    let mut driver = connect(&fixture, factory);
-    initialize(&mut *driver, 1).await;
-    let RuntimeClientResult::Capability { capabilities } = result(
-        driver
-            .request(RuntimeClientRequest::CapabilityGet {
-                id: RequestId::new(2),
-            })
-            .await,
-    ) else {
-        panic!("capability_get returns the projection");
-    };
-    let python = capabilities
-        .tools
-        .iter()
-        .find(|tool| tool.name == "py-echo")
-        .expect("the Python tool is discovered");
-    assert!(matches!(
-        &python.origin,
-        ToolOrigin::Python { tool_version_id } if !tool_version_id.as_str().is_empty()
-    ));
+    let mut projected = None;
+    for factory in all_driver_factories() {
+        let mut driver = connect(&fixture, &*factory);
+        initialize(&mut *driver, 1).await;
+        let RuntimeClientResult::Capability { capabilities } = result(
+            driver
+                .request(RuntimeClientRequest::CapabilityGet {
+                    id: RequestId::new(2),
+                })
+                .await,
+        ) else {
+            panic!("capability_get returns the projection");
+        };
+        let python = capabilities
+            .tools
+            .iter()
+            .find(|tool| tool.name == "py_echo")
+            .unwrap_or_else(|| {
+                panic!(
+                    "the Python package tool is discovered ({}): tools={:?} sources={:?}",
+                    factory.name(),
+                    capabilities
+                        .tools
+                        .iter()
+                        .map(|tool| tool.name.as_str())
+                        .collect::<Vec<_>>(),
+                    capabilities.sources
+                )
+            });
+        assert!(
+            matches!(
+                &python.origin,
+                ToolOrigin::Mcp { server_id } if server_id.as_str() == "python:py-echo"
+            ),
+            "the origin is the synthesized server identity ({})",
+            factory.name()
+        );
+        if let Some(first) = &projected {
+            assert_eq!(
+                *first, capabilities,
+                "the capability projection is transport-independent"
+            );
+        } else {
+            projected = Some(capabilities);
+        }
+    }
 }
 
 /// MCP tools are projected with typed MCP origin metadata carrying the

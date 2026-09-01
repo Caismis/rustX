@@ -93,37 +93,35 @@ fn dependencies() -> LocalRuntimeDependencies {
     }
 }
 
-/// A syntactically valid custom Python tool package.
+/// A syntactically valid managed Python tool package (Issue #174).
 fn write_python_package(workspace: &std::path::Path, name: &str) {
     let package = workspace.join(".agents/tools").join(name);
     std::fs::create_dir_all(&package).expect("package directory");
     std::fs::write(
-        package.join("TOOL.toml"),
-        format!(
-            "schema_version = 1\nname = {name:?}\ndescription = \"Fixture\"\nentrypoint = \"tool:main\"\nexecution = \"foreground_only\"\nconcurrency = \"sequential\"\n"
-        ),
+        package.join("server.py"),
+        format!("from fastmcp import FastMCP\nmcp = FastMCP({name:?})\n"),
     )
-    .expect("manifest");
+    .expect("server source");
+    std::fs::write(package.join("requirements.txt"), "# none\n").expect("requirements");
+}
+
+/// A malformed managed Python tool package: `server.py` without the
+/// required `requirements.txt`, rejected in place by discovery.
+fn write_broken_python_package(workspace: &std::path::Path, name: &str) {
+    let package = workspace.join(".agents/tools").join(name);
+    std::fs::create_dir_all(&package).expect("package directory");
     std::fs::write(
-        package.join("input.schema.json"),
-        r#"{"type":"object","properties":{},"additionalProperties":false}"#,
+        package.join("server.py"),
+        "from fastmcp import FastMCP\nmcp = FastMCP('broken')\n",
     )
-    .expect("schema");
-    std::fs::write(
-        package.join("pyproject.toml"),
-        "[project]\nname = \"fixture\"\nversion = \"0.1.0\"\nrequires-python = \">=3.11\"\n",
-    )
-    .expect("project");
-    std::fs::write(
-        package.join("uv.lock"),
-        "version = 1\nrevision = 3\nrequires-python = \">=3.11\"\n\n[[package]]\nname = \"fixture\"\nversion = \"0.1.0\"\nsource = { virtual = \".\" }\n",
-    )
-    .expect("lock");
-    std::fs::write(
-        package.join("tool.py"),
-        "def main(arguments):\n    return arguments\n",
-    )
-    .expect("source");
+    .expect("server source");
+}
+
+/// The capability source descriptor of one managed Python package folder.
+fn python_source(name: &str) -> CapabilitySourceDescriptor {
+    CapabilitySourceDescriptor::Mcp {
+        server_id: rustx::runtime::identity::McpServerId::new(format!("python:{name}")),
+    }
 }
 
 /// Attaches the Runtime Client and returns the initialized snapshot.
@@ -218,21 +216,15 @@ async fn prove_native_tool_executes(runtime: &LocalConversationRuntime) {
 }
 
 /// A malformed Python tool package must not terminate startup: the runtime
-/// composes, the Python source is observably unavailable, the native tool
-/// plane is committed and really executes.
+/// composes, the package's synthesized MCP source is observably unavailable,
+/// the native tool plane is committed and really executes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_python_capability_failure_is_isolated_from_runtime_startup() {
     let root = tempfile::tempdir().expect("temp root");
     let (_canonical, paths) = startup(&root, SESSION_JSON);
-    // A package whose manifest name does not match its directory: discovery
-    // rejects it, and the whole Python plane becomes unavailable.
-    let package = paths.workspace.join(".agents/tools/broken-tool");
-    std::fs::create_dir_all(&package).expect("package directory");
-    std::fs::write(
-        package.join("TOOL.toml"),
-        "schema_version = 1\nname = \"other-name\"\ndescription = \"Broken\"\nentrypoint = \"tool:main\"\nexecution = \"foreground_only\"\nconcurrency = \"sequential\"\n",
-    )
-    .expect("manifest");
+    // A package without `requirements.txt`: discovery rejects it in place,
+    // and its `python:broken-tool` source becomes unavailable.
+    write_broken_python_package(&paths.workspace, "broken-tool");
 
     let runtime = LocalConversationRuntime::compose(&paths, &dependencies())
         .await
@@ -248,13 +240,13 @@ async fn a_python_capability_failure_is_isolated_from_runtime_startup() {
     }
     assert!(
         !names.iter().any(|name| name.contains("broken")),
-        "no partially initialized Python executor enters the committed registry: {names:?}"
+        "no partially initialized Python server enters the committed registry: {names:?}"
     );
     let Some(CapabilitySourceStateView::Unavailable { reason }) =
-        source_state(&snapshot, &CapabilitySourceDescriptor::Python)
+        source_state(&snapshot, &python_source("broken-tool"))
     else {
         panic!(
-            "the Python source must be observably unavailable: {:?}",
+            "the package's source must be observably unavailable: {:?}",
             snapshot.capabilities.sources
         );
     };
@@ -265,14 +257,15 @@ async fn a_python_capability_failure_is_isolated_from_runtime_startup() {
     prove_native_tool_executes(&runtime).await;
 }
 
-/// Python store initialization itself fails (Issue #81 follow-up): the
-/// core environment store is valid, but a conflicting regular file sits
-/// exactly where the Python-private store must create its directories.
-/// The runtime composes, the Python source is observably unavailable with
-/// the storage diagnostic, the native tools are committed and really
-/// execute, and Runtime Client `initialize` succeeds. This exercises the
-/// exact constructor/store-opening failure that previously escaped the
-/// optional boundary — deterministically, without permission bits.
+/// Python store initialization itself fails (Issue #81 follow-up, revised
+/// by Issue #174): the core environment store is valid, but a conflicting
+/// regular file sits exactly where the managed package store must create
+/// its `packages/` directory. The runtime composes, the discovered
+/// package's source is observably unavailable with the storage diagnostic,
+/// the native tools are committed and really execute, and Runtime Client
+/// `initialize` succeeds. This exercises the exact constructor/store-opening
+/// failure that previously escaped the optional boundary — deterministically,
+/// without permission bits.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn python_store_initialization_failure_is_isolated_from_runtime_startup() {
     let root = tempfile::tempdir().expect("temp root");
@@ -281,12 +274,15 @@ async fn python_store_initialization_failure_is_isolated_from_runtime_startup() 
     // to discovery: only opening the Python store can fail.
     write_python_package(&paths.workspace, "fixture-tool");
     // The deterministic filesystem conflict: a regular file where
-    // `PythonToolStore` must create `m7-tools/tool-versions`.
+    // `PythonToolStore` must create `python-tools/packages`.
     let environments =
         paths.environment_store_root_for(&ConversationId::new("conversation-standalone"));
-    std::fs::create_dir_all(&environments).expect("environments root");
-    std::fs::write(environments.join("m7-tools"), b"not a directory")
-        .expect("conflicting regular file");
+    std::fs::create_dir_all(environments.join("python-tools")).expect("python store root");
+    std::fs::write(
+        environments.join("python-tools/packages"),
+        b"not a directory",
+    )
+    .expect("conflicting regular file");
 
     let runtime = LocalConversationRuntime::compose(&paths, &dependencies())
         .await
@@ -294,10 +290,10 @@ async fn python_store_initialization_failure_is_isolated_from_runtime_startup() 
     let snapshot = attach_snapshot(&runtime);
 
     let Some(CapabilitySourceStateView::Unavailable { reason }) =
-        source_state(&snapshot, &CapabilitySourceDescriptor::Python)
+        source_state(&snapshot, &python_source("fixture-tool"))
     else {
         panic!(
-            "the Python source must be observably unavailable: {:?}",
+            "the package's source must be observably unavailable: {:?}",
             snapshot.capabilities.sources
         );
     };
@@ -310,7 +306,9 @@ async fn python_store_initialization_failure_is_isolated_from_runtime_startup() 
     let authoritative = runtime.capability().availability();
     let Some(rustx::capabilities::CapabilitySourceState::Unavailable {
         reason: authoritative_reason,
-    }) = authoritative.get(&rustx::capabilities::CapabilitySourceId::Python)
+    }) = authoritative.get(&rustx::capabilities::CapabilitySourceId::Mcp(
+        rustx::runtime::identity::McpServerId::new("python:fixture-tool"),
+    ))
     else {
         panic!("the coordinator owns the unavailable state: {authoritative:?}");
     };
@@ -344,17 +342,11 @@ fn base_only_capability_setup_is_structurally_independent_of_python_storage() {
     std::fs::create_dir_all(&workspace_root).expect("workspace");
     // A broken Python package: base-only preparation must not even
     // discover it.
-    let package = workspace_root.join(".agents/tools/broken-tool");
-    std::fs::create_dir_all(&package).expect("package directory");
-    std::fs::write(
-        package.join("TOOL.toml"),
-        "schema_version = 1\nname = \"other-name\"\ndescription = \"Broken\"\nentrypoint = \"tool:main\"\nexecution = \"foreground_only\"\nconcurrency = \"sequential\"\n",
-    )
-    .expect("manifest");
+    write_broken_python_package(&workspace_root, "broken-tool");
     // The Python store location is a conflicting regular file.
     let store_root = dir.path().join("skill-env");
     std::fs::create_dir_all(&store_root).expect("environment store root");
-    let python_store_conflict = store_root.join("m7-tools");
+    let python_store_conflict = store_root.join("python-tools");
     std::fs::write(&python_store_conflict, b"not a directory").expect("conflicting file");
 
     let coordinator = rustx::capabilities::CapabilityCoordinator::new(
@@ -367,7 +359,6 @@ fn base_only_capability_setup_is_structurally_independent_of_python_storage() {
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: rustx::tools::environment::ToolEnvironment::new(),
             environment_store_root: store_root,
-            python_store_roots: None,
         },
     )
     .expect("coordinator construction must not depend on Python storage");
@@ -385,79 +376,16 @@ fn base_only_capability_setup_is_structurally_independent_of_python_storage() {
         "the conflicting file was never replaced by Python storage"
     );
     assert!(
-        !dir.path().join("skill-env/m7-tools/tool-versions").exists(),
-        "no Python ToolVersion storage was created"
+        !dir.path().join("skill-env/python-tools/packages").exists(),
+        "no managed Python package storage was created"
     );
 }
 
-/// A corrupt persisted `ToolVersion` (Issue #81 root-cause regression):
-/// storage recomputes the identity from the persisted source, detects the
-/// mismatch, and the Python capability becomes unavailable — while the
-/// runtime stays alive and native tools keep working. No repair, no
-/// migration, no compatibility path.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_corrupt_published_tool_version_marks_python_unavailable_and_keeps_the_runtime_alive() {
-    let root = tempfile::tempdir().expect("temp root");
-    let (_, paths) = startup(&root, SESSION_JSON);
-    write_python_package(&paths.workspace, "fixture-tool");
-
-    // Compute the package identity through real discovery, then seed the
-    // persisted store with an entry whose marker claims that identity but
-    // whose source bytes no longer match it.
-    let workspace = rustx::tools::Workspace::new(&paths.workspace).expect("workspace");
-    let package = rustx::tools::python::PythonToolDiscovery::new(&workspace)
-        .discover()
-        .expect("discover")
-        .pop()
-        .expect("one package");
-    let published = paths
-        .environment_store_root_for(&ConversationId::new("conversation-standalone"))
-        .join("m7-tools/tool-versions")
-        .join(package.tool_version_id.as_str());
-    std::fs::create_dir_all(published.join("source")).expect("published source");
-    std::fs::write(
-        published.join("RUSTX_TOOL_VERSION.json"),
-        serde_json::to_vec(&serde_json::json!({
-            "format": 1,
-            "tool_version_id": package.tool_version_id.as_str(),
-        }))
-        .expect("marker"),
-    )
-    .expect("marker write");
-    std::fs::write(
-        published.join("source/tool.py"),
-        b"def main(arguments):\n    return \"tampered\"\n",
-    )
-    .expect("tampered source");
-
-    let runtime = LocalConversationRuntime::compose(&paths, &dependencies())
-        .await
-        .expect("a corrupt ToolVersion store must not terminate composition");
-    let snapshot = attach_snapshot(&runtime);
-
-    let Some(CapabilitySourceStateView::Unavailable { reason }) =
-        source_state(&snapshot, &CapabilitySourceDescriptor::Python)
-    else {
-        panic!(
-            "the Python source must be observably unavailable: {:?}",
-            snapshot.capabilities.sources
-        );
-    };
-    assert!(
-        reason.contains("does not match its claimed identity"),
-        "the reason is the storage revalidation diagnostic: {reason}"
-    );
-    let names = tool_names(&snapshot);
-    assert!(names.contains(&"bash"), "native tools survive: {names:?}");
-    assert!(
-        !names.contains(&"fixture-tool"),
-        "the corrupt ToolVersion never enters the committed registry: {names:?}"
-    );
-    // The corrupt publication is never mutated into looking valid.
-    let persisted = std::fs::read_to_string(published.join("source/tool.py")).expect("persisted");
-    assert!(persisted.contains("tampered"));
-    prove_native_tool_executes(&runtime).await;
-}
+// NOTE (Issue #174): the corrupt-persisted-ToolVersion regression was
+// removed with the old per-tool Python store. The fail-closed revalidation
+// of a tampered prepared state (manifest or source mismatch rejects the
+// state, never repairs it) is now covered by the `tools::python` unit
+// tests against the fingerprint-keyed `packages/<fingerprint>` layout.
 
 /// The fatal/isolated boundary: failures that prove the *core* runtime or
 /// the *base* capability plane cannot be constructed stay fatal.
@@ -551,11 +479,12 @@ mod mcp {
         let snapshot = attach_snapshot(&runtime);
 
         assert!(
-            matches!(
-                source_state(&snapshot, &CapabilitySourceDescriptor::Python),
-                Some(CapabilitySourceStateView::Ready)
-            ),
-            "the Python plane is ready (no packages): {:?}",
+            !snapshot.capabilities.sources.iter().any(|source| matches!(
+                &source.source,
+                CapabilitySourceDescriptor::Mcp { server_id }
+                    if server_id.as_str().starts_with("python:")
+            )),
+            "no packages means no managed Python source is evaluated: {:?}",
             snapshot.capabilities.sources
         );
         let good = CapabilitySourceDescriptor::Mcp {
@@ -807,14 +736,14 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
     let root = tempfile::tempdir().expect("temp root");
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
-    // A broken Python package (Python source fails) ...
+    // A broken Python package (its synthesized MCP source fails) ...
     let package = workspace.join(".agents/tools/broken-tool");
     std::fs::create_dir_all(&package).expect("package directory");
     std::fs::write(
-        package.join("TOOL.toml"),
-        "schema_version = 1\nname = \"other-name\"\ndescription = \"Broken\"\nentrypoint = \"tool:main\"\nexecution = \"foreground_only\"\nconcurrency = \"sequential\"\n",
+        package.join("server.py"),
+        "from fastmcp import FastMCP\nmcp = FastMCP('broken')\n",
     )
-    .expect("manifest");
+    .expect("server source without the required requirements.txt");
     std::fs::write(root.path().join("models.jsonc"), MODELS_JSON).expect("models.jsonc");
     // ... and an MCP server whose program does not exist.
     let session = serde_json::json!({
@@ -870,7 +799,7 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
         );
     }
     let Some(CapabilitySourceStateView::Unavailable { reason }) =
-        source_state(&snapshot, &CapabilitySourceDescriptor::Python)
+        source_state(&snapshot, &python_source("broken-tool"))
     else {
         panic!(
             "the Python failure is typed and observable, not an opaque EOF: {:?}",

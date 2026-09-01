@@ -18,6 +18,7 @@ mod common;
 mod bash;
 mod mcp;
 mod mcp_config;
+mod mcp_managed;
 mod mcp_runtime;
 mod skills;
 mod tool_packages;

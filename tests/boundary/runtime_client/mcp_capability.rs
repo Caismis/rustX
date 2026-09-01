@@ -9,8 +9,8 @@
 //!
 //! The transport-independent conformance scenarios (run over in-memory byte
 //! pipes) stay in `scripted_suites::runtime_client::conformance`; the
-//! native/Python/Skill projection stays in
-//! `scripted_suites::runtime_client::capability`.
+//! managed Python package projection (Issue #174) lives in
+//! [`super::python_capability`].
 //!
 //! The exact libtest name of each test is passed to the fixture child as its
 //! re-entry point; renaming a test means updating its spawn string.

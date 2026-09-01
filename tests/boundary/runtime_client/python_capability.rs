@@ -1,17 +1,21 @@
-//! Issue #37: capability/tool/Skill inspection through the Runtime Client
-//! protocol.
+//! Boundary conformance: capability projection over a managed Python tool
+//! package (Issue #174).
 //!
-//! The active capability projection must carry the revision, the
-//! deterministic tool catalog with origin metadata for native and Python
-//! tools, and the deterministic Skill catalog (identity, version, name,
-//! description) — without executors, environment paths, or private
-//! dependency internals on the wire.
+//! A managed Python package is prepared by a real, network-bound `uv`
+//! environment build and served by a real `FastMCP` stdio child process.
+//! The contract under test — the package's tools projected as MCP-origin
+//! tools of the synthesized `python:<folder>` server — only exists once
+//! that real build and real child serve the catalog, so these tests are
+//! boundary conformance even though the Runtime Client host side is driven
+//! in-process. They skip cleanly when `uv` is unavailable.
 //!
-//! The MCP origin half spawns this binary as a real fixture child server
-//! and is therefore boundary conformance: it lives in
-//! `boundary_suites::runtime_client::mcp_capability`.
+//! The transport-independent conformance scenarios whose fixtures spawn no
+//! real child stay in `scripted_suites::runtime_client::conformance`; the
+//! configured-server half of the MCP origin contract lives in
+//! [`super::mcp_capability`].
 
 use super::super::support;
+use super::super::support::runtime_client_conformance as conformance;
 
 use std::sync::Arc;
 
@@ -21,10 +25,10 @@ use rustx::tools::types::{
     ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
 };
 
-/// A capability view covering native + Python + Skill origins: the
-/// revision, deterministic ordering, origin metadata, and Skill
-/// identity/version/name/description/exact virtual location, with no private
-/// internals on the wire.
+/// A capability view covering native + managed Python package (MCP-origin,
+/// Issue #174) + Skill origins: the revision, deterministic ordering, origin
+/// metadata, and Skill identity/version/name/description/exact virtual
+/// location, with no private internals on the wire.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)] // one complete capability fixture
@@ -66,7 +70,7 @@ async fn capability_projection_covers_native_python_and_skills() {
         .tool_activation(rustx::capabilities::ToolActivationPolicy {
             tools: Some(vec![
                 "ls".to_owned(),
-                "py-echo".to_owned(),
+                "py_echo".to_owned(),
                 "read".to_owned(),
             ]),
             ..rustx::capabilities::ToolActivationPolicy::default()
@@ -96,17 +100,18 @@ async fn capability_projection_covers_native_python_and_skills() {
         panic!("capability result");
     };
 
-    // The candidate activated a new revision (Skill + Python content).
+    // The candidate activated a new revision (Skill + Python package content).
     assert!(capabilities.revision.get() >= 1);
 
-    // Deterministic ordering: base registry order, then discovered Python
-    // tools, all in one deterministic catalog; two reads are identical.
+    // Deterministic ordering: base registry order, then the managed Python
+    // package's MCP tools, all in one deterministic catalog; two reads are
+    // identical.
     let names: Vec<&str> = capabilities
         .tools
         .iter()
         .map(|tool| tool.name.as_str())
         .collect();
-    assert_eq!(names, vec!["ls", "py-echo", "read"]);
+    assert_eq!(names, vec!["ls", "py_echo", "read"]);
     let second = attachment.handle_request(RuntimeClientRequest::CapabilityGet {
         id: rustx::runtime_client::RequestId::new(2),
     });
@@ -118,11 +123,13 @@ async fn capability_projection_covers_native_python_and_skills() {
     };
     assert_eq!(second_view, capabilities, "deterministic ordering");
 
-    // Origin metadata is correct and typed.
+    // Origin metadata is correct and typed: the managed Python package
+    // (Issue #174) surfaces as an MCP-origin tool of its synthesized
+    // `python:<folder>` server.
     assert_eq!(capabilities.tools[0].origin, ToolOrigin::Builtin);
     assert!(matches!(
         &capabilities.tools[1].origin,
-        ToolOrigin::Python { tool_version_id } if !tool_version_id.as_str().is_empty()
+        ToolOrigin::Mcp { server_id } if server_id.as_str() == "python:py-echo"
     ));
 
     // Skill identity/version/name/description/host location.
@@ -151,4 +158,15 @@ async fn capability_projection_covers_native_python_and_skills() {
         );
     }
     assert!(json.contains(&location));
+}
+
+/// The Python-origin transport conformance scenario runs outside the
+/// macro-generated matrix: it builds ONE fixture (one uv environment build
+/// of the pinned `FastMCP` package, completed before any transport
+/// connects) and drives both transports sequentially against the same
+/// committed generation, instead of paying one concurrent network-bound
+/// build per driver. See the scenario's own documentation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn capability_projection_covers_python_origins() {
+    conformance::capability_projection_covers_python_origins().await;
 }

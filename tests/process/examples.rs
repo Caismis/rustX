@@ -2,9 +2,10 @@
 //! resources through the production composition path.
 //!
 //! This is a local-composition boundary test: composing the example
-//! registers its Python `echo` tool through the real tool pipeline, which
-//! requires the `uv` toolchain. It therefore lives in the `process` target
-//! (whose jobs install Python + uv), not the pure `contracts` target.
+//! registers its managed Python `echo` package (Issue #174) through the real
+//! tool pipeline, which requires the `uv` toolchain. It therefore lives in
+//! the `process` target (whose jobs install Python + uv), not the pure
+//! `contracts` target.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -23,11 +24,8 @@ fn examples_root() -> PathBuf {
 const REQUIRED_EXAMPLE_FILES: &[&str] = &[
     "AGENTS.md",
     ".agents/skills/review-guidance/SKILL.md",
-    ".agents/tools/echo/TOOL.toml",
-    ".agents/tools/echo/input.schema.json",
-    ".agents/tools/echo/pyproject.toml",
-    ".agents/tools/echo/uv.lock",
-    ".agents/tools/echo/tool.py",
+    ".agents/tools/echo/server.py",
+    ".agents/tools/echo/requirements.txt",
     ".agents/subagents/navigator/instructions.md",
     ".agents/subagents/navigator/AGENTS.md",
     ".agents/subagents/reviewer/instructions.md",

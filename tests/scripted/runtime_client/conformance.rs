@@ -19,7 +19,10 @@
 //!
 //! The MCP capability projection spawns this binary as a real fixture child
 //! and is therefore boundary conformance: it lives in
-//! `boundary_suites::runtime_client::mcp_capability`.
+//! `boundary_suites::runtime_client::mcp_capability`. The managed Python
+//! package projection (Issue #174) needs a real, network-bound `uv` build
+//! and a real `FastMCP` stdio child, so it is boundary conformance too:
+//! `boundary_suites::runtime_client::python_capability`.
 
 use super::super::support::runtime_client_conformance as conformance;
 
@@ -63,7 +66,6 @@ conformance_scenarios!(
     // Projections
     agent_status_is_runtime_owned,
     capability_projection_is_deterministic,
-    capability_projection_covers_python_origins,
     snapshot_and_cursor_linearize,
     resync_required_and_snapshot_repair,
 );

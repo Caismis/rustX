@@ -179,7 +179,6 @@ async fn child_fixture(
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: tool_runtime.environment().clone(),
             environment_store_root: dir.path().join("child-environments"),
-            python_store_roots: None,
         },
     )
     .expect("child capability coordinator");
@@ -356,7 +355,6 @@ async fn parent_runtime_plane(
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: tool_runtime.environment().clone(),
             environment_store_root: dir.path().join("parent-environments"),
-            python_store_roots: None,
         },
     )
     .expect("parent capability coordinator");

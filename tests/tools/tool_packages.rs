@@ -1,13 +1,13 @@
-//! Deterministic M7 contract coverage that does not require a public registry.
+//! Deterministic managed-Python-package contract coverage (Issue #174) that
+//! does not require a public registry.
 
 use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 use rustx::runtime::identity::ToolId;
 use rustx::tools::Workspace;
-use rustx::tools::environment::{ToolEnvironment, ToolEnvironmentOverlay};
 use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
-use rustx::tools::python::PythonToolDiscovery;
+use rustx::tools::python::discover_python_packages;
 use rustx::tools::types::{
     ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
     ToolExecutionResult, ToolInvocation, ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy,
@@ -37,77 +37,119 @@ impl ToolExecutor for NoopExecutor {
     }
 }
 
-fn write_python_package(root: &std::path::Path, name: &str, description: &str) {
+fn write_python_package(root: &std::path::Path, name: &str) {
     let package = root.join(".agents/tools").join(name);
     std::fs::create_dir_all(&package).expect("package directory");
     std::fs::write(
-        package.join("TOOL.toml"),
-        format!(
-            "schema_version = 1\nname = {name:?}\ndescription = {description:?}\nentrypoint = \"tool:main\"\nexecution = \"foreground_only\"\nconcurrency = \"sequential\"\n"
-        ),
+        package.join("server.py"),
+        format!("from fastmcp import FastMCP\nmcp = FastMCP({name:?})\n"),
     )
-    .expect("manifest");
-    std::fs::write(
-        package.join("input.schema.json"),
-        r#"{"type":"object","properties":{},"additionalProperties":false}"#,
-    )
-    .expect("schema");
-    std::fs::write(
-        package.join("pyproject.toml"),
-        "[project]\nname = \"fixture\"\nversion = \"0.1.0\"\nrequires-python = \">=3.11\"\n",
-    )
-    .expect("project");
-    std::fs::write(package.join("uv.lock"), "version = 1\nrevision = 1\n").expect("lock");
-    std::fs::write(
-        package.join("tool.py"),
-        "def main(arguments):\n    return arguments\n",
-    )
-    .expect("source");
+    .expect("server source");
+    std::fs::write(package.join("requirements.txt"), "# none\n").expect("requirements");
 }
 
 #[test]
-fn python_discovery_is_sorted_and_tool_version_tracks_complete_snapshot() {
+fn python_discovery_is_sorted_and_tracks_current_package_bytes() {
     let directory = tempfile::tempdir().expect("workspace");
-    write_python_package(directory.path(), "zeta", "Zeta");
-    write_python_package(directory.path(), "alpha", "Alpha");
+    write_python_package(directory.path(), "zeta");
+    write_python_package(directory.path(), "alpha");
     let workspace = Workspace::new(directory.path()).expect("workspace");
-    let packages = PythonToolDiscovery::new(&workspace)
-        .discover()
-        .expect("discover");
+    let discovered = discover_python_packages(&workspace).expect("discover");
     assert_eq!(
-        packages
+        discovered
             .iter()
-            .map(|package| package.name.as_str())
+            .map(|entry| entry.server_id.as_str().to_owned())
             .collect::<Vec<_>>(),
-        ["alpha", "zeta"]
+        ["python:alpha", "python:zeta"]
     );
-    let original = packages[0].tool_version_id.clone();
+    let original = discovered[0]
+        .outcome
+        .as_ref()
+        .expect("alpha package")
+        .clone();
 
     std::fs::write(
-        directory.path().join(".agents/tools/alpha/TOOL.toml"),
-        "schema_version = 1\nname = \"alpha\"\ndescription = \"changed\"\nentrypoint = \"tool:main\"\nexecution = \"foreground_only\"\nconcurrency = \"sequential\"\n",
+        directory.path().join(".agents/tools/alpha/server.py"),
+        "from fastmcp import FastMCP\nmcp = FastMCP('changed')\n",
     )
-    .expect("change description");
-    let changed = PythonToolDiscovery::new(&workspace)
-        .discover()
-        .expect("rediscover")[0]
-        .tool_version_id
+    .expect("change server source");
+    let changed = discover_python_packages(&workspace).expect("rediscover")[0]
+        .outcome
+        .as_ref()
+        .expect("alpha package")
         .clone();
-    assert_ne!(original, changed);
+    assert_ne!(
+        original.files, changed.files,
+        "the frozen package snapshot tracks the current package bytes"
+    );
+}
+
+/// A package that declares the rustX-managed `fastmcp` dependency is
+/// rejected in place with a diagnostic naming both the package and the
+/// managed pin (Issue #174).
+#[test]
+fn python_discovery_rejects_a_self_pinning_package_in_place() {
+    let directory = tempfile::tempdir().expect("workspace");
+    let package = directory.path().join(".agents/tools/selfpinning");
+    std::fs::create_dir_all(&package).expect("package directory");
+    std::fs::write(
+        package.join("server.py"),
+        "from fastmcp import FastMCP\nmcp = FastMCP('selfpinning')\n",
+    )
+    .expect("server source");
+    std::fs::write(
+        package.join("requirements.txt"),
+        format!(
+            "fastmcp=={}\n",
+            rustx::tools::python::MANAGED_FASTMCP_VERSION
+        ),
+    )
+    .expect("requirements");
+    let workspace = Workspace::new(directory.path()).expect("workspace");
+    let discovered = discover_python_packages(&workspace).expect("discover");
+    assert_eq!(discovered.len(), 1);
+    assert_eq!(discovered[0].server_id.as_str(), "python:selfpinning");
+    let Err(rustx::tools::python::PythonToolError::InvalidPackage(message)) =
+        &discovered[0].outcome
+    else {
+        panic!(
+            "the self-pinning package is rejected: {:?}",
+            discovered[0].outcome
+        );
+    };
+    assert!(
+        message.contains("\"selfpinning\""),
+        "the diagnostic names the package: {message}"
+    );
+    assert!(
+        message.contains(rustx::tools::python::MANAGED_FASTMCP_VERSION),
+        "the diagnostic names the managed pin: {message}"
+    );
 }
 
 #[cfg(unix)]
 #[test]
 fn python_discovery_rejects_symlinked_package_content() {
     let directory = tempfile::tempdir().expect("workspace");
-    write_python_package(directory.path(), "alpha", "Alpha");
+    write_python_package(directory.path(), "alpha");
     std::os::unix::fs::symlink(
-        directory.path().join(".agents/tools/alpha/tool.py"),
+        directory.path().join(".agents/tools/alpha/server.py"),
         directory.path().join(".agents/tools/alpha/linked.py"),
     )
     .expect("symlink");
     let workspace = Workspace::new(directory.path()).expect("workspace");
-    assert!(PythonToolDiscovery::new(&workspace).discover().is_err());
+    let discovered = discover_python_packages(&workspace).expect("discover");
+    assert_eq!(discovered.len(), 1);
+    assert_eq!(discovered[0].server_id.as_str(), "python:alpha");
+    assert!(
+        matches!(
+            &discovered[0].outcome,
+            Err(rustx::tools::python::PythonToolError::InvalidPackage(message))
+                if message.contains("symlink")
+        ),
+        "the symlinked package is rejected in place: {:?}",
+        discovered[0].outcome
+    );
 }
 
 #[test]
@@ -139,24 +181,6 @@ fn composed_registry_rejects_global_name_collisions() {
         collision,
         Err(rustx::tools::ToolRegistryError::DuplicateName(_))
     ));
-}
-
-#[test]
-fn replacement_python_overlay_excludes_skill_overlay() {
-    let base = ToolEnvironment::new().with_overlay(&ToolEnvironmentOverlay::node(
-        std::path::Path::new("/skill-node"),
-    ));
-    let replacement = base.with_replacement_overlay(&ToolEnvironmentOverlay::python(
-        std::path::Path::new("/tool-env"),
-    ));
-    let entries = replacement.child_environment(std::path::Path::new("/workspace"));
-    assert_eq!(entries[0].1, "/tool-env/bin:/usr/local/bin:/usr/bin:/bin");
-    assert!(
-        entries
-            .iter()
-            .any(|(key, value)| key == "VIRTUAL_ENV" && value == "/tool-env")
-    );
-    assert!(!entries.iter().any(|(key, _)| key == "NODE_PATH"));
 }
 
 #[test]

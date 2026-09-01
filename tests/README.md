@@ -130,6 +130,9 @@ invariant is a real process boundary.
   real staged children.
 - `runtime_client/mcp_capability` — capability projection over a real MCP
   stdio child server (this binary re-executed in fixture mode).
+- `runtime_client/python_capability` — capability projection over a managed
+  Python tool package (Issue #174): a real, network-bound `uv` environment
+  build serving a real `FastMCP` stdio child.
 
 Every one of these is platform-sensitive (process groups, signals, unix
 sockets, shell supervision), so the `boundary_suites::` prefix also runs in

@@ -296,7 +296,6 @@ impl RuntimeClientFixtureBuilder {
                 mcp_servers: self.mcp_servers,
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: workspace.path().join("skill-env"),
-                python_store_roots: None,
             },
             Arc::new(crate::scripted_suites::common::FakeSkillEnvironmentBackend::new()),
         )
@@ -384,50 +383,27 @@ pub fn skill_location(workspace: &Path, name: &str) -> String {
         .into_owned()
 }
 
-/// Writes one valid Python tool package into a workspace, generating a real
-/// `uv.lock` when `uv` is available (a missing `uv` skips the environment
-/// step, mirroring the `m7_uv` acceptance pattern).
+/// Writes one valid managed Python tool package (Issue #174) into a
+/// workspace: `.agents/tools/<name>/server.py` exposing one `FastMCP` tool
+/// (named `name` with `-` replaced by `_`) plus the required
+/// `requirements.txt`. The runtime prepares the isolated `uv` environment
+/// itself; a missing `uv` degrades the package's server to unavailable.
 pub fn write_python_package(workspace: &Path, name: &str, description: &str) {
     let package = workspace.join(".agents/tools").join(name);
     std::fs::create_dir_all(&package).expect("package directory");
+    let tool = name.replace('-', "_");
     std::fs::write(
-        package.join("TOOL.toml"),
+        package.join("server.py"),
         format!(
-            "schema_version = 1\nname = {name:?}\ndescription = {description:?}\nentrypoint = \"tool:main\"\nexecution = \"foreground_only\"\nconcurrency = \"sequential\"\n"
+            "from fastmcp import FastMCP\n\nmcp = FastMCP({name:?})\n\n\n@mcp.tool\ndef {tool}(text: str) -> str:\n    \"\"\"{description}\"\"\"\n    return text\n"
         ),
     )
-    .expect("manifest");
+    .expect("server source");
     std::fs::write(
-        package.join("input.schema.json"),
-        r#"{"type":"object","properties":{},"additionalProperties":false}"#,
+        package.join("requirements.txt"),
+        "# no extra dependencies; the runtime pins fastmcp itself\n",
     )
-    .expect("schema");
-    std::fs::write(
-        package.join("pyproject.toml"),
-        "[project]\nname = \"fixture\"\nversion = \"0.1.0\"\nrequires-python = \">=3.11\"\n",
-    )
-    .expect("project");
-    std::fs::write(
-        package.join("tool.py"),
-        "def main(arguments):\n    return arguments\n",
-    )
-    .expect("source");
-    if let Some(uv) = uv_path() {
-        let lock = std::process::Command::new(&uv)
-            .args(["lock", "--offline", "--no-config"])
-            .current_dir(&package)
-            .env_clear()
-            .env("PATH", "/usr/local/bin:/usr/bin:/bin")
-            .env("HOME", workspace.parent().expect("fixture root"))
-            .env("UV_NO_PYTHON_DOWNLOADS", "1")
-            .output()
-            .expect("run fixture uv lock");
-        assert!(
-            lock.status.success(),
-            "fixture lock failed: {}",
-            String::from_utf8_lossy(&lock.stderr)
-        );
-    }
+    .expect("requirements");
 }
 
 /// The `uv` executable on `PATH`, when present.
