@@ -75,7 +75,7 @@ use crate::model::frozen::FrozenModelSpec;
 use crate::model::invocation::ModelBindingRegistry;
 use crate::model::session::SessionModelConfig;
 use crate::protocol::manifest::SkillBinding;
-use crate::runtime::identity::{McpServerId, McpToolIdentity, ToolId, ToolVersionId};
+use crate::runtime::identity::{McpServerId, McpToolIdentity, ToolId};
 use crate::runtime::resources::{ProjectContextFile, RuntimeResourceSnapshot};
 use crate::skills::{SkillCatalogEntry, SkillSnapshot};
 use crate::tools::mcp::{McpServerBinding, McpServerBindings};
@@ -127,17 +127,6 @@ pub enum ResolvedSubagentTool {
         /// another process.
         identity: McpToolIdentity,
     },
-    /// One custom Python tool at its exact immutable version.
-    Python {
-        /// The exact `ToolId` of the admitted definition.
-        tool_id: ToolId,
-        /// The exact immutable tool version to execute.
-        tool_version_id: ToolVersionId,
-        /// The canonical model-facing name.
-        name: String,
-        /// The exact admitted definition.
-        definition: ToolDefinition,
-    },
 }
 
 impl ResolvedSubagentTool {
@@ -145,7 +134,7 @@ impl ResolvedSubagentTool {
     #[must_use]
     pub fn name(&self) -> &str {
         match self {
-            Self::Builtin { name, .. } | Self::Mcp { name, .. } | Self::Python { name, .. } => name,
+            Self::Builtin { name, .. } | Self::Mcp { name, .. } => name,
         }
     }
 
@@ -153,9 +142,7 @@ impl ResolvedSubagentTool {
     #[must_use]
     pub const fn definition(&self) -> &ToolDefinition {
         match self {
-            Self::Builtin { definition, .. }
-            | Self::Mcp { definition, .. }
-            | Self::Python { definition, .. } => definition,
+            Self::Builtin { definition, .. } | Self::Mcp { definition, .. } => definition,
         }
     }
 
@@ -167,7 +154,6 @@ impl ResolvedSubagentTool {
             Self::Mcp {
                 server_id, name, ..
             } => format!("mcp:{server_id}/{name}"),
-            Self::Python { name, .. } => format!("python:{name}"),
         }
     }
 }
@@ -221,9 +207,12 @@ pub struct ResolvedSubagentSkill {
 /// ```text
 /// selected mcp:github/get_issue   ->  mcp_servers = { github: <binding> }
 ///                                     (never every configured server)
-/// selected python:symbols@V1      ->  python_shared_store_root = Some(..)
-/// selected nothing external       ->  both empty/None
+/// selected nothing external       ->  empty
 /// ```
+///
+/// Managed Python tool packages cross as ordinary frozen MCP bindings under
+/// their synthesized server identities (Issue #174); there is no
+/// Python-specific materialization channel.
 ///
 /// The child never reads `rustx.jsonc` to obtain any of this: a
 /// configuration edit between the parent's freeze and the child's
@@ -235,13 +224,6 @@ pub struct ResolvedSubagentMaterialization {
     /// Exactly the MCP servers whose tools this child selected, keyed by
     /// the one authoritative server identity.
     pub mcp_servers: BTreeMap<McpServerId, McpServerBinding>,
-    /// The shared immutable Python tool-store root, present only when this
-    /// child selected at least one Python tool.
-    ///
-    /// The child opens `tool-versions/` and `uv-cache/` under this root and
-    /// keeps its own private `python-tool-envs/`, `python-tool-bindings/`,
-    /// and `python-invocations/` roots.
-    pub python_shared_store_root: Option<PathBuf>,
 }
 
 impl ResolvedSubagentMaterialization {
@@ -250,7 +232,7 @@ impl ResolvedSubagentMaterialization {
     /// deterministic base-only plane it always did.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.mcp_servers.is_empty() && self.python_shared_store_root.is_none()
+        self.mcp_servers.is_empty()
     }
 }
 
@@ -490,11 +472,7 @@ impl SubagentResolver {
         let skills = resolve_skills(definition, capability.skills())?;
         let model = resolve_model(definition, attempt_model, models)?;
         let project_instructions = resolve_project_instructions(definition, resources);
-        let materialization = resolve_materialization(
-            &tools,
-            capability.mcp_servers(),
-            capability.python_store_root(),
-        )?;
+        let materialization = resolve_materialization(&tools, capability.mcp_servers())?;
         Ok(ResolvedSubagentSpec {
             agent: definition.name().clone(),
             definition_digest: definition.digest().clone(),
@@ -616,9 +594,9 @@ fn resolve_tools(
 /// ```
 ///
 /// Tolerating an unavailable source must therefore never *stop* validation:
-/// an offline MCP server listed before a misspelled Python or Builtin
-/// selector would otherwise smuggle a statically invalid definition into a
-/// published generation.
+/// an offline MCP server listed before a misspelled Builtin selector or a
+/// `python:<folder>` id naming no managed package would otherwise smuggle a
+/// statically invalid definition into a published generation.
 fn validate_selectors_for_admission(
     definition: &SubagentDefinition,
     available: &AvailableToolCatalog,
@@ -642,7 +620,6 @@ fn optional_source(selector: &SubagentToolSelector) -> Option<CapabilitySourceId
         SubagentToolSelector::Mcp { server_id, .. } => {
             Some(CapabilitySourceId::Mcp(server_id.clone()))
         }
-        SubagentToolSelector::Python { .. } => Some(CapabilitySourceId::Python),
     }
 }
 
@@ -672,9 +649,6 @@ fn matches_selector(definition: &ToolDefinition, selector: &SubagentToolSelector
                 server_id: admitted,
             },
         ) => definition.name == *selected && admitted == server_id,
-        (SubagentToolSelector::Python { name }, ToolOrigin::Python { .. }) => {
-            definition.name == *name
-        }
         _ => false,
     }
 }
@@ -703,14 +677,6 @@ fn freeze_tool(
             ),
             definition: definition.clone(),
         },
-        (SubagentToolSelector::Python { .. }, ToolOrigin::Python { tool_version_id }) => {
-            ResolvedSubagentTool::Python {
-                tool_id: definition.id.clone(),
-                tool_version_id: tool_version_id.clone(),
-                name: definition.name.clone(),
-                definition: definition.clone(),
-            }
-        }
         _ => ResolvedSubagentTool::Builtin {
             tool_id: definition.id.clone(),
             name: definition.name.clone(),
@@ -787,10 +753,8 @@ fn resolve_skills(
 fn resolve_materialization(
     tools: &[ResolvedSubagentTool],
     configured: &McpServerBindings,
-    python_store_root: Option<&std::path::Path>,
 ) -> Result<ResolvedSubagentMaterialization, SubagentResolutionError> {
     let mut mcp_servers = BTreeMap::new();
-    let mut needs_python = false;
     for tool in tools {
         match tool {
             ResolvedSubagentTool::Builtin { .. } => {}
@@ -809,26 +773,9 @@ fn resolve_materialization(
                 })?;
                 mcp_servers.insert(server_id.clone(), binding.clone());
             }
-            ResolvedSubagentTool::Python { .. } => needs_python = true,
         }
     }
-    let python_shared_store_root = if needs_python {
-        Some(
-            python_store_root
-                .ok_or_else(|| SubagentResolutionError::SourceUnavailable {
-                    selector: "python".to_owned(),
-                    source: "python".to_owned(),
-                    reason: "the runtime generation has no Python tool store root".to_owned(),
-                })?
-                .to_path_buf(),
-        )
-    } else {
-        None
-    };
-    Ok(ResolvedSubagentMaterialization {
-        mcp_servers,
-        python_shared_store_root,
-    })
+    Ok(ResolvedSubagentMaterialization { mcp_servers })
 }
 
 /// Freezes the child's model **authority**.
@@ -914,7 +861,7 @@ mod tests {
     use crate::capabilities::{
         AvailableToolCatalog, CapabilityAvailability, CapabilitySourceId, CapabilitySourceState,
     };
-    use crate::runtime::identity::{McpServerId, ToolId, ToolVersionId};
+    use crate::runtime::identity::{McpServerId, ToolId};
     use crate::runtime::subagent::SubagentWorkspacePolicy;
     use crate::runtime::subagent::catalog::{
         SubagentCatalog, SubagentDefinition, SubagentName, SubagentProjectInstructionPolicy,
@@ -951,8 +898,10 @@ mod tests {
             ),
             tool(
                 "repository_symbols",
-                ToolOrigin::Python {
-                    tool_version_id: ToolVersionId::new("sha256:abc"),
+                ToolOrigin::Mcp {
+                    // A managed Python package surfaces under its synthesized
+                    // server identity (Issue #174).
+                    server_id: McpServerId::new("python:symbols"),
                 },
             ),
         ])
@@ -978,7 +927,10 @@ mod tests {
 
     fn ready() -> CapabilityAvailability {
         let mut availability = CapabilityAvailability::new();
-        availability.insert(CapabilitySourceId::Python, CapabilitySourceState::Ready);
+        availability.insert(
+            CapabilitySourceId::Mcp(McpServerId::new("python:symbols")),
+            CapabilitySourceState::Ready,
+        );
         availability.insert(
             CapabilitySourceId::Mcp(McpServerId::new("github")),
             CapabilitySourceState::Ready,
@@ -997,7 +949,8 @@ mod tests {
                     server_id: McpServerId::new("github"),
                     name: "get_issue".to_owned(),
                 },
-                SubagentToolSelector::Python {
+                SubagentToolSelector::Mcp {
+                    server_id: McpServerId::new("python:symbols"),
                     name: "repository_symbols".to_owned(),
                 },
             ]),
@@ -1016,18 +969,13 @@ mod tests {
         ));
         assert!(matches!(
             &resolved[2],
-            ResolvedSubagentTool::Python { tool_version_id, name, .. }
-                if tool_version_id.as_str() == "sha256:abc" && name == "repository_symbols"
+            ResolvedSubagentTool::Mcp { server_id, name, .. }
+                if server_id.as_str() == "python:symbols" && name == "repository_symbols"
         ));
         assert_eq!(
             resolved
                 .iter()
-                .filter(|tool| {
-                    matches!(
-                        tool,
-                        ResolvedSubagentTool::Mcp { .. } | ResolvedSubagentTool::Python { .. }
-                    )
-                })
+                .filter(|tool| matches!(tool, ResolvedSubagentTool::Mcp { .. }))
                 .count(),
             2,
             "both externally sourced origins keep their exact source-qualified identity"
@@ -1077,17 +1025,13 @@ mod tests {
                 ),
             ),
         ];
-        let plane = resolve_materialization(&tools, &configured, None).expect("plane");
+        let plane = resolve_materialization(&tools, &configured).expect("plane");
         assert_eq!(
             plane.mcp_servers.keys().collect::<Vec<_>>(),
             vec![&github],
             "the unrelated configured server is never frozen for this child"
         );
         assert!(!plane.mcp_servers.contains_key(&unrelated));
-        assert_eq!(
-            plane.python_shared_store_root, None,
-            "a child with no Python selection is given no Python store at all"
-        );
         assert!(!plane.is_empty());
 
         // A Builtin-only agent needs no external plane whatsoever.
@@ -1098,37 +1042,9 @@ mod tests {
             &tool("read", ToolOrigin::Builtin),
         )];
         assert_eq!(
-            resolve_materialization(&builtin_only, &configured, None).expect("plane"),
+            resolve_materialization(&builtin_only, &configured).expect("plane"),
             ResolvedSubagentMaterialization::default()
         );
-    }
-
-    /// A Python selection freezes the shared immutable store root, and a
-    /// generation without one refuses the invocation rather than letting the
-    /// child pick a store for itself.
-    #[test]
-    fn a_python_selection_freezes_the_shared_store_root() {
-        use super::resolve_materialization;
-        let configured = crate::tools::mcp::McpServerBindings::new();
-        let tools = vec![freeze_tool(
-            &SubagentToolSelector::Python {
-                name: "symbols".to_owned(),
-            },
-            &tool(
-                "symbols",
-                ToolOrigin::Python {
-                    tool_version_id: ToolVersionId::new("sha256:v1"),
-                },
-            ),
-        )];
-        let root = std::path::Path::new("/rr/environments/m7-tools");
-        let plane = resolve_materialization(&tools, &configured, Some(root)).expect("plane");
-        assert_eq!(plane.python_shared_store_root.as_deref(), Some(root));
-
-        assert!(matches!(
-            resolve_materialization(&tools, &configured, None),
-            Err(SubagentResolutionError::SourceUnavailable { .. })
-        ));
     }
 
     /// The frozen MCP identity is the deterministic cross-process digest of
@@ -1293,9 +1209,9 @@ mod tests {
     /// source".
     ///
     /// The definition below lists an offline MCP selector first in canonical
-    /// order followed by a statically invalid Python one. A validator that
-    /// treated the unavailable source as sufficient would never reach the
-    /// invalid selector and would admit the definition.
+    /// order followed by a statically invalid one against a *ready* source.
+    /// A validator that treated the unavailable source as sufficient would
+    /// never reach the invalid selector and would admit the definition.
     #[test]
     fn admission_validates_every_selector_past_an_unavailable_source() {
         let mut availability = ready();
@@ -1310,8 +1226,9 @@ mod tests {
                 server_id: McpServerId::new("github"),
                 name: "get_issue".to_owned(),
             },
-            SubagentToolSelector::Python {
-                name: "not_a_python_tool".to_owned(),
+            SubagentToolSelector::Mcp {
+                server_id: McpServerId::new("python:symbols"),
+                name: "not_a_real_tool".to_owned(),
             },
         ]);
         assert_eq!(
@@ -1333,7 +1250,7 @@ mod tests {
         assert!(matches!(
             validate_selectors_for_admission(&definition, &available(), &availability),
             Err(SubagentResolutionError::UnknownCapability { selector })
-                if selector == "python:not_a_python_tool"
+                if selector == "mcp:python:symbols/not_a_real_tool"
         ));
     }
 

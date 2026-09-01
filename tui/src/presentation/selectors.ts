@@ -68,10 +68,7 @@ export function originLabel(origin: ToolOrigin): string {
   if (origin === "builtin") {
     return "native";
   }
-  if ("mcp" in origin) {
-    return `mcp:${origin.mcp.server_id}`;
-  }
-  return "python";
+  return `mcp:${origin.mcp.server_id}`;
 }
 
 /** A short human label for an attempt settlement. */

@@ -25,11 +25,8 @@ examples/local-runtime/
 │       │   └── review-guidance/SKILL.md
 │       ├── tools/
 │       │   └── echo/
-│       │       ├── TOOL.toml
-│       │       ├── input.schema.json
-│       │       ├── pyproject.toml
-│       │       ├── uv.lock
-│       │       └── tool.py
+│       │       ├── server.py
+│       │       └── requirements.txt
 │       ├── subagents/
 │       │   ├── navigator/{instructions.md,AGENTS.md}
 │       │   └── reviewer/{instructions.md,AGENTS.md}
@@ -47,10 +44,10 @@ examples/local-runtime/
 | `rustx.jsonc` | The current runtime/project configuration: default model for new Sessions, context, launch-scoped Agent Status modules/timezone, native-tool policy and activation, MCP sources, Skill roots, and authorized environment. |
 | `workspace/` | The authoritative execution cwd and conventional project/source tree, including Skills and editable custom Python tool packages. Relative native file-tool paths resolve here. This is not a general filesystem sandbox for Read/Write/Edit/Grep/Glob. |
 | `workspace/.agents/skills/*` | Canonical project Skills, automatically discovered through the Skill plane's own semantics; a directory does not register a Workflow or Subagent. |
-| `workspace/.agents/tools/*` | Automatically discovered custom Python tool source packages; there is no separate registration entry in `rustx.jsonc`. |
+| `workspace/.agents/tools/*` | Automatically discovered managed Python tool packages (FastMCP servers); there is no separate registration entry in `rustx.jsonc`. |
 | `workspace/.agents/subagents/*` | Explicitly defined/admitted Subagent instruction and project-guidance sources. The config controls admission; filesystem presence alone does not expose a profile. |
 | `workspace/.agents/workflows/*` | Explicitly registered native Workflow YAML sources. The config controls both registration and model visibility; the directory is never scanned. |
-| `.rustx/` (`runtime-root`) | Runtime-owned generated artifacts, immutable Python tool versions, environments, and Session storage. Keep it disjoint from `workspace/`; it is a separate ownership domain, not a promise that every file under it is unreachable through every filesystem mechanism. |
+| `.rustx/` (`runtime-root`) | Runtime-owned generated artifacts, prepared Python tool environments, and Session storage. Keep it disjoint from `workspace/`; it is a separate ownership domain, not a promise that every file under it is unreachable through every filesystem mechanism. |
 
 Native Read/Write/Edit/Grep/Glob paths may be relative to the execution cwd or
 absolute host filesystem paths. `.` and `..` are resolved lexically before
@@ -182,10 +179,13 @@ subschema instead. Apart from references, nested subschemas are unrestricted.
 Rename the tool's field or flatten its root, or configure `foreground_only` or
 `background_only`, which inject nothing and therefore accept any schema —
 composed roots and `execution_mode` included. The same rule applies to
-`mcpToolPolicies` and to Python tool packages, which is worth knowing before
+`mcpToolPolicies`, which is worth knowing before
 switching an MCP server's tools to `model_selectable`: their schemas come from
 the server verbatim, and a server that ships a composed root will be rejected
-until you pick a fixed policy for it. The runtime intrinsics `execution` and
+until you pick a fixed policy for it. Managed Python tool packages are exempt
+from this decision: each package is served under the default
+`foreground_only`/`sequential` policy, so its FastMCP-generated tool schemas
+are never decorated. The runtime intrinsics `execution` and
 `ask_user`, and the `todo` task list, are not configured in this table: all
 three are fixed foreground, sequential, approval-never tools. `execution` is
 the single model-facing control plane for conversation-owned asynchronous
@@ -366,27 +366,53 @@ interpret, or configure MCP independently.
 
 ## Custom Python tool
 
-The `echo` tool is discovered automatically from:
+The `echo` tool is discovered automatically from its package folder:
 
 ```text
 <workspace>/.agents/tools/echo/
+├── server.py           # the FastMCP server; entrypoint is fixed: server.py:mcp
+└── requirements.txt    # REQUIRED, even when empty
 ```
 
-Its `TOOL.toml` uses the current manifest fields and
-`foreground_only`/`sequential`/`never` execution, concurrency, and approval
-policies. `input.schema.json` requires one string `message`, and `tool.py` exposes the executor entrypoint
-`def main(arguments)` and returns a JSON-serializable object. `pyproject.toml`
-has no third-party dependencies, and the committed `uv.lock` is generated
-from that project.
+One folder is one package: rustX serves it as one MCP server whose identity is
+`python:echo`, and every `@mcp.tool` function in `server.py` becomes one tool
+of that server — a package may expose several tools. The tool schema is not a
+separate file: FastMCP derives each tool's name, description, and input schema
+from the decorated function's name, docstring, and type hints, so those are
+the schema authority. The example declares one tool, `echo`, which echoes the
+supplied `message`.
 
-The runtime expects the `uv` executable to be available on `PATH` when it
-prepares the discovered Python tool's private environment.
+`requirements.txt` declares the package's own third-party dependencies, one
+PEP 508 requirement per line (this example needs none). Do not declare
+`fastmcp` itself: rustX injects and pins the managed FastMCP build, and a
+package that declares it is rejected with a package-identifying diagnostic.
 
-The package directory is editable source. During capability preparation,
-rustX publishes immutable package versions and private Python environments
-under `runtime-root/environments/`; those generated files are runtime state,
-not workspace source and must not be hand-edited. Do not put a generated
-virtual environment in `workspace/`.
+The runtime expects the `uv` executable (and a `python3` interpreter) to be
+available on `PATH` when it prepares a discovered package's private
+environment.
+
+The package directory is editable source. During capability preparation rustX
+fingerprints the package identity (the synthesized `python:<folder>` server
+identity) together with the package bytes and the probed interpreter and uv
+identities, and prepares one isolated uv environment per fingerprint under the
+runtime-owned environment store (`runtime-root/environments/…/python-tools/`):
+the frozen source copy, the generated `pyproject.toml` and `uv.lock`, the
+`venv/`, and the manifest are all derived runtime state, never workspace
+source, and must not be hand-edited. Do not put a generated virtual
+environment in `workspace/`. The package folder name is part of the
+environment identity: two distinct folders never share one prepared
+environment, even when their files are byte-identical, and moving the whole
+workspace to another host path does not change a package's identity. Editing
+the package changes its fingerprint, so
+an edit produces a new prepared environment that affects only future
+capability activations; a running generation keeps the frozen server it
+started with. The server process must keep stdout reserved for the MCP wire —
+diagnostics belong on stderr; arbitrary stdout output is not a supported
+logging channel. The `python:` MCP server namespace is reserved for these
+discovered packages: a configured `mcpServers` entry may not declare a server
+id starting with `python:` (rejected at startup with an actionable
+diagnostic), so a package's synthesized identity can never collide with a
+configured server.
 
 ## Native file-tool note
 

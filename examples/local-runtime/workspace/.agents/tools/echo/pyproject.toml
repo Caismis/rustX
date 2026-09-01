@@ -1,6 +1,0 @@
-[project]
-name = "rustx-example-echo"
-version = "0.1.0"
-description = "A dependency-free rustX example Python tool."
-requires-python = ">=3.11"
-dependencies = []

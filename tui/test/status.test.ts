@@ -235,7 +235,7 @@ describe("footer", () => {
         capabilities: {
           revision: 3,
           sources: [
-            { source: { type: "python" }, state: { type: "ready" } },
+            { source: { type: "mcp", server_id: "python:echo" }, state: { type: "ready" } },
             {
               source: { type: "mcp", server_id: "exa" },
               state: { type: "unavailable", reason: "spawn failed" },

@@ -144,7 +144,7 @@ pub use identity::{
     AgentId, AgentVersionId, ArtifactId, AttemptId, CapabilityRevision, ConversationId, EventId,
     InteractionId, McpServerId, MessageId, NodeEnvironmentDigest, PythonEnvironmentDigest,
     RequestId, RuntimeResourceRevision, SkillId, SkillVersionId, ToolCallId, ToolExecutionId,
-    ToolId, ToolVersionId, TurnId,
+    ToolId, TurnId,
 };
 pub use inbound::{
     ConversationInboundMailbox, InboundBatch, InboundItem, InboundSequence, MailboxError,

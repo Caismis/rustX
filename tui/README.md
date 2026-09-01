@@ -559,7 +559,8 @@ denial, cancellation, timeout, interruption, progress, duration, exit code, and
 truncation all come from the Runtime Client. Nothing reads a status out of
 output text, infers running from an absent result, or infers cancellation from
 missing output. A renderer that does not recognise a shape returns nothing and
-the generic renderer takes over, so unknown, MCP, and Python tools stay fully
+the generic renderer takes over, so unknown and MCP tools (including managed
+Python tool packages, which are served as MCP servers) stay fully
 usable.
 
 ### Visual collapse is not runtime truncation

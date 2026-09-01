@@ -28,7 +28,7 @@ use crate::tools::mcp::{
     McpInvalidationState, McpRuntimeGeneration, McpRuntimeLeaseAuthority, McpRuntimeLeaseSet,
     McpRuntimeRetirementRegistry, McpServerBindings, McpServerRuntime,
 };
-use crate::tools::python::{PythonToolDiscovery, PythonToolExecutor, PythonToolStore};
+use crate::tools::python::{PythonToolStore, discover_python_packages};
 use crate::tools::workspace::Workspace;
 
 /// The coordinator configuration of one conversation/capability owner.
@@ -53,13 +53,6 @@ pub struct CapabilityCoordinatorConfig {
     /// The caller-configured runtime-private environment store root,
     /// disjoint from the Workspace.
     pub environment_store_root: PathBuf,
-    /// An explicit Python tool-store root split (Issue #145).
-    ///
-    /// `None` is the top-level runtime shape: one unified store under the
-    /// environment store root. A subagent child passes an explicit split so
-    /// it reads the parent's shared immutable `tool-versions/` and
-    /// `uv-cache/` while keeping its own private mutable roots.
-    pub python_store_roots: Option<crate::tools::python::PythonToolStoreRoots>,
 }
 
 /// The synchronized coordinator state.
@@ -120,30 +113,28 @@ struct CoordinatorInner {
     /// mutation (`tools/list_changed`) and epoch validation + snapshot swap
     /// (commit) serialize through the same guard.
     mcp_invalidation: Arc<McpInvalidationState>,
-    /// The configured location of the Python tool store
-    /// (`<environment store>/m7-tools`).
+    /// The configured location of the managed Python package store
+    /// (`<environment store>/python-tools`).
     ///
     /// The coordinator owns the *location* only. Opening/creating the
-    /// Python-specific storage is part of the optional Python capability
-    /// preparation ([`CapabilityCoordinator::prepare_python_tools`]), so a
-    /// Python storage failure degrades Python availability and can never
-    /// fail core coordinator construction — and a base-only/subagent
-    /// coordinator never touches Python storage at all.
-    python_store_roots: crate::tools::python::PythonToolStoreRoots,
-    /// The lazily initialized, coordinator-lifetime-stable Python tool
+    /// Python-specific storage is part of the optional managed-package
+    /// preparation ([`CapabilityCoordinator::prepare_python_packages`]), so
+    /// a Python storage failure degrades the discovered packages'
+    /// availability and can never fail core coordinator construction — and
+    /// a base-only/subagent coordinator never touches Python storage at
+    /// all.
+    python_store_root: PathBuf,
+    /// The lazily initialized, coordinator-lifetime-stable Python package
     /// store (Issue #81).
     ///
     /// Initialization timing is not lifetime ownership: the slot starts
-    /// empty because Python is optional and its storage may fail, a failed
-    /// initialization leaves the slot empty so the next preparation retries,
-    /// and the first *successful* initialization publishes the one stable
-    /// process-local store identity every later Python preparation — and
-    /// every executor derived from it — reuses. The store owns the
-    /// process-local coordination domains (in-flight environment build
-    /// coalescing, invocation bundle allocation), so it must never be
-    /// reconstructed per preparation: that would silently restart the
-    /// invocation identifier allocation and let two executor generations
-    /// claim the same execution bundle.
+    /// empty because Python packages are optional and their storage may
+    /// fail, a failed initialization leaves the slot empty so the next
+    /// preparation retries, and the first *successful* initialization
+    /// publishes the one stable process-local store identity every later
+    /// preparation reuses. The store owns the process-local build
+    /// coalescing domain, so it must never be reconstructed per
+    /// preparation.
     ///
     /// The mutex is held only across the synchronous store construction
     /// (a bounded `create_dir_all` sequence) — never across `.await`.
@@ -244,86 +235,6 @@ async fn retire_candidate_runtimes(runtimes: Vec<McpRuntimeGeneration>) {
     for generation in runtimes {
         let _: Option<String> = generation.retire_and_close().await;
     }
-}
-
-/// Opens and verifies exactly the frozen Python `ToolVersion`s of one child
-/// (Issue #145).
-///
-/// The store is opened over the plan's shared/private root split, so the
-/// child reads the parent's immutable `tool-versions/` and `uv-cache/` while
-/// every mutable execution root stays child-private. `fallback_private_root`
-/// is used only when a plan carries Python tools without an explicit split,
-/// which the resolver does not produce.
-async fn materialize_selected_python(
-    plan: &crate::capabilities::selected::SelectedCapabilityPlan,
-    fallback_private_root: &Path,
-    cancellation: &crate::runtime::cancellation::CancellationSignal,
-) -> Result<Vec<ToolRegistration>, CapabilityPreparationError> {
-    use crate::capabilities::selected::SelectedMaterializationError;
-    if plan.python_tools.is_empty() {
-        return Ok(Vec::new());
-    }
-    let roots = plan.python_roots.clone().unwrap_or_else(|| {
-        crate::tools::python::PythonToolStoreRoots::unified(fallback_private_root.to_path_buf())
-    });
-    let store = PythonToolStore::with_roots(roots).map_err(|error| {
-        SelectedMaterializationError::PythonVersion {
-            tool_version_id: plan.python_tools[0].tool_version_id.clone(),
-            detail: format!("the child Python store could not be opened: {error}"),
-        }
-    })?;
-    let mut registrations = Vec::with_capacity(plan.python_tools.len());
-    for selected in &plan.python_tools {
-        // The one Python authority in a child: the exact frozen identity,
-        // re-verified against the published bytes. No workspace is
-        // consulted and no same-named version can substitute.
-        let published = store
-            .open_published_version(&selected.tool_version_id)
-            .map_err(|error| SelectedMaterializationError::PythonVersion {
-                tool_version_id: selected.tool_version_id.clone(),
-                detail: error.to_string(),
-            })?;
-        if published.package.name != selected.name {
-            return Err(SelectedMaterializationError::PythonNameMismatch {
-                tool_version_id: selected.tool_version_id.clone(),
-                expected: selected.name.clone(),
-                observed: published.package.name.clone(),
-            }
-            .into());
-        }
-        let environment = store
-            .ensure_environment(&published, cancellation)
-            .await
-            .map_err(|error| SelectedMaterializationError::PythonEnvironment {
-                tool_version_id: selected.tool_version_id.clone(),
-                detail: error.to_string(),
-            })?;
-        let package = published.package.clone();
-        let executor = Arc::new(crate::tools::python::PythonToolExecutor::new(
-            &store,
-            published,
-            environment,
-        ));
-        registrations.push(ToolRegistration::plain(
-            crate::tools::types::ToolDefinition {
-                id: crate::runtime::identity::ToolId::new(crate::tools::python::python_tool_id(
-                    &package.name,
-                )),
-                name: package.name,
-                description: package.description,
-                input_schema: package.input_schema,
-                execution_policy: package.policy.execution,
-                concurrency_policy: package.policy.concurrency,
-                approval_policy: package.policy.approval,
-                replay_policy: crate::tools::types::ToolReplayPolicy::Never,
-                origin: crate::tools::types::ToolOrigin::Python {
-                    tool_version_id: package.tool_version_id,
-                },
-            },
-            executor as Arc<dyn crate::tools::executor::ToolExecutor>,
-        ));
-    }
-    Ok(registrations)
 }
 
 /// The capability coordinator of one conversation/capability owner.
@@ -436,6 +347,13 @@ pub struct PreparedCapabilityCandidate {
     /// the candidate until `commit` transfers them into the coordinator's
     /// published generation state.
     mcp_runtimes: Vec<McpRuntimeGeneration>,
+    /// The effective MCP server set of this candidate: the configured
+    /// bindings plus the synthesized managed-Python-package bindings (Issue
+    /// #174). The committed snapshot freezes this set for the subagent
+    /// materialization crossing; it is deliberately separate from
+    /// `resource_inputs`, which carries the *configured* inputs that commit
+    /// publishes back as the coordinator's authoritative reload state.
+    effective_mcp_servers: crate::tools::mcp::McpServerBindings,
     resource_inputs: CapabilityResourceInputs,
     /// Explicit runtime-resource reload must publish the candidate registry
     /// even when model-facing definitions are byte-identical: executor
@@ -568,13 +486,9 @@ impl CapabilityCoordinator {
         let tool_activation = config.tool_activation;
         let skill_discovery = config.skill_discovery;
         // Only the Python store *location* is computed here; the store
-        // itself is opened inside the optional Python preparation
+        // itself is opened inside the optional managed-package preparation
         // boundary (Issue #81), never in core construction.
-        let python_store_roots = config.python_store_roots.clone().unwrap_or_else(|| {
-            crate::tools::python::PythonToolStoreRoots::unified(
-                environment_store.root().join("m7-tools"),
-            )
-        });
+        let python_store_root = environment_store.root().join("python-tools");
         let initial_skills = Arc::new(SkillSnapshot::new(Vec::new()));
         let initial_snapshot = Arc::new(CapabilitySnapshot::new(
             config.conversation_id.clone(),
@@ -590,7 +504,6 @@ impl CapabilityCoordinator {
             config.base_environment.clone(),
             Arc::new(McpRuntimeLeaseAuthority::empty()),
             Arc::new(mcp_servers.clone()),
-            Some(python_store_roots.shared.clone()),
         ));
         Ok(Self {
             inner: Arc::new(CoordinatorInner {
@@ -607,7 +520,7 @@ impl CapabilityCoordinator {
                 #[cfg(test)]
                 connect_ownership_pause: Mutex::new(None),
                 mcp_invalidation: Arc::new(McpInvalidationState::new()),
-                python_store_roots,
+                python_store_root,
                 python_store: Mutex::new(None),
                 environment_store,
                 state: Mutex::new(CoordinatorState {
@@ -858,26 +771,58 @@ impl CapabilityCoordinator {
         // recorded as its own typed availability state, never as a
         // preparation error of the whole candidate.
         let mut availability = CapabilityAvailability::new();
-        let python_tools = match self.prepare_python_tools().await {
-            Ok(tools) => {
-                availability.insert(CapabilitySourceId::Python, CapabilitySourceState::Ready);
-                tools
+        // ---- Managed Python tool packages (Issue #174) ----
+        //
+        // Each discovered package is prepared into its isolated uv
+        // environment and compiled into one synthesized MCP server binding.
+        // The bindings merge into the set the generic MCP path below
+        // iterates — connect, tools/list, epoch checks, availability,
+        // commit, leases, and the frozen snapshot are exactly the generic
+        // machinery — so a managed package is never a second protocol.
+        // A package that fails discovery or preparation records its own
+        // synthesized source as unavailable and contributes nothing.
+        //
+        // The merge is deliberately NOT a mutation of `inputs`: the
+        // candidate's `resource_inputs` are the *configured* inputs (commit
+        // publishes them back as the coordinator's authoritative reload
+        // state), while the synthesized bindings are re-derived from
+        // workspace discovery on every preparation. Persisting the merged
+        // set would make the next preparation collide with its own earlier
+        // synthesis.
+        let mut effective_mcp_servers = inputs.mcp_servers.clone();
+        let mut rejected_sources: Vec<(McpServerId, String)> = Vec::new();
+        for (server_id, outcome) in self.prepare_python_packages().await? {
+            match outcome {
+                Ok(binding) => match effective_mcp_servers.entry(server_id.clone()) {
+                    std::collections::btree_map::Entry::Vacant(slot) => {
+                        slot.insert(binding);
+                    }
+                    std::collections::btree_map::Entry::Occupied(_) => {
+                        // Structurally unreachable: configured `mcpServers`
+                        // entries are rejected at configuration validation
+                        // when they claim the reserved `python:` namespace
+                        // (see `mcp_bindings`), and discovery yields at
+                        // most one package per folder, so one `McpServerId`
+                        // can never have two owners. A collision here is an
+                        // internal invariant violation, never a supported
+                        // runtime state — there is no precedence rule and no
+                        // second semantic path.
+                        return Err(CapabilityPreparationError::Mcp(format!(
+                            "internal invariant violated: MCP server identity {server_id} \
+                             already has an owner"
+                        )));
+                    }
+                },
+                Err(reason) => rejected_sources.push((server_id, reason)),
             }
-            Err(reason) => {
-                availability.insert(
-                    CapabilitySourceId::Python,
-                    CapabilitySourceState::unavailable(reason),
-                );
-                Vec::new()
-            }
-        };
+        }
         let mut discovered_tools = Vec::<ToolRegistration>::new();
         discovered_tools.extend(inputs.base_tool_registry.registrations());
         let mut mcp_tools = Vec::new();
         let mut mcp_epochs = BTreeMap::new();
         let mut mcp_runtimes = Vec::new();
         // `BTreeMap` iteration is the deterministic identity order.
-        for (server_id, binding) in &inputs.mcp_servers {
+        for (server_id, binding) in &effective_mcp_servers {
             match self.prepare_mcp_server(server_id, binding, None).await {
                 Ok((epoch, generation, tools)) => {
                     mcp_epochs.insert(server_id.clone(), epoch);
@@ -901,7 +846,15 @@ impl CapabilityCoordinator {
                 }
             }
         }
-        mcp_tools.extend(python_tools);
+        // Package-local failures land on the package's own synthesized
+        // source, after the generic loop so a sibling failure can never
+        // silently overwrite another source's rejection diagnostic.
+        for (server_id, reason) in rejected_sources {
+            availability.insert(
+                CapabilitySourceId::Mcp(server_id),
+                CapabilitySourceState::unavailable(reason),
+            );
+        }
         discovered_tools.extend(
             mcp_tools
                 .into_iter()
@@ -922,73 +875,87 @@ impl CapabilityCoordinator {
             mcp_epochs,
             availability,
             mcp_runtimes,
+            effective_mcp_servers,
             resource_inputs: inputs,
             force_publish,
         })
     }
 
-    /// Prepares the complete custom Python tool plane: store opening,
-    /// discovery, publication, environment materialization, and executor
-    /// construction for every discovered package.
+    /// Discovers and prepares the managed Python tool packages of the
+    /// Workspace, returning one synthesized MCP server identity per package
+    /// folder with either its prepared launch binding or its rejection
+    /// diagnostic (Issue #174).
     ///
-    /// The plane is one optional capability source: any failure —
-    /// including opening/creating the Python-private store itself —
-    /// rejects the whole plane (the caller records `Python` unavailable)
-    /// so a partial Python executor set can never enter the candidate and
-    /// Python storage can never fail core coordinator construction.
-    async fn prepare_python_tools(
+    /// Every package is its own optional capability source: a failure —
+    /// including opening/creating the Python store itself — rejects only
+    /// the packages that depend on it (the caller records each synthesized
+    /// source unavailable), so Python storage can never fail core
+    /// coordinator construction. Only walking the `.agents/tools/`
+    /// container itself is a candidate-level preparation error, the same
+    /// layering Skill discovery already has.
+    async fn prepare_python_packages(
         &self,
     ) -> Result<
         Vec<(
-            crate::tools::types::ToolDefinition,
-            Arc<dyn crate::tools::executor::ToolExecutor>,
+            McpServerId,
+            Result<crate::tools::mcp::McpServerBinding, String>,
         )>,
-        String,
+        CapabilityPreparationError,
     > {
-        let store = self.python_store().map_err(|error| error.to_string())?;
-        let python_packages = PythonToolDiscovery::new(&self.inner.workspace)
-            .discover()
-            .map_err(|error| error.to_string())?;
-        let mut python_tools = Vec::new();
-        for package in python_packages {
-            let published = store.publish(&package).map_err(|error| error.to_string())?;
-            let environment = store
-                .ensure_environment(&published, &self.inner.preparation_cancellation.child())
-                .await
-                .map_err(|error| error.to_string())?;
-            let executor = Arc::new(PythonToolExecutor::new(&store, published, environment));
-            python_tools.push((
-                crate::tools::types::ToolDefinition {
-                    id: crate::runtime::identity::ToolId::new(
-                        crate::tools::python::python_tool_id(&package.name),
-                    ),
-                    name: package.name,
-                    description: package.description,
-                    input_schema: package.input_schema,
-                    execution_policy: package.policy.execution,
-                    concurrency_policy: package.policy.concurrency,
-                    approval_policy: package.policy.approval,
-                    replay_policy: crate::tools::types::ToolReplayPolicy::Never,
-                    origin: crate::tools::types::ToolOrigin::Python {
-                        tool_version_id: package.tool_version_id,
-                    },
-                },
-                executor as Arc<dyn crate::tools::executor::ToolExecutor>,
-            ));
+        let discovered = discover_python_packages(&self.inner.workspace).map_err(|error| {
+            CapabilityPreparationError::Mcp(format!(
+                "Python tool package discovery failed: {error}"
+            ))
+        })?;
+        if discovered.is_empty() {
+            return Ok(Vec::new());
         }
-        Ok(python_tools)
+        let store = match self.python_store() {
+            Ok(store) => store,
+            Err(error) => {
+                // The store is shared preparation infrastructure: its
+                // failure rejects every discovered package with the same
+                // diagnostic, but nothing else.
+                let reason = error.to_string();
+                return Ok(discovered
+                    .into_iter()
+                    .map(|entry| {
+                        let outcome = match entry.outcome {
+                            Ok(_) => Err(reason.clone()),
+                            Err(error) => Err(error.to_string()),
+                        };
+                        (entry.server_id, outcome)
+                    })
+                    .collect());
+            }
+        };
+        let mut bindings = Vec::with_capacity(discovered.len());
+        for entry in discovered {
+            let outcome = match entry.outcome {
+                Err(error) => Err(error.to_string()),
+                Ok(package) => match store
+                    .ensure_prepared(&package, &self.inner.preparation_cancellation.child())
+                    .await
+                {
+                    Ok(prepared) => Ok(prepared.server_binding()),
+                    Err(error) => Err(error.to_string()),
+                },
+            };
+            bindings.push((entry.server_id, outcome));
+        }
+        Ok(bindings)
     }
 
-    /// Returns the coordinator-lifetime-stable Python tool store,
+    /// Returns the coordinator-lifetime-stable Python package store,
     /// initializing it on first use.
     ///
-    /// The slot starts empty because Python is optional: a construction
-    /// failure leaves it empty (the caller records `Python` unavailable and
-    /// the next preparation retries); the first successful construction is
-    /// published into the slot under the mutex, so concurrent first
-    /// preparations converge to exactly one store identity — the single
-    /// process-local coordination domain for environment build coalescing
-    /// and invocation bundle allocation. The mutex is never held across
+    /// The slot starts empty because Python packages are optional: a
+    /// construction failure leaves it empty (the caller records the
+    /// discovered packages unavailable and the next preparation retries);
+    /// the first successful construction is published into the slot under
+    /// the mutex, so concurrent first preparations converge to exactly one
+    /// store identity — the single process-local coordination domain for
+    /// environment build coalescing. The mutex is never held across
     /// `.await`: construction is a bounded synchronous `create_dir_all`
     /// sequence.
     fn python_store(&self) -> Result<PythonToolStore, crate::tools::python::PythonToolError> {
@@ -1000,7 +967,7 @@ impl CapabilityCoordinator {
         if let Some(store) = &*slot {
             return Ok(store.clone());
         }
-        let store = PythonToolStore::with_roots(self.inner.python_store_roots.clone())?;
+        let store = PythonToolStore::new(self.inner.python_store_root.clone())?;
         *slot = Some(store.clone());
         drop(slot);
         Ok(store)
@@ -1129,6 +1096,9 @@ impl CapabilityCoordinator {
             mcp_epochs: BTreeMap::new(),
             availability: CapabilityAvailability::new(),
             mcp_runtimes: Vec::new(),
+            // The base-only candidate connects nothing; its effective server
+            // set is the configured one, exactly as before.
+            effective_mcp_servers: inputs.mcp_servers.clone(),
             resource_inputs: inputs,
             force_publish: false,
         })
@@ -1144,8 +1114,8 @@ impl CapabilityCoordinator {
     /// ```text
     /// no Skill discovery            the child's Skills are already frozen
     ///                               and materialized by its composition
-    /// no workspace Python discovery only the frozen ToolVersionIds are
-    ///                               opened, from the shared immutable store
+    /// no workspace Python discovery managed Python packages cross as
+    ///                               ordinary frozen MCP bindings
     /// no "every configured server"  only the servers the selection names
     ///                               are connected at all
     /// no activation policy pass     the frozen set IS the active set
@@ -1260,25 +1230,6 @@ impl CapabilityCoordinator {
             }
         }
 
-        // ---- Python: open exactly the frozen immutable versions ----
-        //
-        // Every failure from here on must retire the MCP runtimes already
-        // connected for this candidate: a failed child preparation must not
-        // leave an MCP stdio process behind.
-        match materialize_selected_python(
-            plan,
-            &self.inner.python_store_roots.private,
-            preparation_cancellation,
-        )
-        .await
-        {
-            Ok(python) => registrations.extend(python),
-            Err(error) => {
-                retire_candidate_runtimes(mcp_runtimes).await;
-                return Err(error);
-            }
-        }
-
         // The frozen set IS the active set: activation policy has nothing
         // left to decide, so the default (activate everything composed) is
         // exactly the authorized projection.
@@ -1301,6 +1252,9 @@ impl CapabilityCoordinator {
             mcp_epochs,
             availability: CapabilityAvailability::new(),
             mcp_runtimes,
+            // The frozen selected set IS the effective set: the child's
+            // composition never learns about any other server.
+            effective_mcp_servers: inputs.mcp_servers.clone(),
             resource_inputs: inputs,
             force_publish: false,
         })
@@ -1743,8 +1697,7 @@ impl CapabilityCoordinator {
                 candidate.node,
                 candidate.effective_environment,
                 mcp_lease_authority,
-                Arc::new(candidate.resource_inputs.mcp_servers.clone()),
-                Some(self.inner.python_store_roots.shared.clone()),
+                Arc::new(candidate.effective_mcp_servers.clone()),
             ));
             let previous_mcp_runtimes = std::mem::replace(
                 &mut state.mcp_runtimes,
@@ -1910,6 +1863,20 @@ impl CapabilityCoordinator {
         *self.inner.commit_hook.lock().expect("commit hook lock") = Some(hook);
     }
 
+    /// Installs a pre-built Python tool store into the lazy slot, replacing
+    /// the production construction. The deterministic scripted suites use
+    /// this to give the coordinator a store backed by a recorded process
+    /// runner instead of the real uv. Only available under `#[cfg(test)]`;
+    /// never used by production code.
+    #[cfg(test)]
+    pub(crate) fn install_python_store(&self, store: PythonToolStore) {
+        *self
+            .inner
+            .python_store
+            .lock()
+            .expect("python store lock poisoned") = Some(store);
+    }
+
     /// Test-only observation of the lazy Python store slot: `None` when no
     /// Python preparation has successfully initialized the store yet,
     /// otherwise the identity token of the one stable coordination domain.
@@ -2062,6 +2029,26 @@ fn paths_overlap(left: &Path, right: &Path) -> bool {
 /// Whether the candidate's capability content equals the current snapshot
 /// (an identical rediscovery/preparation is a no-op that must not fabricate
 /// a new revision).
+///
+/// The no-op equivalence covers **both** halves of a published capability
+/// generation:
+///
+/// - the model-visible capability contract: the tool definitions, the
+///   available catalog, the Skills, and the shared Python/Node environment
+///   digests;
+/// - the effective executable/runtime binding identity: the frozen MCP
+///   server bindings (transport command/args/env/cwd/endpoint/headers and
+///   invocation policy).
+///
+/// A candidate may be considered a no-op only when both halves are
+/// equivalent. In particular a source or runtime binding change — a
+/// configured server whose command/env/endpoint changed, or a managed
+/// Python package whose source edit moved its prepared state to a new
+/// fingerprint-keyed directory and therefore changed the synthesized
+/// binding's launch program — is a real publication even when the
+/// model-facing `tools/list` catalog is byte-identical: after a successful
+/// commit, newly admitted executions must use the new executable
+/// generation, never the old one.
 fn candidate_is_noop(
     candidate: &PreparedCapabilityCandidate,
     current: &CapabilitySnapshot,
@@ -2074,6 +2061,12 @@ fn candidate_is_noop(
             == current.python_environment().map(|env| env.digest.clone())
         && candidate.node.as_ref().map(|env| env.digest.clone())
             == current.node_environment().map(|env| env.digest.clone())
+        // The effective frozen server bindings are part of the no-op
+        // equivalence (`McpServerBinding` derives deterministic equality).
+        // The snapshot freezes exactly the bindings the candidate would
+        // publish, so a changed executable identity can never be discarded
+        // as a capability no-op merely because the tool definitions match.
+        && candidate.effective_mcp_servers == *current.mcp_servers()
 }
 
 /// The RAII-style attempt capability lease.
@@ -2235,7 +2228,6 @@ body
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: dir.path().join("skill-env"),
-            python_store_roots: None,
         })
         .expect("coordinator");
         (dir, coordinator)
@@ -2440,28 +2432,43 @@ body
         ));
     }
 
-    /// Lazy Python store ownership (Issue #81): store initialization is
-    /// optional and retryable, but once it succeeds the coordinator retains
-    /// one stable process-local store identity for its lifetime.
+    /// Lazy Python store ownership (Issue #81, revised by Issue #174): the
+    /// managed-package store initialization is optional and retryable, but
+    /// once it succeeds the coordinator retains one stable process-local
+    /// store identity for its lifetime.
     ///
-    /// Phase 1: the Python store path is a conflicting regular file —
-    /// preparation degrades Python to `Unavailable` and the lazy slot stays
-    /// empty (no permanently poisoned state). Phase 2: the filesystem is
-    /// repaired and the next preparation retries, initializes the store,
-    /// and Python becomes `Ready`. Phase 3: later preparations reuse the
+    /// Phase 1: the store's `packages/` path is a conflicting regular file —
+    /// preparation degrades the discovered package to `Unavailable` and the
+    /// lazy slot stays empty (no permanently poisoned state). Phase 2: the
+    /// filesystem is repaired and the next preparation retries and
+    /// initializes the store (the package itself is made invalid first, so
+    /// no environment build runs). Phase 3: later preparations reuse the
     /// same store identity instead of constructing a new coordination
-    /// domain (which would restart invocation bundle allocation).
+    /// domain (which would restart environment build coalescing).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn python_store_initialization_is_lazy_retryable_and_stable() {
         use crate::capabilities::{CapabilitySourceId, CapabilitySourceState};
+        use crate::tools::python::python_server_id;
 
         let dir = tempfile::tempdir().expect("temp dir");
         let workspace_root = dir.path().join("workspace");
-        std::fs::create_dir_all(&workspace_root).expect("workspace");
+        let package_root = workspace_root.join(".agents/tools/demo");
+        std::fs::create_dir_all(&package_root).expect("package folder");
+        std::fs::write(
+            package_root.join("server.py"),
+            b"from fastmcp import FastMCP\nmcp = FastMCP('demo')\n",
+        )
+        .expect("server source");
+        std::fs::write(
+            package_root.join("requirements.txt"),
+            b"# no extra dependencies\n",
+        )
+        .expect("requirements");
         let store_root = dir.path().join("skill-env");
-        std::fs::create_dir_all(&store_root).expect("environment store root");
-        let conflict = store_root.join("m7-tools");
+        std::fs::create_dir_all(store_root.join("python-tools")).expect("environment store root");
+        let conflict = store_root.join("python-tools/packages");
         std::fs::write(&conflict, b"not a directory").expect("conflicting regular file");
+        let source_id = CapabilitySourceId::Mcp(python_server_id("demo"));
         let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
             conversation_id: crate::runtime::identity::ConversationId::new("conv-lazy-store"),
             workspace: Workspace::new(&workspace_root).expect("workspace"),
@@ -2471,20 +2478,19 @@ body
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: store_root,
-            python_store_roots: None,
         })
         .expect("coordinator construction never touches Python storage");
 
         // Phase 1: initialization fails, the slot stays empty, preparation
-        // itself succeeds with Python unavailable.
+        // itself succeeds with the package's server unavailable.
         assert_eq!(coordinator.python_store_identity_token(), None);
         let candidate = coordinator.prepare_candidate().await.expect("prepare");
         assert!(
             matches!(
-                candidate.availability().get(&CapabilitySourceId::Python),
+                candidate.availability().get(&source_id),
                 Some(CapabilitySourceState::Unavailable { .. })
             ),
-            "the store-opening failure degrades Python availability: {:?}",
+            "the store-opening failure degrades the package's server availability: {:?}",
             candidate.availability()
         );
         assert_eq!(
@@ -2494,16 +2500,22 @@ body
         );
 
         // Phase 2: the filesystem is repaired; the next preparation retries
-        // and publishes the one stable store identity.
+        // and publishes the one stable store identity. The package is made
+        // invalid first so the retry never starts an environment build.
         std::fs::remove_file(&conflict).expect("repair the filesystem");
+        std::fs::remove_file(package_root.join("requirements.txt"))
+            .expect("invalidate the package");
         let candidate = coordinator
             .prepare_candidate()
             .await
             .expect("retry prepare");
-        assert_eq!(
-            candidate.availability().get(&CapabilitySourceId::Python),
-            Some(&CapabilitySourceState::Ready),
-            "the retry initializes the store and Python becomes ready"
+        assert!(
+            matches!(
+                candidate.availability().get(&source_id),
+                Some(CapabilitySourceState::Unavailable { .. })
+            ),
+            "the invalid package stays unavailable: {:?}",
+            candidate.availability()
         );
         let first = coordinator
             .python_store_identity_token()
@@ -2515,9 +2527,13 @@ body
             .prepare_candidate()
             .await
             .expect("third prepare");
-        assert_eq!(
-            candidate.availability().get(&CapabilitySourceId::Python),
-            Some(&CapabilitySourceState::Ready)
+        assert!(
+            matches!(
+                candidate.availability().get(&source_id),
+                Some(CapabilitySourceState::Unavailable { .. })
+            ),
+            "the invalid package stays unavailable: {:?}",
+            candidate.availability()
         );
         assert_eq!(
             coordinator.python_store_identity_token(),
@@ -2603,7 +2619,6 @@ mod mcp_race_tests {
             )]),
             base_environment: ToolEnvironment::new(),
             environment_store_root: dir.path().join("skill-env"),
-            python_store_roots: None,
         })
         .expect("coordinator");
         (coordinator, server_id)
@@ -2658,7 +2673,6 @@ mod mcp_race_tests {
             mcp_servers,
             base_environment: ToolEnvironment::new(),
             environment_store_root: dir.path().join("skill-env"),
-            python_store_roots: None,
         })
         .expect("coordinator");
         let lifecycle = crate::runtime::types::ConversationLifecycle::new();
@@ -3132,5 +3146,237 @@ mod mcp_race_tests {
             assert_eq!(guard.epoch(&server), 2);
         }
         assert_eq!(state.epoch(&server), 2);
+    }
+
+    /// Mutates the configured stdio binding of the fixture server by adding
+    /// one environment key the fixture ignores: the model-facing `tools/list`
+    /// catalog stays byte-identical while the executable binding differs.
+    fn fixture_binding_with_marker(
+        coordinator: &CapabilityCoordinator,
+        server_id: &McpServerId,
+        marker: &str,
+    ) {
+        let mut inputs = coordinator
+            .inner
+            .resource_inputs
+            .lock()
+            .expect("capability resource-input lock poisoned");
+        let binding = inputs
+            .mcp_servers
+            .get_mut(server_id)
+            .expect("fixture binding");
+        binding.transport = match &binding.transport {
+            McpTransportConfig::Stdio {
+                program,
+                args,
+                cwd,
+                environment,
+            } => {
+                let mut environment = environment.clone();
+                environment.insert("RUSTX_NOOP_BINDING_MARKER".to_owned(), marker.to_owned());
+                McpTransportConfig::Stdio {
+                    program: program.clone(),
+                    args: args.clone(),
+                    cwd: cwd.clone(),
+                    environment,
+                }
+            }
+            other @ McpTransportConfig::StreamableHttp { .. } => {
+                panic!("the fixture binding is stdio: {other:?}")
+            }
+        };
+    }
+
+    /// Blocker 2 executable identity: identical model-facing definitions with
+    /// a changed executable binding is a NEW publication, never a no-op.
+    ///
+    /// Proves through the actual coordinator commit path: commit v1, change
+    /// the effective binding while preserving the `tools/list` schema,
+    /// prepare and commit v2, the executable generation advances, and a
+    /// future attempt lease resolves to v2.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_changed_executable_binding_is_a_new_publication_even_with_identical_definitions() {
+        if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (coordinator, server_id) = coordinator_with_fixture(
+            &dir,
+            "fixture",
+            "capabilities::coordinator::mcp_race_tests::a_changed_executable_binding_is_a_new_publication_even_with_identical_definitions",
+        );
+        let candidate_v1 = coordinator.prepare_candidate().await.expect("prepare v1");
+        let v1_runtime = candidate_v1
+            .mcp_runtimes
+            .first()
+            .expect("v1 candidate runtime")
+            .runtime();
+        let v1_snapshot = coordinator.commit(candidate_v1).expect("commit v1");
+        assert_eq!(v1_snapshot.revision().get(), 1);
+
+        // The binding changes (a new environment key the fixture ignores);
+        // the tool catalog stays identical.
+        fixture_binding_with_marker(&coordinator, &server_id, "v2");
+        let candidate_v2 = coordinator.prepare_candidate().await.expect("prepare v2");
+        assert_eq!(
+            candidate_v2.candidate_registry.definitions(),
+            v1_snapshot.tool_registry().definitions(),
+            "the model-facing tools/list contract is byte-identical"
+        );
+        let v2_snapshot = coordinator.commit(candidate_v2).expect("commit v2");
+        assert_eq!(
+            v2_snapshot.revision().get(),
+            2,
+            "a changed executable binding is a new publication, never a no-op"
+        );
+
+        // The executable generation advanced: the current runtime is a
+        // different physical generation, and a future attempt lease resolves
+        // to it.
+        let v2_runtime = coordinator
+            .current_mcp_runtime(&server_id)
+            .expect("v2 runtime");
+        assert!(
+            !Arc::ptr_eq(&v1_runtime, &v2_runtime),
+            "the committed executable generation advanced"
+        );
+        let future_lease = coordinator.acquire_attempt_lease();
+        assert_eq!(future_lease.revision().get(), 2);
+        assert!(
+            future_lease
+                .mcp_leases()
+                .expect("future leases")
+                .contains_runtime(&v2_runtime),
+            "a future admission executes on the new generation"
+        );
+        drop(future_lease);
+        let _ = coordinator.settle_ready_mcp_runtimes().await;
+        assert_eq!(coordinator.pending_mcp_retirements(), 0);
+    }
+
+    /// Blocker 2 no-op boundary: an unchanged executable binding with
+    /// unchanged definitions is a true no-op — the commit never fabricates a
+    /// revision.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_unchanged_binding_and_definitions_is_a_true_noop() {
+        if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (coordinator, _server_id) = coordinator_with_fixture(
+            &dir,
+            "fixture",
+            "capabilities::coordinator::mcp_race_tests::an_unchanged_binding_and_definitions_is_a_true_noop",
+        );
+        let first = coordinator.prepare_candidate().await.expect("prepare");
+        let snapshot = coordinator.commit(first).expect("first commit");
+        assert_eq!(snapshot.revision().get(), 1);
+
+        // An identical rediscovery is a commit no-op: same definitions, same
+        // effective bindings.
+        let refresh = coordinator
+            .prepare_candidate()
+            .await
+            .expect("refresh prepare");
+        let second = coordinator.commit(refresh).expect("refresh commit");
+        assert_eq!(
+            second.revision().get(),
+            1,
+            "identical content and identical executable bindings never fabricate a revision"
+        );
+        let _ = coordinator.settle_ready_mcp_runtimes().await;
+        assert_eq!(coordinator.pending_mcp_retirements(), 0);
+    }
+
+    /// Blocker 2 old-lease/new-generation ownership: an execution already
+    /// admitted before the commit keeps its old generation (and can still
+    /// call it) while a future admission resolves to the new generation; the
+    /// old generation retires only after its leases settle.
+    ///
+    /// The lease is a direct MCP generation lease (not an attempt lease): a
+    /// reload commit is refused while an *attempt* lease is active (the
+    /// `Busy` contract), so reloads happen between attempts. The generation
+    /// lease alone pins the old physical generation without blocking the
+    /// commit — exactly the ownership an in-flight execution holds while a
+    /// reload lands.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_old_lease_keeps_serving_its_generation_while_future_leases_resolve_to_the_new_one()
+    {
+        if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (coordinator, server_id) = coordinator_with_fixture(
+            &dir,
+            "fixture",
+            "capabilities::coordinator::mcp_race_tests::an_old_lease_keeps_serving_its_generation_while_future_leases_resolve_to_the_new_one",
+        );
+        let candidate_v1 = coordinator.prepare_candidate().await.expect("prepare v1");
+        let v1_runtime = candidate_v1
+            .mcp_runtimes
+            .first()
+            .expect("v1 candidate runtime")
+            .runtime();
+        let v1_snapshot = coordinator.commit(candidate_v1).expect("commit v1");
+        assert_eq!(v1_snapshot.revision().get(), 1);
+
+        // The old execution is admitted before the source/runtime change:
+        // it holds a direct generation lease on the old physical runtime.
+        let old_leases = v1_snapshot
+            .acquire_mcp_leases()
+            .expect("old generation accepts a lease");
+        assert!(
+            old_leases.contains_runtime(&v1_runtime),
+            "the old execution owns the old generation"
+        );
+
+        // The source/runtime binding changes and commits while the old lease
+        // is held (no attempt lease is active, so the reload is legal).
+        fixture_binding_with_marker(&coordinator, &server_id, "v2");
+        let candidate_v2 = coordinator.prepare_candidate().await.expect("prepare v2");
+        let v2_snapshot = coordinator.commit(candidate_v2).expect("commit v2");
+        assert_eq!(v2_snapshot.revision().get(), 2);
+        let v2_runtime = coordinator
+            .current_mcp_runtime(&server_id)
+            .expect("v2 runtime");
+
+        // The old lease is untouched by the commit: it still owns the old
+        // generation and can still call it.
+        assert!(
+            old_leases.contains_runtime(&v1_runtime),
+            "an already-admitted execution keeps its old generation"
+        );
+        let tools = v1_runtime.list_tools().await.expect("old catalog");
+        assert!(
+            tools.iter().any(|tool| tool.name == "echo"),
+            "the old generation still serves its catalog"
+        );
+        assert_eq!(
+            coordinator.pending_mcp_retirements(),
+            1,
+            "the retired old generation cannot close while its lease is held"
+        );
+
+        // A future admission resolves to the new generation.
+        let future_lease = coordinator.acquire_attempt_lease();
+        assert_eq!(future_lease.revision().get(), 2);
+        assert!(
+            future_lease
+                .mcp_leases()
+                .expect("future leases")
+                .contains_runtime(&v2_runtime),
+            "a future admission executes on the new generation"
+        );
+        drop(future_lease);
+
+        // Once the old lease settles, the old generation retires: its close
+        // completes and the retirement registry reaps it.
+        drop(old_leases);
+        let _ = coordinator.settle_ready_mcp_runtimes().await;
+        assert_eq!(
+            coordinator.pending_mcp_retirements(),
+            0,
+            "the old generation retires only after its leases settle"
+        );
     }
 }

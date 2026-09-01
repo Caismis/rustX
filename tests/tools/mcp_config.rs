@@ -355,6 +355,45 @@ fn empty_server_identity_is_rejected() {
     );
 }
 
+/// The `python:` MCP server namespace is structurally reserved for
+/// rustX-managed Python tool packages (Issue #174): a configured
+/// `mcpServers` entry claiming it is rejected at configuration validation,
+/// before any capability preparation — one `McpServerId` can never have two
+/// owners. The diagnostic explains the reservation actionably.
+#[test]
+fn the_reserved_python_namespace_is_rejected_for_configured_servers() {
+    for fragment in [
+        r#""mcpServers": {"python:foo": {"command": "python", "args": ["-m", "demo"]}}"#,
+        r#""mcpServers": {"python:demo": {"url": "https://demo"}}"#,
+        r#""mcpServers": {"python:": {"url": "https://x"}}"#,
+    ] {
+        let error = rejection(fragment);
+        let message = error.to_string();
+        assert!(
+            message.contains("python:") && message.contains("reserved"),
+            "the rejection names the reserved namespace: {message}"
+        );
+        assert!(
+            message.contains("mcpServers"),
+            "the rejection names the configuration surface: {message}"
+        );
+    }
+}
+
+/// Normal configured server IDs remain accepted: only the reserved prefix
+/// is rejected, never an ordinary identity.
+#[test]
+fn normal_configured_server_ids_remain_accepted() {
+    for fragment in [
+        r#""mcpServers": {"github": {"command": "npx"}}"#,
+        r#""mcpServers": {"python-tools": {"command": "npx"}}"#,
+        r#""mcpServers": {"py-demo": {"url": "https://py-demo"}}"#,
+    ] {
+        let bindings = bindings(fragment);
+        assert_eq!(bindings.len(), 1, "a normal id binds: {fragment}");
+    }
+}
+
 /// A server with no policy entry gets the deterministic default policy.
 #[test]
 fn absent_policy_entry_uses_the_deterministic_default() {

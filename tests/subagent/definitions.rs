@@ -635,10 +635,13 @@ async fn statically_invalid_references_fail_composition_closed() {
                 "definitions": {"explore": {
                     "description": "d",
                     "instructionsFile": ".agents/subagents/explore/instructions.md",
-                    "tools": {"python": ["not_a_python_tool"]},
+                    // A managed Python package (Issue #174) crosses as its
+                    // synthesized MCP server (`python:<folder>`); one that
+                    // does not exist is statically invalid.
+                    "tools": {"mcp": {"python:symbols": ["not_a_real_tool"]}},
                 }}
             }),
-            "python:not_a_python_tool",
+            "mcp:python:symbols/not_a_real_tool",
         ),
         (
             serde_json::json!({
@@ -1456,7 +1459,9 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
     .expect("the child resolves");
     let frozen = match &resolved.tools[0] {
         ResolvedSubagentTool::Builtin { definition, .. } => definition.clone(),
-        other => panic!("expected a frozen Builtin, found {other:?}"),
+        other @ ResolvedSubagentTool::Mcp { .. } => {
+            panic!("expected a frozen Builtin, found {other:?}")
+        }
     };
     assert_eq!(
         frozen.execution_policy,
@@ -1493,7 +1498,9 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
 /// Blocker 3: an unavailable optional source may block one invocation, but
 /// it must never stop admission from validating the rest of a definition's
 /// selectors. The offline MCP selector sorts first in canonical order, so a
-/// short-circuiting validator would never reach the invalid Python one.
+/// short-circuiting validator would never reach the invalid one naming a
+/// server that does not exist (a `python:<folder>` id without any managed
+/// package, Issue #174).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
     let lab = Lab::new();
@@ -1513,10 +1520,10 @@ async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
                     "description": "Read-only repository exploration.",
                     "instructionsFile": ".agents/subagents/explore/instructions.md",
                     "tools": {
-                        // `mcp:` sorts before `python:` in canonical selector
-                        // order, so the unavailable source is inspected first.
-                        "mcp": {"offline": ["get_issue"]},
-                        "python": ["not_a_python_tool"],
+                        // `offline` sorts before `python:ghost` in canonical
+                        // selector order, so the unavailable source is
+                        // inspected first.
+                        "mcp": {"offline": ["get_issue"], "python:ghost": ["not_a_real_tool"]},
                     },
                 }
             },
@@ -1535,7 +1542,7 @@ async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
         .expect_err("a statically invalid selector rejects the candidate generation");
     let rendered = format!("{error}");
     assert!(
-        rendered.contains("python:not_a_python_tool"),
+        rendered.contains("mcp:python:ghost/not_a_real_tool"),
         "the selector after the unavailable source is still validated: {rendered}"
     );
 }

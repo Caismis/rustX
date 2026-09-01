@@ -37,8 +37,10 @@
 //! - [`subagent`] — the child-process boundary with real staged children:
 //!   control socket, registry lifecycle, terminal notice, cancellation/drain
 //!   crossing the boundary.
-//! - [`runtime_client`] — capability projection over a real MCP stdio child
-//!   server (this binary re-executed in fixture mode).
+//! - [`runtime_client`] — capability projection over real MCP stdio child
+//!   servers: the configured-server fixture (this binary re-executed in
+//!   fixture mode) and the managed Python package projection (a real,
+//!   network-bound `uv` build serving a real `FastMCP` child).
 //!
 //! See `tests/README.md` for the full test architecture.
 

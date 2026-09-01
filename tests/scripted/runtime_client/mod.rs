@@ -7,7 +7,6 @@
 //! regressions live in [`stdio_transport`].
 
 mod binding;
-mod capability;
 mod conformance;
 mod endpoint;
 mod host;

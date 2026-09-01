@@ -390,9 +390,6 @@ mod tests {
     fn reserved_workflow_output_is_rejected_before_no_tools_hides_it() {
         for origin in [
             ToolOrigin::Builtin,
-            ToolOrigin::Python {
-                tool_version_id: crate::runtime::identity::ToolVersionId::new("version-1"),
-            },
             ToolOrigin::Mcp {
                 server_id: crate::runtime::identity::McpServerId::new("server-1"),
             },

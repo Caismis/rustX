@@ -182,12 +182,19 @@ pub struct SubagentDocument {
     pub worktree: SubagentWorktreeDocument,
 }
 
-/// The three-origin capability selection of one named definition.
+/// The source-qualified capability selection of one named definition.
 ///
 /// Origins are named explicitly rather than collapsed into bare strings, so
 /// a Builtin `read` and an MCP server's `read` are never interchangeable and
 /// resolution keeps exact source identity. Wildcards are deliberately
-/// absent: a selection is an exact list.
+/// absent: a selection is an exact list. Managed Python tool packages are
+/// selected through the `mcp` map under their synthesized server identity
+/// (`python:<folder>`, Issue #174).
+///
+/// The `python:` namespace is reserved for those synthesized identities:
+/// `mcpServers` configuration may never declare a server under it (rejected
+/// during validation), so a subagent selection naming `python:<folder>`
+/// always resolves to the managed package, never to a configured server.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct SubagentToolsDocument {
@@ -195,8 +202,6 @@ pub struct SubagentToolsDocument {
     pub builtin: Vec<String>,
     /// MCP capabilities, keyed by server identity.
     pub mcp: BTreeMap<McpServerId, Vec<String>>,
-    /// Custom Python capabilities, by canonical model-facing name.
-    pub python: Vec<String>,
 }
 
 impl SubagentToolsDocument {
@@ -214,11 +219,6 @@ impl SubagentToolsDocument {
                 name: name.clone(),
             }));
         }
-        selectors.extend(
-            self.python
-                .iter()
-                .map(|name| SubagentToolSelector::Python { name: name.clone() }),
-        );
         selectors
     }
 }
@@ -441,8 +441,7 @@ impl CurrentRuntimeConfig {
             }
             for selector in document.tools.selectors() {
                 let empty = match &selector {
-                    SubagentToolSelector::Builtin { name }
-                    | SubagentToolSelector::Python { name } => name.trim().is_empty(),
+                    SubagentToolSelector::Builtin { name } => name.trim().is_empty(),
                     SubagentToolSelector::Mcp { server_id, name } => {
                         server_id.as_str().is_empty() || name.trim().is_empty()
                     }
@@ -588,6 +587,26 @@ impl CurrentRuntimeConfig {
                 if server_id.as_str().is_empty() {
                     return Err(CurrentRuntimeConfigError::Invalid {
                         detail: "mcpServers keys must be non-empty server identities".to_owned(),
+                    });
+                }
+                // The `python:` MCP server namespace is structurally
+                // reserved for rustX-managed Python packages (Issue #174):
+                // every discovered package synthesizes `python:<folder>`,
+                // and one `McpServerId` can never have two owners. This is
+                // validated here, at configuration normalization, before
+                // any capability preparation — not arbitrated at runtime.
+                if server_id
+                    .as_str()
+                    .starts_with(crate::tools::python::MANAGED_MCP_NAMESPACE)
+                {
+                    return Err(CurrentRuntimeConfigError::Invalid {
+                        detail: format!(
+                            "mcpServers.{server_id}: the \"{}\" MCP server namespace is reserved \
+                             for automatically discovered managed Python tool packages \
+                             (each `.agents/tools/<folder>/` synthesizes \
+                             \"{0}<folder>\"); configure this server under a different id",
+                            crate::tools::python::MANAGED_MCP_NAMESPACE,
+                        ),
                     });
                 }
                 let transport = document.to_transport().map_err(|detail| {

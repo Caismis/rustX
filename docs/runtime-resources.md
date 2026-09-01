@@ -88,7 +88,9 @@ an in-flight attempt. A reload additionally refuses while an attempt is live.
 A resolved specification freezes everything the child needs: the
 `(agent, definition_digest)` identity, the instruction document, the
 completely resolved model invocation, the exact source-qualified capability
-identities across Builtin/MCP/Python together with the exact admitted
+identities across Builtin/MCP (managed Python packages included, under their
+synthesized `python:<folder>` server identities) together with the exact
+admitted
 `ToolDefinition` of each, the selected Skills' immutable
 `SkillId` + `SkillVersionId` bindings with their model-visible catalog
 metadata, and the exact project-instruction chain. The child consumes that
@@ -120,12 +122,11 @@ nominal:
   process's catalog read and means nothing in another process, so the child
   connects the server itself, performs its own `tools/list`, recomputes the
   identity from what the server actually publishes, and refuses to start on
-  a missing or changed definition;
-- each Python capability crosses as its exact immutable `ToolVersionId`. A
-  workspace is not `ToolVersion` authority after resolution: the child opens
-  that exact published version from the shared content-addressed store and
-  revalidates its digest, so a newer same-named version can never substitute
-  it;
+  a missing or changed definition. A selected Python tool crosses exactly
+  this way: as the frozen binding of its synthesized `python:<folder>`
+  server, verified through the same `McpToolIdentity` — a workspace edit
+  after the freeze fails the child's preparation closed instead of
+  substituting a different server;
 - each Skill crosses as `SkillId` + `SkillVersionId` plus its catalog
   metadata and the materialization source it was frozen from. A host path is
   a source, never identity: the bytes behind a path can change without the
@@ -135,8 +136,9 @@ nominal:
   — no `SKILL.md` body is preloaded;
 - the specification additionally carries a `ResolvedSubagentMaterialization`
   plane holding **only** the sources the selection actually needs: the MCP
-  server bindings of the selected tools, and a shared Python store root only
-  when a Python tool is selected. An agent that selects one MCP tool has no
+  server bindings of the selected tools (a selected Python tool contributes
+  its synthesized server's binding; no Python store root crosses at all). An
+  agent that selects one MCP tool has no
   second binding to widen to.
 
 ### What `definition_digest` is, and is not

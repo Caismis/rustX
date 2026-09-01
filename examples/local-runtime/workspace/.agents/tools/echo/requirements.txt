@@ -1,0 +1,3 @@
+# Declare the package's own dependencies here, one PEP 508 requirement per
+# line. This example needs none. Do NOT declare `fastmcp` itself: rustX
+# injects and pins the managed FastMCP build, and declaring it is rejected.

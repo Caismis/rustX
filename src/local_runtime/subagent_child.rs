@@ -33,12 +33,13 @@
 //!
 //! # Composition is cancellable owned work (Issue #145)
 //!
-//! External capability materialization can start an MCP process, verify a
-//! content-addressed Python `ToolVersion`, and build a uv environment.
-//! Composition therefore races the attempt-derived cancellation and the
-//! control channel's EOF: a settled preparation drops the composition, the
-//! child never answers `Ready`, no semantic work begins, and the parent
-//! settles the terminal from the child's physical outcome.
+//! External capability materialization can start an MCP process, negotiate a
+//! protocol revision, and prepare the fingerprint-keyed uv environment of a
+//! managed Python tool package (Issue #174). Composition therefore races the
+//! attempt-derived cancellation and the control channel's EOF: a settled
+//! preparation drops the composition, the child never answers `Ready`, no
+//! semantic work begins, and the parent settles the terminal from the
+//! child's physical outcome.
 //!
 //! # Message-bus invariant (child side)
 //!
@@ -352,10 +353,10 @@ pub(crate) async fn serve_child_delegation(
 /// Composes the child runtime as **cancellable owned work** (Issue #145).
 ///
 /// External capability materialization can take materially longer than the
-/// old base-only startup — an MCP process start plus protocol negotiation,
-/// a content-addressed `ToolVersion` verification, a uv environment build.
-/// Three things therefore race here, and the composition future is dropped
-/// the instant any of them wins:
+/// old base-only startup — an MCP process start plus protocol negotiation, a
+/// fingerprint-keyed uv environment build of a managed Python tool package
+/// (Issue #174). Three things therefore race here, and the composition
+/// future is dropped the instant any of them wins:
 ///
 /// ```text
 /// Cancel from the parent   the spawn attempt no longer wants this child
@@ -690,7 +691,6 @@ mod tests {
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: tool_runtime.environment().clone(),
             environment_store_root: dir.path().join("environments"),
-            python_store_roots: None,
         })
         .expect("capability coordinator");
         let candidate = capability.prepare_candidate().await.expect("candidate");

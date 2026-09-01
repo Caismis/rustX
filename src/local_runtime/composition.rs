@@ -76,13 +76,13 @@
 //! store, a malformed Skill, a dependency conflict, shared environment
 //! materialization).
 //!
-//! Failures of **optional external capability sources** — the custom
-//! Python tool plane and each configured MCP server independently — are
+//! Failures of **optional external capability sources** — each configured
+//! MCP server and each managed Python tool package independently — are
 //! isolated by the capability plane itself (`prepare_candidate` records
 //! them as typed [`CapabilitySourceState::Unavailable`](crate::capabilities::CapabilitySourceState)
 //! state instead of failing the candidate). The runtime therefore starts
-//! with, e.g., native tools ready, Python unavailable, one MCP server
-//! unavailable and another ready; the base/native capability set is never
+//! with, e.g., native tools ready, one MCP server unavailable and another
+//! ready; the base/native capability set is never
 //! conditional on an optional source, and one optional source's failure
 //! never suppresses another. The Runtime Client projection carries the
 //! typed availability state, so a client observes the reason instead of an
@@ -455,9 +455,9 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
 ///
 /// External capability composition is no longer a cheap synchronous
 /// prelude: it may start an MCP process, negotiate a protocol, list a
-/// catalog, verify a content-addressed `ToolVersion`, and materialize a uv
-/// environment. Two authorities must therefore be able to end it *before*
-/// the child ever reaches semantic work:
+/// catalog, and materialize the fingerprint-keyed uv environment of a
+/// managed Python tool package (Issue #174). Two authorities must therefore
+/// be able to end it *before* the child ever reaches semantic work:
 ///
 /// ```text
 /// attempt-derived cancellation   the spawn attempt that owns this child
@@ -836,31 +836,8 @@ fn selected_capability_plan(
                 name: name.clone(),
                 identity: identity.clone(),
             }),
-            ResolvedSubagentTool::Python {
-                tool_version_id,
-                name,
-                ..
-            } => plan
-                .python_tools
-                .push(crate::capabilities::SelectedPythonTool {
-                    tool_version_id: tool_version_id.clone(),
-                    name: name.clone(),
-                }),
         }
     }
-    // The shared root is the parent's immutable `tool-versions/` + `uv-cache/`
-    // authority; every mutable execution root is child-private.
-    plan.python_roots = spec
-        .resolved
-        .materialization
-        .python_shared_store_root
-        .as_ref()
-        .map(|shared| {
-            crate::tools::python::PythonToolStoreRoots::split(
-                shared.clone(),
-                spec.runtime_root.join("python"),
-            )
-        });
     plan
 }
 
@@ -1352,9 +1329,6 @@ impl LocalConversationCore {
             mcp_servers: runtime_config.mcp_bindings()?,
             base_environment,
             environment_store_root: paths.environment_store_root_for(&conversation_id),
-            // The top-level runtime owns one unified store; the split only
-            // exists for a subagent child (Issue #145).
-            python_store_roots: None,
         })
         .map_err(|error| LocalRuntimeError::Capability {
             detail: format!("{error:?}"),
@@ -1364,10 +1338,10 @@ impl LocalConversationCore {
         // capability or resource state. The named-subagent catalog, its two
         // admission domains, the registered Workflow programs, project
         // instructions, and the capability candidate are validated as one
-        // coherent generation. Optional-source failures (Python tools and
-        // individual MCP servers) remain typed availability state inside
-        // `prepare_candidate` (Issue #81); base capability failures remain
-        // fatal.
+        // coherent generation. Optional-source failures (individual MCP
+        // servers, including managed Python packages) remain typed
+        // availability state inside `prepare_candidate` (Issue #81); base
+        // capability failures remain fatal.
         let candidate = capability.prepare_candidate().await.map_err(|error| {
             LocalRuntimeError::Capability {
                 detail: format!("{error:?}"),
@@ -1485,8 +1459,8 @@ impl LocalConversationCore {
     ///   are structurally unregistrable there;
     /// - the capability plane is **base-only**: no Skill discovery, no
     ///   Python/Node environments, and no MCP servers; it never opens or
-    ///   creates Python tool storage (Issue #81), so a broken Python store
-    ///   location cannot fail child composition;
+    ///   creates Python package storage (Issue #81), so a broken Python
+    ///   store location cannot fail child composition;
     /// - the Skill catalog is exactly the parent-resolved allowlist, handed
     ///   over by value, with progressive disclosure preserved: only catalog
     ///   metadata is frozen, never a `SKILL.md` body;
@@ -1561,9 +1535,9 @@ impl LocalConversationCore {
         let base_registry = subagent_child_registry(&spec.resolved)?;
 
         // 9. The capability plane sees exactly the frozen selected MCP
-        // server bindings — never a configured set the child could widen —
-        // and a Python store whose immutable/cache roots are shared with the
-        // parent while every mutable execution root is child-private.
+        // server bindings — never a configured set the child could widen.
+        // Managed Python packages cross as ordinary frozen MCP bindings
+        // (Issue #174); the child never opens Python store state itself.
         let plan = selected_capability_plan(spec);
         let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
             conversation_id: tool_runtime.conversation_id().clone(),
@@ -1574,7 +1548,6 @@ impl LocalConversationCore {
             mcp_servers: spec.resolved.materialization.mcp_servers.clone(),
             base_environment,
             environment_store_root: spec.runtime_root.join("environments"),
-            python_store_roots: plan.python_roots.clone(),
         })
         .map_err(|error| LocalRuntimeError::Capability {
             detail: format!("{error:?}"),
@@ -2218,8 +2191,8 @@ pub enum LocalRuntimeError {
     /// The base capability plane could not be constructed, prepared, or
     /// committed.
     ///
-    /// This never carries an optional-source failure: the custom Python
-    /// tool plane and each configured MCP server fail into typed
+    /// This never carries an optional-source failure: each configured MCP
+    /// server and each managed Python tool package fail into typed
     /// availability state instead (Issue #81).
     Capability {
         /// The failure detail.

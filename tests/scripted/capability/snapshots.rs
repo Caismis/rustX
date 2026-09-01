@@ -149,7 +149,6 @@ fn conversation_with_options(
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: dir.path().join("skill-env"),
-            python_store_roots: None,
         },
         Arc::new(backend.clone()),
     )
@@ -495,7 +494,6 @@ async fn absolute_store_path_does_not_change_the_digest() {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: ToolEnvironment::new(),
                 environment_store_root: dir.path().join("skill-env"),
-                python_store_roots: None,
             },
             Arc::new(backend.clone()),
         )
@@ -954,7 +952,6 @@ fn environment_store_inside_workspace_is_rejected_before_creation() {
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: store.clone(),
-            python_store_roots: None,
         },
         Arc::new(common::FakeSkillEnvironmentBackend::new()),
     ) else {
@@ -984,7 +981,6 @@ fn workspace_inside_environment_store_is_rejected() {
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: store,
-            python_store_roots: None,
         },
         Arc::new(common::FakeSkillEnvironmentBackend::new()),
     ) else {
@@ -1013,7 +1009,6 @@ fn external_environment_store_is_accepted() {
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: store.clone(),
-            python_store_roots: None,
         },
         Arc::new(common::FakeSkillEnvironmentBackend::new()),
     )
@@ -1050,7 +1045,6 @@ fn symlink_prefix_environment_store_is_rejected_before_creation() {
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: configured,
-            python_store_roots: None,
         },
         Arc::new(common::FakeSkillEnvironmentBackend::new()),
     ) else {
@@ -1660,7 +1654,6 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
             mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: conversation.dir.path().join("skill-env-2"),
-            python_store_roots: None,
         },
         Arc::new(conversation.backend.clone()),
     )

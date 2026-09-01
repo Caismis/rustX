@@ -6,13 +6,13 @@
 //! executors. The canonical [`ToolDefinition`] is tool-owned and carries the
 //! three independent execution policy axes; the provider-neutral compiled
 //! [`ModelToolDefinition`] is what actually reaches a model request.
-//! Execution scheduling and executors are runtime-owned (M3+); native, MCP,
-//! and Python executors reuse the same contract. No external
-//! SDK type appears here.
+//! Execution scheduling and executors are runtime-owned (M3+); native and
+//! MCP executors reuse the same contract (managed Python tool packages are
+//! MCP tools, Issue #174). No external SDK type appears here.
 
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::identity::{McpServerId, ToolCallId, ToolId, ToolVersionId};
+use crate::runtime::identity::{McpServerId, ToolCallId, ToolId};
 use crate::runtime::types::CancellationReason;
 
 /// The canonical runtime/tool contract of one registered tool.
@@ -204,15 +204,12 @@ pub enum ToolOrigin {
     /// A tool built into the runtime. Platform communication tools such as
     /// future Fleet messaging are represented as built-in tools as well.
     Builtin,
-    /// A tool served by a bound MCP server.
+    /// A tool served by a bound MCP server. Managed Python tool packages
+    /// (Issue #174) compile into this origin through their synthesized
+    /// server identity (`python:<folder>`).
     Mcp {
         /// Identity of the MCP server exposing the tool.
         server_id: McpServerId,
-    },
-    /// A custom Python tool at an immutable version.
-    Python {
-        /// Identity of the immutable tool version to execute.
-        tool_version_id: ToolVersionId,
     },
 }
 

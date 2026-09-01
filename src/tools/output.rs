@@ -15,7 +15,7 @@
 //! single aggregate model-facing projection that combines those facts with
 //! status and tool-owned content.
 
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::PathBuf;
 
 use crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES;
@@ -167,22 +167,6 @@ impl ToolOutputCapture {
                 foreground_store.expect("foreground capture requires the managed-output store"),
             ),
             Self::Background(capture) => capture.push(text),
-        }
-    }
-
-    /// Streams a logical result transport through the same mode-specific
-    /// bounded preview and storage seam.
-    pub(crate) fn push_reader<R: Read>(
-        &mut self,
-        reader: R,
-        foreground_store: Option<&ManagedToolOutput>,
-    ) -> Result<(), String> {
-        match self {
-            Self::Foreground(capture) => capture.push_reader(
-                reader,
-                foreground_store.expect("foreground capture requires the managed-output store"),
-            ),
-            Self::Background(capture) => capture.push_reader(reader),
         }
     }
 
@@ -353,15 +337,6 @@ impl ForegroundOutputCapture {
         Ok(())
     }
 
-    /// Streams a UTF-8 result transport without materializing it in memory.
-    pub(crate) fn push_reader<R: Read>(
-        &mut self,
-        reader: R,
-        store: &ManagedToolOutput,
-    ) -> Result<(), String> {
-        stream_utf8(reader, |text| self.push(text, store))
-    }
-
     /// Settles the capture. A partial foreground spill remains available as a
     /// typed `Partial` locator; it is never falsely promoted to `Complete`.
     pub(crate) fn finish(self, complete: bool) -> CapturedOutput {
@@ -420,11 +395,6 @@ impl BackgroundOutputCapture {
         Ok(())
     }
 
-    /// Streams a UTF-8 result transport directly into the background sink.
-    pub(crate) fn push_reader<R: Read>(&mut self, reader: R) -> Result<(), String> {
-        stream_utf8(reader, |text| self.push(text))
-    }
-
     /// Settles the capture while retaining the same dispatch-owned locator.
     pub(crate) fn finish(self, complete: bool) -> CapturedOutput {
         let total_bytes = self.preview.total();
@@ -474,50 +444,6 @@ pub(crate) fn truncation_for_capture(captured: &CapturedOutput) -> Option<Trunca
     })
 }
 
-/// Streams bytes as valid UTF-8 fragments, preserving code points split over
-/// reader boundaries. Invalid transport bytes are an explicit protocol/storage
-/// failure rather than malformed canonical text.
-fn stream_utf8<R: Read, F>(mut reader: R, mut push: F) -> Result<(), String>
-where
-    F: FnMut(&str) -> Result<(), String>,
-{
-    let mut buffer = [0u8; 8192];
-    let mut pending = Vec::new();
-    loop {
-        let read = reader
-            .read(&mut buffer)
-            .map_err(|error| format!("cannot read the logical result transport: {error}"))?;
-        if read == 0 {
-            break;
-        }
-        pending.extend_from_slice(&buffer[..read]);
-        match std::str::from_utf8(&pending) {
-            Ok(text) => {
-                if !text.is_empty() {
-                    push(text)?;
-                }
-                pending.clear();
-            }
-            Err(error) => {
-                let valid = error.valid_up_to();
-                if valid > 0 {
-                    let text = std::str::from_utf8(&pending[..valid]).expect("valid UTF-8 prefix");
-                    push(text)?;
-                    pending.drain(..valid);
-                }
-                if error.error_len().is_some() {
-                    return Err("the logical result transport is not valid UTF-8".to_owned());
-                }
-            }
-        }
-    }
-    if pending.is_empty() {
-        Ok(())
-    } else {
-        Err("the logical result transport ends with incomplete UTF-8".to_owned())
-    }
-}
-
 fn floor_char_boundary(text: &[u8], mut index: usize) -> usize {
     while index > 0 && std::str::from_utf8(&text[..index]).is_err() {
         index -= 1;
@@ -534,12 +460,9 @@ fn ceil_char_boundary(text: &[u8], mut index: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Cursor, Write};
+    use std::io::Write;
 
-    use super::{
-        ForegroundOutputCapture, TextPreviewCapture, ToolOutputCapture, ToolOutputWriter,
-        stream_utf8,
-    };
+    use super::{ForegroundOutputCapture, TextPreviewCapture, ToolOutputCapture, ToolOutputWriter};
     use crate::runtime::identity::ConversationId;
     use crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES;
     use crate::tools::managed_output::ManagedToolOutput;
@@ -586,17 +509,6 @@ mod tests {
                 .count(),
             1
         );
-    }
-
-    #[test]
-    fn reader_streaming_preserves_split_utf8_without_materializing_the_tail() {
-        let mut fragments = Vec::new();
-        stream_utf8(Cursor::new("prefix😀suffix".as_bytes()), |text| {
-            fragments.push(text.to_owned());
-            Ok(())
-        })
-        .expect("valid UTF-8");
-        assert_eq!(fragments.concat(), "prefix😀suffix");
     }
 
     #[test]

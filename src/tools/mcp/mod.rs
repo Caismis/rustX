@@ -25,6 +25,18 @@
 //! - a peer that silently ignores the probe hits rmcp's bounded discover
 //!   timeout and takes the same legacy fallback.
 //!
+//! # Stdio protocol corruption
+//!
+//! Stdout of a stdio server is protocol-owned; stderr is the diagnostics
+//! channel. rmcp's framing deliberately keeps decode failures to itself
+//! (plain noise is ignored; structurally invalid MCP/JSON-RPC data earns
+//! only a peer-facing `Invalid Request` reply), so the generic observation
+//! seam in [`framing`] records a confirmed structurally invalid peer
+//! message as a rustX fact, ends the byte stream after the offending line,
+//! and poisons the connection generation: the in-flight operation fails
+//! with [`McpError::ProtocolViolation`] naming the server, and the
+//! generation never serves another call as healthy.
+//!
 //! rustX then validates the negotiated revision against its own supported
 //! set (the legacy handshake lets a server echo any revision it likes) and
 //! selects the invalidation mechanism that revision actually defines:
@@ -38,6 +50,7 @@
 #[doc(hidden)]
 pub mod fixture;
 
+mod framing;
 pub mod identity;
 
 use std::collections::BTreeMap;
@@ -299,6 +312,12 @@ pub enum McpError {
     Discovery(String),
     /// Client and server share no MCP protocol revision rustX can speak.
     ProtocolCompatibility(String),
+    /// The peer emitted a structurally invalid MCP/JSON-RPC message on the
+    /// wire. This is not version negotiation and it is not peer-only
+    /// traffic: the violation is a rustX runtime fact, the current
+    /// operation fails, and the connection generation is protocol-poisoned
+    /// — it is never silently treated as healthy again.
+    ProtocolViolation(String),
     /// The remote call or response could not be translated.
     Execution(String),
     /// The owned stdio process tree could not be proven terminal, so no
@@ -315,6 +334,9 @@ impl std::fmt::Display for McpError {
             Self::Discovery(message) => write!(formatter, "MCP discovery failed: {message}"),
             Self::ProtocolCompatibility(message) => {
                 write!(formatter, "MCP protocol negotiation failed: {message}")
+            }
+            Self::ProtocolViolation(message) => {
+                write!(formatter, "MCP protocol violation: {message}")
             }
             Self::Execution(message) => write!(formatter, "MCP execution failed: {message}"),
             Self::PhysicalSettlement(message) => {
@@ -350,6 +372,11 @@ pub struct McpServerRuntime {
     subscription: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     invalidation: Arc<McpInvalidationState>,
     change_notify: Arc<tokio::sync::Notify>,
+    /// The generic stdio protocol-corruption observation seam: a confirmed
+    /// structurally invalid peer message recorded by the transport tee.
+    /// Once set, this generation is poisoned — no operation on it may
+    /// settle as healthy.
+    protocol_violation: Arc<framing::ProtocolViolationRecorder>,
     /// Test-only close synchronization/fault seam, installed at most once.
     #[cfg(test)]
     close_probe: std::sync::OnceLock<Arc<test_sync::CloseProbe>>,
@@ -1246,6 +1273,12 @@ impl McpServerRuntime {
         let closed = Arc::new(AtomicBool::new(false));
         let call_gate = Arc::new(tokio::sync::RwLock::new(()));
         let handler = McpClientHandler::new();
+        // The generic protocol-corruption observation seam. Only the stdio
+        // transport installs the tee (it is the byte stream the seam
+        // observes); the recorder exists for every transport so the
+        // violation check is uniform. Streamable HTTP surfaces corruption
+        // through its own worker transport and is unchanged by this seam.
+        let protocol_violation = framing::ProtocolViolationRecorder::new();
         let (service, process) = match &binding.transport {
             McpTransportConfig::Stdio {
                 program,
@@ -1304,8 +1337,15 @@ impl McpServerRuntime {
                     )
                     .await);
                 };
-                let transport =
-                    rmcp::transport::async_rw::AsyncRwTransport::new_client(stdout, stdin);
+                let transport = rmcp::transport::async_rw::AsyncRwTransport::new_client(
+                    // The observation tee: rmcp remains the one
+                    // framing/protocol authority over exactly these
+                    // bytes; the tee only records a confirmed
+                    // structurally invalid message and then ends the
+                    // stream, so the violation becomes a rustX fact.
+                    framing::ViolationObservingReader::new(stdout, protocol_violation.clone()),
+                    stdin,
+                );
                 // A handshake failure explicitly awaits the same physical
                 // settlement proof as normal runtime drain. Dropping the
                 // process handle would only request shutdown and would leave
@@ -1321,8 +1361,26 @@ impl McpServerRuntime {
                     started = start_client_service(handler.clone(), transport) => started,
                 };
                 let service = match started {
-                    Ok(service) => service,
+                    Ok(service) => {
+                        // Fail closed: a structurally invalid peer message
+                        // during the handshake fails the connection even if
+                        // rmcp's own peer-facing recovery let the handshake
+                        // complete — the violation is a rustX fact, never
+                        // peer-only traffic.
+                        if let Some(violation) = protocol_violation.violation() {
+                            return Err(settle_connect_failure(
+                                Some(&process),
+                                protocol_violation_error(server_id, &violation),
+                            )
+                            .await);
+                        }
+                        service
+                    }
                     Err(error) => {
+                        let error = match protocol_violation.violation() {
+                            Some(violation) => protocol_violation_error(server_id, &violation),
+                            None => error,
+                        };
                         return Err(settle_connect_failure(Some(&process), error).await);
                     }
                 };
@@ -1406,6 +1464,7 @@ impl McpServerRuntime {
             subscription: tokio::sync::Mutex::new(None),
             invalidation,
             change_notify: Arc::new(tokio::sync::Notify::new()),
+            protocol_violation,
             #[cfg(test)]
             close_probe: std::sync::OnceLock::new(),
         });
@@ -1423,6 +1482,10 @@ impl McpServerRuntime {
             // tools.
             if uses_inline_lifecycle(&info.protocol_version) {
                 if let Err(error) = runtime.subscribe_tool_list_changed().await {
+                    let error = match runtime.protocol_violation.violation() {
+                        Some(violation) => protocol_violation_error(server_id, &violation),
+                        None => error,
+                    };
                     return Err(match runtime.close().await {
                         Ok(()) => error,
                         Err(settlement) => McpError::PhysicalSettlement(format!(
@@ -1519,16 +1582,36 @@ impl McpServerRuntime {
     /// cannot be translated into rustX's canonical schema contract.
     pub async fn list_tools(&self) -> Result<Vec<CanonicalMcpTool>, McpError> {
         let _call_gate = self.call_gate.read().await;
+        // A generation that already violated the protocol never serves a
+        // healthy catalog, and the precise violation diagnostic outranks
+        // the generic closed state.
+        if let Some(violation) = self.protocol_violation.violation() {
+            self.poison_after_protocol_violation().await;
+            return Err(protocol_violation_error(&self.server_id, &violation));
+        }
         if self.closed.load(Ordering::Acquire) {
             return Err(McpError::Execution(
                 "the MCP server runtime is closed".to_owned(),
             ));
         }
-        let tools = self
-            .peer
-            .list_all_tools()
-            .await
-            .map_err(|error| McpError::Discovery(bound_error(&error.to_string())))?;
+        let tools = match self.peer.list_all_tools().await {
+            Ok(tools) => {
+                // Never freeze a catalog from a connection that has already
+                // violated the protocol.
+                if let Some(violation) = self.protocol_violation.violation() {
+                    self.poison_after_protocol_violation().await;
+                    return Err(protocol_violation_error(&self.server_id, &violation));
+                }
+                tools
+            }
+            Err(error) => {
+                if let Some(violation) = self.protocol_violation.violation() {
+                    self.poison_after_protocol_violation().await;
+                    return Err(protocol_violation_error(&self.server_id, &violation));
+                }
+                return Err(McpError::Discovery(bound_error(&error.to_string())));
+            }
+        };
         let mut canonical = tools
             .into_iter()
             .map(CanonicalMcpTool::try_from)
@@ -1626,6 +1709,35 @@ impl McpServerRuntime {
         }
     }
 
+    /// Fails closed after a confirmed peer protocol violation: this
+    /// generation stops accepting new remote work (`closed`) and its owned
+    /// stdio process is asked to retire. Physical settlement proof still
+    /// goes through the ordinary `close()`/generation-retirement
+    /// ownership — this only fences the protocol boundary, promptly.
+    async fn poison_after_protocol_violation(&self) {
+        self.closed.store(true, Ordering::Release);
+        if let Some(process) = &self.process {
+            process.lock().await.request_shutdown();
+        }
+    }
+
+    /// The failed tool result for a confirmed protocol violation, when the
+    /// observation seam recorded one. Also poisons the generation (see
+    /// [`Self::poison_after_protocol_violation`]).
+    async fn protocol_violation_failure(
+        &self,
+        context: &ToolExecutionContext<'_>,
+        started: Instant,
+    ) -> Option<ToolExecutionResult> {
+        let violation = self.protocol_violation.violation()?;
+        self.poison_after_protocol_violation().await;
+        Some(failed_mcp(
+            &protocol_violation_call_diagnostic(&self.server_id, &violation),
+            context,
+            started,
+        ))
+    }
+
     async fn call(
         &self,
         remote_name: &str,
@@ -1634,6 +1746,12 @@ impl McpServerRuntime {
     ) -> ToolExecutionResult {
         let _call_gate = self.call_gate.read().await;
         let started = Instant::now();
+        // A generation that already violated the protocol never serves
+        // another call as healthy, whether the violation arrived during an
+        // earlier call or while the connection was idle.
+        if let Some(failure) = self.protocol_violation_failure(context, started).await {
+            return failure;
+        }
         if self.closed.load(Ordering::Acquire) {
             return failed_mcp("MCP server runtime is closed", context, started);
         }
@@ -1714,11 +1832,37 @@ impl McpServerRuntime {
                 return failed_mcp(&bound_error(&error.to_string()), context, started);
             }
             Some(Err(_)) | None => {
+                // The observation tee ends the stream on a confirmed
+                // violation, so a violation surfaced mid-call lands here as
+                // a transport close. It is a protocol failure, not an
+                // anonymous disconnect — and the generation is poisoned.
+                if let Some(failure) = self.protocol_violation_failure(context, started).await {
+                    return failure;
+                }
                 return failed_mcp("MCP transport closed during tools/call", context, started);
             }
         };
         translate_result(response, context, started)
     }
+}
+
+/// The discovery-time protocol-violation error: names the server identity
+/// (for a managed Python package its synthesized `python:<folder>` id) and
+/// carries the recorder's bounded diagnostic.
+fn protocol_violation_error(server_id: &McpServerId, violation: &str) -> McpError {
+    McpError::ProtocolViolation(format!(
+        "MCP server '{server_id}' emitted a structurally invalid stdio message: {violation}; \
+         the connection generation is protocol-poisoned and is not treated as healthy"
+    ))
+}
+
+/// The execution-time protocol-violation diagnostic carried by a failed
+/// tool result.
+fn protocol_violation_call_diagnostic(server_id: &McpServerId, violation: &str) -> String {
+    bound_error(&format!(
+        "MCP protocol violation: server '{server_id}' emitted a structurally invalid stdio \
+         message ({violation}); this connection generation is poisoned and cannot serve calls"
+    ))
 }
 
 async fn start_client_service<T, E, A>(
@@ -1803,6 +1947,9 @@ fn append_server_stderr(error: McpError, preview: &str) -> McpError {
         }
         McpError::ProtocolCompatibility(message) => {
             McpError::ProtocolCompatibility(format!("{message}; server stderr: {preview}"))
+        }
+        McpError::ProtocolViolation(message) => {
+            McpError::ProtocolViolation(format!("{message}; server stderr: {preview}"))
         }
         error => error,
     }

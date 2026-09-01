@@ -1597,9 +1597,6 @@ pub(crate) fn capability_view(
         .iter()
         .map(|(source, state)| super::snapshot::CapabilitySourceView {
             source: match source {
-                crate::capabilities::CapabilitySourceId::Python => {
-                    super::snapshot::CapabilitySourceDescriptor::Python
-                }
                 crate::capabilities::CapabilitySourceId::Mcp(server_id) => {
                     super::snapshot::CapabilitySourceDescriptor::Mcp {
                         server_id: server_id.clone(),

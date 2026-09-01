@@ -2207,7 +2207,6 @@ mod tests {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
-                python_store_roots: None,
             },
         )
         .expect("coordinator");
@@ -2290,7 +2289,6 @@ mod tests {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
-                python_store_roots: None,
             },
         )
         .expect("coordinator");
@@ -4236,9 +4234,9 @@ mod tests {
             .expect("subscribe from the snapshot cursor");
         let revision_before = fixture.coordinator.current_snapshot().revision();
 
-        // Break the Python plane *without* changing the executable set:
-        // the workspace had no Python tools, and a malformed package can
-        // never contribute one.
+        // Break one Python tool package *without* changing the executable
+        // set: the workspace had no Python packages, and a malformed
+        // package can never contribute one.
         let workspace = fixture
             .runtime
             .tool_runtime()
@@ -4247,11 +4245,13 @@ mod tests {
             .to_path_buf();
         let package = workspace.join(".agents").join("tools").join("broken-tool");
         std::fs::create_dir_all(&package).expect("package dir");
+        // A package without `requirements.txt` is rejected in place by the
+        // discovery pass.
         std::fs::write(
-            package.join("TOOL.toml"),
-            "schema_version = 1\nname = \"other-name\"\ndescription = \"Broken\"\nentrypoint = \"tool:main\"\nexecution = \"foreground_only\"\nconcurrency = \"sequential\"\n",
+            package.join("server.py"),
+            "from fastmcp import FastMCP\nmcp = FastMCP('broken')\n",
         )
-        .expect("broken manifest");
+        .expect("broken package source");
         let committed = fixture
             .runtime
             .reload_resources()
@@ -4283,9 +4283,9 @@ mod tests {
                 matches!(
                     source,
                     crate::runtime_client::snapshot::CapabilitySourceView {
-                        source: crate::runtime_client::snapshot::CapabilitySourceDescriptor::Python,
+                        source: crate::runtime_client::snapshot::CapabilitySourceDescriptor::Mcp { server_id, .. },
                         state: crate::runtime_client::snapshot::CapabilitySourceStateView::Unavailable { .. },
-                    }
+                    } if server_id.as_str() == "python:broken-tool"
                 )
             }),
             "the event carries the typed unavailable state: {:?}",
@@ -5680,7 +5680,6 @@ mod tests {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
-                python_store_roots: None,
             },
         )
         .expect("coordinator");
@@ -5762,7 +5761,6 @@ mod tests {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
-                python_store_roots: None,
             },
         )
         .expect("coordinator");
@@ -5876,7 +5874,6 @@ mod tests {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
-                python_store_roots: None,
             },
         )
         .expect("coordinator");
@@ -7090,7 +7087,6 @@ mod tests {
                 mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("skill-env"),
-                python_store_roots: None,
             },
         )
         .expect("coordinator");

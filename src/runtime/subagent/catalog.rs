@@ -161,11 +161,12 @@ impl std::error::Error for SubagentNameError {}
 
 /// One source-qualified capability selection of a named definition.
 ///
-/// The three origins share **one** selection vocabulary and **one**
+/// The origins share **one** selection vocabulary and **one**
 /// resolution core: the selector names the origin explicitly so resolution
 /// can never confuse a Builtin `read` with an MCP server's `read`, and the
 /// frozen resolution keeps the exact canonical identity of the origin it
-/// came from.
+/// came from. Managed Python tool packages are selected through the `Mcp`
+/// origin under their synthesized server identity (Issue #174).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "origin", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SubagentToolSelector {
@@ -182,11 +183,6 @@ pub enum SubagentToolSelector {
         /// The canonical tool name as the server publishes it.
         name: String,
     },
-    /// One custom Python tool of the Workspace tool plane.
-    Python {
-        /// The canonical model-facing name.
-        name: String,
-    },
 }
 
 impl SubagentToolSelector {
@@ -196,7 +192,6 @@ impl SubagentToolSelector {
         match self {
             Self::Builtin { name } => format!("builtin:{name}"),
             Self::Mcp { server_id, name } => format!("mcp:{server_id}/{name}"),
-            Self::Python { name } => format!("python:{name}"),
         }
     }
 }
@@ -909,7 +904,8 @@ mod tests {
         .expect("definition");
         let other_origin = definition(
             "explore",
-            vec![SubagentToolSelector::Python {
+            vec![SubagentToolSelector::Mcp {
+                server_id: crate::runtime::identity::McpServerId::new("server-1"),
                 name: "read".to_owned(),
             }],
             Vec::new(),

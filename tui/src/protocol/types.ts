@@ -50,7 +50,6 @@ export type ToolId = string;
 export type SkillId = string;
 export type SkillVersionId = string;
 export type McpServerId = string;
-export type ToolVersionId = string;
 export type SessionId = string;
 export type SessionNodeId = string;
 
@@ -278,10 +277,7 @@ export type ToolReplayPolicy = "never" | "idempotent";
  * approval, concurrency, or replay behaviour. Those are Rust-owned and reach
  * the client only as published facts.
  */
-export type ToolOrigin =
-  | "builtin"
-  | { mcp: { server_id: McpServerId } }
-  | { python: { tool_version_id: ToolVersionId } };
+export type ToolOrigin = "builtin" | { mcp: { server_id: McpServerId } };
 
 export type BackgroundLifecycle =
   | "starting"
@@ -878,9 +874,7 @@ export interface CapabilityView {
 }
 
 /** The identity of one optional capability source (Issue #81). */
-export type CapabilitySourceDescriptor =
-  | { type: "python" }
-  | { type: "mcp"; server_id: McpServerId };
+export type CapabilitySourceDescriptor = { type: "mcp"; server_id: McpServerId };
 
 /** The availability of one optional capability source. */
 export type CapabilitySourceStateView =

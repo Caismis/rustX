@@ -8,7 +8,6 @@ use rustx::model::session::SummaryModelPolicy;
 use rustx::model::types::ModelProtocol;
 use rustx::skills::{SkillDiscovery, SkillDiscoveryConfig};
 use rustx::tools::Workspace;
-use rustx::tools::python::PythonToolDiscovery;
 use rustx::tools::types::{ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy};
 
 fn examples_root() -> PathBuf {
@@ -159,53 +158,29 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
 }
 
 #[test]
-fn committed_echo_tool_is_found_by_production_python_discovery() {
+fn committed_echo_package_is_discovered_by_production_python_discovery() {
     let workspace_path = examples_root().join("workspace");
     let workspace = Workspace::new(&workspace_path).expect("example workspace");
-    let packages = PythonToolDiscovery::new(&workspace)
-        .discover()
-        .expect("example Python package must be discoverable");
-    assert_eq!(packages.len(), 1);
+    let discovered = rustx::tools::python::discover_python_packages(&workspace)
+        .expect("example tool packages must be discoverable");
+    assert_eq!(discovered.len(), 1);
 
-    let package = &packages[0];
+    let echo = &discovered[0];
+    assert_eq!(echo.server_id.as_str(), "python:echo");
+    let package = echo
+        .outcome
+        .as_ref()
+        .expect("the committed echo package must be valid");
     assert_eq!(package.name, "echo");
-    assert_eq!(
-        package.description,
-        "Return the message supplied to the example tool."
-    );
-    assert_eq!(package.entrypoint, "tool:main");
-    assert_eq!(
-        package.input_schema,
-        serde_json::json!({
-            "type": "object",
-            "required": ["message"],
-            "properties": {"message": {"type": "string"}},
-            "additionalProperties": false
-        })
-    );
-    assert_eq!(
-        package.policy.execution,
-        ToolExecutionPolicy::ForegroundOnly
-    );
-    assert_eq!(
-        package.policy.concurrency,
-        ToolConcurrencyPolicy::Sequential
-    );
-    for required in [
-        "TOOL.toml",
-        "input.schema.json",
-        "pyproject.toml",
-        "uv.lock",
-        "tool.py",
-    ] {
-        assert!(
-            package
-                .files
-                .iter()
-                .any(|(path, _)| path == Path::new(required)),
-            "discovered package must include {required}"
-        );
-    }
+    let file_names: Vec<&str> = package
+        .files
+        .iter()
+        .map(|(path, _)| path.to_str().expect("UTF-8 package path"))
+        .collect();
+    assert!(file_names.contains(&"server.py"));
+    assert!(file_names.contains(&"requirements.txt"));
+    // The example declares no dependencies; rustX pins FastMCP itself.
+    assert!(package.requirements.is_empty());
 }
 
 #[test]
