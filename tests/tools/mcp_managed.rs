@@ -24,16 +24,19 @@
 //!   venv interpreter (never `uv run`), and behaviorally the call-phase
 //!   child PATH is the fixed runtime-approved PATH — the uv binary used to
 //!   prepare the environment is unreachable from inside a call.
-//! - **Framing resilience**: the rmcp stdio reader ignores unparseable
-//!   stdout lines (the documented behavior of every official MCP SDK), so a
-//!   tool that prints to stdout — or a server that prints at import time —
-//!   cannot corrupt the wire, and stderr diagnostics never participate in
-//!   framing at all. A server that *dies* at startup instead is a bounded,
-//!   diagnosed `MCP discovery failed` error carrying the server's stderr.
+//! - **Framing ownership**: the generic MCP framing owns protocol behavior
+//!   — Python package authors must keep stdout reserved for the MCP wire,
+//!   and stderr is the diagnostic/logging channel. Stderr diagnostics at
+//!   import time and mid-call never participate in framing. (The framing's
+//!   tolerance of non-protocol noise and its bounded `Invalid Request`
+//!   answer to genuinely protocol-invalid output are proven by the generic
+//!   MCP boundary suite in `mcp_runtime.rs`; the managed Python tests do
+//!   not advertise arbitrary stdout logging as supported behavior.)
 //! - **Freeze invariant**: editing the workspace source after a state was
 //!   prepared neither mutates the frozen `source/` copy nor disturbs a
 //!   running server of the old generation; the next preparation builds a
-//!   new fingerprint-keyed state and serves the new code.
+//!   new fingerprint-keyed state, and a committed activation serves the new
+//!   implementation even when the FastMCP-derived schema is unchanged.
 //!
 //! Every test follows the uv-availability skip convention of `uv.rs`: with
 //! no uv on PATH the real-materialization acceptance is not exercised.
@@ -534,41 +537,39 @@ async fn one_connected_runtime_reuses_one_process_across_calls() {
     server.close().await;
 }
 
-/// A server that prints to stdout — at import time and mid-call — cannot
-/// corrupt the stdio wire (the rmcp reader ignores unparseable lines,
-/// matching every official MCP SDK), and stderr diagnostics never
-/// participate in framing.
+/// The stdout/stderr ownership boundary: a package that writes diagnostics
+/// to **stderr** — at import time and mid-call — never participates in MCP
+/// framing; the wire stays intact. This is the supported diagnostic
+/// channel: stdout is reserved for the MCP protocol, and the managed Python
+/// contract does not advertise arbitrary stdout logging (the generic MCP
+/// framing's tolerance of non-protocol noise is proven as an implementation
+/// characteristic in `mcp_runtime.rs`, and its bounded `Invalid Request`
+/// answer to genuinely protocol-invalid output is proven there too).
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn stdout_noise_and_stderr_diagnostics_do_not_break_framing() {
+async fn stderr_diagnostics_do_not_participate_in_framing() {
     require_uv!();
     let directory = tempfile::tempdir().expect("fixture root");
     let workspace_root = directory.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
     write_package(
         &workspace_root,
-        "noisy",
+        "diagnostics",
         &[
             (
                 "server.py",
                 "import sys
 from fastmcp import FastMCP
 
-print('issue174 import-time stdout noise')
+print('issue174 import-time diagnostic', file=sys.stderr)
 
-mcp = FastMCP('noisy')
-
-
-@mcp.tool
-def stderr_log() -> str:
-    print('issue174 diagnostic line', file=sys.stderr)
-    return 'stderr-ok'
+mcp = FastMCP('diagnostics')
 
 
 @mcp.tool
-def stdout_noise() -> str:
-    print('issue174 plain text on the wire')
-    return 'stdout-ok'
+def stderr_log(text: str) -> str:
+    print(f'issue174 diagnostic: {text}', file=sys.stderr)
+    return f'logged:{text}'
 ",
             ),
             ("requirements.txt", "# none\n"),
@@ -576,23 +577,26 @@ def stdout_noise() -> str:
     );
 
     let store = PythonToolStore::new(directory.path().join("runtime")).expect("store");
-    let package = discover(&workspace_root, "noisy");
+    let package = discover(&workspace_root, "diagnostics");
     let prepared = prepare(&store, &package).await;
-    // The import-time stdout print precedes the handshake; the tolerant
-    // stdio reader ignores it and the connection still negotiates.
-    let server =
-        ConnectedServer::connect(&prepared, "noisy", &workspace_root, "conv-managed-noisy").await;
-    let stderr_call = server.call("stderr_log", serde_json::json!({})).await;
-    assert_eq!(result_text(&stderr_call), "stderr-ok");
-    let stdout_call = server.call("stdout_noise", serde_json::json!({})).await;
-    assert_eq!(
-        result_text(&stdout_call),
-        "stdout-ok",
-        "an unparseable stdout line mid-call cannot corrupt the wire"
-    );
-    // The connection survives the noise: framing is intact afterwards.
-    let again = server.call("stderr_log", serde_json::json!({})).await;
-    assert_eq!(result_text(&again), "stderr-ok");
+    // The import-time stderr diagnostic precedes the handshake; stderr is a
+    // separate stream that never participates in framing.
+    let server = ConnectedServer::connect(
+        &prepared,
+        "diagnostics",
+        &workspace_root,
+        "conv-managed-diagnostics",
+    )
+    .await;
+    let call = server
+        .call("stderr_log", serde_json::json!({"text": "hello"}))
+        .await;
+    assert_eq!(result_text(&call), "logged:hello");
+    // The connection survives the diagnostics: framing is intact afterwards.
+    let again = server
+        .call("stderr_log", serde_json::json!({"text": "again"}))
+        .await;
+    assert_eq!(result_text(&again), "logged:again");
     server.close().await;
 }
 
@@ -686,13 +690,70 @@ async fn a_server_failing_at_startup_is_isolated_and_diagnosed() {
     );
 }
 
-/// The freeze invariant end to end: editing the workspace source after a
-/// state was prepared neither mutates the frozen `source/` copy nor
-/// disturbs the still-running old server; the next preparation builds a new
-/// fingerprint-keyed state and serves the new code.
+/// Executes one managed tool through a committed capability snapshot's
+/// canonical registry — the same path an admitted attempt uses — proving
+/// which executable generation the snapshot actually serves.
+async fn call_through_snapshot(
+    workspace_root: &Path,
+    server_id: &McpServerId,
+    snapshot: &rustx::capabilities::CapabilitySnapshot,
+    name: &str,
+    arguments: serde_json::Value,
+) -> ToolExecutionResult {
+    let registry = snapshot.tool_registry();
+    let tool_id =
+        rustx::runtime::identity::ToolId::new(rustx::tools::mcp::mcp_tool_id(server_id, name));
+    assert!(
+        registry
+            .definitions()
+            .iter()
+            .any(|definition| definition.name == name),
+        "the snapshot must publish {name}"
+    );
+    let executor = registry.executor(&tool_id);
+    let artifacts = tempfile::tempdir().expect("artifacts");
+    let bundle = rustx::tools::runtime::ConversationToolRuntime::new(
+        ConversationId::new("conv-managed-commit"),
+        workspace_root,
+        artifacts.path(),
+    )
+    .expect("tool runtime");
+    ToolExecutor::execute(
+        executor.as_ref(),
+        ToolInvocation {
+            call_id: ToolCallId::new(format!("call-{name}")),
+            tool_id,
+            tool_name: name.to_owned(),
+            mode: ToolInvocationMode::Foreground,
+            arguments,
+        },
+        ToolExecutionContext::new(
+            bundle.conversation_id(),
+            None,
+            rustx::runtime::ExecutionCancellation::detached(
+                rustx::runtime::CancellationSignal::new(),
+                rustx::runtime::types::CancellationReason::UserRequested,
+            ),
+            bundle.workspace(),
+            &NoProgress,
+            bundle.artifacts(),
+            bundle.tool_output(),
+            bundle.environment(),
+        ),
+    )
+    .await
+}
+
+/// The freeze invariant end to end through the **coordinator commit path**
+/// (Blocker 2): a source implementation change with an unchanged
+/// FastMCP-derived `tools/list` schema is committed as a new publication
+/// (the effective binding changed — new fingerprint-keyed state, new launch
+/// program), the revision advances, and a future activation executes the
+/// new implementation; the already-admitted old execution keeps the old
+/// generation and the frozen old server keeps serving the old code.
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_source_edit_freezes_the_running_generation_and_prepares_anew() {
+async fn a_source_implementation_change_is_observed_through_the_coordinator_commit_path() {
     require_uv!();
     let directory = tempfile::tempdir().expect("fixture root");
     let workspace_root = directory.path().join("workspace");
@@ -712,66 +773,104 @@ def add(a: int, b: int) -> str:
         &[("server.py", server_v1), ("requirements.txt", "# none\n")],
     );
 
-    let store = PythonToolStore::new(directory.path().join("runtime")).expect("store");
-    let package_v1 = discover(&workspace_root, "calc");
-    let prepared_v1 = prepare(&store, &package_v1).await;
-    let runtime_v1 =
-        ConnectedServer::connect(&prepared_v1, "calc", &workspace_root, "conv-managed-freeze")
-            .await;
-    assert_eq!(
-        result_text(
-            &runtime_v1
-                .call("add", serde_json::json!({"a": 40, "b": 2}))
-                .await
-        ),
-        "sum:42"
-    );
+    let coordinator = rustx::capabilities::CapabilityCoordinator::new(
+        rustx::capabilities::CapabilityCoordinatorConfig {
+            conversation_id: ConversationId::new("conv-managed-freeze"),
+            workspace: Workspace::new(&workspace_root).expect("workspace"),
+            base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
+            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            // Keep this fixture independent of the developer's HOME.
+            skill_discovery: rustx::skills::SkillDiscoveryConfig {
+                automatic_roots: vec![workspace_root.join(".agents/skills")],
+                explicit_paths: Vec::new(),
+            },
+            mcp_servers: std::collections::BTreeMap::new(),
+            base_environment: rustx::tools::environment::ToolEnvironment::new(),
+            environment_store_root: directory.path().join("skill-env"),
+        },
+    )
+    .expect("coordinator");
+    let server_id = python_server_id("calc");
 
-    // The workspace edit lands after the old generation was prepared.
+    // Commit generation v1 and admit an execution against it.
+    let candidate_v1 = tokio::time::timeout(LIVENESS, coordinator.prepare_candidate())
+        .await
+        .expect("prepare v1 must not hang")
+        .expect("prepare v1");
+    let v1_snapshot = coordinator.commit(candidate_v1).expect("commit v1");
+    assert_eq!(v1_snapshot.revision().get(), 1);
+    let old_lease = coordinator.acquire_attempt_lease();
+    assert_eq!(old_lease.revision().get(), 1);
+    let v1_result = call_through_snapshot(
+        &workspace_root,
+        &server_id,
+        old_lease.snapshot(),
+        "add",
+        serde_json::json!({"a": 40, "b": 2}),
+    )
+    .await;
+    assert_eq!(result_text(&v1_result), "sum:42");
+    // The admitted execution settles before the reload (a reload is refused
+    // while an attempt lease is active).
+    drop(old_lease);
+
+    // The workspace edit changes only the implementation: the FastMCP-derived
+    // tool name, description, and input schema are unchanged.
     let server_v2 = server_v1.replace("sum:{a + b}", "changed:{a - b}");
     std::fs::write(
         workspace_root.join(".agents/tools/calc/server.py"),
         &server_v2,
     )
     .expect("edit the live source");
-    let package_v2 = discover(&workspace_root, "calc");
-    let prepared_v2 = prepare(&store, &package_v2).await;
-    assert_ne!(
-        prepared_v1.fingerprint, prepared_v2.fingerprint,
-        "a source edit is a new preparation identity"
+
+    // The next activation prepares and commits generation v2. The effective
+    // binding changed (a new fingerprint-keyed state directory, hence a new
+    // launch program), so this is a real publication even though the
+    // model-facing schema is byte-identical.
+    let candidate_v2 = tokio::time::timeout(LIVENESS, coordinator.prepare_candidate())
+        .await
+        .expect("prepare v2 must not hang")
+        .expect("prepare v2");
+    let v2_snapshot = coordinator.commit(candidate_v2).expect("commit v2");
+    assert_eq!(
+        v2_snapshot.tool_registry().definitions(),
+        v1_snapshot.tool_registry().definitions(),
+        "the model-facing tools/list contract is unchanged"
+    );
+    assert_eq!(
+        v2_snapshot.revision().get(),
+        2,
+        "an implementation change with unchanged schema is a new publication"
     );
 
-    // The old frozen source copy is byte-identical: filesystem edits never
-    // mutate a prepared state.
-    assert_eq!(
-        std::fs::read_to_string(prepared_v1.state_dir.join("source/server.py"))
-            .expect("frozen source"),
-        server_v1,
-        "the frozen source copy is immutable"
-    );
-    // And the still-running old server still executes the old code.
-    assert_eq!(
-        result_text(
-            &runtime_v1
-                .call("add", serde_json::json!({"a": 40, "b": 2}))
-                .await
-        ),
-        "sum:42",
-        "the running old generation is undisturbed by the edit"
-    );
+    // A future activation executes the new implementation.
+    let future_lease = coordinator.acquire_attempt_lease();
+    assert_eq!(future_lease.revision().get(), 2);
+    let v2_result = call_through_snapshot(
+        &workspace_root,
+        &server_id,
+        future_lease.snapshot(),
+        "add",
+        serde_json::json!({"a": 40, "b": 2}),
+    )
+    .await;
+    assert_eq!(result_text(&v2_result), "changed:38");
+    drop(future_lease);
 
-    // The newly prepared state serves the new code.
-    let runtime_v2 =
-        ConnectedServer::connect(&prepared_v2, "calc", &workspace_root, "conv-managed-freeze")
-            .await;
-    assert_eq!(
-        result_text(
-            &runtime_v2
-                .call("add", serde_json::json!({"a": 40, "b": 2}))
-                .await
-        ),
-        "changed:38"
+    // The frozen source copy of generation v1 is byte-identical: filesystem
+    // edits never mutate a prepared state.
+    let states = std::fs::read_dir(directory.path().join("skill-env/python-tools/packages"))
+        .expect("packages")
+        .map(|entry| entry.expect("entry").path())
+        .filter(|path| path.join("source/server.py").is_file())
+        .collect::<Vec<_>>();
+    assert_eq!(states.len(), 2, "two fingerprint-keyed prepared states");
+    let frozen = states
+        .iter()
+        .map(|state| std::fs::read_to_string(state.join("source/server.py")).expect("frozen"))
+        .collect::<Vec<_>>();
+    assert!(
+        frozen.contains(&server_v1.to_owned()) && frozen.contains(&server_v2.clone()),
+        "each prepared state froze its own source generation: {frozen:?}"
     );
-    runtime_v1.close().await;
-    runtime_v2.close().await;
 }

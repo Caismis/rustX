@@ -822,4 +822,177 @@ mod unix_tests {
         server_task.abort();
         let _ = server_task.await;
     }
+
+    /// A stdio binding that re-runs this test binary as the raw-wire
+    /// corruption fixture (Issue #174 review: generic MCP framing owns
+    /// protocol errors). The child re-executes exactly the fixture test
+    /// (the same `--exact` convention as the other stdio fixtures).
+    fn raw_fixture_binding(
+        test_name: &str,
+        corruption: &str,
+        journal: &std::path::Path,
+    ) -> McpServerBinding {
+        McpServerBinding {
+            transport: McpTransportConfig::Stdio {
+                program: std::env::current_exe()
+                    .expect("test executable")
+                    .display()
+                    .to_string(),
+                args: rustx::tools::mcp::fixture::fixture_spawn_args(test_name),
+                cwd: None,
+                environment: BTreeMap::from([
+                    (
+                        rustx::tools::mcp::fixture::raw::RAW_FIXTURE_MODE_ENV.to_owned(),
+                        "1".to_owned(),
+                    ),
+                    (
+                        rustx::tools::mcp::fixture::raw::RAW_CORRUPTION_ENV.to_owned(),
+                        corruption.to_owned(),
+                    ),
+                    (
+                        rustx::tools::mcp::fixture::raw::RAW_JOURNAL_ENV.to_owned(),
+                        journal.display().to_string(),
+                    ),
+                ]),
+            },
+            policy: ToolInvocationPolicy::default(),
+        }
+    }
+
+    /// Connects the raw fixture and drives one `echo` call through the
+    /// canonical executor boundary, returning the fixture's inbound journal.
+    async fn drive_raw_fixture(
+        test_name: &str,
+        corruption: &str,
+        workspace_dir: &tempfile::TempDir,
+    ) -> Vec<String> {
+        struct NoProgress;
+        impl rustx::tools::executor::ProgressReporter for NoProgress {
+            fn report(&self, _progress: rustx::tools::types::ToolProgress) {}
+        }
+        let journal = workspace_dir.path().join("raw-journal");
+        let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
+        let runtime = McpServerRuntime::connect(
+            &McpServerId::new("raw-fixture"),
+            &raw_fixture_binding(test_name, corruption, &journal),
+            &workspace,
+            Arc::new(McpInvalidationState::new()),
+        )
+        .await
+        .expect("the raw fixture negotiates despite its corrupt line");
+        let tools = runtime.list_tools().await.expect("tools/list");
+        assert_eq!(tools.len(), 1, "the catalog is intact: {tools:?}");
+        assert_eq!(tools[0].name, "echo");
+        let definitions = rustx::tools::mcp::definitions(
+            &McpServerId::new("raw-fixture"),
+            ToolInvocationPolicy::default(),
+            &runtime,
+            tools,
+        );
+        let (definition, executor) = definitions
+            .iter()
+            .find(|(definition, _)| definition.name == "echo")
+            .expect("echo definition");
+        let artifacts_dir = tempfile::tempdir().expect("artifacts");
+        let bundle = rustx::tools::runtime::ConversationToolRuntime::new(
+            rustx::runtime::identity::ConversationId::new("raw-fixture"),
+            workspace_dir.path(),
+            artifacts_dir.path(),
+        )
+        .expect("tool runtime");
+        let progress = NoProgress;
+        let result = rustx::tools::executor::ToolExecutor::execute(
+            executor.as_ref(),
+            rustx::tools::types::ToolInvocation {
+                call_id: rustx::runtime::identity::ToolCallId::new("raw-echo"),
+                tool_id: definition.id.clone(),
+                tool_name: "echo".to_owned(),
+                mode: rustx::tools::types::ToolInvocationMode::Foreground,
+                arguments: serde_json::json!({}),
+            },
+            rustx::tools::executor::ToolExecutionContext::new(
+                bundle.conversation_id(),
+                None,
+                rustx::runtime::ExecutionCancellation::detached(
+                    rustx::runtime::CancellationSignal::new(),
+                    rustx::runtime::types::CancellationReason::UserRequested,
+                ),
+                bundle.workspace(),
+                &progress,
+                bundle.artifacts(),
+                bundle.tool_output(),
+                bundle.environment(),
+            ),
+        )
+        .await;
+        assert!(
+            matches!(
+                result.status,
+                rustx::tools::types::ToolExecutionStatus::Success
+            ),
+            "the call completes: {:?}",
+            result.status
+        );
+        runtime.close().await.expect("physical settlement");
+        rustx::tools::mcp::fixture::raw::read_journal(&journal)
+    }
+
+    /// Plain non-protocol noise is deliberately ignored by the generic MCP
+    /// framing: a non-JSON line at import-time and mid-call never corrupts
+    /// the wire, and — being `Syntax`-class input — is *not* answered with
+    /// a protocol error reply. This is an implementation characteristic of
+    /// the transport, not a user-facing logging contract.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn plain_non_protocol_noise_is_deliberately_ignored_by_the_generic_framing() {
+        if rustx::tools::mcp::fixture::raw::serve_if_raw_fixture_mode().await {
+            return;
+        }
+        let workspace_dir = tempfile::tempdir().expect("workspace");
+        let journal = drive_raw_fixture(
+            "mcp_runtime::unix_tests::plain_non_protocol_noise_is_deliberately_ignored_by_the_generic_framing",
+            rustx::tools::mcp::fixture::raw::CORRUPTION_NOISE,
+            &workspace_dir,
+        )
+        .await;
+        assert!(
+            !journal.iter().any(
+                |entry| entry == rustx::tools::mcp::fixture::raw::JOURNAL_CLIENT_PROTOCOL_ERROR
+            ),
+            "noise is ignored without any protocol-level reply: {journal:?}"
+        );
+    }
+
+    /// A genuinely malformed MCP protocol message — well-formed JSON that is
+    /// not a valid MCP message — is a real protocol error, not noise: the
+    /// generic framing answers it with a bounded `Invalid Request` error
+    /// reply (the peer observes it) and the exchange continues. This is the
+    /// boundary the managed Python contract must not cross: stdout is the
+    /// MCP wire, and a package that violates it earns a structural protocol
+    /// error, never a silent free pass.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn protocol_invalid_output_is_answered_with_a_bounded_invalid_request_reply() {
+        if rustx::tools::mcp::fixture::raw::serve_if_raw_fixture_mode().await {
+            return;
+        }
+        let workspace_dir = tempfile::tempdir().expect("workspace");
+        let journal = drive_raw_fixture(
+            "mcp_runtime::unix_tests::protocol_invalid_output_is_answered_with_a_bounded_invalid_request_reply",
+            rustx::tools::mcp::fixture::raw::CORRUPTION_INVALID,
+            &workspace_dir,
+        )
+        .await;
+        assert!(
+            journal.iter().any(
+                |entry| entry == rustx::tools::mcp::fixture::raw::JOURNAL_CLIENT_PROTOCOL_ERROR
+            ),
+            "the invalid message earns a bounded protocol error reply: {journal:?}"
+        );
+        assert!(
+            journal.iter().any(|entry| {
+                entry.starts_with(rustx::tools::mcp::fixture::raw::JOURNAL_INBOUND_PREFIX)
+                    && entry.contains("Invalid request")
+            }),
+            "the reply carries the bounded Invalid Request diagnostic: {journal:?}"
+        );
+    }
 }

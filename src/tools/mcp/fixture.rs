@@ -20,6 +20,7 @@
 //! cannot represent.
 
 pub mod legacy;
+pub mod raw;
 
 use std::borrow::Cow;
 use std::io::Write;
