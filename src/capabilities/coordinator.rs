@@ -798,18 +798,19 @@ impl CapabilityCoordinator {
                         slot.insert(binding);
                     }
                     std::collections::btree_map::Entry::Occupied(_) => {
-                        // The synthesized identity space never shadows a
-                        // configured server: the package is rejected, and the
-                        // diagnostic replaces whatever state the configured
-                        // server earns below.
-                        rejected_sources.push((
-                            server_id.clone(),
-                            format!(
-                                "the Python tool package synthesizes MCP server identity \
-                                 {server_id}, which a configured MCP server already uses; the \
-                                 package is rejected"
-                            ),
-                        ));
+                        // Structurally unreachable: configured `mcpServers`
+                        // entries are rejected at configuration validation
+                        // when they claim the reserved `python:` namespace
+                        // (see `mcp_bindings`), and discovery yields at
+                        // most one package per folder, so one `McpServerId`
+                        // can never have two owners. A collision here is an
+                        // internal invariant violation, never a supported
+                        // runtime state — there is no precedence rule and no
+                        // second semantic path.
+                        return Err(CapabilityPreparationError::Mcp(format!(
+                            "internal invariant violated: MCP server identity {server_id} \
+                             already has an owner"
+                        )));
                     }
                 },
                 Err(reason) => rejected_sources.push((server_id, reason)),
@@ -845,10 +846,9 @@ impl CapabilityCoordinator {
                 }
             }
         }
-        // Package-local failures (and identity collisions) land on the
-        // package's own synthesized source, after the generic loop so a
-        // colliding configured server cannot silently overwrite the
-        // rejection diagnostic.
+        // Package-local failures land on the package's own synthesized
+        // source, after the generic loop so a sibling failure can never
+        // silently overwrite another source's rejection diagnostic.
         for (server_id, reason) in rejected_sources {
             availability.insert(
                 CapabilitySourceId::Mcp(server_id),
@@ -2029,6 +2029,26 @@ fn paths_overlap(left: &Path, right: &Path) -> bool {
 /// Whether the candidate's capability content equals the current snapshot
 /// (an identical rediscovery/preparation is a no-op that must not fabricate
 /// a new revision).
+///
+/// The no-op equivalence covers **both** halves of a published capability
+/// generation:
+///
+/// - the model-visible capability contract: the tool definitions, the
+///   available catalog, the Skills, and the shared Python/Node environment
+///   digests;
+/// - the effective executable/runtime binding identity: the frozen MCP
+///   server bindings (transport command/args/env/cwd/endpoint/headers and
+///   invocation policy).
+///
+/// A candidate may be considered a no-op only when both halves are
+/// equivalent. In particular a source or runtime binding change — a
+/// configured server whose command/env/endpoint changed, or a managed
+/// Python package whose source edit moved its prepared state to a new
+/// fingerprint-keyed directory and therefore changed the synthesized
+/// binding's launch program — is a real publication even when the
+/// model-facing `tools/list` catalog is byte-identical: after a successful
+/// commit, newly admitted executions must use the new executable
+/// generation, never the old one.
 fn candidate_is_noop(
     candidate: &PreparedCapabilityCandidate,
     current: &CapabilitySnapshot,
@@ -2041,6 +2061,12 @@ fn candidate_is_noop(
             == current.python_environment().map(|env| env.digest.clone())
         && candidate.node.as_ref().map(|env| env.digest.clone())
             == current.node_environment().map(|env| env.digest.clone())
+        // The effective frozen server bindings are part of the no-op
+        // equivalence (`McpServerBinding` derives deterministic equality).
+        // The snapshot freezes exactly the bindings the candidate would
+        // publish, so a changed executable identity can never be discarded
+        // as a capability no-op merely because the tool definitions match.
+        && candidate.effective_mcp_servers == *current.mcp_servers()
 }
 
 /// The RAII-style attempt capability lease.
@@ -3120,5 +3146,237 @@ mod mcp_race_tests {
             assert_eq!(guard.epoch(&server), 2);
         }
         assert_eq!(state.epoch(&server), 2);
+    }
+
+    /// Mutates the configured stdio binding of the fixture server by adding
+    /// one environment key the fixture ignores: the model-facing `tools/list`
+    /// catalog stays byte-identical while the executable binding differs.
+    fn fixture_binding_with_marker(
+        coordinator: &CapabilityCoordinator,
+        server_id: &McpServerId,
+        marker: &str,
+    ) {
+        let mut inputs = coordinator
+            .inner
+            .resource_inputs
+            .lock()
+            .expect("capability resource-input lock poisoned");
+        let binding = inputs
+            .mcp_servers
+            .get_mut(server_id)
+            .expect("fixture binding");
+        binding.transport = match &binding.transport {
+            McpTransportConfig::Stdio {
+                program,
+                args,
+                cwd,
+                environment,
+            } => {
+                let mut environment = environment.clone();
+                environment.insert("RUSTX_NOOP_BINDING_MARKER".to_owned(), marker.to_owned());
+                McpTransportConfig::Stdio {
+                    program: program.clone(),
+                    args: args.clone(),
+                    cwd: cwd.clone(),
+                    environment,
+                }
+            }
+            other @ McpTransportConfig::StreamableHttp { .. } => {
+                panic!("the fixture binding is stdio: {other:?}")
+            }
+        };
+    }
+
+    /// Blocker 2 executable identity: identical model-facing definitions with
+    /// a changed executable binding is a NEW publication, never a no-op.
+    ///
+    /// Proves through the actual coordinator commit path: commit v1, change
+    /// the effective binding while preserving the `tools/list` schema,
+    /// prepare and commit v2, the executable generation advances, and a
+    /// future attempt lease resolves to v2.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_changed_executable_binding_is_a_new_publication_even_with_identical_definitions() {
+        if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (coordinator, server_id) = coordinator_with_fixture(
+            &dir,
+            "fixture",
+            "capabilities::coordinator::mcp_race_tests::a_changed_executable_binding_is_a_new_publication_even_with_identical_definitions",
+        );
+        let candidate_v1 = coordinator.prepare_candidate().await.expect("prepare v1");
+        let v1_runtime = candidate_v1
+            .mcp_runtimes
+            .first()
+            .expect("v1 candidate runtime")
+            .runtime();
+        let v1_snapshot = coordinator.commit(candidate_v1).expect("commit v1");
+        assert_eq!(v1_snapshot.revision().get(), 1);
+
+        // The binding changes (a new environment key the fixture ignores);
+        // the tool catalog stays identical.
+        fixture_binding_with_marker(&coordinator, &server_id, "v2");
+        let candidate_v2 = coordinator.prepare_candidate().await.expect("prepare v2");
+        assert_eq!(
+            candidate_v2.candidate_registry.definitions(),
+            v1_snapshot.tool_registry().definitions(),
+            "the model-facing tools/list contract is byte-identical"
+        );
+        let v2_snapshot = coordinator.commit(candidate_v2).expect("commit v2");
+        assert_eq!(
+            v2_snapshot.revision().get(),
+            2,
+            "a changed executable binding is a new publication, never a no-op"
+        );
+
+        // The executable generation advanced: the current runtime is a
+        // different physical generation, and a future attempt lease resolves
+        // to it.
+        let v2_runtime = coordinator
+            .current_mcp_runtime(&server_id)
+            .expect("v2 runtime");
+        assert!(
+            !Arc::ptr_eq(&v1_runtime, &v2_runtime),
+            "the committed executable generation advanced"
+        );
+        let future_lease = coordinator.acquire_attempt_lease();
+        assert_eq!(future_lease.revision().get(), 2);
+        assert!(
+            future_lease
+                .mcp_leases()
+                .expect("future leases")
+                .contains_runtime(&v2_runtime),
+            "a future admission executes on the new generation"
+        );
+        drop(future_lease);
+        let _ = coordinator.settle_ready_mcp_runtimes().await;
+        assert_eq!(coordinator.pending_mcp_retirements(), 0);
+    }
+
+    /// Blocker 2 no-op boundary: an unchanged executable binding with
+    /// unchanged definitions is a true no-op — the commit never fabricates a
+    /// revision.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_unchanged_binding_and_definitions_is_a_true_noop() {
+        if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (coordinator, _server_id) = coordinator_with_fixture(
+            &dir,
+            "fixture",
+            "capabilities::coordinator::mcp_race_tests::an_unchanged_binding_and_definitions_is_a_true_noop",
+        );
+        let first = coordinator.prepare_candidate().await.expect("prepare");
+        let snapshot = coordinator.commit(first).expect("first commit");
+        assert_eq!(snapshot.revision().get(), 1);
+
+        // An identical rediscovery is a commit no-op: same definitions, same
+        // effective bindings.
+        let refresh = coordinator
+            .prepare_candidate()
+            .await
+            .expect("refresh prepare");
+        let second = coordinator.commit(refresh).expect("refresh commit");
+        assert_eq!(
+            second.revision().get(),
+            1,
+            "identical content and identical executable bindings never fabricate a revision"
+        );
+        let _ = coordinator.settle_ready_mcp_runtimes().await;
+        assert_eq!(coordinator.pending_mcp_retirements(), 0);
+    }
+
+    /// Blocker 2 old-lease/new-generation ownership: an execution already
+    /// admitted before the commit keeps its old generation (and can still
+    /// call it) while a future admission resolves to the new generation; the
+    /// old generation retires only after its leases settle.
+    ///
+    /// The lease is a direct MCP generation lease (not an attempt lease): a
+    /// reload commit is refused while an *attempt* lease is active (the
+    /// `Busy` contract), so reloads happen between attempts. The generation
+    /// lease alone pins the old physical generation without blocking the
+    /// commit — exactly the ownership an in-flight execution holds while a
+    /// reload lands.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_old_lease_keeps_serving_its_generation_while_future_leases_resolve_to_the_new_one()
+    {
+        if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (coordinator, server_id) = coordinator_with_fixture(
+            &dir,
+            "fixture",
+            "capabilities::coordinator::mcp_race_tests::an_old_lease_keeps_serving_its_generation_while_future_leases_resolve_to_the_new_one",
+        );
+        let candidate_v1 = coordinator.prepare_candidate().await.expect("prepare v1");
+        let v1_runtime = candidate_v1
+            .mcp_runtimes
+            .first()
+            .expect("v1 candidate runtime")
+            .runtime();
+        let v1_snapshot = coordinator.commit(candidate_v1).expect("commit v1");
+        assert_eq!(v1_snapshot.revision().get(), 1);
+
+        // The old execution is admitted before the source/runtime change:
+        // it holds a direct generation lease on the old physical runtime.
+        let old_leases = v1_snapshot
+            .acquire_mcp_leases()
+            .expect("old generation accepts a lease");
+        assert!(
+            old_leases.contains_runtime(&v1_runtime),
+            "the old execution owns the old generation"
+        );
+
+        // The source/runtime binding changes and commits while the old lease
+        // is held (no attempt lease is active, so the reload is legal).
+        fixture_binding_with_marker(&coordinator, &server_id, "v2");
+        let candidate_v2 = coordinator.prepare_candidate().await.expect("prepare v2");
+        let v2_snapshot = coordinator.commit(candidate_v2).expect("commit v2");
+        assert_eq!(v2_snapshot.revision().get(), 2);
+        let v2_runtime = coordinator
+            .current_mcp_runtime(&server_id)
+            .expect("v2 runtime");
+
+        // The old lease is untouched by the commit: it still owns the old
+        // generation and can still call it.
+        assert!(
+            old_leases.contains_runtime(&v1_runtime),
+            "an already-admitted execution keeps its old generation"
+        );
+        let tools = v1_runtime.list_tools().await.expect("old catalog");
+        assert!(
+            tools.iter().any(|tool| tool.name == "echo"),
+            "the old generation still serves its catalog"
+        );
+        assert_eq!(
+            coordinator.pending_mcp_retirements(),
+            1,
+            "the retired old generation cannot close while its lease is held"
+        );
+
+        // A future admission resolves to the new generation.
+        let future_lease = coordinator.acquire_attempt_lease();
+        assert_eq!(future_lease.revision().get(), 2);
+        assert!(
+            future_lease
+                .mcp_leases()
+                .expect("future leases")
+                .contains_runtime(&v2_runtime),
+            "a future admission executes on the new generation"
+        );
+        drop(future_lease);
+
+        // Once the old lease settles, the old generation retires: its close
+        // completes and the retirement registry reaps it.
+        drop(old_leases);
+        let _ = coordinator.settle_ready_mcp_runtimes().await;
+        assert_eq!(
+            coordinator.pending_mcp_retirements(),
+            0,
+            "the old generation retires only after its leases settle"
+        );
     }
 }
