@@ -66,7 +66,7 @@ jobs:
       # prefix; they run in the boundary jobs. `--bins` also makes the
       # `bash-supervisor` binary available to the bash tool's unit tests.
       - name: Run unit tests and the in-crate contract suites
-        run: cargo test --lib --bins --examples --all-features -- --skip boundary_suites::
+        run: 'cargo test --lib --bins --examples --all-features -- --skip boundary_suites::'
 
       # contracts/: pure serialization/configuration fixture contracts.
       # provider/: adapter request serialization, stream parsing, error
@@ -121,7 +121,7 @@ jobs:
         run: cargo build --bins
 
       - name: Run the in-crate boundary suites
-        run: cargo test --lib --all-features -- boundary_suites::
+        run: 'cargo test --lib --all-features -- boundary_suites::'
 
       - name: Run the external boundary targets
         env:
@@ -184,7 +184,7 @@ jobs:
       # scripted contract suites are skipped by prefix. `--bins` builds the
       # `bash-supervisor`/`rustx` binaries these tests exec.
       - name: Run unit tests and the in-crate boundary suites
-        run: cargo test --lib --bins --all-features -- --skip scripted_suites::
+        run: 'cargo test --lib --bins --all-features -- --skip scripted_suites::'
 
       - name: Run the external boundary targets
         env:
