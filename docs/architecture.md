@@ -2956,11 +2956,16 @@ never workspace-declared). Every `@mcp.tool` function in the server becomes
 one tool; FastMCP derives name, description, and input schema from the
 function's name, docstring, and type hints, so those are the schema authority.
 Candidate preparation freezes the package bytes in memory and computes one
-fingerprint over the material inputs: every package file (path and bytes,
-including `requirements.txt`), the probed Python interpreter identity (path +
-version), the probed uv identity (path + version), the FastMCP pin, and
-OS/arch — no timestamps, and the package name/path deliberately excluded so
-identical content shares state. The preparation then publishes one immutable
+fingerprint over the material inputs: the package identity (the
+synthesized `python:<folder>` MCP server identity), every package file
+(path and bytes, including `requirements.txt`), the probed Python
+interpreter identity (path + version), the probed uv identity (path +
+version), the FastMCP pin, and OS/arch — no timestamps, and no host paths:
+the folder name is the logical identity, so relocating the workspace never
+changes a package's identity, while two distinct folders never share one
+prepared environment even when every user-authored byte is identical
+(cross-package environment deduplication is explicitly out of scope). The
+preparation then publishes one immutable
 prepared state per fingerprint under the runtime-private store
 (`<environment-store>/python-tools/packages/<fingerprint>/`): the frozen
 `source/` copy, the rustX-generated `pyproject.toml` (the package's
@@ -2972,9 +2977,13 @@ identity input and the frozen source digest. A build runs `uv lock` then
 atomic rename; same-fingerprint in-flight builds coalesce behind one
 store-owned owner task (callers only wait; owner failure publishes a terminal
 error and removes the in-flight entry). Reuse is fail-closed: a state whose
-manifest is missing or invalid, whose identity inputs no longer match, whose
+manifest is missing or invalid, whose identity inputs no longer match (the
+fingerprint, the package identity, the fixed entrypoint, the managed FastMCP
+pin, the probed Python/uv identities, OS/arch), whose
 frozen source no longer hashes back, or whose venv interpreter is gone is an
-explicit preparation failure, never a silent reuse and never a repair. A
+explicit preparation failure, never a silent reuse and never a repair. The
+manifest's `origin` field is deliberately non-authoritative host provenance
+for diagnostics; reuse never depends on it. A
 changed fingerprint prepares a new state directory; the old one is left
 untouched (no GC exists). The interpreter whose identity enters the
 fingerprint is pinned to uv via `UV_PYTHON`, managed Python downloads stay
@@ -3186,6 +3195,19 @@ generic runtime supervisor:
   revision authoritative. Conversation-owned detached background
   executions do not hold attempt leases and never block a capability
   commit.
+- **Executable identity is part of the no-op equivalence.** A candidate is
+  a no-op only when the model-visible capability contract (tool
+  definitions, available catalog, Skills, environment digests) **and** the
+  effective executable/runtime binding identity (the frozen MCP server
+  bindings: command/args/env/cwd/endpoint/headers/policy) are both
+  equivalent. A changed executable binding — a configured server whose
+  launch changed, or a managed Python package whose source edit moved its
+  prepared state to a new fingerprint-keyed directory and changed the
+  synthesized launch program — is a real publication even when the
+  `tools/list` schema is byte-identical; after a successful commit, newly
+  admitted executions use the new executable generation. An
+  already-admitted execution keeps its old generation (and the retired old
+  MCP runtime closes only after its leases settle).
 - **Background environment capture.** The effective environment is
   captured at background dispatch prepare time (before the ownership
   commit) and retained by the detached execution; later revision
@@ -5412,6 +5434,15 @@ server; a server without an entry gets the deterministic default
 (`foreground_only` + `sequential`), and an entry naming a server `mcpServers`
 does not declare fails startup. Keeping it outside the connection object is
 what keeps `mcpServers` recognizable as ordinary MCP configuration.
+
+The `python:` MCP server namespace is structurally reserved for
+rustX-managed Python tool packages (Issue #174): every discovered
+`.agents/tools/<folder>/` synthesizes the identity `python:<folder>`, and
+one `McpServerId` can never have two owners. Validation rejects a
+configured `mcpServers` entry whose identity starts with `python:` — at
+configuration normalization, before any capability preparation — with an
+actionable diagnostic naming the reservation, so the conflict cannot exist
+as a runtime state and no runtime arbitration rule exists.
 
 Normalization happens exactly once, at this boundary: `CurrentRuntimeConfig`
 validates each entry and turns it into a typed

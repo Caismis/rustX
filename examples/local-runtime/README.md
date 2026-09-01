@@ -392,17 +392,27 @@ available on `PATH` when it prepares a discovered package's private
 environment.
 
 The package directory is editable source. During capability preparation rustX
-fingerprints the package bytes together with the probed interpreter and uv
-identities and prepares one isolated uv environment per fingerprint under the
+fingerprints the package identity (the synthesized `python:<folder>` server
+identity) together with the package bytes and the probed interpreter and uv
+identities, and prepares one isolated uv environment per fingerprint under the
 runtime-owned environment store (`runtime-root/environments/…/python-tools/`):
 the frozen source copy, the generated `pyproject.toml` and `uv.lock`, the
 `venv/`, and the manifest are all derived runtime state, never workspace
 source, and must not be hand-edited. Do not put a generated virtual
-environment in `workspace/`. Editing the package changes its fingerprint, so
+environment in `workspace/`. The package folder name is part of the
+environment identity: two distinct folders never share one prepared
+environment, even when their files are byte-identical, and moving the whole
+workspace to another host path does not change a package's identity. Editing
+the package changes its fingerprint, so
 an edit produces a new prepared environment that affects only future
 capability activations; a running generation keeps the frozen server it
 started with. The server process must keep stdout reserved for the MCP wire —
-diagnostics belong on stderr.
+diagnostics belong on stderr; arbitrary stdout output is not a supported
+logging channel. The `python:` MCP server namespace is reserved for these
+discovered packages: a configured `mcpServers` entry may not declare a server
+id starting with `python:` (rejected at startup with an actionable
+diagnostic), so a package's synthesized identity can never collide with a
+configured server.
 
 ## Native file-tool note
 

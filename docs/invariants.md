@@ -1328,6 +1328,15 @@ before restart.
   namespace under their synthesized `python:<folder>` server identities —
   there is no Python selector namespace. There
   is no parallel per-origin registry and no wildcard selector.
+- **The `python:` MCP server namespace is structurally reserved.** Every
+  discovered `.agents/tools/<folder>/` synthesizes `python:<folder>`, and a
+  configured `mcpServers` entry whose identity starts with `python:` is
+  rejected at configuration validation (before any capability preparation)
+  with an actionable diagnostic. One `McpServerId` can never have two
+  owners: there is no runtime arbitration, no precedence rule, no alias,
+  and no compatibility mode. A coordinator encountering the impossible
+  collision treats it as an internal invariant violation, never as a
+  supported availability state.
 - **MCP selections additionally freeze a deterministic cross-process
   identity.** `McpToolIdentity` (`MCP_TOOL_IDENTITY_V1`) is what a separate
   OS process can recompute and compare; see Issue #145 below.
@@ -1407,7 +1416,8 @@ before restart.
 - **Publication is atomic and reads fail closed.** A build stages in a
   sibling directory and publishes with one atomic `rename`; every read
   revalidates the manifest, the recorded identity inputs (fingerprint,
-  FastMCP pin, OS/arch), the frozen source digest, and the venv interpreter,
+  package identity, fixed entrypoint, FastMCP pin, probed Python/uv
+  identities, OS/arch), the frozen source digest, and the venv interpreter,
   and a state that does not verify is an explicit preparation failure —
   never a silent reuse, never a repair, never a "latest by name" fallback.
 - **Build coalescing is process-local by construction.** The in-flight map
@@ -1991,6 +2001,18 @@ hold attempt leases and never block a capability commit.
   commit boundary. An identical rediscovery/preparation is a no-op that
   never fabricates a new revision; a candidate prepared from an obsolete
   base revision is rejected as stale.
+- The no-op equivalence covers the executable identity, not only the
+  model-visible contract: a candidate is a no-op only when the tool
+  definitions, available catalog, Skills, environment digests **and** the
+  effective frozen MCP server bindings are all equivalent. A changed
+  executable binding — a configured server whose command/args/env/cwd/
+  endpoint/headers/policy changed, or a managed Python package whose
+  source edit moved its prepared state to a new fingerprint-keyed
+  directory (a new synthesized launch program) — is a real publication
+  even when the model-facing `tools/list` schema is byte-identical; after
+  a successful commit, newly admitted executions use the new executable
+  generation, while an already-admitted execution keeps its old
+  generation until its leases settle.
 - Failed preparation or commit leaves the current active revision
   authoritative.
 - `CapabilityRevision`, `SkillVersionId`, `PythonEnvironmentDigest`, and
@@ -2135,10 +2157,17 @@ A package rewrite is observed only at the next quiescent re-discovery.
   cancellation is advisory: rustX cannot prove an arbitrary server stopped
   all physical side effects.
 - Python candidate preparation snapshots every package-owned byte before
-  commit, computes one fingerprint over those bytes (including
-  `requirements.txt`), the probed interpreter and uv identities, the
-  rustX-pinned FastMCP build, and OS/arch, and binds the resulting prepared
-  state to one synthesized MCP server identity (`python:<folder>`). Calls
+  commit, computes one fingerprint over the package identity (the
+  synthesized `python:<folder>` MCP server identity), those bytes
+  (including `requirements.txt`), the probed interpreter and uv identities,
+  the rustX-pinned FastMCP build, and OS/arch, and binds the resulting
+  prepared state to one synthesized MCP server identity (`python:<folder>`).
+  The package identity is a first-class fingerprint input: two distinct
+  folders never share one prepared environment, even when every
+  user-authored byte is identical (cross-package environment deduplication
+  is explicitly out of scope). The live host path is not an identity input:
+  relocating the workspace never changes a package's logical identity.
+  Calls
   never resolve source through the current
   capability pointer and never execute mutable workspace source: the server
   runs the frozen `source/` copy of its state directory.
@@ -2163,8 +2192,11 @@ A package rewrite is observed only at the next quiescent re-discovery.
   environment is a dependency-isolation boundary, not a security sandbox.
 - **Environment identity input lock.** A published state is reusable only
   when its manifest matches every deterministic input that derives the
-  fingerprint: source digest, FastMCP pin, probed Python runtime identity,
-  probed uv identity, OS, and architecture.
+  fingerprint: the package identity, the source digest, the FastMCP pin,
+  the probed Python runtime identity, the probed uv identity, the fixed
+  entrypoint, OS, and architecture. The manifest's `origin` field is
+  deliberately non-authoritative host provenance for diagnostics; reuse
+  never depends on it.
 - **Runtime selection pinning.** The interpreter whose identity enters the
   fingerprint is the exact executable passed to uv (`UV_PYTHON`), so
   project-local interpreter selection or uv heuristics can never silently

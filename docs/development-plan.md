@@ -419,14 +419,18 @@ Implement:
   `requirements.txt`; a package may expose several `@mcp.tool` functions, and
   declaring `fastmcp` itself is rejected because the managed FastMCP build is
   rustX-pinned
-- One preparation fingerprint per package over every package byte
+- One preparation fingerprint per package over the package identity
+  (the synthesized `python:<folder>` server identity) and every package
+  byte
   (`requirements.txt` included), the probed interpreter and uv identities,
   the FastMCP pin, and OS/arch; one immutable prepared state per fingerprint
   under `<environment-store>/python-tools/packages/<fingerprint>/` (frozen
   source copy, rustX-generated `pyproject.toml`/`uv.lock`, `venv/`,
   `manifest.json`), staged and published with one atomic rename, with
   fail-closed reuse validation and store-owned coalesced `uv`
-  materialization
+  materialization. Two distinct folders never share one prepared
+  environment, even when their files are byte-identical; the live host
+  path is not an identity input
 - The exact probed interpreter is pinned to uv (`UV_PYTHON`), managed Python
   downloads stay disabled, and every preparation command has a finite
   deadline (timeout = explicit preparation failure)

@@ -101,7 +101,12 @@ invariant is a real process boundary.
   the transport-independent conformance matrix run through the direct
   endpoint and the stdio/JSONL framing over in-memory pipes.
 - `capability/` — capability snapshots, quiescent commits, environment
-  materialization.
+  materialization, and the executable-identity no-op contracts: a changed
+  MCP executable binding (a managed Python package whose source edit moved
+  its prepared state, or a configured server whose launch changed) is a
+  new publication even with a byte-identical `tools/list` schema, an
+  unchanged binding is a true no-op, and an already-leased old generation
+  keeps serving while future admissions resolve to the new generation.
 - `interaction/` — the durable interaction audit's runtime half.
 - `background/` — the background registry contracts and the deterministic
   half of the `execution` intrinsic control plane (routing for detached
