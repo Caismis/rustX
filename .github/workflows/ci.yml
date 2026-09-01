@@ -59,12 +59,17 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # `cargo test --bins` builds the bin *test harnesses* but does not
+      # place the binaries at `target/debug/`, where the bash tool's unit
+      # tests look for `bash-supervisor` at runtime — so build them first.
+      - name: Build the binaries the boundary-owning unit tests exec
+        run: cargo build --bins
+
       # Source-module unit tests + bin unit tests + examples + the scripted
       # contract suites (agent/, context/, runtime_client/, capability/,
       # interaction/, background/, tools/). The in-crate boundary
       # conformance suites are selected OUT by their `boundary_suites::`
-      # prefix; they run in the boundary jobs. `--bins` also makes the
-      # `bash-supervisor` binary available to the bash tool's unit tests.
+      # prefix; they run in the boundary jobs.
       - name: Run unit tests and the in-crate contract suites
         run: 'cargo test --lib --bins --examples --all-features -- --skip boundary_suites::'
 
@@ -181,8 +186,12 @@ jobs:
       # Lib test binary: source-module unit tests (including the bash/uv
       # boundary-owning modules, whose OS primitives are platform-sensitive)
       # + the in-crate boundary conformance suites; the deterministic
-      # scripted contract suites are skipped by prefix. `--bins` builds the
-      # `bash-supervisor`/`rustx` binaries these tests exec.
+      # scripted contract suites are skipped by prefix. The explicit bin
+      # build is required: `cargo test --bins` alone does not place
+      # `bash-supervisor` at `target/debug/` where the tests look for it.
+      - name: Build the binaries the boundary tests exec
+        run: cargo build --bins
+
       - name: Run unit tests and the in-crate boundary suites
         run: 'cargo test --lib --bins --all-features -- --skip scripted_suites::'
 
