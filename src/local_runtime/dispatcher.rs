@@ -19,15 +19,35 @@
 //!            |                                     ^
 //!   Delegate -> delegate channel                   |  Ready
 //!   Cancel   -> cancel channel        outbound ----+  Result
-//!   AnchorAccepted / AnchorRefused                    StartupError
-//!            -> the exact pending unit's waiter       AnchorOffered
-//!   EOF      -> parent-lost watch, every waiter       AnchorReleased
-//!               fails ParentLost                      Diagnostic
+//!   AnchorAccepted / AnchorRefused    (reliable:     StartupError
+//!            -> the exact pending unit's waiter     AnchorOffered
+//!   EOF      -> parent-lost watch, every waiter     AnchorReleased
+//!               fails ParentLost                    Diagnostic)
+//!                                    activity ----+  Activity
+//!                                    (disposable: latest-value, the
+//!                                     writer may skip intermediates)
 //! ```
 //!
 //! Everything else in the child talks to the dispatcher through narrow
 //! bounded in-process channels and never learns that a socket exists.
 //! There is no second socket, no listener, and no network service.
+//!
+//! # Two delivery classes
+//!
+//! The writer interleaves exactly two delivery classes on the one write
+//! half (Issue #178):
+//!
+//! - **Reliable** frames (everything except `Activity`): one bounded,
+//!   ordered mpsc queue. A send awaits capacity and is never silently
+//!   dropped while the parent control plane is alive; the writer drains
+//!   the queue in order.
+//! - **Disposable** `Activity` frames: one latest-value `watch` slot. A
+//!   publication overwrites the previous unpublished value in place, so
+//!   activity traffic consumes **no** reliable-queue capacity, and the
+//!   writer's biased select always drains queued reliable frames before
+//!   writing the next activity frame. Disposable traffic can therefore
+//!   never delay, crowd out, or rewrite a terminal `Result`, a
+//!   containment ownership frame, or a startup failure.
 //!
 //! # Acknowledgement routing
 //!
@@ -50,9 +70,10 @@ use futures_util::future::BoxFuture;
 
 use crate::runtime::identity::ProcessUnitId;
 use crate::runtime::nested_containment::{AnchorError, NestedAnchorAuthority};
+use crate::runtime::subagent::activity::SubagentObservation;
 use crate::runtime::subagent::ipc::{
-    ChildFrame, DelegationFrame, ParentFrame, ProcessUnitAnchorFrame, read_parent_frame,
-    write_child_frame,
+    ActivityFrame, ChildFrame, DelegationFrame, ParentFrame, ProcessUnitAnchorFrame,
+    read_parent_frame, write_child_frame,
 };
 use crate::runtime::types::CancellationReason;
 
@@ -96,19 +117,40 @@ impl std::fmt::Debug for ChildControlHandle {
 }
 
 struct DispatcherInner {
+    /// The reliable lane: bounded, ordered, never silently dropped.
     outbound: tokio::sync::mpsc::Sender<ChildFrame>,
+    /// The disposable lane (Issue #178): the latest unpublished activity
+    /// projection. A publication overwrites in place; the writer may skip
+    /// intermediate values.
+    activity: tokio::sync::watch::Sender<ActivityFrame>,
     pending: Mutex<HashMap<ProcessUnitId, tokio::sync::oneshot::Sender<Result<(), AnchorError>>>>,
     parent_lost: tokio::sync::watch::Sender<bool>,
 }
 
 impl ChildControlHandle {
-    /// Sends one bounded frame to the parent.
-    pub(crate) async fn send(&self, frame: ChildFrame) -> Result<(), AnchorError> {
+    /// Sends one **reliable** frame to the parent.
+    ///
+    /// The reliable lane is ordered and non-lossy: the send awaits bounded
+    /// queue capacity and the frame is never silently dropped while the
+    /// parent control plane is alive. This is the lane of every lifecycle,
+    /// settlement, and containment ownership frame.
+    pub(crate) async fn send_reliable(&self, frame: ChildFrame) -> Result<(), AnchorError> {
         self.inner
             .outbound
             .send(frame)
             .await
             .map_err(|_| AnchorError::ParentLost)
+    }
+
+    /// Publishes one **disposable** live-activity projection (Issue #178).
+    ///
+    /// Synchronous, infallible, and non-blocking: the publication
+    /// overwrites the previous unpublished value in place, so intermediate
+    /// values may never reach the wire, and a stalled parent can never
+    /// apply backpressure to the publisher. This lane carries observation
+    /// traffic only — never anything a consumer must observe.
+    pub(crate) fn publish_activity(&self, frame: ActivityFrame) {
+        self.inner.activity.send_replace(frame);
     }
 
     /// Whether the parent control channel has already reached EOF.
@@ -292,8 +334,12 @@ impl ChildControlDispatcher {
             tokio::sync::mpsc::channel::<ChildFrame>(OUTBOUND_CAPACITY);
         let (events_tx, events_rx) = tokio::sync::mpsc::channel::<ChildControlEvent>(4);
         let (lost_tx, _lost_rx) = tokio::sync::watch::channel(false);
+        let (activity_tx, activity_rx) = tokio::sync::watch::channel(ActivityFrame {
+            observation: SubagentObservation::default(),
+        });
         let inner = Arc::new(DispatcherInner {
             outbound: outbound_tx,
+            activity: activity_tx,
             pending: Mutex::new(HashMap::new()),
             parent_lost: lost_tx,
         });
@@ -302,6 +348,11 @@ impl ChildControlDispatcher {
         let writer_close = close.clone();
         let writer = tokio::spawn(async move {
             let mut write_half = write_half;
+            // The initial value is never a real projection: mark it seen so
+            // the loop below writes only values published after startup.
+            let mut activity_rx = activity_rx;
+            activity_rx.borrow_and_update();
+            let mut activity_open = true;
             let mut closing = false;
             loop {
                 // The test gate parks the writer BEFORE it receives, so the
@@ -312,6 +363,11 @@ impl ChildControlDispatcher {
                     gate.wait_open().await;
                 }
                 tokio::select! {
+                    // The reliable lane always wins: queued reliable frames
+                    // drain before the next activity write, and once the
+                    // queue is closed and drained (`None`) the writer ends —
+                    // a pending activity is dropped, which is exactly the
+                    // disposable contract.
                     biased;
                     frame = outbound_rx.recv() => match frame {
                         Some(frame) => {
@@ -322,6 +378,20 @@ impl ChildControlDispatcher {
                             }
                         }
                         None => break,
+                    },
+                    changed = activity_rx.changed(), if activity_open => match changed {
+                        Ok(()) => {
+                            let frame = ChildFrame::Activity(
+                                activity_rx.borrow_and_update().clone(),
+                            );
+                            if write_child_frame(&mut write_half, &frame).await.is_err() {
+                                break;
+                            }
+                        }
+                        // Every activity sender is gone (the dispatcher is
+                        // being torn down): disable the arm so the loop
+                        // cannot spin.
+                        Err(_) => activity_open = false,
                     },
                     () = writer_close.notified(), if !closing => {
                         // Refuse new frames and drain what is already
@@ -464,9 +534,10 @@ mod tests {
     use super::{ChildControlDispatcher, ChildControlEvent};
     use crate::runtime::identity::ProcessUnitId;
     use crate::runtime::nested_containment::AnchorError;
+    use crate::runtime::subagent::activity::SubagentObservation;
     use crate::runtime::subagent::ipc::{
-        ChildFrame, DelegationFrame, DiagnosticFrame, ParentFrame, ProcessUnitAckFrame,
-        ProcessUnitRefusalFrame, read_child_frame, write_parent_frame,
+        ActivityFrame, ChildFrame, DelegationFrame, DiagnosticFrame, ParentFrame,
+        ProcessUnitAckFrame, ProcessUnitRefusalFrame, read_child_frame, write_parent_frame,
     };
     use crate::runtime::types::CancellationReason;
 
@@ -620,7 +691,7 @@ mod tests {
         let authority = dispatcher.anchor_authority();
         let handle = dispatcher.handle();
         handle
-            .send(ChildFrame::Result(
+            .send_reliable(ChildFrame::Result(
                 crate::runtime::subagent::ipc::ResultFrame {
                     status: crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
                     content: Some("answer".to_owned()),
@@ -646,7 +717,7 @@ mod tests {
         authority.release(ProcessUnitId::new("unit-a"), 11).await;
         assert_eq!(
             handle
-                .send(ChildFrame::Diagnostic(DiagnosticFrame {
+                .send_reliable(ChildFrame::Diagnostic(DiagnosticFrame {
                     message: "after drain".to_owned(),
                 }))
                 .await,
@@ -711,7 +782,7 @@ mod tests {
         // that the queue is now full — no timing is involved.
         for index in 0..super::OUTBOUND_CAPACITY {
             handle
-                .send(ChildFrame::Diagnostic(DiagnosticFrame {
+                .send_reliable(ChildFrame::Diagnostic(DiagnosticFrame {
                     message: format!("filler {index}"),
                 }))
                 .await
@@ -754,6 +825,128 @@ mod tests {
             )),
             "the exact AnchorReleased arrives once the backpressure clears"
         );
+        // The parent applies exactly this release to exactly this anchor.
+        assert!(retained.release(&unit, 4242));
+        assert!(retained.is_empty());
+
+        dispatcher.shutdown().await;
+    }
+
+    /// Disposable activity never consumes reliable-lane capacity (Issue
+    /// #178): with the writer gated, 100+ activity publications all
+    /// coalesce into the latest-value slot, so the terminal `Result` send
+    /// completes immediately (the reliable queue is provably empty). Once
+    /// the gate opens, the biased writer drains the queued reliable frame
+    /// first and then writes exactly one activity frame — the latest
+    /// revision, never an intermediate.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn activity_never_delays_the_terminal_result() {
+        use futures_util::FutureExt;
+
+        let (mut parent, child) = pair();
+        let gate = super::WriterGate::default();
+        let dispatcher = ChildControlDispatcher::start_with_writer_gate(child, gate.clone());
+        let handle = dispatcher.handle();
+
+        // Saturate the disposable lane: every publication overwrites the
+        // previous unpublished value in place, synchronously.
+        for revision in 1..=100u64 {
+            handle.publish_activity(ActivityFrame {
+                observation: SubagentObservation {
+                    revision,
+                    ..SubagentObservation::default()
+                },
+            });
+        }
+
+        // The terminal result never waits on activity capacity: the
+        // reliable queue is provably empty, so this send resolves
+        // immediately.
+        let result = crate::runtime::subagent::ipc::ResultFrame {
+            status: crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            content: Some("the terminal answer".to_owned()),
+            diagnostic: None,
+        };
+        handle
+            .send_reliable(ChildFrame::Result(result.clone()))
+            .await
+            .expect("Result never waits on disposable activity");
+
+        // The biased writer drains the queued reliable frame first...
+        gate.open();
+        assert_eq!(
+            read_child_frame(&mut parent).await.expect("result frame"),
+            Some(ChildFrame::Result(result)),
+            "the Result arrives first and intact"
+        );
+        // ...then writes exactly one activity frame: the latest revision.
+        assert_eq!(
+            read_child_frame(&mut parent).await.expect("activity frame"),
+            Some(ChildFrame::Activity(ActivityFrame {
+                observation: SubagentObservation {
+                    revision: 100,
+                    ..SubagentObservation::default()
+                }
+            })),
+            "the coalesced activity carries only the latest revision"
+        );
+        assert!(
+            read_child_frame(&mut parent).now_or_never().is_none(),
+            "no intermediate revision ever reached the wire"
+        );
+
+        dispatcher.shutdown().await;
+    }
+
+    /// A containment ownership frame never waits behind disposable
+    /// activity (Issue #178): with the writer gated and the activity lane
+    /// saturated, `release` resolves immediately — the reliable lane has
+    /// capacity by construction — and once the gate opens the exact
+    /// `AnchorReleased` frame arrives and releases exactly the parent's
+    /// retained anchor.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn activity_never_delays_a_containment_release() {
+        let (mut parent, child) = pair();
+        let gate = super::WriterGate::default();
+        let dispatcher = ChildControlDispatcher::start_with_writer_gate(child, gate.clone());
+        let handle = dispatcher.handle();
+        let authority = dispatcher.anchor_authority();
+
+        // Saturate the disposable lane.
+        for revision in 1..=100u64 {
+            handle.publish_activity(ActivityFrame {
+                observation: SubagentObservation {
+                    revision,
+                    ..SubagentObservation::default()
+                },
+            });
+        }
+
+        // The parent retains this exact anchor; the child has just proven
+        // the unit physically terminal. The release resolves immediately:
+        // disposable traffic consumed no reliable capacity.
+        let unit = ProcessUnitId::new("unit-a");
+        let mut retained = crate::runtime::subagent::anchors::RetainedProcessUnits::default();
+        retained.retain(unit.clone(), 4242).expect("retained");
+        authority.release(unit.clone(), 4242).await;
+
+        // The biased writer delivers the queued ownership frame first...
+        gate.open();
+        assert_eq!(
+            read_child_frame(&mut parent).await.expect("release frame"),
+            Some(ChildFrame::AnchorReleased(
+                crate::runtime::subagent::ipc::ProcessUnitAnchorFrame {
+                    unit_id: unit.clone(),
+                    pgid: 4242
+                }
+            )),
+            "the exact AnchorReleased arrives first"
+        );
+        // ...then the coalesced activity.
+        assert!(matches!(
+            read_child_frame(&mut parent).await.expect("activity frame"),
+            Some(ChildFrame::Activity(_))
+        ));
         // The parent applies exactly this release to exactly this anchor.
         assert!(retained.release(&unit, 4242));
         assert!(retained.is_empty());
@@ -820,7 +1013,7 @@ mod tests {
         // The wire proves the silence: frames are totally ordered, so any
         // manufactured release would arrive before this trailing frame.
         handle
-            .send(ChildFrame::Diagnostic(DiagnosticFrame {
+            .send_reliable(ChildFrame::Diagnostic(DiagnosticFrame {
                 message: "after both owner losses".to_owned(),
             }))
             .await

@@ -257,6 +257,9 @@ pub(crate) struct ProcessUnitRefusalFrame {
 /// This is observation-plane traffic only: it carries the child's newest
 /// [`SubagentObservation`] with latest-value coalescing semantics, is never
 /// durable, never semantic evidence, and never blocks the child's execution.
+/// The child publishes it through a latest-value slot, so the dispatcher's
+/// writer may skip intermediate values entirely: a parent that receives
+/// revision `n` may never have seen any earlier revision.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ActivityFrame {

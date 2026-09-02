@@ -79,7 +79,7 @@ use crate::message::content::TextBlock;
 use crate::message::types::{MessageBlock, UserContentBlock, UserSource};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
-use crate::runtime::subagent::activity::{SubagentObservation, SubagentObservationProjector};
+use crate::runtime::subagent::activity::SubagentObservationProjector;
 use crate::runtime::subagent::ipc::{
     ActivityFrame, ChildFrame, ChildResultStatus, DiagnosticFrame, ParentFrame, ReadyFrame,
     ResultFrame, SUBAGENT_IPC_VERSION, SubagentChildSpec, read_parent_frame, write_child_frame,
@@ -160,7 +160,7 @@ pub async fn run_subagent_child() -> i32 {
         // by `run_child` when the channel allowed.
         Err(ChildExit::Startup(message)) => {
             let _ = handle
-                .send(ChildFrame::StartupError(DiagnosticFrame {
+                .send_reliable(ChildFrame::StartupError(DiagnosticFrame {
                     message: bound_diagnostic(message),
                 }))
                 .await;
@@ -219,7 +219,7 @@ async fn run_child(
     let headless = core.into_headless();
     drop(headless);
     handle
-        .send(ChildFrame::Ready(ReadyFrame {
+        .send_reliable(ChildFrame::Ready(ReadyFrame {
             subagent_id: spec.subagent_id.clone(),
         }))
         .await
@@ -304,13 +304,12 @@ pub(crate) async fn serve_child_delegation(
     // Cancel frames through the ordinary cancellation path.
     //
     // The live activity projection (Issue #178) taps the same drained
-    // observation stream: every drained observation folds into a
-    // latest-value `watch` projection, and one forwarder task publishes new
-    // revisions to the parent. Neither the fold nor the `watch` send ever
-    // blocks this loop on observation delivery.
-    let (activity_tx, activity_rx) = tokio::sync::watch::channel(SubagentObservation::default());
-    let _activity_forwarder = ActivityForwarder::start(activity_rx, handle.clone());
-    let terminal = await_terminal(dispatcher, &runtime, &observations, &activity_tx).await?;
+    // observation stream: every drained observation folds into the
+    // child-owned projector, and each applied transition is published to
+    // the dispatcher's disposable latest-value activity slot —
+    // synchronous and non-blocking, so this loop never waits on
+    // observation delivery and no separate forwarder task exists.
+    let terminal = await_terminal(dispatcher, &runtime, &observations, handle).await?;
     let frame = match terminal {
         AttemptTerminal::Completed => {
             let answer = workflow_output.as_ref().and_then(|latch| {
@@ -449,7 +448,7 @@ async fn report_and_drain(
     frame: ResultFrame,
 ) -> Result<(), ChildExit> {
     handle
-        .send(ChildFrame::Result(frame))
+        .send_reliable(ChildFrame::Result(frame))
         .await
         .map_err(|error| ChildExit::Protocol(error.to_string()))?;
     let _ = runtime.shutdown().await;
@@ -471,14 +470,16 @@ enum AttemptTerminal {
 
 /// Drives the attempt to its terminal event, serving cancellation through
 /// the ordinary runtime path and folding every drained observation into the
-/// live activity projection (Issue #178).
+/// live activity projection (Issue #178). Applied transitions are published
+/// through the dispatcher's disposable activity lane: synchronous and
+/// non-blocking, so the agent loop never waits on observation delivery.
 async fn await_terminal(
     dispatcher: &mut ChildControlDispatcher,
     runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
     observations: &Arc<PendingObservations>,
-    activity: &tokio::sync::watch::Sender<SubagentObservation>,
+    handle: &ChildControlHandle,
 ) -> Result<AttemptTerminal, ChildExit> {
-    await_terminal_inner(dispatcher, runtime, observations, activity, |_| {}).await
+    await_terminal_inner(dispatcher, runtime, observations, handle, |_| {}).await
 }
 
 #[cfg(test)]
@@ -486,7 +487,7 @@ async fn await_terminal_with_probe(
     dispatcher: &mut ChildControlDispatcher,
     runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
     observations: &Arc<PendingObservations>,
-    activity: &tokio::sync::watch::Sender<SubagentObservation>,
+    handle: &ChildControlHandle,
     cancellation_before_admission: Arc<tokio::sync::Notify>,
     cancellation_after_admission: Arc<tokio::sync::Notify>,
 ) -> Result<AttemptTerminal, ChildExit> {
@@ -494,7 +495,7 @@ async fn await_terminal_with_probe(
         dispatcher,
         runtime,
         observations,
-        activity,
+        handle,
         move |delivered| {
             if delivered {
                 cancellation_after_admission.notify_one();
@@ -510,15 +511,15 @@ async fn await_terminal_inner<F>(
     dispatcher: &mut ChildControlDispatcher,
     runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
     observations: &Arc<PendingObservations>,
-    activity: &tokio::sync::watch::Sender<SubagentObservation>,
+    handle: &ChildControlHandle,
     on_cancellation: F,
 ) -> Result<AttemptTerminal, ChildExit>
 where
     F: Fn(bool) + Send + Sync + 'static,
 {
     // The child-owned live projector. Only applied transitions are
-    // published; the `watch` send overwrites in place (latest-value
-    // coalescing) and never waits on the consumer.
+    // published, and the publication is a `watch` overwrite in place
+    // (latest-value coalescing) that never waits on the consumer.
     let mut projector = SubagentObservationProjector::default();
     loop {
         tokio::select! {
@@ -562,11 +563,13 @@ where
                 for observation in observations.drain() {
                     // The activity tap runs first so even the terminal
                     // event's own transition is projected before this loop
-                    // returns. A `watch` send fails only when no receiver
-                    // exists (the forwarder is gone), which is never a
-                    // reason to disturb the attempt.
+                    // returns. The publication is synchronous and
+                    // non-blocking (a `watch` overwrite): it can never
+                    // disturb the attempt.
                     if projector.fold(&observation, Utc::now()) {
-                        let _ = activity.send(projector.observation().clone());
+                        handle.publish_activity(ActivityFrame {
+                            observation: projector.observation().clone(),
+                        });
                     }
                     match observation {
                         ConversationObservation::Event { event, .. } => {
@@ -604,62 +607,6 @@ where
                 }
             }
         }
-    }
-}
-
-/// One coalescing pump step of the activity forwarder: waits for a newer
-/// projection and forwards exactly the latest value.
-///
-/// Factored out of the forwarder loop so tests drive one pump at a time
-/// deterministically. The `send` may await bounded outbound-queue
-/// capacity — that is fine, this task is not the agent loop.
-async fn pump_activity_projection(
-    rx: &mut tokio::sync::watch::Receiver<SubagentObservation>,
-    handle: &ChildControlHandle,
-) -> Result<(), ()> {
-    rx.changed().await.map_err(|_| ())?;
-    let latest = rx.borrow_and_update().clone();
-    handle
-        .send(ChildFrame::Activity(ActivityFrame {
-            observation: latest,
-        }))
-        .await
-        .map_err(|_| ())
-}
-
-/// The activity forwarder loop: publishes every newer projection revision
-/// to the parent, coalesced to the latest value by the `watch` channel.
-/// Exits on channel close or parent loss.
-async fn forward_activity_projection(
-    mut rx: tokio::sync::watch::Receiver<SubagentObservation>,
-    handle: ChildControlHandle,
-) {
-    while pump_activity_projection(&mut rx, &handle).await.is_ok() {}
-}
-
-/// Owns the activity forwarder task (Issue #178).
-///
-/// Dropping the guard aborts the task deterministically; the drop happens
-/// when the child semantic loop returns, which is always after the terminal
-/// `Result` frame was queued. A pump already past `changed()` can still win
-/// an enqueue race against the `Result` send; that is harmless because the
-/// parent stops reading once `Result` arrives and drops any post-terminal
-/// activity frame by revision/lifecycle rule, so no activity frame can ever
-/// overtake or rewrite the child's terminal semantics.
-struct ActivityForwarder(tokio::task::JoinHandle<()>);
-
-impl ActivityForwarder {
-    fn start(
-        rx: tokio::sync::watch::Receiver<SubagentObservation>,
-        handle: ChildControlHandle,
-    ) -> Self {
-        Self(tokio::spawn(forward_activity_projection(rx, handle)))
-    }
-}
-
-impl Drop for ActivityForwarder {
-    fn drop(&mut self) {
-        self.0.abort();
     }
 }
 
@@ -893,15 +840,14 @@ mod tests {
         let cancellation_after_admission = Arc::new(tokio::sync::Notify::new());
         let before_probe = Arc::clone(&cancellation_before_admission);
         let after_probe = Arc::clone(&cancellation_after_admission);
-        let (activity_tx, _activity_rx) =
-            tokio::sync::watch::channel(SubagentObservation::default());
         let waiter = tokio::spawn(async move {
             let mut child_end = ChildControlDispatcher::start(child_end);
+            let handle = child_end.handle();
             await_terminal_with_probe(
                 &mut child_end,
                 &child_runtime,
                 &child_observations,
-                &activity_tx,
+                &handle,
                 before_probe,
                 after_probe,
             )
@@ -1017,15 +963,14 @@ mod tests {
         let child_observations = Arc::clone(&observations);
         let cancellation_after_admission = Arc::new(tokio::sync::Notify::new());
         let after_probe = Arc::clone(&cancellation_after_admission);
-        let (activity_tx, _activity_rx) =
-            tokio::sync::watch::channel(SubagentObservation::default());
         let waiter = tokio::spawn(async move {
             let mut child_end = ChildControlDispatcher::start(child_end);
+            let handle = child_end.handle();
             await_terminal_with_probe(
                 &mut child_end,
                 &child_runtime,
                 &child_observations,
-                &activity_tx,
+                &handle,
                 Arc::new(tokio::sync::Notify::new()),
                 after_probe,
             )
@@ -1132,15 +1077,14 @@ mod tests {
         let child_observations = Arc::clone(&observations);
         let cancellation_after_admission = Arc::new(tokio::sync::Notify::new());
         let after_probe = Arc::clone(&cancellation_after_admission);
-        let (activity_tx, _activity_rx) =
-            tokio::sync::watch::channel(SubagentObservation::default());
         let waiter = tokio::spawn(async move {
             let mut child_end = ChildControlDispatcher::start(child_end);
+            let handle = child_end.handle();
             await_terminal_with_probe(
                 &mut child_end,
                 &child_runtime,
                 &child_observations,
-                &activity_tx,
+                &handle,
                 Arc::new(tokio::sync::Notify::new()),
                 after_probe,
             )
@@ -1275,74 +1219,5 @@ mod tests {
         .await
         .expect("liveness: the wire closes with the dispatcher");
         assert_eq!(frame, Ok(None), "the settled child is silent on the wire");
-    }
-
-    /// The activity forwarder coalesces with latest-value semantics (Issue
-    /// #178): publishing revisions 1, 2, 3 and pumping once after 1 and
-    /// once after 3 lets the parent observe 1 then 3, never 2, and the
-    /// observed revision never goes backward. A closed channel ends the
-    /// pump.
-    #[tokio::test]
-    async fn the_activity_forwarder_coalesces_to_the_latest_revision() {
-        use futures_util::FutureExt;
-
-        let (mut parent, child) = tokio::net::UnixStream::pair().expect("control pair");
-        let dispatcher = ChildControlDispatcher::start(child);
-        let handle = dispatcher.handle();
-        let (tx, mut rx) = tokio::sync::watch::channel(SubagentObservation::default());
-
-        let at_revision = |revision: u64| SubagentObservation {
-            revision,
-            ..SubagentObservation::default()
-        };
-
-        // Revision 1 is published and pumped on its own.
-        tx.send(at_revision(1)).expect("publish 1");
-        pump_activity_projection(&mut rx, &handle)
-            .await
-            .expect("pump 1");
-        match crate::runtime::subagent::ipc::read_child_frame(&mut parent)
-            .await
-            .expect("read 1")
-        {
-            Some(ChildFrame::Activity(frame)) => {
-                assert_eq!(frame.observation.revision, 1);
-            }
-            other => panic!("expected an activity frame, got {other:?}"),
-        }
-
-        // Revisions 2 and 3 land before the next pump: the intermediate
-        // value is overwritten before it is ever read.
-        tx.send(at_revision(2)).expect("publish 2");
-        tx.send(at_revision(3)).expect("publish 3");
-        pump_activity_projection(&mut rx, &handle)
-            .await
-            .expect("pump latest");
-        match crate::runtime::subagent::ipc::read_child_frame(&mut parent)
-            .await
-            .expect("read 3")
-        {
-            Some(ChildFrame::Activity(frame)) => {
-                assert!(
-                    frame.observation.revision == 3 && frame.observation.revision > 1,
-                    "the coalescing pump forwards the latest value, never a stale one"
-                );
-            }
-            other => panic!("expected an activity frame, got {other:?}"),
-        }
-
-        // Revision 2 was never sent: no further frame is pending.
-        assert!(
-            crate::runtime::subagent::ipc::read_child_frame(&mut parent)
-                .now_or_never()
-                .is_none(),
-            "the intermediate revision was coalesced away"
-        );
-
-        // Dropping the producer closes the channel: the pump reports the
-        // termination and the forwarder loop would exit.
-        drop(tx);
-        assert_eq!(pump_activity_projection(&mut rx, &handle).await, Err(()));
-        dispatcher.shutdown().await;
     }
 }

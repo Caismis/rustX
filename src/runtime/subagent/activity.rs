@@ -11,7 +11,7 @@
 //!         |  fold (SubagentObservationProjector, child side)
 //!         v
 //! SubagentObservation   latest-value, revision-stamped
-//!         |  watch coalescing -> Activity IPC frame (v8)
+//!         |  dispatcher activity-slot coalescing -> Activity IPC frame
 //!         v
 //! parent registry read model (SubagentSnapshot.observation)
 //!         |  existing push-only snapshot seam
@@ -42,11 +42,11 @@
 //! # Coalescing
 //!
 //! High-frequency transitions (tool progress in particular) are coalesced
-//! with latest-value semantics: the child forwards its projection through a
-//! `watch` channel, so a slow consumer observes the newest revision and
-//! provably never blocks child execution on observation delivery. The
-//! monotonically increasing `revision` lets the parent drop stale or
-//! reordered updates.
+//! with latest-value semantics: the child publishes its projection into the
+//! dispatcher's disposable latest-value activity slot, so a slow consumer
+//! observes the newest revision and provably never blocks child execution
+//! on observation delivery. The monotonically increasing `revision` lets
+//! the parent drop stale or reordered updates.
 //!
 //! # Timestamps
 //!
