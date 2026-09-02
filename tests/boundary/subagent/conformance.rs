@@ -1915,11 +1915,12 @@ async fn model_activity_projects_while_lifecycle_stays_running() {
 /// the projection to neutral and counts the execution. The lifecycle stays
 /// `Running` throughout.
 ///
-/// Foreground progress reports become canonical `ToolExecutionProgress`
-/// events only in the completion batch commit, so a parked foreground
-/// execution deterministically projects its identity with `progress: None`;
-/// the completion fold then resets to neutral, and no reported progress can
-/// survive into a settled or later projection.
+/// Live (not yet durable) foreground progress projects while the tool still
+/// executes (Issue #178, blocker 3): the parked projection carries the
+/// newest report with latest-value coalescing. The durable
+/// `ToolExecutionProgress` facts still commit only in the completion batch
+/// commit; the completion fold then resets to neutral, and no reported
+/// progress can survive into a settled or later projection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tool_activity_projects_identity_scoped_progress_and_counts_executions() {
     let dir = tempfile::tempdir().expect("temp root");
@@ -2005,9 +2006,10 @@ async fn tool_activity_projects_identity_scoped_progress_and_counts_executions()
     assert_eq!(probing.observation.counters.tool_executions, 0);
 
     // The second execution reports bounded structured progress before it
-    // parks. Those reports stay inside the child's foreground progress
-    // buffer until the completion batch commits, so the parked projection
-    // deterministically carries the execution identity with no progress.
+    // parks. The live reports project while the tool still executes: the
+    // parked projection deterministically carries the newest report
+    // (latest-value coalescing), and the durable facts still commit only
+    // with the completion batch.
     probe_release.send_replace(true);
     support::fake::await_started(&mut scan_started, "the scan tool starts").await;
     let scanning = await_snapshot(
@@ -2016,11 +2018,12 @@ async fn tool_activity_projects_identity_scoped_progress_and_counts_executions()
         |snapshot| {
             matches!(
                 snapshot.observation.activity,
-                SubagentActivity::Tool { ref tool_call_id, .. }
+                SubagentActivity::Tool { ref tool_call_id, progress: Some(ref progress), .. }
                     if *tool_call_id == ToolCallId::new("call-scan")
+                        && progress.message.as_deref() == Some("progress 2")
             )
         },
-        "the second parked execution projects its Tool identity",
+        "the parked execution projects its Tool identity with the latest live progress",
     )
     .await;
     assert_eq!(scanning.state, SubagentState::Running);
@@ -2029,9 +2032,13 @@ async fn tool_activity_projects_identity_scoped_progress_and_counts_executions()
         SubagentActivity::Tool {
             tool_call_id: ToolCallId::new("call-scan"),
             tool_id: rustx::runtime::identity::ToolId::new("tool-scan"),
-            progress: None,
+            progress: Some(rustx::tools::types::ToolProgress {
+                message: Some("progress 2".to_owned()),
+                completed: None,
+                total: None,
+            }),
         },
-        "in-flight foreground progress never projects before the completion batch"
+        "live foreground progress projects in-flight, coalesced to the latest report"
     );
     assert!(
         scanning.observation.revision > probing.observation.revision,

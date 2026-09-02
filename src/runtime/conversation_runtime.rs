@@ -4996,6 +4996,24 @@ impl AgentExecutionObserver for RuntimeObserver {
             transcript_cursor,
         });
     }
+
+    // The loop fires this while the tool still executes; a leaf push into
+    // the queue's disposable live-progress lane, exactly like the other
+    // callbacks — no coordinator or projection lock is ever taken here.
+    fn observe_tool_progress(
+        &self,
+        attempt_id: &AttemptId,
+        tool_call_id: &crate::runtime::identity::ToolCallId,
+        tool_id: &crate::runtime::identity::ToolId,
+        progress: &crate::tools::types::ToolProgress,
+    ) {
+        self.push(ConversationObservation::ToolProgress {
+            attempt_id: attempt_id.clone(),
+            tool_call_id: tool_call_id.clone(),
+            tool_id: tool_id.clone(),
+            progress: progress.clone(),
+        });
+    }
 }
 
 // The mailbox fires `on_enqueued`/`on_drained` while the mailbox lock is

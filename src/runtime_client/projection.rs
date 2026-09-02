@@ -517,9 +517,17 @@ impl RuntimeClientProjection {
                 upsert_background(&mut self.snapshot.background, view.clone());
                 vec![RuntimeClientEvent::BackgroundExecutionUpdated { execution: view }]
             }
+            ConversationObservation::ToolProgress { .. } => {
+                // Live-only, latest-value (Issue #178): a not-yet-durable
+                // foreground tool progress report folds to NO client events.
+                // The client already receives the durable progress facts at
+                // batch settlement through the `Event` lane; the runtime
+                // client protocol has no live-progress surface (no version
+                // bump), so there is nothing to project.
+                Vec::new()
+            }
             ConversationObservation::SubagentLifecycle(snapshot)
-            | ConversationObservation::SubagentActivity(snapshot) => {
-                // Both subagent delivery classes fold identically: the
+            | ConversationObservation::SubagentActivity(snapshot) => {                // Both subagent delivery classes fold identically: the
                 // whole-view upsert is unconditional last-write-wins, and
                 // the queue's lane rules (a lifecycle push evicts queued
                 // activity of the same subagent) already guarantee no fold

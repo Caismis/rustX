@@ -143,6 +143,15 @@ impl SubagentObservationProjector {
     pub(crate) fn fold(&mut self, observation: &ConversationObservation, now: DateTime<Utc>) -> bool {
         let applied = match observation {
             ConversationObservation::Event { event, .. } => self.fold_event(event),
+            // One live (not yet durable) foreground tool progress report
+            // (Issue #178): exactly the durable `ToolExecutionProgress`
+            // semantics — applies only to the current in-flight `Tool`
+            // activity with the matching call id; otherwise ignored.
+            ConversationObservation::ToolProgress {
+                tool_call_id,
+                progress,
+                ..
+            } => self.apply_tool_progress(tool_call_id, progress),
             ConversationObservation::InteractionPending { request, .. } => {
                 let on = match &request.kind {
                     InteractionKind::Approval { tool_id, .. } => SubagentWaitReason::Approval {
@@ -586,6 +595,84 @@ mod tests {
             "the counter is genuinely cumulative"
         );
         assert_eq!(projector.observation.counters.model_requests, 3);
+    }
+
+    /// The live (not yet durable) `ToolProgress` observation (Issue #178)
+    /// folds with exactly the durable `ToolExecutionProgress` semantics: it
+    /// applies to the current in-flight `Tool` activity with the matching
+    /// call id, while the tool still executes, and is ignored for any other
+    /// call or when no tool is current.
+    #[test]
+    fn live_tool_progress_folds_into_the_current_execution() {
+        let mut projector = SubagentObservationProjector::default();
+        assert_folded(
+            &mut projector,
+            &event(RuntimeEvent::ToolExecutionStarted {
+                tool_call_id: ToolCallId::new("call-1"),
+                tool_id: ToolId::new("tool-bash"),
+            }),
+        );
+
+        // A live report of another call id is ignored.
+        assert_ignored(
+            &mut projector,
+            &ConversationObservation::ToolProgress {
+                attempt_id: AttemptId::new("attempt-1"),
+                tool_call_id: ToolCallId::new("call-other"),
+                tool_id: ToolId::new("tool-bash"),
+                progress: ToolProgress {
+                    message: Some("stray".to_owned()),
+                    ..ToolProgress::default()
+                },
+            },
+        );
+
+        // A live report of the in-flight call projects WHILE the tool still
+        // executes — no durable progress fact has committed.
+        assert_folded(
+            &mut projector,
+            &ConversationObservation::ToolProgress {
+                attempt_id: AttemptId::new("attempt-1"),
+                tool_call_id: ToolCallId::new("call-1"),
+                tool_id: ToolId::new("tool-bash"),
+                progress: ToolProgress {
+                    message: Some("live".to_owned()),
+                    completed: Some(1.0),
+                    total: Some(4.0),
+                },
+            },
+        );
+        assert_eq!(
+            projector.observation.activity,
+            SubagentActivity::Tool {
+                tool_call_id: ToolCallId::new("call-1"),
+                tool_id: ToolId::new("tool-bash"),
+                progress: Some(ToolProgress {
+                    message: Some("live".to_owned()),
+                    completed: Some(1.0),
+                    total: Some(4.0),
+                }),
+            }
+        );
+
+        // With no tool in flight, a live report is ignored.
+        assert_folded(
+            &mut projector,
+            &event(RuntimeEvent::ToolExecutionCompleted {
+                tool_call_id: ToolCallId::new("call-1"),
+                tool_id: ToolId::new("tool-bash"),
+                result: tool_result(),
+            }),
+        );
+        assert_ignored(
+            &mut projector,
+            &ConversationObservation::ToolProgress {
+                attempt_id: AttemptId::new("attempt-1"),
+                tool_call_id: ToolCallId::new("call-1"),
+                tool_id: ToolId::new("tool-bash"),
+                progress: ToolProgress::default(),
+            },
+        );
     }
 
     #[test]

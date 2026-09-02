@@ -330,7 +330,7 @@ impl ChildControlDispatcher {
         #[cfg(test)] writer_gate: Option<WriterGate>,
     ) -> Self {
         let (read_half, write_half) = tokio::io::split(control);
-        let (outbound_tx, mut outbound_rx) =
+        let (outbound_tx, outbound_rx) =
             tokio::sync::mpsc::channel::<ChildFrame>(OUTBOUND_CAPACITY);
         let (events_tx, events_rx) = tokio::sync::mpsc::channel::<ChildControlEvent>(4);
         let (lost_tx, _lost_rx) = tokio::sync::watch::channel(false);
@@ -345,63 +345,14 @@ impl ChildControlDispatcher {
         });
 
         let close = Arc::new(tokio::sync::Notify::new());
-        let writer_close = close.clone();
-        let writer = tokio::spawn(async move {
-            let mut write_half = write_half;
-            // The initial value is never a real projection: mark it seen so
-            // the loop below writes only values published after startup.
-            let mut activity_rx = activity_rx;
-            activity_rx.borrow_and_update();
-            let mut activity_open = true;
-            let mut closing = false;
-            loop {
-                // The test gate parks the writer BEFORE it receives, so the
-                // bounded queue provably stays full while the gate is
-                // closed. Level-triggered: once open this never waits.
-                #[cfg(test)]
-                if let Some(gate) = &writer_gate {
-                    gate.wait_open().await;
-                }
-                tokio::select! {
-                    // The reliable lane always wins: queued reliable frames
-                    // drain before the next activity write, and once the
-                    // queue is closed and drained (`None`) the writer ends —
-                    // a pending activity is dropped, which is exactly the
-                    // disposable contract.
-                    biased;
-                    frame = outbound_rx.recv() => match frame {
-                        Some(frame) => {
-                            if write_child_frame(&mut write_half, &frame).await.is_err() {
-                                // The parent is gone; the reader publishes
-                                // parent loss.
-                                break;
-                            }
-                        }
-                        None => break,
-                    },
-                    changed = activity_rx.changed(), if activity_open => match changed {
-                        Ok(()) => {
-                            let frame = ChildFrame::Activity(
-                                activity_rx.borrow_and_update().clone(),
-                            );
-                            if write_child_frame(&mut write_half, &frame).await.is_err() {
-                                break;
-                            }
-                        }
-                        // Every activity sender is gone (the dispatcher is
-                        // being torn down): disable the arm so the loop
-                        // cannot spin.
-                        Err(_) => activity_open = false,
-                    },
-                    () = writer_close.notified(), if !closing => {
-                        // Refuse new frames and drain what is already
-                        // queued; `recv()` then reports the closed queue.
-                        closing = true;
-                        outbound_rx.close();
-                    }
-                }
-            }
-        });
+        let writer = tokio::spawn(run_writer(
+            write_half,
+            outbound_rx,
+            activity_rx,
+            close.clone(),
+            #[cfg(test)]
+            writer_gate,
+        ));
 
         let reader_inner = Arc::clone(&inner);
         let reader = tokio::spawn(async move {
@@ -466,7 +417,6 @@ impl ChildControlDispatcher {
     pub(crate) fn handle(&self) -> ChildControlHandle {
         self.handle.clone()
     }
-
     /// The nested anchor authority backed by this dispatcher.
     pub(crate) fn anchor_authority(&self) -> Arc<dyn NestedAnchorAuthority> {
         Arc::clone(&self.handle.inner) as Arc<dyn NestedAnchorAuthority>
@@ -495,6 +445,71 @@ impl ChildControlDispatcher {
         let _ = writer.await;
         reader.abort();
         let _ = reader.await;
+    }
+}
+
+/// The one writer task: the sole writer of the transport's write half,
+/// interleaving the two delivery classes with explicit priority.
+///
+/// The biased select polls the reliable lane first: queued reliable frames
+/// always drain before the next activity write, and once the reliable queue
+/// is closed and drained (`recv()` reports `None`) the writer ends — a
+/// still-pending activity is dropped, which is exactly the disposable
+/// contract.
+async fn run_writer(
+    mut write_half: tokio::io::WriteHalf<tokio::net::UnixStream>,
+    mut outbound_rx: tokio::sync::mpsc::Receiver<ChildFrame>,
+    activity_rx: tokio::sync::watch::Receiver<ActivityFrame>,
+    close: Arc<tokio::sync::Notify>,
+    #[cfg(test)] writer_gate: Option<WriterGate>,
+) {
+    // The initial value is never a real projection: mark it seen so the
+    // loop below writes only values published after startup.
+    let mut activity_rx = activity_rx;
+    activity_rx.borrow_and_update();
+    let mut activity_open = true;
+    let mut closing = false;
+    loop {
+        // The test gate parks the writer BEFORE it receives, so the
+        // bounded queue provably stays full while the gate is
+        // closed. Level-triggered: once open this never waits.
+        #[cfg(test)]
+        if let Some(gate) = &writer_gate {
+            gate.wait_open().await;
+        }
+        tokio::select! {
+            biased;
+            frame = outbound_rx.recv() => match frame {
+                Some(frame) => {
+                    if write_child_frame(&mut write_half, &frame).await.is_err() {
+                        // The parent is gone; the reader publishes
+                        // parent loss.
+                        break;
+                    }
+                }
+                None => break,
+            },
+            changed = activity_rx.changed(), if activity_open => match changed {
+                Ok(()) => {
+                    let frame = ChildFrame::Activity(
+                        activity_rx.borrow_and_update().clone(),
+                    );
+                    if write_child_frame(&mut write_half, &frame).await.is_err() {
+                        break;
+                    }
+                }
+                // Every activity sender is gone (the dispatcher is
+                // being torn down): disable the arm so the loop
+                // cannot spin.
+                Err(_) => activity_open = false,
+            },
+            () = close.notified(), if !closing => {
+                // Refuse new frames and drain what is already
+                // queued; `recv()` then reports the closed queue.
+                closing = true;
+                outbound_rx.close();
+            }
+        }
     }
 }
 

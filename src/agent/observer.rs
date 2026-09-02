@@ -30,7 +30,8 @@ use crate::durable::TranscriptCursor;
 use crate::events::types::RuntimeEvent;
 use crate::message::types::MessageBlock;
 use crate::publication::{PublicationAudit, PublicationFrame, PublicationStreamStart};
-use crate::runtime::identity::AttemptId;
+use crate::runtime::identity::{AttemptId, ToolCallId, ToolId};
+use crate::tools::types::ToolProgress;
 
 /// The structured Agent Status observation of one committed model turn.
 ///
@@ -112,4 +113,20 @@ pub trait AgentExecutionObserver: Sync {
         audit: &PublicationAudit,
         transcript_cursor: TranscriptCursor,
     );
+
+    /// Observes one LIVE (not yet durable) foreground tool progress report
+    /// (Issue #178). Unlike `observe_event` this is not a committed canonical
+    /// fact: it is a disposable, latest-value, read-only observation emitted
+    /// while the tool still executes. The durable `ToolExecutionProgress`
+    /// facts still commit at batch settlement; this observation never enters
+    /// the Event Journal, never blocks the loop, and must never be treated as
+    /// execution evidence. Default: ignored.
+    fn observe_tool_progress(
+        &self,
+        _attempt_id: &AttemptId,
+        _tool_call_id: &ToolCallId,
+        _tool_id: &ToolId,
+        _progress: &ToolProgress,
+    ) {
+    }
 }
