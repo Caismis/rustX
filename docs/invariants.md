@@ -864,6 +864,52 @@ The TUI renders these as diagnostics from projection state and owns no
 activity truth: the lifecycle `state` remains the only authority on whether
 a child is alive, settling, or settled.
 
+### Durable child conversation inspection (Issue #179)
+
+The child's own conversation is the durable authority for its transcript and
+execution history; the parent only references that conversation by
+`child_conversation_id`.
+
+- **Identity is singular.** `child_conversation_id` is the only identity used
+  to resolve a child's durable conversation. There are no transcript,
+  inspection, task-history, or TUI-only child-history ids.
+- **Canonical messages stay in the child.** Child messages are committed
+  exactly once to the child Message Ledger. A Runtime Client inspector reads
+  the child's normal Surface/transcript projection and never copies messages
+  into the parent Ledger, a subagent snapshot, a transcript cache, or TUI
+  state. The existing canonical terminal delivery into the parent remains its
+  one unchanged path.
+- **Execution history stays in the child.** The child Event Journal and
+  durable Request Snapshots remain the authorities for execution facts and
+  model-request history. Durable inspection folds those facts into the normal
+  Runtime Client read model without copying them into the parent Event
+  Journal, creating a live cursor event, or exposing a subagent-specific
+  history payload.
+- **Terminal state remains durable.** Child settlement removes only the
+  physical execution incarnation. The stable child store under the launch
+  runtime root remains available
+  for later inspection after success, failure, cancellation, interruption,
+  or loss of the live process, to the extent the child state was durably
+  committed.
+- **Inspection is read-side only.** `RuntimeClientHost::new_durable` owns no
+  execution runtime, mailbox, provider, registry, or lifecycle control. Its
+  attachment linearizes at durable bootstrap; `snapshot_get` rebuilds the
+  read model from the same authorities for resync. Detach only releases the
+  inspection client. It cannot change child progress, cancellation,
+  settlement, provider/tool counts, journal ordering, terminal publication,
+  or parent delivery.
+- **Navigation is presentation state.** Parent/child frames, selection, and
+  the current-conversation label exist only in the TUI app. `Ctrl+Up`/`Ctrl+Down`
+  selects a row, `Enter` attaches the exact child identity, and `Esc` returns
+  to the existing parent attachment. Navigation writes no Ledger or Event
+  Journal fact and makes no model request.
+- **Observation remains independent.** The #178/#181 parent surface is
+  identity + lifecycle + bounded live observation. Live observation is
+  disposable and is not reconstructed into history. The durable child
+  conversation is the full transcript and execution-history authority.
+  User inspection is not parent-model context transfer: opening a child does
+  not enlarge the parent transcript or the next parent provider request.
+
 ### ApprovalMode control plane
 
 `ApprovalMode` is runtime control state, defaulting to `Policy` and optionally

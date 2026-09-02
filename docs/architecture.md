@@ -3622,9 +3622,52 @@ Runtime Client is a projection/control/attachment adapter over it.
   have. A headless runtime (Issue #60 subagents, every zero-client
   regression) simply never constructs a host.
 
-  Runtime Client **attachments** stay fully dynamic after activation —
-  attach, detach mid-attempt, reattach — because attachment lifetime and
-  host-binding lifetime are different axes.
+Runtime Client **attachments** stay fully dynamic after activation —
+attach, detach mid-attempt, reattach — because attachment lifetime and
+host-binding lifetime are different axes.
+
+#### Durable conversation attachment and inspection (Issue #179)
+
+Runtime Client attachment is a generic conversation-identity capability, not
+a subagent transcript API. `RuntimeClientHost::new_durable` accepts the
+`ConversationStore` already identified by a known `ConversationId` and builds
+the ordinary Runtime Client projection from that conversation's durable
+Surface, Message Ledger, Request Snapshots, transcript ordering spine, and
+Event Journal. The local runtime resolves `--inspect-conversation <id>` to
+the stable child store path; the wire protocol still uses the normal
+`initialize`, `snapshot_get`, `transcript_page_get`, and subscription shapes.
+There is no transcript identifier, inspection identifier, child-specific
+payload, or protocol compatibility mode.
+
+The child's own conversation is the durable authority for its transcript and
+execution history. A child spawn keeps its stable `conversation.sqlite` under
+the launch runtime root's identity-derived semantic child directory while its
+physical incarnation/artifact root remains disposable. Settlement removes
+only the physical execution root, so a completed, failed, cancelled, or
+interrupted child can be reopened by the same `child_conversation_id` after
+its runtime process is gone. The parent subagent surface keeps identity,
+lifecycle, terminal metadata, and bounded live observation; it never stores
+the child's canonical messages or execution facts.
+
+The read-only host has no `ConversationRuntime`, mailbox, subagent registry,
+provider adapter, or lifecycle handle. Its attachment linearizes at the
+durable bootstrap reads used to construct the projection. Durable Event
+Journal facts are folded into that read model without allocating a live
+Runtime Client cursor or publishing an event. `snapshot_get` and a fresh
+attachment rebuild from the durable authorities, so a skipped projection or
+reconnect repairs from authoritative state rather than client-owned history.
+Detaching is only subscriber/client lifecycle: it cannot cancel, settle,
+retry, execute tools, change Event Journal ordering, or affect the parent.
+
+The TUI keeps parent/child frames, the selected row, and the current
+conversation label as presentation state only. `Ctrl+Up`/`Ctrl+Down` selects
+a known subagent row, `Enter` opens its exact `child_conversation_id` in a
+read-only ordinary conversation view, and `Esc` detaches that inspection and
+restores the still-live parent attachment. Inspection is not parent-model
+context transfer: opening a child changes neither the parent's transcript nor
+the next parent provider request. The #178/#181 observation plane is reused
+only as bounded parent-side live observation; it is disposable and is not a
+transcript or execution-history authority.
 
 - **Adapter bootstrap is one global cut.**
   `ConversationRuntime::install_observation_bridge` is the one fallible

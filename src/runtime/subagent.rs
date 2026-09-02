@@ -81,6 +81,40 @@ pub(crate) mod anchors;
 pub(crate) mod ipc;
 pub(crate) mod process;
 
+use std::path::{Path, PathBuf};
+
+/// Returns the durable database path of one child conversation.
+///
+/// The semantic child directory is stable for the lifetime of the durable
+/// conversation. Its sibling `incarnation-*` directories are only physical
+/// spawn namespaces and may be removed after execution settles. Keeping this
+/// layout rule here gives the child runtime, the local inspection launcher,
+/// and the process owner one identity-based lookup without exposing a path to
+/// the Runtime Client protocol or TUI.
+#[must_use]
+pub(crate) fn child_conversation_store_path(
+    parent_runtime_root: &Path,
+    conversation_id: &ConversationId,
+) -> PathBuf {
+    parent_runtime_root
+        .join("subagents")
+        .join(conversation_id.as_str())
+        .join("conversation.sqlite")
+}
+
+/// Child conversation identities are used as one filesystem component by the
+/// local launcher. Reject separators and traversal components before turning a
+/// client-supplied identity into a path.
+#[must_use]
+pub(crate) fn is_safe_child_conversation_component(conversation_id: &ConversationId) -> bool {
+    let value = conversation_id.as_str();
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && !value.contains('/')
+        && !value.contains('\\')
+}
+
 pub use activity::{
     SubagentActivity, SubagentActivityCounters, SubagentExecutionProfile, SubagentObservation,
     SubagentWaitReason,

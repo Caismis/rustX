@@ -6,6 +6,7 @@
 //!
 //! ```text
 //! rustx --models <path> --config <rustx.jsonc> --workspace <dir> --runtime-root <dir>
+//!       [--inspect-conversation <conversation-id>]
 //!       [--continue | --session <session-id> [--node <node-id>]] [--name <text>]
 //! ```
 //!
@@ -30,6 +31,10 @@
 //! client, which turns a choice into `--session`/`/resume` — so this process
 //! has no `--resume` flag of its own.
 //!
+//! `--inspect-conversation` is a read-only generic conversation attachment.
+//! It opens the durable conversation identified by the supplied identity and
+//! does not compose a Session, model catalog, or execution runtime.
+//!
 //! `--name` is orthogonal to all of that: it names the Session the launch
 //! bound, exactly as `/name` would once inside it. A name is display
 //! metadata, never an identity, so no flag here ever resolves a Session by
@@ -44,6 +49,7 @@ use super::session::{SessionId, SessionNodeId};
 /// The usage text printed to **stderr** for an argument failure.
 pub const USAGE: &str = "usage: rustx --models <models.jsonc> --config <rustx.jsonc> \
                          --workspace <dir> --runtime-root <dir> \
+                         [--inspect-conversation <conversation-id>] \
                          [--continue | --session <session-id> [--node <node-id>]] \
                          [--name <text>] [tool/skill options]";
 
@@ -66,6 +72,7 @@ pub fn parse_arguments(
     let mut no_builtin_tools = false;
     let mut no_tools = false;
     let mut continue_active_session = false;
+    let mut inspect_conversation: Option<String> = None;
     let mut session: Option<String> = None;
     let mut node: Option<String> = None;
     let mut session_name: Option<String> = None;
@@ -75,8 +82,17 @@ pub fn parse_arguments(
     let mut arguments = arguments.into_iter();
     while let Some(flag) = arguments.next() {
         match flag.as_str() {
-            "--models" | "--config" | "--workspace" | "--runtime-root" | "--skill" | "--tools"
-            | "--exclude-tools" | "--session" | "--node" | "--name" => {
+            "--models"
+            | "--config"
+            | "--workspace"
+            | "--runtime-root"
+            | "--skill"
+            | "--tools"
+            | "--exclude-tools"
+            | "--session"
+            | "--node"
+            | "--name"
+            | "--inspect-conversation" => {
                 let Some(value) = arguments.next() else {
                     return Err(ArgumentError::MissingValue { flag });
                 };
@@ -89,6 +105,9 @@ pub fn parse_arguments(
                     "--session" => set_text(&mut session, value.as_str(), flag.as_str())?,
                     "--node" => set_text(&mut node, value.as_str(), flag.as_str())?,
                     "--name" => set_text(&mut session_name, value.as_str(), flag.as_str())?,
+                    "--inspect-conversation" => {
+                        set_text(&mut inspect_conversation, value.as_str(), flag.as_str())?;
+                    }
                     "--tools" => set_names(&mut tools, value.as_str(), flag.as_str())?,
                     "--exclude-tools" => {
                         set_names(&mut exclude_tools, value.as_str(), flag.as_str())?;
@@ -108,7 +127,13 @@ pub fn parse_arguments(
         }
     }
 
-    let startup_session = startup_session(continue_active_session, session, node)?;
+    let startup_session = startup_request(
+        inspect_conversation,
+        continue_active_session,
+        session,
+        node,
+        session_name.is_some(),
+    )?;
     Ok(LocalRuntimePaths {
         models: required(models, "--models")?,
         config: required(config, "--config")?,
@@ -123,6 +148,46 @@ pub fn parse_arguments(
         workspace: required(workspace, "--workspace")?,
         runtime_root: required(runtime_root, "--runtime-root")?,
     })
+}
+
+fn startup_request(
+    inspect_conversation: Option<String>,
+    continue_active_session: bool,
+    session: Option<String>,
+    node: Option<String>,
+    has_session_name: bool,
+) -> Result<StartupSession, ArgumentError> {
+    if let Some(conversation_id) = inspect_conversation {
+        if continue_active_session {
+            return Err(ArgumentError::Conflicting {
+                first: "--inspect-conversation",
+                second: "--continue",
+            });
+        }
+        if session.is_some() {
+            return Err(ArgumentError::Conflicting {
+                first: "--inspect-conversation",
+                second: "--session",
+            });
+        }
+        if has_session_name {
+            return Err(ArgumentError::Conflicting {
+                first: "--inspect-conversation",
+                second: "--name",
+            });
+        }
+        if node.is_some() {
+            return Err(ArgumentError::Conflicting {
+                first: "--inspect-conversation",
+                second: "--node",
+            });
+        }
+        Ok(StartupSession::InspectConversation {
+            conversation_id: crate::runtime::identity::ConversationId::new(conversation_id),
+        })
+    } else {
+        startup_session(continue_active_session, session, node)
+    }
 }
 
 /// Resolves the one Session this launch asks for.
@@ -503,6 +568,68 @@ mod tests {
         assert!(matches!(
             parse_arguments(with(&["--name", "a", "--name", "b"])).expect_err("repeated"),
             ArgumentError::Repeated { .. }
+        ));
+    }
+
+    /// A known conversation identity selects the generic read-only startup
+    /// path exactly, and never falls through to Session composition.
+    #[test]
+    fn inspecting_a_conversation_is_an_exclusive_startup_request() {
+        let base = args(&[
+            "--models",
+            "m",
+            "--config",
+            "r",
+            "--workspace",
+            "w",
+            "--runtime-root",
+            "p",
+        ]);
+        let with = |extra: &[&str]| {
+            let mut values = base.clone();
+            values.extend(args(extra));
+            values
+        };
+
+        let inspected =
+            parse_arguments(with(&["--inspect-conversation", "conv-parent-subagent-1"]))
+                .expect("inspection");
+        assert_eq!(
+            inspected.startup_session,
+            StartupSession::InspectConversation {
+                conversation_id: crate::runtime::identity::ConversationId::new(
+                    "conv-parent-subagent-1",
+                ),
+            }
+        );
+        assert!(matches!(
+            parse_arguments(with(&["--inspect-conversation", "child", "--continue"]))
+                .expect_err("inspection and continue"),
+            ArgumentError::Conflicting {
+                first: "--inspect-conversation",
+                second: "--continue"
+            }
+        ));
+        assert!(matches!(
+            parse_arguments(with(&["--inspect-conversation", "child", "--session", "s"]))
+                .expect_err("inspection and session"),
+            ArgumentError::Conflicting {
+                first: "--inspect-conversation",
+                second: "--session"
+            }
+        ));
+        assert!(matches!(
+            parse_arguments(with(&[
+                "--inspect-conversation",
+                "child",
+                "--name",
+                "label"
+            ]))
+            .expect_err("inspection and name"),
+            ArgumentError::Conflicting {
+                first: "--inspect-conversation",
+                second: "--name"
+            }
         ));
     }
 

@@ -35,7 +35,9 @@ use std::io::Write;
 use crate::runtime_client::transport::stdio::{StdioSessionEnd, serve_stdio_jsonl};
 
 use super::cli::{USAGE, parse_arguments};
-use super::composition::{LocalRuntimeDependencies, LocalSessionProduct};
+use super::composition::{
+    LocalConversationInspection, LocalRuntimeDependencies, LocalSessionProduct, StartupSession,
+};
 
 /// The deterministic terminal outcome of the local runtime process.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +71,11 @@ impl ProcessOutcome {
     }
 }
 
+enum ServingRuntime {
+    Session(Box<LocalSessionProduct>),
+    Inspection(LocalConversationInspection),
+}
+
 /// Composes the runtime from explicit arguments and serves it on
 /// stdin/stdout.
 ///
@@ -82,12 +89,24 @@ pub async fn serve(arguments: impl IntoIterator<Item = String>) -> ProcessOutcom
     // Composition completes — including the initial capability commit —
     // before the transport exists, so a startup failure can never leave a
     // partially initialized protocol server.
-    let runtime =
-        match LocalSessionProduct::compose(&paths, &LocalRuntimeDependencies::default()).await {
-            Ok(runtime) => runtime,
+    let runtime = match &paths.startup_session {
+        StartupSession::InspectConversation { conversation_id } => {
+            match LocalConversationInspection::compose(&paths, conversation_id) {
+                Ok(runtime) => ServingRuntime::Inspection(runtime),
+                Err(error) => return ProcessOutcome::StartupFailed(error.to_string()),
+            }
+        }
+        _ => match LocalSessionProduct::compose(&paths, &LocalRuntimeDependencies::default()).await
+        {
+            Ok(runtime) => ServingRuntime::Session(Box::new(runtime)),
             Err(error) => return ProcessOutcome::StartupFailed(error.to_string()),
-        };
-    match serve_stdio_jsonl(runtime.endpoint()).await {
+        },
+    };
+    let endpoint = match &runtime {
+        ServingRuntime::Session(runtime) => runtime.endpoint(),
+        ServingRuntime::Inspection(runtime) => runtime.endpoint(),
+    };
+    match serve_stdio_jsonl(endpoint).await {
         Ok(end) => ProcessOutcome::TransportClosed(end),
         Err(error) => ProcessOutcome::TransportFailed(error.to_string()),
     }

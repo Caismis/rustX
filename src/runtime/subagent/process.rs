@@ -38,7 +38,7 @@ use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
 use crate::context::{AgentStatusConfig, SessionContextPolicy};
-use crate::runtime::identity::SubagentId;
+use crate::runtime::identity::{ConversationId, SubagentId};
 use crate::runtime::types::CancellationReason;
 
 use super::anchors::{NestedUnitSettlement, RetainedProcessUnits, contain_retained};
@@ -120,7 +120,10 @@ impl SubagentSpawnPlan {
         &self,
         subagent_id: &SubagentId,
     ) -> Result<PhysicalChildRuntimeRoot, SpawnError> {
-        PhysicalChildRuntimeRoot::allocate(&self.runtime_root, subagent_id)
+        PhysicalChildRuntimeRoot::allocate(
+            &self.runtime_root,
+            &ConversationId::new(subagent_id.as_str()),
+        )
     }
 
     /// The one typed startup specification of a child.
@@ -181,13 +184,40 @@ impl SubagentSpawnPlan {
 #[derive(Debug)]
 pub(crate) struct PhysicalChildRuntimeRoot {
     path: PathBuf,
+    /// The stable child Message Ledger/Event Journal database, when this is a
+    /// production-allocated root. Test-only roots do not own a durable store.
+    durable_store: Option<PathBuf>,
 }
 
 impl PhysicalChildRuntimeRoot {
     /// Creates the semantic grouping directory and exclusively creates one
     /// fresh incarnation directory beneath it.
-    fn allocate(parent: &Path, subagent_id: &SubagentId) -> Result<Self, SpawnError> {
-        let semantic_root = parent.join("subagents").join(subagent_id.as_str());
+    fn allocate(parent: &Path, conversation_id: &ConversationId) -> Result<Self, SpawnError> {
+        if !super::is_safe_child_conversation_component(conversation_id) {
+            return Err(SpawnError::WorkspaceSetup {
+                detail: format!(
+                    "child conversation identity {:?} is not a safe filesystem component",
+                    conversation_id.as_str()
+                ),
+            });
+        }
+        let semantic_root = super::child_conversation_store_path(parent, conversation_id)
+            .parent()
+            .expect("a child conversation database has a semantic parent")
+            .to_path_buf();
+        let durable_store = super::child_conversation_store_path(parent, conversation_id);
+        for path in [
+            durable_store.clone(),
+            PathBuf::from(format!("{}-wal", durable_store.display())),
+            PathBuf::from(format!("{}-shm", durable_store.display())),
+        ] {
+            if path.exists() {
+                return Err(SpawnError::ConversationIdentityInUse {
+                    conversation_id: conversation_id.clone(),
+                    path,
+                });
+            }
+        }
         std::fs::create_dir_all(&semantic_root).map_err(|error| SpawnError::WorkspaceSetup {
             detail: format!(
                 "create semantic child runtime grouping {}: {error}",
@@ -206,7 +236,12 @@ impl PhysicalChildRuntimeRoot {
             let name = format!("incarnation-{}", hex_token(&token));
             let path = semantic_root.join(name);
             match std::fs::create_dir(&path) {
-                Ok(()) => return Ok(Self { path }),
+                Ok(()) => {
+                    return Ok(Self {
+                        path,
+                        durable_store: Some(durable_store),
+                    });
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(error) => {
                     return Err(SpawnError::WorkspaceSetup {
@@ -241,11 +276,40 @@ impl PhysicalChildRuntimeRoot {
         std::fs::remove_dir_all(self.path)
     }
 
+    /// Removes the exact stable store owned by an uncommitted spawn. A
+    /// committed child never calls this method: its durable conversation is
+    /// retained after the physical execution root is settled.
+    fn remove_durable_store(&self) -> std::io::Result<()> {
+        let Some(database) = &self.durable_store else {
+            return Ok(());
+        };
+        let mut failures = Vec::new();
+        for path in [
+            database.clone(),
+            PathBuf::from(format!("{}-wal", database.display())),
+            PathBuf::from(format!("{}-shm", database.display())),
+        ] {
+            if let Err(error) = std::fs::remove_file(&path)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                failures.push(format!("{}: {error}", path.display()));
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(std::io::Error::other(failures.join("; ")))
+        }
+    }
+
     /// Wraps a test-created directory in the same lifecycle owner used by a
     /// production staged child.
     #[cfg(test)]
     fn from_existing(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            path,
+            durable_store: None,
+        }
     }
 }
 
@@ -283,6 +347,15 @@ pub enum SpawnError {
         /// The failure detail.
         detail: String,
     },
+    /// The semantic child identity already has a durable conversation store.
+    /// A new physical incarnation must never reuse that store: the caller
+    /// must advance to a fresh child identity instead.
+    ConversationIdentityInUse {
+        /// The identity whose durable store is already present.
+        conversation_id: ConversationId,
+        /// The existing durable store or sidecar that caused the refusal.
+        path: PathBuf,
+    },
     /// The OS spawn failed.
     Spawn {
         /// The failure detail.
@@ -319,6 +392,15 @@ impl core::fmt::Display for SpawnError {
             Self::WorkspaceSetup { detail } => {
                 write!(f, "cannot prepare the child runtime root: {detail}")
             }
+            Self::ConversationIdentityInUse {
+                conversation_id,
+                path,
+            } => write!(
+                f,
+                "child conversation identity {} already has a durable store at {}; refusing to reuse it",
+                conversation_id.as_str(),
+                path.display()
+            ),
             Self::Spawn { detail } => write!(f, "cannot spawn the child runtime: {detail}"),
             Self::Handshake { detail } => {
                 write!(f, "the child startup handshake failed: {detail}")
@@ -534,6 +616,9 @@ async fn discard_unstaged_resources(
     error: SpawnError,
 ) -> SpawnError {
     let path = runtime_root.path().display().to_string();
+    let durable_error = runtime_root.remove_durable_store().err().map(|cleanup| {
+        format!("could not remove unowned durable child conversation store for {path}: {cleanup}")
+    });
     let root_error = runtime_root.remove().err().map(|cleanup| {
         format!("could not remove unowned physical child runtime root {path}: {cleanup}")
     });
@@ -542,12 +627,12 @@ async fn discard_unstaged_resources(
         .await
         .err()
         .map(|error| error.detail);
-    match (root_error, workspace_error) {
-        (None, None) => error,
-        (root_error, workspace_error) => SpawnError::Rollback {
+    match (durable_error, root_error, workspace_error) {
+        (None, None, None) => error,
+        (durable_error, root_error, workspace_error) => SpawnError::Rollback {
             detail: format!(
                 "{error}; {}",
-                [root_error, workspace_error]
+                [durable_error, root_error, workspace_error]
                     .into_iter()
                     .flatten()
                     .collect::<Vec<_>>()
@@ -879,10 +964,17 @@ impl StagedChild {
         let runtime_root = self.runtime_root;
         let runtime_root_cleanup_error = if settlement.unproven.is_empty() {
             let path = runtime_root.path().display().to_string();
-            runtime_root
+            let durable_error = runtime_root.remove_durable_store().err().map(|error| {
+                format!("remove uncommitted durable child conversation store for {path}: {error}")
+            });
+            let root_error = runtime_root
                 .remove()
                 .err()
-                .map(|error| format!("remove child runtime root {path}: {error}"))
+                .map(|error| format!("remove child runtime root {path}: {error}"));
+            [durable_error, root_error]
+                .into_iter()
+                .flatten()
+                .reduce(|left, right| format!("{left}; {right}"))
         } else {
             None
         };
@@ -1546,7 +1638,7 @@ mod tests {
     };
     use crate::context::{AgentStatusConfig, SessionContextPolicy};
     use crate::runtime::cancellation::CancellationSignal;
-    use crate::runtime::identity::{ProcessUnitId, SubagentId};
+    use crate::runtime::identity::{ConversationId, ProcessUnitId, SubagentId};
     use crate::runtime::subagent::anchors::RetainedProcessUnits;
     use crate::runtime::subagent::ipc::{
         ChildFrame, ParentFrame, ProcessUnitAnchorFrame, ReadyFrame, read_parent_frame,
@@ -2158,6 +2250,84 @@ mod tests {
         fresh_root
             .remove()
             .expect("remove only the fresh incarnation");
+    }
+
+    /// A durable store reserves its semantic conversation identity even when
+    /// the physical incarnation is gone. Reissuing that identity would make
+    /// a later child append to an earlier child's transcript, so allocation
+    /// reports a typed collision for the registry to skip.
+    #[test]
+    fn an_existing_durable_store_blocks_semantic_identity_reuse() {
+        let dir = tempfile::tempdir().expect("lab");
+        let plan = allocation_plan(dir.path().join("runtime"));
+        let subagent_id = SubagentId::new("conv-durable-subagent-1");
+        let first_root = plan
+            .allocate_child_runtime_root(&subagent_id)
+            .expect("first physical incarnation");
+        let durable_path = crate::runtime::subagent::child_conversation_store_path(
+            &plan.runtime_root,
+            &ConversationId::new(subagent_id.as_str()),
+        );
+        std::fs::write(&durable_path, b"durable child state").expect("durable marker");
+
+        let error = plan
+            .allocate_child_runtime_root(&subagent_id)
+            .expect_err("the semantic identity is already durable");
+        assert!(matches!(
+            error,
+            super::SpawnError::ConversationIdentityInUse { .. }
+        ));
+        first_root.remove().expect("remove the first physical root");
+    }
+
+    /// A committed child keeps its stable conversation database when the
+    /// physical execution incarnation is settled and removed. A later
+    /// inspector can therefore reopen the child's durable authorities after
+    /// the child process and its runtime-private execution tree are gone.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_settled_child_keeps_durable_store_after_physical_cleanup() {
+        let dir = tempfile::tempdir().expect("lab");
+        let plan = allocation_plan(dir.path().join("runtime"));
+        let subagent_id = SubagentId::new("conv-durable-subagent-1");
+        let conversation_id = ConversationId::new(subagent_id.as_str());
+        let runtime_root = plan
+            .allocate_child_runtime_root(&subagent_id)
+            .expect("physical child incarnation");
+        let physical_path = runtime_root.path().to_path_buf();
+        let durable_path = crate::runtime::subagent::child_conversation_store_path(
+            &plan.runtime_root,
+            &conversation_id,
+        );
+        assert_eq!(
+            durable_path,
+            physical_path
+                .parent()
+                .expect("semantic child grouping")
+                .join("conversation.sqlite")
+        );
+        std::fs::write(&durable_path, b"durable child state").expect("durable marker");
+
+        let mut retained = RetainedProcessUnits::default();
+        let settlement = settle_nested(
+            PhysicalOutcome::Lost {
+                diagnostic: "child settled for inspection test".to_owned(),
+                cancellation_delivered: false,
+            },
+            &mut retained,
+            runtime_root,
+            None,
+        )
+        .await;
+
+        assert!(settlement.runtime_root_cleanup_error.is_none());
+        assert!(
+            !physical_path.exists(),
+            "only the physical incarnation is removed"
+        );
+        assert_eq!(
+            std::fs::read(&durable_path).expect("durable store survives"),
+            b"durable child state"
+        );
     }
 
     /// A real old process is blocked immediately before its delayed

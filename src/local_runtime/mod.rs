@@ -40,9 +40,9 @@ pub mod supervisor;
 
 pub use cli::{ArgumentError, USAGE, parse_arguments};
 pub use composition::{
-    HeadlessConversationRuntime, LocalConversationCore, LocalConversationRuntime,
-    LocalRuntimeDependencies, LocalRuntimeError, LocalRuntimePaths, LocalSessionProduct,
-    StartupSession,
+    HeadlessConversationRuntime, LocalConversationCore, LocalConversationInspection,
+    LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimeError, LocalRuntimePaths,
+    LocalSessionProduct, StartupSession,
 };
 pub use config::{
     CURRENT_RUNTIME_SCHEMA_VERSION, CurrentRuntimeConfig, CurrentRuntimeConfigError,

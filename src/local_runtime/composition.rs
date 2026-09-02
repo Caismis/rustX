@@ -108,6 +108,7 @@ use crate::capabilities::{
     ToolActivationPolicy,
 };
 use crate::context::{AgentStatusEngine, DefaultTokenEstimator, TokenEstimator};
+use crate::durable::{ConversationStoreBinding, SqliteConversationStore};
 use crate::model::catalog::{
     CredentialEnvironment, ModelCatalog, ModelCatalogError, ProcessCredentialEnvironment,
 };
@@ -125,7 +126,8 @@ use crate::runtime::resources::{
 };
 use crate::runtime::subagent::{
     ResolvedSubagentTool, SubagentCatalog, SubagentDefinition, SubagentProjectInstructionPolicy,
-    SubagentResolver, SubagentWorkspaceManager,
+    SubagentResolver, SubagentWorkspaceManager, child_conversation_store_path,
+    is_safe_child_conversation_component,
 };
 use crate::runtime::workflow::{
     MAX_WORKFLOW_BYTES, WorkflowCatalog, WorkflowDefinition, WorkflowOutputLatch, WorkflowProgram,
@@ -185,6 +187,12 @@ pub enum StartupSession {
         /// absent.
         node: Option<SessionNodeId>,
     },
+    /// Attach a Runtime Client to a known durable child conversation. This
+    /// path owns no Session catalog selection and is read-only.
+    InspectConversation {
+        /// The durable conversation identity to inspect.
+        conversation_id: ConversationId,
+    },
 }
 
 /// The explicit startup paths of one local runtime process.
@@ -224,8 +232,9 @@ pub struct LocalRuntimePaths {
     /// The model-visible workspace root.
     pub workspace: PathBuf,
     /// The exact runtime-private root from which disjoint private
-    /// subdirectories are derived. For a child this is one physical
-    /// spawn-incarnation namespace, never a stable semantic-id path.
+    /// subdirectories are derived. Child conversation stores live below its
+    /// stable `subagents/<conversation-id>` semantic directory; child
+    /// execution incarnations remain private and disposable.
     pub runtime_root: PathBuf,
 }
 
@@ -1247,7 +1256,13 @@ impl LocalConversationCore {
                             detail: error.to_string(),
                         })?,
                     },
-                    runtime_root: artifacts_root.clone(),
+                    // Child conversation stores and their disposable
+                    // physical incarnations live below the launch's one
+                    // runtime-private root. Keeping this identity namespace
+                    // independent of the selected Session's artifact path
+                    // lets a later generic inspection attach by
+                    // `child_conversation_id` alone.
+                    runtime_root: paths.runtime_root.clone(),
                     model_timeout_policy,
                     agent_status: runtime_config.agent_status.clone(),
                     context: runtime_config.context_policy(),
@@ -1470,9 +1485,9 @@ impl LocalConversationCore {
     ///   differ from the parent workspace;
     /// - the definition's instruction document is immutable `AgentProfile`
     ///   System authority and canonical history starts empty;
-    /// - the durable authority is the child-private store under
-    ///   [`SubagentChildSpec::runtime_root`], disjoint from the parent's
-    ///   store.
+    /// - the durable authority is the stable child store beside the physical
+    ///   spawn-incarnation directory, disjoint from the parent's store. The
+    ///   physical root remains disposable execution/artifact state.
     ///
     /// The caller (the child driver) still owns activation: the returned
     /// core is inert until `into_headless`.
@@ -1504,7 +1519,10 @@ impl LocalConversationCore {
         // 5-6. The child conversation tool runtime over the authoritative
         // project workspace selected by the parent and the exact
         // spawn-incarnation-private runtime root. The child authorizes no
-        // environment entries.
+        // environment entries. Its durable Message Ledger/Event Journal is
+        // deliberately one level above that physical root: execution
+        // artifacts can be discarded after settlement while the conversation
+        // identity remains inspectable.
         let base_environment = ToolEnvironment::from_authorized(std::iter::empty())
             .map_err(CurrentRuntimeConfigError::Environment)
             .map_err(LocalRuntimeError::RuntimeConfig)?;
@@ -1513,6 +1531,26 @@ impl LocalConversationCore {
             spec.runtime_root.join("artifacts"),
         );
         runtime_config.environment = Some(base_environment.clone());
+        let durable_store_path = spec
+            .runtime_root
+            .parent()
+            .ok_or_else(|| LocalRuntimeError::ToolRuntime {
+                detail: format!(
+                    "physical child runtime root {} has no stable semantic parent",
+                    spec.runtime_root.display()
+                ),
+            })?
+            .join("conversation.sqlite");
+        let durable_store = Arc::new(
+            SqliteConversationStore::open(spec.child_conversation_id.clone(), &durable_store_path)
+                .map_err(|error| LocalRuntimeError::ToolRuntime {
+                    detail: format!(
+                        "open child durable conversation store {}: {error}",
+                        durable_store_path.display()
+                    ),
+                })?,
+        );
+        runtime_config.durable_binding = Some(ConversationStoreBinding::new(durable_store));
         let tool_runtime = ConversationToolRuntime::from_config(
             spec.child_conversation_id.clone(),
             runtime_config,
@@ -1900,6 +1938,9 @@ impl LocalSessionProduct {
             StartupSession::Select { session, node } => {
                 catalog.plan_select(session, node.as_ref())?
             }
+            StartupSession::InspectConversation { .. } => {
+                unreachable!("durable conversation inspection uses its dedicated composition path")
+            }
         };
         // `--name` names the Session this launch bound, whichever one that
         // is. It is the startup form of `/name` and nothing more: naming is
@@ -2070,6 +2111,72 @@ impl LocalConversationRuntime {
     }
 }
 
+/// A read-only Runtime Client attachment to one known durable conversation.
+///
+/// This path deliberately bypasses Session composition and the live
+/// `ConversationRuntime`: an inspector needs the child conversation's own
+/// Message Ledger/Event Journal, not a second lifecycle or execution owner.
+pub struct LocalConversationInspection {
+    host: RuntimeClientHost,
+}
+
+impl std::fmt::Debug for LocalConversationInspection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalConversationInspection")
+            .field("conversation_id", self.host.conversation_id())
+            .finish()
+    }
+}
+
+impl LocalConversationInspection {
+    /// Opens the durable child conversation identified by `conversation_id`.
+    ///
+    /// The identity is resolved to the local runtime's stable child-store
+    /// layout only at this Rust-owned composition boundary. The TUI and wire
+    /// protocol never receive or store a filesystem path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LocalRuntimeError::ConversationNotFound`] when the identity
+    /// has no durable child store, or [`LocalRuntimeError::DurableConversation`]
+    /// when that store cannot be opened.
+    pub fn compose(
+        paths: &LocalRuntimePaths,
+        conversation_id: &ConversationId,
+    ) -> Result<Self, LocalRuntimeError> {
+        if !is_safe_child_conversation_component(conversation_id) {
+            return Err(LocalRuntimeError::ConversationNotFound {
+                conversation_id: conversation_id.clone(),
+                path: child_conversation_store_path(&paths.runtime_root, conversation_id),
+            });
+        }
+        let database_path = child_conversation_store_path(&paths.runtime_root, conversation_id);
+        if !database_path.is_file() {
+            return Err(LocalRuntimeError::ConversationNotFound {
+                conversation_id: conversation_id.clone(),
+                path: database_path,
+            });
+        }
+        let store = Arc::new(
+            SqliteConversationStore::open(conversation_id.clone(), &database_path).map_err(
+                |error| LocalRuntimeError::DurableConversation {
+                    path: database_path.clone(),
+                    detail: error.to_string(),
+                },
+            )?,
+        );
+        Ok(Self {
+            host: RuntimeClientHost::new_durable(store, None)?,
+        })
+    }
+
+    /// The transport-neutral Runtime Client endpoint for this inspection.
+    #[must_use]
+    pub fn endpoint(&self) -> RuntimeClientEndpoint {
+        RuntimeClientEndpoint::new(self.host.clone())
+    }
+}
+
 /// The composed headless local conversation runtime.
 ///
 /// The same semantic composition as the interactive runtime
@@ -2172,6 +2279,21 @@ pub enum LocalRuntimeError {
         /// The failure detail.
         detail: String,
     },
+    /// The requested durable child conversation does not exist at the
+    /// identity-derived local store path.
+    ConversationNotFound {
+        /// The requested conversation identity.
+        conversation_id: ConversationId,
+        /// The identity-derived database path, for diagnostics only.
+        path: PathBuf,
+    },
+    /// The requested durable conversation exists but cannot be opened.
+    DurableConversation {
+        /// The database path, for diagnostics only.
+        path: PathBuf,
+        /// The bounded store failure detail.
+        detail: String,
+    },
     /// The model catalog is invalid or its credentials are unresolved.
     Catalog(ModelCatalogError),
     /// A model binding or the initial session model could not be resolved.
@@ -2212,6 +2334,19 @@ impl std::fmt::Display for LocalRuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io { path, detail } => write!(f, "cannot read {}: {detail}", path.display()),
+            Self::ConversationNotFound {
+                conversation_id,
+                path,
+            } => write!(
+                f,
+                "durable conversation {conversation_id} was not found at {}",
+                path.display()
+            ),
+            Self::DurableConversation { path, detail } => write!(
+                f,
+                "cannot open durable conversation {}: {detail}",
+                path.display()
+            ),
             Self::Catalog(error) => write!(f, "model catalog: {error}"),
             Self::Model(error) => write!(f, "session model: {error}"),
             Self::RuntimeConfig(error) => write!(f, "{error}"),
@@ -3197,6 +3332,86 @@ mod subagent_child_tests {
             format!("{error:?}").contains("was not given a binding"),
             "the child refuses rather than looking a server up for itself: {error:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod conversation_inspection_tests {
+    use super::{LocalConversationInspection, LocalRuntimePaths, StartupSession};
+    use crate::durable::{ConversationStore, SqliteConversationStore};
+    use crate::message::content::TextBlock;
+    use crate::message::types::{MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
+    use crate::runtime::identity::{ConversationId, MessageId};
+    use crate::runtime_client::types::{RuntimeClientRequest, RuntimeClientResult};
+
+    #[test]
+    fn resolves_the_known_child_identity_to_the_ordinary_attachment() {
+        let root = tempfile::tempdir().expect("runtime root");
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let conversation_id = ConversationId::new("conversation-parent-subagent-1");
+        let database_path = root
+            .path()
+            .join("runtime/subagents")
+            .join(conversation_id.as_str())
+            .join("conversation.sqlite");
+        std::fs::create_dir_all(database_path.parent().expect("child store parent"))
+            .expect("child store directory");
+        let store = SqliteConversationStore::open(conversation_id.clone(), &database_path)
+            .expect("child store");
+        store
+            .initialize(&[MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("child-user"),
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "durable child message".to_owned(),
+                })],
+                source: UserSource::Human,
+                kind: crate::message::types::InboundKind::Message,
+                timestamp: None,
+            })])
+            .expect("child history");
+
+        let paths = LocalRuntimePaths {
+            models: root.path().join("models.jsonc"),
+            config: root.path().join("rustx.jsonc"),
+            skill_paths: Vec::new(),
+            no_skills: true,
+            no_builtin_tools: false,
+            no_tools: false,
+            startup_session: StartupSession::Empty,
+            session_name: None,
+            tools: None,
+            exclude_tools: Vec::new(),
+            workspace,
+            runtime_root: root.path().join("runtime"),
+        };
+        let inspection = LocalConversationInspection::compose(&paths, &conversation_id)
+            .expect("identity resolves to the durable child store");
+        let response = inspection
+            .endpoint()
+            .handle_request(RuntimeClientRequest::Initialize {
+                id: crate::runtime_client::RequestId::new(1),
+                protocol_version: crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
+            });
+        let Some(RuntimeClientResult::Initialized {
+            conversation_id: attached_id,
+            snapshot,
+            ..
+        }) = response.result
+        else {
+            panic!("inspection must use the ordinary Runtime Client attachment: {response:?}");
+        };
+        assert_eq!(attached_id, conversation_id);
+        assert_eq!(snapshot.messages.len(), 1);
+        assert!(matches!(
+            &snapshot.messages[0],
+            MessageBlock::User(user)
+                if user.id == MessageId::new("child-user")
+                    && user.content.iter().any(|content| matches!(
+                        content,
+                        UserContentBlock::Text(text) if text.text == "durable child message"
+                    ))
+        ));
     }
 }
 
