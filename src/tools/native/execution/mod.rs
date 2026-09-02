@@ -51,9 +51,10 @@
 //! `status` is observation; `cancel` is control. Neither is a result
 //! channel: the subagent response is a bounded [`SubagentExecutionSnapshot`]
 //! projection that deliberately excludes the registry's internal terminal
-//! `detail` (which carries the successful child answer), so a subagent's
-//! final answer still arrives exactly once through the existing canonical
-//! inbound message path — never through `execution`.
+//! `detail` (Issue #178: diagnostics only, never the answer) and the live
+//! observation-plane fields, so a subagent's final answer still arrives
+//! exactly once through the existing canonical inbound message path — never
+//! through `execution`.
 //!
 //! The intrinsic's policies are fixed to foreground-only sequential
 //! execution and it may never become background-dispatchable (enforced by
@@ -227,14 +228,15 @@ fn run_execution(
 /// an authority of its own and never a second lifecycle record.
 ///
 /// The projection exposes lifecycle/identity/control facts only. It
-/// deliberately excludes the registry's internal `detail` field, which the
-/// subagent settlement path populates with the successful child answer
-/// content: the model-facing control plane must never carry the child's
-/// answer, so the canonical inbound child-agent message stays the **only**
-/// result-delivery channel and `execution(status|cancel)` stays pure
-/// lifecycle observation/control. The same guarantee holds while the
-/// registry is still in `PublishingTerminal`: the pending answer is never
-/// model-visible through the intrinsic.
+/// deliberately excludes the registry's internal `detail` field (a
+/// failure/cancellation diagnostic; Issue #178 removed the successful
+/// answer content from it entirely) and the live observation-plane fields:
+/// the model-facing control plane must never carry the child's answer or
+/// its live activity, so the canonical inbound child-agent message stays
+/// the **only** result-delivery channel and `execution(status|cancel)`
+/// stays pure lifecycle observation/control. The same guarantee holds
+/// while the registry is still in `PublishingTerminal`: the pending answer
+/// is never model-visible through the intrinsic.
 ///
 /// [`SubagentSnapshot`]: crate::runtime::subagent::SubagentSnapshot
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -271,9 +273,11 @@ pub struct SubagentExecutionSnapshot {
 impl From<SubagentSnapshot> for SubagentExecutionSnapshot {
     fn from(snapshot: SubagentSnapshot) -> Self {
         // The registry's authoritative snapshot is projected field by
-        // field. `detail` — the registry-internal terminal detail that
-        // carries the successful child answer — is intentionally dropped:
-        // it is domain-internal state, never model-facing result content.
+        // field. `detail` — the registry-internal terminal diagnostic — is
+        // intentionally dropped, as are the observation-plane `observation`
+        // and `profile` fields (Issue #178): live activity enters no model
+        // context, and the canonical inbound child-agent message stays the
+        // only result-delivery channel.
         let SubagentSnapshot {
             subagent_id,
             child_agent_id,
@@ -285,6 +289,8 @@ impl From<SubagentSnapshot> for SubagentExecutionSnapshot {
             handoff,
             state,
             detail: _,
+            observation: _,
+            profile: _,
             publication_abandoned,
             settled,
             started_at,
@@ -496,8 +502,8 @@ mod tests {
     }
 
     /// The subagent projection keeps every lifecycle/identity/control fact
-    /// but can never expose the registry-internal terminal `detail` that
-    /// carries the successful child answer.
+    /// but can never expose the registry-internal terminal `detail` or the
+    /// live observation-plane fields.
     #[test]
     fn the_subagent_projection_never_exposes_the_child_answer() {
         use crate::runtime::identity::{AgentId, ConversationId, SubagentId, ToolCallId};
@@ -512,9 +518,11 @@ mod tests {
             workspace: WorkspaceSnapshot::shared(std::path::PathBuf::from("<shared-workspace>")),
             handoff: None,
             state: SubagentState::Succeeded,
-            // The registry-internal terminal detail carries the successful
-            // child answer; the projection must drop it.
+            // The registry-internal terminal detail carries diagnostics
+            // only since Issue #178; either way the projection must drop it.
             detail: Some("issue162-secret-child-answer".to_owned()),
+            observation: crate::runtime::subagent::SubagentObservation::default(),
+            profile: None,
             publication_abandoned: false,
             settled: true,
             started_at: chrono::Utc::now(),

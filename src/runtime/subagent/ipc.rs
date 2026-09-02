@@ -54,10 +54,11 @@ use super::workspace::WorkspaceSnapshot;
 /// typed cancellation provenance (Issue #138). Version 6 carries the
 /// resolved workspace authority and immutable Git snapshot facts (Issue
 /// #146). Version 7 carries the invoking attempt's effective `ApprovalMode`
-/// and the reserved Workflow Agent terminal protocol (Issue #83). There is no
-/// compatibility decoding: a peer that does not speak exactly this version
-/// exits before composing anything.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 7;
+/// and the reserved Workflow Agent terminal protocol (Issue #83). Version 8
+/// carries the child→parent live activity projection frames (Issue #178).
+/// There is no compatibility decoding: a peer that does not speak exactly
+/// this version exits before composing anything.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 8;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -81,6 +82,7 @@ const KIND_RESULT: u8 = 103;
 const KIND_DIAGNOSTIC: u8 = 104;
 const KIND_ANCHOR_OFFERED: u8 = 105;
 const KIND_ANCHOR_RELEASED: u8 = 106;
+const KIND_ACTIVITY: u8 = 107;
 
 /// The typed startup specification of one subagent child, carried by the
 /// `Hello` frame.
@@ -250,6 +252,18 @@ pub(crate) struct ProcessUnitRefusalFrame {
     pub reason: String,
 }
 
+/// One live activity projection update from the child (Issue #178).
+///
+/// This is observation-plane traffic only: it carries the child's newest
+/// [`SubagentObservation`] with latest-value coalescing semantics, is never
+/// durable, never semantic evidence, and never blocks the child's execution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ActivityFrame {
+    /// The child's latest live activity projection.
+    pub observation: super::activity::SubagentObservation,
+}
+
 /// One decoded parent-bound frame.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ChildFrame {
@@ -267,6 +281,8 @@ pub(crate) enum ChildFrame {
     /// A nested supervised unit is proven physically terminal, so the
     /// parent may drop exactly that retained anchor.
     AnchorReleased(ProcessUnitAnchorFrame),
+    /// A live activity projection update (observation plane only).
+    Activity(ActivityFrame),
 }
 
 /// One decoded child-bound frame.
@@ -431,6 +447,9 @@ pub(crate) async fn write_child_frame<W: tokio::io::AsyncWrite + Unpin + ?Sized>
         ChildFrame::AnchorReleased(payload) => {
             write_frame(stream, KIND_ANCHOR_RELEASED, &encode(payload)?).await
         }
+        ChildFrame::Activity(payload) => {
+            write_frame(stream, KIND_ACTIVITY, &encode(payload)?).await
+        }
     }
 }
 
@@ -448,6 +467,7 @@ pub(crate) async fn read_child_frame<R: tokio::io::AsyncRead + Unpin + ?Sized>(
         KIND_DIAGNOSTIC => ChildFrame::Diagnostic(decode(&payload)?),
         KIND_ANCHOR_OFFERED => ChildFrame::AnchorOffered(decode(&payload)?),
         KIND_ANCHOR_RELEASED => ChildFrame::AnchorReleased(decode(&payload)?),
+        KIND_ACTIVITY => ChildFrame::Activity(decode(&payload)?),
         other => return Err(ProtocolError::UnknownKind { kind: other }),
     };
     Ok(Some(frame))
@@ -634,6 +654,52 @@ mod tests {
         ));
     }
 
+    /// IPC v8 carries the child→parent live activity projection: the frame
+    /// round-trips exactly and its payload is the typed
+    /// `SubagentObservation`.
+    #[tokio::test]
+    async fn the_activity_frame_round_trips() {
+        let (mut parent, mut child) = pair();
+        let observation = super::super::activity::SubagentObservation {
+            revision: 7,
+            activity: super::super::activity::SubagentActivity::Tool {
+                tool_call_id: crate::runtime::identity::ToolCallId::new("call-1"),
+                tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
+                progress: None,
+            },
+            last_activity_at: None,
+            counters: super::super::activity::SubagentActivityCounters {
+                model_requests: 2,
+                model_retries: 0,
+                tool_executions: 1,
+            },
+        };
+        write_child_frame(
+            &mut child,
+            &ChildFrame::Activity(ActivityFrame {
+                observation: observation.clone(),
+            }),
+        )
+        .await
+        .expect("write activity");
+        assert_eq!(
+            read_child_frame(&mut parent).await.expect("read activity"),
+            Some(ChildFrame::Activity(ActivityFrame { observation }))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_malformed_activity_payload_is_rejected() {
+        let (mut parent, mut child) = pair();
+        write_frame(&mut child, KIND_ACTIVITY, b"{\"observation\":")
+            .await
+            .expect("write");
+        assert!(matches!(
+            read_child_frame(&mut parent).await,
+            Err(ProtocolError::Malformed { .. })
+        ));
+    }
+
     #[tokio::test]
     async fn typed_frames_round_trip() {
         let (mut parent, mut child) = pair();
@@ -715,8 +781,8 @@ mod tests {
         ));
     }
 
-    /// IPC v7 does not decode obsolete pre-v7 Cancel payloads. A stale peer is
-    /// rejected as malformed rather than silently losing cancellation
+    /// Current IPC does not decode obsolete pre-v7 Cancel payloads. A stale
+    /// peer is rejected as malformed rather than silently losing cancellation
     /// provenance through a compatibility path.
     #[tokio::test]
     async fn the_v4_empty_cancel_payload_is_not_compatibility_decoded() {

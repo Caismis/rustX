@@ -379,7 +379,7 @@ pub enum RuntimeClientEvent {
     /// termination, client detach, and client reconnect.
     SubagentUpdated {
         /// The canonical registry snapshot after the transition.
-        subagent: RuntimeClientSubagent,
+        subagent: Box<RuntimeClientSubagent>,
     },
 
     /// The externally visible capability read model changed (Issue #81).

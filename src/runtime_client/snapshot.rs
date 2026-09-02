@@ -751,7 +751,13 @@ pub struct RuntimeClientWorkspaceHandoff {
 /// A read-model materialization of the authoritative registry snapshot:
 /// every field is derived, and the durable ownership/terminal events —
 /// never this view — are the recovery authority.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Since Issue #178 the view also carries the child's live activity
+/// projection (`observation`), its redacted execution profile
+/// (`execution_profile`), and its start time (`started_at`). These are
+/// observation-plane facts: the lifecycle `state` remains the only
+/// authority on whether the child is alive, settling, or settled.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeClientSubagent {
     /// The conversation-owned subagent identity.
@@ -770,10 +776,24 @@ pub struct RuntimeClientSubagent {
     pub definition_digest: String,
     /// The authoritative lifecycle state.
     pub state: crate::runtime::subagent::SubagentState,
-    /// The bounded terminal detail (result content, failure diagnostic, or
-    /// cancellation detail), once known.
+    /// The bounded terminal failure/cancellation diagnostic, once known.
+    ///
+    /// A successful child's answer content never appears here (Issue
+    /// #178): the durable terminal inbound publication is the one result
+    /// channel.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// The latest live activity projection reported by the child (Issue
+    /// #178). Latest-value coalesced; never a lifecycle authority.
+    pub observation: crate::runtime::subagent::SubagentObservation,
+    /// The redacted execution profile frozen at child start (Issue #178);
+    /// `None` for recovery-projected records. Named `execution_profile`
+    /// on the wire: the bare `profile` key was the obsolete pre-#144
+    /// profile-name field and stays retired.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_profile: Option<crate::runtime::subagent::SubagentExecutionProfile>,
+    /// When the ownership committed; clients derive elapsed time from it.
+    pub started_at: DateTime<Utc>,
     /// The model-independent project workspace facts.
     pub workspace: RuntimeClientSubagentWorkspace,
 }

@@ -11786,7 +11786,11 @@ mod tests {
             crate::runtime::subagent::SubagentState::PublishingTerminal
         );
         assert!(unresolved.publication_abandoned);
-        assert!(unresolved.detail.is_some(), "candidate remains observable");
+        // Issue #178: the successful answer never rides the live read
+        // model, not even while its publication is unresolved; the
+        // candidate remains observable through the PublishingTerminal
+        // lifecycle state itself.
+        assert!(unresolved.detail.is_none());
         let pending_items = store
             .select_pending_batch()
             .expect("pending")
@@ -11997,10 +12001,10 @@ mod tests {
             crate::runtime::subagent::SubagentState::PublishingTerminal
         );
         assert!(unresolved.publication_abandoned);
-        assert!(
-            unresolved.detail.is_some(),
-            "the unresolved candidate is unchanged"
-        );
+        // Issue #178: the successful answer never rides the live read
+        // model; the unresolved candidate is observable through its
+        // PublishingTerminal lifecycle state, unchanged.
+        assert!(unresolved.detail.is_none());
 
         admission_gate.release();
     }

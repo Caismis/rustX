@@ -2100,8 +2100,9 @@ impl WorkflowRuntime {
                 if let Some(snapshot) = snapshot
                     && matches!(snapshot.state, crate::runtime::subagent::SubagentState::Succeeded)
                 {
-                    return Self::settled_agent_value(
+                    return self.settled_agent_value(
                             snapshot,
+                            &subagent_id,
                             node_id,
                             output_schema,
                             cancellation.reason(),
@@ -2116,29 +2117,36 @@ impl WorkflowRuntime {
             node: node_id.to_owned(),
             detail: "the native SubagentRegistry lost the child record".to_owned(),
         })?;
-        Self::settled_agent_value(snapshot, node_id, output_schema, cancellation.reason())
+        self.settled_agent_value(
+            snapshot,
+            &subagent_id,
+            node_id,
+            output_schema,
+            cancellation.reason(),
+        )
     }
 
     fn settled_agent_value(
+        &self,
         snapshot: crate::runtime::subagent::SubagentSnapshot,
+        subagent_id: &crate::runtime::identity::SubagentId,
         node_id: &str,
         output_schema: &Value,
         cancellation_reason: crate::runtime::types::CancellationReason,
     ) -> Result<Value, WorkflowRunError> {
         match snapshot.state {
             crate::runtime::subagent::SubagentState::Succeeded => {
-                let content = snapshot
-                    .detail
+                // The committed output value is the live Workflow result
+                // channel owned by the registry (Issue #178): the
+                // observation snapshot deliberately never carries it.
+                let content = self
+                    .subagents
+                    .workflow_agent_output(subagent_id)
                     .ok_or_else(|| WorkflowRunError::ChildFailed {
                         node: node_id.to_owned(),
                         detail: "workflow Agent completed without committed output".to_owned(),
                     })?;
-                let value = serde_json::from_str(&content).map_err(|error| {
-                    WorkflowRunError::ChildFailed {
-                        node: node_id.to_owned(),
-                        detail: format!("workflow Agent output was not JSON: {error}"),
-                    }
-                })?;
+                let value = content;
                 let validator = jsonschema::Validator::new(output_schema).map_err(|error| {
                     WorkflowRunError::ChildFailed {
                         node: node_id.to_owned(),

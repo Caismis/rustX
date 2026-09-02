@@ -712,7 +712,11 @@ impl StagedChild {
     /// anchors move together into the driver task. They are moved, never
     /// copied, so there is one owner at every instant and no second
     /// containment authority can exist.
-    pub(crate) fn into_driver(self, delegate: super::ipc::DelegationFrame) -> ChildDriver {
+    pub(crate) fn into_driver(
+        self,
+        delegate: super::ipc::DelegationFrame,
+        activity: Option<super::registry::SubagentActivitySink>,
+    ) -> ChildDriver {
         let Self {
             child,
             control,
@@ -748,6 +752,7 @@ impl StagedChild {
                 delegate,
                 command_rx,
                 cancelled_before_start,
+                activity,
             )
             .await
         });
@@ -1036,6 +1041,13 @@ async fn handshake_core(
                         detail: "the child produced a result before delegation".to_owned(),
                     });
                 }
+                // The child never publishes activity before the delegation:
+                // the projection only advances once the attempt runs.
+                Ok(Some(ChildFrame::Activity(_))) => {
+                    return Err(SpawnError::Handshake {
+                        detail: "the child published activity before delegation".to_owned(),
+                    });
+                }
                 Ok(None) => {
                     let exit = try_wait(child);
                     return Err(SpawnError::Handshake {
@@ -1159,6 +1171,9 @@ async fn drive_child(
     delegate: super::ipc::DelegationFrame,
     mut commands: tokio::sync::mpsc::Receiver<DriverCommand>,
     cancelled_before_start: Option<CancellationReason>,
+    // The registry's live-activity sink (Issue #178). `None` only in tests
+    // that drive the physical pipeline without a registry.
+    activity: Option<super::registry::SubagentActivitySink>,
 ) -> PhysicalSettlement {
     let mut cancel_deadline = None;
     let mut cancellation_delivered = false;
@@ -1239,6 +1254,15 @@ async fn drive_child(
                 match frame {
                     Ok(Some(ChildFrame::Result(frame))) => result = Some(frame),
                     Ok(Some(ChildFrame::Diagnostic(_))) => {}
+                    // Live activity is observation-plane traffic (Issue
+                    // #178): applied synchronously into the registry read
+                    // model, never awaited on a consumer, never semantic
+                    // evidence.
+                    Ok(Some(ChildFrame::Activity(frame))) => {
+                        if let Some(sink) = &activity {
+                            sink.apply(frame.observation);
+                        }
+                    }
                     // The nested anchor protocol stays live for the whole
                     // committed lifetime: a unit may be created at any point
                     // during the child's semantic work.
@@ -1780,10 +1804,13 @@ mod tests {
 
         // The ownership commit: the direct child handle AND the retained
         // anchor set move into the driver task, exactly once.
-        let driver = staged.into_driver(crate::runtime::subagent::ipc::DelegationFrame {
-            task: "inspect".to_owned(),
-            context: None,
-        });
+        let driver = staged.into_driver(
+            crate::runtime::subagent::ipc::DelegationFrame {
+                task: "inspect".to_owned(),
+                context: None,
+            },
+            None,
+        );
         let (_commands, start_gate, task) = driver.split();
         let _ = start_gate.send(None);
 
