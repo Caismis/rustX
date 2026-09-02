@@ -431,6 +431,21 @@ describe("footer", () => {
 });
 
 describe("startup and context", () => {
+  it("makes parent and inspected-child context explicit without changing projection state", () => {
+    const state = stateOf();
+    const parent = footer(state, "connected", 160, undefined, {
+      conversationId: "conversation-parent",
+    });
+    const child = footer(state, "connected", 160, undefined, {
+      conversationId: "conversation-child",
+      parentConversationId: "conversation-parent",
+      readOnly: true,
+    });
+    assert.match(parent, /parent conversation-parent/);
+    assert.match(child, /child conversation-child · read-only · Esc parent/);
+    assert.doesNotMatch(child, /parent conversation-parent/);
+  });
+
   it("is shown before a real turn and reclaimed after transcript content", () => {
     const initial = stateOf();
     assert.equal(startupVisible(initial), true);

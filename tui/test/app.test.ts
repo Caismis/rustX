@@ -25,6 +25,7 @@ import {
   catalogModel,
   sessionModel,
   sessionView,
+  subagent,
 } from "./support/fixtures.ts";
 
 function fakeConnection(
@@ -148,6 +149,80 @@ function countTuiRenderRequests(): {
 }
 
 describe("RustxTuiApp lifecycle", () => {
+  it("opens a selected child by child_conversation_id and returns with Esc", async () => {
+    const parentState = {
+      ...emptyPresentationState(sessionModel("alpha/model-a")),
+      subagents: [subagent("explore", "sha256:child")],
+    };
+    const parent = fakeSession(async () => {}, parentState);
+    const parentApi = parent as unknown as {
+      identity: { conversationId: string };
+    };
+    parentApi.identity = { conversationId: "conversation-parent" };
+
+    const child = fakeSession(async () => {}, emptyPresentationState(sessionModel("alpha/model-a")));
+    const childApi = child as unknown as {
+      identity: { conversationId: string };
+    };
+    childApi.identity = { conversationId: "conversation-child" };
+    const childLog: string[] = [];
+    const opened: string[] = [];
+    const app = new RustxTuiApp({
+      session: parent,
+      connection: fakeConnection(),
+      child: fakeChild([]),
+      openConversation: async (conversationId) => {
+        opened.push(conversationId);
+        return { session: child, connection: fakeConnection(), child: fakeChild(childLog) };
+      },
+    });
+    const running = app.run();
+
+    // Ctrl+Down enters the explicit subagent-list focus; plain Enter remains
+    // reserved for the editor unless that focus is active.
+    process.stdin.emit("data", "\x1b[1;5B");
+    await waitForApplicationContinuation();
+    process.stdin.emit("data", "\r");
+    await waitForApplicationContinuation();
+    assert.deepEqual(opened, ["conv-1-subagent-1"]);
+
+    process.stdin.emit("data", "\u001b");
+    await waitForPiEscapeDisambiguation();
+    assert.deepEqual(childLog, ["close_stdin", "wait_exit"]);
+    assert.equal(parent.state, parentState, "navigation does not replace parent state");
+
+    await app.quit();
+    await running;
+  });
+
+  it("detaches a direct read-only inspection without requesting shutdown", async () => {
+    const log: string[] = [];
+    let shutdownRequested = false;
+    const session = fakeSession(async () => {}, {
+      ...emptyPresentationState(sessionModel("alpha/model-a")),
+    });
+    session.shutdown = async () => {
+      shutdownRequested = true;
+    };
+    const sessionApi = session as unknown as {
+      identity: { conversationId: string };
+    };
+    sessionApi.identity = { conversationId: "conversation-child" };
+    const app = new RustxTuiApp({
+      session,
+      connection: fakeConnection(),
+      child: fakeChild(log),
+      readOnly: true,
+    });
+    const running = app.run();
+
+    process.stdin.emit("data", "\x03");
+    await running;
+
+    assert.equal(shutdownRequested, false);
+    assert.deepEqual(log, ["close_stdin", "wait_exit"]);
+  });
+
   it("keeps stdin open until the exact attempt settlement is observed", async () => {
     const log: string[] = [];
     let beginSettlement!: () => void;

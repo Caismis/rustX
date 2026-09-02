@@ -42,6 +42,7 @@ import type {
   RuntimeClientSubagent,
   RuntimeClientSubagentActivity,
 } from "../../protocol/types.ts";
+import { SUBAGENT_TERMINAL_STATES } from "../../protocol/types.ts";
 import type { PresentationState } from "../../presentation/state.ts";
 import type { ToolCorrelation } from "../../presentation/tools.ts";
 import {
@@ -181,14 +182,17 @@ export function renderBackground(
 }
 
 /**
- * The subagent section: one compact row per child the runtime still
- * considers active (Issue #178).
+ * The subagent section: one compact row per child known to the parent runtime.
+ * Active rows show the disposable observation plane; terminal rows remain
+ * visible as navigation targets for their durable child conversation (Issue
+ * #179).
  *
  * This is the observation plane, not a second authority: the lifecycle
- * label and the activity line are both runtime-published facts, terminal
- * children render nothing here (their settlement is conversation content,
- * delivered by the durable terminal inbound publication), and `detail` —
- * diagnostics only since Issue #178 — is never rendered as a payload.
+ * label and the activity line are both runtime-published facts. Terminal rows
+ * render lifecycle and identity only: their settlement is conversation
+ * content, delivered by the durable terminal inbound publication, and
+ * `detail` — diagnostics only since Issue #178 — is never rendered as a
+ * payload.
  *
  * `now` is injectable so the elapsed and last-activity labels are provable
  * without a wall clock.
@@ -197,30 +201,42 @@ export function renderSubagentSection(
   state: PresentationState,
   preferences: PresentationPreferences,
   now: Date = new Date(),
+  selectedSubagentId?: string,
 ): string {
-  const active = activeSubagents(state);
-  if (active.length === 0) {
+  if (state.subagents.length === 0) {
     return "";
   }
+  const active = activeSubagents(state);
   return [
     role.strong(
-      `Subagents · ${active.length} active of ${state.subagents.length} known`,
+      `Subagents · ${active.length} active of ${state.subagents.length} known · Ctrl+↑↓ select · Enter inspect`,
     ),
-    ...active.map((subagent) => renderSubagent(subagent, preferences, now)),
+    ...state.subagents.map((subagent) => renderSubagent(
+      subagent,
+      preferences,
+      now,
+      subagent.subagent_id === selectedSubagentId,
+    )),
   ].join("\n");
 }
 
-/** One compact live-activity card for a non-terminal subagent child. */
+/** One compact row for a subagent identity and its optional live observation. */
 function renderSubagent(
   subagent: RuntimeClientSubagent,
   _preferences: PresentationPreferences,
   now: Date,
+  selected: boolean,
 ): string {
-  const glyph = role.pending("◐");
+  const terminal = SUBAGENT_TERMINAL_STATES.has(subagent.state);
+  const glyph = terminal ? role.meta("●") : role.pending("◐");
+  const timing = terminal ? "" : ` ${role.chrome("·")} ${role.meta(formatElapsed(now, subagent.started_at))}`;
   const lines = [
-    `${glyph} ${role.toolTitle(style.bold(bounded(subagent.agent)))} ${role.chrome("·")} ${role.pending(subagent.state)} ${role.chrome("·")} ${role.meta(formatElapsed(now, subagent.started_at))}`,
-    `  ${role.meta(activityLine(subagent.observation.activity))}`,
+    `${selected ? role.accent("▸") : " "} ${glyph} ${role.toolTitle(style.bold(bounded(subagent.agent)))} ${role.chrome("·")} ${terminal ? role.meta(subagent.state) : role.pending(subagent.state)}${timing} ${role.chrome("·")} ${role.meta(bounded(subagent.child_conversation_id))}`,
   ];
+  if (terminal) {
+    return lines.join("\n");
+  }
+  lines.push(`  ${role.meta(activityLine(subagent.observation.activity))}`);
   const lastActivityAt = subagent.observation.last_activity_at;
   if (lastActivityAt !== undefined) {
     lines.push(

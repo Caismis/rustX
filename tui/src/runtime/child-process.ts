@@ -36,6 +36,12 @@ export interface RuntimePaths {
 /** Startup controls forwarded verbatim to the Rust owner. */
 export interface RuntimeStartupOptions {
   /**
+   * Attach read-only to this known conversation's durable Runtime Client
+   * projection. This is a generic conversation identity target, not a
+   * subagent transcript request; Rust resolves it to the conversation store.
+   */
+  inspectConversation?: string | undefined;
+  /**
    * Start on the Session the catalog has published as active instead of an
    * empty one. A launch is not a resume: the runtime begins on an empty
    * Session unless this asks otherwise, and a client replacing the process to
@@ -135,6 +141,9 @@ export class ChildRuntimeProcess {
     const startupArguments: string[] = [];
     if (startup.continueActiveSession) {
       startupArguments.push("--continue");
+    }
+    if (startup.inspectConversation !== undefined) {
+      startupArguments.push("--inspect-conversation", startup.inspectConversation);
     }
     if (startup.session !== undefined) {
       startupArguments.push("--session", startup.session);
@@ -307,6 +316,7 @@ export class ChildRuntimeProcess {
 function emptyRuntimeStartupOptions(): RuntimeStartupOptions {
   return {
     continueActiveSession: false,
+    inspectConversation: undefined,
     session: undefined,
     node: undefined,
     sessionName: undefined,
