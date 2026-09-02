@@ -5930,17 +5930,16 @@ mod tests {
                 "both live reports reached the observer while the tool still executes"
             );
             assert!(
-                !observer.events().iter().any(|event| matches!(
-                    event,
-                    RuntimeEvent::ToolExecutionProgress { .. }
-                )),
+                !observer
+                    .events()
+                    .iter()
+                    .any(|event| matches!(event, RuntimeEvent::ToolExecutionProgress { .. })),
                 "live progress is never a committed-fact observation"
             );
             assert!(
-                !event_history(store.as_ref()).iter().any(|event| matches!(
-                    event,
-                    RuntimeEvent::ToolExecutionProgress { .. }
-                )),
+                !event_history(store.as_ref())
+                    .iter()
+                    .any(|event| matches!(event, RuntimeEvent::ToolExecutionProgress { .. })),
                 "nothing durable committed while the tool is parked"
             );
             release.notify_one();
@@ -5973,7 +5972,11 @@ mod tests {
             .iter()
             .position(|event| matches!(event, RuntimeEvent::ToolExecutionCompleted { .. }))
             .expect("the completion fact committed");
-        assert_eq!(progress_positions.len(), 2, "the retained reports commit once each");
+        assert_eq!(
+            progress_positions.len(),
+            2,
+            "the retained reports commit once each"
+        );
         assert!(
             progress_positions
                 .iter()

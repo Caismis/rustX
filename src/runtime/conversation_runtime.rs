@@ -3339,9 +3339,6 @@ impl ConversationRuntime {
     /// Boundary tests park/unpark the parent's projection input through
     /// this handle to own the fold schedule deterministically.
     #[cfg(test)]
-    // Wired by the boundary conformance suites of the observation plane
-    // (Issue #178 follow-up); not referenced by any in-crate unit test.
-    #[allow(dead_code)]
     pub(crate) fn installed_observation_bridge(&self) -> Option<Arc<PendingObservations>> {
         self.inner.pending.get().cloned()
     }

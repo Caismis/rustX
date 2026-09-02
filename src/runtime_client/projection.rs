@@ -527,7 +527,8 @@ impl RuntimeClientProjection {
                 Vec::new()
             }
             ConversationObservation::SubagentLifecycle(snapshot)
-            | ConversationObservation::SubagentActivity(snapshot) => {                // Both subagent delivery classes fold identically: the
+            | ConversationObservation::SubagentActivity(snapshot) => {
+                // Both subagent delivery classes fold identically: the
                 // whole-view upsert is unconditional last-write-wins, and
                 // the queue's lane rules (a lifecycle push evicts queued
                 // activity of the same subagent) already guarantee no fold

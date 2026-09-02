@@ -287,6 +287,11 @@ pub struct FakeTool {
     result: ToolExecutionResult,
     release: Option<watch::Sender<bool>>,
     progress_reports: usize,
+    /// Phased mode: one park gate per entry; after gate `i` releases, the
+    /// tool reports `phase_reports[i]` (when `i < phase_reports.len()`) and
+    /// parks on gate `i + 1`. The final gate release settles the call.
+    phase_gates: Vec<watch::Sender<bool>>,
+    phase_reports: Vec<String>,
     calls: watch::Sender<Vec<ToolInvocation>>,
     started: watch::Sender<bool>,
     completed: watch::Sender<Vec<String>>,
@@ -314,6 +319,8 @@ impl FakeTool {
             result,
             release: None,
             progress_reports: 0,
+            phase_gates: Vec::new(),
+            phase_reports: Vec::new(),
             calls: watch::Sender::new(Vec::new()),
             started: watch::Sender::new(false),
             completed: watch::Sender::new(Vec::new()),
@@ -335,11 +342,45 @@ impl FakeTool {
                 result,
                 release: Some(release.clone()),
                 progress_reports: 0,
+                phase_gates: Vec::new(),
+                phase_reports: Vec::new(),
                 calls: watch::Sender::new(Vec::new()),
                 started: watch::Sender::new(false),
                 completed: watch::Sender::new(Vec::new()),
             },
             release,
+        )
+    }
+
+    /// Creates a phased parking fake tool and its `reports.len() + 1`
+    /// release gates, in order. Execution parks on the first gate without
+    /// having reported anything (a deterministic no-progress cut); each gate
+    /// release reports the next `reports` message as progress and parks on
+    /// the next gate, and releasing the final gate settles the call with
+    /// `result`. Like [`FakeTool::parking`], every park races the
+    /// invocation's cancellation signal, so a phased tool always settles.
+    #[must_use]
+    pub fn parking_phases(
+        definition: ToolDefinition,
+        result: ToolExecutionResult,
+        reports: &[&str],
+    ) -> (Self, Vec<watch::Sender<bool>>) {
+        let gates: Vec<watch::Sender<bool>> = (0..=reports.len())
+            .map(|_| watch::channel(false).0)
+            .collect();
+        (
+            Self {
+                definition,
+                result,
+                release: None,
+                progress_reports: 0,
+                phase_gates: gates.clone(),
+                phase_reports: reports.iter().map(|report| (*report).to_owned()).collect(),
+                calls: watch::Sender::new(Vec::new()),
+                started: watch::Sender::new(false),
+                completed: watch::Sender::new(Vec::new()),
+            },
+            gates,
         )
     }
 
@@ -400,6 +441,8 @@ impl ToolExecutor for FakeTool {
         let result = self.result.clone();
         let completed = self.completed.clone();
         let progress_reports = self.progress_reports;
+        let phase_gates = self.phase_gates.clone();
+        let phase_reports = self.phase_reports.clone();
         Box::pin(async move {
             started.send_replace(true);
             for index in 0..progress_reports {
@@ -409,34 +452,64 @@ impl ToolExecutor for FakeTool {
                     total: None,
                 });
             }
-            let outcome = if let Some(release) = release.as_mut() {
-                tokio::select! {
-                    biased;
-                    () = context.cancellation.cancelled() => {
-                        ToolExecutionResult {
-                            status: ToolExecutionStatus::Cancelled {
-                                reason: rustx::runtime::types::CancellationReason::UserRequested,
-                                phase: rustx::tools::types::ToolCancellationPhase::DuringExecution,
-                            },
-                            content: Vec::new(),
-                            duration_ms: 0,
-                            exit_code: None,
-                            artifacts: Vec::new(),
-                            truncation: None,
-                            managed_output: None,
+            let outcome = 'outcome: {
+                // Phased mode: park on each gate; a release reports the
+                // phase's progress and the loop parks on the next gate.
+                for (index, gate) in phase_gates.iter().enumerate() {
+                    let mut gate_receiver = gate.subscribe();
+                    tokio::select! {
+                        biased;
+                        () = context.cancellation.cancelled() => {
+                            break 'outcome cancelled_execution_result();
+                        }
+                        released = gate_receiver.wait_for(|released| *released) => {
+                            released.expect("fake tool phase gate stays open");
                         }
                     }
-                    released = release.wait_for(|released| *released) => {
-                        released.expect("fake tool release channel stays open");
-                        result
-                    },
+                    if let Some(report) = phase_reports.get(index) {
+                        context.progress.report(rustx::tools::types::ToolProgress {
+                            message: Some(report.clone()),
+                            completed: None,
+                            total: None,
+                        });
+                    }
                 }
-            } else {
-                result
+                if let Some(release) = release.as_mut() {
+                    tokio::select! {
+                        biased;
+                        () = context.cancellation.cancelled() => {
+                            cancelled_execution_result()
+                        }
+                        released = release.wait_for(|released| *released) => {
+                            released.expect("fake tool release channel stays open");
+                            result
+                        },
+                    }
+                } else {
+                    result
+                }
             };
             completed.send_modify(|order| order.push(invocation.tool_name.clone()));
             outcome
         })
+    }
+}
+
+/// The normalized cancelled outcome a parking or phased fake tool settles
+/// with when the invocation's cancellation signal fires mid-park (the loop
+/// normalizes the reason to the attempt's).
+fn cancelled_execution_result() -> ToolExecutionResult {
+    ToolExecutionResult {
+        status: ToolExecutionStatus::Cancelled {
+            reason: rustx::runtime::types::CancellationReason::UserRequested,
+            phase: rustx::tools::types::ToolCancellationPhase::DuringExecution,
+        },
+        content: Vec::new(),
+        duration_ms: 0,
+        exit_code: None,
+        artifacts: Vec::new(),
+        truncation: None,
+        managed_output: None,
     }
 }
 

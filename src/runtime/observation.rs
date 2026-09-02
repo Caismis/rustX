@@ -187,12 +187,14 @@ pub(crate) enum ConversationObservation {
     /// at batch settlement as `RuntimeEvent::ToolExecutionProgress`.
     ToolProgress {
         /// The owning attempt.
-        #[allow(dead_code)] // identity carried for consumers; the in-crate folds key on the call
+        #[allow(dead_code)]
+        // identity carried for consumers; the in-crate folds key on the call
         attempt_id: AttemptId,
         /// The in-flight tool call.
         tool_call_id: ToolCallId,
         /// The executing tool.
-        #[allow(dead_code)] // identity carried for consumers; the in-crate folds key on the call
+        #[allow(dead_code)]
+        // identity carried for consumers; the in-crate folds key on the call
         tool_id: ToolId,
         /// The latest bounded progress notification.
         progress: ToolProgress,
@@ -419,7 +421,9 @@ impl PendingObservations {
             // Disposable: overwrite in place — the queue holds only the
             // latest unpublished activity snapshot per subagent.
             ConversationObservation::SubagentActivity(snapshot) => {
-                state.latest_activity.insert(snapshot.subagent_id.clone(), snapshot);
+                state
+                    .latest_activity
+                    .insert(snapshot.subagent_id.clone(), snapshot);
             }
             // Disposable: overwrite in place — the queue holds only the
             // latest unpublished live progress report per tool call.
@@ -672,10 +676,9 @@ mod tests {
     fn activity_pushes_of_one_subagent_coalesce_to_the_latest() {
         let queue = PendingObservations::new();
         for revision in 1..=5 {
-            queue.push(ConversationObservation::SubagentActivity(subagent_snapshot(
-                "conv-1-subagent-1",
-                revision,
-            )));
+            queue.push(ConversationObservation::SubagentActivity(
+                subagent_snapshot("conv-1-subagent-1", revision),
+            ));
         }
         assert_eq!(queue.queued(), 1, "the activity lane holds the latest only");
         let drained = queue.drain();
@@ -699,10 +702,9 @@ mod tests {
         for index in 1..=3 {
             let subagent_id = format!("conv-1-subagent-{index}");
             for revision in 1..=2 {
-                queue.push(ConversationObservation::SubagentActivity(subagent_snapshot(
-                    &subagent_id,
-                    revision,
-                )));
+                queue.push(ConversationObservation::SubagentActivity(
+                    subagent_snapshot(&subagent_id, revision),
+                ));
             }
         }
         assert_eq!(queue.queued(), 3, "one entry per active subagent");
@@ -727,19 +729,20 @@ mod tests {
     #[test]
     fn a_lifecycle_snapshot_evicts_the_queued_activity() {
         let queue = PendingObservations::new();
-        queue.push(ConversationObservation::SubagentActivity(subagent_snapshot(
-            "conv-1-subagent-1",
-            3,
-        )));
-        queue.push(ConversationObservation::SubagentLifecycle(subagent_snapshot(
-            "conv-1-subagent-1",
-            4,
-        )));
-        assert_eq!(queue.queued(), 1, "the lifecycle push evicted the stale activity");
-        queue.push(ConversationObservation::SubagentActivity(subagent_snapshot(
-            "conv-1-subagent-1",
-            5,
-        )));
+        queue.push(ConversationObservation::SubagentActivity(
+            subagent_snapshot("conv-1-subagent-1", 3),
+        ));
+        queue.push(ConversationObservation::SubagentLifecycle(
+            subagent_snapshot("conv-1-subagent-1", 4),
+        ));
+        assert_eq!(
+            queue.queued(),
+            1,
+            "the lifecycle push evicted the stale activity"
+        );
+        queue.push(ConversationObservation::SubagentActivity(
+            subagent_snapshot("conv-1-subagent-1", 5),
+        ));
         let drained = queue.drain();
         assert_eq!(drained.len(), 2);
         match (&drained[0], &drained[1]) {
@@ -761,10 +764,9 @@ mod tests {
         let queue = PendingObservations::new();
         queue.park();
         for revision in 1..=4 {
-            queue.push(ConversationObservation::SubagentActivity(subagent_snapshot(
-                "conv-1-subagent-1",
-                revision,
-            )));
+            queue.push(ConversationObservation::SubagentActivity(
+                subagent_snapshot("conv-1-subagent-1", revision),
+            ));
         }
         queue.push(ConversationObservation::Shutdown);
         assert!(queue.drain().is_empty(), "parked: the worker folds nothing");
@@ -786,16 +788,14 @@ mod tests {
     fn close_clears_both_lanes_terminally() {
         let queue = PendingObservations::new();
         queue.push(ConversationObservation::Shutdown);
-        queue.push(ConversationObservation::SubagentActivity(subagent_snapshot(
-            "conv-1-subagent-1",
-            1,
-        )));
+        queue.push(ConversationObservation::SubagentActivity(
+            subagent_snapshot("conv-1-subagent-1", 1),
+        ));
         queue.close();
         assert_eq!(queue.queued(), 0);
-        queue.push(ConversationObservation::SubagentActivity(subagent_snapshot(
-            "conv-1-subagent-1",
-            2,
-        )));
+        queue.push(ConversationObservation::SubagentActivity(
+            subagent_snapshot("conv-1-subagent-1", 2),
+        ));
         assert_eq!(queue.queued(), 0, "a closed queue accepts nothing");
         assert!(queue.is_closed());
     }

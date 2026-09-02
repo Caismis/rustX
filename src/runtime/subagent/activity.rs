@@ -140,7 +140,11 @@ impl SubagentObservationProjector {
     /// carry no activity signal (message commits, status emissions, journal
     /// bookkeeping) leave the projection untouched: they bump no revision
     /// and stamp no timestamp.
-    pub(crate) fn fold(&mut self, observation: &ConversationObservation, now: DateTime<Utc>) -> bool {
+    pub(crate) fn fold(
+        &mut self,
+        observation: &ConversationObservation,
+        now: DateTime<Utc>,
+    ) -> bool {
         let applied = match observation {
             ConversationObservation::Event { event, .. } => self.fold_event(event),
             // One live (not yet durable) foreground tool progress report
@@ -410,7 +414,10 @@ mod tests {
         }
     }
 
-    fn assert_folded(projector: &mut SubagentObservationProjector, observation: &ConversationObservation) {
+    fn assert_folded(
+        projector: &mut SubagentObservationProjector,
+        observation: &ConversationObservation,
+    ) {
         let revision = projector.observation().revision;
         assert!(
             projector.fold(observation, now()),
@@ -420,7 +427,10 @@ mod tests {
         assert_eq!(projector.observation().last_activity_at, Some(now()));
     }
 
-    fn assert_ignored(projector: &mut SubagentObservationProjector, observation: &ConversationObservation) {
+    fn assert_ignored(
+        projector: &mut SubagentObservationProjector,
+        observation: &ConversationObservation,
+    ) {
         let before = projector.observation().clone();
         assert!(!projector.fold(observation, now()));
         assert_eq!(
@@ -434,7 +444,10 @@ mod tests {
     fn model_request_start_and_complete_cycle() {
         let mut projector = SubagentObservationProjector::default();
         assert_eq!(projector.observation.revision, 0);
-        assert_eq!(projector.observation.activity, SubagentActivity::AwaitingActivity);
+        assert_eq!(
+            projector.observation.activity,
+            SubagentActivity::AwaitingActivity
+        );
         assert_eq!(projector.observation.last_activity_at, None);
 
         assert_folded(
@@ -461,7 +474,10 @@ mod tests {
                 usage: None,
             }),
         );
-        assert_eq!(projector.observation.activity, SubagentActivity::AwaitingActivity);
+        assert_eq!(
+            projector.observation.activity,
+            SubagentActivity::AwaitingActivity
+        );
     }
 
     #[test]
@@ -482,7 +498,10 @@ mod tests {
                 usage: None,
             }),
         );
-        assert_eq!(projector.observation.activity, SubagentActivity::AwaitingActivity);
+        assert_eq!(
+            projector.observation.activity,
+            SubagentActivity::AwaitingActivity
+        );
 
         assert_folded(
             &mut projector,
@@ -743,7 +762,10 @@ mod tests {
                 result: tool_result(),
             }),
         );
-        assert_eq!(projector.observation.activity, SubagentActivity::AwaitingActivity);
+        assert_eq!(
+            projector.observation.activity,
+            SubagentActivity::AwaitingActivity
+        );
         assert_eq!(projector.observation.counters.tool_executions, 1);
 
         // Progress with no tool in flight is ignored.
@@ -776,7 +798,10 @@ mod tests {
                 error: "denied".to_owned(),
             }),
         );
-        assert_eq!(projector.observation.activity, SubagentActivity::AwaitingActivity);
+        assert_eq!(
+            projector.observation.activity,
+            SubagentActivity::AwaitingActivity
+        );
         assert_eq!(projector.observation.counters.tool_executions, 1);
     }
 
@@ -791,7 +816,10 @@ mod tests {
                 error: "no budget".to_owned(),
             }),
         );
-        assert_eq!(projector.observation.activity, SubagentActivity::AwaitingActivity);
+        assert_eq!(
+            projector.observation.activity,
+            SubagentActivity::AwaitingActivity
+        );
     }
 
     #[test]
@@ -843,7 +871,10 @@ mod tests {
                 audit: None,
             },
         );
-        assert_eq!(projector.observation.activity, SubagentActivity::AwaitingActivity);
+        assert_eq!(
+            projector.observation.activity,
+            SubagentActivity::AwaitingActivity
+        );
     }
 
     fn interaction_audit() -> crate::events::types::RuntimeEventEnvelope {
@@ -917,7 +948,10 @@ mod tests {
         );
         let counters = projector.observation.counters;
         projector.observation.settle_neutral();
-        assert_eq!(projector.observation.activity, SubagentActivity::AwaitingActivity);
+        assert_eq!(
+            projector.observation.activity,
+            SubagentActivity::AwaitingActivity
+        );
         assert_eq!(projector.observation.revision, 2);
         assert_eq!(projector.observation.counters, counters);
         assert_eq!(projector.observation.last_activity_at, Some(now()));
