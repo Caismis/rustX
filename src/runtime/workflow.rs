@@ -2147,6 +2147,13 @@ impl WorkflowRuntime {
                         detail: "workflow Agent completed without committed output".to_owned(),
                     })?;
                 let value = content;
+                // This validation is not redundant with
+                // `validate_workflow_candidate` in the registry: the registry
+                // revalidates the untrusted cross-process child wire frame
+                // before its durable commit, while this validates the run's
+                // result against the node's own frozen `output_schema`
+                // authority at consumption time. The two checks guard
+                // different trust boundaries; both stay.
                 let validator = jsonschema::Validator::new(output_schema).map_err(|error| {
                     WorkflowRunError::ChildFailed {
                         node: node_id.to_owned(),

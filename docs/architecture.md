@@ -4691,12 +4691,17 @@ a child is doing *right now* without creating a second authority:
 child Agent Loop                 objective execution facts
         |
         v
-child-side projector    folds the child's own ConversationObservation
-        |               stream into SubagentObservation (revision,
-        |               activity, last_activity_at, counters)
+child-side projector    folds the child's drained ConversationObservation
+        |               stream inline in the serve loop into
+        |               SubagentObservation (revision, activity,
+        |               last_activity_at, counters) — no forwarder task
         v
-tokio watch             latest-value coalescing; publishing can never
-        |               block the child Agent Loop
+child dispatcher        two delivery classes on one write half: a
+        |               reliable bounded mpsc lane (OUTBOUND_CAPACITY 64)
+        |               plus one disposable latest-value watch slot for
+        |               Activity; the biased writer drains reliable frames
+        |               first, so publishing can never block the child
+        |               Agent Loop or crowd out a terminal Result
         v
 Activity IPC frame      subagent IPC version 8, child->parent kind 107
         |
@@ -4712,7 +4717,16 @@ SubagentRegistry::apply_activity
 SubagentSnapshot.observation / execution_profile / started_at
         |
         v
-SubagentObserver seam -> Runtime Client SubagentUpdated + snapshot.subagents
+SubagentObserver seam -> parent PendingObservations: one reliable FIFO
+                        for lifecycle/semantic facts beside disposable
+                        keyed latest-value lanes (SubagentActivity by
+                        SubagentId, ToolProgress by ToolCallId; a
+                        lifecycle push evicts queued activity, a tool
+                        settlement evicts queued progress)
+        |
+        v
+Runtime Client SubagentUpdated + snapshot.subagents (replay ring +
+snapshot repair for lagging consumers)
 ```
 
 `SubagentState` stays the closed seven-state authority
@@ -4733,6 +4747,15 @@ the activity to the terminal-neutral `awaiting_activity` with a revision
 bump, retaining the counters and the last-activity timestamp as the final
 record; post-terminal activity frames are dropped, and the lifecycle remains
 the only terminal truth.
+
+The same live seam exists inside any conversation for foreground tool
+progress: while a call still executes, each reported observation fires
+`AgentExecutionObserver::observe_tool_progress` and reaches runtime
+observers as `ConversationObservation::ToolProgress` — disposable,
+latest-value per tool call, never durable, and folded to no events at the
+Runtime Client boundary. The durable `ToolExecutionProgress` facts still
+commit at batch settlement (see the agent loop's ToolResultObserver
+section); the live observation is never execution evidence.
 
 `SubagentExecutionProfile` is the safe read-model counterpart of the frozen
 model authority: derived exactly once from the `ResolvedSubagentSpec` the

@@ -1252,17 +1252,28 @@ second authority:
   execution or a scheduled retry.
 - **The child owns the projection; the parent owns the read model.** The
   child Agent Loop produces the objective execution facts; a child-side
-  projector folds its own `ConversationObservation` stream into a
-  `SubagentObservation` — a child-owned strictly monotonic `revision`, the
+  projector folds its own drained `ConversationObservation` stream —
+  inline in the serve loop, no forwarder task — into a
+  `SubagentObservation`: a child-owned strictly monotonic `revision`, the
   current `activity`, a child-stamped `last_activity_at`, and cumulative
-  `counters` — and forwards the newest revision through a watch-coalesced,
-  nonblocking `Activity` frame (subagent IPC version 8, frame kind 107).
+  `counters`. Publication crosses the child dispatcher's two delivery
+  classes: a reliable bounded mpsc lane carries everything except
+  `Activity`, while one disposable latest-value watch slot carries
+  `Activity` frames (subagent IPC version 8, frame kind 107); the biased
+  writer always drains the reliable lane first, so activity traffic
+  consumes no reliable capacity and can never delay a terminal `Result`.
   The parent process driver applies each decoded frame synchronously
   through `SubagentRegistry::apply_activity`, which drops frames for a
   terminal or terminal-publishing record and frames whose revision does
   not advance the stored one. The registry read model (`SubagentSnapshot.observation`,
   `execution_profile`, `started_at`) reaches observers through the
-  existing `SubagentObserver` seam and, at the Runtime Client boundary,
+  existing `SubagentObserver` seam, where the parent's
+  `PendingObservations` applies the same split: one reliable FIFO for
+  lifecycle and semantic facts, beside two disposable latest-value lanes —
+  `SubagentActivity` keyed by subagent identity (a lifecycle push evicts
+  a queued activity snapshot of the same subagent) and `ToolProgress`
+  keyed by tool call (a settlement push evicts the queued progress of
+  that call). At the Runtime Client boundary the projection surfaces
   through `SubagentUpdated` events and `snapshot.subagents`.
 - **Only superseded observations are coalescible.** Lifecycle,
   cancellation, and terminal publication stay reliable and exactly-once;

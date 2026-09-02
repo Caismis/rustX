@@ -129,9 +129,14 @@ invariant is a real process boundary.
   isolation, cancellation/drain across the boundary. Also the Issue #178
   live-activity observation plane: activity projects while the lifecycle
   stays `Running`, a stalled or absent consumer changes nothing about child
-  execution, activity frames commit no parent journal facts and never enter
-  parent model context or the result channel, the frozen execution profile
-  is the only projected configuration, and snapshot repair serves the latest
+  execution (the same workload fingerprints identically with no observer, a
+  draining consumer, and a stalled one), a stalled parent projection
+  coalesces superseded activity and converges on the newest revision,
+  foreground live tool progress projects while the tool runs and is never
+  durable, a retry's next request projects retry ordinal zero, activity
+  frames commit no parent journal facts and never enter parent model
+  context or the result channel, the frozen execution profile is the only
+  projected configuration, and snapshot repair serves the latest
   observation. A child is an ordinary
   `ConversationRuntime`; generic retry/deadline/cancellation/settlement
   semantics belong to `scripted_suites::agent` and must not be replayed
