@@ -1408,6 +1408,15 @@ impl<'a> AgentExecution<'a> {
                         let retry_number = next_request_ordinal;
                         let retry_delay_ms =
                             transient_retry_delay_ms(transient_retries, error.retry_after_ms);
+                        // Freeze the absolute deadline BEFORE the schedule
+                        // commits: once `ModelRetryScheduled` is durable, its
+                        // committed delay and the backoff deadline are one
+                        // atomic fact, so a clock advance ordered after the
+                        // commit always covers the deadline.
+                        let retry_deadline_ms = self
+                            .monotonic_clock
+                            .now_millis()
+                            .saturating_add(retry_delay_ms);
                         if let Err(terminal) = self.schedule_transient_retry(
                             failed_request_id,
                             retry_number,
@@ -1415,7 +1424,8 @@ impl<'a> AgentExecution<'a> {
                         ) {
                             return Some(terminal);
                         }
-                        if let Err(terminal) = self.wait_for_retry_backoff(retry_delay_ms).await {
+                        if let Err(terminal) = self.wait_for_retry_backoff(retry_deadline_ms).await
+                        {
                             return Some(terminal);
                         }
                         match self
@@ -3395,10 +3405,12 @@ impl<'a> AgentExecution<'a> {
     }
 
     /// Waits for a retry deadline in the runtime-owned monotonic clock. The
-    /// cancellation branch is intentionally biased so an already observable
-    /// cancellation wins before the clock can authorize another request.
-    async fn wait_for_retry_backoff(&self, delay_ms: u64) -> Result<(), Terminal> {
-        let deadline = self.monotonic_clock.now_millis().saturating_add(delay_ms);
+    /// deadline is captured by the caller before the schedule commits, so the
+    /// durable `ModelRetryScheduled` and the backoff deadline are one atomic
+    /// fact. The cancellation branch is intentionally biased so an already
+    /// observable cancellation wins before the clock can authorize another
+    /// request.
+    async fn wait_for_retry_backoff(&self, deadline_ms: u64) -> Result<(), Terminal> {
         #[cfg(test)]
         if let Some(pause) = self
             .retry_backoff_pause
@@ -3415,7 +3427,7 @@ impl<'a> AgentExecution<'a> {
         tokio::select! {
             biased;
             () = self.cancellation.cancelled() => Err(self.cancelled_terminal()),
-            () = self.monotonic_clock.wait_until_millis(deadline) => Ok(()),
+            () = self.monotonic_clock.wait_until_millis(deadline_ms) => Ok(()),
         }
     }
 
