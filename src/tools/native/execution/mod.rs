@@ -75,13 +75,19 @@
 //! filtered out — it is unreachable, and indistinguishable from absence.
 //!
 //! Each domain produces its own bounded authoritative listing, most
-//! recently allocated first. The intrinsic merges the two by strict
-//! alternation starting with the tool domain and truncates the result to
-//! the single global [`MAX_LISTED_EXECUTIONS`] bound, reporting `returned`,
-//! `matched`, `truncated`, and `limit` explicitly. The two domains allocate
-//! from independent sequences, so no shared ordinal could interleave them;
-//! alternation is what keeps one domain's overflow from starving the other
-//! out of a single global bound.
+//! recently allocated first *within that domain*. The intrinsic merges the
+//! two by strict alternation starting with the tool domain and truncates
+//! the result to the single global [`MAX_LISTED_EXECUTIONS`] bound,
+//! reporting `returned`, `matched`, `truncated`, and `limit` explicitly.
+//! The two domains allocate from independent sequences, so no shared
+//! ordinal could interleave them; alternation is what keeps one domain's
+//! overflow from starving the other out of a single global bound.
+//!
+//! The merged sequence is therefore deterministic but deliberately **not**
+//! globally most-recent-first: newest-first holds inside each domain only,
+//! and no cross-domain chronological claim is made — or could be made,
+//! since the domains share no ordinal or clock. The model-facing tool
+//! description says exactly this.
 //!
 //! The intrinsic's policies are fixed to foreground-only sequential
 //! execution and it may never become background-dispatchable (enforced by
@@ -148,7 +154,8 @@ fn definition() -> ToolDefinition {
              background tool execution has kind \"tool\", an asynchronous subagent child \
              has kind \"subagent\". Pass the exact handle from the creation result; the \
              kind is never guessed from the id. \"list\" takes no target and returns a \
-             bounded, most-recent-first summary of this conversation's own executions, \
+             bounded, deterministically ordered summary of this conversation's own \
+             executions — newest-first within each execution kind, the kinds interleaved — \
              optionally filtered by kind and to lifecycle-active ones; it reports handles \
              and lifecycle state only, never execution output, a subagent's answer, or a \
              child's history."
@@ -1187,6 +1194,32 @@ mod tests {
         assert_eq!(first.matched, MAX_LISTED_EXECUTIONS + 12);
         assert!(first.truncated);
         assert_eq!(first.limit, MAX_LISTED_EXECUTIONS);
+    }
+
+    /// The model-facing description states the ordering contract the
+    /// intrinsic actually implements (Issue #180).
+    ///
+    /// Only each domain is newest-first; the merged sequence is
+    /// deterministic alternation, and the two domains share no ordinal or
+    /// clock that could make a global chronological claim true. Promising
+    /// "most recent first" would therefore have been a promise the runtime
+    /// cannot keep.
+    #[test]
+    fn the_description_promises_determinism_not_global_recency() {
+        let description = super::definition().description;
+        assert!(
+            description.contains("deterministically ordered"),
+            "{description}"
+        );
+        assert!(
+            description.contains("newest-first within each execution kind"),
+            "{description}"
+        );
+        assert!(
+            !description.to_lowercase().contains("most-recent-first")
+                && !description.to_lowercase().contains("most recent first"),
+            "the merged listing is not globally most-recent-first: {description}"
+        );
     }
 
     /// The counts are always present, so the truncation contract does not

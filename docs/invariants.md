@@ -2839,16 +2839,20 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   the two conversations allocated structurally identical ids. The `kind`
   filter selects which authority is consulted at all, so it can never fall
   through into the other domain. The merged order is each domain's records
-  most-recently-allocated first, alternating between the domains starting
-  with `tool`, truncated to the single global `MAX_LISTED_EXECUTIONS`
-  bound with explicit `returned`/`matched`/`truncated`/`limit` metadata;
-  no per-domain quota exists, ordering never depends on timestamps, and an
-  identical request against unchanged registries returns identical entries
-  and metadata. Listing is observation only: it mutates no lifecycle,
-  cancellation, settlement, terminal notification, capacity accounting,
-  ordering, or — for subagents — observation-plane revision or latest
-  value. A listing entry carries the typed handle, the owning domain's own
-  lifecycle state, and bounded identity facts only: never a detached tool
+  most-recently-allocated first *within that domain*, alternating between
+  the domains starting with `tool`, truncated to the single global
+  `MAX_LISTED_EXECUTIONS` bound with explicit
+  `returned`/`matched`/`truncated`/`limit` metadata; no per-domain quota
+  exists, ordering never depends on timestamps, and an identical request
+  against unchanged registries returns identical entries and metadata. The
+  merged listing is deterministic but never globally most-recent-first —
+  the domains share no ordinal or clock — and neither the model-facing
+  tool description nor this contract claims otherwise. Listing is
+  observation only: it mutates no lifecycle, cancellation, settlement,
+  terminal notification, capacity accounting, ordering, or — for
+  subagents — observation-plane revision or latest value. A listing entry
+  carries the typed handle, the owning domain's own lifecycle state, and
+  bounded identity facts only: never a detached tool
   `result`/`progress`, never a subagent `detail`, never answer content, and
   never child history, so `list` can no more become a result channel than
   `status` can. Issue #178's live activity projection stays out of the

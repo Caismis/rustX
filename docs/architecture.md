@@ -2356,6 +2356,11 @@ bounds only how much it materializes.
   independent sequences and share no ordinal or clock, so alternation — not
   concatenation — is what keeps one domain's overflow from starving the
   other out of a single global bound. Ordering never depends on timestamps.
+  The merged result is therefore deterministic but deliberately **not**
+  globally most-recent-first: newest-first holds *within each domain*, and
+  no cross-domain chronological claim is made — nor could one be, since the
+  domains share no ordinal or clock. The model-facing tool description says
+  exactly this and claims no global recency.
 - **Bound and truncation.** The response is truncated to the single global
   `MAX_LISTED_EXECUTIONS` constant; there are no per-domain quotas, so the
   externally visible bound is exactly one number. Every response carries
