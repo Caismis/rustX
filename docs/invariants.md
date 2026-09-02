@@ -856,7 +856,13 @@ pending, the overlay focuses the lexicographically-smallest questionnaire
 `InteractionId`; ordinary editor input remains an inbound message, and
 explicit commands can address approval or attempt identities. The TUI renders
 both from authoritative projection state, sends typed responses through the
-Runtime Client, and never suppresses or auto-answers them locally.
+Runtime Client, and never suppresses or auto-answers them locally. Subagent
+children project through `SubagentUpdated` events and `snapshot.subagents`;
+since Issue #178 each entry also carries the child's latest-value live
+activity `observation`, its redacted `execution_profile`, and `started_at`.
+The TUI renders these as diagnostics from projection state and owns no
+activity truth: the lifecycle `state` remains the only authority on whether
+a child is alive, settling, or settled.
 
 ### ApprovalMode control plane
 
@@ -1223,6 +1229,71 @@ before restart.
   replay, no fabricated success, and no child relaunch. Result and diagnostic
   bounds are bytes, not characters, and truncate only at a valid UTF-8
   boundary; Chinese, emoji, ASCII, and short-content cases are covered.
+
+## Subagent live-activity observation plane (Issue #178)
+
+A subagent has one lifecycle authority, one durable execution history, and
+disposable live observation projections.
+
+Observing a child must never enlarge parent model context unless the child
+reaches the existing canonical result-delivery boundary.
+
+The observation plane adds live activity visibility without creating a
+second authority:
+
+- **Lifecycle and activity are orthogonal dimensions.** The closed
+  seven-state `SubagentState` lifecycle remains the sole authority on
+  whether a child is alive, settling, or settled. `SubagentActivity`
+  (`awaiting_activity`, `model`, `retrying_model`, `tool`, `compacting`,
+  `waiting`) is a live-only projection of what the child is observably
+  doing right now. It is never a lifecycle state, no lifecycle transition
+  ever reads it, and any activity can coexist with any live lifecycle
+  state — a `Cancelling` child may still project an in-flight tool
+  execution or a scheduled retry.
+- **The child owns the projection; the parent owns the read model.** The
+  child Agent Loop produces the objective execution facts; a child-side
+  projector folds its own `ConversationObservation` stream into a
+  `SubagentObservation` — a child-owned strictly monotonic `revision`, the
+  current `activity`, a child-stamped `last_activity_at`, and cumulative
+  `counters` — and forwards the newest revision through a watch-coalesced,
+  nonblocking `Activity` frame (subagent IPC version 8, frame kind 107).
+  The parent process driver applies each decoded frame synchronously
+  through `SubagentRegistry::apply_activity`, which drops frames for a
+  terminal or terminal-publishing record and frames whose revision does
+  not advance the stored one. The registry read model (`SubagentSnapshot.observation`,
+  `execution_profile`, `started_at`) reaches observers through the
+  existing `SubagentObserver` seam and, at the Runtime Client boundary,
+  through `SubagentUpdated` events and `snapshot.subagents`.
+- **Only superseded observations are coalescible.** Lifecycle,
+  cancellation, and terminal publication stay reliable and exactly-once;
+  activity delivery is latest-value: a watch overwrite or a replay-ring
+  eviction may drop a superseded observation, and a lagging consumer
+  converges on the newest projection through `resync_required` and the
+  next snapshot repair. Observation delivery or drop never determines
+  terminality, and a child with zero observers or a stalled observer
+  executes identically to an observed one — the watch publish can never
+  block the child Agent Loop.
+- **Settlement resets the projection to terminal-neutral.** The registry's
+  terminal settlement sets the activity to `awaiting_activity` and bumps
+  the revision, retaining the counters and the last-activity timestamp as
+  the final record of what the child did. Activity frames arriving after
+  settlement are dropped, and the lifecycle remains the only terminal
+  truth.
+- **The execution profile is safe by construction.**
+  `SubagentExecutionProfile` is derived exactly once from the frozen
+  `ResolvedSubagentSpec` model the child actually started with and carries
+  only the effective model identity and the reasoning selection — never
+  credentials, endpoints, or provider internals. Every status and
+  observation surface is diagnostics-only: the successful terminal answer
+  has exactly one delivery channel, the canonical durable terminal inbound
+  publication, and never appears in `detail`, in the activity projection,
+  or in any snapshot field.
+- **Nothing in the observation plane is durable.** No activity fact enters
+  the Event Journal, a checkpoint, or any recovery input. After a restart,
+  a recovered child projects the initial absent observation (revision 0,
+  `awaiting_activity`, no timestamp) regardless of what it was doing
+  before the restart. Activity is not execution history and must never be
+  treated as recoverable.
 
 ## Issue #144: named attempt-scoped subagent definitions
 
@@ -1591,11 +1662,14 @@ before restart.
   service.
 - **Anchor acknowledgements route by exact typed identity.** Two units with
   outstanding offers cannot open each other's start gates.
-- **The subagent IPC version is 7 and there is no compatibility decoding.** A
+- **The subagent IPC version is 8 and there is no compatibility decoding.** A
   peer that does not speak exactly this version exits before composing
   anything. The typed `Cancel` payload carries the parent registry's semantic
   `CancellationReason`; only pre-ownership preparation cancellation uses an
-  absent reason because no child attempt exists yet.
+  absent reason because no child attempt exists yet. Version 8 adds the
+  child→parent `Activity` frame (kind 107) carrying the latest-value
+  `SubagentObservation` of the Issue #178 observation plane; it is
+  observation-plane traffic only and never a control acknowledgement.
 
 ## Issue #146: deterministic worktree isolation and workspace handoff
 
@@ -1692,6 +1766,11 @@ the launch-boundary policy inheritance.
   retry ordinal, delay, or `retrying` lifecycle state. The parent durable
   journal of a retried child contains the ownership fact and one terminal
   publication, never a `ModelRequestStarted`/`ModelRetryScheduled` pair.
+  Since Issue #178 a scheduled retry is additionally projected as live
+  activity (`retrying_model`, then `model { retry }`) through the subagent
+  observation plane: that visibility is a disposable read model only —
+  never a lifecycle state, a journal fact, or an inbound — and changes
+  nothing about retry ownership.
 - **The frozen timeout policy is inherited, not re-enforced.** The launched
   child receives the parent runtime's effective frozen `ModelTimeoutPolicy`
   through the typed `SubagentChildSpec` and applies it independently to
@@ -2696,14 +2775,16 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   control facts only (`subagent_id`, `child_agent_id`,
   `child_conversation_id`, `tool_call_id`, `agent`, `definition_digest`,
   `workspace`, `handoff`, `state`, `publication_abandoned`, `settled`,
-  `started_at`). The registry's internal `detail` field — which the
-  subagent settlement path populates with the successful child answer —
-  is deliberately excluded, in every lifecycle state including
-  `PublishingTerminal`, so the canonical inbound child-agent message is
-  the **only** child-result delivery channel and `execution(status|cancel)`
-  never exposes the answer. The projection is derived from the
-  registry's authoritative read model at response time; it is not a
-  second lifecycle record or authority.
+  `started_at`). The registry's internal `detail` field is
+  diagnostics-only — since Issue #178 the successful child answer never
+  enters it — and is deliberately excluded, in every lifecycle state
+  including `PublishingTerminal`, as are the observation-plane
+  `observation` and `execution_profile` fields, so the canonical inbound
+  child-agent message is the **only** child-result delivery channel,
+  observing a child never enlarges parent model context, and
+  `execution(status|cancel)` never exposes the answer. The projection is
+  derived from the registry's authoritative read model at response time;
+  it is not a second lifecycle record or authority.
 - Model-facing output is bounded by named limits. Text overflow is not an
   artifact (Issue #86): native Bash and MCP logical results (a managed
   Python tool's results included — Python tools are MCP tools) all
@@ -3702,7 +3783,10 @@ The frozen invariants:
   `RuntimeClientSnapshot` / capability views; the runtime never imports,
   stores, or returns a Runtime Client projection or snapshot type, and
   `RequestHistory` lives in `src/runtime/request_history.rs` as
-  runtime-owned semantic state.
+  runtime-owned semantic state. A subagent child reuses this same
+  contract: the child-side projector of the Issue #178 observation plane
+  folds its own `ConversationObservation` stream into the live
+  `SubagentObservation` it forwards to the parent.
 - **There is exactly one production owner of next-attempt admission.** Any
   producer may publish ordinary inbound work through the conversation
   inbound boundary, but only the coordinator admits the next
@@ -4133,11 +4217,17 @@ semantic normalization boundary. The frozen invariants:
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
   explicit at attachment admission; the current protocol is the sole
   supported version, and every superseded version is rejected explicitly.
-- **Runtime Client protocol v10 adds subagent workspace facts and preserved
-  handoff metadata.** Version 9 added `interrupted` to the closed
-  `SubagentState` vocabulary; Rust serialization and the maintained TUI mirror
-  describe the same `running | cancelling | publishing_terminal | succeeded
-  | failed | cancelled | interrupted` states plus the workspace projection.
+- **Runtime Client protocol v11 adds the subagent live-activity
+  projection.** `RuntimeClientSubagent` gains the child's latest-value
+  `observation` (`SubagentObservation`: revision, activity, timestamp,
+  counters), the redacted `execution_profile` (wire key
+  `execution_profile`; the bare `profile` key was the retired pre-#144
+  profile-name field), and `started_at`. These are observation-plane facts:
+  the closed `SubagentState` lifecycle remains the only authority on whether
+  the child is alive, settling, or settled. Version 10 added subagent
+  workspace facts and preserved handoff metadata; version 9 added
+  `interrupted` to the closed `SubagentState` vocabulary. Rust serialization
+  and the maintained TUI mirror describe the same states and projections.
   Superseded versions are not decoded compatibly.
 - **The semantic layer owns protocol negotiation and attachment
   admission; transports are framing only.** `initialize` is dispatched by

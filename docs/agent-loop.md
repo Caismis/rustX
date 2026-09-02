@@ -1034,8 +1034,13 @@ These are absent by decision, not as TODO compatibility hooks:
 - **Generic forms/workflows, generalized permission/risk policy, and
   provider-specific interaction payloads** — Issue #100 deliberately keeps
   Questionnaire bounded and makes `ask_user` an ordinary Tool Plane capability.
-- **Subagent lifecycle observation** — Issue #60 owns the native subagent
-  runtime; the observation seam follows the owner.
+- **Subagent lifecycle control** — Issue #60 owns the native subagent
+  runtime, and the Agent Loop exposes no seam that steers a child's
+  lifecycle. Live visibility now exists outside this list as the Issue #178
+  observation plane: a read-only, disposable projection folded from the
+  child's own `ConversationObservation` stream, forwarded to the parent
+  registry's read model, never an Agent Loop control seam and never a
+  second authority.
 - **`TurnStoppingPolicy` / forced continuation** — no native owner exists.
 
 ## 4.4 The publication boundary of a model turn (FND-03 / Issue #108)
