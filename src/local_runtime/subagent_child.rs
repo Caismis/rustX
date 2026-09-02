@@ -79,7 +79,7 @@ use crate::message::content::TextBlock;
 use crate::message::types::{MessageBlock, UserContentBlock, UserSource};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
-use crate::runtime::subagent::activity::SubagentObservation;
+use crate::runtime::subagent::activity::{SubagentObservation, SubagentObservationProjector};
 use crate::runtime::subagent::ipc::{
     ActivityFrame, ChildFrame, ChildResultStatus, DiagnosticFrame, ParentFrame, ReadyFrame,
     ResultFrame, SUBAGENT_IPC_VERSION, SubagentChildSpec, read_parent_frame, write_child_frame,
@@ -516,10 +516,10 @@ async fn await_terminal_inner<F>(
 where
     F: Fn(bool) + Send + Sync + 'static,
 {
-    // The child-owned live projection. Only applied transitions are
+    // The child-owned live projector. Only applied transitions are
     // published; the `watch` send overwrites in place (latest-value
     // coalescing) and never waits on the consumer.
-    let mut projection = SubagentObservation::default();
+    let mut projector = SubagentObservationProjector::default();
     loop {
         tokio::select! {
             event = dispatcher.next_event() => {
@@ -565,8 +565,8 @@ where
                     // returns. A `watch` send fails only when no receiver
                     // exists (the forwarder is gone), which is never a
                     // reason to disturb the attempt.
-                    if projection.fold(&observation, Utc::now()) {
-                        let _ = activity.send(projection.clone());
+                    if projector.fold(&observation, Utc::now()) {
+                        let _ = activity.send(projector.observation().clone());
                     }
                     match observation {
                         ConversationObservation::Event { event, .. } => {

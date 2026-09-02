@@ -8,7 +8,7 @@
 //!
 //! ```text
 //! child runtime semantic observations
-//!         |  fold (SubagentObservation::fold, child side)
+//!         |  fold (SubagentObservationProjector, child side)
 //!         v
 //! SubagentObservation   latest-value, revision-stamped
 //!         |  watch coalescing -> Activity IPC frame (v8)
@@ -102,115 +102,6 @@ impl Default for SubagentObservation {
 }
 
 impl SubagentObservation {
-    /// Folds one child runtime observation into this projection.
-    ///
-    /// Returns whether a transition was applied — i.e. whether the revision
-    /// advanced and the projection is worth forwarding. Observations that
-    /// carry no activity signal (message commits, status emissions, journal
-    /// bookkeeping) leave the projection untouched: they bump no revision
-    /// and stamp no timestamp.
-    pub(crate) fn fold(
-        &mut self,
-        observation: &ConversationObservation,
-        now: DateTime<Utc>,
-    ) -> bool {
-        let applied = match observation {
-            ConversationObservation::Event { event, .. } => self.fold_event(event),
-            ConversationObservation::InteractionPending { request, .. } => {
-                let on = match &request.kind {
-                    InteractionKind::Approval { tool_id, .. } => SubagentWaitReason::Approval {
-                        tool_id: tool_id.clone(),
-                    },
-                    InteractionKind::Questionnaire { .. } => SubagentWaitReason::Questionnaire,
-                };
-                self.activity = SubagentActivity::Waiting { on };
-                true
-            }
-            // A settlement always returns the projection to neutral, even if
-            // another activity is currently projected: the wait is objectively
-            // over, and any still-running tool or model request re-projects
-            // itself on its own next event.
-            ConversationObservation::InteractionSettled { .. } => {
-                self.activity = SubagentActivity::AwaitingActivity;
-                true
-            }
-            _ => false,
-        };
-        if applied {
-            self.revision += 1;
-            self.last_activity_at = Some(now);
-        }
-        applied
-    }
-
-    /// Folds one canonical runtime event of the child's attempt.
-    fn fold_event(&mut self, event: &RuntimeEvent) -> bool {
-        match event {
-            RuntimeEvent::ModelRequestStarted { request_id, .. } => {
-                self.counters.model_requests += 1;
-                self.activity = SubagentActivity::Model {
-                    request_id: request_id.clone(),
-                    retry: u32::try_from(self.counters.model_retries).unwrap_or(u32::MAX),
-                };
-                true
-            }
-            RuntimeEvent::ModelRequestCompleted { .. }
-            | RuntimeEvent::ModelRequestFailed { .. }
-            | RuntimeEvent::CompactionCompleted { .. }
-            | RuntimeEvent::CompactionFailed { .. } => {
-                self.activity = SubagentActivity::AwaitingActivity;
-                true
-            }
-            RuntimeEvent::ModelRetryScheduled { retry_number, .. } => {
-                self.counters.model_retries = u64::from(*retry_number);
-                self.activity = SubagentActivity::RetryingModel {
-                    retry: *retry_number,
-                };
-                true
-            }
-            RuntimeEvent::ToolExecutionStarted {
-                tool_call_id,
-                tool_id,
-            } => {
-                self.activity = SubagentActivity::Tool {
-                    tool_call_id: tool_call_id.clone(),
-                    tool_id: tool_id.clone(),
-                    progress: None,
-                };
-                true
-            }
-            RuntimeEvent::ToolExecutionProgress {
-                tool_call_id,
-                progress,
-                ..
-            } => match &mut self.activity {
-                // Progress belongs to exactly one in-flight execution: an
-                // update for any other call (or while no tool is current)
-                // is not a transition of this projection.
-                SubagentActivity::Tool {
-                    tool_call_id: current,
-                    progress: slot,
-                    ..
-                } if current == tool_call_id => {
-                    *slot = Some(progress.clone());
-                    true
-                }
-                _ => false,
-            },
-            RuntimeEvent::ToolExecutionCompleted { .. }
-            | RuntimeEvent::ToolExecutionFailed { .. } => {
-                self.counters.tool_executions += 1;
-                self.activity = SubagentActivity::AwaitingActivity;
-                true
-            }
-            RuntimeEvent::CompactionStarted => {
-                self.activity = SubagentActivity::Compacting;
-                true
-            }
-            _ => false,
-        }
-    }
-
     /// Resets the projection to the terminal-neutral state at settlement
     /// (parent registry side): the lifecycle is the terminal truth, and
     /// live activity is a live-only signal, so a settled child never
@@ -222,6 +113,149 @@ impl SubagentObservation {
     }
 }
 
+/// The child-side projector: owns the wire projection plus the fold-local
+/// state that must not cross the wire.
+///
+/// The projection is rebuilt by folding every child runtime observation;
+/// some folds need state that is not part of the projection itself — the
+/// pending retry ordinal of the next model request — and that state must
+/// never be serialized into [`SubagentObservation`], so it lives here.
+#[derive(Debug, Default)]
+pub(crate) struct SubagentObservationProjector {
+    /// The latest folded wire projection.
+    observation: SubagentObservation,
+    /// Retry ordinal carried by the NEXT `ModelRequestStarted`: set by
+    /// `ModelRetryScheduled`, consumed (reset to 0) by the next request
+    /// start. This is the current request's retry ordinal, kept strictly
+    /// separate from the cumulative counter — a fresh request of a later
+    /// turn never inherits an earlier retry's ordinal.
+    pending_retry: u32,
+}
+
+impl SubagentObservationProjector {
+    /// Folds one child runtime observation into the projection.
+    ///
+    /// Returns whether a transition was applied — i.e. whether the revision
+    /// advanced and the projection is worth forwarding. Observations that
+    /// carry no activity signal (message commits, status emissions, journal
+    /// bookkeeping) leave the projection untouched: they bump no revision
+    /// and stamp no timestamp.
+    pub(crate) fn fold(&mut self, observation: &ConversationObservation, now: DateTime<Utc>) -> bool {
+        let applied = match observation {
+            ConversationObservation::Event { event, .. } => self.fold_event(event),
+            ConversationObservation::InteractionPending { request, .. } => {
+                let on = match &request.kind {
+                    InteractionKind::Approval { tool_id, .. } => SubagentWaitReason::Approval {
+                        tool_id: tool_id.clone(),
+                    },
+                    InteractionKind::Questionnaire { .. } => SubagentWaitReason::Questionnaire,
+                };
+                self.observation.activity = SubagentActivity::Waiting { on };
+                true
+            }
+            // A settlement always returns the projection to neutral, even if
+            // another activity is currently projected: the wait is objectively
+            // over, and any still-running tool or model request re-projects
+            // itself on its own next event.
+            ConversationObservation::InteractionSettled { .. } => {
+                self.observation.activity = SubagentActivity::AwaitingActivity;
+                true
+            }
+            _ => false,
+        };
+        if applied {
+            self.observation.revision += 1;
+            self.observation.last_activity_at = Some(now);
+        }
+        applied
+    }
+
+    /// The latest folded wire projection.
+    pub(crate) fn observation(&self) -> &SubagentObservation {
+        &self.observation
+    }
+
+    /// Folds one canonical runtime event of the child's attempt.
+    fn fold_event(&mut self, event: &RuntimeEvent) -> bool {
+        match event {
+            RuntimeEvent::ModelRequestStarted { request_id, .. } => {
+                // The retry ordinal of THIS request: whatever retry the
+                // scheduler armed, consumed exactly once. A later turn's
+                // fresh request therefore projects retry 0 regardless of
+                // how many retries earlier turns accumulated.
+                let retry = std::mem::take(&mut self.pending_retry);
+                self.observation.counters.model_requests += 1;
+                self.observation.activity = SubagentActivity::Model {
+                    request_id: request_id.clone(),
+                    retry,
+                };
+                true
+            }
+            RuntimeEvent::ModelRequestCompleted { .. }
+            | RuntimeEvent::ModelRequestFailed { .. }
+            | RuntimeEvent::CompactionCompleted { .. }
+            | RuntimeEvent::CompactionFailed { .. } => {
+                self.observation.activity = SubagentActivity::AwaitingActivity;
+                true
+            }
+            RuntimeEvent::ModelRetryScheduled { retry_number, .. } => {
+                self.pending_retry = *retry_number;
+                self.observation.counters.model_retries += 1;
+                self.observation.activity = SubagentActivity::RetryingModel {
+                    retry: *retry_number,
+                };
+                true
+            }
+            RuntimeEvent::ToolExecutionStarted {
+                tool_call_id,
+                tool_id,
+            } => {
+                self.observation.activity = SubagentActivity::Tool {
+                    tool_call_id: tool_call_id.clone(),
+                    tool_id: tool_id.clone(),
+                    progress: None,
+                };
+                true
+            }
+            RuntimeEvent::ToolExecutionProgress {
+                tool_call_id,
+                progress,
+                ..
+            } => self.apply_tool_progress(tool_call_id, progress),
+            RuntimeEvent::ToolExecutionCompleted { .. }
+            | RuntimeEvent::ToolExecutionFailed { .. } => {
+                self.observation.counters.tool_executions += 1;
+                self.observation.activity = SubagentActivity::AwaitingActivity;
+                true
+            }
+            RuntimeEvent::CompactionStarted => {
+                self.observation.activity = SubagentActivity::Compacting;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Applies one tool progress report to the projection.
+    ///
+    /// Progress belongs to exactly one in-flight execution: an update for
+    /// any other call (or while no tool is current) is not a transition of
+    /// this projection.
+    fn apply_tool_progress(&mut self, tool_call_id: &ToolCallId, progress: &ToolProgress) -> bool {
+        match &mut self.observation.activity {
+            SubagentActivity::Tool {
+                tool_call_id: current,
+                progress: slot,
+                ..
+            } if current == tool_call_id => {
+                *slot = Some(progress.clone());
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
 /// Cumulative activity counters of one child, kept across activity changes
 /// so a consumer can observe throughput without folding every transition.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -229,7 +263,7 @@ impl SubagentObservation {
 pub struct SubagentActivityCounters {
     /// Model requests started.
     pub model_requests: u64,
-    /// Model retry schedules observed (the latest scheduled retry ordinal).
+    /// Model retry schedules observed (cumulative count).
     pub model_retries: u64,
     /// Tool executions finished (completed plus failed).
     pub tool_executions: u64,
@@ -253,7 +287,8 @@ pub enum SubagentActivity {
     Model {
         /// The in-flight provider request.
         request_id: RequestId,
-        /// How many retries were scheduled before this request.
+        /// The retry ordinal of THIS request: 0 for a first attempt, `n`
+        /// for the request the nth scheduled retry armed.
         retry: u32,
     },
     /// The last model request failed and a retry is scheduled.
@@ -366,78 +401,82 @@ mod tests {
         }
     }
 
-    fn assert_folded(projection: &mut SubagentObservation, observation: &ConversationObservation) {
-        let revision = projection.revision;
+    fn assert_folded(projector: &mut SubagentObservationProjector, observation: &ConversationObservation) {
+        let revision = projector.observation().revision;
         assert!(
-            projection.fold(observation, now()),
+            projector.fold(observation, now()),
             "the observation carries an activity signal"
         );
-        assert_eq!(projection.revision, revision + 1);
-        assert_eq!(projection.last_activity_at, Some(now()));
+        assert_eq!(projector.observation().revision, revision + 1);
+        assert_eq!(projector.observation().last_activity_at, Some(now()));
     }
 
-    fn assert_ignored(projection: &mut SubagentObservation, observation: &ConversationObservation) {
-        let before = projection.clone();
-        assert!(!projection.fold(observation, now()));
-        assert_eq!(*projection, before, "an irrelevant observation is a no-op");
+    fn assert_ignored(projector: &mut SubagentObservationProjector, observation: &ConversationObservation) {
+        let before = projector.observation().clone();
+        assert!(!projector.fold(observation, now()));
+        assert_eq!(
+            *projector.observation(),
+            before,
+            "an irrelevant observation is a no-op"
+        );
     }
 
     #[test]
     fn model_request_start_and_complete_cycle() {
-        let mut projection = SubagentObservation::default();
-        assert_eq!(projection.revision, 0);
-        assert_eq!(projection.activity, SubagentActivity::AwaitingActivity);
-        assert_eq!(projection.last_activity_at, None);
+        let mut projector = SubagentObservationProjector::default();
+        assert_eq!(projector.observation.revision, 0);
+        assert_eq!(projector.observation.activity, SubagentActivity::AwaitingActivity);
+        assert_eq!(projector.observation.last_activity_at, None);
 
         assert_folded(
-            &mut projection,
+            &mut projector,
             &event(RuntimeEvent::ModelRequestStarted {
                 request_id: RequestId::new("req-1"),
                 model: "local/model".to_owned(),
             }),
         );
         assert_eq!(
-            projection.activity,
+            projector.observation.activity,
             SubagentActivity::Model {
                 request_id: RequestId::new("req-1"),
                 retry: 0,
             }
         );
-        assert_eq!(projection.counters.model_requests, 1);
+        assert_eq!(projector.observation.counters.model_requests, 1);
 
         assert_folded(
-            &mut projection,
+            &mut projector,
             &event(RuntimeEvent::ModelRequestCompleted {
                 request_id: RequestId::new("req-1"),
                 finish_reason: crate::model::ModelFinishReason::Stop,
                 usage: None,
             }),
         );
-        assert_eq!(projection.activity, SubagentActivity::AwaitingActivity);
+        assert_eq!(projector.observation.activity, SubagentActivity::AwaitingActivity);
     }
 
     #[test]
     fn a_scheduled_retry_marks_the_next_request_as_a_retry() {
-        let mut projection = SubagentObservation::default();
+        let mut projector = SubagentObservationProjector::default();
         assert_folded(
-            &mut projection,
+            &mut projector,
             &event(RuntimeEvent::ModelRequestStarted {
                 request_id: RequestId::new("req-1"),
                 model: "local/model".to_owned(),
             }),
         );
         assert_folded(
-            &mut projection,
+            &mut projector,
             &event(RuntimeEvent::ModelRequestFailed {
                 request_id: RequestId::new("req-1"),
                 error: model_error(),
                 usage: None,
             }),
         );
-        assert_eq!(projection.activity, SubagentActivity::AwaitingActivity);
+        assert_eq!(projector.observation.activity, SubagentActivity::AwaitingActivity);
 
         assert_folded(
-            &mut projection,
+            &mut projector,
             &event(RuntimeEvent::ModelRetryScheduled {
                 failed_request_id: RequestId::new("req-1"),
                 retry_number: 1,
@@ -445,40 +484,122 @@ mod tests {
             }),
         );
         assert_eq!(
-            projection.activity,
+            projector.observation.activity,
             SubagentActivity::RetryingModel { retry: 1 }
         );
-        assert_eq!(projection.counters.model_retries, 1);
+        assert_eq!(projector.observation.counters.model_retries, 1);
 
         assert_folded(
-            &mut projection,
+            &mut projector,
             &event(RuntimeEvent::ModelRequestStarted {
                 request_id: RequestId::new("req-2"),
                 model: "local/model".to_owned(),
             }),
         );
         assert_eq!(
-            projection.activity,
+            projector.observation.activity,
             SubagentActivity::Model {
                 request_id: RequestId::new("req-2"),
                 retry: 1,
             }
         );
-        assert_eq!(projection.counters.model_requests, 2);
+        assert_eq!(projector.observation.counters.model_requests, 2);
+    }
+
+    /// Regression (Issue #178, blocker 7): the retry ordinal is a property
+    /// of the CURRENT request, consumed by the next request start — never
+    /// of the cumulative retry counter. A retried request projects
+    /// `retry: 1`, and a fresh request of a later turn projects `retry: 0`
+    /// even though the counter stays cumulative.
+    #[test]
+    fn a_fresh_request_of_a_later_turn_never_inherits_an_earlier_retry_ordinal() {
+        let mut projector = SubagentObservationProjector::default();
+
+        // Turn 1: the request fails, retry #1 is scheduled, and the
+        // retried request starts and completes.
+        assert_folded(
+            &mut projector,
+            &event(RuntimeEvent::ModelRequestStarted {
+                request_id: RequestId::new("req-1"),
+                model: "local/model".to_owned(),
+            }),
+        );
+        assert_folded(
+            &mut projector,
+            &event(RuntimeEvent::ModelRequestFailed {
+                request_id: RequestId::new("req-1"),
+                error: model_error(),
+                usage: None,
+            }),
+        );
+        assert_folded(
+            &mut projector,
+            &event(RuntimeEvent::ModelRetryScheduled {
+                failed_request_id: RequestId::new("req-1"),
+                retry_number: 1,
+                retry_delay_ms: Some(250),
+            }),
+        );
+        assert_folded(
+            &mut projector,
+            &event(RuntimeEvent::ModelRequestStarted {
+                request_id: RequestId::new("req-2"),
+                model: "local/model".to_owned(),
+            }),
+        );
+        assert_eq!(
+            projector.observation.activity,
+            SubagentActivity::Model {
+                request_id: RequestId::new("req-2"),
+                retry: 1,
+            },
+            "the retried request carries the armed ordinal"
+        );
+        assert_folded(
+            &mut projector,
+            &event(RuntimeEvent::ModelRequestCompleted {
+                request_id: RequestId::new("req-2"),
+                finish_reason: crate::model::ModelFinishReason::Stop,
+                usage: None,
+            }),
+        );
+
+        // Turn 2: a fresh request. The cumulative counter still records one
+        // retry, but the ordinal was consumed by req-2 — nothing is armed.
+        assert_folded(
+            &mut projector,
+            &event(RuntimeEvent::ModelRequestStarted {
+                request_id: RequestId::new("req-3"),
+                model: "local/model".to_owned(),
+            }),
+        );
+        assert_eq!(
+            projector.observation.activity,
+            SubagentActivity::Model {
+                request_id: RequestId::new("req-3"),
+                retry: 0,
+            },
+            "a fresh request of a later turn starts at ordinal 0"
+        );
+        assert_eq!(
+            projector.observation.counters.model_retries, 1,
+            "the counter is genuinely cumulative"
+        );
+        assert_eq!(projector.observation.counters.model_requests, 3);
     }
 
     #[test]
     fn tool_progress_applies_only_to_the_current_execution() {
-        let mut projection = SubagentObservation::default();
+        let mut projector = SubagentObservationProjector::default();
         assert_folded(
-            &mut projection,
+            &mut projector,
             &event(RuntimeEvent::ToolExecutionStarted {
                 tool_call_id: ToolCallId::new("call-1"),
                 tool_id: ToolId::new("tool-bash"),
             }),
         );
         assert_eq!(
-            projection.activity,
+            projector.observation.activity,
             SubagentActivity::Tool {
                 tool_call_id: ToolCallId::new("call-1"),
                 tool_id: ToolId::new("tool-bash"),
@@ -489,7 +610,7 @@ mod tests {
         // Progress of another call id is ignored: no transition, no
         // revision bump.
         assert_ignored(
-            &mut projection,
+            &mut projector,
             &event(RuntimeEvent::ToolExecutionProgress {
                 tool_call_id: ToolCallId::new("call-other"),
                 tool_id: ToolId::new("tool-bash"),
@@ -502,7 +623,7 @@ mod tests {
         );
 
         assert_folded(
-            &mut projection,
+            &mut projector,
             &event(RuntimeEvent::ToolExecutionProgress {
                 tool_call_id: ToolCallId::new("call-1"),
                 tool_id: ToolId::new("tool-bash"),
@@ -515,7 +636,7 @@ mod tests {
             }),
         );
         assert_eq!(
-            projection.activity,
+            projector.observation.activity,
             SubagentActivity::Tool {
                 tool_call_id: ToolCallId::new("call-1"),
                 tool_id: ToolId::new("tool-bash"),
@@ -528,19 +649,19 @@ mod tests {
         );
 
         assert_folded(
-            &mut projection,
+            &mut projector,
             &event(RuntimeEvent::ToolExecutionCompleted {
                 tool_call_id: ToolCallId::new("call-1"),
                 tool_id: ToolId::new("tool-bash"),
                 result: tool_result(),
             }),
         );
-        assert_eq!(projection.activity, SubagentActivity::AwaitingActivity);
-        assert_eq!(projection.counters.tool_executions, 1);
+        assert_eq!(projector.observation.activity, SubagentActivity::AwaitingActivity);
+        assert_eq!(projector.observation.counters.tool_executions, 1);
 
         // Progress with no tool in flight is ignored.
         assert_ignored(
-            &mut projection,
+            &mut projector,
             &event(RuntimeEvent::ToolExecutionProgress {
                 tool_call_id: ToolCallId::new("call-1"),
                 tool_id: ToolId::new("tool-bash"),
@@ -552,43 +673,43 @@ mod tests {
 
     #[test]
     fn failed_tool_executions_count_and_reset() {
-        let mut projection = SubagentObservation::default();
+        let mut projector = SubagentObservationProjector::default();
         assert_folded(
-            &mut projection,
+            &mut projector,
             &event(RuntimeEvent::ToolExecutionStarted {
                 tool_call_id: ToolCallId::new("call-1"),
                 tool_id: ToolId::new("tool-read"),
             }),
         );
         assert_folded(
-            &mut projection,
+            &mut projector,
             &event(RuntimeEvent::ToolExecutionFailed {
                 tool_call_id: ToolCallId::new("call-1"),
                 tool_id: ToolId::new("tool-read"),
                 error: "denied".to_owned(),
             }),
         );
-        assert_eq!(projection.activity, SubagentActivity::AwaitingActivity);
-        assert_eq!(projection.counters.tool_executions, 1);
+        assert_eq!(projector.observation.activity, SubagentActivity::AwaitingActivity);
+        assert_eq!(projector.observation.counters.tool_executions, 1);
     }
 
     #[test]
     fn compaction_cycle_projects_and_resets() {
-        let mut projection = SubagentObservation::default();
-        assert_folded(&mut projection, &event(RuntimeEvent::CompactionStarted));
-        assert_eq!(projection.activity, SubagentActivity::Compacting);
+        let mut projector = SubagentObservationProjector::default();
+        assert_folded(&mut projector, &event(RuntimeEvent::CompactionStarted));
+        assert_eq!(projector.observation.activity, SubagentActivity::Compacting);
         assert_folded(
-            &mut projection,
+            &mut projector,
             &event(RuntimeEvent::CompactionFailed {
                 error: "no budget".to_owned(),
             }),
         );
-        assert_eq!(projection.activity, SubagentActivity::AwaitingActivity);
+        assert_eq!(projector.observation.activity, SubagentActivity::AwaitingActivity);
     }
 
     #[test]
     fn interactions_project_the_wait_and_settle_to_neutral() {
-        let mut projection = SubagentObservation::default();
+        let mut projector = SubagentObservationProjector::default();
         let request = crate::runtime::interaction::InteractionRequest {
             id: crate::runtime::identity::InteractionId::new("interaction-1"),
             conversation_id: crate::runtime::identity::ConversationId::new("conv-1"),
@@ -605,7 +726,7 @@ mod tests {
             },
         };
         assert_folded(
-            &mut projection,
+            &mut projector,
             &ConversationObservation::InteractionPending {
                 request,
                 audit: interaction_audit(),
@@ -613,7 +734,7 @@ mod tests {
             },
         );
         assert_eq!(
-            projection.activity,
+            projector.observation.activity,
             SubagentActivity::Waiting {
                 on: SubagentWaitReason::Approval {
                     tool_id: ToolId::new("tool-bash"),
@@ -624,7 +745,7 @@ mod tests {
         // The settlement returns to neutral even though the wait was the
         // current activity.
         assert_folded(
-            &mut projection,
+            &mut projector,
             &ConversationObservation::InteractionSettled {
                 interaction_id: crate::runtime::identity::InteractionId::new("interaction-1"),
                 outcome: crate::runtime::interaction::InteractionOutcome::Responded {
@@ -635,7 +756,7 @@ mod tests {
                 audit: None,
             },
         );
-        assert_eq!(projection.activity, SubagentActivity::AwaitingActivity);
+        assert_eq!(projector.observation.activity, SubagentActivity::AwaitingActivity);
     }
 
     fn interaction_audit() -> crate::events::types::RuntimeEventEnvelope {
@@ -653,7 +774,7 @@ mod tests {
 
     #[test]
     fn questionnaire_waits_project_without_a_tool_identity() {
-        let mut projection = SubagentObservation::default();
+        let mut projector = SubagentObservationProjector::default();
         let request = crate::runtime::interaction::InteractionRequest {
             id: crate::runtime::identity::InteractionId::new("interaction-2"),
             conversation_id: crate::runtime::identity::ConversationId::new("conv-1"),
@@ -675,7 +796,7 @@ mod tests {
             },
         };
         assert_folded(
-            &mut projection,
+            &mut projector,
             &ConversationObservation::InteractionPending {
                 request,
                 audit: interaction_audit(),
@@ -683,7 +804,7 @@ mod tests {
             },
         );
         assert_eq!(
-            projection.activity,
+            projector.observation.activity,
             SubagentActivity::Waiting {
                 on: SubagentWaitReason::Questionnaire,
             }
@@ -692,47 +813,47 @@ mod tests {
 
     #[test]
     fn observations_without_an_activity_signal_are_ignored() {
-        let mut projection = SubagentObservation::default();
-        assert_ignored(&mut projection, &event(RuntimeEvent::TurnStarted));
-        assert_ignored(&mut projection, &ConversationObservation::Shutdown);
+        let mut projector = SubagentObservationProjector::default();
+        assert_ignored(&mut projector, &event(RuntimeEvent::TurnStarted));
+        assert_ignored(&mut projector, &ConversationObservation::Shutdown);
     }
 
     #[test]
     fn settlement_resets_to_neutral_and_keeps_the_counters() {
-        let mut projection = SubagentObservation::default();
+        let mut projector = SubagentObservationProjector::default();
         assert_folded(
-            &mut projection,
+            &mut projector,
             &event(RuntimeEvent::ToolExecutionStarted {
                 tool_call_id: ToolCallId::new("call-1"),
                 tool_id: ToolId::new("tool-bash"),
             }),
         );
-        let counters = projection.counters;
-        projection.settle_neutral();
-        assert_eq!(projection.activity, SubagentActivity::AwaitingActivity);
-        assert_eq!(projection.revision, 2);
-        assert_eq!(projection.counters, counters);
-        assert_eq!(projection.last_activity_at, Some(now()));
+        let counters = projector.observation.counters;
+        projector.observation.settle_neutral();
+        assert_eq!(projector.observation.activity, SubagentActivity::AwaitingActivity);
+        assert_eq!(projector.observation.revision, 2);
+        assert_eq!(projector.observation.counters, counters);
+        assert_eq!(projector.observation.last_activity_at, Some(now()));
     }
 
     #[test]
     fn the_projection_round_trips_as_snake_case_json() {
-        let mut projection = SubagentObservation::default();
+        let mut projector = SubagentObservationProjector::default();
         assert_folded(
-            &mut projection,
+            &mut projector,
             &event(RuntimeEvent::ToolExecutionStarted {
                 tool_call_id: ToolCallId::new("call-1"),
                 tool_id: ToolId::new("tool-bash"),
             }),
         );
-        let value = serde_json::to_value(&projection).expect("serialize");
+        let value = serde_json::to_value(projector.observation()).expect("serialize");
         assert_eq!(value["revision"], 1);
         assert_eq!(value["activity"]["type"], "tool");
         assert_eq!(value["activity"]["tool_call_id"], "call-1");
         assert_eq!(value["counters"]["model_requests"], 0);
         let decoded: SubagentObservation =
             serde_json::from_value(value.clone()).expect("deserialize");
-        assert_eq!(decoded, projection);
+        assert_eq!(&decoded, projector.observation());
         // Unknown fields are rejected outright.
         let mut malformed = value;
         malformed["unexpected"] = serde_json::json!(true);
