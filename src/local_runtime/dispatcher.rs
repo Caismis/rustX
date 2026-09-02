@@ -463,10 +463,14 @@ async fn run_writer(
     close: Arc<tokio::sync::Notify>,
     #[cfg(test)] writer_gate: Option<WriterGate>,
 ) {
-    // The initial value is never a real projection: mark it seen so the
-    // loop below writes only values published after startup.
+    // The receiver is the channel's original, so it has already seen the
+    // initial placeholder value: `changed()` fires only for values
+    // published after the channel was created. Deliberately do NOT
+    // `borrow_and_update()` here — that would additionally swallow every
+    // value published before this task is first scheduled, which is not
+    // the disposable contract (the latest published value must reach the
+    // wire regardless of writer scheduling).
     let mut activity_rx = activity_rx;
-    activity_rx.borrow_and_update();
     let mut activity_open = true;
     let mut closing = false;
     loop {
