@@ -95,8 +95,10 @@ pub async fn serve(arguments: impl IntoIterator<Item = String>) -> ProcessOutcom
 
 /// Runs the process to its single exit point.
 ///
-/// Diagnostics go to stderr with `writeln!`; `println!` is never used, so
-/// stdout carries protocol records and nothing else.
+/// Diagnostics go to stderr with `writeln!`; `println!` is never used. In
+/// the normal mode stdout carries protocol records and nothing else; in
+/// the internal `--subagent-child` mode stdout is instead owned by the
+/// Activity observation IPC (Issue #178).
 pub async fn run_process(arguments: impl IntoIterator<Item = String>) -> i32 {
     let arguments: Vec<String> = arguments.into_iter().collect();
     // The internal subagent-child mode (Issue #60): one exact flag, no
