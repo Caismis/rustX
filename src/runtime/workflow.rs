@@ -2692,6 +2692,8 @@ mod tests {
     #[cfg(unix)]
     fn stage_workflow_child(plane: &WorkflowTestPlane) -> ScriptedWorkflowChild {
         let (driver_end, test_end) = tokio::net::UnixStream::pair().expect("workflow IPC pair");
+        let (observation_end, _observation_peer) =
+            tokio::net::UnixStream::pair().expect("observation pair");
         let child = tokio::process::Command::new("sh")
             .arg("-c")
             .arg("true")
@@ -2704,9 +2706,12 @@ mod tests {
         let pid = child.id().expect("workflow scripted child pid");
         let root = plane.runtime_root.join(format!("test-child-{pid}"));
         std::fs::create_dir_all(&root).expect("workflow child runtime root");
-        plane
-            .registry
-            .push_staged_override(StagedChild::for_test(child, driver_end, root.clone()));
+        plane.registry.push_staged_override(StagedChild::for_test(
+            child,
+            driver_end,
+            observation_end,
+            root.clone(),
+        ));
         ScriptedWorkflowChild {
             peer: test_end,
             root,

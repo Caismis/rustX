@@ -57,6 +57,8 @@
 //! fold runs immediately after the source fact committed, so the stamp is
 //! the live observation time, never a backdated durable time.
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -118,8 +120,28 @@ impl SubagentObservation {
 ///
 /// The projection is rebuilt by folding every child runtime observation;
 /// some folds need state that is not part of the projection itself — the
-/// pending retry ordinal of the next model request — and that state must
-/// never be serialized into [`SubagentObservation`], so it lives here.
+/// pending retry ordinal of the next model request, and the set of
+/// concurrently active tool executions — and that state must never be
+/// serialized into [`SubagentObservation`], so it lives here.
+///
+/// # Parallel tool executions
+///
+/// A parallel tool group (`ToolConcurrencyPolicy::Parallel`) can have more
+/// than one foreground tool executing at once. The projector tracks every
+/// active call internally, but the wire activity stays bounded to one
+/// deterministic representative:
+///
+/// - `ToolExecutionStarted(call)` registers the call and makes it visible:
+///   the most recently started call is the representative.
+/// - A progress report (live or durable) updates its own call only and
+///   makes that call visible: the call that most recently produced an
+///   objective activity fact is the representative. Progress of a settled
+///   or unknown call is ignored — a stale report can never resurrect a
+///   completed execution.
+/// - `ToolExecutionCompleted`/`Failed(call)` removes exactly that call and
+///   counts it exactly once. If the settled call was visible, the
+///   representative falls back to the latest-started surviving call; the
+///   projection only returns to neutral once NO active call remains.
 #[derive(Debug, Default)]
 pub(crate) struct SubagentObservationProjector {
     /// The latest folded wire projection.
@@ -130,6 +152,28 @@ pub(crate) struct SubagentObservationProjector {
     /// separate from the cumulative counter — a fresh request of a later
     /// turn never inherits an earlier retry's ordinal.
     pending_retry: u32,
+    /// Every currently executing tool call, keyed by call id. Fold-local
+    /// only: never serialized into the wire projection.
+    active_tools: BTreeMap<ToolCallId, ActiveToolProjection>,
+    /// Monotonic start ordinal used to pick a deterministic surviving
+    /// representative (latest-started) — never hash-map iteration order.
+    next_tool_order: u64,
+    /// The call currently exposed as the bounded wire representative.
+    /// Invariant: `Some(call)` exactly while the activity is
+    /// `SubagentActivity::Tool { tool_call_id: call, .. }` and `call` is in
+    /// `active_tools`.
+    visible_tool: Option<ToolCallId>,
+}
+
+/// Fold-local projection of one active tool execution (never serialized).
+#[derive(Debug, Clone)]
+struct ActiveToolProjection {
+    /// The executed tool.
+    tool_id: ToolId,
+    /// The latest bounded progress notification this call reported.
+    progress: Option<ToolProgress>,
+    /// The deterministic start ordinal of this call.
+    started_order: u64,
 }
 
 impl SubagentObservationProjector {
@@ -163,15 +207,17 @@ impl SubagentObservationProjector {
                     },
                     InteractionKind::Questionnaire { .. } => SubagentWaitReason::Questionnaire,
                 };
+                self.visible_tool = None;
                 self.observation.activity = SubagentActivity::Waiting { on };
                 true
             }
-            // A settlement always returns the projection to neutral, even if
-            // another activity is currently projected: the wait is objectively
-            // over, and any still-running tool or model request re-projects
-            // itself on its own next event.
+            // The wait is objectively over. If a sibling tool is still
+            // running (a parallel group approved while other calls execute),
+            // the projection returns to a deterministic surviving tool
+            // representative; only with no active call left does it go
+            // neutral.
             ConversationObservation::InteractionSettled { .. } => {
-                self.observation.activity = SubagentActivity::AwaitingActivity;
+                self.project_tool_survivor_or_neutral();
                 true
             }
             _ => false,
@@ -198,6 +244,7 @@ impl SubagentObservationProjector {
                 // how many retries earlier turns accumulated.
                 let retry = std::mem::take(&mut self.pending_retry);
                 self.observation.counters.model_requests += 1;
+                self.visible_tool = None;
                 self.observation.activity = SubagentActivity::Model {
                     request_id: request_id.clone(),
                     retry,
@@ -208,12 +255,14 @@ impl SubagentObservationProjector {
             | RuntimeEvent::ModelRequestFailed { .. }
             | RuntimeEvent::CompactionCompleted { .. }
             | RuntimeEvent::CompactionFailed { .. } => {
+                self.visible_tool = None;
                 self.observation.activity = SubagentActivity::AwaitingActivity;
                 true
             }
             RuntimeEvent::ModelRetryScheduled { retry_number, .. } => {
                 self.pending_retry = *retry_number;
                 self.observation.counters.model_retries += 1;
+                self.visible_tool = None;
                 self.observation.activity = SubagentActivity::RetryingModel {
                     retry: *retry_number,
                 };
@@ -223,6 +272,16 @@ impl SubagentObservationProjector {
                 tool_call_id,
                 tool_id,
             } => {
+                self.next_tool_order += 1;
+                self.active_tools.insert(
+                    tool_call_id.clone(),
+                    ActiveToolProjection {
+                        tool_id: tool_id.clone(),
+                        progress: None,
+                        started_order: self.next_tool_order,
+                    },
+                );
+                self.visible_tool = Some(tool_call_id.clone());
                 self.observation.activity = SubagentActivity::Tool {
                     tool_call_id: tool_call_id.clone(),
                     tool_id: tool_id.clone(),
@@ -235,13 +294,12 @@ impl SubagentObservationProjector {
                 progress,
                 ..
             } => self.apply_tool_progress(tool_call_id, progress),
-            RuntimeEvent::ToolExecutionCompleted { .. }
-            | RuntimeEvent::ToolExecutionFailed { .. } => {
-                self.observation.counters.tool_executions += 1;
-                self.observation.activity = SubagentActivity::AwaitingActivity;
-                true
+            RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. }
+            | RuntimeEvent::ToolExecutionFailed { tool_call_id, .. } => {
+                self.settle_tool_execution(tool_call_id)
             }
             RuntimeEvent::CompactionStarted => {
+                self.visible_tool = None;
                 self.observation.activity = SubagentActivity::Compacting;
                 true
             }
@@ -251,20 +309,67 @@ impl SubagentObservationProjector {
 
     /// Applies one tool progress report to the projection.
     ///
-    /// Progress belongs to exactly one in-flight execution: an update for
-    /// any other call (or while no tool is current) is not a transition of
-    /// this projection.
+    /// Progress belongs to exactly one in-flight execution: it updates its
+    /// own call's fold-local state and makes that call the visible
+    /// representative — the call that most recently produced an objective
+    /// activity fact is what the bounded wire projection shows. A report
+    /// for a settled or unknown call is stale and can never resurrect a
+    /// completed execution.
     fn apply_tool_progress(&mut self, tool_call_id: &ToolCallId, progress: &ToolProgress) -> bool {
-        match &mut self.observation.activity {
-            SubagentActivity::Tool {
-                tool_call_id: current,
-                progress: slot,
-                ..
-            } if current == tool_call_id => {
-                *slot = Some(progress.clone());
-                true
-            }
-            _ => false,
+        let tool_id = {
+            let Some(tool) = self.active_tools.get_mut(tool_call_id) else {
+                return false;
+            };
+            tool.progress = Some(progress.clone());
+            tool.tool_id.clone()
+        };
+        self.visible_tool = Some(tool_call_id.clone());
+        self.observation.activity = SubagentActivity::Tool {
+            tool_call_id: tool_call_id.clone(),
+            tool_id,
+            progress: Some(progress.clone()),
+        };
+        true
+    }
+
+    /// Settles exactly one tool execution.
+    ///
+    /// Removes only that call from the active set and counts it exactly
+    /// once; a settlement of a call that is not active (duplicate or
+    /// never-started-here) carries no signal. If the settled call was the
+    /// visible representative, the projection falls back to the
+    /// latest-started surviving call — sibling completion never resets the
+    /// projection to neutral while another call remains active.
+    fn settle_tool_execution(&mut self, tool_call_id: &ToolCallId) -> bool {
+        if self.active_tools.remove(tool_call_id).is_none() {
+            return false;
+        }
+        self.observation.counters.tool_executions += 1;
+        if self.visible_tool.as_ref() == Some(tool_call_id) {
+            self.project_tool_survivor_or_neutral();
+        }
+        true
+    }
+
+    /// Re-projects the deterministic surviving tool representative — the
+    /// latest-started call still active — or returns the projection to the
+    /// neutral state once no active call remains.
+    fn project_tool_survivor_or_neutral(&mut self) {
+        let survivor = self
+            .active_tools
+            .iter()
+            .max_by_key(|(_, tool)| tool.started_order)
+            .map(|(tool_call_id, tool)| (tool_call_id.clone(), tool.clone()));
+        if let Some((tool_call_id, tool)) = survivor {
+            self.visible_tool = Some(tool_call_id.clone());
+            self.observation.activity = SubagentActivity::Tool {
+                tool_call_id,
+                tool_id: tool.tool_id,
+                progress: tool.progress,
+            };
+        } else {
+            self.visible_tool = None;
+            self.observation.activity = SubagentActivity::AwaitingActivity;
         }
     }
 }
@@ -998,6 +1103,230 @@ mod tests {
         assert!(
             !serialized.contains("127.0.0.1"),
             "no endpoint material crosses into the profile: {serialized}"
+        );
+    }
+
+    fn tool_started(projector: &mut SubagentObservationProjector, call: &str) {
+        assert_folded(
+            projector,
+            &event(RuntimeEvent::ToolExecutionStarted {
+                tool_call_id: ToolCallId::new(call),
+                tool_id: ToolId::new("tool-bash"),
+            }),
+        );
+    }
+
+    fn live_progress(call: &str, message: &str) -> ConversationObservation {
+        ConversationObservation::ToolProgress {
+            attempt_id: AttemptId::new("attempt-1"),
+            tool_call_id: ToolCallId::new(call),
+            tool_id: ToolId::new("tool-bash"),
+            progress: ToolProgress {
+                message: Some(message.to_owned()),
+                ..ToolProgress::default()
+            },
+        }
+    }
+
+    fn tool_completed(call: &str) -> ConversationObservation {
+        event(RuntimeEvent::ToolExecutionCompleted {
+            tool_call_id: ToolCallId::new(call),
+            tool_id: ToolId::new("tool-bash"),
+            result: tool_result(),
+        })
+    }
+
+    fn tool_activity(call: &str, message: Option<&str>) -> SubagentActivity {
+        SubagentActivity::Tool {
+            tool_call_id: ToolCallId::new(call),
+            tool_id: ToolId::new("tool-bash"),
+            progress: message.map(|message| ToolProgress {
+                message: Some(message.to_owned()),
+                ..ToolProgress::default()
+            }),
+        }
+    }
+
+    /// Parallel regression (Issue #178): completing one call of a parallel
+    /// group must not reset the projection to neutral while a sibling call
+    /// is still objectively executing.
+    #[test]
+    fn a_parallel_sibling_completion_keeps_the_surviving_call_visible() {
+        let mut projector = SubagentObservationProjector::default();
+        tool_started(&mut projector, "call-a");
+        tool_started(&mut projector, "call-b");
+        assert_folded(&mut projector, &live_progress("call-b", "halfway"));
+
+        // call-a settles while call-b still runs: call-b (the call that
+        // most recently produced an objective activity fact) stays visible.
+        assert_folded(&mut projector, &tool_completed("call-a"));
+        assert_eq!(
+            projector.observation.activity,
+            tool_activity("call-b", Some("halfway")),
+            "a surviving parallel call keeps projecting, never neutral"
+        );
+        assert_eq!(projector.observation.counters.tool_executions, 1);
+    }
+
+    /// Parallel regression (Issue #178): when the VISIBLE call settles, the
+    /// representative falls back to a deterministic surviving call
+    /// (latest-started) instead of going neutral.
+    #[test]
+    fn a_visible_parallel_completion_falls_back_to_the_survivor() {
+        let mut projector = SubagentObservationProjector::default();
+        tool_started(&mut projector, "call-a");
+        tool_started(&mut projector, "call-b");
+        assert_folded(&mut projector, &live_progress("call-b", "halfway"));
+        assert_eq!(
+            projector.observation.activity,
+            tool_activity("call-b", Some("halfway"))
+        );
+
+        assert_folded(&mut projector, &tool_completed("call-b"));
+        assert_eq!(
+            projector.observation.activity,
+            tool_activity("call-a", None),
+            "the deterministic survivor (latest-started remaining call) becomes visible"
+        );
+        assert_eq!(projector.observation.counters.tool_executions, 1);
+    }
+
+    /// Parallel regression (Issue #178): progress of a call whose sibling
+    /// already settled still advances the projection.
+    #[test]
+    fn progress_of_a_surviving_sibling_remains_observable() {
+        let mut projector = SubagentObservationProjector::default();
+        tool_started(&mut projector, "call-a");
+        tool_started(&mut projector, "call-b");
+        assert_folded(&mut projector, &tool_completed("call-a"));
+
+        let revision = projector.observation.revision;
+        assert_folded(&mut projector, &live_progress("call-b", "phase 2"));
+        assert_eq!(projector.observation.revision, revision + 1);
+        assert_eq!(
+            projector.observation.activity,
+            tool_activity("call-b", Some("phase 2"))
+        );
+    }
+
+    /// Parallel regression (Issue #178): the projection returns to neutral
+    /// only after the FINAL active call settles.
+    #[test]
+    fn the_projection_goes_neutral_only_after_the_final_parallel_call_settles() {
+        let mut projector = SubagentObservationProjector::default();
+        tool_started(&mut projector, "call-a");
+        tool_started(&mut projector, "call-b");
+
+        assert_folded(&mut projector, &tool_completed("call-a"));
+        assert_eq!(
+            projector.observation.activity,
+            tool_activity("call-b", None),
+            "one call is still objectively executing"
+        );
+
+        assert_folded(&mut projector, &tool_completed("call-b"));
+        assert_eq!(
+            projector.observation.activity,
+            SubagentActivity::AwaitingActivity,
+            "no active call remains"
+        );
+        assert_eq!(projector.observation.counters.tool_executions, 2);
+    }
+
+    /// Parallel regression (Issue #178): two parallel calls count exactly
+    /// once each, and a duplicate settlement carries no signal.
+    #[test]
+    fn parallel_tool_executions_count_exactly_once_each() {
+        let mut projector = SubagentObservationProjector::default();
+        tool_started(&mut projector, "call-a");
+        tool_started(&mut projector, "call-b");
+        assert_folded(&mut projector, &tool_completed("call-a"));
+        assert_folded(
+            &mut projector,
+            &event(RuntimeEvent::ToolExecutionFailed {
+                tool_call_id: ToolCallId::new("call-b"),
+                tool_id: ToolId::new("tool-bash"),
+                error: "denied".to_owned(),
+            }),
+        );
+        assert_eq!(projector.observation.counters.tool_executions, 2);
+
+        // A duplicate settlement of call-a is stale: no counter, no
+        // revision.
+        assert_ignored(&mut projector, &tool_completed("call-a"));
+        assert_eq!(projector.observation.counters.tool_executions, 2);
+    }
+
+    /// Parallel regression (Issue #178): a late progress report of an
+    /// already-settled call can never resurrect it.
+    #[test]
+    fn stale_progress_never_resurrects_a_completed_call() {
+        let mut projector = SubagentObservationProjector::default();
+        tool_started(&mut projector, "call-a");
+        assert_folded(&mut projector, &tool_completed("call-a"));
+        assert_eq!(
+            projector.observation.activity,
+            SubagentActivity::AwaitingActivity
+        );
+
+        assert_ignored(&mut projector, &live_progress("call-a", "late"));
+        assert_eq!(
+            projector.observation.activity,
+            SubagentActivity::AwaitingActivity
+        );
+    }
+
+    /// Parallel regression (Issue #178): an interaction settlement while a
+    /// sibling tool still runs returns to the surviving tool, not to
+    /// neutral.
+    #[test]
+    fn an_interaction_settlement_reprojects_a_still_running_sibling() {
+        let mut projector = SubagentObservationProjector::default();
+        tool_started(&mut projector, "call-a");
+        tool_started(&mut projector, "call-b");
+        assert_folded(
+            &mut projector,
+            &ConversationObservation::InteractionPending {
+                request: crate::runtime::interaction::InteractionRequest {
+                    id: crate::runtime::identity::InteractionId::new("interaction-1"),
+                    conversation_id: crate::runtime::identity::ConversationId::new("conv-1"),
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: 1,
+                    kind: InteractionKind::Approval {
+                        call_id: ToolCallId::new("call-a"),
+                        tool_id: ToolId::new("tool-bash"),
+                        tool_name: "bash".to_owned(),
+                        origin: crate::tools::types::ToolOrigin::Builtin,
+                        mode: crate::tools::types::ToolInvocationMode::Foreground,
+                        arguments: serde_json::json!({}),
+                        reason: "policy".to_owned(),
+                    },
+                },
+                audit: interaction_audit(),
+                transcript_cursor: crate::durable::TranscriptCursor::new(1),
+            },
+        );
+        assert!(matches!(
+            projector.observation.activity,
+            SubagentActivity::Waiting { .. }
+        ));
+
+        assert_folded(
+            &mut projector,
+            &ConversationObservation::InteractionSettled {
+                interaction_id: crate::runtime::identity::InteractionId::new("interaction-1"),
+                outcome: crate::runtime::interaction::InteractionOutcome::Responded {
+                    response: crate::runtime::interaction::InteractionResponse::Approval {
+                        decision: crate::runtime::interaction::ApprovalDecision::Allow,
+                    },
+                },
+                audit: None,
+            },
+        );
+        assert_eq!(
+            projector.observation.activity,
+            tool_activity("call-b", None),
+            "the latest-started still-active call is the representative again"
         );
     }
 }

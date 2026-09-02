@@ -1257,13 +1257,20 @@ second authority:
   `SubagentObservation`: a child-owned strictly monotonic `revision`, the
   current `activity`, a child-stamped `last_activity_at`, and cumulative
   `counters`. Publication crosses the child dispatcher's two delivery
-  classes: a reliable bounded mpsc lane carries everything except
-  `Activity`, while one disposable latest-value watch slot carries
-  `Activity` frames (subagent IPC version 8, frame kind 107); the biased
-  writer always drains the reliable lane first, so activity traffic
-  consumes no reliable capacity and can never delay a terminal `Result`.
-  The parent process driver applies each decoded frame synchronously
-  through `SubagentRegistry::apply_activity`, which drops frames for a
+  classes on two independent transports: a reliable bounded mpsc lane
+  carries everything except `Activity` onto the fd 0 control stream, while
+  one disposable latest-value watch slot is drained by a dedicated
+  observation writer onto the fd 1 observation stream (subagent IPC
+  version 9, frame kind 107). Reliable control traffic and disposable
+  observation traffic therefore have independent backpressure domains: a
+  stalled observation writer stalls only itself and can never delay a
+  terminal `Result`, a containment `AnchorReleased`, or any other reliable
+  control frame. On the parent side the process driver remains the sole
+  owner of the control protocol; a dedicated observation receiver only
+  decodes `Activity` frames into `SubagentRegistry::apply_activity` — it
+  never settles, cancels, anchors, or journals anything, and observation
+  transport EOF is diagnostics loss, never process or lifecycle evidence.
+  `apply_activity` drops frames for a
   terminal or terminal-publishing record and frames whose revision does
   not advance the stored one. The registry read model (`SubagentSnapshot.observation`,
   `execution_profile`, `started_at`) reaches observers through the
@@ -1290,6 +1297,16 @@ second authority:
   the final record of what the child did. Activity frames arriving after
   settlement are dropped, and the lifecycle remains the only terminal
   truth.
+- **Parallel tool executions project one deterministic bounded
+  representative.** A parallel tool group can execute several foreground
+  calls concurrently; the projector tracks every active call in fold-local
+  state that never crosses the wire, while the wire activity stays bounded
+  to one representative: the call that most recently produced an objective
+  activity fact (start or progress) is visible, a completion removes and
+  counts exactly its own call, and a visible completion falls back to the
+  latest-started surviving call. The projection returns to neutral only
+  when no active call remains, and stale progress of a settled call is
+  ignored — it can never resurrect a completed execution.
 - **The execution profile is safe by construction.**
   `SubagentExecutionProfile` is derived exactly once from the frozen
   `ResolvedSubagentSpec` model the child actually started with and carries
@@ -1665,22 +1682,26 @@ second authority:
 
 ### Child control transport
 
-- **There is exactly one owner of the child's raw IPC transport.** One reader
-  of the read half, one serialized writer of the write half, bounded
-  in-process channels for every other owner, and explicit EOF propagation. No
-  Tool executor or supervised-unit owner ever locks, reads, or writes the
-  `UnixStream`; there is no second socket, no listener, and no network
-  service.
+- **There is exactly one owner of each raw IPC transport.** On the fd 0
+  control stream: one reader of the read half, one serialized writer of the
+  write half, bounded in-process channels for every other owner, and
+  explicit EOF propagation. The fd 1 observation stream has its own
+  dedicated writer (child side) and receiver (parent side): a stalled or
+  lost observation transport never delays reliable control traffic, and
+  observation EOF is diagnostics loss, never process or lifecycle evidence.
+  No Tool executor or supervised-unit owner ever locks, reads, or writes
+  either `UnixStream`; there is no listener and no network service.
 - **Anchor acknowledgements route by exact typed identity.** Two units with
   outstanding offers cannot open each other's start gates.
-- **The subagent IPC version is 8 and there is no compatibility decoding.** A
+- **The subagent IPC version is 9 and there is no compatibility decoding.** A
   peer that does not speak exactly this version exits before composing
   anything. The typed `Cancel` payload carries the parent registry's semantic
   `CancellationReason`; only pre-ownership preparation cancellation uses an
-  absent reason because no child attempt exists yet. Version 8 adds the
+  absent reason because no child attempt exists yet. Version 9 moves the
   child→parent `Activity` frame (kind 107) carrying the latest-value
-  `SubagentObservation` of the Issue #178 observation plane; it is
-  observation-plane traffic only and never a control acknowledgement.
+  `SubagentObservation` of the Issue #178 observation plane onto the
+  dedicated fd 1 observation stream; it is observation-plane traffic only
+  and never a control acknowledgement.
 
 ## Issue #146: deterministic worktree isolation and workspace handoff
 

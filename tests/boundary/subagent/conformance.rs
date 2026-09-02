@@ -482,6 +482,20 @@ struct WiredChild {
     pid: u32,
 }
 
+/// How the wired child's disposable observation channel (Issue #178) is
+/// connected.
+#[derive(Clone, Copy)]
+enum ObservationWiring {
+    /// Both ends live: the driver's observation receiver drains activity
+    /// frames into the registry read model.
+    Live,
+    /// Both directions dead from the start: the driver-side receiver
+    /// observes an immediate EOF and every child-side activity write fails.
+    /// Execution must be byte-identical to `Live` — observation loss is
+    /// diagnostics-only.
+    Broken,
+}
+
 /// Stages and commits a wired child whose process exits immediately (kill
 /// and reap of an exited process are both no-ops).
 async fn launch_wired_child(plane: &ParentPlane, child: &ChildFixture, task: &str) -> WiredChild {
@@ -494,7 +508,32 @@ async fn launch_wired_child_with_shell(
     task: &str,
     shell: &str,
 ) -> WiredChild {
+    launch_wired_child_full(plane, child, task, shell, ObservationWiring::Live).await
+}
+
+async fn launch_wired_child_full(
+    plane: &ParentPlane,
+    child: &ChildFixture,
+    task: &str,
+    shell: &str,
+    observation_wiring: ObservationWiring,
+) -> WiredChild {
     let (driver_end, child_end) = tokio::net::UnixStream::pair().expect("control pair");
+    // The disposable observation channel (Issue #178): a second socket pair
+    // with its own backpressure domain, exactly like the production spawn's
+    // fd 1.
+    let (observation_driver_end, observation_child_end) = match observation_wiring {
+        ObservationWiring::Live => tokio::net::UnixStream::pair().expect("observation pair"),
+        ObservationWiring::Broken => {
+            let (driver_end, dropped_child_end) =
+                tokio::net::UnixStream::pair().expect("observation pair");
+            drop(dropped_child_end);
+            let (dropped_parent_end, child_end) =
+                tokio::net::UnixStream::pair().expect("observation pair");
+            drop(dropped_parent_end);
+            (driver_end, child_end)
+        }
+    };
     let mut command = tokio::process::Command::new("sh");
     command
         .arg("-c")
@@ -508,9 +547,12 @@ async fn launch_wired_child_with_shell(
     let pid = process.id().expect("scripted child pid");
     let child_root = plane.runtime_root.join(format!("wired-child-{pid}"));
     std::fs::create_dir_all(&child_root).expect("child runtime root");
-    plane
-        .registry
-        .push_staged_override(StagedChild::for_test(process, driver_end, child_root));
+    plane.registry.push_staged_override(StagedChild::for_test(
+        process,
+        driver_end,
+        observation_driver_end,
+        child_root,
+    ));
     let prepared = plane
         .registry
         .prepare(
@@ -540,8 +582,10 @@ async fn launch_wired_child_with_shell(
     let child_observations = Arc::clone(&child.observations);
     let (stop_serve, stop_receiver) = tokio::sync::oneshot::channel();
     let serve = tokio::spawn(async move {
-        let mut dispatcher =
-            crate::local_runtime::dispatcher::ChildControlDispatcher::start(child_end);
+        let mut dispatcher = crate::local_runtime::dispatcher::ChildControlDispatcher::start(
+            child_end,
+            observation_child_end,
+        );
         let handle = dispatcher.handle();
         let result = tokio::select! {
             result = crate::local_runtime::subagent_child::serve_child_delegation(
@@ -2108,6 +2152,197 @@ async fn tool_activity_projects_identity_scoped_progress_and_counts_executions()
         .expect("child runtime drains");
 }
 
+/// Parallel regression (Issue #178): two foreground calls of one parallel
+/// tool group execute concurrently, and the projection must represent that
+/// objectively: one bounded Tool representative for as long as any call is
+/// active, live progress scoped to its own call, exactly-once execution
+/// counting, and no false neutral while a sibling still runs.
+///
+/// Note on durability: per-call `ToolExecutionCompleted` facts commit in
+/// the canonical batch only after the whole group settles, so the survivor
+/// fallback between two completion folds is pinned by the projector unit
+/// regressions; what this end-to-end cut pins deterministically is that a
+/// physically finished sibling (not yet committed) never neutralizes,
+/// counts, or hides the still-parked sibling's projection.
+///
+/// Determinism: both calls park on watch gates, so every asserted
+/// projection is a stable parked state — the coalescing activity lane can
+/// never skip past it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parallel_tool_group_never_projects_neutral_while_a_sibling_runs() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let plane = standalone_parent_plane(&dir, "conv-178-parallel-activity");
+    let mut tools = ToolRegistry::new();
+    // call-a parks without reporting progress; call-b parks, reports one
+    // progress phase on release, and parks again before settling.
+    let (probe_a, release_a) = FakeTool::parking(
+        common::tool_policies(
+            "probe-a",
+            "tool-probe-a",
+            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+            rustx::tools::types::ToolConcurrencyPolicy::Parallel,
+        ),
+        support::fake::success_result("a done"),
+    );
+    let mut a_started = probe_a.started();
+    probe_a.register(&mut tools);
+    let (probe_b, b_gates) = FakeTool::parking_phases(
+        common::tool_policies(
+            "probe-b",
+            "tool-probe-b",
+            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+            rustx::tools::types::ToolConcurrencyPolicy::Parallel,
+        ),
+        support::fake::success_result("b done"),
+        &["b phase 2"],
+    );
+    let mut b_started = probe_b.started();
+    probe_b.register(&mut tools);
+    // The final answer request parks too, so the completion counters are
+    // observably applied before the terminal frame can race them.
+    let (answer_release, answer_released) = support::fake::model_release();
+    // One model turn proposing BOTH calls: adjacent Parallel invocations
+    // form one concurrent group.
+    let mut parallel_turn = vec![FakeStep::Emit(started())];
+    parallel_turn.extend(
+        support::fake::tool_call_events(
+            0,
+            &support::fake::ScriptedCall {
+                id: "call-a",
+                tool_id: "tool-probe-a",
+                name: "probe-a",
+                arguments: serde_json::json!({}),
+            },
+        )
+        .into_iter()
+        .map(FakeStep::Emit),
+    );
+    parallel_turn.extend(
+        support::fake::tool_call_events(
+            1,
+            &support::fake::ScriptedCall {
+                id: "call-b",
+                tool_id: "tool-probe-b",
+                name: "probe-b",
+                arguments: serde_json::json!({}),
+            },
+        )
+        .into_iter()
+        .map(FakeStep::Emit),
+    );
+    parallel_turn.push(FakeStep::Emit(ModelEvent::Completed {
+        finish_reason: ModelFinishReason::ToolCalls,
+        usage: None,
+    }));
+    let child = child_fixture(
+        &dir,
+        &ConversationId::new("conv-178-parallel-activity-child"),
+        vec![
+            parallel_turn,
+            vec![
+                FakeStep::Emit(started()),
+                FakeStep::ParkUntilReleased(answer_released),
+                FakeStep::Emit(text("PARALLEL-ACTIVITY-ANSWER")),
+                FakeStep::Emit(completed()),
+            ],
+        ],
+        tools,
+        Vec::new(),
+    )
+    .await;
+    let wired = launch_wired_child(&plane, &child, "inspect").await;
+
+    // Both calls of the parallel group are objectively executing at once.
+    support::fake::await_started(&mut a_started, "call-a starts").await;
+    support::fake::await_started(&mut b_started, "call-b starts").await;
+    let both_active = await_snapshot(
+        &plane,
+        &wired.accepted.subagent_id,
+        |snapshot| matches!(snapshot.observation.activity, SubagentActivity::Tool { .. }),
+        "two concurrently parked calls project one bounded Tool representative",
+    )
+    .await;
+    assert_eq!(both_active.state, SubagentState::Running);
+    assert_eq!(both_active.observation.counters.tool_executions, 0);
+
+    // call-a finishes physically while call-b stays parked. Its completion
+    // fact commits only in the canonical batch after the WHOLE group
+    // settles, so the projection must keep representing the still-running
+    // call-b — never neutral, and nothing counted yet.
+    release_a.send_replace(true);
+    b_gates[0].send_replace(true);
+    let phased = await_snapshot(
+        &plane,
+        &wired.accepted.subagent_id,
+        |snapshot| {
+            matches!(
+                snapshot.observation.activity,
+                SubagentActivity::Tool { ref tool_call_id, progress: Some(ref progress), .. }
+                    if *tool_call_id == ToolCallId::new("call-b")
+                        && progress.message.as_deref() == Some("b phase 2")
+            )
+        },
+        "the surviving call's live progress projects in-flight",
+    )
+    .await;
+    assert_eq!(
+        phased.observation.counters.tool_executions, 0,
+        "a physically finished but uncommitted sibling is never counted and never neutralizes the projection"
+    );
+
+    // The final call settles: the group batch commits, no Tool activity can
+    // outlive it, and each execution counted exactly once. (The cut between
+    // the batch commit and the next request start may legitimately coalesce
+    // away; the projector unit regressions pin the per-call survivor and
+    // neutral transitions themselves.)
+    b_gates[1].send_replace(true);
+    let settled_tools = await_snapshot(
+        &plane,
+        &wired.accepted.subagent_id,
+        |snapshot| snapshot.observation.counters.tool_executions == 2,
+        "both completions are observably applied",
+    )
+    .await;
+    assert!(
+        !matches!(
+            settled_tools.observation.activity,
+            SubagentActivity::Tool { .. }
+        ),
+        "no active call remains: {:?}",
+        settled_tools.observation.activity
+    );
+
+    // The child settles: terminal-neutral, exactly two executions, and the
+    // answer arrives exactly once through the canonical inbound.
+    answer_release.send_replace(true);
+    let settled = plane
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .expect("child settles");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    assert_eq!(
+        settled.observation.activity,
+        SubagentActivity::AwaitingActivity
+    );
+    assert_eq!(settled.observation.counters.tool_executions, 2);
+    assert!(
+        settled.observation.revision > phased.observation.revision,
+        "every applied transition advanced the revision"
+    );
+    await_serve(wired.serve).await;
+    assert_eq!(
+        parent_pending_texts(&plane),
+        vec!["PARALLEL-ACTIVITY-ANSWER".to_owned()],
+        "the answer arrives exactly once, through the canonical inbound"
+    );
+    child
+        .runtime
+        .shutdown()
+        .await
+        .expect("child runtime drains");
+}
+
 /// Invariant: a real transient retry is visible as activity — never as
 /// lifecycle. While the child sleeps in retry backoff the parent projects
 /// `RetryingModel` with the scheduled ordinal; once the manual clock
@@ -2246,6 +2481,11 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
         /// A Runtime Client host whose bridge stays parked until the child
         /// has settled.
         Stalled,
+        /// No runtime client, and the observation channel is broken from
+        /// the start: the parent's receiver sees an immediate EOF and every
+        /// child-side activity write fails. Observation transport loss is
+        /// diagnostics-only; execution must not change.
+        ObservationBroken,
     }
 
     /// The topology-independent execution record of one child run: two runs
@@ -2284,7 +2524,9 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
     async fn run(conversation: &str, topology: Topology) -> ExecutionRecord {
         let dir = tempfile::tempdir().expect("temp root");
         let (plane, parent_runtime, host) = match topology {
-            Topology::Standalone => (standalone_parent_plane(&dir, conversation), None, None),
+            Topology::Standalone | Topology::ObservationBroken => {
+                (standalone_parent_plane(&dir, conversation), None, None)
+            }
             Topology::Draining | Topology::Stalled => {
                 let (parent, host) = parent_runtime_host_plane(
                     &dir,
@@ -2354,7 +2596,12 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
             Vec::new(),
         )
         .await;
-        let wired = launch_wired_child(&plane, &child, "inspect the workspace").await;
+        let wiring = match topology {
+            Topology::ObservationBroken => ObservationWiring::Broken,
+            _ => ObservationWiring::Live,
+        };
+        let wired =
+            launch_wired_child_full(&plane, &child, "inspect the workspace", "true", wiring).await;
         let subagent_id = wired.accepted.subagent_id.clone();
 
         // The reliable baseline of the stalled consumer: once the Running
@@ -2375,24 +2622,41 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
         };
 
         // The child is parked mid-execution with its progress reports live:
-        // the same stable observation cut in every topology (the registry
-        // read model applies activity frames regardless of any downstream
-        // consumer).
+        // the same stable observation cut in every topology whose
+        // observation channel is alive (the registry read model applies
+        // activity frames regardless of any downstream consumer). With a
+        // broken observation channel the read model simply stays at its
+        // initial observation — diagnostics-only loss, no execution change.
         support::fake::await_started(&mut scan_started, "the scan tool starts").await;
-        let working = await_snapshot(
-            &plane,
-            &subagent_id,
-            |snapshot| {
-                matches!(
-                    snapshot.observation.activity,
-                    SubagentActivity::Tool { ref tool_call_id, progress: Some(_), .. }
-                        if *tool_call_id == ToolCallId::new("call-scan")
-                )
-            },
-            "the parked execution's live progress reaches the registry read model",
-        )
-        .await;
-        assert_eq!(working.state, SubagentState::Running);
+        if matches!(topology, Topology::ObservationBroken) {
+            let current = await_snapshot(
+                &plane,
+                &subagent_id,
+                |snapshot| snapshot.state == SubagentState::Running,
+                "the child record commits",
+            )
+            .await;
+            assert_eq!(
+                current.observation,
+                rustx::runtime::subagent::SubagentObservation::default(),
+                "a broken observation channel leaves the read model at the initial observation"
+            );
+        } else {
+            let working = await_snapshot(
+                &plane,
+                &subagent_id,
+                |snapshot| {
+                    matches!(
+                        snapshot.observation.activity,
+                        SubagentActivity::Tool { ref tool_call_id, progress: Some(_), .. }
+                            if *tool_call_id == ToolCallId::new("call-scan")
+                    )
+                },
+                "the parked execution's live progress reaches the registry read model",
+            )
+            .await;
+            assert_eq!(working.state, SubagentState::Running);
+        }
         if let Some(baseline) = baseline {
             let bridge = bridge.as_ref().expect("the stalled bridge");
             assert!(
@@ -2428,7 +2692,7 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
         // surfaces it depends on the topology, the semantic content does
         // not.
         match topology {
-            Topology::Standalone => {
+            Topology::Standalone | Topology::ObservationBroken => {
                 assert_eq!(
                     parent_pending_texts(&plane),
                     vec!["TOPOLOGY-ANSWER".to_owned()],
@@ -2546,6 +2810,7 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
     let standalone = run("conv-178-topology", Topology::Standalone).await;
     let drained = run("conv-178-topology", Topology::Draining).await;
     let stalled = run("conv-178-topology", Topology::Stalled).await;
+    let observation_broken = run("conv-178-topology", Topology::ObservationBroken).await;
 
     // The shared workload really ran in every topology: three provider
     // requests (R0 transient, R1 the retried tool-call request, R2 the
@@ -2565,6 +2830,10 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
     assert_eq!(
         standalone, stalled,
         "a stalled observation consumer changes nothing about the child's execution"
+    );
+    assert_eq!(
+        standalone, observation_broken,
+        "a broken observation transport changes nothing about the child's execution"
     );
 }
 

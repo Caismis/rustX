@@ -4696,18 +4696,28 @@ child-side projector    folds the child's drained ConversationObservation
         |               SubagentObservation (revision, activity,
         |               last_activity_at, counters) — no forwarder task
         v
-child dispatcher        two delivery classes on one write half: a
-        |               reliable bounded mpsc lane (OUTBOUND_CAPACITY 64)
-        |               plus one disposable latest-value watch slot for
-        |               Activity; the biased writer drains reliable frames
-        |               first, so publishing can never block the child
-        |               Agent Loop or crowd out a terminal Result
+child dispatcher        two delivery classes on two independent
+        |               transports: a reliable bounded mpsc lane
+        |               (OUTBOUND_CAPACITY 64) written to the fd 0 control
+        |               stream by the reliable writer, plus one disposable
+        |               latest-value watch slot drained by a dedicated
+        |               observation writer onto the fd 1 observation
+        |               stream; publishing can never block the child Agent
+        |               Loop or crowd out a terminal Result
         v
-Activity IPC frame      subagent IPC version 8, child->parent kind 107
-        |
+Activity IPC frame      subagent IPC version 9: reliable control frames
+        |               on the fd 0 stream, disposable Activity frames
+        |               (kind 107) on the fd 1 stream — independent
+        |               backpressure domains, so a stalled observation
+        |               transport can never delay Result, AnchorReleased,
+        |               or any other reliable control frame
         v
-parent process driver   decodes and applies synchronously, never awaits
-        |               a consumer
+parent process driver   owns the fd 0 control protocol (lifecycle
+        |               authority); a dedicated observation receiver owns
+        |               the fd 1 stream and only decodes Activity frames
+        |               into the sink — it never settles, cancels, or
+        |               journals anything, and observation EOF is not
+        |               process/lifecycle evidence
         v
 SubagentRegistry::apply_activity
         |               drops frames for terminal/terminal-publishing
@@ -4747,6 +4757,26 @@ the activity to the terminal-neutral `awaiting_activity` with a revision
 bump, retaining the counters and the last-activity timestamp as the final
 record; post-terminal activity frames are dropped, and the lifecycle remains
 the only terminal truth.
+
+Reliable subagent control and disposable live observation have independent
+backpressure domains: the reliable control protocol (Ready, Result,
+StartupError, AnchorOffered, AnchorReleased, Diagnostic) runs on the fd 0
+stream with its own writer, while disposable Activity frames run on the fd 1
+stream with a dedicated observation writer and receiver. Observation loss or
+stalling cannot delay lifecycle, containment, or terminal control traffic —
+a blocked observation writer stalls only itself, and losing the observation
+transport is diagnostics-only: child execution, settlement, and the existing
+parent-liveness semantics of the control transport are unchanged.
+
+A child may execute multiple foreground tools concurrently (a parallel tool
+group). The observation projector tracks all active calls internally —
+fold-local state that never crosses the wire — but exposes one deterministic
+representative as the bounded live activity projection: the call that most
+recently produced an objective activity fact is visible, completion removes
+exactly its own call (counted exactly once), and sibling completion falls
+back to the latest-started surviving call, never resetting the activity to
+neutral while another call remains active. Stale progress of a settled call
+is ignored and can never resurrect it.
 
 The same live seam exists inside any conversation for foreground tool
 progress: while a call still executes, each reported observation fires
@@ -5282,7 +5312,7 @@ terminal's own bounded diagnostic. An anchor is never removed merely because
 the direct child exited; it is removed by an exact
 `ProcessUnitAnchorReleased { unit_id, pgid }` or by containment.
 
-##### One child control dispatcher, one IPC plane
+##### One child control dispatcher, two IPC transports
 
 Letting each nested unit owner lock the child's `UnixStream` would create
 several readers and several writers of one frame protocol: interleaved
@@ -5293,29 +5323,39 @@ dispatcher:
 ```text
                      ChildControlDispatcher
         reader task                            writer task
- (sole reader of the read half)        (sole writer of the write half)
+ (sole reader of the fd 0 control      (sole writer of the fd 0 control
+  read half)                              write half)
    Delegate -> control-event channel      Ready / Result / StartupError
    Cancel   -> control-event channel      AnchorOffered / AnchorReleased
    AnchorAccepted / AnchorRefused         bounded diagnostics
-        -> the exact pending unit         Activity (latest-value
-                                          observation, never acked)
+        -> the exact pending unit
    EOF -> parent-lost watch; every
           outstanding offer fails
+
+        observation writer task
+ (sole writer of the fd 1 observation
+  stream, child -> parent only)
+   Activity (latest-value watch slot,
+   coalescing, never acked, its own
+   backpressure domain)
 ```
 
 Acknowledgements route by exact typed `ProcessUnitId`, never by arrival
 order, so two units with outstanding offers cannot open each other's gates.
-The read half remains the parent-liveness authority, and its EOF is what
-`ChildPreparation` observes during composition. Channels are bounded, there
-is no second socket, no listener, and no network service. The subagent IPC
-version is **8**: its typed `Cancel` frame carries the parent registry's
-semantic `CancellationReason` (with an absent reason only for pre-ownership
+The control read half remains the parent-liveness authority, and its EOF is
+what `ChildPreparation` observes during composition. Channels are bounded,
+there is no listener and no network service. The subagent IPC version is
+**9**: its typed `Cancel` frame carries the parent registry's semantic
+`CancellationReason` (with an absent reason only for pre-ownership
 preparation cancellation, where no child attempt exists), and the
 child→parent `Activity` frame (kind 107) carries the Issue #178 live
-activity projection — observation-plane traffic that rides the one IPC
-plane, is applied synchronously into the registry read model, and is never
-a control acknowledgement. There is no compatibility decoding for older
-versions.
+activity projection on the dedicated fd 1 observation stream — reliable
+control and disposable observation never share a transport backpressure
+dependency, so a stalled observation writer can never delay a `Result`, an
+`AnchorReleased`, or any other control frame. The parent's observation
+receiver only decodes `Activity` into the registry read model; observation
+EOF is diagnostics loss, never process or lifecycle evidence. There is no
+compatibility decoding for older versions.
 
 ##### Recovery-semantics conformance (Issue #138)
 

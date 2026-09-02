@@ -2684,7 +2684,12 @@ mod subagent_child_tests {
     async fn attempt_cancellation_settles_a_long_preparation() {
         let cancellation = crate::runtime::cancellation::CancellationSignal::new();
         let (parent, child) = tokio::net::UnixStream::pair().expect("control pair");
-        let dispatcher = crate::local_runtime::dispatcher::ChildControlDispatcher::start(child);
+        let (_observation_parent, observation_child) =
+            tokio::net::UnixStream::pair().expect("observation pair");
+        let dispatcher = crate::local_runtime::dispatcher::ChildControlDispatcher::start(
+            child,
+            observation_child,
+        );
         let preparation = ChildPreparation::new(cancellation.clone(), dispatcher.handle());
 
         // A cancellation-aware step that would never finish on its own: it
@@ -2730,7 +2735,12 @@ mod subagent_child_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn parent_loss_settles_a_long_preparation() {
         let (parent, child) = tokio::net::UnixStream::pair().expect("control pair");
-        let dispatcher = crate::local_runtime::dispatcher::ChildControlDispatcher::start(child);
+        let (_observation_parent, observation_child) =
+            tokio::net::UnixStream::pair().expect("observation pair");
+        let dispatcher = crate::local_runtime::dispatcher::ChildControlDispatcher::start(
+            child,
+            observation_child,
+        );
         let handle = dispatcher.handle();
         let preparation = ChildPreparation::new(
             crate::runtime::cancellation::CancellationSignal::new(),
@@ -2780,7 +2790,12 @@ mod subagent_child_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn an_uninterrupted_preparation_returns_its_result() {
         let (parent, child) = tokio::net::UnixStream::pair().expect("control pair");
-        let dispatcher = crate::local_runtime::dispatcher::ChildControlDispatcher::start(child);
+        let (_observation_parent, observation_child) =
+            tokio::net::UnixStream::pair().expect("observation pair");
+        let dispatcher = crate::local_runtime::dispatcher::ChildControlDispatcher::start(
+            child,
+            observation_child,
+        );
         let preparation = ChildPreparation::new(
             crate::runtime::cancellation::CancellationSignal::new(),
             dispatcher.handle(),
@@ -2798,7 +2813,12 @@ mod subagent_child_tests {
     async fn a_step_completing_after_cancellation_is_not_publishable() {
         let cancellation = crate::runtime::cancellation::CancellationSignal::new();
         let (parent, child) = tokio::net::UnixStream::pair().expect("control pair");
-        let dispatcher = crate::local_runtime::dispatcher::ChildControlDispatcher::start(child);
+        let (_observation_parent, observation_child) =
+            tokio::net::UnixStream::pair().expect("observation pair");
+        let dispatcher = crate::local_runtime::dispatcher::ChildControlDispatcher::start(
+            child,
+            observation_child,
+        );
         let preparation = ChildPreparation::new(cancellation.clone(), dispatcher.handle());
         cancellation.cancel();
         // The cancellation already fired; the step completes anyway. The

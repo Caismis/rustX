@@ -6429,6 +6429,8 @@ mod tests {
     ) {
         std::fs::create_dir_all(runtime_root).expect("runtime root");
         let (driver_end, test_end) = tokio::net::UnixStream::pair().expect("control pair");
+        let (observation_end, _observation_peer) =
+            tokio::net::UnixStream::pair().expect("observation pair");
         let child = tokio::process::Command::new("sh")
             .arg("-c")
             .arg("trap '' TERM; exec sleep 60")
@@ -6442,6 +6444,7 @@ mod tests {
             crate::runtime::subagent::process::StagedChild::for_test(
                 child,
                 driver_end,
+                observation_end,
                 runtime_root.to_path_buf(),
             ),
             test_end,
@@ -14253,6 +14256,8 @@ mod tests {
         let runtime_root = dir.path().join("subagents");
         std::fs::create_dir_all(&runtime_root).expect("subagent runtime root");
         let (driver_end, mut peer) = tokio::net::UnixStream::pair().expect("IPC pair");
+        let (observation_end, _observation_peer) =
+            tokio::net::UnixStream::pair().expect("observation pair");
         let child = tokio::process::Command::new("sh")
             .arg("-c")
             .arg("true")
@@ -14268,6 +14273,7 @@ mod tests {
         subagents.push_staged_override(crate::runtime::subagent::process::StagedChild::for_test(
             child,
             driver_end,
+            observation_end,
             child_root.clone(),
         ));
 

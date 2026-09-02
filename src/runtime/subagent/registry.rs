@@ -2427,6 +2427,8 @@ mod tests {
 
     fn stage_process(plane: &TestPlane, shell: &str) -> ScriptedChild {
         let (driver_end, test_end) = tokio::net::UnixStream::pair().expect("pair");
+        let (observation_end, _observation_peer) =
+            tokio::net::UnixStream::pair().expect("observation pair");
         let child = tokio::process::Command::new("sh")
             .arg("-c")
             .arg(shell)
@@ -2439,7 +2441,7 @@ mod tests {
         let pid = child.id().expect("scripted child pid");
         let child_runtime_root = plane.runtime_root.join(format!("test-child-{pid}"));
         std::fs::create_dir_all(&child_runtime_root).expect("child runtime root");
-        let staged = StagedChild::for_test(child, driver_end, child_runtime_root);
+        let staged = StagedChild::for_test(child, driver_end, observation_end, child_runtime_root);
         plane.registry.push_staged_override(staged);
         ScriptedChild {
             peer: test_end,
@@ -2583,6 +2585,8 @@ mod tests {
         // spawned, so this asserts exactly one thing: the registry no longer
         // has a capability-shaped refusal of its own.
         let (parent, _peer) = tokio::net::UnixStream::pair().expect("control pair");
+        let (observation_end, _observation_peer) =
+            tokio::net::UnixStream::pair().expect("observation pair");
         let child = tokio::process::Command::new("sleep")
             .arg("30")
             .spawn()
@@ -2593,9 +2597,12 @@ mod tests {
             "external-origin"
         ));
         std::fs::create_dir_all(&root).expect("root");
-        plane
-            .registry
-            .push_staged_override(StagedChild::for_test(child, parent, root));
+        plane.registry.push_staged_override(StagedChild::for_test(
+            child,
+            parent,
+            observation_end,
+            root,
+        ));
         let prepared = plane
             .registry
             .prepare(&spec, &CancellationSignal::new())

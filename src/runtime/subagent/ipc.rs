@@ -22,14 +22,26 @@
 //! rejects every malformed, oversized, unknown, or out-of-order frame as a
 //! protocol failure of the child — never as semantic evidence.
 //!
-//! # Transport
+//! # Transports
 //!
-//! The channel is one inherited `UnixStream` pair endpoint passed as the
-//! child process's standard input (fd 0). The parent's endpoint closes when
-//! the parent process dies — for any reason, including `SIGKILL` — so the
-//! same channel is the parent-liveness authority: a child that observes EOF
-//! before its terminal settlement drains and exits. No socket path, no
-//! listener, no network endpoint, and no PID polling is involved.
+//! The child inherits **two** `UnixStream` pair endpoints with independent
+//! backpressure domains (Issue #178):
+//!
+//! - fd 0 (standard input): the **reliable control channel**, duplex. It
+//!   carries the `Hello` handshake, `Delegate`, `Cancel`, anchor
+//!   acknowledgements, and every child-bound lifecycle/ownership frame
+//!   (`Ready`, `StartupError`, `Result`, `Diagnostic`, `AnchorOffered`,
+//!   `AnchorReleased`) — ordered and non-lossy. The parent's endpoint closes
+//!   when the parent process dies — for any reason, including `SIGKILL` — so
+//!   this channel is the parent-liveness authority: a child that observes
+//!   EOF before its terminal settlement drains and exits.
+//! - fd 1 (standard output): the **disposable observation channel**,
+//!   child-to-parent only. It carries `Activity` frames with latest-value
+//!   semantics. A stalled or lost observation channel delays nothing on the
+//!   control channel, and its EOF is never lifecycle evidence.
+//!
+//! No socket path, no listener, no network endpoint, and no PID polling is
+//! involved.
 
 use std::path::PathBuf;
 
@@ -55,10 +67,13 @@ use super::workspace::WorkspaceSnapshot;
 /// resolved workspace authority and immutable Git snapshot facts (Issue
 /// #146). Version 7 carries the invoking attempt's effective `ApprovalMode`
 /// and the reserved Workflow Agent terminal protocol (Issue #83). Version 8
-/// carries the child→parent live activity projection frames (Issue #178).
+/// carried the child→parent live activity projection frames (Issue #178);
+/// version 9 moves them onto the dedicated disposable observation channel
+/// (fd 1), so observation backpressure can never occupy the reliable
+/// control transport.
 /// There is no compatibility decoding: a peer that does not speak exactly
 /// this version exits before composing anything.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 8;
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 9;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -75,13 +90,15 @@ const KIND_CANCEL: u8 = 3;
 const KIND_ANCHOR_ACCEPTED: u8 = 4;
 const KIND_ANCHOR_REFUSED: u8 = 5;
 
-// Child -> parent frame kinds.
+// Child -> parent frame kinds (reliable control channel, fd 0).
 const KIND_READY: u8 = 101;
 const KIND_STARTUP_ERROR: u8 = 102;
 const KIND_RESULT: u8 = 103;
 const KIND_DIAGNOSTIC: u8 = 104;
 const KIND_ANCHOR_OFFERED: u8 = 105;
 const KIND_ANCHOR_RELEASED: u8 = 106;
+
+// Observation channel frame kind (disposable, fd 1, child -> parent only).
 const KIND_ACTIVITY: u8 = 107;
 
 /// The typed startup specification of one subagent child, carried by the
@@ -257,9 +274,11 @@ pub(crate) struct ProcessUnitRefusalFrame {
 /// This is observation-plane traffic only: it carries the child's newest
 /// [`SubagentObservation`] with latest-value coalescing semantics, is never
 /// durable, never semantic evidence, and never blocks the child's execution.
-/// The child publishes it through a latest-value slot, so the dispatcher's
-/// writer may skip intermediate values entirely: a parent that receives
-/// revision `n` may never have seen any earlier revision.
+/// It travels on the **dedicated disposable observation channel** (fd 1),
+/// never on the reliable control channel: the child publishes it through a
+/// latest-value slot drained by an independent observation writer, so the
+/// parent may receive revision `n` without ever having seen any earlier
+/// revision, and a stalled observation transport delays no control frame.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ActivityFrame {
@@ -267,7 +286,7 @@ pub(crate) struct ActivityFrame {
     pub observation: super::activity::SubagentObservation,
 }
 
-/// One decoded parent-bound frame.
+/// One decoded parent-bound frame of the reliable control channel.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ChildFrame {
     /// Composition and activation completed.
@@ -284,8 +303,6 @@ pub(crate) enum ChildFrame {
     /// A nested supervised unit is proven physically terminal, so the
     /// parent may drop exactly that retained anchor.
     AnchorReleased(ProcessUnitAnchorFrame),
-    /// A live activity projection update (observation plane only).
-    Activity(ActivityFrame),
 }
 
 /// One decoded child-bound frame.
@@ -355,10 +372,11 @@ impl std::error::Error for ProtocolError {}
 
 /// Writes one bounded frame.
 ///
-/// The transport is generic over the sink so the one raw `UnixStream` can be
-/// split into a read half and a write half owned by the single child control
-/// dispatcher (Issue #145). It is deliberately *not* generic over a
-/// different socket: there is exactly one IPC plane.
+/// The transport is generic over the sink so the control `UnixStream` can
+/// be split into a read half and a write half owned by the single child
+/// control dispatcher (Issue #145), and so the observation channel — a
+/// separate `UnixStream` with its own independent backpressure domain
+/// (Issue #178) — reuses exactly the same framing.
 pub(crate) async fn write_frame<W: tokio::io::AsyncWrite + Unpin + ?Sized>(
     stream: &mut W,
     kind: u8,
@@ -430,7 +448,7 @@ fn decode<'a, T: Deserialize<'a>>(payload: &'a [u8]) -> Result<T, ProtocolError>
     })
 }
 
-/// Writes one typed parent-bound frame.
+/// Writes one typed parent-bound frame of the reliable control channel.
 pub(crate) async fn write_child_frame<W: tokio::io::AsyncWrite + Unpin + ?Sized>(
     stream: &mut W,
     frame: &ChildFrame,
@@ -450,13 +468,12 @@ pub(crate) async fn write_child_frame<W: tokio::io::AsyncWrite + Unpin + ?Sized>
         ChildFrame::AnchorReleased(payload) => {
             write_frame(stream, KIND_ANCHOR_RELEASED, &encode(payload)?).await
         }
-        ChildFrame::Activity(payload) => {
-            write_frame(stream, KIND_ACTIVITY, &encode(payload)?).await
-        }
     }
 }
 
-/// Reads and decodes one typed parent-bound frame.
+/// Reads and decodes one typed parent-bound frame of the reliable control
+/// channel. An observation-channel kind arriving here is an unknown-kind
+/// protocol failure: the two channels never mix traffic.
 pub(crate) async fn read_child_frame<R: tokio::io::AsyncRead + Unpin + ?Sized>(
     stream: &mut R,
 ) -> Result<Option<ChildFrame>, ProtocolError> {
@@ -470,10 +487,32 @@ pub(crate) async fn read_child_frame<R: tokio::io::AsyncRead + Unpin + ?Sized>(
         KIND_DIAGNOSTIC => ChildFrame::Diagnostic(decode(&payload)?),
         KIND_ANCHOR_OFFERED => ChildFrame::AnchorOffered(decode(&payload)?),
         KIND_ANCHOR_RELEASED => ChildFrame::AnchorReleased(decode(&payload)?),
-        KIND_ACTIVITY => ChildFrame::Activity(decode(&payload)?),
         other => return Err(ProtocolError::UnknownKind { kind: other }),
     };
     Ok(Some(frame))
+}
+
+/// Writes one disposable activity frame to the observation channel.
+pub(crate) async fn write_activity_frame<W: tokio::io::AsyncWrite + Unpin + ?Sized>(
+    stream: &mut W,
+    frame: &ActivityFrame,
+) -> Result<(), ProtocolError> {
+    write_frame(stream, KIND_ACTIVITY, &encode(frame)?).await
+}
+
+/// Reads and decodes one disposable activity frame of the observation
+/// channel; `Ok(None)` is a clean EOF at a frame boundary. Anything but an
+/// activity frame is an unknown-kind protocol failure of the channel.
+pub(crate) async fn read_activity_frame<R: tokio::io::AsyncRead + Unpin + ?Sized>(
+    stream: &mut R,
+) -> Result<Option<ActivityFrame>, ProtocolError> {
+    let Some((kind, payload)) = read_frame(stream).await? else {
+        return Ok(None);
+    };
+    if kind != KIND_ACTIVITY {
+        return Err(ProtocolError::UnknownKind { kind });
+    }
+    Ok(Some(decode(&payload)?))
 }
 
 /// Writes one typed child-bound frame.
@@ -657,9 +696,9 @@ mod tests {
         ));
     }
 
-    /// IPC v8 carries the child→parent live activity projection: the frame
-    /// round-trips exactly and its payload is the typed
-    /// `SubagentObservation`.
+    /// IPC v9 carries the child→parent live activity projection on the
+    /// dedicated observation channel: the frame round-trips exactly and its
+    /// payload is the typed `SubagentObservation`.
     #[tokio::test]
     async fn the_activity_frame_round_trips() {
         let (mut parent, mut child) = pair();
@@ -677,17 +716,19 @@ mod tests {
                 tool_executions: 1,
             },
         };
-        write_child_frame(
+        write_activity_frame(
             &mut child,
-            &ChildFrame::Activity(ActivityFrame {
+            &ActivityFrame {
                 observation: observation.clone(),
-            }),
+            },
         )
         .await
         .expect("write activity");
         assert_eq!(
-            read_child_frame(&mut parent).await.expect("read activity"),
-            Some(ChildFrame::Activity(ActivityFrame { observation }))
+            read_activity_frame(&mut parent)
+                .await
+                .expect("read activity"),
+            Some(ActivityFrame { observation })
         );
     }
 
@@ -698,9 +739,44 @@ mod tests {
             .await
             .expect("write");
         assert!(matches!(
-            read_child_frame(&mut parent).await,
+            read_activity_frame(&mut parent).await,
             Err(ProtocolError::Malformed { .. })
         ));
+    }
+
+    /// The two channels never mix traffic: the observation kind on the
+    /// reliable control channel is a protocol failure, and a control kind
+    /// on the observation channel is one too.
+    #[tokio::test]
+    async fn the_two_channels_reject_each_others_kinds() {
+        let (mut parent, mut child) = pair();
+        let payload = encode(&ActivityFrame {
+            observation: super::super::activity::SubagentObservation::default(),
+        })
+        .expect("encode");
+        write_frame(&mut child, KIND_ACTIVITY, &payload)
+            .await
+            .expect("write an activity frame onto the control channel");
+        assert_eq!(
+            read_child_frame(&mut parent).await,
+            Err(ProtocolError::UnknownKind {
+                kind: KIND_ACTIVITY
+            })
+        );
+
+        let (mut parent, mut child) = pair();
+        write_child_frame(
+            &mut child,
+            &ChildFrame::Ready(ReadyFrame {
+                subagent_id: SubagentId::new("conv-1-subagent-1"),
+            }),
+        )
+        .await
+        .expect("write a control frame onto the observation channel");
+        assert_eq!(
+            read_activity_frame(&mut parent).await,
+            Err(ProtocolError::UnknownKind { kind: KIND_READY })
+        );
     }
 
     #[tokio::test]
