@@ -54,6 +54,7 @@ use crate::runtime::inbound::ConversationInboundMailbox;
 use crate::runtime::types::{CancellationReason, DurabilityGate};
 use crate::runtime::workflow::WorkflowId;
 
+use super::activity::{SubagentExecutionProfile, SubagentObservation};
 use super::catalog::{SubagentDefinitionDigest, SubagentName};
 use super::ipc::DelegationFrame;
 use super::process::{PhysicalOutcome, PhysicalSettlement, StagedChild, SubagentSpawnPlan};
@@ -190,8 +191,21 @@ struct SubagentRecord {
     /// The narrow cancellation handle into the driver task — never an OS
     /// process handle.
     control: Option<tokio::sync::mpsc::Sender<super::process::DriverCommand>>,
-    /// The bounded terminal result content or diagnostic.
+    /// The bounded terminal failure/cancellation diagnostic. A successful
+    /// child's answer content never appears here: the durable terminal
+    /// inbound publication is the one result channel (Issue #178).
     detail: Option<String>,
+    /// The latest live activity projection reported by the child (Issue
+    /// #178). Observation-plane state only: never a lifecycle input.
+    observation: SubagentObservation,
+    /// The redacted execution profile frozen at child start (Issue #178).
+    /// `None` only for recovery-projected records, whose frozen launch
+    /// specification no longer exists in this process.
+    profile: Option<SubagentExecutionProfile>,
+    /// The parent-validated Workflow output value of a successful
+    /// Workflow-owned child: the live Workflow result channel, deliberately
+    /// kept out of the observation snapshot.
+    terminal_workflow_value: Option<serde_json::Value>,
     pending_terminal: Option<TerminalCandidate>,
     publication_abandoned: bool,
     notification: NotificationState,
@@ -220,6 +234,8 @@ impl SubagentRecord {
             handoff: self.handoff.clone(),
             state,
             detail: self.detail.clone(),
+            observation: self.observation.clone(),
+            profile: self.profile.clone(),
             publication_abandoned: self.publication_abandoned,
             settled: self.lifecycle.is_terminal() && !self.publication_abandoned,
             started_at: self.started_at,
@@ -279,7 +295,7 @@ pub enum SubagentState {
 /// registry's state machine, never an authority of its own. The snapshot is
 /// also the domain payload of the model-facing `execution(status)` response
 /// (Issue #162), so it serializes as the authoritative state projection.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SubagentSnapshot {
     /// The conversation-owned subagent identity.
     pub subagent_id: SubagentId,
@@ -304,9 +320,19 @@ pub struct SubagentSnapshot {
     pub handoff: Option<WorkspaceHandoff>,
     /// The lifecycle state.
     pub state: SubagentState,
-    /// The bounded result content (succeeded) or failure/cancellation
-    /// detail, once known.
+    /// The bounded failure/cancellation diagnostic, once known.
+    ///
+    /// A successful child's answer content never appears here (Issue #178):
+    /// the durable terminal inbound publication is the one result channel,
+    /// and the live observation/control projection carries diagnostics only.
     pub detail: Option<String>,
+    /// The latest live activity projection reported by the child (Issue
+    /// #178). Observation-plane state only: it never changes lifecycle
+    /// semantics, and every terminal settlement resets it to neutral.
+    pub observation: SubagentObservation,
+    /// The redacted execution profile frozen at child start (Issue #178);
+    /// `None` for recovery-projected records.
+    pub profile: Option<SubagentExecutionProfile>,
     /// Whether a terminal publication could not reach the durable
     /// authority and was abandoned.
     pub publication_abandoned: bool,
@@ -354,6 +380,9 @@ pub struct PreparedSubagent {
     terminal: SubagentTerminalMode,
     task: String,
     context: Option<String>,
+    /// The redacted execution profile derived from the frozen model
+    /// authority at preparation time (Issue #178).
+    profile: SubagentExecutionProfile,
     staged: StagedChild,
 }
 
@@ -488,16 +517,54 @@ impl core::fmt::Display for SubagentStartError {
 impl std::error::Error for SubagentStartError {}
 
 /// The observation seam of the subagent plane (TUI / Runtime Client).
+///
+/// Two publication classes (Issue #178): [`on_snapshot`](Self::on_snapshot)
+/// is the **reliable** lifecycle/identity publication — every transition
+/// reaches the consumer exactly once, in order — and
+/// [`on_activity`](Self::on_activity) is the **disposable** latest-value
+/// activity publication, which the consumer may coalesce or drop.
 pub trait SubagentObserver: Send + Sync {
     /// Called under the registry lock with each new consistency snapshot;
     /// the implementation must be cheap and nonblocking.
     fn on_snapshot(&self, snapshot: &SubagentSnapshot);
+
+    /// Called under the registry lock with each new live-activity snapshot
+    /// (Issue #178).
+    ///
+    /// This is a disposable, latest-value publication: the consumer may
+    /// coalesce or drop intermediate values, and it must never treat an
+    /// activity snapshot as lifecycle evidence. The default body forwards
+    /// to [`on_snapshot`](Self::on_snapshot), so an observer that does not
+    /// distinguish the two classes keeps capturing everything.
+    fn on_activity(&self, snapshot: &SubagentSnapshot) {
+        self.on_snapshot(snapshot);
+    }
 }
 
 /// The durability-failure reporting seam of the subagent plane.
 pub trait SubagentDurabilityFailureSink: Send + Sync {
     /// A terminal publication could not reach the durable authority.
     fn terminal_publication_failed(&self, subagent_id: &SubagentId, diagnostic: &str);
+}
+
+/// The narrow live-activity sink the child driver task holds (Issue #178).
+///
+/// Cheaply cloneable; routes decoded activity frames into the registry's
+/// read model synchronously (one brief lock acquisition, no await). It
+/// carries no authority: it cannot touch lifecycle, journal, or mailbox
+/// state, and every update passes through
+/// [`SubagentRegistry::apply_activity`]'s drop rules.
+#[derive(Clone)]
+pub(crate) struct SubagentActivitySink {
+    subagent_id: SubagentId,
+    registry: SubagentRegistry,
+}
+
+impl SubagentActivitySink {
+    /// Applies one decoded child activity projection.
+    pub(crate) fn apply(&self, observation: SubagentObservation) {
+        self.registry.apply_activity(&self.subagent_id, observation);
+    }
 }
 
 /// The composition inputs of the registry.
@@ -668,6 +735,11 @@ impl SubagentRegistry {
             cancel_reason: None,
             control: None,
             detail,
+            // A recovery-projected record has no live activity and no
+            // frozen launch profile in this process.
+            observation: SubagentObservation::default(),
+            profile: None,
+            terminal_workflow_value: None,
             pending_terminal: None,
             publication_abandoned: false,
             notification: NotificationState::Delivered,
@@ -750,6 +822,9 @@ impl SubagentRegistry {
         let subagent_id = SubagentId::for_conversation(&self.config.conversation_id, ordinal);
         let child_conversation_id = ConversationId::new(subagent_id.as_str());
         let child_agent_id = AgentId::new(format!("agent-{subagent_id}"));
+        // The redacted observation-plane profile derives from the frozen
+        // model authority exactly once, at preparation time.
+        let profile = SubagentExecutionProfile::from_frozen(&spec.resolved.model);
         // Workspace acquisition is staged child ownership. It happens after
         // resolution/freeze and before any child preparation, but the lease
         // is not durable until the commit below succeeds.
@@ -791,6 +866,7 @@ impl SubagentRegistry {
                         terminal: spec.terminal.clone(),
                         task: spec.task.clone(),
                         context: spec.context.clone(),
+                        profile,
                         staged: staged.with_workspace(workspace_lease),
                     });
                 }
@@ -849,6 +925,7 @@ impl SubagentRegistry {
             terminal: spec.terminal.clone(),
             task: spec.task.clone(),
             context: spec.context.clone(),
+            profile,
             staged,
         })
     }
@@ -910,6 +987,7 @@ impl SubagentRegistry {
             terminal,
             task,
             context,
+            profile,
             staged,
         } = prepared;
         let decision = {
@@ -1012,6 +1090,9 @@ impl SubagentRegistry {
                         cancel_reason: None,
                         control: None,
                         detail: None,
+                        observation: SubagentObservation::default(),
+                        profile: Some(profile),
+                        terminal_workflow_value: None,
                         pending_terminal: None,
                         publication_abandoned: false,
                         notification: NotificationState::None,
@@ -1039,7 +1120,14 @@ impl SubagentRegistry {
                 }),
             },
             Decision::Accepted { .. } => {
-                let driver = staged.into_driver(DelegationFrame { task, context });
+                // The driver routes the child's live activity frames into
+                // the registry read model through this narrow sink; it is
+                // observation-plane traffic only.
+                let activity = SubagentActivitySink {
+                    subagent_id: subagent_id.clone(),
+                    registry: self.clone_for_task(),
+                };
+                let driver = staged.into_driver(DelegationFrame { task, context }, Some(activity));
                 let (commands, start_gate, task) = driver.split();
                 // This hook is outside the registry lock and after the
                 // durable ownership fact, the Running record, and the
@@ -1154,6 +1242,57 @@ impl SubagentRegistry {
             .index
             .get(subagent_id)
             .map(|&index| state.records[index].snapshot())
+    }
+
+    /// **Observation plane (Issue #178).** Applies one live activity
+    /// projection reported by the child driver.
+    ///
+    /// This is a synchronous, lock-brief read-model update: it never touches
+    /// lifecycle, the journal, or the mailbox, and it never blocks on any
+    /// observation consumer. Two drop rules keep the projection honest:
+    ///
+    /// - post-terminal (or terminal-publishing) updates are dropped, so
+    ///   late activity can never resurrect live-ness after settlement;
+    /// - stale or reordered revisions are dropped, preserving latest-value
+    ///   semantics under coalesced delivery.
+    pub fn apply_activity(&self, subagent_id: &SubagentId, observation: SubagentObservation) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(&index) = state.index.get(subagent_id) else {
+            return;
+        };
+        let record = &mut state.records[index];
+        if record.lifecycle.is_terminal()
+            || matches!(record.lifecycle, SubagentLifecycle::PublishingTerminal)
+        {
+            return;
+        }
+        if observation.revision <= record.observation.revision {
+            return;
+        }
+        record.observation = observation;
+        publish_activity_snapshot(&mut state, &self.state_version, index);
+    }
+
+    /// The durably committed Workflow output value of one settled
+    /// Workflow-owned child (Issue #83).
+    ///
+    /// This is the live Workflow result channel: the value was validated
+    /// and committed atomically with the child's terminal lifecycle fact,
+    /// and it deliberately never rides the observation snapshot (Issue
+    /// #178). `None` for any non-Workflow child, any non-successful
+    /// settlement, and any record that has not settled.
+    #[must_use]
+    pub(crate) fn workflow_agent_output(
+        &self,
+        subagent_id: &SubagentId,
+    ) -> Option<serde_json::Value> {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let &index = state.index.get(subagent_id)?;
+        let record = &state.records[index];
+        if record.lifecycle != SubagentLifecycle::Succeeded {
+            return None;
+        }
+        record.terminal_workflow_value.clone()
     }
 
     /// The consistency snapshots of every known subagent, in ordinal order.
@@ -1272,6 +1411,26 @@ impl SubagentRegistry {
         }
     }
 
+    /// Resolves with the newest snapshot of `subagent_id` once `predicate`
+    /// holds for it; `None` if the record does not exist. Driven by the
+    /// registry state-version watch — no polling.
+    pub async fn wait_for_snapshot(
+        &self,
+        subagent_id: &SubagentId,
+        predicate: impl Fn(&SubagentSnapshot) -> bool,
+    ) -> Option<SubagentSnapshot> {
+        let mut rx = self.state_version.subscribe();
+        loop {
+            let snapshot = self.snapshot(subagent_id)?;
+            if predicate(&snapshot) {
+                return Some(snapshot);
+            }
+            if rx.changed().await.is_err() {
+                return None;
+            }
+        }
+    }
+
     /// **Settlement.** Canonicalizes the driver's physical outcome against
     /// the lifecycle, then drives the durable result acceptance.
     ///
@@ -1327,6 +1486,12 @@ impl SubagentRegistry {
                 return;
             }
             record.handoff = workspace_handoff;
+            // Lifecycle is the terminal truth; activity is live-only. Every
+            // terminal settlement resets the projection to neutral (with a
+            // bumped revision, so the reset itself is observable) while
+            // keeping the counters and last-activity timestamp as the final
+            // record of what the child did.
+            record.observation.settle_neutral();
             let cancelling = matches!(record.lifecycle, SubagentLifecycle::Cancelling);
             let workflow_output = matches!(
                 &record.terminal,
@@ -1492,15 +1657,23 @@ impl SubagentRegistry {
             };
             let candidate = validate_workflow_candidate(&record.terminal, candidate);
             record.pending_terminal = Some(candidate.clone());
-            record.detail = candidate
-                .content
-                .clone()
-                .or_else(|| candidate.diagnostic.clone())
-                .or_else(|| {
-                    candidate
-                        .reason
-                        .map(|reason| reason_text(reason).to_owned())
-                });
+            // Issue #178: the successful answer content never rides the live
+            // observation/control projection. It exists only in the durable
+            // terminal publication draft (`terminal_publication`, unchanged);
+            // `detail` keeps failure/cancellation diagnostics only. The
+            // Workflow output value is the separate live Workflow result
+            // channel (`workflow_agent_output`), equally kept out of the
+            // snapshot.
+            record.detail = candidate.diagnostic.clone().or_else(|| {
+                candidate
+                    .reason
+                    .map(|reason| reason_text(reason).to_owned())
+            });
+            if candidate.state == TerminalState::Succeeded {
+                record
+                    .terminal_workflow_value
+                    .clone_from(&candidate.workflow_value);
+            }
             candidate
         };
         self.publish_terminal(subagent_id, &candidate);
@@ -1979,6 +2152,23 @@ fn publish_snapshot(
     version.send_modify(|v| *v += 1);
 }
 
+/// The disposable sibling of [`publish_snapshot`] for live-activity
+/// updates (Issue #178): emits the record's snapshot through
+/// [`SubagentObserver::on_activity`] — the publication the consumer may
+/// coalesce or drop — and bumps the watch version. Called under the
+/// registry lock.
+fn publish_activity_snapshot(
+    state: &mut RegistryState,
+    version: &tokio::sync::watch::Sender<u64>,
+    index: usize,
+) {
+    let snapshot = state.records[index].snapshot();
+    if let Some(observer) = &state.observer {
+        observer.on_activity(&snapshot);
+    }
+    version.send_modify(|v| *v += 1);
+}
+
 /// A test-only pause inside the ownership-commit critical section
 /// (production is unwired; mirrors the background dispatch hook).
 #[cfg(test)]
@@ -2237,6 +2427,8 @@ mod tests {
 
     fn stage_process(plane: &TestPlane, shell: &str) -> ScriptedChild {
         let (driver_end, test_end) = tokio::net::UnixStream::pair().expect("pair");
+        let (observation_end, _observation_peer) =
+            tokio::net::UnixStream::pair().expect("observation pair");
         let child = tokio::process::Command::new("sh")
             .arg("-c")
             .arg(shell)
@@ -2249,7 +2441,7 @@ mod tests {
         let pid = child.id().expect("scripted child pid");
         let child_runtime_root = plane.runtime_root.join(format!("test-child-{pid}"));
         std::fs::create_dir_all(&child_runtime_root).expect("child runtime root");
-        let staged = StagedChild::for_test(child, driver_end, child_runtime_root);
+        let staged = StagedChild::for_test(child, driver_end, observation_end, child_runtime_root);
         plane.registry.push_staged_override(staged);
         ScriptedChild {
             peer: test_end,
@@ -2393,6 +2585,8 @@ mod tests {
         // spawned, so this asserts exactly one thing: the registry no longer
         // has a capability-shaped refusal of its own.
         let (parent, _peer) = tokio::net::UnixStream::pair().expect("control pair");
+        let (observation_end, _observation_peer) =
+            tokio::net::UnixStream::pair().expect("observation pair");
         let child = tokio::process::Command::new("sleep")
             .arg("30")
             .spawn()
@@ -2403,9 +2597,12 @@ mod tests {
             "external-origin"
         ));
         std::fs::create_dir_all(&root).expect("root");
-        plane
-            .registry
-            .push_staged_override(StagedChild::for_test(child, parent, root));
+        plane.registry.push_staged_override(StagedChild::for_test(
+            child,
+            parent,
+            observation_end,
+            root,
+        ));
         let prepared = plane
             .registry
             .prepare(&spec, &CancellationSignal::new())
@@ -2476,7 +2673,10 @@ mod tests {
             .await
             .expect("settled");
         assert_eq!(settled.state, SubagentState::Succeeded);
-        assert_eq!(settled.detail.as_deref(), Some("the answer"));
+        // Issue #178: the successful answer content never rides the live
+        // observation/control projection — `detail` is diagnostics-only,
+        // and the durable pending inbound below is the one result channel.
+        assert_eq!(settled.detail, None);
         // The result entered the parent's durable pending inbound with the
         // child agent provenance, exactly once.
         let pending = plane
@@ -2509,13 +2709,6 @@ mod tests {
                 ..
             } if *subagent_id == accepted.subagent_id
         )));
-        assert!(
-            settled
-                .detail
-                .as_deref()
-                .is_none_or(|detail| !detail.contains("physical settlement")),
-            "a clean semantic success has no settlement diagnostic"
-        );
     }
 
     #[tokio::test]
@@ -2571,6 +2764,14 @@ mod tests {
                 .count(),
             1,
             "the Workflow value is committed exactly once with the child terminal fact"
+        );
+        // The live Workflow result channel is the registry's committed
+        // value, not the observation snapshot (Issue #178): the snapshot
+        // detail is diagnostics-only even for a successful Workflow child.
+        assert_eq!(settled.detail, None);
+        assert_eq!(
+            plane.registry.workflow_agent_output(&accepted.subagent_id),
+            Some(serde_json::json!({"summary": "answer"})),
         );
     }
 
@@ -3504,6 +3705,143 @@ mod tests {
             .cancel(&accepted.subagent_id, CancellationReason::UserRequested)
             .expect("known");
         assert_eq!(after.state, SubagentState::Succeeded);
+    }
+
+    /// Issue #178: a live activity update lands in the registry read model
+    /// and rides the snapshot, while the lifecycle — the only authority —
+    /// is untouched. Stale or reordered revisions are dropped.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn live_activity_updates_the_snapshot_without_touching_lifecycle() {
+        let plane = plane(4);
+        let child = stage_stubborn(&plane);
+        let accepted = start(&plane, &start_spec("inspect")).await;
+
+        let observation = SubagentObservation {
+            revision: 1,
+            activity: super::super::activity::SubagentActivity::Model {
+                request_id: crate::runtime::identity::RequestId::new("req-1"),
+                retry: 0,
+            },
+            counters: super::super::activity::SubagentActivityCounters {
+                model_requests: 1,
+                ..super::super::activity::SubagentActivityCounters::default()
+            },
+            ..SubagentObservation::default()
+        };
+        plane
+            .registry
+            .apply_activity(&accepted.subagent_id, observation.clone());
+
+        let snapshot = plane
+            .registry
+            .snapshot(&accepted.subagent_id)
+            .expect("snapshot");
+        assert_eq!(snapshot.state, SubagentState::Running);
+        assert_eq!(snapshot.observation, observation);
+
+        // Stale and reordered revisions are dropped.
+        plane
+            .registry
+            .apply_activity(&accepted.subagent_id, observation.clone());
+        plane
+            .registry
+            .apply_activity(&accepted.subagent_id, SubagentObservation::default());
+        let snapshot = plane
+            .registry
+            .snapshot(&accepted.subagent_id)
+            .expect("snapshot");
+        assert_eq!(snapshot.observation, observation);
+
+        // Unknown identities are a no-op.
+        plane.registry.apply_activity(
+            &SubagentId::new("conv-test-subagent-99"),
+            observation.clone(),
+        );
+
+        let _ = plane
+            .registry
+            .cancel(&accepted.subagent_id, CancellationReason::UserRequested);
+        plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
+        drop(child);
+    }
+
+    /// Issue #178: the redacted execution profile flows from the resolved
+    /// specification into the snapshot at commit; settlement resets the
+    /// activity to neutral with a bumped revision while keeping the
+    /// counters, and post-terminal activity is dropped.
+    #[tokio::test]
+    async fn settlement_resets_activity_to_neutral_and_drops_late_updates() {
+        let plane = plane(4);
+        let child = stage_exit0(&plane);
+        let accepted = start(&plane, &start_spec("inspect")).await;
+
+        // The profile was derived from the frozen model authority at start.
+        let running = plane
+            .registry
+            .snapshot(&accepted.subagent_id)
+            .expect("running snapshot");
+        let profile = running.profile.clone().expect("profile at commit");
+        assert_eq!(profile.model, "local/model");
+        assert!(!profile.reasoning_enabled);
+        assert_eq!(running.observation, SubagentObservation::default());
+
+        let observation = SubagentObservation {
+            revision: 3,
+            activity: super::super::activity::SubagentActivity::Tool {
+                tool_call_id: ToolCallId::new("call-1"),
+                tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
+                progress: None,
+            },
+            counters: super::super::activity::SubagentActivityCounters {
+                tool_executions: 2,
+                ..super::super::activity::SubagentActivityCounters::default()
+            },
+            ..SubagentObservation::default()
+        };
+        plane
+            .registry
+            .apply_activity(&accepted.subagent_id, observation);
+
+        child
+            .complete(ChildResultStatus::Succeeded, Some("the answer"))
+            .await;
+        let settled = plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
+        assert_eq!(settled.state, SubagentState::Succeeded);
+        assert_eq!(
+            settled.observation.activity,
+            super::super::activity::SubagentActivity::AwaitingActivity,
+            "the terminal snapshot is activity-neutral"
+        );
+        assert_eq!(
+            settled.observation.revision, 4,
+            "the settlement reset bumped the revision"
+        );
+        assert_eq!(settled.observation.counters.tool_executions, 2);
+        assert_eq!(settled.profile, running.profile);
+
+        // Post-terminal activity can never resurrect live-ness.
+        let late = SubagentObservation {
+            revision: 99,
+            ..SubagentObservation::default()
+        };
+        plane.registry.apply_activity(&accepted.subagent_id, late);
+        let after = plane
+            .registry
+            .snapshot(&accepted.subagent_id)
+            .expect("snapshot");
+        assert_eq!(after.observation.revision, 4);
+        assert_eq!(
+            after.observation.activity,
+            super::super::activity::SubagentActivity::AwaitingActivity
+        );
     }
 
     use crate::context::SessionContextPolicy;

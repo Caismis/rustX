@@ -2264,13 +2264,16 @@ uniform. It owns only routing: every request is dispatched by explicit
 authoritative snapshot; the intrinsic projects that snapshot into a bounded
 tagged model-facing representation. The tool projection carries the
 `BackgroundExecutionSnapshot`; the subagent projection carries lifecycle,
-identity, and control facts only and deliberately excludes the registry's
-internal terminal `detail` — which carries the successful child answer — so
-the canonical inbound child-agent message remains the **only** child-result
-delivery channel and `execution` never becomes a result channel. The
-intrinsic never guesses a kind from an id, never tries one registry and
-falls through to another, and never owns lifecycle state, cancellation
-implementation, durability, or result publication.
+identity, and control facts only and deliberately excludes both the
+registry's internal `detail` — diagnostics-only since Issue #178, when the
+successful child answer stopped entering it — and the observation-plane
+`observation`/`execution_profile` fields — so the canonical inbound
+child-agent message remains the **only** child-result delivery channel,
+`execution` never becomes a result channel, and observing a child never
+enlarges parent model context. The intrinsic never guesses a kind from an
+id, never tries one registry and falls through to another, and never owns
+lifecycle state, cancellation implementation, durability, or result
+publication.
 
 Native tool input schemas are generated from tool-owned Rust input types,
 so the typed contract is the single source of truth for the model-facing
@@ -3307,11 +3310,18 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
-The current Runtime Client protocol is version 10. It adds subagent workspace
-facts and preserved-worktree handoff metadata after version 9 added
-`interrupted` to the closed `SubagentState` vocabulary. Rust snapshots and
+The current Runtime Client protocol is version 11. It adds the subagent
+live-activity projection after version 10 added subagent workspace facts and
+preserved-worktree handoff metadata and version 9 added `interrupted` to the
+closed `SubagentState` vocabulary: `RuntimeClientSubagent` now carries the
+child's latest-value `observation` (revision, activity, timestamp,
+counters), the redacted `execution_profile` (wire key `execution_profile`;
+the bare `profile` key stays retired), and `started_at`. Rust snapshots and
 the maintained TUI mirror agree that an unexpected child process/control-plane
-loss has an unknown outcome. Superseded Runtime Client versions are rejected explicitly;
+loss has an unknown outcome, and that the activity projection is
+diagnostics-only — the closed `SubagentState` lifecycle remains the only
+authority on whether a child is alive, settling, or settled. Superseded
+Runtime Client versions are rejected explicitly;
 there is no compatibility decoder.
 
 Module ownership:
@@ -4671,6 +4681,126 @@ later cancellation is in-flight cancellation. The registry retains no
 `tokio::process::Child`; rollback and the committed driver are the only
 physical teardown owners at their respective phases.
 
+#### Live activity observation (Issue #178)
+
+A subagent has one lifecycle authority, one durable execution history, and
+disposable live observation projections. The observation plane projects what
+a child is doing *right now* without creating a second authority:
+
+```text
+child Agent Loop                 objective execution facts
+        |
+        v
+child-side projector    folds the child's drained ConversationObservation
+        |               stream inline in the serve loop into
+        |               SubagentObservation (revision, activity,
+        |               last_activity_at, counters) — no forwarder task
+        v
+child dispatcher        two delivery classes on two independent
+        |               transports: a reliable bounded mpsc lane
+        |               (OUTBOUND_CAPACITY 64) written to the fd 0 control
+        |               stream by the reliable writer, plus one disposable
+        |               latest-value watch slot drained by a dedicated
+        |               observation writer onto the fd 1 observation
+        |               stream; publishing can never block the child Agent
+        |               Loop or crowd out a terminal Result
+        v
+Activity IPC frame      subagent IPC version 9: reliable control frames
+        |               on the fd 0 stream, disposable Activity frames
+        |               (kind 107) on the fd 1 stream — independent
+        |               backpressure domains, so a stalled observation
+        |               transport can never delay Result, AnchorReleased,
+        |               or any other reliable control frame
+        v
+parent process driver   owns the fd 0 control protocol (lifecycle
+        |               authority); a dedicated observation receiver owns
+        |               the fd 1 stream and only decodes Activity frames
+        |               into the sink — it never settles, cancels, or
+        |               journals anything, and observation EOF is not
+        |               process/lifecycle evidence
+        v
+SubagentRegistry::apply_activity
+        |               drops frames for terminal/terminal-publishing
+        |               records and non-advancing revisions (child-owned,
+        |               strictly monotonic)
+        v
+SubagentSnapshot.observation / execution_profile / started_at
+        |
+        v
+SubagentObserver seam -> parent PendingObservations: one reliable FIFO
+                        for lifecycle/semantic facts beside disposable
+                        keyed latest-value lanes (SubagentActivity by
+                        SubagentId, ToolProgress by ToolCallId; a
+                        lifecycle push evicts queued activity, a tool
+                        settlement evicts queued progress)
+        |
+        v
+Runtime Client SubagentUpdated + snapshot.subagents (replay ring +
+snapshot repair for lagging consumers)
+```
+
+`SubagentState` stays the closed seven-state authority
+on whether a child is alive, settling, or settled. `SubagentActivity`
+(`awaiting_activity`, `model`, `retrying_model`, `tool`, `compacting`,
+`waiting`) is an orthogonal live projection derived only from objective
+child runtime transitions; it is never a lifecycle state, and a child can be
+lifecycle-`Cancelling` with any activity still projected.
+
+The reliability split is deliberate. Lifecycle, cancellation, and terminal
+publication remain reliable and exactly-once; only superseded activity
+observations are coalescible — a watch overwrite or a replay-ring eviction
+drops them, and consumers converge on the newest projection through
+`resync_required` and snapshot repair. Observation delivery or drop never
+determines terminality: a zero-observer or stalled-observer execution
+behaves identically to an observed one. At settlement the registry resets
+the activity to the terminal-neutral `awaiting_activity` with a revision
+bump, retaining the counters and the last-activity timestamp as the final
+record; post-terminal activity frames are dropped, and the lifecycle remains
+the only terminal truth.
+
+Reliable subagent control and disposable live observation have independent
+backpressure domains: the reliable control protocol (Ready, Result,
+StartupError, AnchorOffered, AnchorReleased, Diagnostic) runs on the fd 0
+stream with its own writer, while disposable Activity frames run on the fd 1
+stream with a dedicated observation writer and receiver. Observation loss or
+stalling cannot delay lifecycle, containment, or terminal control traffic —
+a blocked observation writer stalls only itself, and losing the observation
+transport is diagnostics-only: child execution, settlement, and the existing
+parent-liveness semantics of the control transport are unchanged.
+
+A child may execute multiple foreground tools concurrently (a parallel tool
+group). The observation projector tracks all active calls internally —
+fold-local state that never crosses the wire — but exposes one deterministic
+representative as the bounded live activity projection: the call that most
+recently produced an objective activity fact is visible, completion removes
+exactly its own call (counted exactly once), and sibling completion falls
+back to the latest-started surviving call, never resetting the activity to
+neutral while another call remains active. Stale progress of a settled call
+is ignored and can never resurrect it.
+
+The same live seam exists inside any conversation for foreground tool
+progress: while a call still executes, each reported observation fires
+`AgentExecutionObserver::observe_tool_progress` and reaches runtime
+observers as `ConversationObservation::ToolProgress` — disposable,
+latest-value per tool call, never durable, and folded to no events at the
+Runtime Client boundary. The durable `ToolExecutionProgress` facts still
+commit at batch settlement (see the agent loop's ToolResultObserver
+section); the live observation is never execution evidence.
+
+`SubagentExecutionProfile` is the safe read-model counterpart of the frozen
+model authority: derived exactly once from the `ResolvedSubagentSpec` the
+child actually started with, it carries only the effective model identity
+and the reasoning selection — never credentials, endpoints, or provider
+internals. Observing a child never enlarges parent model context: the
+model-facing `execution` projection drops the observation-plane fields, and
+the successful terminal answer flows only through the canonical durable
+terminal inbound publication.
+
+Nothing in the observation plane is durable or recovered. After a restart a
+recovered child projects the initial absent observation (revision 0,
+`awaiting_activity`), because activity is not execution history and is never
+recovery input.
+
 #### Deterministic subagent workspaces (Issue #146)
 
 Named definitions carry one bounded project-workspace policy:
@@ -5182,7 +5312,7 @@ terminal's own bounded diagnostic. An anchor is never removed merely because
 the direct child exited; it is removed by an exact
 `ProcessUnitAnchorReleased { unit_id, pgid }` or by containment.
 
-##### One child control dispatcher, one IPC plane
+##### One child control dispatcher, two IPC transports
 
 Letting each nested unit owner lock the child's `UnixStream` would create
 several readers and several writers of one frame protocol: interleaved
@@ -5193,23 +5323,38 @@ dispatcher:
 ```text
                      ChildControlDispatcher
         reader task                            writer task
- (sole reader of the read half)        (sole writer of the write half)
+ (sole reader of the fd 0 control      (sole writer of the fd 0 control
+  read half)                              write half)
    Delegate -> control-event channel      Ready / Result / StartupError
    Cancel   -> control-event channel      AnchorOffered / AnchorReleased
    AnchorAccepted / AnchorRefused         bounded diagnostics
         -> the exact pending unit
    EOF -> parent-lost watch; every
           outstanding offer fails
+
+        observation writer task
+ (sole writer of the fd 1 observation
+  stream, child -> parent only)
+   Activity (latest-value watch slot,
+   coalescing, never acked, its own
+   backpressure domain)
 ```
 
 Acknowledgements route by exact typed `ProcessUnitId`, never by arrival
 order, so two units with outstanding offers cannot open each other's gates.
-The read half remains the parent-liveness authority, and its EOF is what
-`ChildPreparation` observes during composition. Channels are bounded, there
-is no second socket, no listener, and no network service. The subagent IPC
-version is **5**: its typed `Cancel` frame carries the parent registry's
-semantic `CancellationReason` (with an absent reason only for pre-ownership
-preparation cancellation, where no child attempt exists); there is no
+The control read half remains the parent-liveness authority, and its EOF is
+what `ChildPreparation` observes during composition. Channels are bounded,
+there is no listener and no network service. The subagent IPC version is
+**9**: its typed `Cancel` frame carries the parent registry's semantic
+`CancellationReason` (with an absent reason only for pre-ownership
+preparation cancellation, where no child attempt exists), and the
+child→parent `Activity` frame (kind 107) carries the Issue #178 live
+activity projection on the dedicated fd 1 observation stream — reliable
+control and disposable observation never share a transport backpressure
+dependency, so a stalled observation writer can never delay a `Result`, an
+`AnchorReleased`, or any other control frame. The parent's observation
+receiver only decodes `Activity` into the registry read model; observation
+EOF is diagnostics loss, never process or lifecycle evidence. There is no
 compatibility decoding for older versions.
 
 ##### Recovery-semantics conformance (Issue #138)
@@ -5227,11 +5372,15 @@ boundaries described above. The resulting child is an ordinary
   receives exactly one terminal result per child; no retry ordinal, delay,
   schedule, or provider attempt ever appears in the parent's durable
   journal, lifecycle projection (`Running` goes straight to a terminal
-  state), or inbound.
+  state), or inbound. Since Issue #178 the retry is visible only as live
+  activity — the child projects `retrying_model` and then
+  `model { retry }` through the observation plane — a disposable read model
+  that is never a lifecycle state, a journal fact, or an inbound and never
+  moves retry ownership.
 - **The frozen `ModelTimeoutPolicy` is inherited (Issue #135).** The
   composition root resolves the policy once and shares that frozen value with
   the parent runtime and `SubagentSpawnPlan`, which carries it into the typed
-  `SubagentChildSpec` (subagent control protocol version 7); the child
+  `SubagentChildSpec` (subagent control protocol version 8); the child
   composition applies it to its own response-start deadlines, stream-idle
   deadlines, and model-backed compaction summarization. There is no
   parent-side watchdog around child provider requests. A child deadline

@@ -517,10 +517,28 @@ impl RuntimeClientProjection {
                 upsert_background(&mut self.snapshot.background, view.clone());
                 vec![RuntimeClientEvent::BackgroundExecutionUpdated { execution: view }]
             }
-            ConversationObservation::Subagent(snapshot) => {
+            ConversationObservation::ToolProgress { .. } => {
+                // Live-only, latest-value (Issue #178): a not-yet-durable
+                // foreground tool progress report folds to NO client events.
+                // The client already receives the durable progress facts at
+                // batch settlement through the `Event` lane; the runtime
+                // client protocol has no live-progress surface (no version
+                // bump), so there is nothing to project.
+                Vec::new()
+            }
+            ConversationObservation::SubagentLifecycle(snapshot)
+            | ConversationObservation::SubagentActivity(snapshot) => {
+                // Both subagent delivery classes fold identically: the
+                // whole-view upsert is unconditional last-write-wins, and
+                // the queue's lane rules (a lifecycle push evicts queued
+                // activity of the same subagent) already guarantee no fold
+                // ever observes an activity snapshot older than the
+                // lifecycle snapshot it already folded.
                 let view = subagent_view(&snapshot);
                 upsert_subagent(&mut self.snapshot.subagents, view.clone());
-                vec![RuntimeClientEvent::SubagentUpdated { subagent: view }]
+                vec![RuntimeClientEvent::SubagentUpdated {
+                    subagent: Box::new(view),
+                }]
             }
             ConversationObservation::Capability {
                 snapshot,
@@ -1677,6 +1695,9 @@ pub(crate) fn subagent_view(
         definition_digest: snapshot.definition_digest.clone(),
         state: snapshot.state,
         detail: snapshot.detail.clone(),
+        observation: snapshot.observation.clone(),
+        execution_profile: snapshot.profile.clone(),
+        started_at: snapshot.started_at,
         workspace: super::snapshot::RuntimeClientSubagentWorkspace {
             workspace: snapshot.workspace.workspace.clone(),
             isolated: snapshot.workspace.isolated,
@@ -3809,5 +3830,105 @@ mod tests {
         assert_eq!(snapshot.background[0].state, BackgroundLifecycle::Succeeded);
         assert!(snapshot.background[0].result.is_some());
         assert_eq!(snapshot.background[1].execution_id.as_str(), "exec_2");
+    }
+
+    /// Issue #178: a subagent registry snapshot folds into the whole-view
+    /// `SubagentUpdated` event carrying the live activity projection and
+    /// the redacted execution profile, and the snapshot repair path serves
+    /// the same enriched view.
+    #[test]
+    fn subagent_observations_fold_the_activity_projection_into_the_view() {
+        use crate::runtime::subagent::{
+            SubagentActivity, SubagentActivityCounters, SubagentExecutionProfile,
+            SubagentObservation, SubagentSnapshot, SubagentState, WorkspaceSnapshot,
+        };
+
+        fn snapshot(observation: SubagentObservation) -> SubagentSnapshot {
+            SubagentSnapshot {
+                subagent_id: crate::runtime::identity::SubagentId::new("conv-1-subagent-1"),
+                child_agent_id: AgentId::new("agent-child"),
+                child_conversation_id: ConversationId::new("conv-1-subagent-1"),
+                tool_call_id: ToolCallId::new("call-1"),
+                agent: "explore".to_owned(),
+                definition_digest: "sha256:d1".to_owned(),
+                workspace: WorkspaceSnapshot::shared(std::path::PathBuf::from(
+                    "<shared-workspace>",
+                )),
+                handoff: None,
+                state: SubagentState::Running,
+                detail: None,
+                observation,
+                profile: Some(SubagentExecutionProfile {
+                    model: "local/model".to_owned(),
+                    reasoning_profile: None,
+                    reasoning_enabled: false,
+                }),
+                publication_abandoned: false,
+                settled: false,
+                started_at: chrono::DateTime::parse_from_rfc3339("2026-09-02T10:00:00Z")
+                    .expect("timestamp")
+                    .with_timezone(&chrono::Utc),
+            }
+        }
+
+        let mut projection = projection();
+        let observation = SubagentObservation {
+            revision: 2,
+            activity: SubagentActivity::Tool {
+                tool_call_id: ToolCallId::new("call-1"),
+                tool_id: ToolId::new("tool-bash"),
+                progress: None,
+            },
+            counters: SubagentActivityCounters {
+                tool_executions: 1,
+                ..SubagentActivityCounters::default()
+            },
+            ..SubagentObservation::default()
+        };
+        projection.apply(ConversationObservation::SubagentLifecycle(snapshot(
+            observation.clone(),
+        )));
+        // The disposable activity lane folds identically (unconditional
+        // last-write-wins whole-view upsert).
+        let newer = SubagentObservation {
+            revision: 3,
+            ..observation.clone()
+        };
+        projection.apply(ConversationObservation::SubagentActivity(snapshot(
+            newer.clone(),
+        )));
+
+        // Both events carry the enriched whole view; the latest wins.
+        let events = collect(&mut projection, RuntimeClientCursor::new(0));
+        let [_, event] = events.as_slice() else {
+            panic!("two SubagentUpdated events: {events:?}");
+        };
+        let RuntimeClientEvent::SubagentUpdated { subagent } = &event.event else {
+            panic!("a SubagentUpdated event: {:?}", event.event);
+        };
+        assert_eq!(subagent.observation, newer);
+        assert_eq!(
+            subagent.execution_profile,
+            Some(SubagentExecutionProfile {
+                model: "local/model".to_owned(),
+                reasoning_profile: None,
+                reasoning_enabled: false,
+            })
+        );
+        assert_eq!(
+            subagent.started_at,
+            chrono::DateTime::parse_from_rfc3339("2026-09-02T10:00:00Z")
+                .expect("timestamp")
+                .with_timezone(&chrono::Utc)
+        );
+
+        // The snapshot repair path re-reads the same enriched view.
+        let (repaired, _) = projection.snapshot().expect("snapshot");
+        assert_eq!(repaired.subagents.len(), 1);
+        assert_eq!(repaired.subagents[0].observation, newer);
+        assert_eq!(
+            repaired.subagents[0].execution_profile,
+            subagent.execution_profile
+        );
     }
 }

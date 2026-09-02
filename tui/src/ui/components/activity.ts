@@ -3,7 +3,8 @@
  *
  * ```text
  * transcript   what was said, and every tool call that was said
- * activity     background executions, pending HITL interactions, orphaned executions
+ * activity     background executions, subagent live activity, pending HITL
+ *              interactions, orphaned executions
  * ```
  *
  * A foreground tool call is deliberately *not* here. It belongs to the
@@ -38,11 +39,14 @@
 import type {
   InteractionRequest,
   RuntimeClientBackgroundExecution,
+  RuntimeClientSubagent,
+  RuntimeClientSubagentActivity,
 } from "../../protocol/types.ts";
 import type { PresentationState } from "../../presentation/state.ts";
 import type { ToolCorrelation } from "../../presentation/tools.ts";
 import {
   activeBackground,
+  activeSubagents,
   focusedInteraction,
   focusedQuestionnaire,
   isBackgroundTerminal,
@@ -174,6 +178,115 @@ export function renderBackground(
     }
   }
   return lines.join("\n");
+}
+
+/**
+ * The subagent section: one compact row per child the runtime still
+ * considers active (Issue #178).
+ *
+ * This is the observation plane, not a second authority: the lifecycle
+ * label and the activity line are both runtime-published facts, terminal
+ * children render nothing here (their settlement is conversation content,
+ * delivered by the durable terminal inbound publication), and `detail` —
+ * diagnostics only since Issue #178 — is never rendered as a payload.
+ *
+ * `now` is injectable so the elapsed and last-activity labels are provable
+ * without a wall clock.
+ */
+export function renderSubagentSection(
+  state: PresentationState,
+  preferences: PresentationPreferences,
+  now: Date = new Date(),
+): string {
+  const active = activeSubagents(state);
+  if (active.length === 0) {
+    return "";
+  }
+  return [
+    role.strong(
+      `Subagents · ${active.length} active of ${state.subagents.length} known`,
+    ),
+    ...active.map((subagent) => renderSubagent(subagent, preferences, now)),
+  ].join("\n");
+}
+
+/** One compact live-activity card for a non-terminal subagent child. */
+function renderSubagent(
+  subagent: RuntimeClientSubagent,
+  _preferences: PresentationPreferences,
+  now: Date,
+): string {
+  const glyph = role.pending("◐");
+  const lines = [
+    `${glyph} ${role.toolTitle(style.bold(bounded(subagent.agent)))} ${role.chrome("·")} ${role.pending(subagent.state)} ${role.chrome("·")} ${role.meta(formatElapsed(now, subagent.started_at))}`,
+    `  ${role.meta(activityLine(subagent.observation.activity))}`,
+  ];
+  const lastActivityAt = subagent.observation.last_activity_at;
+  if (lastActivityAt !== undefined) {
+    lines.push(
+      `  ${role.meta(`last activity ${formatElapsed(now, lastActivityAt)} ago`)}`,
+    );
+  }
+  const profile = subagent.execution_profile;
+  if (profile !== undefined) {
+    const reasoning = profile.reasoning_profile;
+    lines.push(
+      `  ${role.meta(bounded(reasoning === undefined ? profile.model : `${profile.model} · ${reasoning}`))}`,
+    );
+  }
+  return lines.join("\n");
+}
+
+/** The one activity line of a subagent card, from the latest projection. */
+function activityLine(activity: RuntimeClientSubagentActivity): string {
+  switch (activity.type) {
+    case "awaiting_activity":
+      return "awaiting activity";
+    case "model":
+      return activity.retry > 0
+        ? `model request · retry ${activity.retry}`
+        : "model request";
+    case "retrying_model":
+      return `retrying · attempt ${activity.retry}`;
+    case "tool": {
+      const progress = describeProgress(activity.progress);
+      return progress === undefined
+        ? bounded(activity.tool_id)
+        : `${bounded(activity.tool_id)} · ${progress}`;
+    }
+    case "compacting":
+      return "compacting context";
+    case "waiting":
+      return activity.on.type === "approval"
+        ? `waiting · approval (${bounded(activity.on.tool_id)})`
+        : "waiting · questionnaire";
+  }
+}
+
+/** Bounds one externally derived value to a single finite line. */
+function bounded(value: string): string {
+  return clipText(value.replace(/\r?\n/g, " "), HEADER_BUDGET.maxChars);
+}
+
+/** A compact runtime-relative duration (`5s`, `3m`, `2h`, `1d`). */
+function formatElapsed(now: Date, since: string): string {
+  const ms = now.getTime() - Date.parse(since);
+  if (!Number.isFinite(ms) || ms < 0) {
+    return "0s";
+  }
+  const seconds = Math.floor(ms / 1_000);
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h`;
+  }
+  return `${Math.floor(hours / 24)}d`;
 }
 
 /** The live runtime-owned approval cards, rendered without local outcome state. */

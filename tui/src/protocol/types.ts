@@ -24,11 +24,14 @@
  */
 
 /**
- * Version 10 adds bounded subagent workspace facts and preserved-worktree
- * handoff metadata; version 9 added `interrupted` to the closed lifecycle
- * vocabulary.
+ * Version 11 adds the subagent live activity projection (`observation`),
+ * the redacted `execution_profile`, and `started_at`, and retires the
+ * successful terminal answer from `detail`, which is now diagnostics-only
+ * (Issue #178). Version 10 added bounded subagent workspace facts and
+ * preserved-worktree handoff metadata; version 9 added `interrupted` to the
+ * closed lifecycle vocabulary.
  */
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 10;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 11;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -305,6 +308,10 @@ export type SubagentState =
 
 export const BACKGROUND_TERMINAL_STATES: ReadonlySet<BackgroundLifecycle> =
   new Set<BackgroundLifecycle>(["succeeded", "failed", "cancelled"]);
+
+/** The subagent lifecycle states the runtime treats as durably settled. */
+export const SUBAGENT_TERMINAL_STATES: ReadonlySet<SubagentState> =
+  new Set<SubagentState>(["succeeded", "failed", "cancelled", "interrupted"]);
 
 // ---------------------------------------------------------------------------
 // Native interaction projection
@@ -741,6 +748,66 @@ export interface RuntimeClientWorkspaceHandoff {
 }
 
 /**
+ * The latest live-activity projection of one subagent child (Issue #178).
+ *
+ * A latest-value, revision-stamped read model of what the child is doing
+ * *right now*: never durable, never a lifecycle authority. `state` remains
+ * the only truth about whether the child is alive, settling, or settled.
+ */
+export interface RuntimeClientSubagentObservation {
+  /** The child-owned projection revision; strictly increasing per transition. */
+  revision: number;
+  /** What the child is observably doing right now. */
+  activity: RuntimeClientSubagentActivity;
+  /** When the latest applied transition was folded (child-side clock). */
+  last_activity_at?: string;
+  /** Cumulative transition counters since the child started. */
+  counters: RuntimeClientSubagentActivityCounters;
+}
+
+/** Cumulative activity counters of one child. */
+export interface RuntimeClientSubagentActivityCounters {
+  /** Model requests started. */
+  model_requests: number;
+  /** The latest scheduled model retry ordinal. */
+  model_retries: number;
+  /** Tool executions finished (completed plus failed). */
+  tool_executions: number;
+}
+
+/** What the child is observably doing right now. */
+export type RuntimeClientSubagentActivity =
+  | { type: "awaiting_activity" }
+  | { type: "model"; request_id: string; retry: number }
+  | { type: "retrying_model"; retry: number }
+  | {
+      type: "tool";
+      tool_call_id: ToolCallId;
+      tool_id: ToolId;
+      progress?: ToolProgress;
+    }
+  | { type: "compacting" }
+  | { type: "waiting"; on: RuntimeClientSubagentWaitReason };
+
+/** Why the child is blocked on a native interaction. */
+export type RuntimeClientSubagentWaitReason =
+  | { type: "approval"; tool_id: ToolId }
+  | { type: "questionnaire" };
+
+/**
+ * The safe, redacted execution profile of one child, frozen at child start
+ * (Issue #178): only the effective model identity and reasoning selection.
+ */
+export interface RuntimeClientSubagentExecutionProfile {
+  /** The effective fully qualified model reference (`provider/model`). */
+  model: string;
+  /** The selected reasoning profile, when the model declares any. */
+  reasoning_profile?: ReasoningProfileId;
+  /** Whether the selected profile semantically enables reasoning. */
+  reasoning_enabled: boolean;
+}
+
+/**
  * The Runtime Client view of one subagent child (Issue #60), carrying the
  * named-agent identity of Issue #144.
  *
@@ -756,7 +823,28 @@ export interface RuntimeClientSubagent {
   agent: string;
   definition_digest: string;
   state: SubagentState;
+  /**
+   * The bounded terminal failure/cancellation diagnostic, once known.
+   *
+   * Diagnostics only: a successful child's answer content never appears here
+   * (Issue #178) — the durable terminal inbound publication is the one
+   * result channel.
+   */
   detail?: string;
+  /**
+   * The latest live activity projection reported by the child (Issue #178).
+   * Latest-value coalesced; never a lifecycle authority.
+   */
+  observation: RuntimeClientSubagentObservation;
+  /**
+   * The redacted execution profile frozen at child start (Issue #178);
+   * absent for recovery-projected records. The wire key is
+   * `execution_profile`: the bare `profile` key was the obsolete pre-#144
+   * profile-name field and stays retired.
+   */
+  execution_profile?: RuntimeClientSubagentExecutionProfile;
+  /** When the ownership committed; clients derive elapsed time from it. */
+  started_at: string;
   workspace: RuntimeClientSubagentWorkspace;
 }
 

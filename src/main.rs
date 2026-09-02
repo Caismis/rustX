@@ -5,10 +5,17 @@
 //! composes the one conversation runtime, and serves its Runtime Client
 //! endpoint over the stdio/JSONL transport.
 //!
-//! stdout carries Runtime Client protocol records and nothing else — there
-//! is no banner, no progress text, and no `println!` anywhere in the
-//! process. Every diagnostic goes to stderr, and a startup configuration
-//! failure exits non-zero having written zero bytes to stdout.
+//! In the normal runtime mode stdout carries Runtime Client protocol
+//! records and nothing else — there is no banner, no progress text, and
+//! no `println!` anywhere in the process. Every diagnostic goes to
+//! stderr, and a startup configuration failure exits non-zero having
+//! written zero bytes to stdout.
+//!
+//! The internal `rustx --subagent-child` mode (Issue #60) is the one
+//! deliberate exception: there fd 0 is the reliable subagent control IPC
+//! and fd 1/stdout is the protocol-owned, framed Activity observation IPC
+//! (Issue #178) — never human-readable output. Diagnostics still go to
+//! stderr in every mode.
 
 fn main() -> std::process::ExitCode {
     let runtime = match tokio::runtime::Builder::new_multi_thread()

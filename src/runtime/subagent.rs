@@ -70,6 +70,7 @@
 //! failure/cancellation/interruption notices). Child-process IPC only
 //! transports bounded envelopes and control.
 
+pub mod activity;
 pub mod catalog;
 mod registry;
 pub mod resolver;
@@ -80,6 +81,10 @@ pub(crate) mod anchors;
 pub(crate) mod ipc;
 pub(crate) mod process;
 
+pub use activity::{
+    SubagentActivity, SubagentActivityCounters, SubagentExecutionProfile, SubagentObservation,
+    SubagentWaitReason,
+};
 pub use catalog::{
     CHILD_UNSAFE_BUILTIN_TOOLS, MAX_SUBAGENT_DEFINITIONS, SUBAGENT_DEFINITION_DIGEST_VERSION,
     SubagentAdmissionError, SubagentCatalog, SubagentDefinition, SubagentDefinitionDigest,

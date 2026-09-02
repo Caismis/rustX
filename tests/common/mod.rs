@@ -236,6 +236,21 @@ impl FixtureServer {
             .expect("request body exists")
     }
 
+    /// A consistent snapshot of every request body observed so far.
+    ///
+    /// Unlike pairing `attempt_count()` with `request_body(i)`, one locked
+    /// snapshot cannot race the per-connection handler: the attempt counter
+    /// increments when a connection is accepted, before its body is read,
+    /// so an accepted-but-abandoned connection (e.g. a client deadline
+    /// firing mid-connect) must not panic a consumer that only ever means
+    /// "the requests actually observed".
+    pub fn request_bodies(&self) -> Vec<String> {
+        self.request_bodies
+            .lock()
+            .expect("request bodies lock")
+            .clone()
+    }
+
     /// The base URL pointing at this server.
     pub fn url(&self, prefix: &str) -> String {
         format!("http://127.0.0.1:{}{}", self.address.port(), prefix)

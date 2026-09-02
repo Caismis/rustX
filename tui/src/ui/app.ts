@@ -81,6 +81,7 @@ import {
   renderBackgroundSection,
   renderInteractionSection,
   renderOrphanExecutions,
+  renderSubagentSection,
 } from "./components/activity.ts";
 import { ModelSelector } from "./components/model-selector.ts";
 import { InspectionView } from "./components/inspection-view.ts";
@@ -1257,6 +1258,7 @@ export class RustxTuiApp {
     for (const section of [
       renderOrphanExecutions(correlation, this.#preferences),
       renderBackgroundSection(state, this.#preferences),
+      renderSubagentSection(state, this.#preferences),
       renderInteractionSection(state, this.#preferences),
     ]) {
       if (section.length > 0) {

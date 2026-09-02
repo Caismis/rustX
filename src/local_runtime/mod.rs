@@ -11,11 +11,19 @@
 //!
 //! # Process output contract
 //!
+//! Normal runtime mode:
+//!
 //! ```text
 //! before serving : stdout is empty; every diagnostic goes to stderr
 //! while serving  : stdout is Runtime Client JSONL only
 //! on failure     : stderr diagnostic, non-zero exit, zero bytes on stdout
 //! ```
+//!
+//! The internal `rustx --subagent-child` mode ([`subagent_child`]) is the
+//! one exception: fd 0 is the reliable subagent control IPC and
+//! fd 1/stdout is the protocol-owned framed Activity observation IPC
+//! (Issue #178), not human-readable output. Diagnostics stay on stderr in
+//! every mode.
 //!
 //! `println!` is never used for diagnostics anywhere in the process.
 

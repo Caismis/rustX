@@ -8,9 +8,9 @@
 //! itself is a thin bounded loop:
 //!
 //! ```text
-//! fd 0 (inherited control channel)
+//! fd 0 (inherited reliable control channel)
 //!   -> Hello(spec)      version handshake; mismatch exits before compose
-//!   -> dispatcher       the ONE owner of the raw transport from here on
+//!   -> dispatcher       the ONE owner of both raw transports from here on
 //!   -> compose          the real runtime stack, deny-by-construction, and
 //!                       cancellable owned work (Issue #145)
 //!   -> Ready            composition and activation complete
@@ -19,17 +19,22 @@
 //!   -> observe          the attempt's canonical terminal event
 //!   -> Result(candidate) exactly once, bounded
 //!   -> drain + exit
+//!
+//! fd 1 (inherited disposable observation channel, Issue #178)
+//!   -> Activity frames only, latest-value; its stall or loss is
+//!      diagnostics-only and never delays or evidences control traffic
 //! ```
 //!
 //! # One control dispatcher (Issue #145)
 //!
-//! Only the `Hello` version handshake reads the raw `UnixStream` directly:
-//! it must be decided before anything at all is composed. Everything after
-//! it goes through [`ChildControlDispatcher`], the single owner of the
-//! transport, because the child now also creates supervised process units
-//! that must offer their containment anchors to the parent concurrently
-//! with `Delegate`/`Cancel`/`Result` traffic. No Tool executor and no
-//! supervised-unit owner ever touches the stream.
+//! Only the `Hello` version handshake reads the raw control `UnixStream`
+//! directly: it must be decided before anything at all is composed.
+//! Everything after it goes through [`ChildControlDispatcher`], the single
+//! owner of both inherited transports, because the child now also creates
+//! supervised process units that must offer their containment anchors to
+//! the parent concurrently with `Delegate`/`Cancel`/`Result` traffic, and
+//! because live activity rides its own disposable channel (Issue #178). No
+//! Tool executor and no supervised-unit owner ever touches either stream.
 //!
 //! # Composition is cancellable owned work (Issue #145)
 //!
@@ -72,14 +77,17 @@
 
 use std::sync::Arc;
 
+use chrono::Utc;
+
 use crate::events::types::RuntimeEvent;
 use crate::message::content::TextBlock;
 use crate::message::types::{MessageBlock, UserContentBlock, UserSource};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
+use crate::runtime::subagent::activity::SubagentObservationProjector;
 use crate::runtime::subagent::ipc::{
-    ChildFrame, ChildResultStatus, DiagnosticFrame, ParentFrame, ReadyFrame, ResultFrame,
-    SUBAGENT_IPC_VERSION, SubagentChildSpec, read_parent_frame, write_child_frame,
+    ActivityFrame, ChildFrame, ChildResultStatus, DiagnosticFrame, ParentFrame, ReadyFrame,
+    ResultFrame, SUBAGENT_IPC_VERSION, SubagentChildSpec, read_parent_frame, write_child_frame,
 };
 use crate::runtime::subagent::{MAX_RESULT_CONTENT_BYTES, bound_utf8};
 
@@ -136,10 +144,17 @@ pub async fn run_subagent_child() -> i32 {
             return 3;
         }
     };
-    // From here on there is exactly one owner of the raw transport. Every
+    // From here on there is exactly one owner of the raw transports. Every
     // other child-side owner — the semantic driver and every nested
     // supervised process unit — reaches the parent only through it.
-    let mut dispatcher = ChildControlDispatcher::start(control);
+    let observation = match take_observation_channel() {
+        Ok(observation) => observation,
+        Err(detail) => {
+            eprintln!("subagent child: observation channel: {detail}");
+            return 2;
+        }
+    };
+    let mut dispatcher = ChildControlDispatcher::start(control, observation);
     let handle = dispatcher.handle();
     // The nested containment authority is installed BEFORE any composition
     // step can create a supervised process unit, so no unit can ever slip
@@ -157,7 +172,7 @@ pub async fn run_subagent_child() -> i32 {
         // by `run_child` when the channel allowed.
         Err(ChildExit::Startup(message)) => {
             let _ = handle
-                .send(ChildFrame::StartupError(DiagnosticFrame {
+                .send_reliable(ChildFrame::StartupError(DiagnosticFrame {
                     message: bound_diagnostic(message),
                 }))
                 .await;
@@ -216,7 +231,7 @@ async fn run_child(
     let headless = core.into_headless();
     drop(headless);
     handle
-        .send(ChildFrame::Ready(ReadyFrame {
+        .send_reliable(ChildFrame::Ready(ReadyFrame {
             subagent_id: spec.subagent_id.clone(),
         }))
         .await
@@ -299,7 +314,14 @@ pub(crate) async fn serve_child_delegation(
 
     // Observe the attempt to its canonical terminal event while serving
     // Cancel frames through the ordinary cancellation path.
-    let terminal = await_terminal(dispatcher, &runtime, &observations).await?;
+    //
+    // The live activity projection (Issue #178) taps the same drained
+    // observation stream: every drained observation folds into the
+    // child-owned projector, and each applied transition is published to
+    // the dispatcher's disposable latest-value activity slot —
+    // synchronous and non-blocking, so this loop never waits on
+    // observation delivery and no separate forwarder task exists.
+    let terminal = await_terminal(dispatcher, &runtime, &observations, handle).await?;
     let frame = match terminal {
         AttemptTerminal::Completed => {
             let answer = workflow_output.as_ref().and_then(|latch| {
@@ -438,7 +460,7 @@ async fn report_and_drain(
     frame: ResultFrame,
 ) -> Result<(), ChildExit> {
     handle
-        .send(ChildFrame::Result(frame))
+        .send_reliable(ChildFrame::Result(frame))
         .await
         .map_err(|error| ChildExit::Protocol(error.to_string()))?;
     let _ = runtime.shutdown().await;
@@ -459,13 +481,17 @@ enum AttemptTerminal {
 }
 
 /// Drives the attempt to its terminal event, serving cancellation through
-/// the ordinary runtime path.
+/// the ordinary runtime path and folding every drained observation into the
+/// live activity projection (Issue #178). Applied transitions are published
+/// through the dispatcher's disposable activity lane: synchronous and
+/// non-blocking, so the agent loop never waits on observation delivery.
 async fn await_terminal(
     dispatcher: &mut ChildControlDispatcher,
     runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
     observations: &Arc<PendingObservations>,
+    handle: &ChildControlHandle,
 ) -> Result<AttemptTerminal, ChildExit> {
-    await_terminal_inner(dispatcher, runtime, observations, |_| {}).await
+    await_terminal_inner(dispatcher, runtime, observations, handle, |_| {}).await
 }
 
 #[cfg(test)]
@@ -473,16 +499,23 @@ async fn await_terminal_with_probe(
     dispatcher: &mut ChildControlDispatcher,
     runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
     observations: &Arc<PendingObservations>,
+    handle: &ChildControlHandle,
     cancellation_before_admission: Arc<tokio::sync::Notify>,
     cancellation_after_admission: Arc<tokio::sync::Notify>,
 ) -> Result<AttemptTerminal, ChildExit> {
-    await_terminal_inner(dispatcher, runtime, observations, move |delivered| {
-        if delivered {
-            cancellation_after_admission.notify_one();
-        } else {
-            cancellation_before_admission.notify_one();
-        }
-    })
+    await_terminal_inner(
+        dispatcher,
+        runtime,
+        observations,
+        handle,
+        move |delivered| {
+            if delivered {
+                cancellation_after_admission.notify_one();
+            } else {
+                cancellation_before_admission.notify_one();
+            }
+        },
+    )
     .await
 }
 
@@ -490,11 +523,16 @@ async fn await_terminal_inner<F>(
     dispatcher: &mut ChildControlDispatcher,
     runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
     observations: &Arc<PendingObservations>,
+    handle: &ChildControlHandle,
     on_cancellation: F,
 ) -> Result<AttemptTerminal, ChildExit>
 where
     F: Fn(bool) + Send + Sync + 'static,
 {
+    // The child-owned live projector. Only applied transitions are
+    // published, and the publication is a `watch` overwrite in place
+    // (latest-value coalescing) that never waits on the consumer.
+    let mut projector = SubagentObservationProjector::default();
     loop {
         tokio::select! {
             event = dispatcher.next_event() => {
@@ -535,6 +573,16 @@ where
             }
             () = observations.wait() => {
                 for observation in observations.drain() {
+                    // The activity tap runs first so even the terminal
+                    // event's own transition is projected before this loop
+                    // returns. The publication is synchronous and
+                    // non-blocking (a `watch` overwrite): it can never
+                    // disturb the attempt.
+                    if projector.fold(&observation, Utc::now()) {
+                        handle.publish_activity(ActivityFrame {
+                            observation: projector.observation().clone(),
+                        });
+                    }
                     match observation {
                         ConversationObservation::Event { event, .. } => {
                             match event {
@@ -643,6 +691,25 @@ fn take_control_channel() -> std::io::Result<tokio::net::UnixStream> {
     // SAFETY: the parent passes the connected control-channel endpoint as
     // the child's fd 0 and this is the single takeover of it.
     let std_stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(0) };
+    std_stream.set_nonblocking(true)?;
+    tokio::net::UnixStream::from_std(std_stream)
+}
+
+/// Takes over the inherited observation channel on fd 1 (Issue #178).
+///
+/// fd 1 is the connected, blocking `UnixStream` endpoint the parent passed
+/// as the child's standard output: the dedicated disposable transport for
+/// `Activity` frames. It shares the fd-0 safety shim's contract — one
+/// takeover, before anything else touches fd 1 — and nothing else in the
+/// child may write to standard output: a stray write would corrupt
+/// observation framing (a diagnostics-only failure), never the control
+/// channel.
+#[allow(unsafe_code)]
+fn take_observation_channel() -> std::io::Result<tokio::net::UnixStream> {
+    use std::os::unix::io::FromRawFd;
+    // SAFETY: the parent passes the connected observation-channel endpoint
+    // as the child's fd 1 and this is the single takeover of it.
+    let std_stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(1) };
     std_stream.set_nonblocking(true)?;
     tokio::net::UnixStream::from_std(std_stream)
 }
@@ -790,6 +857,8 @@ mod tests {
         .expect("admission gate entered");
 
         let (mut parent_end, child_end) = tokio::net::UnixStream::pair().expect("control pair");
+        let (_observation_parent_end, observation_child_end) =
+            tokio::net::UnixStream::pair().expect("observation pair");
         crate::runtime::subagent::ipc::write_parent_frame(
             &mut parent_end,
             &ParentFrame::Cancel {
@@ -805,11 +874,13 @@ mod tests {
         let before_probe = Arc::clone(&cancellation_before_admission);
         let after_probe = Arc::clone(&cancellation_after_admission);
         let waiter = tokio::spawn(async move {
-            let mut child_end = ChildControlDispatcher::start(child_end);
+            let mut child_end = ChildControlDispatcher::start(child_end, observation_child_end);
+            let handle = child_end.handle();
             await_terminal_with_probe(
                 &mut child_end,
                 &child_runtime,
                 &child_observations,
+                &handle,
                 before_probe,
                 after_probe,
             )
@@ -913,6 +984,8 @@ mod tests {
             .await;
 
         let (mut parent_end, child_end) = tokio::net::UnixStream::pair().expect("control pair");
+        let (_observation_parent_end, observation_child_end) =
+            tokio::net::UnixStream::pair().expect("observation pair");
         crate::runtime::subagent::ipc::write_parent_frame(
             &mut parent_end,
             &ParentFrame::Cancel {
@@ -926,11 +999,13 @@ mod tests {
         let cancellation_after_admission = Arc::new(tokio::sync::Notify::new());
         let after_probe = Arc::clone(&cancellation_after_admission);
         let waiter = tokio::spawn(async move {
-            let mut child_end = ChildControlDispatcher::start(child_end);
+            let mut child_end = ChildControlDispatcher::start(child_end, observation_child_end);
+            let handle = child_end.handle();
             await_terminal_with_probe(
                 &mut child_end,
                 &child_runtime,
                 &child_observations,
+                &handle,
                 Arc::new(tokio::sync::Notify::new()),
                 after_probe,
             )
@@ -1025,6 +1100,8 @@ mod tests {
         assert_eq!(model.requests().len(), 1, "exactly one request started");
 
         let (mut parent_end, child_end) = tokio::net::UnixStream::pair().expect("control pair");
+        let (_observation_parent_end, observation_child_end) =
+            tokio::net::UnixStream::pair().expect("observation pair");
         crate::runtime::subagent::ipc::write_parent_frame(
             &mut parent_end,
             &ParentFrame::Cancel {
@@ -1038,11 +1115,13 @@ mod tests {
         let cancellation_after_admission = Arc::new(tokio::sync::Notify::new());
         let after_probe = Arc::clone(&cancellation_after_admission);
         let waiter = tokio::spawn(async move {
-            let mut child_end = ChildControlDispatcher::start(child_end);
+            let mut child_end = ChildControlDispatcher::start(child_end, observation_child_end);
+            let handle = child_end.handle();
             await_terminal_with_probe(
                 &mut child_end,
                 &child_runtime,
                 &child_observations,
+                &handle,
                 Arc::new(tokio::sync::Notify::new()),
                 after_probe,
             )
@@ -1122,7 +1201,9 @@ mod tests {
         let gate = crate::local_runtime::composition::arm_test_preparation_gate(&runtime_root);
 
         let (parent, child) = tokio::net::UnixStream::pair().expect("control pair");
-        let mut dispatcher = ChildControlDispatcher::start(child);
+        let (_observation_parent, observation_child) =
+            tokio::net::UnixStream::pair().expect("observation pair");
+        let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
         let handle = dispatcher.handle();
         let composed = tokio::spawn(async move {
             let outcome = Box::pin(compose_cancellably(&mut dispatcher, &handle, &spec)).await;

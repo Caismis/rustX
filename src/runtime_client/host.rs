@@ -2461,13 +2461,15 @@ mod tests {
         ));
 
         // Incompatible protocol version fails explicitly.
-        let bad = fixture.host.attach(11);
+        let bad = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION + 1);
         assert!(matches!(
             bad,
             Err(RuntimeClientError::UnsupportedProtocolVersion {
-                supported: 10,
-                requested: 11,
-            })
+                requested,
+                ..
+            }) if requested == crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION + 1
         ));
 
         // Explicit detach releases the attachment; a fresh attachment has

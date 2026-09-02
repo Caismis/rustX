@@ -3333,6 +3333,16 @@ impl ConversationRuntime {
         self.inner.install_observation_bridge(queue)
     }
 
+    /// Test-only: the observation bridge installed through
+    /// [`ConversationRuntime::install_observation_bridge`], when one is.
+    ///
+    /// Boundary tests park/unpark the parent's projection input through
+    /// this handle to own the fold schedule deterministically.
+    #[cfg(test)]
+    pub(crate) fn installed_observation_bridge(&self) -> Option<Arc<PendingObservations>> {
+        self.inner.pending.get().cloned()
+    }
+
     /// Claims the one-time Runtime Client binding of the tool runtime and of
     /// the capability coordinator.
     ///
@@ -4983,6 +4993,24 @@ impl AgentExecutionObserver for RuntimeObserver {
             transcript_cursor,
         });
     }
+
+    // The loop fires this while the tool still executes; a leaf push into
+    // the queue's disposable live-progress lane, exactly like the other
+    // callbacks — no coordinator or projection lock is ever taken here.
+    fn observe_tool_progress(
+        &self,
+        attempt_id: &AttemptId,
+        tool_call_id: &crate::runtime::identity::ToolCallId,
+        tool_id: &crate::runtime::identity::ToolId,
+        progress: &crate::tools::types::ToolProgress,
+    ) {
+        self.push(ConversationObservation::ToolProgress {
+            attempt_id: attempt_id.clone(),
+            tool_call_id: tool_call_id.clone(),
+            tool_id: tool_id.clone(),
+            progress: progress.clone(),
+        });
+    }
 }
 
 // The mailbox fires `on_enqueued`/`on_drained` while the mailbox lock is
@@ -5012,10 +5040,16 @@ impl BackgroundObserver for RuntimeObserver {
 }
 
 // Same leaf contract as the background observer: the registry fires under
-// its lock, so this only pushes into the queue.
+// its lock, so this only pushes into the queue. Lifecycle/identity
+// publications are reliable; live-activity publications are disposable and
+// land in the coalescing latest-value lane.
 impl crate::runtime::subagent::SubagentObserver for RuntimeObserver {
     fn on_snapshot(&self, snapshot: &crate::runtime::subagent::SubagentSnapshot) {
-        self.push(ConversationObservation::Subagent(snapshot.clone()));
+        self.push(ConversationObservation::SubagentLifecycle(snapshot.clone()));
+    }
+
+    fn on_activity(&self, snapshot: &crate::runtime::subagent::SubagentSnapshot) {
+        self.push(ConversationObservation::SubagentActivity(snapshot.clone()));
     }
 }
 
@@ -6395,6 +6429,8 @@ mod tests {
     ) {
         std::fs::create_dir_all(runtime_root).expect("runtime root");
         let (driver_end, test_end) = tokio::net::UnixStream::pair().expect("control pair");
+        let (observation_end, _observation_peer) =
+            tokio::net::UnixStream::pair().expect("observation pair");
         let child = tokio::process::Command::new("sh")
             .arg("-c")
             .arg("trap '' TERM; exec sleep 60")
@@ -6408,6 +6444,7 @@ mod tests {
             crate::runtime::subagent::process::StagedChild::for_test(
                 child,
                 driver_end,
+                observation_end,
                 runtime_root.to_path_buf(),
             ),
             test_end,
@@ -11786,7 +11823,11 @@ mod tests {
             crate::runtime::subagent::SubagentState::PublishingTerminal
         );
         assert!(unresolved.publication_abandoned);
-        assert!(unresolved.detail.is_some(), "candidate remains observable");
+        // Issue #178: the successful answer never rides the live read
+        // model, not even while its publication is unresolved; the
+        // candidate remains observable through the PublishingTerminal
+        // lifecycle state itself.
+        assert!(unresolved.detail.is_none());
         let pending_items = store
             .select_pending_batch()
             .expect("pending")
@@ -11997,10 +12038,10 @@ mod tests {
             crate::runtime::subagent::SubagentState::PublishingTerminal
         );
         assert!(unresolved.publication_abandoned);
-        assert!(
-            unresolved.detail.is_some(),
-            "the unresolved candidate is unchanged"
-        );
+        // Issue #178: the successful answer never rides the live read
+        // model; the unresolved candidate is observable through its
+        // PublishingTerminal lifecycle state, unchanged.
+        assert!(unresolved.detail.is_none());
 
         admission_gate.release();
     }
@@ -14215,6 +14256,8 @@ mod tests {
         let runtime_root = dir.path().join("subagents");
         std::fs::create_dir_all(&runtime_root).expect("subagent runtime root");
         let (driver_end, mut peer) = tokio::net::UnixStream::pair().expect("IPC pair");
+        let (observation_end, _observation_peer) =
+            tokio::net::UnixStream::pair().expect("observation pair");
         let child = tokio::process::Command::new("sh")
             .arg("-c")
             .arg("true")
@@ -14230,6 +14273,7 @@ mod tests {
         subagents.push_staged_override(crate::runtime::subagent::process::StagedChild::for_test(
             child,
             driver_end,
+            observation_end,
             child_root.clone(),
         ));
 

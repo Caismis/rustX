@@ -2100,8 +2100,9 @@ impl WorkflowRuntime {
                 if let Some(snapshot) = snapshot
                     && matches!(snapshot.state, crate::runtime::subagent::SubagentState::Succeeded)
                 {
-                    return Self::settled_agent_value(
+                    return self.settled_agent_value(
                             snapshot,
+                            &subagent_id,
                             node_id,
                             output_schema,
                             cancellation.reason(),
@@ -2116,29 +2117,43 @@ impl WorkflowRuntime {
             node: node_id.to_owned(),
             detail: "the native SubagentRegistry lost the child record".to_owned(),
         })?;
-        Self::settled_agent_value(snapshot, node_id, output_schema, cancellation.reason())
+        self.settled_agent_value(
+            snapshot,
+            &subagent_id,
+            node_id,
+            output_schema,
+            cancellation.reason(),
+        )
     }
 
     fn settled_agent_value(
+        &self,
         snapshot: crate::runtime::subagent::SubagentSnapshot,
+        subagent_id: &crate::runtime::identity::SubagentId,
         node_id: &str,
         output_schema: &Value,
         cancellation_reason: crate::runtime::types::CancellationReason,
     ) -> Result<Value, WorkflowRunError> {
         match snapshot.state {
             crate::runtime::subagent::SubagentState::Succeeded => {
-                let content = snapshot
-                    .detail
+                // The committed output value is the live Workflow result
+                // channel owned by the registry (Issue #178): the
+                // observation snapshot deliberately never carries it.
+                let content = self
+                    .subagents
+                    .workflow_agent_output(subagent_id)
                     .ok_or_else(|| WorkflowRunError::ChildFailed {
                         node: node_id.to_owned(),
                         detail: "workflow Agent completed without committed output".to_owned(),
                     })?;
-                let value = serde_json::from_str(&content).map_err(|error| {
-                    WorkflowRunError::ChildFailed {
-                        node: node_id.to_owned(),
-                        detail: format!("workflow Agent output was not JSON: {error}"),
-                    }
-                })?;
+                let value = content;
+                // This validation is not redundant with
+                // `validate_workflow_candidate` in the registry: the registry
+                // revalidates the untrusted cross-process child wire frame
+                // before its durable commit, while this validates the run's
+                // result against the node's own frozen `output_schema`
+                // authority at consumption time. The two checks guard
+                // different trust boundaries; both stay.
                 let validator = jsonschema::Validator::new(output_schema).map_err(|error| {
                     WorkflowRunError::ChildFailed {
                         node: node_id.to_owned(),
@@ -2677,6 +2692,8 @@ mod tests {
     #[cfg(unix)]
     fn stage_workflow_child(plane: &WorkflowTestPlane) -> ScriptedWorkflowChild {
         let (driver_end, test_end) = tokio::net::UnixStream::pair().expect("workflow IPC pair");
+        let (observation_end, _observation_peer) =
+            tokio::net::UnixStream::pair().expect("observation pair");
         let child = tokio::process::Command::new("sh")
             .arg("-c")
             .arg("true")
@@ -2689,9 +2706,12 @@ mod tests {
         let pid = child.id().expect("workflow scripted child pid");
         let root = plane.runtime_root.join(format!("test-child-{pid}"));
         std::fs::create_dir_all(&root).expect("workflow child runtime root");
-        plane
-            .registry
-            .push_staged_override(StagedChild::for_test(child, driver_end, root.clone()));
+        plane.registry.push_staged_override(StagedChild::for_test(
+            child,
+            driver_end,
+            observation_end,
+            root.clone(),
+        ));
         ScriptedWorkflowChild {
             peer: test_end,
             root,

@@ -234,7 +234,14 @@ pub enum RuntimeClientSessionRequest {
 /// Version 10 carries Issue #146's bounded subagent workspace facts and
 /// preserved-worktree handoff metadata. There is no compatibility decoding
 /// of version 9.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 10;
+///
+/// Version 11 carries Issue #178's subagent live-activity projection: the
+/// subagent view gains the latest-value `observation`, the redacted
+/// `execution_profile`, and `started_at`, and its `detail` is now
+/// diagnostics-only (a successful child's answer rides only the durable
+/// terminal inbound publication). There is no compatibility decoding of
+/// version 10.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 11;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1101,6 +1108,8 @@ mod tests {
         RuntimeClientProtocolEvent, RuntimeClientRequest, RuntimeClientResponse,
         RuntimeClientResult, RuntimeClientSubagent, SessionView,
     };
+    use chrono::{DateTime, Utc};
+
     use crate::events::types::EVENT_SCHEMA_VERSION;
     use crate::message::content::TextBlock;
     use crate::message::types::UserContentBlock;
@@ -1114,7 +1123,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 10);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 11);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1128,9 +1137,10 @@ mod tests {
 
     /// The Runtime Client subagent projection carries the complete closed
     /// lifecycle vocabulary on the wire, including the unknown-outcome
-    /// `Interrupted` terminal state.
+    /// `Interrupted` terminal state, plus the Issue #178 observation-plane
+    /// fields.
     #[test]
-    fn interrupted_subagent_projection_serializes_as_the_v10_wire_state() {
+    fn interrupted_subagent_projection_serializes_as_the_v11_wire_state() {
         let subagent = RuntimeClientSubagent {
             subagent_id: crate::runtime::identity::SubagentId::new("subagent-1"),
             child_agent_id: crate::runtime::identity::AgentId::new("agent-child"),
@@ -1139,6 +1149,11 @@ mod tests {
             definition_digest: "sha256:definition".to_owned(),
             state: crate::runtime::subagent::SubagentState::Interrupted,
             detail: Some("child outcome unknown".to_owned()),
+            observation: crate::runtime::subagent::SubagentObservation::default(),
+            execution_profile: None,
+            started_at: DateTime::parse_from_rfc3339("2026-09-02T10:00:00Z")
+                .expect("timestamp")
+                .with_timezone(&Utc),
             workspace: super::RuntimeClientSubagentWorkspace {
                 workspace: std::path::PathBuf::from("<shared-workspace>"),
                 isolated: false,
@@ -1149,10 +1164,19 @@ mod tests {
             },
         };
 
-        let value = serde_json::to_value(subagent).expect("serialize subagent projection");
+        let value = serde_json::to_value(&subagent).expect("serialize subagent projection");
         assert_eq!(value["state"], "interrupted");
         assert_eq!(value["agent"], "conformance");
         assert_eq!(value["definition_digest"], "sha256:definition");
+        assert_eq!(value["observation"]["revision"], 0);
+        assert_eq!(
+            value["observation"]["activity"]["type"],
+            "awaiting_activity"
+        );
+        assert_eq!(value["started_at"], "2026-09-02T10:00:00Z");
+        let decoded: RuntimeClientSubagent =
+            serde_json::from_value(value).expect("deserialize subagent projection");
+        assert_eq!(decoded, subagent);
     }
 
     /// Requests serialize deterministically with their method discriminator

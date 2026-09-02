@@ -32,9 +32,13 @@ use crate::runtime::subagent::ipc::{ChildFrame, ChildResultStatus, ResultFrame};
 use crate::runtime::subagent::process::StagedChild;
 
 /// A scripted child: one trivial real process (kill/reap semantics) and the
-/// test-held end of the control channel (protocol semantics).
+/// test-held ends of the control channel and the disposable observation
+/// channel (protocol semantics).
 struct ScriptedChild {
     peer: tokio::net::UnixStream,
+    /// The test-held end of the observation channel (Issue #178): Activity
+    /// frames are written here, never on the control peer.
+    observation_peer: tokio::net::UnixStream,
 }
 
 /// A Builtin-only frozen specification: the registry owns live child
@@ -71,9 +75,12 @@ fn spec(task: &str) -> SubagentStartSpec {
 }
 
 /// Stages a scripted child whose process exits immediately; the test drives
-/// the protocol over `peer`.
+/// the protocol over `peer` and the observation plane over
+/// `observation_peer`.
 fn stage_exit0(plane: &SubagentPlane) -> ScriptedChild {
     let (driver_end, test_end) = tokio::net::UnixStream::pair().expect("pair");
+    let (observation_end, observation_peer) =
+        tokio::net::UnixStream::pair().expect("observation pair");
     let child = tokio::process::Command::new("sh")
         .arg("-c")
         .arg("true")
@@ -86,9 +93,12 @@ fn stage_exit0(plane: &SubagentPlane) -> ScriptedChild {
     let pid = child.id().expect("scripted child pid");
     let child_runtime_root = plane.runtime_root.join(format!("test-child-{pid}"));
     std::fs::create_dir_all(&child_runtime_root).expect("child runtime root");
-    let staged = StagedChild::for_test(child, driver_end, child_runtime_root);
+    let staged = StagedChild::for_test(child, driver_end, observation_end, child_runtime_root);
     plane.registry.push_staged_override(staged);
-    ScriptedChild { peer: test_end }
+    ScriptedChild {
+        peer: test_end,
+        observation_peer,
+    }
 }
 
 impl ScriptedChild {
@@ -538,10 +548,19 @@ async fn publishing_terminal_does_not_expose_the_pending_child_answer() {
         .expect("publication abandoned resolves the wait");
     assert_eq!(unsettled.state, SubagentState::PublishingTerminal);
     assert!(unsettled.publication_abandoned);
+    // Issue #178: the pending answer never rides the live read model, not
+    // even while its publication is unresolved. The registry retains the
+    // candidate internally for its bounded retry; the observable contract
+    // is that `detail` is diagnostics-only and therefore `None` here.
     assert_eq!(
-        unsettled.detail.as_deref(),
-        Some(SECRET_CHILD_ANSWER),
-        "the registry authority retains the pending answer internally"
+        unsettled.detail, None,
+        "the pending answer is not exposed through the snapshot detail"
+    );
+    assert!(
+        !serde_json::to_string(&unsettled)
+            .expect("snapshot serializes")
+            .contains(SECRET_CHILD_ANSWER),
+        "the pending answer never appears anywhere in the serialized snapshot"
     );
     assert!(
         plane
@@ -574,5 +593,152 @@ async fn publishing_terminal_does_not_expose_the_pending_child_answer() {
     assert!(
         !serialized.contains(SECRET_CHILD_ANSWER),
         "PublishingTerminal must not expose the pending answer: {serialized}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Live activity racing terminal settlement (Issue #178)
+// ---------------------------------------------------------------------------
+
+/// An activity frame applied while the child runs lands in the read model;
+/// terminal settlement resets the projection to neutral with a bumped
+/// revision; a frame racing in after the terminal is dropped — the terminal
+/// stays final and the settled snapshot never projects the late activity.
+///
+/// Activity travels on the dedicated observation channel (Issue #178), so
+/// the test synchronizes through the registry read model itself: the live
+/// frame is provably applied (its revision is observed) before the terminal
+/// result is sent on the control channel.
+#[tokio::test]
+async fn activity_frames_racing_terminal_settlement_are_dropped() {
+    let plane = subagent_plane();
+    let child = stage_exit0(&plane);
+    let accepted = start_subagent(&plane, "inspect the tool plane").await;
+    let mut peer = child.peer;
+    let mut observation_peer = child.observation_peer;
+
+    let observation_at = |revision: u64, activity| crate::runtime::subagent::SubagentObservation {
+        revision,
+        activity,
+        last_activity_at: None,
+        counters: crate::runtime::subagent::SubagentActivityCounters {
+            model_requests: 1,
+            model_retries: 0,
+            tool_executions: 2,
+        },
+    };
+
+    // The delegation arrives first; then the live activity update crosses
+    // the observation channel and is provably applied to the read model.
+    let frame = crate::runtime::subagent::ipc::read_parent_frame(&mut peer)
+        .await
+        .expect("delegate frame");
+    assert!(matches!(
+        frame,
+        Some(crate::runtime::subagent::ipc::ParentFrame::Delegate(_))
+    ));
+    crate::runtime::subagent::ipc::write_activity_frame(
+        &mut observation_peer,
+        &crate::runtime::subagent::ipc::ActivityFrame {
+            observation: observation_at(
+                3,
+                crate::runtime::subagent::SubagentActivity::Tool {
+                    tool_call_id: ToolCallId::new("call-178"),
+                    tool_id: crate::runtime::identity::ToolId::new("tool-178"),
+                    progress: None,
+                },
+            ),
+        },
+    )
+    .await
+    .expect("live activity frame");
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let snapshot = plane
+                .registry
+                .snapshot(&accepted.subagent_id)
+                .expect("child record");
+            if snapshot.observation.revision == 3 {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the live activity frame applies before the terminal");
+
+    // The terminal result crosses the control channel and settles.
+    crate::runtime::subagent::ipc::write_child_frame(
+        &mut peer,
+        &ChildFrame::Result(ResultFrame {
+            status: ChildResultStatus::Succeeded,
+            content: Some("RACE-178-ANSWER".to_owned()),
+            diagnostic: None,
+        }),
+    )
+    .await
+    .expect("terminal result frame");
+    let settled = plane
+        .registry
+        .wait_until_settled(&accepted.subagent_id)
+        .await
+        .expect("settled");
+
+    // A post-terminal update: wherever it lands — the observation receiver
+    // may already be torn down with the drive — it can never land in the
+    // read model (the registry's terminal-record drop rule).
+    let _ = crate::runtime::subagent::ipc::write_activity_frame(
+        &mut observation_peer,
+        &crate::runtime::subagent::ipc::ActivityFrame {
+            observation: observation_at(
+                9,
+                crate::runtime::subagent::SubagentActivity::Model {
+                    request_id: crate::runtime::identity::RequestId::new("req-late"),
+                    retry: 0,
+                },
+            ),
+        },
+    )
+    .await;
+
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    // The pre-terminal frame (revision 3) was applied; the settlement reset
+    // bumped the revision once, and the post-terminal frame (revision 9)
+    // was dropped: neither its activity nor its revision ever landed.
+    assert_eq!(
+        settled.observation.activity,
+        crate::runtime::subagent::SubagentActivity::AwaitingActivity,
+        "the terminal settlement is the final projection"
+    );
+    assert_eq!(
+        settled.observation.revision, 4,
+        "the applied live revision plus exactly one settlement bump"
+    );
+    assert_eq!(
+        settled.observation.counters.tool_executions, 2,
+        "the counters of the last applied frame survive the reset"
+    );
+    assert_eq!(settled.detail, None, "the answer never rides the detail");
+
+    // The result channel is still exactly the canonical durable inbound.
+    let pending = plane
+        .store
+        .select_pending_batch()
+        .expect("pending")
+        .expect("one pending batch");
+    assert_eq!(pending.items.len(), 1);
+    let text = pending.items[0]
+        .message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            rustx::message::types::UserContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        text.contains("RACE-178-ANSWER"),
+        "the canonical inbound carries the answer exactly once: {text}"
     );
 }

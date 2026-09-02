@@ -472,7 +472,9 @@ async fn a_subagent_child_runs_end_to_end_through_the_real_process_stack() {
     };
 
     // The registry surface is the authoritative lifecycle: one child,
-    // succeeded, carrying the bounded terminal detail.
+    // succeeded, with no result content on the live projection (Issue
+    // #178: `detail` is diagnostics-only; the answer arrived exactly once
+    // through the canonical Agent-authored inbound proven above).
     assert_eq!(snapshot.subagents.len(), 1, "exactly one child was owned");
     let subagent = &snapshot.subagents[0];
     assert_eq!(
@@ -485,10 +487,14 @@ async fn a_subagent_child_runs_end_to_end_through_the_real_process_stack() {
         "the committed child carries the definition digest it started with: {}",
         subagent.definition_digest
     );
-    let detail = subagent.detail.clone().expect("the terminal detail");
+    assert_eq!(
+        subagent.detail, None,
+        "the successful answer never rides the snapshot detail"
+    );
+    let subagent_wire = serde_json::to_string(subagent).expect("subagent view serializes");
     assert!(
-        detail.contains("CHILD-ANSWER"),
-        "the child's answer is the terminal detail: {detail}"
+        !subagent_wire.contains("CHILD-ANSWER"),
+        "the successful answer appears nowhere in the serialized client view: {subagent_wire}"
     );
 
     // The dedicated status surface answers with the same snapshot.

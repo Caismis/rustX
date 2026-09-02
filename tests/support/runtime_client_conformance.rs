@@ -625,10 +625,12 @@ pub async fn unsupported_protocol_version_is_typed(factory: &dyn DriverFactory) 
         }
     );
 
+    // A future version the runtime does not speak is rejected the same way.
+    let future = rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION + 1;
     let response = driver
         .request(RuntimeClientRequest::Initialize {
             id: RequestId::new(7),
-            protocol_version: 11,
+            protocol_version: future,
         })
         .await;
     assert_eq!(response.id, RequestId::new(7));
@@ -636,7 +638,7 @@ pub async fn unsupported_protocol_version_is_typed(factory: &dyn DriverFactory) 
         error(response),
         RuntimeClientError::UnsupportedProtocolVersion {
             supported: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
-            requested: 11,
+            requested: future,
         }
     );
 

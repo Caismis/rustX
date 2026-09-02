@@ -427,6 +427,8 @@ impl Child {
     /// terminal) drives the publication transaction instead.
     fn stage_live_subagent_child(&self, root: &Path, command: &str) -> tokio::net::UnixStream {
         let (driver_end, peer) = tokio::net::UnixStream::pair().expect("subagent control pair");
+        let (observation_end, _observation_peer) =
+            tokio::net::UnixStream::pair().expect("subagent observation pair");
         let process = tokio::process::Command::new("sh")
             .arg("-c")
             .arg(command)
@@ -443,6 +445,7 @@ impl Child {
             .push_staged_override(crate::runtime::subagent::process::StagedChild::for_test(
                 process,
                 driver_end,
+                observation_end,
                 runtime_root,
             ));
         peer

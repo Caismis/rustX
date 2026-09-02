@@ -40,14 +40,16 @@
 //!   wait.
 //! - Wall-clock time appears only as an outer anti-hang liveness guard.
 
-use super::super::support;
+use super::super::{common, support};
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use rustx::durable::ConversationStore;
 use rustx::events::types::{RuntimeEvent, SubagentTerminalState};
-use rustx::message::types::{ContentBlockIndex, MessageBlock, UserContentBlock, UserSource};
+use rustx::message::types::{
+    ContentBlockIndex, InboundKind, MessageBlock, UserContentBlock, UserSource,
+};
 use rustx::model::ModelTimeoutPolicy;
 use rustx::model::error::{ModelError, ModelErrorKind, ModelRetryDisposition};
 use rustx::model::event::ModelEvent;
@@ -55,18 +57,19 @@ use rustx::model::finish::ModelFinishReason;
 use rustx::runtime::conversation_runtime::{
     ConversationContextConfig, ConversationRuntime, RuntimeConversationConfig,
 };
-use rustx::runtime::identity::{AgentId, ConversationId, ToolCallId};
+use rustx::runtime::identity::{AgentId, ConversationId, SubagentId, ToolCallId};
 use rustx::runtime::types::{CancellationReason, SystemClock};
 use rustx::runtime::{ManualMonotonicClock, MonotonicClock};
 use rustx::tools::executor::ToolRegistry;
-use support::fake::{FakeModel, FakeStep, fake_model};
+use support::fake::{FakeModel, FakeStep, FakeTool, fake_model};
 
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::inbound::ConversationInboundMailbox;
 use crate::runtime::observation::PendingObservations;
 use crate::runtime::subagent::process::StagedChild;
 use crate::runtime::subagent::{
-    ResolvedSubagentSpec, SubagentAccepted, SubagentName, SubagentRegistry, SubagentRegistryConfig,
+    ResolvedSubagentSpec, SubagentAccepted, SubagentActivity, SubagentExecutionProfile,
+    SubagentName, SubagentObserver, SubagentRegistry, SubagentRegistryConfig, SubagentSnapshot,
     SubagentSpawnPlan, SubagentStartOutcome, SubagentStartSpec, SubagentState,
 };
 
@@ -150,6 +153,9 @@ struct ChildFixture {
     observations: Arc<PendingObservations>,
     model: Arc<FakeModel>,
     store: Arc<dyn ConversationStore>,
+    /// The child's manually advanced monotonic clock: retry backoff only
+    /// completes when the test advances it past the captured deadline.
+    clock: Arc<ManualMonotonicClock>,
 }
 
 /// Builds the child runtime with the inherited timeout policy, an explicit
@@ -235,6 +241,7 @@ async fn child_fixture(
         observations,
         model,
         store,
+        clock,
     }
 }
 
@@ -334,6 +341,34 @@ async fn parent_runtime_plane(
     conversation: &str,
     parent_scripts: Vec<Vec<FakeStep>>,
 ) -> ParentRuntimePlane {
+    compose_parent_runtime_plane(dir, conversation, parent_scripts, false)
+        .await
+        .0
+}
+
+/// The same parent plane with a Runtime Client host bound before
+/// activation: the host's projection then observes the registry through the
+/// ordinary observation bridge, so a late-attaching client exercises the
+/// real snapshot-repair path.
+async fn parent_runtime_host_plane(
+    dir: &tempfile::TempDir,
+    conversation: &str,
+    parent_scripts: Vec<Vec<FakeStep>>,
+) -> (ParentRuntimePlane, rustx::runtime_client::RuntimeClientHost) {
+    let (plane, host) = compose_parent_runtime_plane(dir, conversation, parent_scripts, true).await;
+    (plane, host.expect("the host plane composes the host"))
+}
+
+#[allow(clippy::too_many_lines)] // fixture composition; mirrors child_fixture
+async fn compose_parent_runtime_plane(
+    dir: &tempfile::TempDir,
+    conversation: &str,
+    parent_scripts: Vec<Vec<FakeStep>>,
+    with_host: bool,
+) -> (
+    ParentRuntimePlane,
+    Option<rustx::runtime_client::RuntimeClientHost>,
+) {
     let conversation_id = ConversationId::new(conversation);
     let workspace = dir.path().join("parent-workspace");
     std::fs::create_dir_all(&workspace).expect("parent workspace");
@@ -406,17 +441,32 @@ async fn parent_runtime_plane(
         workflow_output: None,
     })
     .expect("parent runtime composition");
+    // The Runtime Client host binds before activation: its bridge handshake
+    // installs the registry observer and seeds the projection at one global
+    // cut over the inert runtime.
+    let host = with_host.then(|| {
+        rustx::runtime_client::RuntimeClientHost::new(
+            rustx::runtime_client::RuntimeClientHostConfig {
+                runtime: runtime.clone(),
+                replay_limit: None,
+            },
+        )
+        .expect("runtime client host composition")
+    });
     runtime.activate();
-    ParentRuntimePlane {
-        plane: ParentPlane {
-            registry,
-            store: tool_runtime.durable_store(),
-            parent_agent_id: AgentId::new("agent-parent-138"),
-            runtime_root,
+    (
+        ParentRuntimePlane {
+            plane: ParentPlane {
+                registry,
+                store: tool_runtime.durable_store(),
+                parent_agent_id: AgentId::new("agent-parent-138"),
+                runtime_root,
+            },
+            runtime,
+            model,
         },
-        runtime,
-        model,
-    }
+        host,
+    )
 }
 
 /// A child wired end to end: the parent registry drives one end of the real
@@ -432,6 +482,20 @@ struct WiredChild {
     pid: u32,
 }
 
+/// How the wired child's disposable observation channel (Issue #178) is
+/// connected.
+#[derive(Clone, Copy)]
+enum ObservationWiring {
+    /// Both ends live: the driver's observation receiver drains activity
+    /// frames into the registry read model.
+    Live,
+    /// Both directions dead from the start: the driver-side receiver
+    /// observes an immediate EOF and every child-side activity write fails.
+    /// Execution must be byte-identical to `Live` — observation loss is
+    /// diagnostics-only.
+    Broken,
+}
+
 /// Stages and commits a wired child whose process exits immediately (kill
 /// and reap of an exited process are both no-ops).
 async fn launch_wired_child(plane: &ParentPlane, child: &ChildFixture, task: &str) -> WiredChild {
@@ -444,7 +508,32 @@ async fn launch_wired_child_with_shell(
     task: &str,
     shell: &str,
 ) -> WiredChild {
+    launch_wired_child_full(plane, child, task, shell, ObservationWiring::Live).await
+}
+
+async fn launch_wired_child_full(
+    plane: &ParentPlane,
+    child: &ChildFixture,
+    task: &str,
+    shell: &str,
+    observation_wiring: ObservationWiring,
+) -> WiredChild {
     let (driver_end, child_end) = tokio::net::UnixStream::pair().expect("control pair");
+    // The disposable observation channel (Issue #178): a second socket pair
+    // with its own backpressure domain, exactly like the production spawn's
+    // fd 1.
+    let (observation_driver_end, observation_child_end) = match observation_wiring {
+        ObservationWiring::Live => tokio::net::UnixStream::pair().expect("observation pair"),
+        ObservationWiring::Broken => {
+            let (driver_end, dropped_child_end) =
+                tokio::net::UnixStream::pair().expect("observation pair");
+            drop(dropped_child_end);
+            let (dropped_parent_end, child_end) =
+                tokio::net::UnixStream::pair().expect("observation pair");
+            drop(dropped_parent_end);
+            (driver_end, child_end)
+        }
+    };
     let mut command = tokio::process::Command::new("sh");
     command
         .arg("-c")
@@ -458,9 +547,12 @@ async fn launch_wired_child_with_shell(
     let pid = process.id().expect("scripted child pid");
     let child_root = plane.runtime_root.join(format!("wired-child-{pid}"));
     std::fs::create_dir_all(&child_root).expect("child runtime root");
-    plane
-        .registry
-        .push_staged_override(StagedChild::for_test(process, driver_end, child_root));
+    plane.registry.push_staged_override(StagedChild::for_test(
+        process,
+        driver_end,
+        observation_driver_end,
+        child_root,
+    ));
     let prepared = plane
         .registry
         .prepare(
@@ -490,8 +582,10 @@ async fn launch_wired_child_with_shell(
     let child_observations = Arc::clone(&child.observations);
     let (stop_serve, stop_receiver) = tokio::sync::oneshot::channel();
     let serve = tokio::spawn(async move {
-        let mut dispatcher =
-            crate::local_runtime::dispatcher::ChildControlDispatcher::start(child_end);
+        let mut dispatcher = crate::local_runtime::dispatcher::ChildControlDispatcher::start(
+            child_end,
+            observation_child_end,
+        );
         let handle = dispatcher.handle();
         let result = tokio::select! {
             result = crate::local_runtime::subagent_child::serve_child_delegation(
@@ -562,6 +656,31 @@ async fn await_journal_fact(
 
 fn count_events(events: &[RuntimeEvent], predicate: impl Fn(&RuntimeEvent) -> bool) -> usize {
     events.iter().filter(|event| predicate(event)).count()
+}
+
+/// Awaits one registry snapshot satisfying `predicate`, driven by the
+/// registry state-version watch ([`SubagentRegistry::wait_for_snapshot`]) —
+/// no polling.
+///
+/// Same discipline as [`await_journal_fact`]: the applied read model is the
+/// synchronization point (an activity frame applies synchronously when the
+/// driver decodes it), so observing the projection is proof of the
+/// interleaving; the timeout only contains a broken fixture.
+async fn await_snapshot(
+    plane: &ParentPlane,
+    subagent_id: &SubagentId,
+    predicate: impl Fn(&SubagentSnapshot) -> bool,
+    description: &str,
+) -> SubagentSnapshot {
+    tokio::time::timeout(
+        LIVENESS,
+        plane.registry.wait_for_snapshot(subagent_id, predicate),
+    )
+    .await
+    .unwrap_or_else(|_| {
+        panic!("{description}: the snapshot projection did not arrive within liveness guard")
+    })
+    .expect("child record")
 }
 
 fn is_request_started(event: &RuntimeEvent) -> bool {
@@ -731,7 +850,17 @@ async fn child_transient_retries_settle_one_parent_success() {
         .await
         .expect("child settles");
     assert_eq!(settled.state, SubagentState::Succeeded);
-    assert_eq!(settled.detail.as_deref(), Some("CHILD-FINAL-ANSWER"));
+    // Issue #178: the successful answer never rides the live
+    // observation/control projection — `detail` is diagnostics-only, and
+    // the durable terminal inbound publication below is the one result
+    // channel.
+    assert_eq!(settled.detail, None);
+    assert!(
+        !serde_json::to_string(&settled)
+            .expect("snapshot serializes")
+            .contains("CHILD-FINAL-ANSWER"),
+        "no success content in the serialized snapshot"
+    );
     await_serve(wired.serve).await;
 
     // The child really retried internally: three provider requests, one
@@ -805,7 +934,16 @@ async fn failed_attempt_publication_stays_child_local() {
         .await
         .expect("child settles");
     assert_eq!(settled.state, SubagentState::Succeeded);
-    assert_eq!(settled.detail.as_deref(), Some("FINAL-ANSWER"));
+    // Issue #178: the successful answer is absent from the live projection;
+    // the durable terminal inbound publication below is the one result
+    // channel.
+    assert_eq!(settled.detail, None);
+    assert!(
+        !serde_json::to_string(&settled)
+            .expect("snapshot serializes")
+            .contains("FINAL-ANSWER"),
+        "no success content in the serialized snapshot"
+    );
     await_serve(wired.serve).await;
 
     // The failed attempt's partial text never became a canonical child
@@ -1419,6 +1557,10 @@ async fn cancellation_after_terminalization_cannot_rewrite_the_result() {
         .await
         .expect("child settles");
     assert_eq!(settled.state, SubagentState::Succeeded);
+    // Issue #178: the successful answer lives only in the durable terminal
+    // inbound publication; the live projection's `detail` is
+    // diagnostics-only and stays `None` on success.
+    assert_eq!(settled.detail, None);
     await_serve(wired.serve).await;
 
     // Both cancellation authorities arrive strictly after terminalization.
@@ -1430,7 +1572,7 @@ async fn cancellation_after_terminalization_cannot_rewrite_the_result() {
         )
         .expect("known child");
     assert_eq!(after_cancel.state, SubagentState::Succeeded);
-    assert_eq!(after_cancel.detail.as_deref(), Some("LATE-CANCEL-ANSWER"));
+    assert_eq!(after_cancel.detail, None);
     plane
         .registry
         .cancel_all(CancellationReason::RuntimeShutdown);
@@ -1439,11 +1581,16 @@ async fn cancellation_after_terminalization_cannot_rewrite_the_result() {
         .snapshot(&wired.accepted.subagent_id)
         .expect("child record");
     assert_eq!(after_drain.state, SubagentState::Succeeded);
-    assert_eq!(after_drain.detail.as_deref(), Some("LATE-CANCEL-ANSWER"));
+    assert_eq!(after_drain.detail, None);
     assert_eq!(
         terminal_publications(&journal(&plane.store)),
         vec![SubagentTerminalState::Succeeded],
         "the committed terminal is never rewritten"
+    );
+    assert_eq!(
+        parent_pending_texts(&plane),
+        vec!["LATE-CANCEL-ANSWER".to_owned()],
+        "the answer exists exactly once, in the canonical terminal inbound"
     );
     child
         .runtime
@@ -1550,16 +1697,17 @@ async fn cancellation_and_drain_have_exactly_one_winning_cause() {
 }
 
 // ---------------------------------------------------------------------------
-// Invariant 15: the parent projection carries no retry state
+// Invariant 15: retry is activity, never lifecycle (Issue #178)
 // ---------------------------------------------------------------------------
 
 /// While the child sleeps in retry backoff, the parent-visible lifecycle is
-/// exactly `Running` with no detail, and the parent durable authority holds
-/// nothing but the ownership fact. The lifecycle vocabulary itself is
-/// proven closed by the exhaustive match; no "retrying" state, ordinal,
-/// delay, or provider-attempt channel exists to project.
+/// exactly `Running` — the closed lifecycle vocabulary is proven by the
+/// exhaustive match — and the parent durable authority holds nothing but
+/// the ownership fact. The retry is visible exclusively on the observation
+/// plane: `snapshot.observation.activity` projects `RetryingModel` with the
+/// scheduled ordinal, folded from the child's durable retry schedule.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_parent_projection_has_no_retry_state() {
+async fn retry_is_activity_never_lifecycle() {
     let dir = tempfile::tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv-138-projection");
     let child = child_fixture(
@@ -1578,14 +1726,27 @@ async fn the_parent_projection_has_no_retry_state() {
     .await;
     let wired = park_child_in_retry_backoff(&child, &plane, "inspect").await;
 
-    // The child is mid-retry; the parent projection must not reflect it.
-    let snapshot = plane
-        .registry
-        .snapshot(&wired.accepted.subagent_id)
-        .expect("child record");
+    // The child's durable retry schedule is committed; the activity frame
+    // it folds into arrives over the control channel and lands in the
+    // registry read model. The watch-driven snapshot wait is the
+    // synchronization point: the read model is the observable, never a
+    // timing guess.
+    let snapshot = await_snapshot(
+        &plane,
+        &wired.accepted.subagent_id,
+        |snapshot| {
+            matches!(
+                snapshot.observation.activity,
+                SubagentActivity::RetryingModel { .. }
+            )
+        },
+        "the retry activity projection reaches the parent read model",
+    )
+    .await;
     match snapshot.state {
         SubagentState::Running => {}
-        // The closed lifecycle vocabulary: there is no retry state to show.
+        // The closed lifecycle vocabulary: there is no retry state; the
+        // retry exists only as observation-plane activity.
         SubagentState::Cancelling
         | SubagentState::PublishingTerminal
         | SubagentState::Succeeded
@@ -1600,7 +1761,19 @@ async fn the_parent_projection_has_no_retry_state() {
             )
         }
     }
+    assert_eq!(
+        snapshot.observation.activity,
+        crate::runtime::subagent::SubagentActivity::RetryingModel { retry: 1 },
+        "the scheduled retry is visible as activity with its ordinal"
+    );
+    assert_eq!(
+        snapshot.observation.counters.model_retries, 1,
+        "the retry counter advanced with the schedule"
+    );
     assert!(snapshot.detail.is_none(), "no retry detail is projected");
+
+    // The retry never enters the parent's durable authority: the ownership
+    // fact remains the only parent-visible state.
     let parent_events = journal(&plane.store);
     assert_eq!(count_events(&parent_events, is_request_started), 0);
     assert_eq!(count_events(&parent_events, is_retry_scheduled), 0);
@@ -1624,6 +1797,2079 @@ async fn the_parent_projection_has_no_retry_state() {
         .await
         .expect("child settles");
     assert_eq!(settled.state, SubagentState::Cancelled);
+    await_serve(wired.serve).await;
+    child
+        .runtime
+        .shutdown()
+        .await
+        .expect("child runtime drains");
+}
+
+// ---------------------------------------------------------------------------
+// Issue #178: the live activity observation plane
+//
+// These tests prove what the observation plane adds across the real control
+// boundary, and — just as much — what it can never touch: the parent
+// lifecycle, the parent journal, the parent model context, and the result
+// channel. The child side folds its own observation stream into a
+// latest-value projection and forwards it over the control socket; the
+// parent driver applies it synchronously into the registry read model.
+//
+// # Determinism
+//
+// The child→parent lane coalesces with latest-value semantics, so only a
+// state the child is *parked at* is a stable parent-observable cut: a
+// parked model stream, a parked tool execution, or retry backoff frozen by
+// the manual clock. Transitions between two parked states may legitimately
+// coalesce away; the tests below therefore assert the parked states, the
+// counters, and the terminal-neutral reset — never an intermediate cut
+// between two immediate folds.
+// ---------------------------------------------------------------------------
+
+/// One scripted tool call proposal at block index 0, then completion with
+/// the tool-calls finish reason: the first request of a tool-using child
+/// script.
+fn tool_call_request(call: &support::fake::ScriptedCall) -> Vec<FakeStep> {
+    let mut steps = vec![FakeStep::Emit(started())];
+    steps.extend(
+        support::fake::tool_call_events(0, call)
+            .into_iter()
+            .map(FakeStep::Emit),
+    );
+    steps.push(FakeStep::Emit(ModelEvent::Completed {
+        finish_reason: ModelFinishReason::ToolCalls,
+        usage: None,
+    }));
+    steps
+}
+
+/// The durable event-kind sequence of one store. Event payloads carry
+/// per-run identities; the kind ordering is the comparable structure.
+fn event_kinds(events: &[RuntimeEvent]) -> Vec<String> {
+    events
+        .iter()
+        .map(|event| {
+            serde_json::to_value(event).expect("event json")["type"]
+                .as_str()
+                .expect("typed event")
+                .to_owned()
+        })
+        .collect()
+}
+
+/// Invariant: an in-flight model request projects `Model` activity while
+/// the lifecycle — the only authority — stays `Running`; terminal
+/// settlement resets the projection to neutral with a bumped revision and
+/// keeps the counters as the final record.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn model_activity_projects_while_lifecycle_stays_running() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let plane = standalone_parent_plane(&dir, "conv-178-model-activity");
+    let (release, released) = support::fake::model_release();
+    let child = child_fixture(
+        &dir,
+        &ConversationId::new("conv-178-model-activity-child"),
+        vec![vec![
+            FakeStep::Emit(started()),
+            FakeStep::ParkUntilReleased(released),
+            FakeStep::Emit(text("MODEL-ACTIVITY-ANSWER")),
+            FakeStep::Emit(completed()),
+        ]],
+        ToolRegistry::new(),
+        Vec::new(),
+    )
+    .await;
+    let wired = launch_wired_child(&plane, &child, "inspect").await;
+
+    // The provider stream is parked mid-request: the projection is stable
+    // at Model for as long as the request is in flight.
+    let running = await_snapshot(
+        &plane,
+        &wired.accepted.subagent_id,
+        |snapshot| {
+            matches!(
+                snapshot.observation.activity,
+                SubagentActivity::Model { .. }
+            )
+        },
+        "the in-flight model request projects Model activity",
+    )
+    .await;
+    assert_eq!(
+        running.state,
+        SubagentState::Running,
+        "activity never moves the lifecycle"
+    );
+    let SubagentActivity::Model { retry, .. } = &running.observation.activity else {
+        unreachable!("the predicate matched a Model activity");
+    };
+    assert_eq!(*retry, 0, "the first request is not a retry");
+    assert_eq!(running.observation.counters.model_requests, 1);
+    assert_eq!(running.observation.counters.tool_executions, 0);
+    assert!(
+        running.observation.last_activity_at.is_some(),
+        "an applied transition carries its live observation timestamp"
+    );
+    assert!(running.detail.is_none(), "no detail while running");
+
+    // The request completes and the child settles: the projection rests at
+    // neutral with a bumped revision, and the lifecycle carries the
+    // terminal truth.
+    release.send_replace(true);
+    let settled = plane
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .expect("child settles");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    assert_eq!(
+        settled.observation.activity,
+        SubagentActivity::AwaitingActivity,
+        "settlement resets the projection to neutral"
+    );
+    assert!(
+        settled.observation.revision > running.observation.revision,
+        "the neutral reset is itself observable"
+    );
+    assert_eq!(
+        settled.observation.counters.model_requests, 1,
+        "the counters survive the reset as the final record"
+    );
+    assert_eq!(settled.detail, None, "the answer never rides the detail");
+    await_serve(wired.serve).await;
+    assert_eq!(
+        parent_pending_texts(&plane),
+        vec!["MODEL-ACTIVITY-ANSWER".to_owned()],
+        "the answer arrives exactly once, through the canonical inbound"
+    );
+    child
+        .runtime
+        .shutdown()
+        .await
+        .expect("child runtime drains");
+}
+
+/// Invariant: a tool execution projects `Tool` with the executing call
+/// identity while it is parked; reported progress is scoped to that one
+/// in-flight execution — it never sticks past the completion, which returns
+/// the projection to neutral and counts the execution. The lifecycle stays
+/// `Running` throughout.
+///
+/// Live (not yet durable) foreground progress projects while the tool still
+/// executes (Issue #178, blocker 3): the parked projection carries the
+/// newest report with latest-value coalescing. The durable
+/// `ToolExecutionProgress` facts still commit only in the completion batch
+/// commit; the completion fold then resets to neutral, and no reported
+/// progress can survive into a settled or later projection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tool_activity_projects_identity_scoped_progress_and_counts_executions() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let plane = standalone_parent_plane(&dir, "conv-178-tool-activity");
+    let mut tools = ToolRegistry::new();
+    // The first tool parks without reporting progress; the second parks
+    // after three numbered progress reports.
+    let (probe, probe_release) = FakeTool::parking(
+        common::tool_policies(
+            "probe",
+            "tool-probe",
+            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+            rustx::tools::types::ToolConcurrencyPolicy::Sequential,
+        ),
+        support::fake::success_result("probe done"),
+    );
+    let mut probe_started = probe.started();
+    probe.register(&mut tools);
+    let (scan, scan_release) = FakeTool::parking(
+        common::tool_policies(
+            "scan",
+            "tool-scan",
+            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+            rustx::tools::types::ToolConcurrencyPolicy::Sequential,
+        ),
+        support::fake::success_result("scan done"),
+    );
+    let scan = scan.emitting_progress(3);
+    let mut scan_started = scan.started();
+    scan.register(&mut tools);
+    // The final answer request parks too, so the completion counters are
+    // observably applied before the terminal frame can race them.
+    let (answer_release, answer_released) = support::fake::model_release();
+    let child = child_fixture(
+        &dir,
+        &ConversationId::new("conv-178-tool-activity-child"),
+        vec![
+            tool_call_request(&support::fake::ScriptedCall {
+                id: "call-probe",
+                tool_id: "tool-probe",
+                name: "probe",
+                arguments: serde_json::json!({}),
+            }),
+            tool_call_request(&support::fake::ScriptedCall {
+                id: "call-scan",
+                tool_id: "tool-scan",
+                name: "scan",
+                arguments: serde_json::json!({}),
+            }),
+            vec![
+                FakeStep::Emit(started()),
+                FakeStep::ParkUntilReleased(answer_released),
+                FakeStep::Emit(text("TOOL-ACTIVITY-ANSWER")),
+                FakeStep::Emit(completed()),
+            ],
+        ],
+        tools,
+        Vec::new(),
+    )
+    .await;
+    let wired = launch_wired_child(&plane, &child, "inspect").await;
+
+    // Parked in the first execution with no progress reported: the tool
+    // identity projects with `progress: None`.
+    support::fake::await_started(&mut probe_started, "the probe tool starts").await;
+    let probing = await_snapshot(
+        &plane,
+        &wired.accepted.subagent_id,
+        |snapshot| matches!(snapshot.observation.activity, SubagentActivity::Tool { .. }),
+        "the parked tool execution projects Tool activity",
+    )
+    .await;
+    assert_eq!(probing.state, SubagentState::Running);
+    assert_eq!(
+        probing.observation.activity,
+        SubagentActivity::Tool {
+            tool_call_id: ToolCallId::new("call-probe"),
+            tool_id: rustx::runtime::identity::ToolId::new("tool-probe"),
+            progress: None,
+        },
+        "no progress has been reported for the parked execution"
+    );
+    assert_eq!(probing.observation.counters.tool_executions, 0);
+
+    // The second execution reports bounded structured progress before it
+    // parks. The live reports project while the tool still executes: the
+    // parked projection deterministically carries the newest report
+    // (latest-value coalescing), and the durable facts still commit only
+    // with the completion batch.
+    probe_release.send_replace(true);
+    support::fake::await_started(&mut scan_started, "the scan tool starts").await;
+    let scanning = await_snapshot(
+        &plane,
+        &wired.accepted.subagent_id,
+        |snapshot| {
+            matches!(
+                snapshot.observation.activity,
+                SubagentActivity::Tool { ref tool_call_id, progress: Some(ref progress), .. }
+                    if *tool_call_id == ToolCallId::new("call-scan")
+                        && progress.message.as_deref() == Some("progress 2")
+            )
+        },
+        "the parked execution projects its Tool identity with the latest live progress",
+    )
+    .await;
+    assert_eq!(scanning.state, SubagentState::Running);
+    assert_eq!(
+        scanning.observation.activity,
+        SubagentActivity::Tool {
+            tool_call_id: ToolCallId::new("call-scan"),
+            tool_id: rustx::runtime::identity::ToolId::new("tool-scan"),
+            progress: Some(rustx::tools::types::ToolProgress {
+                message: Some("progress 2".to_owned()),
+                completed: None,
+                total: None,
+            }),
+        },
+        "live foreground progress projects in-flight, coalesced to the latest report"
+    );
+    assert!(
+        scanning.observation.revision > probing.observation.revision,
+        "revisions are strictly increasing across applied transitions"
+    );
+    assert_eq!(scanning.observation.counters.tool_executions, 1);
+
+    // Both executions complete and the answer request parks in flight: the
+    // completion counters are observably applied, and the progress the scan
+    // tool reported stuck to nothing — it never survives the completion
+    // transition it committed with.
+    scan_release.send_replace(true);
+    let answering = await_snapshot(
+        &plane,
+        &wired.accepted.subagent_id,
+        |snapshot| {
+            snapshot.observation.counters.tool_executions == 2
+                && snapshot.observation.counters.model_requests == 3
+        },
+        "both completions and the third request are observably applied",
+    )
+    .await;
+    assert!(
+        matches!(
+            answering.observation.activity,
+            SubagentActivity::Model { .. } | SubagentActivity::AwaitingActivity
+        ),
+        "no progress outlives the completion it committed with: {:?}",
+        answering.observation.activity
+    );
+
+    // The answer request completes and the child settles: the projection
+    // rests at neutral and the counters hold as the final record.
+    answer_release.send_replace(true);
+    let settled = plane
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .expect("child settles");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    assert_eq!(
+        settled.observation.activity,
+        SubagentActivity::AwaitingActivity
+    );
+    assert_eq!(settled.observation.counters.tool_executions, 2);
+    assert_eq!(settled.observation.counters.model_requests, 3);
+    assert!(
+        settled.observation.revision > scanning.observation.revision,
+        "the completion transition and the terminal reset both advanced the revision"
+    );
+    await_serve(wired.serve).await;
+    assert_eq!(
+        parent_pending_texts(&plane),
+        vec!["TOOL-ACTIVITY-ANSWER".to_owned()]
+    );
+    // The child's tool work committed no parent journal facts at all.
+    let parent_events = journal(&plane.store);
+    assert_eq!(count_events(&parent_events, is_request_started), 0);
+    assert_eq!(
+        count_events(&parent_events, |event| matches!(
+            event,
+            RuntimeEvent::ToolExecutionStarted { .. } | RuntimeEvent::ToolExecutionCompleted { .. }
+        )),
+        0,
+        "tool activity never enters the parent durable authority"
+    );
+    child
+        .runtime
+        .shutdown()
+        .await
+        .expect("child runtime drains");
+}
+
+/// Parallel regression (Issue #178): two foreground calls of one parallel
+/// tool group execute concurrently, and the projection must represent that
+/// objectively: one bounded Tool representative for as long as any call is
+/// active, live progress scoped to its own call, exactly-once execution
+/// counting, and no false neutral while a sibling still runs.
+///
+/// Note on durability: per-call `ToolExecutionCompleted` facts commit in
+/// the canonical batch only after the whole group settles, so the survivor
+/// fallback between two completion folds is pinned by the projector unit
+/// regressions; what this end-to-end cut pins deterministically is that a
+/// physically finished sibling (not yet committed) never neutralizes,
+/// counts, or hides the still-parked sibling's projection.
+///
+/// Determinism: both calls park on watch gates, so every asserted
+/// projection is a stable parked state — the coalescing activity lane can
+/// never skip past it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn parallel_tool_group_never_projects_neutral_while_a_sibling_runs() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let plane = standalone_parent_plane(&dir, "conv-178-parallel-activity");
+    let mut tools = ToolRegistry::new();
+    // call-a parks without reporting progress; call-b parks, reports one
+    // progress phase on release, and parks again before settling.
+    let (probe_a, release_a) = FakeTool::parking(
+        common::tool_policies(
+            "probe-a",
+            "tool-probe-a",
+            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+            rustx::tools::types::ToolConcurrencyPolicy::Parallel,
+        ),
+        support::fake::success_result("a done"),
+    );
+    let mut a_started = probe_a.started();
+    probe_a.register(&mut tools);
+    let (probe_b, b_gates) = FakeTool::parking_phases(
+        common::tool_policies(
+            "probe-b",
+            "tool-probe-b",
+            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+            rustx::tools::types::ToolConcurrencyPolicy::Parallel,
+        ),
+        support::fake::success_result("b done"),
+        &["b phase 2"],
+    );
+    let mut b_started = probe_b.started();
+    probe_b.register(&mut tools);
+    // The final answer request parks too, so the completion counters are
+    // observably applied before the terminal frame can race them.
+    let (answer_release, answer_released) = support::fake::model_release();
+    // One model turn proposing BOTH calls: adjacent Parallel invocations
+    // form one concurrent group.
+    let mut parallel_turn = vec![FakeStep::Emit(started())];
+    parallel_turn.extend(
+        support::fake::tool_call_events(
+            0,
+            &support::fake::ScriptedCall {
+                id: "call-a",
+                tool_id: "tool-probe-a",
+                name: "probe-a",
+                arguments: serde_json::json!({}),
+            },
+        )
+        .into_iter()
+        .map(FakeStep::Emit),
+    );
+    parallel_turn.extend(
+        support::fake::tool_call_events(
+            1,
+            &support::fake::ScriptedCall {
+                id: "call-b",
+                tool_id: "tool-probe-b",
+                name: "probe-b",
+                arguments: serde_json::json!({}),
+            },
+        )
+        .into_iter()
+        .map(FakeStep::Emit),
+    );
+    parallel_turn.push(FakeStep::Emit(ModelEvent::Completed {
+        finish_reason: ModelFinishReason::ToolCalls,
+        usage: None,
+    }));
+    let child = child_fixture(
+        &dir,
+        &ConversationId::new("conv-178-parallel-activity-child"),
+        vec![
+            parallel_turn,
+            vec![
+                FakeStep::Emit(started()),
+                FakeStep::ParkUntilReleased(answer_released),
+                FakeStep::Emit(text("PARALLEL-ACTIVITY-ANSWER")),
+                FakeStep::Emit(completed()),
+            ],
+        ],
+        tools,
+        Vec::new(),
+    )
+    .await;
+    let wired = launch_wired_child(&plane, &child, "inspect").await;
+
+    // Both calls of the parallel group are objectively executing at once.
+    support::fake::await_started(&mut a_started, "call-a starts").await;
+    support::fake::await_started(&mut b_started, "call-b starts").await;
+    let both_active = await_snapshot(
+        &plane,
+        &wired.accepted.subagent_id,
+        |snapshot| matches!(snapshot.observation.activity, SubagentActivity::Tool { .. }),
+        "two concurrently parked calls project one bounded Tool representative",
+    )
+    .await;
+    assert_eq!(both_active.state, SubagentState::Running);
+    assert_eq!(both_active.observation.counters.tool_executions, 0);
+
+    // call-a finishes physically while call-b stays parked. Its completion
+    // fact commits only in the canonical batch after the WHOLE group
+    // settles, so the projection must keep representing the still-running
+    // call-b — never neutral, and nothing counted yet.
+    release_a.send_replace(true);
+    b_gates[0].send_replace(true);
+    let phased = await_snapshot(
+        &plane,
+        &wired.accepted.subagent_id,
+        |snapshot| {
+            matches!(
+                snapshot.observation.activity,
+                SubagentActivity::Tool { ref tool_call_id, progress: Some(ref progress), .. }
+                    if *tool_call_id == ToolCallId::new("call-b")
+                        && progress.message.as_deref() == Some("b phase 2")
+            )
+        },
+        "the surviving call's live progress projects in-flight",
+    )
+    .await;
+    assert_eq!(
+        phased.observation.counters.tool_executions, 0,
+        "a physically finished but uncommitted sibling is never counted and never neutralizes the projection"
+    );
+
+    // The final call settles: the group batch commits, no Tool activity can
+    // outlive it, and each execution counted exactly once. (The cut between
+    // the batch commit and the next request start may legitimately coalesce
+    // away; the projector unit regressions pin the per-call survivor and
+    // neutral transitions themselves.)
+    b_gates[1].send_replace(true);
+    let settled_tools = await_snapshot(
+        &plane,
+        &wired.accepted.subagent_id,
+        |snapshot| snapshot.observation.counters.tool_executions == 2,
+        "both completions are observably applied",
+    )
+    .await;
+    assert!(
+        !matches!(
+            settled_tools.observation.activity,
+            SubagentActivity::Tool { .. }
+        ),
+        "no active call remains: {:?}",
+        settled_tools.observation.activity
+    );
+
+    // The child settles: terminal-neutral, exactly two executions, and the
+    // answer arrives exactly once through the canonical inbound.
+    answer_release.send_replace(true);
+    let settled = plane
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .expect("child settles");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    assert_eq!(
+        settled.observation.activity,
+        SubagentActivity::AwaitingActivity
+    );
+    assert_eq!(settled.observation.counters.tool_executions, 2);
+    assert!(
+        settled.observation.revision > phased.observation.revision,
+        "every applied transition advanced the revision"
+    );
+    await_serve(wired.serve).await;
+    assert_eq!(
+        parent_pending_texts(&plane),
+        vec!["PARALLEL-ACTIVITY-ANSWER".to_owned()],
+        "the answer arrives exactly once, through the canonical inbound"
+    );
+    child
+        .runtime
+        .shutdown()
+        .await
+        .expect("child runtime drains");
+}
+
+/// Invariant: a real transient retry is visible as activity — never as
+/// lifecycle. While the child sleeps in retry backoff the parent projects
+/// `RetryingModel` with the scheduled ordinal; once the manual clock
+/// releases the backoff, the next in-flight request projects `Model` with
+/// the retry ordinal it was scheduled under.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_transient_retry_projects_retrying_model_then_the_retried_request() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let plane = standalone_parent_plane(&dir, "conv-178-retry-activity");
+    let (release, released) = support::fake::model_release();
+    let child = child_fixture(
+        &dir,
+        &ConversationId::new("conv-178-retry-activity-child"),
+        vec![
+            // No provider hint: the backoff deadline is 2000ms ahead on the
+            // manual clock, which the test advances exactly once.
+            vec![
+                FakeStep::Emit(started()),
+                FakeStep::Emit(transient_failure("R0 boom", None)),
+            ],
+            vec![
+                FakeStep::Emit(started()),
+                FakeStep::ParkUntilReleased(released),
+                FakeStep::Emit(text("RETRY-ACTIVITY-ANSWER")),
+                FakeStep::Emit(completed()),
+            ],
+        ],
+        ToolRegistry::new(),
+        Vec::new(),
+    )
+    .await;
+    let wired = park_child_in_retry_backoff(&child, &plane, "inspect").await;
+
+    // Parked in backoff: the retry schedule is durably committed and the
+    // projection is stable at RetryingModel.
+    let retrying = await_snapshot(
+        &plane,
+        &wired.accepted.subagent_id,
+        |snapshot| {
+            matches!(
+                snapshot.observation.activity,
+                SubagentActivity::RetryingModel { .. }
+            )
+        },
+        "the committed retry schedule projects RetryingModel activity",
+    )
+    .await;
+    assert_eq!(retrying.state, SubagentState::Running);
+    assert_eq!(
+        retrying.observation.activity,
+        SubagentActivity::RetryingModel { retry: 1 }
+    );
+    assert_eq!(retrying.observation.counters.model_retries, 1);
+    assert_eq!(retrying.observation.counters.model_requests, 1);
+
+    // The manual clock reaches the captured deadline: the retried request
+    // starts and parks mid-stream, projecting Model with its retry ordinal.
+    child.clock.advance(10_000);
+    let retried = await_snapshot(
+        &plane,
+        &wired.accepted.subagent_id,
+        |snapshot| {
+            matches!(
+                snapshot.observation.activity,
+                SubagentActivity::Model { .. }
+            )
+        },
+        "the retried request projects Model activity",
+    )
+    .await;
+    assert_eq!(retried.state, SubagentState::Running);
+    let SubagentActivity::Model { retry, .. } = &retried.observation.activity else {
+        unreachable!("the predicate matched a Model activity");
+    };
+    assert_eq!(*retry, 1, "the in-flight request is the scheduled retry");
+    assert_eq!(retried.observation.counters.model_requests, 2);
+    assert!(retried.observation.revision > retrying.observation.revision);
+
+    release.send_replace(true);
+    let settled = plane
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .expect("child settles");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    assert_eq!(
+        settled.observation.activity,
+        SubagentActivity::AwaitingActivity
+    );
+    assert_eq!(settled.observation.counters.model_retries, 1);
+    assert_eq!(settled.observation.counters.model_requests, 2);
+    await_serve(wired.serve).await;
+    assert_eq!(
+        parent_pending_texts(&plane),
+        vec!["RETRY-ACTIVITY-ANSWER".to_owned()]
+    );
+    child
+        .runtime
+        .shutdown()
+        .await
+        .expect("child runtime drains");
+}
+
+/// Invariant: the parent-side observation consumer topology is structurally
+/// independent of the child's execution. The SAME child workload — one
+/// transient retry, one progress-emitting tool execution, one
+/// parked-then-released answer — runs under three parent-side consumer
+/// topologies:
+///
+/// - `Standalone`: no runtime client at all (no observer, no projection, no
+///   consumer of the parent's observation stream);
+/// - `Draining`: a Runtime Client host whose projection worker drains the
+///   parent's `PendingObservations` normally;
+/// - `Stalled`: the same host with the parent's installed observation
+///   bridge parked before the child launches and unparked only after
+///   settlement (a stalled consumer).
+///
+/// All three produce semantically identical execution: the same ordered
+/// provider requests, the same durable retry count, the same tool
+/// invocations, the same child journal event-kind ordering, the same
+/// `Succeeded` terminal, and exactly one terminal publication delivering
+/// the canonical answer exactly once. The only allowed difference is which
+/// intermediate disposable activity revisions each topology observed: the
+/// draining projection converges continuously; the stalled queue holds the
+/// reliable baseline plus at most one coalesced activity entry while the
+/// child runs and converges after the unpark.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_observation_consumer_topology_never_changes_child_execution() {
+    /// The parent-side observation consumer topology of one run.
+    #[derive(Clone, Copy)]
+    enum Topology {
+        /// No runtime client: no observer consumer at all.
+        Standalone,
+        /// A Runtime Client host whose projection drains normally.
+        Draining,
+        /// A Runtime Client host whose bridge stays parked until the child
+        /// has settled.
+        Stalled,
+        /// No runtime client, and the observation channel is broken from
+        /// the start: the parent's receiver sees an immediate EOF and every
+        /// child-side activity write fails. Observation transport loss is
+        /// diagnostics-only; execution must not change.
+        ObservationBroken,
+    }
+
+    /// The topology-independent execution record of one child run: two runs
+    /// of the same workload under different consumer topologies must
+    /// fingerprint identically.
+    #[derive(Debug, PartialEq)]
+    struct ExecutionRecord {
+        /// The ordered provider requests: model identity plus canonical
+        /// message payloads with the volatile wall-clock timestamps
+        /// stripped. Context-assembly blocks (the agent-status time module)
+        /// are wall-clock products of each run and stay outside the compared
+        /// surface.
+        requests: Vec<serde_json::Value>,
+        /// The durable retry schedules the child committed.
+        retries: usize,
+        /// The ordered tool invocations the child issued.
+        tool_calls: Vec<rustx::tools::types::ToolInvocation>,
+        /// The child journal's durable event-kind ordering.
+        event_kinds: Vec<String>,
+    }
+
+    /// Strips every `timestamp` key of a serialized value tree: wall-clock
+    /// stamps are the one run-volatile field of an otherwise deterministic
+    /// canonical payload.
+    fn strip_timestamps(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.remove("timestamp");
+                map.values_mut().for_each(strip_timestamps);
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(strip_timestamps),
+            _ => {}
+        }
+    }
+
+    async fn run(conversation: &str, topology: Topology) -> ExecutionRecord {
+        let dir = tempfile::tempdir().expect("temp root");
+        let (plane, parent_runtime, host) = match topology {
+            Topology::Standalone | Topology::ObservationBroken => {
+                (standalone_parent_plane(&dir, conversation), None, None)
+            }
+            Topology::Draining | Topology::Stalled => {
+                let (parent, host) = parent_runtime_host_plane(
+                    &dir,
+                    conversation,
+                    vec![answer_script("PARENT-TOPOLOGY-TURN")],
+                )
+                .await;
+                (
+                    parent.plane,
+                    Some((parent.runtime, parent.model)),
+                    Some(host),
+                )
+            }
+        };
+        let bridge = parent_runtime.as_ref().map(|(runtime, _)| {
+            runtime
+                .installed_observation_bridge()
+                .expect("the host installed the observation bridge")
+        });
+        if let Topology::Stalled = topology {
+            // The stalled consumer: parked before the child launches, so
+            // every observation of the run accumulates (coalesced) in the
+            // queue instead of folding.
+            bridge.as_ref().expect("the stalled bridge").park();
+        }
+        let mut tools = ToolRegistry::new();
+        let (scan, scan_release) = FakeTool::parking(
+            common::tool_policies(
+                "scan",
+                "tool-scan",
+                rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+                rustx::tools::types::ToolConcurrencyPolicy::Sequential,
+            ),
+            support::fake::success_result("scan done"),
+        );
+        let scan = scan.emitting_progress(3);
+        let mut scan_started = scan.started();
+        let scan_calls = scan.calls();
+        scan.register(&mut tools);
+        let (answer_release, answer_released) = support::fake::model_release();
+        let child = child_fixture(
+            &dir,
+            &ConversationId::new(format!("{conversation}-child")),
+            vec![
+                // One transient failure with a zero provider hint: the retry
+                // schedule commits durably and the backoff collapses.
+                vec![
+                    FakeStep::Emit(started()),
+                    FakeStep::Emit(transient_failure("R0 boom", Some(0))),
+                ],
+                // The retried request runs the progress-emitting tool.
+                tool_call_request(&support::fake::ScriptedCall {
+                    id: "call-scan",
+                    tool_id: "tool-scan",
+                    name: "scan",
+                    arguments: serde_json::json!({"mode": "deep"}),
+                }),
+                // The answer request parks until the test releases it.
+                vec![
+                    FakeStep::Emit(started()),
+                    FakeStep::ParkUntilReleased(answer_released),
+                    FakeStep::Emit(text("TOPOLOGY-ANSWER")),
+                    FakeStep::Emit(completed()),
+                ],
+            ],
+            tools,
+            Vec::new(),
+        )
+        .await;
+        let wiring = match topology {
+            Topology::ObservationBroken => ObservationWiring::Broken,
+            _ => ObservationWiring::Live,
+        };
+        let wired =
+            launch_wired_child_full(&plane, &child, "inspect the workspace", "true", wiring).await;
+        let subagent_id = wired.accepted.subagent_id.clone();
+
+        // The reliable baseline of the stalled consumer: once the Running
+        // record is visible, its lifecycle observation is queued (the
+        // registry publishes under its lock before bumping the state
+        // version). No further lifecycle transition exists mid-run.
+        let baseline = if let Topology::Stalled = topology {
+            await_snapshot(
+                &plane,
+                &subagent_id,
+                |snapshot| snapshot.state == SubagentState::Running,
+                "the child record commits",
+            )
+            .await;
+            Some(bridge.as_ref().expect("the stalled bridge").queued())
+        } else {
+            None
+        };
+
+        // The child is parked mid-execution with its progress reports live:
+        // the same stable observation cut in every topology whose
+        // observation channel is alive (the registry read model applies
+        // activity frames regardless of any downstream consumer). With a
+        // broken observation channel the read model simply stays at its
+        // initial observation — diagnostics-only loss, no execution change.
+        support::fake::await_started(&mut scan_started, "the scan tool starts").await;
+        if matches!(topology, Topology::ObservationBroken) {
+            let current = await_snapshot(
+                &plane,
+                &subagent_id,
+                |snapshot| snapshot.state == SubagentState::Running,
+                "the child record commits",
+            )
+            .await;
+            assert_eq!(
+                current.observation,
+                rustx::runtime::subagent::SubagentObservation::default(),
+                "a broken observation channel leaves the read model at the initial observation"
+            );
+        } else {
+            let working = await_snapshot(
+                &plane,
+                &subagent_id,
+                |snapshot| {
+                    matches!(
+                        snapshot.observation.activity,
+                        SubagentActivity::Tool { ref tool_call_id, progress: Some(_), .. }
+                            if *tool_call_id == ToolCallId::new("call-scan")
+                    )
+                },
+                "the parked execution's live progress reaches the registry read model",
+            )
+            .await;
+            assert_eq!(working.state, SubagentState::Running);
+        }
+        if let Some(baseline) = baseline {
+            let bridge = bridge.as_ref().expect("the stalled bridge");
+            assert!(
+                bridge.queued() <= baseline + 1,
+                "the parked queue holds the reliable baseline plus at most one coalesced \
+                 activity entry — pending observation state is O(active subagents), not \
+                 O(activity updates): baseline {baseline}, queued {}",
+                bridge.queued()
+            );
+        }
+
+        scan_release.send_replace(true);
+        answer_release.send_replace(true);
+        let settled = plane
+            .registry
+            .wait_until_settled(&subagent_id)
+            .await
+            .expect("child settles");
+        assert_eq!(settled.state, SubagentState::Succeeded);
+        assert_eq!(
+            settled.observation.activity,
+            SubagentActivity::AwaitingActivity,
+            "settlement resets the projection to neutral"
+        );
+        await_serve(wired.serve).await;
+        assert_eq!(
+            terminal_publications(&journal(&plane.store)),
+            vec![SubagentTerminalState::Succeeded],
+            "exactly one terminal publication in every topology"
+        );
+
+        // The canonical answer exists exactly once; how the parent side
+        // surfaces it depends on the topology, the semantic content does
+        // not.
+        match topology {
+            Topology::Standalone | Topology::ObservationBroken => {
+                assert_eq!(
+                    parent_pending_texts(&plane),
+                    vec!["TOPOLOGY-ANSWER".to_owned()],
+                    "the canonical answer exists exactly once, in the pending terminal inbound"
+                );
+            }
+            Topology::Draining | Topology::Stalled => {
+                // The parent runtime adopted the canonical terminal inbound
+                // and completed its continuation turn through its ordinary
+                // Agent Loop.
+                await_journal_fact(
+                    &plane.store,
+                    1,
+                    |event| matches!(event, RuntimeEvent::AttemptCompleted { .. }),
+                    "the parent consumes the terminal inbound in an ordinary turn",
+                )
+                .await;
+                let (_, parent_model) = parent_runtime.as_ref().expect("runtime plane");
+                let mut sightings = 0_usize;
+                for request in &parent_model.requests() {
+                    for message in &request.messages {
+                        let serialized = serde_json::to_string(message).expect("message json");
+                        if serialized.contains("TOPOLOGY-ANSWER") {
+                            sightings += 1;
+                            assert!(
+                                matches!(
+                                    message,
+                                    rustx::model::input::ModelInputMessage::Canonical(
+                                        MessageBlock::User(user)
+                                    ) if matches!(user.source, UserSource::Agent { .. })
+                                ),
+                                "the answer enters the parent context only as the canonical \
+                                 Agent-authored terminal inbound: {serialized}"
+                            );
+                        }
+                    }
+                }
+                assert_eq!(
+                    sightings, 1,
+                    "the canonical answer was adopted exactly once"
+                );
+            }
+        }
+
+        // The only allowed topology difference: which intermediate
+        // disposable activity revisions the consumer observed. The draining
+        // projection converges continuously; the stalled projection folds
+        // the coalesced backlog after the unpark. Both converge to the
+        // registry's latest observation.
+        if let Topology::Stalled = topology {
+            bridge.as_ref().expect("the stalled bridge").unpark();
+        }
+        if let Some(host) = &host {
+            tokio::time::timeout(LIVENESS, async {
+                loop {
+                    let (snapshot, _) = host.snapshot().expect("projection snapshot");
+                    if snapshot.subagents.iter().any(|view| {
+                        view.subagent_id == subagent_id && view.observation == settled.observation
+                    }) {
+                        return;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("the projection converges to the registry's latest observation");
+        }
+
+        let record = ExecutionRecord {
+            requests: child
+                .model
+                .requests()
+                .iter()
+                .map(|request| {
+                    let mut messages: Vec<serde_json::Value> = request
+                        .messages
+                        .iter()
+                        .filter_map(|message| message.as_canonical())
+                        // Context-assembly blocks (the agent-status time
+                        // module) are wall-clock products of each run, not of
+                        // the workload; they are excluded deliberately.
+                        .filter(|message| {
+                            !matches!(
+                                message,
+                                MessageBlock::User(user)
+                                    if matches!(user.kind, InboundKind::Context(_))
+                            )
+                        })
+                        .map(|message| serde_json::to_value(message).expect("message json"))
+                        .collect();
+                    for message in &mut messages {
+                        strip_timestamps(message);
+                    }
+                    serde_json::json!({
+                        "model": request.model(),
+                        "messages": messages,
+                    })
+                })
+                .collect(),
+            retries: count_events(&journal(&child.store), is_retry_scheduled),
+            tool_calls: scan_calls.borrow().clone(),
+            event_kinds: event_kinds(&journal(&child.store)),
+        };
+        child
+            .runtime
+            .shutdown()
+            .await
+            .expect("child runtime drains");
+        if let Some((runtime, _)) = parent_runtime {
+            runtime.shutdown().await.expect("parent runtime drains");
+        }
+        record
+    }
+
+    let standalone = run("conv-178-topology", Topology::Standalone).await;
+    let drained = run("conv-178-topology", Topology::Draining).await;
+    let stalled = run("conv-178-topology", Topology::Stalled).await;
+    let observation_broken = run("conv-178-topology", Topology::ObservationBroken).await;
+
+    // The shared workload really ran in every topology: three provider
+    // requests (R0 transient, R1 the retried tool-call request, R2 the
+    // answer), one durable retry schedule, one tool execution with the
+    // scripted arguments.
+    assert_eq!(standalone.requests.len(), 3, "R0, R1, R2 all ran");
+    assert_eq!(standalone.retries, 1, "one durable retry schedule");
+    assert_eq!(standalone.tool_calls.len(), 1, "one tool execution");
+    assert_eq!(
+        standalone.tool_calls[0].arguments,
+        serde_json::json!({"mode": "deep"})
+    );
+    assert_eq!(
+        standalone, drained,
+        "a draining runtime-client consumer changes nothing about the child's execution"
+    );
+    assert_eq!(
+        standalone, stalled,
+        "a stalled observation consumer changes nothing about the child's execution"
+    );
+    assert_eq!(
+        standalone, observation_broken,
+        "a broken observation transport changes nothing about the child's execution"
+    );
+}
+
+/// Invariant (parent-projection backpressure): a stalled parent projection
+/// never accumulates disposable activity. The parent's installed
+/// observation bridge is parked before the child launches; the child runs a
+/// tool that reports 200 live progress revisions — far beyond the
+/// dispatcher's `OUTBOUND_CAPACITY` (64) or any queue capacity — and parks
+/// mid-execution. While the consumer is stalled the parent's pending queue
+/// holds the reliable lifecycle baseline plus at most one coalesced
+/// activity entry: pending observation state is O(active subagents), never
+/// O(activity updates). After the unpark the projection converges to the
+/// registry's latest revision without having observed the intermediates.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let (parent, host) = parent_runtime_host_plane(
+        &dir,
+        "conv-178-projection-backpressure",
+        vec![answer_script("PARENT-BACKPRESSURE-TURN")],
+    )
+    .await;
+    let bridge = parent
+        .runtime
+        .installed_observation_bridge()
+        .expect("the host installed the observation bridge");
+    // The stalled consumer: parked before the child launches.
+    bridge.park();
+    let mut tools = ToolRegistry::new();
+    let (scan, scan_release) = FakeTool::parking(
+        common::tool_policies(
+            "scan",
+            "tool-scan",
+            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+            rustx::tools::types::ToolConcurrencyPolicy::Sequential,
+        ),
+        support::fake::success_result("scan done"),
+    );
+    // Far more revisions than any queue capacity: per-revision queueing
+    // would deadlock or grow the queue unboundedly.
+    let scan = scan.emitting_progress(200);
+    let mut scan_started = scan.started();
+    scan.register(&mut tools);
+    // The first request parks before proposing the tool call, so the
+    // reliable baseline is captured while no tool activity can exist yet.
+    let (request_release, request_released) = support::fake::model_release();
+    let mut first_request = vec![
+        FakeStep::Emit(started()),
+        FakeStep::ParkUntilReleased(request_released),
+    ];
+    first_request.extend(
+        support::fake::tool_call_events(
+            0,
+            &support::fake::ScriptedCall {
+                id: "call-scan",
+                tool_id: "tool-scan",
+                name: "scan",
+                arguments: serde_json::json!({}),
+            },
+        )
+        .into_iter()
+        .map(FakeStep::Emit),
+    );
+    first_request.push(FakeStep::Emit(ModelEvent::Completed {
+        finish_reason: ModelFinishReason::ToolCalls,
+        usage: None,
+    }));
+    let child = child_fixture(
+        &dir,
+        &ConversationId::new("conv-178-projection-backpressure-child"),
+        vec![first_request, answer_script("BACKPRESSURE-ANSWER")],
+        tools,
+        Vec::new(),
+    )
+    .await;
+    let wired = launch_wired_child(&parent.plane, &child, "inspect").await;
+    let subagent_id = wired.accepted.subagent_id.clone();
+
+    // The reliable baseline: the Running lifecycle observation is queued
+    // (the registry publishes under its lock before bumping the state
+    // version) and the first request is still parked mid-stream, so no tool
+    // activity can have queued. No further lifecycle transition exists
+    // mid-run, so everything the parked queue accumulates from here is at
+    // most one coalesced activity entry.
+    await_snapshot(
+        &parent.plane,
+        &subagent_id,
+        |snapshot| snapshot.state == SubagentState::Running,
+        "the child record commits",
+    )
+    .await;
+    let baseline = bridge.queued();
+
+    // 200 live progress revisions flow while the consumer is stalled. The
+    // wire may coalesce intermediates — that is the contract — but the
+    // newest reported revision must land in the registry read model.
+    request_release.send_replace(true);
+    support::fake::await_started(&mut scan_started, "the scan tool starts").await;
+    let working = await_snapshot(
+        &parent.plane,
+        &subagent_id,
+        |snapshot| {
+            matches!(
+                snapshot.observation.activity,
+                SubagentActivity::Tool { progress: Some(ref progress), .. }
+                    if progress.message.as_deref() == Some("progress 199")
+            )
+        },
+        "the newest reported revision reaches the registry read model",
+    )
+    .await;
+    assert!(
+        working.observation.revision >= 2,
+        "activity really flowed across the wire: {:?}",
+        working.observation
+    );
+    assert!(
+        bridge.queued() <= baseline + 1,
+        "200 reported revisions, at most one queued activity entry: baseline {baseline}, queued {}",
+        bridge.queued()
+    );
+
+    // The stalled consumer resumes: the projection folds the coalesced
+    // backlog and converges to the registry's latest observation. The
+    // intermediate revisions were never observed — that is allowed.
+    bridge.unpark();
+    let converged = tokio::time::timeout(LIVENESS, async {
+        loop {
+            let latest = parent
+                .plane
+                .registry
+                .snapshot(&subagent_id)
+                .expect("child record")
+                .observation;
+            let (snapshot, _) = host.snapshot().expect("projection snapshot");
+            let view = snapshot
+                .subagents
+                .iter()
+                .find(|view| view.subagent_id == subagent_id)
+                .expect("the child is in the projection");
+            if view.observation.revision == latest.revision {
+                break latest;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the projection converges to the registry's latest revision");
+    let (snapshot, _) = host.snapshot().expect("projection snapshot");
+    let view = snapshot
+        .subagents
+        .iter()
+        .find(|view| view.subagent_id == subagent_id)
+        .expect("the child is in the projection");
+    assert_eq!(
+        view.observation, converged,
+        "the projected observation is the registry's latest, intermediates skipped"
+    );
+
+    // The tool settles and the child completes: the terminal lifecycle fact
+    // was queued reliably through the stall, the projection rests at
+    // terminal-neutral, and the canonical answer publishes exactly once.
+    scan_release.send_replace(true);
+    let settled = parent
+        .plane
+        .registry
+        .wait_until_settled(&subagent_id)
+        .await
+        .expect("child settles");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    assert_eq!(
+        settled.observation.activity,
+        SubagentActivity::AwaitingActivity,
+        "settlement resets the projection to neutral"
+    );
+    await_serve(wired.serve).await;
+    assert_eq!(
+        terminal_publications(&journal(&parent.plane.store)),
+        vec![SubagentTerminalState::Succeeded],
+        "exactly one terminal publication"
+    );
+    await_journal_fact(
+        &parent.plane.store,
+        1,
+        |event| matches!(event, RuntimeEvent::AttemptCompleted { .. }),
+        "the parent consumes the terminal inbound in an ordinary turn",
+    )
+    .await;
+    child
+        .runtime
+        .shutdown()
+        .await
+        .expect("child runtime drains");
+    parent
+        .runtime
+        .shutdown()
+        .await
+        .expect("parent runtime drains");
+}
+
+/// Invariant (live foreground tool progress): a phased tool execution
+/// proves the full live-progress contract across the wire. While the tool
+/// is parked mid-execution the parent projects the newest reported phase
+/// (latest-value, coalesced); no durable `ToolExecutionProgress` fact
+/// exists early; at settlement the projection returns to neutral, the
+/// execution counts once, and the durable progress facts commit at batch
+/// settlement — after the start fact, immediately before the completion
+/// fact.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let plane = standalone_parent_plane(&dir, "conv-178-live-progress");
+    let mut tools = ToolRegistry::new();
+    // The phased tool parks first (a deterministic no-progress cut); each
+    // gate release reports the next phase's progress and parks again, and
+    // the final gate release settles the call.
+    let (phased, gates) = FakeTool::parking_phases(
+        common::tool_policies(
+            "phased",
+            "tool-phased",
+            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+            rustx::tools::types::ToolConcurrencyPolicy::Sequential,
+        ),
+        support::fake::success_result("phased done"),
+        &["phase 1", "phase 2"],
+    );
+    let mut phased_started = phased.started();
+    phased.register(&mut tools);
+    let (answer_release, answer_released) = support::fake::model_release();
+    let child = child_fixture(
+        &dir,
+        &ConversationId::new("conv-178-live-progress-child"),
+        vec![
+            tool_call_request(&support::fake::ScriptedCall {
+                id: "call-phased",
+                tool_id: "tool-phased",
+                name: "phased",
+                arguments: serde_json::json!({}),
+            }),
+            vec![
+                FakeStep::Emit(started()),
+                FakeStep::ParkUntilReleased(answer_released),
+                FakeStep::Emit(text("LIVE-PROGRESS-ANSWER")),
+                FakeStep::Emit(completed()),
+            ],
+        ],
+        tools,
+        Vec::new(),
+    )
+    .await;
+    let wired = launch_wired_child(&plane, &child, "inspect").await;
+    let subagent_id = wired.accepted.subagent_id.clone();
+
+    // The tool started and parked without reporting: the durable start fact
+    // committed and the live projection carries the executing call's
+    // identity with no progress.
+    support::fake::await_started(&mut phased_started, "the phased tool starts").await;
+    await_journal_fact(
+        &child.store,
+        1,
+        |event| matches!(event, RuntimeEvent::ToolExecutionStarted { .. }),
+        "the tool start fact commits",
+    )
+    .await;
+    let initial = await_snapshot(
+        &plane,
+        &subagent_id,
+        |snapshot| {
+            snapshot.observation.activity
+                == SubagentActivity::Tool {
+                    tool_call_id: ToolCallId::new("call-phased"),
+                    tool_id: rustx::runtime::identity::ToolId::new("tool-phased"),
+                    progress: None,
+                }
+        },
+        "the parked execution projects its Tool identity without progress",
+    )
+    .await;
+    assert_eq!(initial.state, SubagentState::Running);
+    assert_eq!(initial.observation.counters.tool_executions, 0);
+
+    // Gate A: the tool reports "phase 1" and parks again — provably
+    // mid-execution (started, never released to completion).
+    gates[0].send_replace(true);
+    let phase_one = await_snapshot(
+        &plane,
+        &subagent_id,
+        |snapshot| {
+            matches!(
+                snapshot.observation.activity,
+                SubagentActivity::Tool { ref tool_call_id, progress: Some(ref progress), .. }
+                    if *tool_call_id == ToolCallId::new("call-phased")
+                        && progress.message.as_deref() == Some("phase 1")
+            )
+        },
+        "the first phase projects live while the tool is unfinished",
+    )
+    .await;
+    assert_eq!(phase_one.state, SubagentState::Running);
+    let mid_execution = journal(&child.store);
+    assert_eq!(
+        count_events(&mid_execution, |event| matches!(
+            event,
+            RuntimeEvent::ToolExecutionCompleted { .. } | RuntimeEvent::ToolExecutionFailed { .. }
+        )),
+        0,
+        "the tool is provably unfinished while its live progress projects"
+    );
+    // The live observation created no durable fact early: the child journal
+    // holds no ToolExecutionProgress while the tool is parked
+    // mid-execution.
+    assert_eq!(
+        count_events(&mid_execution, |event| matches!(
+            event,
+            RuntimeEvent::ToolExecutionProgress { .. }
+        )),
+        0,
+        "live progress is never durable before batch settlement"
+    );
+
+    // Gate B: the second phase becomes the latest visible report
+    // (intermediate coalescing is fine — the newest must land).
+    gates[1].send_replace(true);
+    let phase_two = await_snapshot(
+        &plane,
+        &subagent_id,
+        |snapshot| {
+            matches!(
+                snapshot.observation.activity,
+                SubagentActivity::Tool { ref tool_call_id, progress: Some(ref progress), .. }
+                    if *tool_call_id == ToolCallId::new("call-phased")
+                        && progress.message.as_deref() == Some("phase 2")
+            )
+        },
+        "the second phase becomes the latest live projection",
+    )
+    .await;
+    assert!(
+        phase_two.observation.revision > phase_one.observation.revision,
+        "revisions are strictly increasing across applied transitions"
+    );
+
+    // The final gate: the tool settles while the answer request parks in
+    // flight. The completion counter applies, and the reported progress
+    // sticks to nothing — it never outlives the completion it commits with.
+    gates[2].send_replace(true);
+    let completing = await_snapshot(
+        &plane,
+        &subagent_id,
+        |snapshot| snapshot.observation.counters.tool_executions == 1,
+        "the tool completion counter applies",
+    )
+    .await;
+    assert!(
+        !matches!(
+            completing.observation.activity,
+            SubagentActivity::Tool { .. }
+        ),
+        "no progress outlives the completion: {:?}",
+        completing.observation.activity
+    );
+
+    // The run completes: one terminal, one canonical answer, the
+    // projection at terminal-neutral.
+    answer_release.send_replace(true);
+    let settled = plane
+        .registry
+        .wait_until_settled(&subagent_id)
+        .await
+        .expect("child settles");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    assert_eq!(
+        settled.observation.activity,
+        SubagentActivity::AwaitingActivity
+    );
+    assert_eq!(settled.observation.counters.tool_executions, 1);
+    await_serve(wired.serve).await;
+    assert_eq!(
+        terminal_publications(&journal(&plane.store)),
+        vec![SubagentTerminalState::Succeeded]
+    );
+    assert_eq!(
+        parent_pending_texts(&plane),
+        vec!["LIVE-PROGRESS-ANSWER".to_owned()]
+    );
+
+    // The durable ordering proof: every durable ToolExecutionProgress
+    // committed after the start fact and immediately before the completion
+    // fact (the batch-settlement contract), carrying the bounded reports.
+    let events = journal(&child.store);
+    let started_pos = events
+        .iter()
+        .position(|event| matches!(event, RuntimeEvent::ToolExecutionStarted { .. }))
+        .expect("the start fact committed");
+    let completed_pos = events
+        .iter()
+        .position(|event| matches!(event, RuntimeEvent::ToolExecutionCompleted { .. }))
+        .expect("the completion fact committed");
+    let progress_positions: Vec<usize> = events
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| matches!(event, RuntimeEvent::ToolExecutionProgress { .. }))
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(
+        progress_positions,
+        vec![completed_pos - 2, completed_pos - 1],
+        "the durable progress facts commit immediately before the completion fact: {:?}",
+        event_kinds(&events)
+    );
+    assert!(
+        started_pos < progress_positions[0],
+        "the durable progress facts commit after the start fact"
+    );
+    let payloads: Vec<Option<String>> = progress_positions
+        .iter()
+        .map(|&index| match &events[index] {
+            RuntimeEvent::ToolExecutionProgress { progress, .. } => progress.message.clone(),
+            _ => unreachable!("the positions were selected on this variant"),
+        })
+        .collect();
+    assert_eq!(
+        payloads,
+        vec![Some("phase 1".to_owned()), Some("phase 2".to_owned())],
+        "the durable payloads are the bounded reports, in observation order"
+    );
+    child
+        .runtime
+        .shutdown()
+        .await
+        .expect("child runtime drains");
+}
+
+/// Invariant (retry ordinal boundary): after a retried request succeeds and
+/// the child moves on to the next logical step, the FRESH request projects
+/// `Model { retry: 0 }` — the ordinal belongs to the current request, never
+/// to the conversation. The cumulative counter keeps the retry count.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_fresh_request_after_a_retry_projects_retry_zero() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let plane = standalone_parent_plane(&dir, "conv-178-retry-ordinal");
+    let mut tools = ToolRegistry::new();
+    FakeTool::new(
+        common::tool_policies(
+            "probe",
+            "tool-probe",
+            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+            rustx::tools::types::ToolConcurrencyPolicy::Sequential,
+        ),
+        support::fake::success_result("probe done"),
+    )
+    .register(&mut tools);
+    let (answer_release, answer_released) = support::fake::model_release();
+    let child = child_fixture(
+        &dir,
+        &ConversationId::new("conv-178-retry-ordinal-child"),
+        vec![
+            // A zero-hint transient failure: the retry schedule commits and
+            // the backoff collapses.
+            vec![
+                FakeStep::Emit(started()),
+                FakeStep::Emit(transient_failure("R0 boom", Some(0))),
+            ],
+            // The retried request runs a quick tool call.
+            tool_call_request(&support::fake::ScriptedCall {
+                id: "call-probe",
+                tool_id: "tool-probe",
+                name: "probe",
+                arguments: serde_json::json!({}),
+            }),
+            // The fresh answer request parks in flight.
+            vec![
+                FakeStep::Emit(started()),
+                FakeStep::ParkUntilReleased(answer_released),
+                FakeStep::Emit(text("RETRY-ZERO-ANSWER")),
+                FakeStep::Emit(completed()),
+            ],
+        ],
+        tools,
+        Vec::new(),
+    )
+    .await;
+    let wired = launch_wired_child(&plane, &child, "inspect").await;
+
+    // The third request is in flight and parked: it is a FRESH request of a
+    // new logical step, so it projects retry 0 even though the conversation
+    // already accumulated one retry.
+    let fresh = await_snapshot(
+        &plane,
+        &wired.accepted.subagent_id,
+        |snapshot| {
+            matches!(
+                snapshot.observation.activity,
+                SubagentActivity::Model { .. }
+            ) && snapshot.observation.counters.model_requests == 3
+        },
+        "the fresh answer request projects Model activity",
+    )
+    .await;
+    assert_eq!(fresh.state, SubagentState::Running);
+    let SubagentActivity::Model { retry, .. } = &fresh.observation.activity else {
+        unreachable!("the predicate matched a Model activity");
+    };
+    assert_eq!(
+        *retry, 0,
+        "a fresh request never inherits an earlier retry's ordinal"
+    );
+    assert_eq!(
+        fresh.observation.counters.model_retries, 1,
+        "the retry counter is genuinely cumulative"
+    );
+    assert_eq!(
+        count_events(&journal(&child.store), is_retry_scheduled),
+        1,
+        "the durable authority agrees: exactly one retry was scheduled"
+    );
+
+    answer_release.send_replace(true);
+    let settled = plane
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .expect("child settles");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    assert_eq!(settled.observation.counters.model_requests, 3);
+    assert_eq!(settled.observation.counters.model_retries, 1);
+    await_serve(wired.serve).await;
+    assert_eq!(
+        parent_pending_texts(&plane),
+        vec!["RETRY-ZERO-ANSWER".to_owned()]
+    );
+    child
+        .runtime
+        .shutdown()
+        .await
+        .expect("child runtime drains");
+}
+
+/// Invariant: a full child run with activity frames flowing leaves the
+/// parent Event Journal exactly as the lifecycle authority alone would —
+/// the ownership fact and the one terminal publication, and nothing else.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn activity_frames_commit_no_parent_journal_facts() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let plane = standalone_parent_plane(&dir, "conv-178-journal-isolation");
+    let mut tools = ToolRegistry::new();
+    // The tool parks so the mid-run Tool activity is applied before the
+    // terminal can settle: without a parked-stable observation point, the
+    // coalesced frames could all arrive after the Result frame and be
+    // dropped as post-terminal, making "activity flowed" unprovable.
+    let (scan, scan_release) = FakeTool::parking(
+        common::tool_policies(
+            "scan",
+            "tool-scan",
+            rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+            rustx::tools::types::ToolConcurrencyPolicy::Sequential,
+        ),
+        support::fake::success_result("scan done"),
+    );
+    let mut scan_started = scan.started();
+    scan.register(&mut tools);
+    // The answer request parks as well, so the completion counter is
+    // observably applied before the terminal frame can race it.
+    let (answer_release, answer_released) = support::fake::model_release();
+    let child = child_fixture(
+        &dir,
+        &ConversationId::new("conv-178-journal-isolation-child"),
+        vec![
+            tool_call_request(&support::fake::ScriptedCall {
+                id: "call-scan",
+                tool_id: "tool-scan",
+                name: "scan",
+                arguments: serde_json::json!({}),
+            }),
+            vec![
+                FakeStep::Emit(started()),
+                FakeStep::ParkUntilReleased(answer_released),
+                FakeStep::Emit(text("JOURNAL-ISOLATION-ANSWER")),
+                FakeStep::Emit(completed()),
+            ],
+        ],
+        tools,
+        Vec::new(),
+    )
+    .await;
+    let wired = launch_wired_child(&plane, &child, "inspect").await;
+    support::fake::await_started(&mut scan_started, "the scan tool starts").await;
+    // Activity really flowed: the parked execution's Tool frame was applied
+    // before the terminal could settle.
+    let running = await_snapshot(
+        &plane,
+        &wired.accepted.subagent_id,
+        |snapshot| {
+            matches!(
+                snapshot.observation.activity,
+                SubagentActivity::Tool { ref tool_call_id, .. }
+                    if *tool_call_id == ToolCallId::new("call-scan")
+            )
+        },
+        "the parked tool execution projects Tool activity",
+    )
+    .await;
+    assert!(running.observation.revision > 1);
+    scan_release.send_replace(true);
+    // The completion counter is observably applied while the answer request
+    // is still parked in flight.
+    let completing = await_snapshot(
+        &plane,
+        &wired.accepted.subagent_id,
+        |snapshot| snapshot.observation.counters.tool_executions == 1,
+        "the tool completion counter is applied before the terminal",
+    )
+    .await;
+    answer_release.send_replace(true);
+    let settled = plane
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .expect("child settles");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    assert!(
+        settled.observation.revision > completing.observation.revision,
+        "completion and the terminal reset advanced the revision further"
+    );
+    assert_eq!(settled.observation.counters.tool_executions, 1);
+    await_serve(wired.serve).await;
+
+    // The complete parent journal: ownership + terminal, in order, nothing
+    // else. Every activity frame committed no durable fact.
+    let parent_events = journal(&plane.store);
+    assert_eq!(
+        event_kinds(&parent_events),
+        vec![
+            "subagent_ownership_committed".to_owned(),
+            "subagent_terminal_published".to_owned(),
+        ],
+        "the parent journal holds the lifecycle facts and nothing else"
+    );
+    child
+        .runtime
+        .shutdown()
+        .await
+        .expect("child runtime drains");
+}
+
+/// Invariant: child activity never enters the parent model context. After a
+/// full child run consumed by a real parent runtime, no parent model
+/// request contains the child's activity identifiers, and the only
+/// child-origin content any request ever carries is the canonical
+/// Agent-authored terminal inbound.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn child_activity_never_enters_the_parent_model_context() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let parent = parent_runtime_plane(
+        &dir,
+        "conv-178-context-parent",
+        vec![answer_script("PARENT-178-TURN")],
+    )
+    .await;
+    let mut tools = ToolRegistry::new();
+    FakeTool::new(
+        common::tool_policies(
+            "scan178",
+            "tool-178-secret",
+            rustx::tools::types::ToolExecutionPolicy::ModelSelectable,
+            rustx::tools::types::ToolConcurrencyPolicy::Sequential,
+        ),
+        support::fake::success_result("scan done"),
+    )
+    .register(&mut tools);
+    let child = child_fixture(
+        &dir,
+        &ConversationId::new("conv-178-context-child"),
+        vec![
+            tool_call_request(&support::fake::ScriptedCall {
+                id: "call-178-secret",
+                tool_id: "tool-178-secret",
+                name: "scan178",
+                arguments: serde_json::json!({}),
+            }),
+            answer_script("CHILD-178-ANSWER-MARKER"),
+        ],
+        tools,
+        Vec::new(),
+    )
+    .await;
+    let wired = launch_wired_child(&parent.plane, &child, "inspect").await;
+    let settled = parent
+        .plane
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .expect("child settles");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    await_serve(wired.serve).await;
+
+    // The parent runtime adopted the canonical terminal inbound and
+    // completed its continuation turn through its ordinary Agent Loop.
+    await_journal_fact(
+        &parent.plane.store,
+        1,
+        |event| matches!(event, RuntimeEvent::AttemptCompleted { .. }),
+        "the parent consumes the terminal inbound in an ordinary turn",
+    )
+    .await;
+
+    let requests = parent.model.requests();
+    assert!(
+        !requests.is_empty(),
+        "the parent really called its model for the continuation"
+    );
+    let mut answer_sightings = 0_usize;
+    for request in &requests {
+        let serialized = serde_json::to_string(request).expect("request json");
+        for marker in ["call-178-secret", "tool-178-secret", "scan178"] {
+            assert!(
+                !serialized.contains(marker),
+                "child activity identifiers never enter the parent model context: {serialized}"
+            );
+        }
+        // The child answer appears only as the canonical Agent-authored
+        // inbound message — never as assistant output, tool results, or
+        // request-only context.
+        for message in &request.messages {
+            let serialized = serde_json::to_string(message).expect("message json");
+            if serialized.contains("CHILD-178-ANSWER-MARKER") {
+                answer_sightings += 1;
+                assert!(
+                    matches!(
+                        message,
+                        rustx::model::input::ModelInputMessage::Canonical(
+                            MessageBlock::User(user)
+                        ) if matches!(user.source, UserSource::Agent { .. })
+                    ),
+                    "the child answer enters the parent context only as the canonical \
+                     Agent-authored terminal inbound: {serialized}"
+                );
+            }
+        }
+    }
+    assert!(
+        answer_sightings > 0,
+        "the parent really consumed the child answer through the canonical inbound"
+    );
+    child
+        .runtime
+        .shutdown()
+        .await
+        .expect("child runtime drains");
+    parent
+        .runtime
+        .shutdown()
+        .await
+        .expect("parent runtime drains");
+}
+
+/// Invariant: the successful terminal answer never enters the observation
+/// plane. A recording observer captures every snapshot the registry ever
+/// published — including every applied activity frame — and none of them,
+/// nor the Runtime Client view of the settled child, contains the answer;
+/// the answer exists exactly once, in the canonical durable terminal
+/// inbound.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_successful_answer_never_enters_the_observation_plane() {
+    const ANSWER: &str = "OBS-178-RESULT-SECRET";
+
+    /// Records every published registry snapshot (called under the registry
+    /// lock; the push is the whole implementation).
+    #[derive(Default)]
+    struct RecordingObserver(std::sync::Mutex<Vec<SubagentSnapshot>>);
+    impl SubagentObserver for RecordingObserver {
+        fn on_snapshot(&self, snapshot: &SubagentSnapshot) {
+            self.0
+                .lock()
+                .expect("recording lock")
+                .push(snapshot.clone());
+        }
+    }
+
+    let dir = tempfile::tempdir().expect("temp root");
+    let plane = standalone_parent_plane(&dir, "conv-178-result-isolation");
+    let recorded = Arc::new(RecordingObserver::default());
+    plane
+        .registry
+        .install_observer_and_snapshots(Arc::clone(&recorded) as Arc<dyn SubagentObserver>);
+    let child = child_fixture(
+        &dir,
+        &ConversationId::new("conv-178-result-isolation-child"),
+        vec![answer_script(ANSWER)],
+        ToolRegistry::new(),
+        Vec::new(),
+    )
+    .await;
+    let wired = launch_wired_child(&plane, &child, "inspect").await;
+    let settled = plane
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .expect("child settles");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    await_serve(wired.serve).await;
+
+    let snapshots = recorded.0.lock().expect("recording lock").clone();
+    assert!(
+        snapshots
+            .iter()
+            .any(|snapshot| snapshot.observation.revision > 0),
+        "activity frames were really applied during the run"
+    );
+    for snapshot in &snapshots {
+        let serialized = serde_json::to_string(snapshot).expect("snapshot json");
+        assert!(
+            !serialized.contains(ANSWER),
+            "no published snapshot — lifecycle or activity — ever carries the answer: {serialized}"
+        );
+    }
+
+    // The Runtime Client view of the settled child is equally clean.
+    let view = crate::runtime_client::projection::subagent_view(&settled);
+    let serialized = serde_json::to_string(&view).expect("client view json");
+    assert!(
+        !serialized.contains(ANSWER),
+        "the Runtime Client subagent view never carries the answer: {serialized}"
+    );
+    assert_eq!(view.detail, None);
+    assert_eq!(
+        view.observation.activity,
+        SubagentActivity::AwaitingActivity
+    );
+
+    // The answer exists exactly once: the canonical durable terminal
+    // inbound.
+    assert_eq!(
+        parent_pending_texts(&plane),
+        vec![ANSWER.to_owned()],
+        "the canonical inbound is the one result channel"
+    );
+    child
+        .runtime
+        .shutdown()
+        .await
+        .expect("child runtime drains");
+}
+
+/// Invariant: a Runtime Client that attaches after activity already flowed
+/// repairs from the snapshot alone — the initialized snapshot and an
+/// explicit `snapshot_get` both serve the latest observation (revision,
+/// activity, counters), the redacted execution profile, and the start time,
+/// without the client having consumed any intermediate `SubagentUpdated`
+/// event.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn snapshot_repair_serves_the_latest_subagent_observation() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let (parent, host) = parent_runtime_host_plane(
+        &dir,
+        "conv-178-repair",
+        vec![answer_script("PARENT-178-DONE")],
+    )
+    .await;
+    let (release, released) = support::fake::model_release();
+    let child = child_fixture(
+        &dir,
+        &ConversationId::new("conv-178-repair-child"),
+        vec![vec![
+            FakeStep::Emit(started()),
+            FakeStep::ParkUntilReleased(released),
+            FakeStep::Emit(text("REPAIR-ANSWER")),
+            FakeStep::Emit(completed()),
+        ]],
+        ToolRegistry::new(),
+        Vec::new(),
+    )
+    .await;
+    let wired = launch_wired_child(&parent.plane, &child, "inspect").await;
+
+    // The child is parked mid-request; the registry read model holds the
+    // stable Model projection.
+    let live = await_snapshot(
+        &parent.plane,
+        &wired.accepted.subagent_id,
+        |snapshot| {
+            matches!(
+                snapshot.observation.activity,
+                SubagentActivity::Model { .. }
+            )
+        },
+        "the in-flight model request projects Model activity",
+    )
+    .await;
+    // The host projection folded the same observation: poll the projection
+    // itself so the attach below provably seeds from the folded state.
+    tokio::time::timeout(LIVENESS, async {
+        loop {
+            let (snapshot, _) = host.snapshot().expect("projection snapshot");
+            if snapshot
+                .subagents
+                .iter()
+                .any(|view| view.observation == live.observation)
+            {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the host projection folds the activity observation");
+
+    // A fresh client attaches now. Its initialized snapshot is the repair
+    // path: it consumed no SubagentUpdated event at all.
+    let (attachment, initialized) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .expect("attach");
+    let rustx::runtime_client::RuntimeClientResult::Initialized { snapshot, .. } = initialized
+    else {
+        panic!("attach initializes: {initialized:?}");
+    };
+    let view = snapshot
+        .subagents
+        .iter()
+        .find(|view| view.subagent_id == wired.accepted.subagent_id)
+        .expect("the child is in the snapshot");
+    assert_eq!(
+        view.observation, live.observation,
+        "the repaired snapshot serves the latest observation"
+    );
+    assert_eq!(
+        view.execution_profile,
+        Some(SubagentExecutionProfile {
+            model: "local/model".to_owned(),
+            reasoning_profile: None,
+            reasoning_enabled: false,
+        }),
+        "the redacted profile repairs with the snapshot"
+    );
+    assert_eq!(view.started_at, live.started_at);
+    assert_eq!(view.state, rustx::runtime::subagent::SubagentState::Running);
+
+    // An explicit snapshot_get agrees — the same repair primitive.
+    let response =
+        attachment.handle_request(rustx::runtime_client::RuntimeClientRequest::SnapshotGet {
+            id: rustx::runtime_client::RequestId::new(1),
+        });
+    let Some(rustx::runtime_client::RuntimeClientResult::Snapshot { snapshot, .. }) =
+        response.result
+    else {
+        panic!("snapshot_get succeeds: {response:?}");
+    };
+    assert_eq!(
+        snapshot
+            .subagents
+            .iter()
+            .find(|view| view.subagent_id == wired.accepted.subagent_id)
+            .expect("the child is in the snapshot")
+            .observation,
+        live.observation
+    );
+
+    // Cleanup: release the child, let it settle, drain both runtimes.
+    release.send_replace(true);
+    let settled = parent
+        .plane
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .expect("child settles");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    await_serve(wired.serve).await;
+    child
+        .runtime
+        .shutdown()
+        .await
+        .expect("child runtime drains");
+    parent
+        .runtime
+        .shutdown()
+        .await
+        .expect("parent runtime drains");
+}
+
+/// Invariant: the snapshot's execution profile is derived from the frozen
+/// child specification and carries only the redacted model facts — never
+/// credentials or endpoints of the frozen provider binding.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_snapshot_projects_only_the_frozen_execution_profile() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let plane = standalone_parent_plane(&dir, "conv-178-profile");
+    let child = child_fixture(
+        &dir,
+        &ConversationId::new("conv-178-profile-child"),
+        vec![answer_script("PROFILE-ANSWER")],
+        ToolRegistry::new(),
+        Vec::new(),
+    )
+    .await;
+    let wired = launch_wired_child(&plane, &child, "inspect").await;
+
+    let snapshot = plane
+        .registry
+        .snapshot(&wired.accepted.subagent_id)
+        .expect("child record");
+    let expected = SubagentExecutionProfile::from_frozen(&resolved_child_spec("conformance").model);
+    assert_eq!(
+        snapshot.profile.as_ref(),
+        Some(&expected),
+        "the profile is derived from the frozen child specification"
+    );
+    let serialized = serde_json::to_string(&snapshot.profile).expect("profile json");
+    for secret in ["test-only-secret", "127.0.0.1"] {
+        assert!(
+            !serialized.contains(secret),
+            "no credential or endpoint material crosses into the profile: {serialized}"
+        );
+    }
+
+    // The Runtime Client view carries the same profile under the
+    // `execution_profile` wire key; the obsolete bare `profile` key stays
+    // retired.
+    let view = crate::runtime_client::projection::subagent_view(&snapshot);
+    assert_eq!(view.execution_profile, snapshot.profile);
+    let wire = serde_json::to_value(&view).expect("view json");
+    assert_eq!(wire["execution_profile"]["model"], "local/model");
+    assert!(
+        wire.get("profile").is_none(),
+        "the obsolete profile key is absent: {wire}"
+    );
+
+    let settled = plane
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .expect("child settles");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    assert_eq!(
+        settled.profile, snapshot.profile,
+        "the frozen profile survives settlement unchanged"
+    );
     await_serve(wired.serve).await;
     child
         .runtime

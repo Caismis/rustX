@@ -3,8 +3,11 @@
 //! This module owns the **physical** boundary of a child rustX runtime:
 //!
 //! ```text
-//! spawn            (own process group, inherited control channel on fd 0)
+//! spawn            (own process group, inherited control channel on fd 0,
+//!                   inherited disposable observation channel on fd 1)
 //! control channel  (bounded framed IPC; also the parent-liveness authority)
+//! observation      (Activity frames only, child->parent; its stall or loss
+//! channel          is diagnostics-only and never evidences lifecycle)
 //! start gate       (the child performs no semantic work before Delegate)
 //! escalation       (Cancel frame -> SIGTERM group -> SIGKILL group)
 //! wait/reap        (the direct child is reaped exactly here)
@@ -479,6 +482,7 @@ pub(crate) async fn spawn_staged(
     let mut staged = StagedChild {
         child: spawned.child,
         control: spawned.control,
+        observation: spawned.observation,
         runtime_root,
         workspace: Some(workspace),
         retained: RetainedProcessUnits::default(),
@@ -553,7 +557,8 @@ async fn discard_unstaged_resources(
     }
 }
 
-/// Spawns the child process with the control channel inherited as fd 0.
+/// Spawns the child process with the control channel inherited as fd 0 and
+/// the disposable observation channel inherited as fd 1 (Issue #178).
 fn spawn_process(
     plan: &SubagentSpawnPlan,
     runtime_root: &Path,
@@ -570,6 +575,22 @@ fn spawn_process(
         detail: format!("control channel: {error}"),
     })?;
     let child_stdio: Stdio = std::os::fd::OwnedFd::from(child_std).into();
+    // The observation channel (Issue #178): a second UnixStream pair whose
+    // child end becomes the child's fd 1. It carries Activity frames only,
+    // child-to-parent, with a backpressure domain fully independent of the
+    // control channel: a stalled or lost observation transport delays no
+    // control frame and evidences no lifecycle fact.
+    let (observation_parent_end, observation_child_end) =
+        tokio::net::UnixStream::pair().map_err(|error| SpawnError::Spawn {
+            detail: format!("observation channel: {error}"),
+        })?;
+    let observation_child_std =
+        observation_child_end
+            .into_std()
+            .map_err(|error| SpawnError::Spawn {
+                detail: format!("observation channel: {error}"),
+            })?;
+    let observation_stdio: Stdio = std::os::fd::OwnedFd::from(observation_child_std).into();
     // The child's diagnostics never travel through a pipe to the parent: a
     // hard parent death must not turn the child's stderr writes into
     // SIGPIPE. They land in a child-private diagnostics log instead.
@@ -588,7 +609,7 @@ fn spawn_process(
         .current_dir(project_workspace)
         .arg("--subagent-child")
         .stdin(child_stdio)
-        .stdout(Stdio::null())
+        .stdout(observation_stdio)
         .stderr(Stdio::from(diagnostics));
     #[cfg(unix)]
     command.process_group(0);
@@ -598,15 +619,17 @@ fn spawn_process(
     Ok(SpawnedProcess {
         child,
         control: parent_end,
+        observation: observation_parent_end,
     })
 }
 
-/// The process and control endpoint that become one `StagedChild` only
+/// The process and channel endpoints that become one `StagedChild` only
 /// after the physical-root token is moved into that owner.
 #[derive(Debug)]
 struct SpawnedProcess {
     child: tokio::process::Child,
     control: tokio::net::UnixStream,
+    observation: tokio::net::UnixStream,
 }
 
 /// A spawned child parked behind the start gate, not yet owned by the
@@ -620,6 +643,12 @@ struct SpawnedProcess {
 pub(crate) struct StagedChild {
     child: tokio::process::Child,
     control: tokio::net::UnixStream,
+    /// The parent end of the disposable observation channel (Issue #178).
+    /// Held unread while staged — the child never publishes activity before
+    /// its delegation — and moved into the driver at the ownership commit,
+    /// where exactly one observation receiver task drains it into the
+    /// registry read model.
+    observation: tokio::net::UnixStream,
     runtime_root: PhysicalChildRuntimeRoot,
     /// The staged project-workspace owner. It moves into the driver at the
     /// durable ownership boundary, or is settled by rollback before then.
@@ -712,10 +741,15 @@ impl StagedChild {
     /// anchors move together into the driver task. They are moved, never
     /// copied, so there is one owner at every instant and no second
     /// containment authority can exist.
-    pub(crate) fn into_driver(self, delegate: super::ipc::DelegationFrame) -> ChildDriver {
+    pub(crate) fn into_driver(
+        self,
+        delegate: super::ipc::DelegationFrame,
+        activity: Option<super::registry::SubagentActivitySink>,
+    ) -> ChildDriver {
         let Self {
             child,
             control,
+            observation,
             runtime_root,
             workspace,
             retained,
@@ -728,6 +762,9 @@ impl StagedChild {
         let (start_tx, start_rx) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
             let Ok(cancelled_before_start) = start_rx.await else {
+                // The observation channel is disposable: dropping the
+                // endpoint is its whole teardown here.
+                drop(observation);
                 return settle_after_driver_loss(
                     child,
                     control,
@@ -742,12 +779,14 @@ impl StagedChild {
             drive_child(
                 child,
                 control,
+                observation,
                 retained,
                 runtime_root,
                 workspace,
                 delegate,
                 command_rx,
                 cancelled_before_start,
+                activity,
             )
             .await
         });
@@ -872,17 +911,20 @@ impl StagedChild {
 
     /// Constructs a staged child from raw parts (tests only).
     ///
-    /// The test plays the child role over `control`'s peer while `child`
-    /// supplies the real OS-process kill/reap semantics the driver owns.
+    /// The test plays the child role over `control`'s and `observation`'s
+    /// peers while `child` supplies the real OS-process kill/reap semantics
+    /// the driver owns.
     #[cfg(test)]
     pub(crate) fn for_test(
         child: tokio::process::Child,
         control: tokio::net::UnixStream,
+        observation: tokio::net::UnixStream,
         runtime_root: std::path::PathBuf,
     ) -> Self {
         Self {
             child,
             control,
+            observation,
             runtime_root: PhysicalChildRuntimeRoot::from_existing(runtime_root),
             workspace: None,
             retained: RetainedProcessUnits::default(),
@@ -1140,8 +1182,78 @@ async fn settle_after_driver_loss(
     settle_nested(outcome, &mut retained, runtime_root, workspace).await
 }
 
-/// The sole driver of one committed child: sends the delegation, observes
-/// frames, owns cancellation escalation, waits, and reaps.
+/// The sole driver of one committed child: owns the control channel, the
+/// cancellation escalation, the wait, and the reap — plus the one
+/// observation receiver of the disposable activity channel (Issue #178).
+///
+/// The observation receiver is a fully independent task on its own
+/// transport: it can only decode Activity frames into the registry read
+/// model. It holds no lifecycle authority — its stall, EOF, or error never
+/// delays, cancels, settles, or evidences anything — and it is torn down
+/// with the drive.
+#[allow(clippy::too_many_arguments)] // one driver owns every physical child resource
+async fn drive_child(
+    child: tokio::process::Child,
+    control: tokio::net::UnixStream,
+    observation: tokio::net::UnixStream,
+    retained: RetainedProcessUnits,
+    runtime_root: PhysicalChildRuntimeRoot,
+    workspace: Option<WorkspaceLease>,
+    delegate: super::ipc::DelegationFrame,
+    commands: tokio::sync::mpsc::Receiver<DriverCommand>,
+    cancelled_before_start: Option<CancellationReason>,
+    // The registry's live-activity sink (Issue #178). `None` only in tests
+    // that drive the physical pipeline without a registry.
+    activity: Option<super::registry::SubagentActivitySink>,
+) -> PhysicalSettlement {
+    let observation_task = if let Some(sink) = activity {
+        Some(tokio::spawn(run_observation_receiver(observation, sink)))
+    } else {
+        // No read model to feed: release the endpoint. The child's
+        // observation writer ends itself on the first failed write —
+        // observation is disposable.
+        drop(observation);
+        None
+    };
+    let settlement = drive_child_control(
+        child,
+        control,
+        retained,
+        runtime_root,
+        workspace,
+        delegate,
+        commands,
+        cancelled_before_start,
+    )
+    .await;
+    if let Some(task) = observation_task {
+        task.abort();
+        let _ = task.await;
+    }
+    settlement
+}
+
+/// The one observer-side owner of the disposable observation transport
+/// (Issue #178): decode `Activity` and apply it into the registry read
+/// model — nothing else.
+///
+/// Observation EOF or failure ends only this task. It is never child
+/// process/lifecycle evidence: it cannot settle, cancel, or outlive the
+/// child, it retains no process anchors, and it touches no journal.
+async fn run_observation_receiver(
+    mut stream: tokio::net::UnixStream,
+    sink: super::registry::SubagentActivitySink,
+) {
+    loop {
+        match super::ipc::read_activity_frame(&mut stream).await {
+            Ok(Some(frame)) => sink.apply(frame.observation),
+            Ok(None) | Err(_) => return,
+        }
+    }
+}
+
+/// The control-plane drive of one committed child: sends the delegation,
+/// observes control frames, owns cancellation escalation, waits, and reaps.
 ///
 /// Terminal order is structural: the driver only returns after the child
 /// process has exited and been reaped, and the registry settles durable
@@ -1150,7 +1262,7 @@ async fn settle_after_driver_loss(
 /// reaped process.
 #[allow(clippy::too_many_lines)] // one coherent delegate/observe/settle pipeline
 #[allow(clippy::too_many_arguments)] // one driver owns every physical child resource
-async fn drive_child(
+async fn drive_child_control(
     mut child: tokio::process::Child,
     mut control: tokio::net::UnixStream,
     mut retained: RetainedProcessUnits,
@@ -1450,6 +1562,10 @@ mod tests {
     struct StagedHarness {
         staged: StagedChild,
         child: tokio::net::UnixStream,
+        /// The child end of the observation channel: the test decides
+        /// whether the staged driver's observation receiver sees a live,
+        /// a stalled, or a dead transport.
+        observation_child: tokio::net::UnixStream,
         runtime_root: PathBuf,
         _dir: tempfile::TempDir,
     }
@@ -1459,6 +1575,8 @@ mod tests {
         let root = dir.path().join("child");
         std::fs::create_dir_all(&root).expect("child root");
         let (parent, child) = tokio::net::UnixStream::pair().expect("control pair");
+        let (observation_parent, observation_child) =
+            tokio::net::UnixStream::pair().expect("observation pair");
         // The stand-in child leads its own process group, exactly like a
         // real staged child: rollback signals that group.
         let process = tokio::process::Command::new("sleep")
@@ -1470,8 +1588,9 @@ mod tests {
             .spawn()
             .expect("a stand-in direct child");
         StagedHarness {
-            staged: StagedChild::for_test(process, parent, root),
+            staged: StagedChild::for_test(process, parent, observation_parent, root),
             child,
+            observation_child,
             runtime_root: dir.path().join("child"),
             _dir: dir,
         }
@@ -1780,10 +1899,13 @@ mod tests {
 
         // The ownership commit: the direct child handle AND the retained
         // anchor set move into the driver task, exactly once.
-        let driver = staged.into_driver(crate::runtime::subagent::ipc::DelegationFrame {
-            task: "inspect".to_owned(),
-            context: None,
-        });
+        let driver = staged.into_driver(
+            crate::runtime::subagent::ipc::DelegationFrame {
+                task: "inspect".to_owned(),
+                context: None,
+            },
+            None,
+        );
         let (_commands, start_gate, task) = driver.split();
         let _ = start_gate.send(None);
 
@@ -1815,6 +1937,39 @@ mod tests {
             "the committed driver, not a separate cleanup owner, removed its exact physical root"
         );
         drop(nested);
+    }
+
+    /// Control-channel loss remains the sole liveness authority (Issue
+    /// #178): with the observation channel still open and healthy, closing
+    /// the control channel settles the drive as a loss — a live observation
+    /// transport can never substitute for the reliable control channel.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn control_loss_settles_even_with_a_live_observation_channel() {
+        let harness = stage();
+        let driver = harness.staged.into_driver(
+            crate::runtime::subagent::ipc::DelegationFrame {
+                task: "inspect".to_owned(),
+                context: None,
+            },
+            None,
+        );
+        let (_commands, start_gate, task) = driver.split();
+        let _ = start_gate.send(None);
+
+        // The observation channel stays open and healthy...
+        let observation_child = harness.observation_child;
+        // ...while the control channel closes: the drive settles as a loss.
+        drop(harness.child);
+        let settlement = tokio::time::timeout(DEADLINE, task)
+            .await
+            .expect("the driver must settle")
+            .expect("the driver task must not panic");
+        assert!(
+            matches!(settlement.outcome, PhysicalOutcome::Lost { .. }),
+            "control EOF with a live observation channel is still a loss: {:?}",
+            settlement.outcome
+        );
+        drop(observation_child);
     }
 
     /// An unresolved nested anchor is a hard barrier for worktree cleanup:
