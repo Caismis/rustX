@@ -188,7 +188,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::tools::artifacts::ArtifactStore;
 use crate::tools::environment::ToolEnvironment;
-use crate::tools::execution::ExecutionListing;
 use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::bound_tool_progress;
 use crate::tools::mcp::McpRuntimeLeaseSet;
@@ -359,6 +358,33 @@ pub struct BackgroundExecutionSnapshot {
     /// The bounded terminal result, when terminal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<ToolExecutionResult>,
+}
+
+/// The background execution domain's own bounded discovery read model
+/// (Issue #180).
+///
+/// This type is owned by the background domain because everything in it is
+/// a background-domain fact: which detached executions the registry still
+/// knows, the registry's own authoritative newest-first allocation order,
+/// which of them match the requested lifecycle filter under
+/// [`BackgroundLifecycle::is_active`], and how many matched. Nothing here
+/// is a model-facing concern, and the domain deliberately does **not**
+/// depend on the model-facing `execution` control plane that consumes it:
+/// the consumer knows the producer, never the other way round.
+///
+/// `snapshots` carries at most the caller's requested number of
+/// authoritative snapshots, most recently allocated first, and `matched`
+/// reports how many records matched the filter *before* that bound was
+/// applied. Reporting `matched` separately is what keeps truncation honest:
+/// a consumer can always tell a complete listing from a bounded prefix
+/// without the registry ever materializing the whole set.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackgroundExecutionListing {
+    /// At most the requested number of authoritative snapshots, in the
+    /// registry's newest-first authoritative order.
+    pub snapshots: Vec<BackgroundExecutionSnapshot>,
+    /// How many records matched the filter in total, before the bound.
+    pub matched: usize,
 }
 
 /// The outcome of a committed background dispatch.
@@ -1274,7 +1300,9 @@ impl ConversationBackgroundRegistry {
     ///
     /// `matched` reports how many records matched before the bound, so a
     /// caller can report truncation without the registry ever materializing
-    /// an unbounded response.
+    /// an unbounded response. `limit` is the caller's materialization bound
+    /// and nothing more: the registry has no opinion on how large a
+    /// model-facing response may be, and never sees one.
     ///
     /// `active_only` selects the non-terminal
     /// (Starting/Running/Cancelling/PublishingTerminal) records exactly as
@@ -1285,11 +1313,7 @@ impl ConversationBackgroundRegistry {
     /// query takes and mutates no record, no lifecycle, no notification
     /// state, and no observer seam.
     #[must_use]
-    pub fn listing(
-        &self,
-        active_only: bool,
-        limit: usize,
-    ) -> ExecutionListing<BackgroundExecutionSnapshot> {
+    pub fn listing(&self, active_only: bool, limit: usize) -> BackgroundExecutionListing {
         let state = self.state();
         let matching = state
             .records
@@ -1298,7 +1322,7 @@ impl ConversationBackgroundRegistry {
             .filter(|record| !active_only || record.lifecycle.is_active());
         let matched = matching.clone().count();
         let snapshots = matching.take(limit).map(snapshot_of).collect();
-        ExecutionListing { snapshots, matched }
+        BackgroundExecutionListing { snapshots, matched }
     }
 
     /// The runner-owned settlement boundary of one execution.
@@ -2254,8 +2278,9 @@ mod tests {
 
     use super::test_sync::CommitBoundaryHook;
     use super::{
-        BACKGROUND_CANCEL_REASON, BackgroundDispatchOutcome, BackgroundLifecycle,
-        BackgroundResources, ConversationBackgroundRegistry,
+        BACKGROUND_CANCEL_REASON, BackgroundDispatchOutcome, BackgroundExecutionListing,
+        BackgroundLifecycle, BackgroundRecord, BackgroundResources, ConversationBackgroundRegistry,
+        NotificationState,
     };
     use crate::durable::inbox::ConversationStore;
     use crate::events::{RecordingEventSink, RuntimeEvent};
@@ -2281,6 +2306,161 @@ mod tests {
             truncation: None,
             managed_output: None,
         }
+    }
+
+    // --- The background domain's own bounded discovery read model (#180) ---
+    //
+    // These prove the read model directly against the registry's own record
+    // vector: ordering, filtering, counting, and bounding involve no runner,
+    // no process, and no settlement. The listing type is the background
+    // domain's own — nothing here names the model-facing `execution`
+    // control plane.
+
+    /// Seeds one synthetic record in allocation order, so listing order can
+    /// be asserted against a known allocation sequence.
+    fn seed_record(
+        registry: &ConversationBackgroundRegistry,
+        id: &str,
+        lifecycle: BackgroundLifecycle,
+    ) {
+        let execution_id = ToolExecutionId::new(id);
+        let mut state = registry.state();
+        let index = state.records.len();
+        state.records.push(BackgroundRecord {
+            execution_id: execution_id.clone(),
+            tool_call_id: ToolCallId::new(format!("call-{id}")),
+            tool_id: ToolId::new("tool-bash"),
+            tool_name: "bash".to_owned(),
+            lifecycle,
+            cancellation: crate::runtime::cancellation::CancellationSignal::new(),
+            cancel_reason: None,
+            progress: None,
+            result: None,
+            pending_terminal: None,
+            publication_abandoned: false,
+            notification: NotificationState::Pending,
+        });
+        state.index.insert(execution_id, index);
+    }
+
+    fn listed_ids(listing: &BackgroundExecutionListing) -> Vec<String> {
+        listing
+            .snapshots
+            .iter()
+            .map(|snapshot| snapshot.execution_id.to_string())
+            .collect()
+    }
+
+    /// The registry's authoritative order is its own allocation order,
+    /// reversed: the most recently allocated execution first.
+    #[test]
+    fn background_listing_is_newest_first_in_the_registrys_allocation_order() {
+        let plane = registry("conv-listing-order");
+        for id in ["e1", "e2", "e3"] {
+            seed_record(&plane.registry, id, BackgroundLifecycle::Running);
+        }
+
+        let listing = plane.registry.listing(false, 16);
+
+        assert_eq!(listed_ids(&listing), vec!["e3", "e2", "e1"]);
+        assert_eq!(listing.matched, 3);
+    }
+
+    /// `active_only` is the domain's own lifecycle classification, under
+    /// which `PublishingTerminal` is still active.
+    #[test]
+    fn background_listing_active_only_uses_the_domains_own_classification() {
+        let plane = registry("conv-listing-active");
+        seed_record(&plane.registry, "e1", BackgroundLifecycle::Starting);
+        seed_record(&plane.registry, "e2", BackgroundLifecycle::Succeeded);
+        seed_record(
+            &plane.registry,
+            "e3",
+            BackgroundLifecycle::PublishingTerminal,
+        );
+        seed_record(&plane.registry, "e4", BackgroundLifecycle::Cancelled);
+        seed_record(&plane.registry, "e5", BackgroundLifecycle::Cancelling);
+
+        assert_eq!(
+            listed_ids(&plane.registry.listing(true, 16)),
+            vec!["e5", "e3", "e1"]
+        );
+        assert_eq!(
+            listed_ids(&plane.registry.listing(false, 16)),
+            vec!["e5", "e4", "e3", "e2", "e1"]
+        );
+    }
+
+    /// `matched` counts every matching record before the bound, and the
+    /// materialized prefix stays finite — so a caller can report truncation
+    /// without the registry ever building an unbounded response.
+    #[test]
+    fn background_listing_counts_matches_before_its_materialization_bound() {
+        let plane = registry("conv-listing-bound");
+        for ordinal in 1..=9 {
+            let lifecycle = if ordinal % 3 == 0 {
+                BackgroundLifecycle::Succeeded
+            } else {
+                BackgroundLifecycle::Running
+            };
+            seed_record(&plane.registry, &format!("e{ordinal}"), lifecycle);
+        }
+
+        let all = plane.registry.listing(false, 2);
+        assert_eq!(all.matched, 9);
+        assert_eq!(listed_ids(&all), vec!["e9", "e8"]);
+
+        let active = plane.registry.listing(true, 3);
+        assert_eq!(active.matched, 6);
+        assert_eq!(listed_ids(&active), vec!["e8", "e7", "e5"]);
+
+        // A zero bound still reports the whole matching population.
+        let none = plane.registry.listing(false, 0);
+        assert!(none.snapshots.is_empty());
+        assert_eq!(none.matched, 9);
+    }
+
+    /// Listing is a pure read: it changes no lifecycle and no settlement.
+    #[test]
+    fn background_listing_mutates_neither_lifecycle_nor_settlement() {
+        let plane = registry("conv-listing-pure");
+        seed_record(&plane.registry, "e1", BackgroundLifecycle::Running);
+        seed_record(
+            &plane.registry,
+            "e2",
+            BackgroundLifecycle::PublishingTerminal,
+        );
+        let before = plane.registry.all_snapshots();
+        let notifications_before: Vec<NotificationState> = plane
+            .registry
+            .state()
+            .records
+            .iter()
+            .map(|record| record.notification)
+            .collect();
+
+        for _ in 0..3 {
+            let _ = plane.registry.listing(false, 16);
+            let _ = plane.registry.listing(true, 1);
+        }
+
+        assert_eq!(plane.registry.all_snapshots(), before);
+        // No settlement candidate is claimed and no terminal notification
+        // advances: a listing is not a settlement boundary.
+        let state = plane.registry.state();
+        assert!(
+            state.records.iter().all(|record| {
+                record.pending_terminal.is_none() && !record.publication_abandoned
+            })
+        );
+        assert_eq!(
+            state
+                .records
+                .iter()
+                .map(|record| record.notification)
+                .collect::<Vec<_>>(),
+            notifications_before
+        );
     }
 
     fn background_invocation(tool: &str) -> ToolInvocation {

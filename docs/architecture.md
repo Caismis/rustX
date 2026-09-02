@@ -2271,8 +2271,8 @@ terminal results   -> remain on their existing domain result channels
 It owns only routing: every request is dispatched by explicit `kind` to the
 owning domain registry (`ConversationBackgroundRegistry` for `kind = tool`,
 `SubagentRegistry` for `kind = subagent`), which returns its authoritative
-snapshot or its authoritative bounded listing; the intrinsic projects those
-into a bounded tagged model-facing representation. The tool status
+snapshot or its own authoritative bounded listing; the intrinsic projects
+those into a bounded tagged model-facing representation. The tool status
 projection carries the `BackgroundExecutionSnapshot`; the subagent status
 projection carries lifecycle, identity, and control facts only and
 deliberately excludes both the registry's internal `detail` —
@@ -2303,6 +2303,36 @@ omission is the only spelling of "do not filter on this axis". There is no
 query language, sort key, cursor, label selector, or conversation selector,
 and no `wait`, `output`, `logs`, `poll_result`, `transcript`, `restart`, or
 `delete` action.
+
+Read-model ownership runs one way only. Each domain authority owns its own
+bounded discovery read model, and the model-facing control plane consumes
+them; no domain depends on the control plane that consumes it:
+
+```text
+ConversationBackgroundRegistry::listing(active_only, limit)
+    -> BackgroundExecutionListing   (owned by the background domain)
+
+SubagentRegistry::listing(active_only, limit)
+    -> SubagentListing              (owned by the subagent domain)
+
+execution(list)
+    -> requests a bounded read model from each selected domain
+    -> converts, merges, and projects them
+    -> applies the one global MAX_LISTED_EXECUTIONS response bound
+    -> returns ExecutionListingResponse
+```
+
+The split of authority is the point. A registry owns which executions
+exist, their lifecycle classification, its own authoritative intra-domain
+order, the matching count, and finite snapshot construction from an
+explicit `limit` its caller supplies. The intrinsic owns filter routing
+between domains, the cross-domain merge policy, the global response limit,
+the truncation metadata, and the model-facing projection. `tools/execution`
+retains only the shared model-facing identity envelope — `ExecutionKind`,
+`ExecutionHandle`, and the `MAX_LISTED_EXECUTIONS` response bound — and no
+read model at all: `MAX_LISTED_EXECUTIONS` is a property of the
+`execution(list)` *response*, never a domain invariant, and a registry
+bounds only how much it materializes.
 
 `execution(list)` semantics:
 

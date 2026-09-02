@@ -2823,10 +2823,16 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   action-tagged: `status`/`cancel` require a `target` and reject a
   `filter`, `list` accepts an optional `filter` and rejects a `target`,
   and unknown fields are rejected at every level. Each owning registry
-  produces its own authoritative bounded listing — which records exist,
-  in which order, which match `active_only` under that domain's own
-  lifecycle classification, and how many matched before the bound — and
-  the intrinsic only projects, merges, bounds, and reports. Discovery is
+  produces its own authoritative bounded listing, in a read-model type
+  that domain itself owns (`BackgroundExecutionListing`,
+  `SubagentListing`) — which records exist, in which order, which match
+  `active_only` under that domain's own lifecycle classification, and how
+  many matched before its caller's materialization bound — and the
+  intrinsic only converts, merges, bounds, and reports. The dependency
+  runs one way only: the model-facing control plane names both domain
+  authorities, and no domain authority names the control plane or its
+  response bound. `MAX_LISTED_EXECUTIONS` stays a control-plane response
+  policy and is never a domain invariant. Discovery is
   conversation-scoped **by construction**: the intrinsic holds only the
   registries its conversation owns, so a foreign execution is unreachable
   rather than filtered, and stays indistinguishable from absence even when

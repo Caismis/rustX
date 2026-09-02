@@ -29,7 +29,14 @@
 //!   | authoritative listing       | authoritative listing
 //!   v                             v
 //! BackgroundExecutionSnapshot     SubagentSnapshot
+//! BackgroundExecutionListing      SubagentListing
 //! ```
+//!
+//! Each domain owns its own read models, including its own bounded
+//! discovery listing; this intrinsic consumes them. The dependency runs one
+//! way only — the model-facing control plane knows both domain authorities,
+//! and neither domain authority knows this control plane or the shared
+//! `tools::execution` envelope's response bound.
 //!
 //! The canonical input is **action-tagged**: the action selects which
 //! fields exist at all, so a target-less action cannot be spelled with a
@@ -88,15 +95,15 @@ use chrono::{DateTime, Utc};
 
 use crate::runtime::identity::{AgentId, ConversationId, SubagentId, ToolCallId, ToolExecutionId};
 use crate::runtime::subagent::{
-    SubagentRegistry, SubagentSnapshot, SubagentState, WorkspaceHandoff, WorkspaceSnapshot,
+    SubagentListing, SubagentRegistry, SubagentSnapshot, SubagentState, WorkspaceHandoff,
+    WorkspaceSnapshot,
 };
 use crate::runtime::types::CancellationReason;
 use crate::tools::background::{
-    BackgroundExecutionSnapshot, BackgroundLifecycle, ConversationBackgroundRegistry,
+    BackgroundExecutionListing, BackgroundExecutionSnapshot, BackgroundLifecycle,
+    ConversationBackgroundRegistry,
 };
-use crate::tools::execution::{
-    ExecutionHandle, ExecutionKind, ExecutionListing, MAX_LISTED_EXECUTIONS,
-};
+use crate::tools::execution::{ExecutionHandle, ExecutionKind, MAX_LISTED_EXECUTIONS};
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
 use crate::tools::types::{
@@ -300,10 +307,20 @@ fn run_list(
     // quota, so the externally visible bound stays exactly one number.
     let tools = match filter.kind {
         None | Some(ExecutionKind::Tool) => background.listing(active_only, MAX_LISTED_EXECUTIONS),
-        Some(ExecutionKind::Subagent) => empty_listing(),
+        // A domain this request never consults contributes the empty
+        // listing: it is not asked and then filtered, it is not asked.
+        Some(ExecutionKind::Subagent) => BackgroundExecutionListing {
+            snapshots: Vec::new(),
+            matched: 0,
+        },
     };
     let children = match (filter.kind, subagents) {
-        (Some(ExecutionKind::Tool), _) | (_, None) => empty_listing(),
+        // Likewise for the subagent domain — and a runtime that owns no
+        // subagent registry has no children to list at all.
+        (Some(ExecutionKind::Tool), _) | (_, None) => SubagentListing {
+            snapshots: Vec::new(),
+            matched: 0,
+        },
         (None | Some(ExecutionKind::Subagent), Some(subagents)) => {
             subagents.listing(active_only, MAX_LISTED_EXECUTIONS)
         }
@@ -319,8 +336,8 @@ fn run_list(
 /// the same entries and the same counts, so repeating a request against
 /// unchanged registries is stable by construction.
 fn merge_bounded(
-    tools: ExecutionListing<BackgroundExecutionSnapshot>,
-    children: ExecutionListing<SubagentSnapshot>,
+    tools: BackgroundExecutionListing,
+    children: SubagentListing,
 ) -> ExecutionListingResponse {
     let matched = tools.matched + children.matched;
     let mut executions = Vec::with_capacity(tools.snapshots.len() + children.snapshots.len());
@@ -345,14 +362,6 @@ fn merge_bounded(
         truncated: matched > executions.len(),
         limit: MAX_LISTED_EXECUTIONS,
         executions,
-    }
-}
-
-/// The empty listing of a domain this request never consults.
-fn empty_listing<T>() -> ExecutionListing<T> {
-    ExecutionListing {
-        snapshots: Vec::new(),
-        matched: 0,
     }
 }
 
@@ -633,11 +642,11 @@ mod tests {
     use chrono::{DateTime, Utc};
 
     use super::{
-        ExecutionInput, ExecutionKind, ExecutionListing, ExecutionSnapshot, ExecutionSummary,
-        MAX_LISTED_EXECUTIONS,
+        ExecutionInput, ExecutionKind, ExecutionSnapshot, ExecutionSummary, MAX_LISTED_EXECUTIONS,
     };
     use crate::runtime::identity::ToolExecutionId;
-    use crate::tools::background::BackgroundExecutionSnapshot;
+    use crate::runtime::subagent::{SubagentListing, SubagentSnapshot};
+    use crate::tools::background::{BackgroundExecutionListing, BackgroundExecutionSnapshot};
 
     /// Every legal invocation of the action-tagged contract parses, and the
     /// action determines which fields exist at all.
@@ -1204,7 +1213,7 @@ mod tests {
             .collect()
     }
 
-    fn tool_listing(ids: &[&str]) -> ExecutionListing<BackgroundExecutionSnapshot> {
+    fn tool_listing(ids: &[&str]) -> BackgroundExecutionListing {
         let snapshots = ids
             .iter()
             .map(|id| BackgroundExecutionSnapshot {
@@ -1217,13 +1226,13 @@ mod tests {
             })
             .take(MAX_LISTED_EXECUTIONS)
             .collect::<Vec<_>>();
-        ExecutionListing {
+        BackgroundExecutionListing {
             snapshots,
             matched: ids.len(),
         }
     }
 
-    fn child_listing(count: usize) -> ExecutionListing<crate::runtime::subagent::SubagentSnapshot> {
+    fn child_listing(count: usize) -> SubagentListing {
         let snapshots = (1..=count)
             .map(|ordinal| {
                 let mut snapshot = subagent_snapshot();
@@ -1233,13 +1242,13 @@ mod tests {
             })
             .take(MAX_LISTED_EXECUTIONS)
             .collect::<Vec<_>>();
-        ExecutionListing {
+        SubagentListing {
             snapshots,
             matched: count,
         }
     }
 
-    fn subagent_snapshot() -> crate::runtime::subagent::SubagentSnapshot {
+    fn subagent_snapshot() -> SubagentSnapshot {
         use crate::runtime::identity::{AgentId, ConversationId, SubagentId, ToolCallId};
         use crate::runtime::subagent::{
             SubagentObservation, SubagentSnapshot, SubagentState, WorkspaceSnapshot,

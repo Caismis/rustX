@@ -53,7 +53,6 @@ use crate::runtime::identity::{AgentId, ConversationId, SubagentId, ToolCallId};
 use crate::runtime::inbound::ConversationInboundMailbox;
 use crate::runtime::types::{CancellationReason, DurabilityGate};
 use crate::runtime::workflow::WorkflowId;
-use crate::tools::execution::ExecutionListing;
 
 use super::activity::{SubagentExecutionProfile, SubagentObservation};
 use super::catalog::{SubagentDefinitionDigest, SubagentName};
@@ -364,6 +363,32 @@ pub struct SubagentSnapshot {
     pub settled: bool,
     /// When the ownership committed.
     pub started_at: DateTime<Utc>,
+}
+
+/// The subagent domain's own bounded discovery read model (Issue #180).
+///
+/// This type is owned by the subagent domain because everything in it is a
+/// subagent-domain fact: which children the registry still knows, the
+/// registry's own authoritative newest-first allocation order, which of
+/// them match the requested lifecycle filter under
+/// [`SubagentState::is_active`], and how many matched. Nothing here is a
+/// model-facing concern, and the domain deliberately does **not** depend on
+/// the model-facing `execution` control plane that consumes it: the
+/// consumer knows the producer, never the other way round.
+///
+/// `snapshots` carries at most the caller's requested number of
+/// authoritative snapshots, most recently started first, and `matched`
+/// reports how many records matched the filter *before* that bound was
+/// applied. Reporting `matched` separately is what keeps truncation honest:
+/// a consumer can always tell a complete listing from a bounded prefix
+/// without the registry ever materializing the whole set.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubagentListing {
+    /// At most the requested number of authoritative snapshots, in the
+    /// registry's newest-first authoritative order.
+    pub snapshots: Vec<SubagentSnapshot>,
+    /// How many records matched the filter in total, before the bound.
+    pub matched: usize,
 }
 
 /// The inputs of one subagent start.
@@ -1337,7 +1362,9 @@ impl SubagentRegistry {
     ///
     /// `matched` reports how many records matched before the bound, so a
     /// caller can report truncation without the registry ever materializing
-    /// an unbounded response.
+    /// an unbounded response. `limit` is the caller's materialization
+    /// bound and nothing more: the registry has no opinion on how large a
+    /// model-facing response may be, and never sees one.
     ///
     /// `active_only` selects the non-terminal (`Running`/`Cancelling`/
     /// `PublishingTerminal`) records exactly as [`SubagentState::is_active`]
@@ -1350,7 +1377,7 @@ impl SubagentRegistry {
     /// indistinguishable, from the child's side, from never having been
     /// listed at all.
     #[must_use]
-    pub fn listing(&self, active_only: bool, limit: usize) -> ExecutionListing<SubagentSnapshot> {
+    pub fn listing(&self, active_only: bool, limit: usize) -> SubagentListing {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let matching = state
             .records
@@ -1359,7 +1386,7 @@ impl SubagentRegistry {
             .filter(|record| !active_only || record.lifecycle.is_active());
         let matched = matching.clone().count();
         let snapshots = matching.take(limit).map(SubagentRecord::snapshot).collect();
-        ExecutionListing { snapshots, matched }
+        SubagentListing { snapshots, matched }
     }
 
     /// The unsettled subagents in deterministic ordinal order (drain).
@@ -3902,6 +3929,146 @@ mod tests {
             after.observation.activity,
             super::super::activity::SubagentActivity::AwaitingActivity
         );
+    }
+
+    // --- The subagent domain's own bounded discovery read model (#180) ---
+    //
+    // These prove the read model directly against the registry's own record
+    // vector, without a live child: the properties under test are ordering,
+    // filtering, counting, and bounding, none of which involve a process.
+    // The listing type is the subagent domain's own — nothing here names
+    // the model-facing `execution` control plane.
+
+    /// Seeds one synthetic record in allocation order, so listing order can
+    /// be asserted against a known allocation sequence.
+    fn seed_record(registry: &SubagentRegistry, id: &str, lifecycle: SubagentLifecycle) {
+        let subagent_id = SubagentId::new(id);
+        let mut state = registry.state.lock().expect("registry state");
+        let index = state.records.len();
+        state.records.push(SubagentRecord {
+            subagent_id: subagent_id.clone(),
+            child_agent_id: AgentId::new(format!("agent-{id}")),
+            child_conversation_id: ConversationId::new(format!("conv-{id}")),
+            tool_call_id: ToolCallId::new(format!("call-{id}")),
+            agent: SubagentName::parse("reviewer").expect("agent name"),
+            definition_digest: serde_json::from_value(serde_json::Value::String(format!(
+                "sha256:{}",
+                "0".repeat(64)
+            )))
+            .expect("digest"),
+            terminal: SubagentTerminalMode::Normal,
+            workspace: WorkspaceSnapshot::shared(std::path::PathBuf::from("/workspace")),
+            handoff: None,
+            lifecycle,
+            cancel_reason: None,
+            control: None,
+            detail: None,
+            observation: SubagentObservation::default(),
+            profile: None,
+            terminal_workflow_value: None,
+            pending_terminal: None,
+            publication_abandoned: false,
+            notification: NotificationState::None,
+            started_at: Utc::now(),
+        });
+        state.index.insert(subagent_id, index);
+    }
+
+    fn listed_ids(listing: &SubagentListing) -> Vec<String> {
+        listing
+            .snapshots
+            .iter()
+            .map(|snapshot| snapshot.subagent_id.to_string())
+            .collect()
+    }
+
+    /// The registry's authoritative order is its own allocation order,
+    /// reversed: the most recently started child first.
+    #[test]
+    fn subagent_listing_is_newest_first_in_the_registrys_allocation_order() {
+        let plane = plane(8);
+        for id in ["s1", "s2", "s3"] {
+            seed_record(&plane.registry, id, SubagentLifecycle::Running);
+        }
+
+        let listing = plane.registry.listing(false, 16);
+
+        assert_eq!(listed_ids(&listing), vec!["s3", "s2", "s1"]);
+        assert_eq!(listing.matched, 3);
+    }
+
+    /// `active_only` is the domain's own lifecycle classification, under
+    /// which `PublishingTerminal` is still active.
+    #[test]
+    fn subagent_listing_active_only_uses_the_domains_own_classification() {
+        let plane = plane(8);
+        seed_record(&plane.registry, "s1", SubagentLifecycle::Running);
+        seed_record(&plane.registry, "s2", SubagentLifecycle::Succeeded);
+        seed_record(&plane.registry, "s3", SubagentLifecycle::PublishingTerminal);
+        seed_record(&plane.registry, "s4", SubagentLifecycle::Cancelled);
+
+        assert_eq!(
+            listed_ids(&plane.registry.listing(true, 16)),
+            vec!["s3", "s1"]
+        );
+        assert_eq!(
+            listed_ids(&plane.registry.listing(false, 16)),
+            vec!["s4", "s3", "s2", "s1"]
+        );
+    }
+
+    /// `matched` counts every matching record before the bound, and the
+    /// materialized prefix stays finite — so a caller can report truncation
+    /// without the registry ever building an unbounded response.
+    #[test]
+    fn subagent_listing_counts_matches_before_its_materialization_bound() {
+        let plane = plane(8);
+        for ordinal in 1..=9 {
+            let lifecycle = if ordinal % 3 == 0 {
+                SubagentLifecycle::Succeeded
+            } else {
+                SubagentLifecycle::Running
+            };
+            seed_record(&plane.registry, &format!("s{ordinal}"), lifecycle);
+        }
+
+        let all = plane.registry.listing(false, 2);
+        assert_eq!(all.matched, 9);
+        assert_eq!(listed_ids(&all), vec!["s9", "s8"]);
+
+        let active = plane.registry.listing(true, 3);
+        assert_eq!(active.matched, 6);
+        assert_eq!(listed_ids(&active), vec!["s8", "s7", "s5"]);
+
+        // A zero bound still reports the whole matching population.
+        let none = plane.registry.listing(false, 0);
+        assert!(none.snapshots.is_empty());
+        assert_eq!(none.matched, 9);
+    }
+
+    /// Listing is a pure read: it changes no lifecycle and no observation.
+    #[test]
+    fn subagent_listing_mutates_neither_lifecycle_nor_observation() {
+        let plane = plane(8);
+        seed_record(&plane.registry, "s1", SubagentLifecycle::Running);
+        let observation = SubagentObservation {
+            revision: 7,
+            ..SubagentObservation::default()
+        };
+        plane
+            .registry
+            .apply_activity(&SubagentId::new("s1"), observation);
+        let before = plane.registry.all_snapshots();
+
+        for _ in 0..3 {
+            let _ = plane.registry.listing(false, 16);
+            let _ = plane.registry.listing(true, 1);
+        }
+
+        let after = plane.registry.all_snapshots();
+        assert_eq!(before, after);
+        assert_eq!(after[0].state, SubagentState::Running);
+        assert_eq!(after[0].observation.revision, 7);
     }
 
     use crate::context::SessionContextPolicy;

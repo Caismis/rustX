@@ -8,28 +8,31 @@
 //! - the explicit [`ExecutionKind`] of one execution;
 //! - the typed [`ExecutionHandle`] every model-visible creation result
 //!   returns and every `execution(status|cancel)` target names;
-//! - the [`ExecutionListing`] envelope an owning domain registry returns
-//!   from its bounded discovery read model, and the single global
-//!   [`MAX_LISTED_EXECUTIONS`] response bound of `execution(list)`
-//!   (Issue #180).
+//! - the single global [`MAX_LISTED_EXECUTIONS`] response bound of
+//!   `execution(list)` (Issue #180), which is a model-facing response
+//!   policy rather than any domain's invariant.
 //!
-//! It deliberately owns **no lifecycle state, no registry, no cancellation
-//! implementation, no durability, and no result channel**. The listing
-//! envelope is shape only: which records exist, in which order, and how
-//! many matched are all decided by the owning registry that fills it. The domain
-//! registries — [`ConversationBackgroundRegistry`] for detached tool
-//! executions and [`SubagentRegistry`] for subagent children — remain the
-//! sole authorities for lifecycle, cancellation, durability, settlement,
-//! and terminal publication. This envelope is identity only: it never
-//! becomes a second source of truth.
+//! It deliberately owns **no lifecycle state, no registry, no read model,
+//! no cancellation implementation, no durability, and no result channel**.
+//! The domain registries — [`ConversationBackgroundRegistry`] for detached
+//! tool executions and [`SubagentRegistry`] for subagent children — remain
+//! the sole authorities for lifecycle, cancellation, durability,
+//! settlement, and terminal publication, and each owns its **own** bounded
+//! discovery read model ([`BackgroundExecutionListing`],
+//! [`SubagentListing`]). Neither domain depends on this module for that:
+//! the dependency runs one way only, from the model-facing control plane
+//! down to the domain authorities. This envelope is identity only: it
+//! never becomes a second source of truth.
 //!
-//! The tagged snapshot *response* of the intrinsic is owned by the
-//! intrinsic itself (`crate::tools::native::execution`), which converts
-//! the authoritative domain snapshot into a bounded tagged model-facing
-//! result.
+//! The tagged snapshot and listing *responses* of the intrinsic are owned
+//! by the intrinsic itself (`crate::tools::native::execution`), which
+//! converts the authoritative domain read models into bounded tagged
+//! model-facing results.
 //!
 //! [`ConversationBackgroundRegistry`]: crate::tools::background::ConversationBackgroundRegistry
+//! [`BackgroundExecutionListing`]: crate::tools::background::BackgroundExecutionListing
 //! [`SubagentRegistry`]: crate::runtime::subagent::SubagentRegistry
+//! [`SubagentListing`]: crate::runtime::subagent::SubagentListing
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -114,37 +117,13 @@ impl ExecutionHandle {
 /// the intrinsic merges the two domain listings and keeps at most this many
 /// entries in total, so the externally visible bound is exactly this number
 /// however the matching executions are distributed across the domains.
+///
+/// It lives here, on the model-facing control envelope, because it is a
+/// property of the `execution(list)` *response* and of nothing else. It is
+/// deliberately not a domain invariant: a registry bounds only how much it
+/// materializes, from an explicit limit its caller supplies, and neither
+/// domain knows what the model-facing response is allowed to carry.
 pub const MAX_LISTED_EXECUTIONS: usize = 64;
-
-/// One owning domain's bounded authoritative listing (Issue #180).
-///
-/// A domain registry produces this itself — it alone knows which records
-/// exist, in which authoritative order, which of them match the requested
-/// lifecycle filter, and how many matched in total. The listing is the
-/// domain's finite read model: `snapshots` carries at most the requested
-/// number of authoritative snapshots, most recently allocated first, and
-/// `matched` reports how many records matched the filter *before* the bound
-/// was applied.
-///
-/// Reporting `matched` separately is what keeps truncation honest: a
-/// consumer can always tell a complete listing from a bounded prefix
-/// without the domain having to materialize the whole set.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ExecutionListing<T> {
-    /// At most the requested number of authoritative snapshots, in the
-    /// domain's newest-first authoritative order.
-    pub snapshots: Vec<T>,
-    /// How many records matched the filter in total, before the bound.
-    pub matched: usize,
-}
-
-impl<T> ExecutionListing<T> {
-    /// Whether the domain held back matching records to honor the bound.
-    #[must_use]
-    pub fn is_truncated(&self) -> bool {
-        self.matched > self.snapshots.len()
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -177,5 +156,43 @@ mod tests {
     fn kind_names_are_the_closed_model_vocabulary() {
         assert_eq!(ExecutionKind::Tool.name(), "tool");
         assert_eq!(ExecutionKind::Subagent.name(), "subagent");
+    }
+
+    /// The layering rule of this envelope, asserted where it is stated
+    /// (Issue #180).
+    ///
+    /// `execution` is the model-facing control plane; the subagent runtime
+    /// is a domain authority underneath it. The control plane may name the
+    /// domain, never the reverse — and because a reverse edge compiles
+    /// perfectly well, the only thing that keeps it out is a test that
+    /// looks. Each domain owns its own bounded listing read model
+    /// (`SubagentListing`, `BackgroundExecutionListing`) precisely so it
+    /// never has to reach up here for one.
+    #[test]
+    fn the_subagent_domain_never_depends_on_this_model_facing_control_plane() {
+        let subagent =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/runtime/subagent");
+        let mut sources = vec![subagent.with_extension("rs")];
+        sources.extend(
+            std::fs::read_dir(&subagent)
+                .expect("subagent domain directory")
+                .map(|entry| entry.expect("directory entry").path())
+                .filter(|path| path.extension().is_some_and(|kind| kind == "rs")),
+        );
+        assert!(
+            sources.len() > 1,
+            "the domain has more than one source file"
+        );
+
+        for source in sources {
+            let text = std::fs::read_to_string(&source).expect("subagent domain source");
+            assert!(
+                !text.contains("tools::execution"),
+                "{} names the model-facing execution control plane: the subagent \
+                 domain must own its own read models, never depend on the control \
+                 plane that consumes them",
+                source.display()
+            );
+        }
     }
 }
