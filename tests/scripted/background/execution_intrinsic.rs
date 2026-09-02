@@ -27,6 +27,7 @@ use std::sync::Arc;
 use rustx::runtime::CancellationSignal;
 use rustx::runtime::identity::ToolExecutionId;
 use rustx::tools::background::{BackgroundDispatchOutcome, BackgroundLifecycle};
+use rustx::tools::execution::MAX_LISTED_EXECUTIONS;
 use rustx::tools::types::ToolExecutionStatus;
 
 // ---------------------------------------------------------------------------
@@ -293,4 +294,443 @@ fn controlled_parking() -> (
     );
     let started = tool.started();
     (tool, started, release)
+}
+
+// ---------------------------------------------------------------------------
+// Discovery (Issue #180)
+// ---------------------------------------------------------------------------
+
+/// `execution(list)` returns every conversation-owned execution within the
+/// bound, each carrying its explicit typed handle rather than a bare id.
+#[tokio::test]
+async fn list_returns_every_conversation_owned_execution_with_a_typed_handle() {
+    let fixture = execution_fixture(None);
+    let registry = fixture.runtime.background().clone();
+    let mut gates = Vec::new();
+    let settled = dispatch_settled(&registry, "exec_1").await;
+    gates.push(dispatch_parking(&registry).await);
+    gates.push(dispatch_parking(&registry).await);
+
+    let listing = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
+    assert_eq!(listing["matched"], 3);
+    assert_eq!(listing["returned"], 3);
+    assert_eq!(listing["truncated"], false);
+    assert_eq!(listing["limit"], MAX_LISTED_EXECUTIONS);
+    assert_eq!(
+        handles(&listing),
+        vec!["exec_3", "exec_2", "exec_1"],
+        "the most recently allocated execution comes first"
+    );
+    for entry in listing["executions"].as_array().expect("executions") {
+        assert_eq!(
+            entry["execution"]["kind"], "tool",
+            "the kind is explicit, never inferred from the id"
+        );
+        assert!(entry["execution"]["id"].is_string());
+        assert_eq!(entry["tool_name"], "bash");
+    }
+    assert_eq!(listing["executions"][0]["state"], "running");
+    assert_eq!(listing["executions"][2]["state"], "succeeded");
+    assert_eq!(settled, ToolExecutionId::new("exec_1"));
+}
+
+/// `active_only` deterministically excludes terminal records, and the
+/// default — an omitted filter — lists active and terminal alike.
+#[tokio::test]
+async fn list_active_only_excludes_terminal_executions() {
+    let fixture = execution_fixture(None);
+    let registry = fixture.runtime.background().clone();
+    dispatch_settled(&registry, "exec_1").await;
+    let _gate = dispatch_parking(&registry).await;
+    dispatch_settled(&registry, "exec_3").await;
+
+    let active = json_content(
+        &run_execution(&fixture, list(&serde_json::json!({"active_only": true}))).await,
+    );
+    assert_eq!(handles(&active), vec!["exec_2"]);
+    assert_eq!(active["matched"], 1, "the count follows the filter");
+    assert_eq!(active["returned"], 1);
+    assert_eq!(active["truncated"], false);
+
+    // The documented default: omitting the field, and stating it as false,
+    // are the same contract, and both list terminal records too.
+    for filter in [
+        serde_json::json!({}),
+        serde_json::json!({"active_only": false}),
+    ] {
+        let all = json_content(&run_execution(&fixture, list(&filter)).await);
+        assert_eq!(handles(&all), vec!["exec_3", "exec_2", "exec_1"]);
+        assert_eq!(all["matched"], 3);
+    }
+}
+
+/// The `kind` filter selects one domain, and a runtime that owns no
+/// subagent registry has no subagents to list — never a fall-through into
+/// the background registry.
+#[tokio::test]
+async fn the_kind_filter_never_falls_through_into_the_other_domain() {
+    let fixture = execution_fixture(None);
+    let registry = fixture.runtime.background().clone();
+    let _gate = dispatch_parking(&registry).await;
+
+    let tools =
+        json_content(&run_execution(&fixture, list(&serde_json::json!({"kind": "tool"}))).await);
+    assert_eq!(handles(&tools), vec!["exec_1"]);
+    assert_eq!(tools["matched"], 1);
+
+    let subagents = json_content(
+        &run_execution(&fixture, list(&serde_json::json!({"kind": "subagent"}))).await,
+    );
+    assert_eq!(
+        subagents["executions"],
+        serde_json::json!([]),
+        "a tool execution is never reachable through the subagent kind"
+    );
+    assert_eq!(subagents["matched"], 0);
+    assert_eq!(subagents["returned"], 0);
+    assert_eq!(subagents["truncated"], false);
+}
+
+/// Repeating the same request against unchanged registries returns the same
+/// entries in the same order with the same metadata.
+#[tokio::test]
+async fn repeated_lists_of_unchanged_state_are_identical() {
+    let fixture = execution_fixture(None);
+    let registry = fixture.runtime.background().clone();
+    let _gates = [
+        dispatch_parking(&registry).await,
+        dispatch_parking(&registry).await,
+    ];
+    dispatch_settled(&registry, "exec_3").await;
+
+    let first = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
+    let second = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
+    assert_eq!(first, second, "an unchanged snapshot lists identically");
+}
+
+/// The bound is an explicit runtime constant: the response stops there,
+/// keeps the deterministic prefix of the order, and says so explicitly.
+#[tokio::test]
+async fn list_truncates_deterministically_at_the_configured_bound() {
+    let fixture = execution_fixture(None);
+    let registry = fixture.runtime.background().clone();
+    let overflow = MAX_LISTED_EXECUTIONS + 6;
+    for ordinal in 1..=overflow {
+        dispatch_settled(&registry, &format!("exec_{ordinal}")).await;
+    }
+
+    let listing = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
+    assert_eq!(listing["returned"], MAX_LISTED_EXECUTIONS);
+    assert_eq!(listing["matched"], overflow);
+    assert_eq!(listing["truncated"], true);
+    assert_eq!(listing["limit"], MAX_LISTED_EXECUTIONS);
+    let expected = (0..MAX_LISTED_EXECUTIONS)
+        .map(|offset| format!("exec_{}", overflow - offset))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        handles(&listing),
+        expected,
+        "truncation keeps the newest deterministic prefix, never a sample"
+    );
+
+    let again = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
+    assert_eq!(
+        listing, again,
+        "truncation chooses the same records and reports the same metadata"
+    );
+}
+
+/// Listing is observation only: it changes no lifecycle, no cancellation
+/// state, no settlement, and no tool invocation count.
+#[tokio::test]
+async fn listing_never_changes_execution_state_or_invocation_counts() {
+    let fixture = execution_fixture(None);
+    let registry = fixture.runtime.background().clone();
+    let (executor, mut started, release) = controlled_parking();
+    let calls = executor.calls();
+    let prepared = registry
+        .prepare_dispatch(
+            &background_invocation("bash"),
+            &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
+            rustx::tools::environment::ToolEnvironment::new(),
+        )
+        .expect("prepare");
+    registry
+        .commit_dispatch(prepared, &CancellationSignal::new())
+        .expect("dispatch commits");
+    support::fake::await_started(&mut started, "background execution").await;
+    dispatch_settled(&registry, "exec_2").await;
+
+    let before = registry.all_snapshots();
+    let calls_before = calls.borrow().len();
+    for filter in [
+        serde_json::json!({}),
+        serde_json::json!({"active_only": true}),
+        serde_json::json!({"kind": "tool"}),
+    ] {
+        let result = run_execution(&fixture, list(&filter)).await;
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+    }
+    let after = registry.all_snapshots();
+    assert_eq!(
+        before, after,
+        "the authoritative registry read model is unchanged by listing"
+    );
+    assert_eq!(
+        calls.borrow().len(),
+        calls_before,
+        "listing invokes no tool"
+    );
+
+    // The listed execution still settles exactly as it would have, through
+    // its own registry-owned path.
+    release.send_replace(true);
+    let terminal = registry
+        .wait_until_terminal(&ToolExecutionId::new("exec_1"))
+        .await
+        .expect("the registry settles the execution");
+    assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
+}
+
+/// A listed execution's cancellation is unaffected: cancelling after a list
+/// behaves exactly as it does without one, and the listing itself never
+/// requests cancellation.
+#[tokio::test]
+async fn listing_never_cancels_or_pre_empts_settlement() {
+    let fixture = execution_fixture(None);
+    let registry = fixture.runtime.background().clone();
+    let _gate = dispatch_parking(&registry).await;
+
+    let listing = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
+    assert_eq!(listing["executions"][0]["state"], "running");
+    let execution_id = ToolExecutionId::new("exec_1");
+    assert_eq!(
+        registry.snapshot(&execution_id).expect("snapshot").state,
+        BackgroundLifecycle::Running,
+        "listing never moves an execution toward cancellation"
+    );
+
+    let cancelled = json_content(
+        &run_execution(
+            &fixture,
+            serde_json::json!({"action": "cancel", "target": {"kind": "tool", "id": "exec_1"}}),
+        )
+        .await,
+    );
+    assert_eq!(cancelled["state"], "cancelling");
+    let terminal = registry
+        .wait_until_terminal(&execution_id)
+        .await
+        .expect("the registry settles the cancellation");
+    assert_eq!(terminal.state, BackgroundLifecycle::Cancelled);
+
+    // After settlement the listing reports the same terminal fact the
+    // registry owns — a projection, never a second lifecycle record.
+    let settled = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
+    assert_eq!(settled["executions"][0]["state"], "cancelled");
+    assert_eq!(
+        json_content(
+            &run_execution(&fixture, list(&serde_json::json!({"active_only": true}))).await
+        )["executions"],
+        serde_json::json!([]),
+        "a settled execution leaves the active listing"
+    );
+}
+
+/// `execution(status)` and `execution(list)` project the same lifecycle
+/// facts for the same execution, because both read the same authoritative
+/// registry snapshot.
+#[tokio::test]
+async fn list_and_status_report_consistent_lifecycle_facts() {
+    let fixture = execution_fixture(None);
+    let registry = fixture.runtime.background().clone();
+    let _gate = dispatch_parking(&registry).await;
+    dispatch_settled(&registry, "exec_2").await;
+
+    let listing = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
+    for entry in listing["executions"].as_array().expect("executions") {
+        let id = entry["execution"]["id"].as_str().expect("id");
+        let status = json_content(
+            &run_execution(
+                &fixture,
+                serde_json::json!({
+                    "action": "status",
+                    "target": {"kind": "tool", "id": id},
+                }),
+            )
+            .await,
+        );
+        assert_eq!(
+            entry["state"], status["state"],
+            "list and status agree about {id}"
+        );
+        assert_eq!(entry["tool_name"], status["tool_name"]);
+        assert_eq!(status["execution_id"], id);
+    }
+}
+
+/// The bounded summary is a discovery read model: a settled execution's
+/// output never rides the listing, so `list` can never become a second
+/// result channel for detached tool executions.
+#[tokio::test]
+async fn a_listing_never_carries_detached_execution_output() {
+    let fixture = execution_fixture(None);
+    let registry = fixture.runtime.background().clone();
+    dispatch_settled(&registry, "exec_1").await;
+
+    let listing = run_execution(&fixture, list(&serde_json::json!({}))).await;
+    let value = json_content(&listing);
+    assert_eq!(value["executions"][0]["state"], "succeeded");
+    let serialized = serde_json::to_string(&value).expect("string");
+    assert!(
+        !serialized.contains("issue180-detached-output"),
+        "the terminal result stays on its own domain channel: {serialized}"
+    );
+    for withheld in ["result", "progress", "content", "exit_code"] {
+        assert!(
+            !serialized.contains(withheld),
+            "a listing carries no {withheld}: {serialized}"
+        );
+    }
+    // The authoritative snapshot still carries it — the listing projects a
+    // narrower read model, it does not erase domain state.
+    assert!(
+        registry
+            .snapshot(&ToolExecutionId::new("exec_1"))
+            .expect("snapshot")
+            .result
+            .is_some(),
+        "the registry keeps the terminal result it owns"
+    );
+}
+
+/// Attaching an empty optional subsystem changes nothing: a runtime that
+/// owns an empty subagent registry lists exactly what a runtime without one
+/// lists, and the discovery machinery's mere existence alters no tool
+/// execution behavior.
+#[tokio::test]
+async fn an_empty_optional_subsystem_changes_no_listing_or_execution_behavior() {
+    let without = execution_fixture(None);
+    let plane = subagent_plane();
+    let with_empty = execution_fixture(Some(plane.registry.clone()));
+    assert!(
+        plane.registry.all_snapshots().is_empty(),
+        "the attached subsystem is empty"
+    );
+
+    for fixture in [&without, &with_empty] {
+        let registry = fixture.runtime.background().clone();
+        dispatch_settled(&registry, "exec_1").await;
+        let _gate = dispatch_parking(&registry).await;
+    }
+
+    for filter in [
+        serde_json::json!({}),
+        serde_json::json!({"active_only": true}),
+        serde_json::json!({"kind": "tool"}),
+        serde_json::json!({"kind": "subagent"}),
+    ] {
+        let bare = json_content(&run_execution(&without, list(&filter)).await);
+        let attached = json_content(&run_execution(&with_empty, list(&filter)).await);
+        assert_eq!(
+            bare, attached,
+            "an empty optional subsystem is indistinguishable from none: {filter}"
+        );
+    }
+
+    // And the executions themselves settle identically on both sides.
+    for fixture in [&without, &with_empty] {
+        let registry = fixture.runtime.background().clone();
+        assert_eq!(
+            registry
+                .snapshot(&ToolExecutionId::new("exec_1"))
+                .expect("snapshot")
+                .state,
+            BackgroundLifecycle::Succeeded
+        );
+        assert_eq!(
+            registry
+                .snapshot(&ToolExecutionId::new("exec_2"))
+                .expect("snapshot")
+                .state,
+            BackgroundLifecycle::Running
+        );
+    }
+}
+
+/// One `execution(list)` invocation.
+fn list(filter: &serde_json::Value) -> serde_json::Value {
+    if filter.as_object().is_some_and(serde_json::Map::is_empty) {
+        serde_json::json!({"action": "list"})
+    } else {
+        serde_json::json!({"action": "list", "filter": filter})
+    }
+}
+
+/// The handle ids of a listing, in response order.
+fn handles(listing: &serde_json::Value) -> Vec<String> {
+    listing["executions"]
+        .as_array()
+        .expect("executions")
+        .iter()
+        .map(|entry| {
+            entry["execution"]["id"]
+                .as_str()
+                .expect("handle id")
+                .to_owned()
+        })
+        .collect()
+}
+
+/// Dispatches one background execution that parks until the returned gate
+/// releases it, so the record stays deterministically active.
+async fn dispatch_parking(
+    registry: &rustx::tools::background::ConversationBackgroundRegistry,
+) -> tokio::sync::watch::Sender<bool> {
+    let (executor, mut started, release) = controlled_parking();
+    let prepared = registry
+        .prepare_dispatch(
+            &background_invocation("bash"),
+            &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
+            rustx::tools::environment::ToolEnvironment::new(),
+        )
+        .expect("prepare");
+    registry
+        .commit_dispatch(prepared, &CancellationSignal::new())
+        .expect("dispatch commits");
+    support::fake::await_started(&mut started, "parking background execution").await;
+    release
+}
+
+/// Dispatches one background execution and waits for the registry's own
+/// terminal settlement, so the record is deterministically terminal.
+async fn dispatch_settled(
+    registry: &rustx::tools::background::ConversationBackgroundRegistry,
+    expected_id: &str,
+) -> ToolExecutionId {
+    let executor = support::fake::FakeTool::new(
+        common::tool_policies(
+            "bash",
+            "tool-bash",
+            rustx::tools::types::ToolExecutionPolicy::ModelSelectable,
+            rustx::tools::types::ToolConcurrencyPolicy::Sequential,
+        ),
+        support::fake::success_result("issue180-detached-output"),
+    );
+    let prepared = registry
+        .prepare_dispatch(
+            &background_invocation("bash"),
+            &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
+            rustx::tools::environment::ToolEnvironment::new(),
+        )
+        .expect("prepare");
+    registry
+        .commit_dispatch(prepared, &CancellationSignal::new())
+        .expect("dispatch commits");
+    let execution_id = ToolExecutionId::new(expected_id);
+    registry
+        .wait_until_terminal(&execution_id)
+        .await
+        .expect("the registry settles the execution");
+    execution_id
 }

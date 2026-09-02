@@ -7,10 +7,16 @@
 //!
 //! - the explicit [`ExecutionKind`] of one execution;
 //! - the typed [`ExecutionHandle`] every model-visible creation result
-//!   returns and every `execution(status|cancel)` target names.
+//!   returns and every `execution(status|cancel)` target names;
+//! - the [`ExecutionListing`] envelope an owning domain registry returns
+//!   from its bounded discovery read model, and the single global
+//!   [`MAX_LISTED_EXECUTIONS`] response bound of `execution(list)`
+//!   (Issue #180).
 //!
 //! It deliberately owns **no lifecycle state, no registry, no cancellation
-//! implementation, no durability, and no result channel**. The domain
+//! implementation, no durability, and no result channel**. The listing
+//! envelope is shape only: which records exist, in which order, and how
+//! many matched are all decided by the owning registry that fills it. The domain
 //! registries — [`ConversationBackgroundRegistry`] for detached tool
 //! executions and [`SubagentRegistry`] for subagent children — remain the
 //! sole authorities for lifecycle, cancellation, durability, settlement,
@@ -98,6 +104,45 @@ impl ExecutionHandle {
             kind: ExecutionKind::Subagent,
             id: subagent_id.to_string(),
         }
+    }
+}
+
+/// The global bound on how many executions one `execution(list)` response
+/// may carry (Issue #180).
+///
+/// The bound is a single **global** response bound, not a per-domain quota:
+/// the intrinsic merges the two domain listings and keeps at most this many
+/// entries in total, so the externally visible bound is exactly this number
+/// however the matching executions are distributed across the domains.
+pub const MAX_LISTED_EXECUTIONS: usize = 64;
+
+/// One owning domain's bounded authoritative listing (Issue #180).
+///
+/// A domain registry produces this itself — it alone knows which records
+/// exist, in which authoritative order, which of them match the requested
+/// lifecycle filter, and how many matched in total. The listing is the
+/// domain's finite read model: `snapshots` carries at most the requested
+/// number of authoritative snapshots, most recently allocated first, and
+/// `matched` reports how many records matched the filter *before* the bound
+/// was applied.
+///
+/// Reporting `matched` separately is what keeps truncation honest: a
+/// consumer can always tell a complete listing from a bounded prefix
+/// without the domain having to materialize the whole set.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExecutionListing<T> {
+    /// At most the requested number of authoritative snapshots, in the
+    /// domain's newest-first authoritative order.
+    pub snapshots: Vec<T>,
+    /// How many records matched the filter in total, before the bound.
+    pub matched: usize,
+}
+
+impl<T> ExecutionListing<T> {
+    /// Whether the domain held back matching records to honor the bound.
+    #[must_use]
+    pub fn is_truncated(&self) -> bool {
+        self.matched > self.snapshots.len()
     }
 }
 

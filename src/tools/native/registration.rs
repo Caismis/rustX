@@ -171,6 +171,21 @@ pub(crate) fn input_schema<I: JsonSchema>() -> serde_json::Value {
 /// `null`, and an explicit `anyOf`/`const` alternative, are left untouched,
 /// so a tool that ever needs `null` as a meaningful business value can
 /// still express it explicitly in its own input contract.
+///
+/// Collapsing the union alone is not the whole rule, because the generator
+/// widens an optional property in two further places that would otherwise
+/// contradict the collapsed type:
+///
+/// - an `Option<SomeEnum>` also gains a `null` **enum member**, leaving a
+///   `{"type": "string", "enum": [..., null]}` schema no instance can
+///   satisfy through that member; and
+/// - a defaulted optional gains `"default": null`, which advertises `null`
+///   as the property's resting value when the contract's resting value is
+///   the property's absence.
+///
+/// Both are removed under exactly the same condition as the union collapse —
+/// a property that was widened for optionality — so a contract that means
+/// `null` on its own terms keeps saying so.
 #[derive(Debug, Clone, Copy)]
 struct OptionalIsAbsentNotNull;
 
@@ -191,6 +206,23 @@ impl Transform for OptionalIsAbsentNotNull {
                 serde_json::Value::Array(types)
             };
             schema.insert("type".to_owned(), value);
+            // The property was widened for optionality; remove the two
+            // residues of that widening that now contradict the collapsed
+            // type.
+            if let Some(members) = schema
+                .get_mut("enum")
+                .and_then(serde_json::Value::as_array_mut)
+                && members.iter().any(serde_json::Value::is_null)
+                && members.iter().any(|member| !member.is_null())
+            {
+                members.retain(|member| !member.is_null());
+            }
+            if schema
+                .get("default")
+                .is_some_and(serde_json::Value::is_null)
+            {
+                schema.remove("default");
+            }
         }
         transform_subschemas(self, schema);
     }

@@ -13,7 +13,7 @@
 
 use super::super::support::execution::{
     SubagentPlane, background_invocation, execution_fixture, failure_message, json_content,
-    run_execution, subagent_plane,
+    run_execution, subagent_plane, subagent_plane_for,
 };
 use super::super::{common, support};
 
@@ -741,4 +741,520 @@ async fn activity_frames_racing_terminal_settlement_are_dropped() {
         text.contains("RACE-178-ANSWER"),
         "the canonical inbound carries the answer exactly once: {text}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Discovery across both domains (Issue #180)
+// ---------------------------------------------------------------------------
+
+/// The merged listing is the deterministic alternating order over both
+/// domains, each contributing its most recently allocated execution first.
+#[tokio::test]
+async fn list_merges_both_domains_in_the_deterministic_alternating_order() {
+    let plane = subagent_plane();
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    let _first = stage_exit0(&plane);
+    let first = start_subagent(&plane, "first child").await;
+    let _second = stage_exit0(&plane);
+    let second = start_subagent(&plane, "second child").await;
+    let _tools = dispatch_parking_pair(&fixture).await;
+
+    let listing = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
+    assert_eq!(
+        handles(&listing),
+        vec![
+            ("tool", "exec_2".to_owned()),
+            ("subagent", second.subagent_id.to_string()),
+            ("tool", "exec_1".to_owned()),
+            ("subagent", first.subagent_id.to_string()),
+        ],
+        "tool, subagent, tool, subagent — each domain newest first"
+    );
+    assert_eq!(listing["matched"], 4);
+    assert_eq!(listing["returned"], 4);
+    assert_eq!(listing["truncated"], false);
+    // Repeating the request against unchanged registries is stable.
+    let again = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
+    assert_eq!(listing, again);
+}
+
+/// A `kind` filter selects one domain authority and never falls through
+/// into the other, even when both domains hold executions.
+#[tokio::test]
+async fn kind_filtering_isolates_the_two_domains() {
+    let plane = subagent_plane();
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    let _child = stage_exit0(&plane);
+    let child = start_subagent(&plane, "inspect the tool plane").await;
+    let _tools = dispatch_parking_pair(&fixture).await;
+
+    let tools =
+        json_content(&run_execution(&fixture, list(&serde_json::json!({"kind": "tool"}))).await);
+    assert_eq!(
+        handles(&tools),
+        vec![("tool", "exec_2".to_owned()), ("tool", "exec_1".to_owned())],
+        "the tool filter reaches only the background registry"
+    );
+    assert_eq!(tools["matched"], 2, "the count excludes the other domain");
+
+    let subagents = json_content(
+        &run_execution(&fixture, list(&serde_json::json!({"kind": "subagent"}))).await,
+    );
+    assert_eq!(
+        handles(&subagents),
+        vec![("subagent", child.subagent_id.to_string())],
+        "the subagent filter reaches only the subagent registry"
+    );
+    assert_eq!(subagents["matched"], 1);
+}
+
+/// Discovery is conversation-scoped by construction: another conversation's
+/// executions are not filtered out, they are unreachable — even when their
+/// ids are structurally identical to this conversation's.
+#[tokio::test]
+async fn foreign_conversation_executions_are_never_listed() {
+    let plane = subagent_plane();
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    let _child = stage_exit0(&plane);
+    let mine = start_subagent(&plane, "my child").await;
+    let _tools = dispatch_parking_pair(&fixture).await;
+
+    // A second conversation with its own registries, wired to nothing.
+    let foreign_plane = subagent_plane_for("conv-180-foreign");
+    let _foreign_child = stage_exit0(&foreign_plane);
+    let foreign_child = start_subagent(&foreign_plane, "foreign child").await;
+    let foreign_fixture = execution_fixture(Some(foreign_plane.registry.clone()));
+    let _foreign_tools = dispatch_parking_pair(&foreign_fixture).await;
+
+    let listing = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
+    assert_eq!(listing["matched"], 3, "only this conversation's executions");
+    assert_eq!(
+        handles(&listing),
+        vec![
+            ("tool", "exec_2".to_owned()),
+            ("subagent", mine.subagent_id.to_string()),
+            ("tool", "exec_1".to_owned()),
+        ]
+    );
+
+    // Both conversations allocated the very same *tool* execution ids, so
+    // structurally identical ids exist in both registries — and each
+    // listing still shows only the records its own conversation owns,
+    // because it never sees the others at all.
+    let foreign_listing =
+        json_content(&run_execution(&foreign_fixture, list(&serde_json::json!({}))).await);
+    assert_eq!(foreign_listing["matched"], 3);
+    assert!(
+        handles(&foreign_listing).contains(&("subagent", foreign_child.subagent_id.to_string())),
+        "the foreign conversation lists its own child"
+    );
+    assert!(
+        !handles(&listing).contains(&("subagent", foreign_child.subagent_id.to_string())),
+        "and this conversation never sees it"
+    );
+    assert_ne!(
+        mine.subagent_id, foreign_child.subagent_id,
+        "the two children are genuinely different executions"
+    );
+    assert_eq!(
+        handles(&listing)
+            .iter()
+            .filter(|(kind, _)| *kind == "tool")
+            .count(),
+        2,
+        "the colliding foreign tool ids never doubled this conversation's own"
+    );
+
+    // The same boundary holds for the single-target surface: a foreign id
+    // is exactly an unknown id.
+    let status = run_execution(
+        &fixture,
+        serde_json::json!({
+            "action": "status",
+            "target": {"kind": "subagent", "id": foreign_child.subagent_id.to_string()},
+        }),
+    )
+    .await;
+    assert!(
+        failure_message(&status).contains("unknown subagent execution"),
+        "a foreign execution is indistinguishable from absence"
+    );
+}
+
+/// Listing a running child changes nothing about it: not its lifecycle, not
+/// its settlement, not its cancellation, and not the Issue #178 observation
+/// plane's latest-value or revision state.
+#[tokio::test]
+async fn listing_never_disturbs_a_running_child_or_its_observation() {
+    let plane = subagent_plane();
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    let child = stage_exit0(&plane);
+    let accepted = start_subagent(&plane, "inspect the tool plane").await;
+    let mut peer = child.peer;
+    let mut observation_peer = child.observation_peer;
+
+    // Drive one live activity update through the observation plane and wait
+    // until the registry has provably applied it.
+    let frame = crate::runtime::subagent::ipc::read_parent_frame(&mut peer)
+        .await
+        .expect("delegate frame");
+    assert!(matches!(
+        frame,
+        Some(crate::runtime::subagent::ipc::ParentFrame::Delegate(_))
+    ));
+    crate::runtime::subagent::ipc::write_activity_frame(
+        &mut observation_peer,
+        &crate::runtime::subagent::ipc::ActivityFrame {
+            observation: crate::runtime::subagent::SubagentObservation {
+                revision: 5,
+                activity: crate::runtime::subagent::SubagentActivity::Tool {
+                    tool_call_id: ToolCallId::new("call-180"),
+                    tool_id: crate::runtime::identity::ToolId::new("tool-grep"),
+                    progress: None,
+                },
+                last_activity_at: None,
+                counters: crate::runtime::subagent::SubagentActivityCounters {
+                    model_requests: 3,
+                    model_retries: 1,
+                    tool_executions: 2,
+                },
+            },
+        },
+    )
+    .await
+    .expect("live activity frame");
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let snapshot = plane
+                .registry
+                .snapshot(&accepted.subagent_id)
+                .expect("child record");
+            if snapshot.observation.revision == 5 {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the live activity frame applies");
+
+    let before = plane.registry.all_snapshots();
+    for filter in [
+        serde_json::json!({}),
+        serde_json::json!({"kind": "subagent"}),
+        serde_json::json!({"active_only": true}),
+    ] {
+        let result = run_execution(&fixture, list(&filter)).await;
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+    }
+    let after = plane.registry.all_snapshots();
+    assert_eq!(
+        before, after,
+        "listing mutates no lifecycle, no counters, and no observation state"
+    );
+    let observation = &after[0].observation;
+    assert_eq!(
+        observation.revision, 5,
+        "listing never advances the latest-value revision"
+    );
+    assert_eq!(observation.counters.model_requests, 3);
+    assert_eq!(observation.counters.model_retries, 1);
+    assert_eq!(observation.counters.tool_executions, 2);
+    assert_eq!(
+        after[0].state,
+        SubagentState::Running,
+        "a listed child is still running"
+    );
+
+    // And the child still settles exactly once, through the canonical path.
+    crate::runtime::subagent::ipc::write_child_frame(
+        &mut peer,
+        &ChildFrame::Result(ResultFrame {
+            status: ChildResultStatus::Succeeded,
+            content: Some(SECRET_CHILD_ANSWER.to_owned()),
+            diagnostic: None,
+        }),
+    )
+    .await
+    .expect("terminal result frame");
+    let settled = plane
+        .registry
+        .wait_until_settled(&accepted.subagent_id)
+        .await
+        .expect("settled");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    let pending = plane
+        .store
+        .select_pending_batch()
+        .expect("pending")
+        .expect("one pending batch");
+    assert_eq!(
+        pending.items.len(),
+        1,
+        "listing added no publication and removed none"
+    );
+}
+
+/// A settled child's answer and history never ride the listing: the
+/// canonical inbound message remains the one result channel.
+#[tokio::test]
+async fn a_listing_never_carries_a_child_answer_or_its_history() {
+    let plane = subagent_plane();
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    let child = stage_exit0(&plane);
+    let accepted = start_subagent(&plane, "inspect the tool plane").await;
+    child
+        .complete(ChildResultStatus::Succeeded, Some(SECRET_CHILD_ANSWER))
+        .await;
+    let settled = plane
+        .registry
+        .wait_until_settled(&accepted.subagent_id)
+        .await
+        .expect("settled");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+
+    let result = run_execution(&fixture, list(&serde_json::json!({}))).await;
+    let listing = json_content(&result);
+    assert_eq!(listing["executions"][0]["state"], "succeeded");
+    assert_eq!(listing["executions"][0]["agent"], "explore");
+    let serialized = serde_json::to_string(&listing).expect("string");
+    assert!(
+        !serialized.contains(SECRET_CHILD_ANSWER),
+        "the successful answer is absent from the listing: {serialized}"
+    );
+    for withheld in [
+        "detail",
+        "observation",
+        "activity",
+        "last_activity_at",
+        "counters",
+        "profile",
+        "history",
+        "transcript",
+        "content",
+    ] {
+        assert!(
+            !serialized.contains(withheld),
+            "a listing carries no {withheld}: {serialized}"
+        );
+    }
+    // The answer did arrive, exactly once, on its own channel.
+    let pending = plane
+        .store
+        .select_pending_batch()
+        .expect("pending")
+        .expect("one pending batch");
+    assert_eq!(pending.items.len(), 1);
+}
+
+/// `execution(list)` and `execution(status)` project the same authoritative
+/// lifecycle facts for the same subagent.
+#[tokio::test]
+async fn list_and_status_agree_about_a_subagent() {
+    let plane = subagent_plane();
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    let _child = stage_exit0(&plane);
+    let accepted = start_subagent(&plane, "inspect the tool plane").await;
+
+    let listing = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
+    let entry = &listing["executions"][0];
+    let status = json_content(
+        &run_execution(
+            &fixture,
+            serde_json::json!({
+                "action": "status",
+                "target": {"kind": "subagent", "id": accepted.subagent_id.to_string()},
+            }),
+        )
+        .await,
+    );
+    assert_eq!(entry["state"], status["state"]);
+    assert_eq!(entry["agent"], status["agent"]);
+    assert_eq!(entry["started_at"], status["started_at"]);
+    assert_eq!(
+        entry["publication_abandoned"],
+        status["publication_abandoned"]
+    );
+    assert_eq!(entry["execution"]["id"], status["subagent_id"]);
+    assert_eq!(entry["execution"]["kind"], "subagent");
+}
+
+/// `active_only` follows the owning domain's own lifecycle classification:
+/// a settled child leaves the active listing and stays in the default one.
+#[tokio::test]
+async fn list_active_only_excludes_settled_children() {
+    let plane = subagent_plane();
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    let settling = stage_exit0(&plane);
+    let settled_child = start_subagent(&plane, "settling child").await;
+    settling
+        .complete(ChildResultStatus::Succeeded, Some("done"))
+        .await;
+    plane
+        .registry
+        .wait_until_settled(&settled_child.subagent_id)
+        .await
+        .expect("settled");
+    let _running = stage_exit0(&plane);
+    let running_child = start_subagent(&plane, "running child").await;
+
+    let active = json_content(
+        &run_execution(&fixture, list(&serde_json::json!({"active_only": true}))).await,
+    );
+    assert_eq!(
+        handles(&active),
+        vec![("subagent", running_child.subagent_id.to_string())],
+        "only the non-terminal child is active"
+    );
+    assert_eq!(active["matched"], 1);
+
+    let all = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
+    assert_eq!(
+        handles(&all),
+        vec![
+            ("subagent", running_child.subagent_id.to_string()),
+            ("subagent", settled_child.subagent_id.to_string()),
+        ],
+        "the default lists terminal children too"
+    );
+    assert_eq!(all["matched"], 2);
+}
+
+/// Listing does not consume, release, or otherwise disturb the subagent
+/// domain's capacity accounting.
+#[tokio::test]
+async fn listing_never_changes_subagent_capacity_accounting() {
+    let plane = subagent_plane();
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    // `subagent_plane` configures `max_active: 4`.
+    let mut children = Vec::new();
+    for ordinal in 0..4 {
+        children.push(stage_exit0(&plane));
+        start_subagent(&plane, &format!("child {ordinal}")).await;
+    }
+
+    let listing = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
+    assert_eq!(listing["matched"], 4);
+
+    // The bound is still exactly where it was: the fifth start is refused
+    // for capacity, not admitted because a listing "released" anything.
+    let _staged = stage_exit0(&plane);
+    let prepared = plane
+        .registry
+        .prepare(&spec("one child too many"), &CancellationSignal::new())
+        .await
+        .expect("preparation still stages a child");
+    let refused = plane
+        .registry
+        .commit(prepared, &CancellationSignal::new())
+        .await
+        .expect_err("the capacity bound still refuses the fifth child at commit");
+    assert!(
+        matches!(
+            refused,
+            rustx::runtime::subagent::SubagentStartError::CapacityExceeded { max: 4 }
+        ),
+        "listing changed no capacity accounting: {refused:?}"
+    );
+
+    // Settling one child frees exactly one slot, listing or not.
+    let settling = children.remove(0);
+    settling
+        .complete(ChildResultStatus::Succeeded, Some("done"))
+        .await;
+    let first = plane
+        .registry
+        .all_snapshots()
+        .into_iter()
+        .next()
+        .expect("the first child");
+    plane
+        .registry
+        .wait_until_settled(&first.subagent_id)
+        .await
+        .expect("settled");
+    let _after = run_execution(&fixture, list(&serde_json::json!({}))).await;
+    let _staged = stage_exit0(&plane);
+    let prepared = plane
+        .registry
+        .prepare(&spec("the replacement child"), &CancellationSignal::new())
+        .await
+        .expect("preparation stages the replacement");
+    assert!(
+        matches!(
+            plane
+                .registry
+                .commit(prepared, &CancellationSignal::new())
+                .await
+                .expect("the freed slot admits exactly one replacement"),
+            SubagentStartOutcome::Accepted(_)
+        ),
+        "the slot the settlement freed is the slot the replacement takes"
+    );
+}
+
+/// One `execution(list)` invocation.
+fn list(filter: &serde_json::Value) -> serde_json::Value {
+    if filter.as_object().is_some_and(serde_json::Map::is_empty) {
+        serde_json::json!({"action": "list"})
+    } else {
+        serde_json::json!({"action": "list", "filter": filter})
+    }
+}
+
+/// The `(kind, id)` handle pairs of a listing, in response order.
+fn handles(listing: &serde_json::Value) -> Vec<(&str, String)> {
+    listing["executions"]
+        .as_array()
+        .expect("executions")
+        .iter()
+        .map(|entry| {
+            (
+                entry["execution"]["kind"].as_str().expect("handle kind"),
+                entry["execution"]["id"]
+                    .as_str()
+                    .expect("handle id")
+                    .to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// Dispatches two parking background executions (`exec_1`, `exec_2`) and
+/// returns their release gates, so both records stay deterministically
+/// active for the duration of the test.
+async fn dispatch_parking_pair(
+    fixture: &super::super::support::execution::ExecutionFixture,
+) -> Vec<tokio::sync::watch::Sender<bool>> {
+    let registry = fixture.runtime.background().clone();
+    let mut gates = Vec::new();
+    for _ in 0..2 {
+        let (tool, release) = support::fake::FakeTool::parking(
+            common::tool_policies(
+                "bash",
+                "tool-bash",
+                rustx::tools::types::ToolExecutionPolicy::ModelSelectable,
+                rustx::tools::types::ToolConcurrencyPolicy::Sequential,
+            ),
+            support::fake::success_result("done"),
+        );
+        let mut started = tool.started();
+        let prepared = registry
+            .prepare_dispatch(
+                &background_invocation("bash"),
+                &(Arc::new(tool) as Arc<dyn rustx::tools::executor::ToolExecutor>),
+                rustx::tools::environment::ToolEnvironment::new(),
+            )
+            .expect("prepare");
+        let outcome = registry
+            .commit_dispatch(prepared, &CancellationSignal::new())
+            .expect("dispatch commits");
+        assert!(matches!(
+            outcome,
+            BackgroundDispatchOutcome::Accepted { .. }
+        ));
+        support::fake::await_started(&mut started, "parking background execution").await;
+        gates.push(release);
+    }
+    gates
 }

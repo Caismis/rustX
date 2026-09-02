@@ -89,7 +89,24 @@ fn all_native_schemas_are_canonical_and_have_no_file_path_contract() {
         rustx::tools::schema::validate_canonical_schema(&schema)
             .unwrap_or_else(|error| panic!("{name}: {error}"));
         assert_eq!(schema["type"], "object");
-        assert_eq!(schema["additionalProperties"], false);
+        // Every native contract rejects unknown fields. A plain object
+        // schema says so at its root; an action-tagged contract (the
+        // `execution` intrinsic) is a root union whose *branches* carry the
+        // object properties, and a root `additionalProperties: false` there
+        // would forbid every property rather than the unknown ones. The
+        // invariant is the strictness, not where it is written.
+        if let Some(branches) = schema["oneOf"].as_array() {
+            assert!(!branches.is_empty(), "{name}: an empty union");
+            for branch in branches {
+                assert_eq!(branch["type"], "object", "{name}: union branch");
+                assert_eq!(
+                    branch["additionalProperties"], false,
+                    "{name}: every union branch rejects unknown fields"
+                );
+            }
+        } else {
+            assert_eq!(schema["additionalProperties"], false);
+        }
         assert!(!schema.to_string().contains("$ref"));
         assert!(!schema.to_string().contains("file_path"));
     }

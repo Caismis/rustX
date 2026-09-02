@@ -53,6 +53,7 @@ use crate::runtime::identity::{AgentId, ConversationId, SubagentId, ToolCallId};
 use crate::runtime::inbound::ConversationInboundMailbox;
 use crate::runtime::types::{CancellationReason, DurabilityGate};
 use crate::runtime::workflow::WorkflowId;
+use crate::tools::execution::ExecutionListing;
 
 use super::activity::{SubagentExecutionProfile, SubagentObservation};
 use super::catalog::{SubagentDefinitionDigest, SubagentName};
@@ -287,6 +288,28 @@ pub enum SubagentState {
     /// The child process/control plane settled without a valid semantic
     /// terminal result; the child's outcome is unknown.
     Interrupted,
+}
+
+impl SubagentState {
+    /// Whether this state is terminal (absorbing).
+    ///
+    /// This is the domain's own lifecycle classification, kept beside the
+    /// vocabulary it classifies: `PublishingTerminal` is deliberately **not**
+    /// terminal — the outcome is known but its durable publication has not
+    /// committed, so the child still owns unfinished settlement work.
+    #[must_use]
+    pub const fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Succeeded | Self::Failed | Self::Cancelled | Self::Interrupted
+        )
+    }
+
+    /// Whether this state is active (non-terminal).
+    #[must_use]
+    pub const fn is_active(self) -> bool {
+        !self.is_terminal()
+    }
 }
 
 /// A consistency snapshot of one subagent child.
@@ -1300,6 +1323,43 @@ impl SubagentRegistry {
     pub fn all_snapshots(&self) -> Vec<SubagentSnapshot> {
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.records.iter().map(SubagentRecord::snapshot).collect()
+    }
+
+    /// The registry's bounded authoritative listing for conversation-owned
+    /// execution discovery (Issue #180).
+    ///
+    /// This is the discovery read model of the subagent domain: the registry
+    /// alone decides which children exist, in which authoritative order,
+    /// which of them are lifecycle-active, and how many matched. The listing
+    /// carries at most `limit` snapshots in **reverse ordinal order** — the
+    /// most recently started child first — so applying the bound keeps the
+    /// children a caller is most likely to still be acting on.
+    ///
+    /// `matched` reports how many records matched before the bound, so a
+    /// caller can report truncation without the registry ever materializing
+    /// an unbounded response.
+    ///
+    /// `active_only` selects the non-terminal (`Running`/`Cancelling`/
+    /// `PublishingTerminal`) records exactly as [`SubagentState::is_active`]
+    /// defines them; otherwise every record the registry still knows is
+    /// listed, terminal ones included.
+    ///
+    /// This is a pure read: it takes the same lock every query takes and
+    /// mutates nothing — no lifecycle, no observation revision, no
+    /// notification state, and no observer seam. Listing a child is
+    /// indistinguishable, from the child's side, from never having been
+    /// listed at all.
+    #[must_use]
+    pub fn listing(&self, active_only: bool, limit: usize) -> ExecutionListing<SubagentSnapshot> {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let matching = state
+            .records
+            .iter()
+            .rev()
+            .filter(|record| !active_only || record.lifecycle.is_active());
+        let matched = matching.clone().count();
+        let snapshots = matching.take(limit).map(SubagentRecord::snapshot).collect();
+        ExecutionListing { snapshots, matched }
     }
 
     /// The unsettled subagents in deterministic ordinal order (drain).

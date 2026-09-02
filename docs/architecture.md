@@ -2254,26 +2254,103 @@ resort for Bash, MCP, and other result types.
 
 `execution` is a runtime intrinsic that happens to participate in the
 common tool execution plane. It is not an ordinary native tool: it is the
-single model-facing observation and cancellation control plane for
-conversation-owned asynchronous executions (Issue #162). Its contract and
-runtime semantics are outside the ordinary-native-tool contract alignment,
-and it is never moved, renamed, or re-schema'd to make `tools/native/` look
-uniform. It owns only routing: every request is dispatched by explicit
-`kind` to the owning domain registry (`ConversationBackgroundRegistry` for
-`kind = tool`, `SubagentRegistry` for `kind = subagent`), which returns its
-authoritative snapshot; the intrinsic projects that snapshot into a bounded
-tagged model-facing representation. The tool projection carries the
-`BackgroundExecutionSnapshot`; the subagent projection carries lifecycle,
-identity, and control facts only and deliberately excludes both the
-registry's internal `detail` — diagnostics-only since Issue #178, when the
-successful child answer stopped entering it — and the observation-plane
-`observation`/`execution_profile` fields — so the canonical inbound
-child-agent message remains the **only** child-result delivery channel,
-`execution` never becomes a result channel, and observing a child never
-enlarges parent model context. The intrinsic never guesses a kind from an
-id, never tries one registry and falls through to another, and never owns
-lifecycle state, cancellation implementation, durability, or result
-publication.
+single model-facing observation, discovery, and cancellation control plane
+for conversation-owned asynchronous executions (Issues #162 and #180). Its
+contract and runtime semantics are outside the ordinary-native-tool contract
+alignment, and it is never moved, renamed, or re-schema'd to make
+`tools/native/` look uniform. The closed role of the control plane is:
+
+```text
+creation APIs      -> return an ExecutionHandle { kind, id }
+execution(status)  -> inspect one execution through its owning domain
+execution(cancel)  -> request cancellation through its owning domain
+execution(list)    -> discover bounded conversation-owned execution handles
+terminal results   -> remain on their existing domain result channels
+```
+
+It owns only routing: every request is dispatched by explicit `kind` to the
+owning domain registry (`ConversationBackgroundRegistry` for `kind = tool`,
+`SubagentRegistry` for `kind = subagent`), which returns its authoritative
+snapshot or its authoritative bounded listing; the intrinsic projects those
+into a bounded tagged model-facing representation. The tool status
+projection carries the `BackgroundExecutionSnapshot`; the subagent status
+projection carries lifecycle, identity, and control facts only and
+deliberately excludes both the registry's internal `detail` —
+diagnostics-only since Issue #178, when the successful child answer stopped
+entering it — and the observation-plane `observation`/`execution_profile`
+fields — so the canonical inbound child-agent message remains the **only**
+child-result delivery channel, `execution` never becomes a result channel,
+and observing a child never enlarges parent model context. The intrinsic
+never guesses a kind from an id, never tries one registry and falls through
+to another, and never owns lifecycle state, a registry, a cache,
+cancellation implementation, durability, or result publication.
+
+The model-facing input contract is action-tagged, so the action determines
+which fields exist rather than leaving a target optional:
+
+```json
+{"action": "status", "target": {"kind": "tool | subagent", "id": "..."}}
+{"action": "cancel", "target": {"kind": "tool | subagent", "id": "..."}}
+{"action": "list",   "filter": {"kind": "tool | subagent", "active_only": true}}
+```
+
+A `target` on `list`, a missing `target` on `status`/`cancel`, a `filter`
+outside `list`, and any unknown field are all input-contract violations
+under the existing strict-schema policy; there is no compatibility spelling
+for the pre-#180 shape. The filter vocabulary is deliberately the smallest
+useful one — an optional `kind` and an optional `active_only`, where
+omission is the only spelling of "do not filter on this axis". There is no
+query language, sort key, cursor, label selector, or conversation selector,
+and no `wait`, `output`, `logs`, `poll_result`, `transcript`, `restart`, or
+`delete` action.
+
+`execution(list)` semantics:
+
+- **Scope.** Discovery is conversation-scoped *by construction*, not by
+  filtering: the intrinsic holds the registries this conversation owns, so
+  another conversation's execution is unreachable rather than hidden, and
+  remains indistinguishable from absence — even when the two conversations
+  allocated structurally identical ids.
+- **Kind isolation.** The kind filter selects which domain authority is
+  consulted at all, so it can never fall through into the other domain.
+- **Lifecycle filter.** `active_only` uses each owning domain's own
+  classification (`BackgroundLifecycle::is_active`,
+  `SubagentState::is_active`), under which `PublishingTerminal` is
+  non-terminal. Omitting the field — the default — lists active and
+  terminal executions alike.
+- **Ordering.** Each domain returns its matching records most recently
+  allocated first, in its own authoritative allocation order. The intrinsic
+  merges the two by strict alternation starting with the tool domain
+  (tool, subagent, tool, subagent, ...); when one domain runs out the
+  remainder of the other follows in order. The two domains allocate from
+  independent sequences and share no ordinal or clock, so alternation — not
+  concatenation — is what keeps one domain's overflow from starving the
+  other out of a single global bound. Ordering never depends on timestamps.
+- **Bound and truncation.** The response is truncated to the single global
+  `MAX_LISTED_EXECUTIONS` constant; there are no per-domain quotas, so the
+  externally visible bound is exactly one number. Every response carries
+  `returned`, `matched` (how many matched the filter before the bound),
+  `truncated`, and `limit`, so the shape does not change with the data.
+  Truncation keeps the deterministic prefix of the order, and repeating an
+  identical request against unchanged registries returns identical entries
+  and identical metadata.
+- **Observation only.** Listing takes each registry's ordinary read path and
+  mutates nothing: no lifecycle, no cancellation, no settlement, no terminal
+  notification, no capacity accounting, no ordering, and — for subagents —
+  no observation-plane revision or latest value.
+- **No result retrieval.** A listing entry carries the typed handle, the
+  owning domain's own lifecycle state, and the few identity facts that make
+  it recognizable (`tool_name`; `agent`, `started_at`,
+  `publication_abandoned`). It carries no detached tool `result` or
+  `progress`, no subagent `detail`, no answer content, and no child
+  history. Full child history belongs to the child's own conversation.
+- **Lifecycle vs. activity.** The `state` of an entry is the owning
+  domain's authoritative lifecycle vocabulary, so `list` and `status`
+  project the same lifecycle facts for the same execution. Issue #178's
+  live activity projection is deliberately *not* part of either: it is an
+  observational read model that enters no model context, `execution(status)`
+  already drops it, and a listing that carried it would make one action of
+  the same intrinsic expose what another withholds.
 
 Native tool input schemas are generated from tool-owned Rust input types,
 so the typed contract is the single source of truth for the model-facing

@@ -192,10 +192,14 @@ Implemented in the M5 tool plane PR (Issue #8):
   `ConversationBackgroundRegistry` with the dispatch ownership commit,
   lifecycle state machine, cancel-vs-complete linearization, and
   exactly-once terminal inbound publication
-- The `execution` runtime intrinsic: the single model-facing observation
-  and cancellation control plane for conversation-owned asynchronous
-  executions (status and idempotent cancel over explicit `kind` + `id`
-  targets, routed to the owning domain registry)
+- The `execution` runtime intrinsic: the single model-facing observation,
+  discovery, and cancellation control plane for conversation-owned
+  asynchronous executions (status and idempotent cancel over explicit
+  `kind` + `id` targets, plus bounded conversation-scoped `list`
+  discovery, all routed to the owning domain registry). The input contract
+  is action-tagged; listing is a deterministically ordered, globally
+  bounded projection of the domain registries' own read models and is
+  never a result, transcript, or wait channel
 - The runtime-owned Agent Status `background_execution` built-in section
 - Native Read, Write, Edit, Glob, Grep, and Bash tools plus the workspace
   boundary, artifact store, managed tool-output store, and explicit tool

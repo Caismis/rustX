@@ -188,6 +188,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::tools::artifacts::ArtifactStore;
 use crate::tools::environment::ToolEnvironment;
+use crate::tools::execution::ExecutionListing;
 use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::bound_tool_progress;
 use crate::tools::mcp::McpRuntimeLeaseSet;
@@ -1258,6 +1259,46 @@ impl ConversationBackgroundRegistry {
     pub fn all_snapshots(&self) -> Vec<BackgroundExecutionSnapshot> {
         let state = self.state();
         state.records.iter().map(snapshot_of).collect()
+    }
+
+    /// The registry's bounded authoritative listing for conversation-owned
+    /// execution discovery (Issue #180).
+    ///
+    /// This is the discovery read model of the background domain: the
+    /// registry alone decides which executions exist, in which authoritative
+    /// order, which of them are lifecycle-active, and how many matched. The
+    /// listing carries at most `limit` snapshots in **reverse execution
+    /// allocation order** — the most recently allocated execution first — so
+    /// applying the bound keeps the executions a caller is most likely to
+    /// still be acting on, and drops the oldest.
+    ///
+    /// `matched` reports how many records matched before the bound, so a
+    /// caller can report truncation without the registry ever materializing
+    /// an unbounded response.
+    ///
+    /// `active_only` selects the non-terminal
+    /// (Starting/Running/Cancelling/PublishingTerminal) records exactly as
+    /// [`BackgroundLifecycle::is_active`] defines them; otherwise every
+    /// record the registry still knows is listed, terminal ones included.
+    ///
+    /// This is a pure read: it takes the same synchronization boundary every
+    /// query takes and mutates no record, no lifecycle, no notification
+    /// state, and no observer seam.
+    #[must_use]
+    pub fn listing(
+        &self,
+        active_only: bool,
+        limit: usize,
+    ) -> ExecutionListing<BackgroundExecutionSnapshot> {
+        let state = self.state();
+        let matching = state
+            .records
+            .iter()
+            .rev()
+            .filter(|record| !active_only || record.lifecycle.is_active());
+        let matched = matching.clone().count();
+        let snapshots = matching.take(limit).map(snapshot_of).collect();
+        ExecutionListing { snapshots, matched }
     }
 
     /// The runner-owned settlement boundary of one execution.
