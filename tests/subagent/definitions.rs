@@ -1229,6 +1229,8 @@ fn the_runtime_client_projection_carries_the_named_identity() {
         handoff: None,
         state: SubagentState::Running,
         detail: None,
+        observation: rustx::runtime::subagent::SubagentObservation::default(),
+        profile: None,
         publication_abandoned: false,
         settled: false,
         started_at: chrono::Utc::now(),
@@ -1241,6 +1243,9 @@ fn the_runtime_client_projection_carries_the_named_identity() {
         definition_digest: snapshot.definition_digest.clone(),
         state: snapshot.state,
         detail: None,
+        observation: snapshot.observation.clone(),
+        execution_profile: None,
+        started_at: snapshot.started_at,
         workspace: rustx::runtime_client::snapshot::RuntimeClientSubagentWorkspace {
             workspace: snapshot.workspace.workspace.clone(),
             isolated: snapshot.workspace.isolated,

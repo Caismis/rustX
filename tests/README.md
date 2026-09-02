@@ -126,13 +126,20 @@ invariant is a real process boundary.
 - `subagent/conformance` — the child ownership boundary with real staged
   children (`sh`, own process group, real control socket): frozen authority
   crossing, registry lifecycle, exactly one terminal child notice, parent
-  isolation, cancellation/drain across the boundary. A child is an ordinary
+  isolation, cancellation/drain across the boundary. Also the Issue #178
+  live-activity observation plane: activity projects while the lifecycle
+  stays `Running`, a stalled or absent consumer changes nothing about child
+  execution, activity frames commit no parent journal facts and never enter
+  parent model context or the result channel, the frozen execution profile
+  is the only projected configuration, and snapshot repair serves the latest
+  observation. A child is an ordinary
   `ConversationRuntime`; generic retry/deadline/cancellation/settlement
   semantics belong to `scripted_suites::agent` and must not be replayed
   here.
 - `subagent/execution_routing` — the subagent half of the `execution`
   intrinsic: status/cancel routing and terminal answer delivery against
-  real staged children.
+  real staged children, including activity frames racing terminal
+  settlement (dropped, never rewriting the terminal).
 - `runtime_client/mcp_capability` — capability projection over a real MCP
   stdio child server (this binary re-executed in fixture mode).
 - `runtime_client/python_capability` — capability projection over a managed

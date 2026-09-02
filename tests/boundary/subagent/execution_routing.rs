@@ -538,10 +538,19 @@ async fn publishing_terminal_does_not_expose_the_pending_child_answer() {
         .expect("publication abandoned resolves the wait");
     assert_eq!(unsettled.state, SubagentState::PublishingTerminal);
     assert!(unsettled.publication_abandoned);
+    // Issue #178: the pending answer never rides the live read model, not
+    // even while its publication is unresolved. The registry retains the
+    // candidate internally for its bounded retry; the observable contract
+    // is that `detail` is diagnostics-only and therefore `None` here.
     assert_eq!(
-        unsettled.detail.as_deref(),
-        Some(SECRET_CHILD_ANSWER),
-        "the registry authority retains the pending answer internally"
+        unsettled.detail, None,
+        "the pending answer is not exposed through the snapshot detail"
+    );
+    assert!(
+        !serde_json::to_string(&unsettled)
+            .expect("snapshot serializes")
+            .contains(SECRET_CHILD_ANSWER),
+        "the pending answer never appears anywhere in the serialized snapshot"
     );
     assert!(
         plane
@@ -574,5 +583,128 @@ async fn publishing_terminal_does_not_expose_the_pending_child_answer() {
     assert!(
         !serialized.contains(SECRET_CHILD_ANSWER),
         "PublishingTerminal must not expose the pending answer: {serialized}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Live activity racing terminal settlement (Issue #178)
+// ---------------------------------------------------------------------------
+
+/// An activity frame applied while the child runs lands in the read model;
+/// terminal settlement resets the projection to neutral with a bumped
+/// revision; a frame racing in after the terminal is dropped — the terminal
+/// stays final and the settled snapshot never projects the late activity.
+#[tokio::test]
+async fn activity_frames_racing_terminal_settlement_are_dropped() {
+    let plane = subagent_plane();
+    let child = stage_exit0(&plane);
+    let accepted = start_subagent(&plane, "inspect the tool plane").await;
+    let mut peer = child.peer;
+
+    let observation_at = |revision: u64, activity| crate::runtime::subagent::SubagentObservation {
+        revision,
+        activity,
+        last_activity_at: None,
+        counters: crate::runtime::subagent::SubagentActivityCounters {
+            model_requests: 1,
+            model_retries: 0,
+            tool_executions: 2,
+        },
+    };
+
+    // The delegation arrives first; then the frames race in one burst: a
+    // live activity update, the terminal result, and a post-terminal update.
+    let frame = crate::runtime::subagent::ipc::read_parent_frame(&mut peer)
+        .await
+        .expect("delegate frame");
+    assert!(matches!(
+        frame,
+        Some(crate::runtime::subagent::ipc::ParentFrame::Delegate(_))
+    ));
+    crate::runtime::subagent::ipc::write_child_frame(
+        &mut peer,
+        &ChildFrame::Activity(crate::runtime::subagent::ipc::ActivityFrame {
+            observation: observation_at(
+                3,
+                crate::runtime::subagent::SubagentActivity::Tool {
+                    tool_call_id: ToolCallId::new("call-178"),
+                    tool_id: crate::runtime::identity::ToolId::new("tool-178"),
+                    progress: None,
+                },
+            ),
+        }),
+    )
+    .await
+    .expect("live activity frame");
+    crate::runtime::subagent::ipc::write_child_frame(
+        &mut peer,
+        &ChildFrame::Result(ResultFrame {
+            status: ChildResultStatus::Succeeded,
+            content: Some("RACE-178-ANSWER".to_owned()),
+            diagnostic: None,
+        }),
+    )
+    .await
+    .expect("terminal result frame");
+    crate::runtime::subagent::ipc::write_child_frame(
+        &mut peer,
+        &ChildFrame::Activity(crate::runtime::subagent::ipc::ActivityFrame {
+            observation: observation_at(
+                9,
+                crate::runtime::subagent::SubagentActivity::Model {
+                    request_id: crate::runtime::identity::RequestId::new("req-late"),
+                    retry: 0,
+                },
+            ),
+        }),
+    )
+    .await
+    .expect("post-terminal activity frame");
+
+    let settled = plane
+        .registry
+        .wait_until_settled(&accepted.subagent_id)
+        .await
+        .expect("settled");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    // The pre-terminal frame (revision 3) was applied in wire order; the
+    // settlement reset bumped the revision once, and the post-terminal
+    // frame (revision 9) was dropped: neither its activity nor its
+    // revision ever landed.
+    assert_eq!(
+        settled.observation.activity,
+        crate::runtime::subagent::SubagentActivity::AwaitingActivity,
+        "the terminal settlement is the final projection"
+    );
+    assert_eq!(
+        settled.observation.revision, 4,
+        "the applied live revision plus exactly one settlement bump"
+    );
+    assert_eq!(
+        settled.observation.counters.tool_executions, 2,
+        "the counters of the last applied frame survive the reset"
+    );
+    assert_eq!(settled.detail, None, "the answer never rides the detail");
+
+    // The result channel is still exactly the canonical durable inbound.
+    let pending = plane
+        .store
+        .select_pending_batch()
+        .expect("pending")
+        .expect("one pending batch");
+    assert_eq!(pending.items.len(), 1);
+    let text = pending.items[0]
+        .message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            rustx::message::types::UserContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        text.contains("RACE-178-ANSWER"),
+        "the canonical inbound carries the answer exactly once: {text}"
     );
 }
