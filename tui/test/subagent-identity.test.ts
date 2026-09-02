@@ -1,6 +1,8 @@
 /**
  * Issue #144: the TUI's protocol mirror carries the named-agent subagent
- * identity, and the obsolete profile-shaped contract is gone.
+ * identity, and the obsolete profile-shaped contract is gone. Issue #178
+ * adds the live activity projection (`observation`), the redacted
+ * `execution_profile`, and `started_at` to the same mirrored shape.
  *
  * The mirror is a compile-time contract, so these cases are deliberately a
  * mix: `tsc --noEmit` proves the shape (a `profile` field would not compile
@@ -12,35 +14,17 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { reduce, replaceFromSnapshot } from "../src/presentation/projection.ts";
+import { RUNTIME_CLIENT_PROTOCOL_VERSION } from "../src/protocol/types.ts";
 import {
-  RUNTIME_CLIENT_PROTOCOL_VERSION,
-  type RuntimeClientSubagent,
-} from "../src/protocol/types.ts";
-import { runtimeCursor, snapshot } from "./support/fixtures.ts";
-
-function subagent(
-  agent: string,
-  definitionDigest: string,
-  state: RuntimeClientSubagent["state"] = "running",
-): RuntimeClientSubagent {
-  return {
-    subagent_id: "conv-1-subagent-1",
-    child_agent_id: "agent-child",
-    child_conversation_id: "conv-1-subagent-1",
-    agent,
-    definition_digest: definitionDigest,
-    state,
-    workspace: {
-      workspace: "<shared-workspace>",
-      isolated: false,
-      parent_had_uncommitted_changes: false,
-    },
-  };
-}
+  runtimeCursor,
+  snapshot,
+  subagent,
+  subagentObservation,
+} from "./support/fixtures.ts";
 
 describe("subagent identity", () => {
-  it("negotiates v10, which carries named identity and workspace handoffs", () => {
-    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 10);
+  it("negotiates v11, which carries the live activity projection", () => {
+    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 11);
   });
 
   it("carries agent and definition_digest from the snapshot", () => {
@@ -63,6 +47,62 @@ describe("subagent identity", () => {
     );
   });
 
+  it("carries the observation and started_at through the snapshot", () => {
+    const observation = subagentObservation(
+      { type: "tool", tool_call_id: "call-1", tool_id: "tool-grep" },
+      {
+        revision: 7,
+        last_activity_at: "2026-09-02T10:02:00Z",
+        counters: { model_requests: 2, model_retries: 1, tool_executions: 3 },
+      },
+    );
+    const state = replaceFromSnapshot(
+      {
+        ...snapshot(),
+        subagents: [
+          subagent("explore", "sha256:d1", "running", {
+            observation,
+            execution_profile: {
+              model: "alpha/model-a",
+              reasoning_profile: "reasoning:high",
+              reasoning_enabled: true,
+            },
+          }),
+        ],
+      },
+      runtimeCursor(1),
+    );
+    const [child] = state.subagents;
+    assert.ok(child);
+    assert.deepEqual(child.observation, observation);
+    assert.equal(child.started_at, "2026-09-02T10:00:00Z");
+    assert.deepEqual(child.execution_profile, {
+      model: "alpha/model-a",
+      reasoning_profile: "reasoning:high",
+      reasoning_enabled: true,
+    });
+  });
+
+  it("carries the whole observation through a subagent_updated upsert", () => {
+    let state = replaceFromSnapshot(
+      { ...snapshot(), subagents: [subagent("explore", "sha256:d1")] },
+      runtimeCursor(1),
+    );
+    const observation = subagentObservation(
+      { type: "retrying_model", retry: 2 },
+      { revision: 3, last_activity_at: "2026-09-02T10:01:00Z" },
+    );
+    state = reduce(state, {
+      cursor: runtimeCursor(2),
+      event: {
+        type: "subagent_updated",
+        subagent: subagent("explore", "sha256:d1", "running", { observation }),
+      },
+    });
+    assert.equal(state.subagents.length, 1);
+    assert.deepEqual(state.subagents[0]?.observation, observation);
+  });
+
   it("keeps a running child bound to the digest it started with", () => {
     // A later generation may redefine the same agent name. A live update
     // about *this* child still carries its own digest, so a client can never
@@ -75,7 +115,7 @@ describe("subagent identity", () => {
       cursor: runtimeCursor(2),
       event: {
         type: "subagent_updated",
-        subagent: { ...subagent("explore", "sha256:d1"), state: "succeeded" },
+        subagent: subagent("explore", "sha256:d1", "succeeded"),
       },
     });
     assert.equal(state.subagents.length, 1);
@@ -99,10 +139,9 @@ describe("subagent identity", () => {
       cursor: runtimeCursor(2),
       event: {
         type: "subagent_updated",
-        subagent: {
-          ...subagent("worker", "sha256:d1", "interrupted"),
+        subagent: subagent("worker", "sha256:d1", "interrupted", {
           detail: "child outcome unknown",
-        },
+        }),
       },
     });
     assert.equal(state.subagents[0]?.state, "interrupted");

@@ -34,12 +34,16 @@ import type {
   RuntimeClientBackgroundExecution,
   RuntimeClientOutcome,
   RuntimeClientSkill,
+  RuntimeClientSubagent,
   RuntimeClientTool,
   SessionSummaryView,
   SessionView,
   ToolOrigin,
 } from "../protocol/types.ts";
-import { BACKGROUND_TERMINAL_STATES } from "../protocol/types.ts";
+import {
+  BACKGROUND_TERMINAL_STATES,
+  SUBAGENT_TERMINAL_STATES,
+} from "../protocol/types.ts";
 import type { PresentationState } from "./state.ts";
 
 /**
@@ -99,6 +103,15 @@ export function activeBackground(
 ): RuntimeClientBackgroundExecution[] {
   return state.background.filter(
     (execution) => !BACKGROUND_TERMINAL_STATES.has(execution.state),
+  );
+}
+
+/** Subagent children the runtime still considers active. */
+export function activeSubagents(
+  state: PresentationState,
+): RuntimeClientSubagent[] {
+  return state.subagents.filter(
+    (subagent) => !SUBAGENT_TERMINAL_STATES.has(subagent.state),
   );
 }
 

@@ -20,6 +20,8 @@ import type {
   ModelInvocationView,
   RuntimeClientBackgroundExecution,
   RuntimeClientSnapshot,
+  RuntimeClientSubagent,
+  RuntimeClientSubagentObservation,
   RuntimeClientTranscriptCursor,
   RuntimeClientCursor,
   RuntimeClientTranscriptPage,
@@ -297,6 +299,46 @@ export function backgroundExecution(
     tool_id: "tool-background",
     tool_name: "bash",
     state,
+    ...overrides,
+  };
+}
+
+/** The neutral live-activity projection of one subagent child (Issue #178). */
+export function subagentObservation(
+  activity: RuntimeClientSubagentObservation["activity"] = {
+    type: "awaiting_activity",
+  },
+  overrides: Partial<RuntimeClientSubagentObservation> = {},
+): RuntimeClientSubagentObservation {
+  return {
+    revision: 0,
+    activity,
+    counters: { model_requests: 0, model_retries: 0, tool_executions: 0 },
+    ...overrides,
+  };
+}
+
+/** One subagent child with named-agent identity and live observation. */
+export function subagent(
+  agent: string,
+  definitionDigest: string,
+  state: RuntimeClientSubagent["state"] = "running",
+  overrides: Partial<RuntimeClientSubagent> = {},
+): RuntimeClientSubagent {
+  return {
+    subagent_id: "conv-1-subagent-1",
+    child_agent_id: "agent-child",
+    child_conversation_id: "conv-1-subagent-1",
+    agent,
+    definition_digest: definitionDigest,
+    state,
+    observation: subagentObservation(),
+    started_at: "2026-09-02T10:00:00Z",
+    workspace: {
+      workspace: "<shared-workspace>",
+      isolated: false,
+      parent_had_uncommitted_changes: false,
+    },
     ...overrides,
   };
 }
