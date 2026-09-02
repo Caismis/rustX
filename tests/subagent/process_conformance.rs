@@ -389,10 +389,27 @@ async fn run_real_child_inherits_the_frozen_timeout_policy_and_retries_locally()
 
     // The child really exercised its ordinary generic retry: exactly four
     // provider requests carry the delegated task (R0 plus three transient
-    // retries), and the parent never reissued the delegation.
-    let bodies = (0..server.attempt_count())
-        .map(|index| server.request_body(usize::try_from(index).expect("index fits usize")))
-        .collect::<Vec<_>>();
+    // retries), and the parent never reissued the delegation. Six requests
+    // provably completed their send before the snapshot above could settle
+    // (parent delegate, 4 gated child attempts, parent continuation — the
+    // "Hello world" cut requires it); the parent's post-notice turn may or
+    // may not have reached the server yet, so the total is not asserted.
+    // Collect one consistent locked snapshot of the observed bodies instead
+    // of indexing by the connection counter, which also counts
+    // accepted-but-abandoned connections (a client deadline firing
+    // mid-connect) and must not panic this proof.
+    let mut bodies = server.request_bodies();
+    for _ in 0..8_000 {
+        if bodies.len() >= 6 {
+            break;
+        }
+        tokio::task::yield_now().await;
+        bodies = server.request_bodies();
+    }
+    assert!(
+        bodies.len() >= 6,
+        "all six settled provider requests were observed: {bodies:?}"
+    );
     let child_requests = bodies
         .iter()
         .filter(|body| {
