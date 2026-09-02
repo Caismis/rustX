@@ -517,10 +517,28 @@ impl core::fmt::Display for SubagentStartError {
 impl std::error::Error for SubagentStartError {}
 
 /// The observation seam of the subagent plane (TUI / Runtime Client).
+///
+/// Two publication classes (Issue #178): [`on_snapshot`](Self::on_snapshot)
+/// is the **reliable** lifecycle/identity publication — every transition
+/// reaches the consumer exactly once, in order — and
+/// [`on_activity`](Self::on_activity) is the **disposable** latest-value
+/// activity publication, which the consumer may coalesce or drop.
 pub trait SubagentObserver: Send + Sync {
     /// Called under the registry lock with each new consistency snapshot;
     /// the implementation must be cheap and nonblocking.
     fn on_snapshot(&self, snapshot: &SubagentSnapshot);
+
+    /// Called under the registry lock with each new live-activity snapshot
+    /// (Issue #178).
+    ///
+    /// This is a disposable, latest-value publication: the consumer may
+    /// coalesce or drop intermediate values, and it must never treat an
+    /// activity snapshot as lifecycle evidence. The default body forwards
+    /// to [`on_snapshot`](Self::on_snapshot), so an observer that does not
+    /// distinguish the two classes keeps capturing everything.
+    fn on_activity(&self, snapshot: &SubagentSnapshot) {
+        self.on_snapshot(snapshot);
+    }
 }
 
 /// The durability-failure reporting seam of the subagent plane.
@@ -1252,7 +1270,7 @@ impl SubagentRegistry {
             return;
         }
         record.observation = observation;
-        publish_snapshot(&mut state, &self.state_version, index);
+        publish_activity_snapshot(&mut state, &self.state_version, index);
     }
 
     /// The durably committed Workflow output value of one settled
@@ -1385,6 +1403,26 @@ impl SubagentRegistry {
         loop {
             let snapshot = self.snapshot(subagent_id)?;
             if snapshot.settled || snapshot.publication_abandoned {
+                return Some(snapshot);
+            }
+            if rx.changed().await.is_err() {
+                return None;
+            }
+        }
+    }
+
+    /// Resolves with the newest snapshot of `subagent_id` once `predicate`
+    /// holds for it; `None` if the record does not exist. Driven by the
+    /// registry state-version watch — no polling.
+    pub async fn wait_for_snapshot(
+        &self,
+        subagent_id: &SubagentId,
+        predicate: impl Fn(&SubagentSnapshot) -> bool,
+    ) -> Option<SubagentSnapshot> {
+        let mut rx = self.state_version.subscribe();
+        loop {
+            let snapshot = self.snapshot(subagent_id)?;
+            if predicate(&snapshot) {
                 return Some(snapshot);
             }
             if rx.changed().await.is_err() {
@@ -2110,6 +2148,23 @@ fn publish_snapshot(
     let snapshot = state.records[index].snapshot();
     if let Some(observer) = &state.observer {
         observer.on_snapshot(&snapshot);
+    }
+    version.send_modify(|v| *v += 1);
+}
+
+/// The disposable sibling of [`publish_snapshot`] for live-activity
+/// updates (Issue #178): emits the record's snapshot through
+/// [`SubagentObserver::on_activity`] — the publication the consumer may
+/// coalesce or drop — and bumps the watch version. Called under the
+/// registry lock.
+fn publish_activity_snapshot(
+    state: &mut RegistryState,
+    version: &tokio::sync::watch::Sender<u64>,
+    index: usize,
+) {
+    let snapshot = state.records[index].snapshot();
+    if let Some(observer) = &state.observer {
+        observer.on_activity(&snapshot);
     }
     version.send_modify(|v| *v += 1);
 }

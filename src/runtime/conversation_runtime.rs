@@ -3333,6 +3333,19 @@ impl ConversationRuntime {
         self.inner.install_observation_bridge(queue)
     }
 
+    /// Test-only: the observation bridge installed through
+    /// [`ConversationRuntime::install_observation_bridge`], when one is.
+    ///
+    /// Boundary tests park/unpark the parent's projection input through
+    /// this handle to own the fold schedule deterministically.
+    #[cfg(test)]
+    // Wired by the boundary conformance suites of the observation plane
+    // (Issue #178 follow-up); not referenced by any in-crate unit test.
+    #[allow(dead_code)]
+    pub(crate) fn installed_observation_bridge(&self) -> Option<Arc<PendingObservations>> {
+        self.inner.pending.get().cloned()
+    }
+
     /// Claims the one-time Runtime Client binding of the tool runtime and of
     /// the capability coordinator.
     ///
@@ -5012,10 +5025,16 @@ impl BackgroundObserver for RuntimeObserver {
 }
 
 // Same leaf contract as the background observer: the registry fires under
-// its lock, so this only pushes into the queue.
+// its lock, so this only pushes into the queue. Lifecycle/identity
+// publications are reliable; live-activity publications are disposable and
+// land in the coalescing latest-value lane.
 impl crate::runtime::subagent::SubagentObserver for RuntimeObserver {
     fn on_snapshot(&self, snapshot: &crate::runtime::subagent::SubagentSnapshot) {
-        self.push(ConversationObservation::Subagent(snapshot.clone()));
+        self.push(ConversationObservation::SubagentLifecycle(snapshot.clone()));
+    }
+
+    fn on_activity(&self, snapshot: &crate::runtime::subagent::SubagentSnapshot) {
+        self.push(ConversationObservation::SubagentActivity(snapshot.clone()));
     }
 }
 

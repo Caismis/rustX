@@ -517,7 +517,14 @@ impl RuntimeClientProjection {
                 upsert_background(&mut self.snapshot.background, view.clone());
                 vec![RuntimeClientEvent::BackgroundExecutionUpdated { execution: view }]
             }
-            ConversationObservation::Subagent(snapshot) => {
+            ConversationObservation::SubagentLifecycle(snapshot)
+            | ConversationObservation::SubagentActivity(snapshot) => {
+                // Both subagent delivery classes fold identically: the
+                // whole-view upsert is unconditional last-write-wins, and
+                // the queue's lane rules (a lifecycle push evicts queued
+                // activity of the same subagent) already guarantee no fold
+                // ever observes an activity snapshot older than the
+                // lifecycle snapshot it already folded.
                 let view = subagent_view(&snapshot);
                 upsert_subagent(&mut self.snapshot.subagents, view.clone());
                 vec![RuntimeClientEvent::SubagentUpdated {
@@ -3869,19 +3876,28 @@ mod tests {
             },
             ..SubagentObservation::default()
         };
-        projection.apply(ConversationObservation::Subagent(snapshot(
+        projection.apply(ConversationObservation::SubagentLifecycle(snapshot(
             observation.clone(),
         )));
+        // The disposable activity lane folds identically (unconditional
+        // last-write-wins whole-view upsert).
+        let newer = SubagentObservation {
+            revision: 3,
+            ..observation.clone()
+        };
+        projection.apply(ConversationObservation::SubagentActivity(snapshot(
+            newer.clone(),
+        )));
 
-        // The event carries the enriched whole view.
+        // Both events carry the enriched whole view; the latest wins.
         let events = collect(&mut projection, RuntimeClientCursor::new(0));
-        let [event] = events.as_slice() else {
-            panic!("one SubagentUpdated event: {events:?}");
+        let [_, event] = events.as_slice() else {
+            panic!("two SubagentUpdated events: {events:?}");
         };
         let RuntimeClientEvent::SubagentUpdated { subagent } = &event.event else {
             panic!("a SubagentUpdated event: {:?}", event.event);
         };
-        assert_eq!(subagent.observation, observation);
+        assert_eq!(subagent.observation, newer);
         assert_eq!(
             subagent.execution_profile,
             Some(SubagentExecutionProfile {
@@ -3900,7 +3916,7 @@ mod tests {
         // The snapshot repair path re-reads the same enriched view.
         let (repaired, _) = projection.snapshot().expect("snapshot");
         assert_eq!(repaired.subagents.len(), 1);
-        assert_eq!(repaired.subagents[0].observation, observation);
+        assert_eq!(repaired.subagents[0].observation, newer);
         assert_eq!(
             repaired.subagents[0].execution_profile,
             subagent.execution_profile
