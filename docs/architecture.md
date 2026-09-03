@@ -631,14 +631,25 @@ InteractionSettled(Approved)           -> ToolExecutionStarted -> external side 
 
 The requested fact commits inside the same critical section that admits the
 pending entry and strictly before the publication callback runs, so a failed
-commit publishes no prompt at all and fails closed as `Unavailable` — exactly
-like a missing provider. The settled fact commits before the semantic waiter
-is released and before the responding client is told its response was
-accepted, so a user-facing approval response can never race ahead of the
-durable evidence that the approval existed. A settled commit that fails
-releases the waiter with `Unavailable` (which Approval maps to a denial) and
-returns `interaction_audit_failed` to the client; the interaction stays
-durably open, which is the honest record.
+commit publishes no prompt at all and fails closed before publication. Before
+the root admission permit, an exact provider refusal is the ordinary
+`Unavailable` contract; it creates no requested audit. After the exact permit
+has crossed the publication frontier, however, the coordinator has admitted
+semantic publication. A failed reliable `InteractionRequested` route is
+therefore a supervised control-path failure, not provider absence: the child
+does not receive an `Unavailable` result or continue normally, and the open
+requested fact remains historical evidence of the interrupted execution.
+
+The settled fact commits before the semantic waiter is released and before the
+responding client is told its response was accepted, so a user-facing approval
+response can never race ahead of the durable evidence that the approval
+existed. If the reliable `InteractionSettled` route fails after the coordinator
+has selected and committed its outcome, the selected outcome is not rewritten
+and the route error is not swallowed: the waiter receives an internal control
+failure and the owning Agent Loop cannot continue under a broken supervision
+path. `InteractionSettled(Approved)` remains strictly before
+`ToolExecutionStarted`, but a historical or undiscoverable settled frame never
+grants recovery authority.
 
 The hard invariant is that this is audit and nothing more:
 

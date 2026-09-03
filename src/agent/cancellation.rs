@@ -26,7 +26,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::runtime::cancellation::{CancellationCause, CancellationSignal, ExecutionCancellation};
+use crate::runtime::cancellation::{
+    CancellationCause, CancellationSignal, ExecutionCancellation, InteractionFailureSignal,
+};
 use crate::runtime::types::CancellationReason;
 
 /// The adjudication of one model-turn start arbitration.
@@ -85,6 +87,11 @@ pub struct AgentCancellation {
     default_reason: CancellationReason,
     reason: Arc<Mutex<Option<CancellationReason>>>,
     start_gate: Arc<ModelTurnStartGate>,
+    /// A process-local marker shared with every execution view of this
+    /// attempt. Interaction control failure is intentionally not modelled as
+    /// cancellation: it must stop supervised continuation without
+    /// synthesizing a human outcome.
+    interaction_failure: InteractionFailureSignal,
 }
 
 impl AgentCancellation {
@@ -97,6 +104,7 @@ impl AgentCancellation {
             default_reason: reason,
             reason: Arc::new(Mutex::new(None)),
             start_gate: Arc::new(ModelTurnStartGate::default()),
+            interaction_failure: InteractionFailureSignal::default(),
         }
     }
 
@@ -244,6 +252,14 @@ impl AgentCancellation {
     #[must_use]
     pub fn execution_cancellation(&self) -> ExecutionCancellation {
         ExecutionCancellation::new(self.signal.clone(), Arc::new(self.clone()))
+            .with_interaction_failure(self.interaction_failure.clone())
+    }
+
+    /// Whether this attempt has encountered a failed semantic interaction
+    /// control path.
+    #[must_use]
+    pub(crate) fn interaction_failed(&self) -> bool {
+        self.interaction_failure.is_marked()
     }
 }
 

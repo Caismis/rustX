@@ -122,7 +122,9 @@ use crate::runtime::identity::{
     ToolCallId, ToolId, TurnId,
 };
 use crate::runtime::inbound::{FreshInboundTurn, InitialTurnTrigger, MailboxError};
-use crate::runtime::interaction::{ApprovalDecision, InteractionOutcome, InteractionResponse};
+use crate::runtime::interaction::{
+    ApprovalDecision, InteractionFailure, InteractionOutcome, InteractionResponse,
+};
 use crate::runtime::types::{CancellationReason, RuntimeError};
 use crate::tools::background::BackgroundDispatchOutcome;
 use crate::tools::executor::{
@@ -816,6 +818,7 @@ impl Terminal {
 enum CanonicalCommitError {
     Conversation(ConversationError),
     Durable(crate::durable::inbox::ConversationStoreError),
+    Interaction(InteractionFailure),
 }
 
 impl core::fmt::Display for CanonicalCommitError {
@@ -823,6 +826,7 @@ impl core::fmt::Display for CanonicalCommitError {
         match self {
             Self::Conversation(error) => write!(f, "{error}"),
             Self::Durable(error) => write!(f, "{error}"),
+            Self::Interaction(error) => write!(f, "{error}"),
         }
     }
 }
@@ -1203,7 +1207,14 @@ impl<'a> AgentExecution<'a> {
                     });
                     break;
                 }
+                if self.cancellation.interaction_failed() {
+                    terminal = Some(Self::interaction_failure_terminal());
+                    break;
+                }
                 terminal = self.run_turn().await;
+                if terminal.is_none() && self.cancellation.interaction_failed() {
+                    terminal = Some(Self::interaction_failure_terminal());
+                }
                 // TEST-ONLY continuation boundary: the previous turn is
                 // structurally complete (every tool result and every
                 // mailbox drain/append of that turn is done) and the
@@ -2947,6 +2958,26 @@ impl<'a> AgentExecution<'a> {
                     },
                 },
             },
+            CanonicalCommitError::Interaction(error) => Terminal::Failed {
+                failure: AttemptFailure::Runtime {
+                    error: RuntimeError::Internal {
+                        message: format!("{context}: {error}"),
+                    },
+                },
+            },
+        }
+    }
+
+    /// Converts a failed reliable interaction/control boundary into the
+    /// existing failed-attempt supervision outcome. It is intentionally not
+    /// cancellation and does not create a human-visible interaction result.
+    fn interaction_failure_terminal() -> Terminal {
+        Terminal::Failed {
+            failure: AttemptFailure::Runtime {
+                error: RuntimeError::Internal {
+                    message: "the reliable interaction control path failed".to_owned(),
+                },
+            },
         }
     }
 
@@ -3784,7 +3815,14 @@ impl<'a> AgentExecution<'a> {
         // committed batch settle in canonical call order before the existing
         // sequential/parallel start frontier advances. The original
         // PreparedInvocation remains in every slot unchanged.
-        self.resolve_pre_tool_decisions(&mut slots).await;
+        self.resolve_pre_tool_decisions(&mut slots)
+            .await
+            .map_err(CanonicalCommitError::Interaction)?;
+        if self.cancellation.interaction_failed() {
+            return Err(CanonicalCommitError::Interaction(
+                InteractionFailure::ControlLost,
+            ));
+        }
         let mut index = 0;
         while index < slots.len() {
             if self.cancellation.is_cancelled() {
@@ -3822,6 +3860,11 @@ impl<'a> AgentExecution<'a> {
                             .await;
                         slots[index].result = Some(result);
                         slots[index].progress = progress;
+                        if self.cancellation.interaction_failed() {
+                            return Err(CanonicalCommitError::Interaction(
+                                InteractionFailure::ControlLost,
+                            ));
+                        }
                     }
                     index += 1;
                 }
@@ -3904,9 +3947,19 @@ impl<'a> AgentExecution<'a> {
                         slots[slot_index].result = Some(result);
                         slots[slot_index].progress = progress;
                     }
+                    if self.cancellation.interaction_failed() {
+                        return Err(CanonicalCommitError::Interaction(
+                            InteractionFailure::ControlLost,
+                        ));
+                    }
                     index = end;
                 }
             }
+        }
+        if self.cancellation.interaction_failed() {
+            return Err(CanonicalCommitError::Interaction(
+                InteractionFailure::ControlLost,
+            ));
         }
         // Cancellation fill: every not-yet-started foreground call receives
         // a cancelled result slot, so the committed batch covers every
@@ -4027,7 +4080,10 @@ impl<'a> AgentExecution<'a> {
     /// cancellation is observable; an owner cancellation produces the
     /// existing cancelled result slot and closes the later tool-start
     /// frontier.
-    async fn resolve_pre_tool_decisions(&self, slots: &mut [CallSlot]) {
+    async fn resolve_pre_tool_decisions(
+        &self,
+        slots: &mut [CallSlot],
+    ) -> Result<(), InteractionFailure> {
         let policy = self.lifecycle.pre_tool_policy();
         for slot in slots {
             if slot.result.is_some() {
@@ -4091,7 +4147,7 @@ impl<'a> AgentExecution<'a> {
                         PreToolResolution::Cancelled(self.cancellation.reason())
                     } else {
                         match outcome {
-                            InteractionOutcome::Responded { response } => match response {
+                            Ok(InteractionOutcome::Responded { response }) => match response {
                                 InteractionResponse::Approval { decision } => match decision {
                                     ApprovalDecision::Allow => PreToolResolution::Allow,
                                     ApprovalDecision::Deny { reason } => {
@@ -4105,13 +4161,18 @@ impl<'a> AgentExecution<'a> {
                                     )
                                 }
                             },
-                            InteractionOutcome::Cancelled { reason } => {
+                            Ok(InteractionOutcome::Cancelled { reason }) => {
                                 PreToolResolution::Cancelled(reason)
                             }
-                            InteractionOutcome::Unavailable => PreToolResolution::Denied(
+                            Ok(InteractionOutcome::Unavailable) => PreToolResolution::Denied(
                                 "interaction provider unavailable; approval failed closed"
                                     .to_owned(),
                             ),
+                            Err(failure) if failure.is_unavailable() => PreToolResolution::Denied(
+                                "interaction provider unavailable; approval failed closed"
+                                    .to_owned(),
+                            ),
+                            Err(failure) => return Err(failure),
                         }
                     }
                 }
@@ -4122,6 +4183,7 @@ impl<'a> AgentExecution<'a> {
                 PreToolResolution::Cancelled(reason) => Some(cancelled_result(reason)),
             };
         }
+        Ok(())
     }
 
     /// Runs the immutable tool-result observation pass of one structurally

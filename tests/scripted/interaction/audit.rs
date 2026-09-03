@@ -904,7 +904,7 @@ async fn interaction_audit_survives_client_detach_and_reattach() {
         .expect("the reattached client answers the live interaction");
     assert_eq!(
         waiter.await.expect("question waiter"),
-        InteractionOutcome::Responded {
+        Ok(InteractionOutcome::Responded {
             response: InteractionResponse::Questionnaire {
                 response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
                     answers: vec![QuestionnaireAnswerEntry {
@@ -915,7 +915,7 @@ async fn interaction_audit_survives_client_detach_and_reattach() {
                     }],
                 }),
             },
-        }
+        })
     );
 
     let facts = interaction_facts(&journal(store.as_ref()));

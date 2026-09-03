@@ -202,6 +202,17 @@ child's root-facing actionable projections, and a delayed response receives
 interaction_not_pending. No recovery path synthesizes Allow, Deny,
 questionnaire decline, cancellation, or execution from historical facts.
 
+Reliable route loss is a third case at the same boundary, not another spelling
+of provider absence. A root admission refusal before the permit produces
+`Unavailable` without `InteractionRequested`. Once the permit and requested
+fact exist, loss of the reliable Requested route interrupts supervised child
+execution and leaves the requested fact as evidence; it does not create an
+ordinary unavailable ToolResult. If the coordinator has already committed a
+settlement but the reliable Settled route fails, that selected outcome remains
+audit evidence while the child stops under the existing control-loss
+semantics. Reopen never recreates either waiter, treats the settled fact as a
+live response, or authorizes a tool from historical `Approved`.
+
 ## 6. Compaction
 
 | Boundary | Durable before kill | Surface after reopen | Ledger | Test |

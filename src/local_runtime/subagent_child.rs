@@ -86,7 +86,8 @@ use crate::message::content::TextBlock;
 use crate::message::types::{MessageBlock, UserContentBlock, UserSource};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::interaction::{
-    InteractionPublicationPermit, InteractionRef, InteractionRoute, InteractionRouteEvent,
+    InteractionAdmissionError, InteractionPublicationPermit, InteractionRef, InteractionRoute,
+    InteractionRouteError, InteractionRouteEvent,
 };
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::subagent::activity::SubagentObservationProjector;
@@ -134,33 +135,36 @@ impl InteractionRoute for ChildInteractionRoute {
     fn admit_publication(
         &self,
         interaction: InteractionRef,
-    ) -> BoxFuture<'static, Result<InteractionPublicationPermit, ()>> {
+    ) -> BoxFuture<'static, Result<InteractionPublicationPermit, InteractionAdmissionError>> {
         self.handle.admit_interaction_publication(interaction)
     }
 
-    fn publish(&self, event: InteractionRouteEvent) -> BoxFuture<'static, Result<(), ()>> {
+    fn publish(
+        &self,
+        event: InteractionRouteEvent,
+    ) -> BoxFuture<'static, Result<(), InteractionRouteError>> {
         let handle = self.handle.clone();
         Box::pin(async move {
             handle
-                .send_reliable(Self::frame(event))
+                .send_reliable_confirmed(Self::frame(event))
                 .await
-                .map_err(|_| ())
+                .map_err(|_| InteractionRouteError::ControlLost)
         })
     }
 
     #[cfg(test)]
-    fn try_publish(&self, event: InteractionRouteEvent) -> Result<(), ()> {
+    fn try_publish(&self, event: InteractionRouteEvent) -> Result<(), InteractionRouteError> {
         self.handle
             .try_send_reliable(Self::frame(event))
-            .map_err(|_| ())
+            .map_err(|_| InteractionRouteError::ControlLost)
     }
 
     #[cfg(test)]
     fn try_admit_publication(
         &self,
         _interaction: InteractionRef,
-    ) -> Result<InteractionPublicationPermit, ()> {
-        Err(())
+    ) -> Result<InteractionPublicationPermit, InteractionAdmissionError> {
+        Err(InteractionAdmissionError::ControlLost)
     }
 }
 
@@ -527,9 +531,13 @@ pub(crate) async fn serve_child_delegation(
             diagnostic: Some(bound_diagnostic(diagnostic)),
         },
         AttemptTerminal::Orphaned => {
-            // The parent is gone: drain and exit without a result; the
-            // parent's recovery owns the interrupted classification.
-            let _ = runtime.shutdown().await;
+            // The reliable parent control path is gone: drop the child
+            // runtime without ordinary semantic shutdown. Ordinary shutdown
+            // would synthesize `InteractionSettled(Cancelled)` for any other
+            // live child interaction, while process loss must leave only the
+            // historical requested facts and let the parent classify the
+            // physical child as interrupted. No waiter is reconstructed by
+            // recovery.
             return Ok(());
         }
     };
@@ -730,6 +738,14 @@ where
     let mut projector = SubagentObservationProjector::default();
     loop {
         tokio::select! {
+            biased;
+            () = handle.parent_lost_signal() => {
+                // A reliable route owner marks the same parent-liveness
+                // authority as the reader's EOF path. The child must not
+                // report a healthy terminal or let a stale observation wake
+                // it into another model turn after that boundary.
+                return Ok(AttemptTerminal::Orphaned);
+            }
             event = dispatcher.next_event() => {
                 match event {
                     Some(ChildControlEvent::Cancel { reason }) => {

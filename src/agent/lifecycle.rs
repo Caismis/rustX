@@ -156,7 +156,8 @@ use crate::runtime::identity::{
 #[cfg(test)]
 use crate::runtime::interaction::TestInteractionRendezvous;
 use crate::runtime::interaction::{
-    ApprovalFacts, InteractionCoordinator, InteractionOutcome, QuestionnaireRequester,
+    ApprovalFacts, InteractionCoordinator, InteractionFailure, InteractionOutcome,
+    QuestionnaireRequester,
 };
 use crate::runtime::types::ApprovalMode;
 use crate::tools::types::{
@@ -363,14 +364,16 @@ impl InteractionBinding {
         attempt_id: AttemptId,
         facts: ApprovalFacts,
         cancellation: ExecutionCancellation,
-    ) -> BoxFuture<'_, InteractionOutcome> {
+    ) -> BoxFuture<'_, Result<InteractionOutcome, InteractionFailure>> {
         match self {
-            Self::Unavailable => Box::pin(async { InteractionOutcome::Unavailable }),
+            Self::Unavailable => Box::pin(async { Err(InteractionFailure::Unavailable) }),
             Self::Native(coordinator) => {
                 Box::pin(coordinator.request_approval(attempt_id, facts, cancellation))
             }
             #[cfg(test)]
-            Self::Test(rendezvous) => rendezvous.request_approval(facts, cancellation),
+            Self::Test(rendezvous) => {
+                Box::pin(async move { Ok(rendezvous.request_approval(facts, cancellation).await) })
+            }
         }
     }
 
@@ -749,7 +752,7 @@ impl AttemptLifecycle {
         attempt_id: AttemptId,
         facts: ApprovalFacts,
         cancellation: ExecutionCancellation,
-    ) -> BoxFuture<'_, InteractionOutcome> {
+    ) -> BoxFuture<'_, Result<InteractionOutcome, InteractionFailure>> {
         self.interaction
             .request_approval(attempt_id, facts, cancellation)
     }

@@ -10132,7 +10132,10 @@ mod tests {
                     .execution_cancellation(),
             )
             .await;
-        assert_eq!(late_interaction, InteractionOutcome::Unavailable);
+        assert_eq!(
+            late_interaction,
+            Err(crate::runtime::interaction::InteractionFailure::Unavailable)
+        );
 
         settle_gate.release();
         assert_eq!(

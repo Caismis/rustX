@@ -71,7 +71,9 @@ use std::sync::{Arc, Mutex};
 use futures_util::future::BoxFuture;
 
 use crate::runtime::identity::ProcessUnitId;
-use crate::runtime::interaction::{InteractionPublicationPermit, InteractionRef};
+use crate::runtime::interaction::{
+    InteractionAdmissionError, InteractionPublicationPermit, InteractionRef,
+};
 use crate::runtime::nested_containment::{AnchorError, NestedAnchorAuthority};
 use crate::runtime::subagent::activity::SubagentObservation;
 use crate::runtime::subagent::ipc::{
@@ -90,7 +92,7 @@ const OUTBOUND_CAPACITY: usize = 64;
 
 type InteractionAdmissionWaiter = (
     InteractionRef,
-    tokio::sync::oneshot::Sender<Result<InteractionPublicationPermit, ()>>,
+    tokio::sync::oneshot::Sender<Result<InteractionPublicationPermit, InteractionAdmissionError>>,
 );
 
 /// One control event the child's semantic driver must act on.
@@ -142,7 +144,7 @@ impl std::fmt::Debug for ChildControlHandle {
 
 struct DispatcherInner {
     /// The reliable lane: bounded, ordered, never silently dropped.
-    outbound: tokio::sync::mpsc::Sender<ChildFrame>,
+    outbound: tokio::sync::mpsc::Sender<ReliableFrame>,
     /// The disposable lane (Issue #178): the latest unpublished activity
     /// projection. A publication overwrites in place; the writer may skip
     /// intermediate values.
@@ -156,6 +158,24 @@ struct DispatcherInner {
     parent_lost: tokio::sync::watch::Sender<bool>,
 }
 
+/// One frame in the reliable outbound queue. Most control traffic only needs
+/// the established bounded-queue guarantee; routed interaction events also
+/// request a completion acknowledgement from the sole writer so their owner
+/// cannot wake before the control write either succeeds or fails.
+struct ReliableFrame {
+    frame: ChildFrame,
+    completion: Option<tokio::sync::oneshot::Sender<Result<(), AnchorError>>>,
+}
+
+impl ReliableFrame {
+    fn queued(frame: ChildFrame) -> Self {
+        Self {
+            frame,
+            completion: None,
+        }
+    }
+}
+
 impl ChildControlHandle {
     /// Sends one **reliable** frame to the parent.
     ///
@@ -166,9 +186,41 @@ impl ChildControlHandle {
     pub(crate) async fn send_reliable(&self, frame: ChildFrame) -> Result<(), AnchorError> {
         self.inner
             .outbound
-            .send(frame)
+            .send(ReliableFrame::queued(frame))
             .await
-            .map_err(|_| AnchorError::ParentLost)
+            .map_err(|_| {
+                self.inner.publish_parent_loss();
+                AnchorError::ParentLost
+            })
+    }
+
+    /// Sends one routed interaction event and waits for the reliable writer
+    /// to complete the control write. Queue acceptance alone is insufficient
+    /// for interaction settlement: the originating waiter must not wake as a
+    /// healthy execution if the peer has already rejected the frame.
+    pub(crate) async fn send_reliable_confirmed(
+        &self,
+        frame: ChildFrame,
+    ) -> Result<(), AnchorError> {
+        if self.parent_lost() {
+            return Err(AnchorError::ParentLost);
+        }
+        let (completion, receiver) = tokio::sync::oneshot::channel();
+        self.inner
+            .outbound
+            .send(ReliableFrame {
+                frame,
+                completion: Some(completion),
+            })
+            .await
+            .map_err(|_| {
+                self.inner.publish_parent_loss();
+                AnchorError::ParentLost
+            })?;
+        receiver.await.unwrap_or_else(|_| {
+            self.inner.publish_parent_loss();
+            Err(AnchorError::ParentLost)
+        })
     }
 
     /// Requests root publication admission for one exact routed interaction.
@@ -177,13 +229,18 @@ impl ChildControlHandle {
     pub(crate) fn admit_interaction_publication(
         &self,
         interaction: InteractionRef,
-    ) -> futures_util::future::BoxFuture<'static, Result<InteractionPublicationPermit, ()>> {
+    ) -> futures_util::future::BoxFuture<
+        'static,
+        Result<InteractionPublicationPermit, InteractionAdmissionError>,
+    > {
         let request_id = self
             .inner
             .next_interaction_admission_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if request_id == 0 {
-            return Box::pin(std::future::ready(Err(())));
+            return Box::pin(std::future::ready(Err(
+                InteractionAdmissionError::ControlLost,
+            )));
         }
         let (sender, receiver) = tokio::sync::oneshot::channel();
         self.inner
@@ -200,7 +257,7 @@ impl ChildControlHandle {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .remove(&request_id);
-                return Err(());
+                return Err(InteractionAdmissionError::ControlLost);
             }
             if handle
                 .send_reliable(ChildFrame::InteractionPublicationAdmissionRequested(
@@ -219,9 +276,11 @@ impl ChildControlHandle {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .remove(&request_id);
-                return Err(());
+                return Err(InteractionAdmissionError::ControlLost);
             }
-            receiver.await.unwrap_or(Err(()))
+            receiver
+                .await
+                .unwrap_or(Err(InteractionAdmissionError::ControlLost))
         })
     }
 
@@ -232,12 +291,15 @@ impl ChildControlHandle {
     pub(crate) fn try_send_reliable(&self, frame: ChildFrame) -> Result<(), AnchorError> {
         self.inner
             .outbound
-            .try_send(frame)
+            .try_send(ReliableFrame::queued(frame))
             .map_err(|error| match error {
                 tokio::sync::mpsc::error::TrySendError::Full(_) => AnchorError::Refused(
                     "the reliable child control lane is at capacity".to_owned(),
                 ),
-                tokio::sync::mpsc::error::TrySendError::Closed(_) => AnchorError::ParentLost,
+                tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+                    self.inner.publish_parent_loss();
+                    AnchorError::ParentLost
+                }
             })
     }
 
@@ -307,10 +369,10 @@ impl NestedAnchorAuthority for DispatcherInner {
             return Box::pin(std::future::ready(Err(AnchorError::ParentLost)));
         }
         let outbound = self.outbound.clone();
-        let frame = ChildFrame::AnchorOffered(ProcessUnitAnchorFrame {
+        let frame = ReliableFrame::queued(ChildFrame::AnchorOffered(ProcessUnitAnchorFrame {
             unit_id: unit,
             pgid,
-        });
+        }));
         Box::pin(async move {
             outbound
                 .send(frame)
@@ -327,10 +389,10 @@ impl NestedAnchorAuthority for DispatcherInner {
 
     fn release(&self, unit: ProcessUnitId, pgid: i32) -> BoxFuture<'static, ()> {
         let outbound = self.outbound.clone();
-        let frame = ChildFrame::AnchorReleased(ProcessUnitAnchorFrame {
+        let frame = ReliableFrame::queued(ChildFrame::AnchorReleased(ProcessUnitAnchorFrame {
             unit_id: unit,
             pgid,
-        });
+        }));
         Box::pin(async move {
             // A release is an ownership transition, not telemetry: while
             // the parent control plane is alive it is never silently
@@ -524,7 +586,7 @@ impl ChildControlDispatcher {
     ) -> Self {
         let (read_half, write_half) = tokio::io::split(control);
         let (outbound_tx, outbound_rx) =
-            tokio::sync::mpsc::channel::<ChildFrame>(OUTBOUND_CAPACITY);
+            tokio::sync::mpsc::channel::<ReliableFrame>(OUTBOUND_CAPACITY);
         let (events_tx, events_rx) = tokio::sync::mpsc::channel::<ChildControlEvent>(4);
         let (lost_tx, _lost_rx) = tokio::sync::watch::channel(false);
         let (activity_tx, activity_rx) = tokio::sync::watch::channel(ActivityFrame {
@@ -540,10 +602,12 @@ impl ChildControlDispatcher {
         });
 
         let close = Arc::new(tokio::sync::Notify::new());
+        let writer_inner = Arc::clone(&inner);
         let writer = tokio::spawn(run_writer(
             write_half,
             outbound_rx,
             close.clone(),
+            writer_inner,
             #[cfg(test)]
             writer_gate,
         ));
@@ -708,8 +772,9 @@ impl ChildControlDispatcher {
 /// by observation traffic — and vice versa.
 async fn run_writer(
     mut write_half: tokio::io::WriteHalf<tokio::net::UnixStream>,
-    mut outbound_rx: tokio::sync::mpsc::Receiver<ChildFrame>,
+    mut outbound_rx: tokio::sync::mpsc::Receiver<ReliableFrame>,
     close: Arc<tokio::sync::Notify>,
+    inner: Arc<DispatcherInner>,
     #[cfg(test)] writer_gate: Option<WriterGate>,
 ) {
     let mut closing = false;
@@ -724,11 +789,26 @@ async fn run_writer(
         tokio::select! {
             biased;
             frame = outbound_rx.recv() => match frame {
-                Some(frame) => {
+                Some(ReliableFrame { frame, completion }) => {
                     if write_child_frame(&mut write_half, &frame).await.is_err() {
-                        // The parent is gone; the reader publishes
-                        // parent loss.
+                        // A failed reliable write is itself a parent-control
+                        // loss. Publish it immediately instead of relying on
+                        // a later send or on the read half also reaching EOF;
+                        // a frame accepted by the bounded queue is not
+                        // considered delivered until this write succeeds.
+                        if let Some(completion) = completion {
+                            let _ = completion.send(Err(AnchorError::ParentLost));
+                        }
+                        inner.publish_parent_loss();
                         break;
+                    }
+                    if let Some(completion) = completion {
+                        let result = if inner.is_parent_lost() {
+                            Err(AnchorError::ParentLost)
+                        } else {
+                            Ok(())
+                        };
+                        let _ = completion.send(result);
                     }
                 }
                 None => break,
@@ -792,6 +872,10 @@ async fn run_observation_writer(
 }
 
 impl DispatcherInner {
+    fn is_parent_lost(&self) -> bool {
+        *self.parent_lost.borrow()
+    }
+
     fn resolve(&self, unit: &ProcessUnitId, outcome: Result<(), AnchorError>) {
         let waiter = self
             .pending
@@ -816,7 +900,12 @@ impl DispatcherInner {
             return;
         };
         if expected != result.interaction || !result.admitted {
-            let _ = sender.send(Err(()));
+            let failure = if expected == result.interaction {
+                InteractionAdmissionError::Unavailable
+            } else {
+                InteractionAdmissionError::ControlLost
+            };
+            let _ = sender.send(Err(failure));
             return;
         }
         let _ = sender.send(Ok(InteractionPublicationPermit::for_interaction(expected)));
@@ -845,7 +934,7 @@ impl DispatcherInner {
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         );
         for (_, (_, waiter)) in admissions {
-            let _ = waiter.send(Err(()));
+            let _ = waiter.send(Err(InteractionAdmissionError::ControlLost));
         }
     }
 }
@@ -856,8 +945,8 @@ mod tests {
     use crate::runtime::identity::ProcessUnitId;
     use crate::runtime::identity::{AttemptId, ConversationId, InteractionId, ToolCallId, ToolId};
     use crate::runtime::interaction::{
-        ApprovalDecision, InteractionKind, InteractionOutcome, InteractionRef, InteractionRequest,
-        InteractionResponse,
+        ApprovalDecision, InteractionAdmissionError, InteractionKind, InteractionOutcome,
+        InteractionRef, InteractionRequest, InteractionResponse,
     };
     use crate::runtime::nested_containment::AnchorError;
     use crate::runtime::subagent::activity::SubagentObservation;
@@ -1146,7 +1235,10 @@ mod tests {
         )
         .await
         .expect("write mismatched admission");
-        assert_eq!(first_waiter.await.expect("first waiter"), Err(()));
+        assert_eq!(
+            first_waiter.await.expect("first waiter"),
+            Err(InteractionAdmissionError::ControlLost)
+        );
 
         let second = InteractionRef::new(
             ConversationId::new("child-conversation"),

@@ -585,6 +585,20 @@ frozen child capability definition explicitly selects it. Detaching after
 publication leaves the originating waiter pending, and reconnect reconstructs
 its presentation from live runtime state.
 
+The permit is also the boundary between two failure contracts. Before a permit
+exists, an exact root refusal is `Unavailable`: no `InteractionRequested` fact
+is committed and Approval/`ask_user` may fail closed through their ordinary
+product result. After the permit is returned, the coordinator commits its own
+`InteractionRequested` fact. A failed reliable Requested route is then control
+loss, never `Unavailable`: the child does not receive a synthetic human result
+or continue normally, and the open requested fact remains historical evidence
+for the interrupted execution. The same rule applies to a Settled route: the
+coordinator selects and audits the terminal outcome, but a failed reliable
+delivery is propagated as control loss instead of being swallowed while the
+waiter wakes a healthy Agent Loop. `InteractionSettled(Approved)` is necessary
+for the live start ordering, but it is not sufficient to continue after that
+mandatory supervision boundary fails.
+
 Live reconnect and process recovery are different operations. Reconnect may
 rebuild presentation for still-live coordinators; recovery never recreates a
 pending waiter, synthesizes a response, or treats historical
@@ -677,9 +691,10 @@ Two ordering rules hold:
   which is durable before the external side effect. The settled fact also
   commits before the responding client learns its response was accepted, so
   the user-facing approval response cannot race ahead of durable evidence that
-  the approval existed. A failed settled commit releases the waiter
-  fail-closed as `Unavailable` and answers the client
-  `interaction_audit_failed`.
+  the approval existed. A failed settled audit or reliable settled-route
+  delivery is a runtime/control failure: it never becomes `Unavailable`, never
+  rewrites the coordinator's selected outcome, and cannot release the Agent
+  Loop into ordinary continuation under a broken supervision path.
 
 Denial semantics are unchanged: a denial remains the canonical denied
 `ToolResult` and gains a matching `Denied { reason }` audit fact. A submitted
