@@ -196,7 +196,7 @@ describe("snapshot reconstruction", () => {
         withExpandedToolCalls(prefs(), ["call-1", "call-2"]),
         ["exec-1"],
       ),
-      ["attempt-1-interaction-1"],
+      [approvalInteraction().interaction],
     );
     const first = visible(state, preferences);
     const second = visible(

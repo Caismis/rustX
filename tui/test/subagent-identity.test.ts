@@ -23,8 +23,8 @@ import {
 } from "./support/fixtures.ts";
 
 describe("subagent identity", () => {
-  it("negotiates v11, which carries the live activity projection", () => {
-    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 11);
+  it("negotiates v12, which carries routed interactions and live activity", () => {
+    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 12);
   });
 
   it("carries agent and definition_digest from the snapshot", () => {

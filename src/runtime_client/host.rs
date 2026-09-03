@@ -25,6 +25,8 @@
 //!   observation attachments;
 //! - the Runtime Client projection (snapshot read model, cursor allocation,
 //!   bounded replay, subscribers) and its linearization boundary;
+//! - the root publication-admission check for child interactions, limited to
+//!   the synchronized presence of the control attachment;
 //! - protocol adaptation: request dispatch, `model_set`/`shutdown`/
 //!   `cancel_current_attempt` forwarding, native Session intent forwarding,
 //!   and inbound publish forwarding;
@@ -40,6 +42,8 @@
 //! - mailbox semantic sequencing (the coordinator owns the
 //!   mailbox/admission relationship);
 //! - `ConversationToolRuntime` / `CapabilityCoordinator` semantic ownership;
+//! - child interaction waiters, pending state, audit, cancellation,
+//!   settlement, or execution authority;
 //! - SessionCatalog/SessionGraph ownership (the optional native Session
 //!   control seam forwards to `LocalSessionSupervisor`);
 //! - cancellation terminal settlement (`AgentExecution` remains the attempt
@@ -143,10 +147,11 @@ use crate::runtime::conversation_runtime::{
     CancelAttemptError, ConversationRuntime, InboundAdmissionError, ManualCompactionError,
     ModelUpdateError, RuntimeBootstrapError, RuntimeResourceReloadError,
 };
-use crate::runtime::identity::{ConversationId, InteractionId, ToolExecutionId};
-use crate::runtime::interaction::{InteractionError, InteractionResponse};
+use crate::runtime::identity::{ConversationId, ToolExecutionId};
+use crate::runtime::interaction::{InteractionRef, InteractionResponse, RoutedInteractionError};
 use crate::runtime::observation::PendingObservations;
 use crate::runtime::request_history::{RequestHistory, RequestHistoryError};
+use crate::runtime::subagent::InteractionPublicationAuthority;
 
 /// The one Runtime Client host construction failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -350,6 +355,21 @@ pub(crate) struct ClientInner {
     worker_started: AtomicBool,
 }
 
+/// Root-side publication authority installed into the parent subagent
+/// registry. It is a weak adapter over the Runtime Client host's attachment
+/// lock, not an interaction owner.
+struct RootInteractionPublicationAuthority {
+    inner: Weak<ClientInner>,
+}
+
+impl InteractionPublicationAuthority for RootInteractionPublicationAuthority {
+    fn admit(&self, _interaction: &InteractionRef) -> bool {
+        self.inner
+            .upgrade()
+            .is_some_and(|inner| inner.admits_interaction_publication())
+    }
+}
+
 /// Releasing the last host handle closes the shared observation queue,
 /// which is the projection worker's terminal condition.
 impl Drop for ClientInner {
@@ -369,6 +389,15 @@ impl ClientInner {
             .expect("runtime client host lock poisoned");
         guard.apply_pending(&self.pending);
         guard
+    }
+
+    /// The root publication-admission frontier. The same host mutex that
+    /// removes/installs the control attachment on detach/attach is used for
+    /// this check, so an admission and a detach have exactly one ordering:
+    /// whichever operation acquires this boundary first wins.
+    pub(crate) fn admits_interaction_publication(&self) -> bool {
+        let state = self.lock_state();
+        state.control_attachment.is_some()
     }
 
     /// Refreshes the bounded transcript bootstrap page from the durable
@@ -787,28 +816,29 @@ impl ClientInner {
     ///
     /// Returns a typed Runtime Client error when the interaction is stale,
     /// already settled, or the response fails bounded validation.
-    pub(crate) fn respond_interaction(
+    pub(crate) async fn respond_interaction(
         &self,
-        interaction_id: &InteractionId,
+        interaction: &InteractionRef,
         response: InteractionResponse,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_writable_runtime()?;
         self.runtime
             .as_ref()
             .expect("a writable Runtime Client host has a runtime")
-            .respond_interaction(interaction_id, response)
+            .respond_interaction(interaction, response)
+            .await
             .map(|()| RuntimeClientResult::InteractionResponseAccepted {
-                interaction_id: interaction_id.clone(),
+                interaction: interaction.clone(),
             })
             .map_err(|error| match error {
-                InteractionError::NotPending { interaction_id } => {
-                    RuntimeClientError::InteractionNotPending { interaction_id }
+                RoutedInteractionError::NotPending { interaction } => {
+                    RuntimeClientError::InteractionNotPending { interaction }
                 }
-                InteractionError::InvalidResponse { message } => {
+                RoutedInteractionError::InvalidResponse { message } => {
                     RuntimeClientError::InteractionInvalidResponse { message }
                 }
-                InteractionError::AuditFailed { interaction_id } => {
-                    RuntimeClientError::InteractionAuditFailed { interaction_id }
+                RoutedInteractionError::AuditFailed { interaction } => {
+                    RuntimeClientError::InteractionAuditFailed { interaction }
                 }
             })
     }
@@ -1686,6 +1716,13 @@ impl RuntimeClientHost {
             pending,
             worker_started: AtomicBool::new(false),
         });
+        if let Some(runtime) = inner.runtime.as_ref() {
+            runtime.install_interaction_publication_authority(Arc::new(
+                RootInteractionPublicationAuthority {
+                    inner: Arc::downgrade(&inner),
+                },
+            ));
+        }
         // Only the projection worker: activating the conversation runtime
         // is the composition's explicit next step, never a side effect of
         // binding a client.
@@ -1827,12 +1864,12 @@ impl RuntimeClientHost {
     /// Returns [`RuntimeClientError::InteractionNotPending`] for a stale or
     /// settled identity, or [`RuntimeClientError::InteractionInvalidResponse`]
     /// for a response that fails bounded validation.
-    pub fn respond_interaction(
+    pub async fn respond_interaction(
         &self,
-        interaction_id: &InteractionId,
+        interaction: &InteractionRef,
         response: InteractionResponse,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.inner.respond_interaction(interaction_id, response)
+        self.inner.respond_interaction(interaction, response).await
     }
 
     /// Reads the authoritative snapshot and its cursor, linearized

@@ -192,6 +192,27 @@ occurrence across the crash and the recovery.
 | approval settled, killed before the execution start | `InteractionRequested < InteractionSettled`, no `ToolExecutionStarted` | the settled audit as history | a tool auto-executing on the historical approval | `a_settled_approval_never_authorizes_a_later_execution` |
 | approval settled, killed after the execution start | `settled < started` | unknown external outcome | the approval being replayed as authorization | `approval_settlement_and_the_tool_start_boundary_compose` |
 
+These rows describe live interaction authority, not only audit replay. A
+Runtime Client detach while the originating runtime is still live leaves its
+pending coordinator waiter untouched; a later attachment reconstructs the
+root projection from that live state. Conversely, process death destroys the
+waiter even though InteractionRequested and any earlier settled fact may
+remain as historical audit evidence. A child process death removes only that
+child's root-facing actionable projections, and a delayed response receives
+interaction_not_pending. No recovery path synthesizes Allow, Deny,
+questionnaire decline, cancellation, or execution from historical facts.
+
+Reliable route loss is a third case at the same boundary, not another spelling
+of provider absence. A root admission refusal before the permit produces
+`Unavailable` without `InteractionRequested`. Once the permit and requested
+fact exist, loss of the reliable Requested route interrupts supervised child
+execution and leaves the requested fact as evidence; it does not create an
+ordinary unavailable ToolResult. If the coordinator has already committed a
+settlement but the reliable Settled route fails, that selected outcome remains
+audit evidence while the child stops under the existing control-loss
+semantics. Reopen never recreates either waiter, treats the settled fact as a
+live response, or authorizes a tool from historical `Approved`.
+
 ## 6. Compaction
 
 | Boundary | Durable before kill | Surface after reopen | Ledger | Test |

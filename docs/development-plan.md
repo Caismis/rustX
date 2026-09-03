@@ -1174,7 +1174,7 @@ closes it exactly once, reusing the background/subagent lifecycle shape.
 Two ordering rules are enforced where the decision is made, not merely
 documented: the requested fact commits before the questionnaire is released
 to a client (a failed commit publishes no questionnaire and fails closed as
-`Unavailable`), and `InteractionSettled(Approved)` commits before the waiter
+an internal publication failure), and `InteractionSettled(Approved)` commits before the waiter
 is released, so it necessarily precedes `ToolExecutionStarted` and the
 external side effect. A failed settled commit releases the waiter fail-closed
 and answers the client `interaction_audit_failed`.

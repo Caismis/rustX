@@ -30,6 +30,7 @@
 //! loses its parent drains its own runtime and exits; the restarted parent
 //! classifies the durable ownership as interrupted and never reattaches.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -39,6 +40,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::context::{AgentStatusConfig, SessionContextPolicy};
 use crate::runtime::identity::{ConversationId, SubagentId};
+use crate::runtime::interaction::{InteractionRef, InteractionResponse, RoutedInteractionError};
 use crate::runtime::types::CancellationReason;
 
 use super::anchors::{NestedUnitSettlement, RetainedProcessUnits, contain_retained};
@@ -46,7 +48,7 @@ use super::ipc::{
     ChildFrame, ChildTerminalMode, ParentFrame, ProcessUnitAckFrame, ProcessUnitRefusalFrame,
     ResultFrame, SubagentChildSpec, read_child_frame, write_parent_frame,
 };
-use super::registry::SubagentTerminalMode;
+use super::registry::{SubagentInteractionSink, SubagentTerminalMode};
 use super::resolver::ResolvedSubagentSpec;
 use super::workspace::{WorkspaceLease, WorkspaceSnapshot};
 
@@ -830,6 +832,8 @@ impl StagedChild {
         self,
         delegate: super::ipc::DelegationFrame,
         activity: Option<super::registry::SubagentActivitySink>,
+        interactions: Option<SubagentInteractionSink>,
+        provider_available: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> ChildDriver {
         let Self {
             child,
@@ -839,7 +843,7 @@ impl StagedChild {
             workspace,
             retained,
         } = self;
-        let (command_tx, command_rx) = tokio::sync::mpsc::channel(4);
+        let (command_tx, command_rx) = tokio::sync::mpsc::channel(16);
         // The driver owns the OS handle immediately after this call, but it
         // cannot send Delegate until the registry has installed its command
         // handle and resolved any cancellation intent that committed during
@@ -872,6 +876,8 @@ impl StagedChild {
                 command_rx,
                 cancelled_before_start,
                 activity,
+                interactions,
+                provider_available,
             )
             .await
         });
@@ -1171,6 +1177,16 @@ async fn handshake_core(
                         detail: "the child produced a result before delegation".to_owned(),
                     });
                 }
+                Ok(Some(
+                    ChildFrame::InteractionRequested(_)
+                    | ChildFrame::InteractionSettled { .. }
+                    | ChildFrame::InteractionResponseResult(_)
+                    | ChildFrame::InteractionPublicationAdmissionRequested(_),
+                )) => {
+                    return Err(SpawnError::Handshake {
+                        detail: "the child produced an interaction frame before Ready".to_owned(),
+                    });
+                }
                 Ok(None) => {
                     let exit = try_wait(child);
                     return Err(SpawnError::Handshake {
@@ -1223,7 +1239,7 @@ pub(crate) struct ChildDriver {
 }
 
 /// The driver command channel payload.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) enum DriverCommand {
     /// Cancel the child with the reason committed by the registry: send the
     /// typed `Cancel` frame, then escalate. The driver never chooses the
@@ -1231,6 +1247,18 @@ pub(crate) enum DriverCommand {
     Cancel {
         /// The registry's first-winner cancellation cause.
         reason: CancellationReason,
+    },
+    /// Forward one root response to the child coordinator and resolve the
+    /// sender when the child has applied the originating transition.
+    InteractionRespond {
+        /// Transport-only response correlation identity.
+        response_id: u64,
+        /// The full routed interaction identity.
+        interaction: InteractionRef,
+        /// The typed response; the child coordinator validates it.
+        response: InteractionResponse,
+        /// The child coordinator's accepted or fail-closed result.
+        result: tokio::sync::oneshot::Sender<Result<(), RoutedInteractionError>>,
     },
 }
 
@@ -1298,6 +1326,8 @@ async fn drive_child(
     // The registry's live-activity sink (Issue #178). `None` only in tests
     // that drive the physical pipeline without a registry.
     activity: Option<super::registry::SubagentActivitySink>,
+    interactions: Option<SubagentInteractionSink>,
+    provider_available: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> PhysicalSettlement {
     let observation_task = if let Some(sink) = activity {
         Some(tokio::spawn(run_observation_receiver(observation, sink)))
@@ -1317,6 +1347,8 @@ async fn drive_child(
         delegate,
         commands,
         cancelled_before_start,
+        interactions,
+        provider_available,
     )
     .await;
     if let Some(task) = observation_task {
@@ -1361,12 +1393,22 @@ async fn drive_child_control(
     mut retained: RetainedProcessUnits,
     runtime_root: PhysicalChildRuntimeRoot,
     workspace: Option<WorkspaceLease>,
-    delegate: super::ipc::DelegationFrame,
+    mut delegate: super::ipc::DelegationFrame,
     mut commands: tokio::sync::mpsc::Receiver<DriverCommand>,
     cancelled_before_start: Option<CancellationReason>,
+    interactions: Option<SubagentInteractionSink>,
+    mut provider_available: Option<tokio::sync::watch::Receiver<bool>>,
 ) -> PhysicalSettlement {
     let mut cancel_deadline = None;
     let mut cancellation_delivered = false;
+    let mut response_waiters: HashMap<
+        u64,
+        (
+            InteractionRef,
+            tokio::sync::oneshot::Sender<Result<(), RoutedInteractionError>>,
+        ),
+    > = HashMap::new();
+    let mut commands_open = true;
     if let Some(reason) = cancelled_before_start {
         if let Err(error) = write_parent_frame(
             &mut control,
@@ -1389,19 +1431,23 @@ async fn drive_child_control(
         }
         cancellation_delivered = true;
         cancel_deadline = Some(tokio::time::Instant::now() + CANCEL_GRACE);
-    } else if let Err(error) =
-        write_parent_frame(&mut control, &ParentFrame::Delegate(delegate)).await
-    {
-        return settle_after_driver_loss(
-            child,
-            control,
-            retained,
-            runtime_root,
-            workspace,
-            format!("could not deliver the delegation: {error}"),
-            false,
-        )
-        .await;
+    } else {
+        if let Some(provider_available) = provider_available.as_ref() {
+            delegate.interaction_provider_available = *provider_available.borrow();
+        }
+        if let Err(error) = write_parent_frame(&mut control, &ParentFrame::Delegate(delegate)).await
+        {
+            return settle_after_driver_loss(
+                child,
+                control,
+                retained,
+                runtime_root,
+                workspace,
+                format!("could not deliver the delegation: {error}"),
+                false,
+            )
+            .await;
+        }
     }
     let mut result: Option<ResultFrame> = None;
     let mut violation: Option<String> = None;
@@ -1412,32 +1458,72 @@ async fn drive_child_control(
             break;
         }
         tokio::select! {
-            command = commands.recv() => {
-                // A closed channel (registry dropped) is not a command.
-                if let Some(DriverCommand::Cancel { reason }) = command
-                    && cancel_deadline.is_none()
-                {
-                    // The Cancel frame is a request, not evidence. The
-                    // driver keeps observing; the escalation deadline
-                    // below is the bounded fallback.
-                    match write_parent_frame(
-                        &mut control,
-                        &ParentFrame::Cancel {
-                            reason: Some(reason),
-                        },
-                    )
-                    .await
-                    {
-                        Ok(()) => {
-                            cancellation_delivered = true;
-                            cancel_deadline = Some(tokio::time::Instant::now() + CANCEL_GRACE);
-                        }
-                        Err(error) => {
-                            violation = Some(format!(
-                                "control channel lost while delivering cancellation: {error}"
-                            ));
+            command = commands.recv(), if commands_open => {
+                match command {
+                    Some(DriverCommand::Cancel { reason })
+                        if cancel_deadline.is_none() => {
+                        // The Cancel frame is a request, not evidence. The
+                        // driver keeps observing; the escalation deadline
+                        // below is the bounded fallback.
+                        match write_parent_frame(
+                            &mut control,
+                            &ParentFrame::Cancel {
+                                reason: Some(reason),
+                            },
+                        )
+                        .await
+                        {
+                            Ok(()) => {
+                                cancellation_delivered = true;
+                                cancel_deadline =
+                                    Some(tokio::time::Instant::now() + CANCEL_GRACE);
+                            }
+                            Err(error) => {
+                                violation = Some(format!(
+                                    "control channel lost while delivering cancellation: {error}"
+                                ));
+                            }
                         }
                     }
+                    Some(DriverCommand::InteractionRespond {
+                        response_id,
+                        interaction,
+                        response,
+                        result,
+                    }) => {
+                        let frame = ParentFrame::InteractionRespond {
+                            response_id,
+                            interaction: interaction.clone(),
+                            response,
+                        };
+                        match write_parent_frame(&mut control, &frame).await {
+                            Ok(()) => {
+                                let previous =
+                                    response_waiters.insert(response_id, (interaction, result));
+                                if let Some((expected, sender)) = previous {
+                                    let _ = sender.send(Err(
+                                        RoutedInteractionError::NotPending {
+                                            interaction: expected,
+                                        },
+                                    ));
+                                    violation = Some(
+                                        "duplicate child interaction response correlation id"
+                                            .to_owned(),
+                                    );
+                                }
+                            }
+                            Err(error) => {
+                                let _ = result.send(Err(RoutedInteractionError::NotPending {
+                                    interaction,
+                                }));
+                                violation = Some(format!(
+                                    "control channel lost while delivering interaction response: {error}"
+                                ));
+                            }
+                        }
+                    }
+                    Some(DriverCommand::Cancel { .. }) => {}
+                    None => commands_open = false,
                 }
             }
             frame = read_child_frame(&mut control) => {
@@ -1460,6 +1546,62 @@ async fn drive_child_control(
                     Ok(Some(ChildFrame::AnchorReleased(release))) => {
                         retained.release(&release.unit_id, release.pgid);
                     }
+                    Ok(Some(ChildFrame::InteractionRequested(request))) => {
+                        if let Some(sink) = &interactions {
+                            sink.apply_requested(request);
+                        }
+                    }
+                    Ok(Some(ChildFrame::InteractionSettled {
+                        interaction,
+                        outcome,
+                    })) => {
+                        if let Some(sink) = &interactions {
+                            sink.apply_settled(&interaction, &outcome);
+                        }
+                    }
+                    Ok(Some(ChildFrame::InteractionResponseResult(frame))) => {
+                        let Some((expected, sender)) = response_waiters.remove(&frame.response_id)
+                        else {
+                            violation = Some(
+                                "child returned an unknown interaction response correlation id"
+                                    .to_owned(),
+                            );
+                            continue;
+                        };
+                        if expected == frame.interaction {
+                            let _ = sender.send(frame.result);
+                        } else {
+                            let _ = sender.send(Err(RoutedInteractionError::NotPending {
+                                interaction: expected,
+                            }));
+                            violation = Some(
+                                "child returned a mismatched interaction response identity"
+                                    .to_owned(),
+                            );
+                        }
+                    }
+                    Ok(Some(
+                        ChildFrame::InteractionPublicationAdmissionRequested(request),
+                    )) => {
+                        let admitted = interactions
+                            .as_ref()
+                            .is_some_and(|sink| sink.admit_publication(&request.interaction));
+                        // The request frame uses `admitted = false` as its
+                        // wire shape; the root authority's answer must echo
+                        // the exact identity and set the decision explicitly.
+                        let mut result = request;
+                        result.admitted = admitted;
+                        if let Err(error) = write_parent_frame(
+                            &mut control,
+                            &ParentFrame::InteractionPublicationAdmissionResult(result),
+                        )
+                        .await
+                        {
+                            violation = Some(format!(
+                                "control channel lost while delivering interaction publication admission: {error}"
+                            ));
+                        }
+                    }
                     Ok(Some(_)) => {
                         violation = Some(
                             "protocol violation: unexpected frame after Ready".to_owned(),
@@ -1467,6 +1609,30 @@ async fn drive_child_control(
                     }
                     Ok(None) => eof = true,
                     Err(error) => violation = Some(error.to_string()),
+                }
+            }
+            provider = async {
+                match provider_available.as_mut() {
+                    Some(receiver) => match receiver.changed().await {
+                        Ok(()) => Some(*receiver.borrow()),
+                        Err(_) => None,
+                    },
+                    None => std::future::pending::<Option<bool>>().await,
+                }
+            }, if provider_available.is_some() => {
+                let Some(available) = provider else {
+                    provider_available = None;
+                    continue;
+                };
+                if let Err(error) = write_parent_frame(
+                    &mut control,
+                    &ParentFrame::InteractionProviderAvailable { available },
+                )
+                .await
+                {
+                    violation = Some(format!(
+                        "control channel lost while delivering interaction provider state: {error}"
+                    ));
                 }
             }
             () = async {
@@ -1489,6 +1655,9 @@ async fn drive_child_control(
                 eof = true;
             }
         }
+    }
+    for (_, (interaction, sender)) in response_waiters {
+        let _ = sender.send(Err(RoutedInteractionError::NotPending { interaction }));
     }
     // Terminal settlement requires the reaped process, never a frame alone
     // and never a kill signal alone. Closing the write half is the
@@ -2008,7 +2177,10 @@ mod tests {
             crate::runtime::subagent::ipc::DelegationFrame {
                 task: "inspect".to_owned(),
                 context: None,
+                interaction_provider_available: false,
             },
+            None,
+            None,
             None,
         );
         let (_commands, start_gate, task) = driver.split();
@@ -2055,7 +2227,10 @@ mod tests {
             crate::runtime::subagent::ipc::DelegationFrame {
                 task: "inspect".to_owned(),
                 context: None,
+                interaction_provider_available: false,
             },
+            None,
+            None,
             None,
         );
         let (_commands, start_gate, task) = driver.split();

@@ -30,6 +30,7 @@ import type {
   SessionModelView,
   ToolExecutionResult,
   UserMessageBlock,
+  RoutedInteraction,
 } from "../../src/protocol/types.ts";
 
 /** Test-only constructors for the two numeric wire cursor domains. */
@@ -43,8 +44,8 @@ export function transcriptCursor(value: number): RuntimeClientTranscriptCursor {
 
 export function approvalInteraction(
   id = "attempt-1-interaction-1",
-): InteractionRequest {
-  return {
+): RoutedInteraction {
+  const request: InteractionRequest = {
     id,
     conversation_id: "conv-test",
     attempt_id: "attempt-1",
@@ -60,12 +61,17 @@ export function approvalInteraction(
       reason: "native policy requires approval",
     },
   };
+  return {
+    interaction: { conversation_id: request.conversation_id, interaction_id: request.id },
+    source: { type: "primary" },
+    request,
+  };
 }
 
 export function questionnaireInteraction(
   id = "attempt-1-interaction-question-1",
-): InteractionRequest {
-  return {
+): RoutedInteraction {
+  const request: InteractionRequest = {
     id,
     conversation_id: "conv-test",
     attempt_id: "attempt-1",
@@ -86,6 +92,11 @@ export function questionnaireInteraction(
         ],
       },
     },
+  };
+  return {
+    interaction: { conversation_id: request.conversation_id, interaction_id: request.id },
+    source: { type: "primary" },
+    request,
   };
 }
 

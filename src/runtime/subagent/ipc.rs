@@ -28,13 +28,12 @@
 //! backpressure domains (Issue #178):
 //!
 //! - fd 0 (standard input): the **reliable control channel**, duplex. It
-//!   carries the `Hello` handshake, `Delegate`, `Cancel`, anchor
-//!   acknowledgements, and every child-bound lifecycle/ownership frame
-//!   (`Ready`, `StartupError`, `Result`, `Diagnostic`, `AnchorOffered`,
-//!   `AnchorReleased`) — ordered and non-lossy. The parent's endpoint closes
-//!   when the parent process dies — for any reason, including `SIGKILL` — so
-//!   this channel is the parent-liveness authority: a child that observes
-//!   EOF before its terminal settlement drains and exits.
+//!   carries the `Hello` handshake, delegation/cancellation, routed
+//!   interaction requests and responses, anchor acknowledgements, and every
+//!   child-bound lifecycle/ownership frame — ordered and non-lossy. The
+//!   parent's endpoint closes when the parent process dies — for any reason,
+//!   including `SIGKILL` — so this channel is the parent-liveness authority:
+//!   a child that observes EOF before its terminal settlement drains and exits.
 //! - fd 1 (standard output): the **disposable observation channel**,
 //!   child-to-parent only. It carries `Activity` frames with latest-value
 //!   semantics. A stalled or lost observation channel delays nothing on the
@@ -70,10 +69,13 @@ use super::workspace::WorkspaceSnapshot;
 /// carried the child→parent live activity projection frames (Issue #178);
 /// version 9 moves them onto the dedicated disposable observation channel
 /// (fd 1), so observation backpressure can never occupy the reliable
-/// control transport.
+/// control transport. Version 10 adds bidirectional routed interaction
+/// control frames and root-provider availability state; version 11 adds the
+/// root publication-admission handshake. HITL traffic remains on fd 0 and
+/// never uses the disposable activity lane.
 /// There is no compatibility decoding: a peer that does not speak exactly
 /// this version exits before composing anything.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 9;
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 11;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -89,6 +91,9 @@ const KIND_DELEGATE: u8 = 2;
 const KIND_CANCEL: u8 = 3;
 const KIND_ANCHOR_ACCEPTED: u8 = 4;
 const KIND_ANCHOR_REFUSED: u8 = 5;
+const KIND_INTERACTION_RESPOND: u8 = 6;
+const KIND_PROVIDER_AVAILABILITY: u8 = 7;
+const KIND_INTERACTION_ADMISSION_RESULT: u8 = 8;
 
 // Child -> parent frame kinds (reliable control channel, fd 0).
 const KIND_READY: u8 = 101;
@@ -97,6 +102,10 @@ const KIND_RESULT: u8 = 103;
 const KIND_DIAGNOSTIC: u8 = 104;
 const KIND_ANCHOR_OFFERED: u8 = 105;
 const KIND_ANCHOR_RELEASED: u8 = 106;
+const KIND_INTERACTION_REQUESTED: u8 = 108;
+const KIND_INTERACTION_SETTLED: u8 = 109;
+const KIND_INTERACTION_RESPONSE_RESULT: u8 = 110;
+const KIND_INTERACTION_ADMISSION_REQUESTED: u8 = 111;
 
 // Observation channel frame kind (disposable, fd 1, child -> parent only).
 const KIND_ACTIVITY: u8 = 107;
@@ -188,6 +197,25 @@ pub(crate) struct DelegationFrame {
     /// The explicit bounded context package, when the delegating call
     /// supplied one.
     pub context: Option<String>,
+    /// Whether a capable root Runtime Client human surface existed when the
+    /// child was admitted. This is provider state, not `ask_user` capability
+    /// selection and not a settlement decision.
+    pub interaction_provider_available: bool,
+}
+
+/// The result of one parent-routed interaction response.
+///
+/// `response_id` is transport correlation only; the semantic target remains
+/// the full `InteractionRef` and is validated by the originating coordinator.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct InteractionResponseResultFrame {
+    /// Transport-only response correlation identity.
+    pub response_id: u64,
+    /// The routed semantic address echoed by the child.
+    pub interaction: crate::runtime::interaction::InteractionRef,
+    /// The originating coordinator's accepted or fail-closed result.
+    pub result: Result<(), crate::runtime::interaction::RoutedInteractionError>,
 }
 
 /// The child's `Ready` frame: composition and activation completed.
@@ -286,6 +314,20 @@ pub(crate) struct ActivityFrame {
     pub observation: super::activity::SubagentObservation,
 }
 
+/// One child publication-admission request/result. `request_id` is
+/// transport correlation only; the exact `InteractionRef` is echoed so a
+/// stale or mismatched result can never authorize another interaction.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct InteractionPublicationAdmissionFrame {
+    /// Transport-only admission correlation identity.
+    pub request_id: u64,
+    /// The exact interaction whose publication is asking for admission.
+    pub interaction: crate::runtime::interaction::InteractionRef,
+    /// Whether the root human-facing provider admitted this publication.
+    pub admitted: bool,
+}
+
 /// One decoded parent-bound frame of the reliable control channel.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ChildFrame {
@@ -303,6 +345,20 @@ pub(crate) enum ChildFrame {
     /// A nested supervised unit is proven physically terminal, so the
     /// parent may drop exactly that retained anchor.
     AnchorReleased(ProcessUnitAnchorFrame),
+    /// A child-owned interaction request committed by its coordinator.
+    InteractionRequested(crate::runtime::interaction::InteractionRequest),
+    /// A child-owned interaction terminal transition.
+    InteractionSettled {
+        /// The originating routed identity.
+        interaction: crate::runtime::interaction::InteractionRef,
+        /// The originating coordinator's terminal outcome.
+        outcome: crate::runtime::interaction::InteractionOutcome,
+    },
+    /// The result of one parent-routed response.
+    InteractionResponseResult(InteractionResponseResultFrame),
+    /// A child asks the root provider authority to admit one exact
+    /// interaction publication before the child commits `InteractionRequested`.
+    InteractionPublicationAdmissionRequested(InteractionPublicationAdmissionFrame),
 }
 
 /// One decoded child-bound frame.
@@ -328,6 +384,24 @@ pub(crate) enum ParentFrame {
     /// The parent will not retain the named unit's anchor; it must never
     /// start.
     AnchorRefused(ProcessUnitRefusalFrame),
+    /// A root Runtime Client response addressed to an originating child.
+    InteractionRespond {
+        /// Transport-only response correlation identity.
+        response_id: u64,
+        /// The full semantic route target.
+        interaction: crate::runtime::interaction::InteractionRef,
+        /// The typed response; the child coordinator validates it.
+        response: crate::runtime::interaction::InteractionResponse,
+    },
+    /// Early root Runtime Client human-provider availability hint for future
+    /// child publications. The admission result is authoritative, and
+    /// existing pending interactions are unaffected.
+    InteractionProviderAvailable {
+        /// Whether a capable root Runtime Client control attachment exists.
+        available: bool,
+    },
+    /// The root provider authority's answer to one child publication request.
+    InteractionPublicationAdmissionResult(InteractionPublicationAdmissionFrame),
 }
 
 /// A control-protocol violation of the peer.
@@ -468,6 +542,31 @@ pub(crate) async fn write_child_frame<W: tokio::io::AsyncWrite + Unpin + ?Sized>
         ChildFrame::AnchorReleased(payload) => {
             write_frame(stream, KIND_ANCHOR_RELEASED, &encode(payload)?).await
         }
+        ChildFrame::InteractionRequested(request) => {
+            write_frame(stream, KIND_INTERACTION_REQUESTED, &encode(request)?).await
+        }
+        ChildFrame::InteractionSettled {
+            interaction,
+            outcome,
+        } => {
+            write_frame(
+                stream,
+                KIND_INTERACTION_SETTLED,
+                &encode(&(interaction, outcome))?,
+            )
+            .await
+        }
+        ChildFrame::InteractionResponseResult(result) => {
+            write_frame(stream, KIND_INTERACTION_RESPONSE_RESULT, &encode(result)?).await
+        }
+        ChildFrame::InteractionPublicationAdmissionRequested(request) => {
+            write_frame(
+                stream,
+                KIND_INTERACTION_ADMISSION_REQUESTED,
+                &encode(request)?,
+            )
+            .await
+        }
     }
 }
 
@@ -487,6 +586,23 @@ pub(crate) async fn read_child_frame<R: tokio::io::AsyncRead + Unpin + ?Sized>(
         KIND_DIAGNOSTIC => ChildFrame::Diagnostic(decode(&payload)?),
         KIND_ANCHOR_OFFERED => ChildFrame::AnchorOffered(decode(&payload)?),
         KIND_ANCHOR_RELEASED => ChildFrame::AnchorReleased(decode(&payload)?),
+        KIND_INTERACTION_REQUESTED => ChildFrame::InteractionRequested(decode(&payload)?),
+        KIND_INTERACTION_SETTLED => {
+            let (interaction, outcome): (
+                crate::runtime::interaction::InteractionRef,
+                crate::runtime::interaction::InteractionOutcome,
+            ) = decode(&payload)?;
+            ChildFrame::InteractionSettled {
+                interaction,
+                outcome,
+            }
+        }
+        KIND_INTERACTION_RESPONSE_RESULT => {
+            ChildFrame::InteractionResponseResult(decode(&payload)?)
+        }
+        KIND_INTERACTION_ADMISSION_REQUESTED => {
+            ChildFrame::InteractionPublicationAdmissionRequested(decode(&payload)?)
+        }
         other => return Err(ProtocolError::UnknownKind { kind: other }),
     };
     Ok(Some(frame))
@@ -532,6 +648,24 @@ pub(crate) async fn write_parent_frame<W: tokio::io::AsyncWrite + Unpin + ?Sized
         ParentFrame::AnchorRefused(payload) => {
             write_frame(stream, KIND_ANCHOR_REFUSED, &encode(payload)?).await
         }
+        ParentFrame::InteractionRespond {
+            response_id,
+            interaction,
+            response,
+        } => {
+            write_frame(
+                stream,
+                KIND_INTERACTION_RESPOND,
+                &encode(&(response_id, interaction, response))?,
+            )
+            .await
+        }
+        ParentFrame::InteractionProviderAvailable { available } => {
+            write_frame(stream, KIND_PROVIDER_AVAILABILITY, &encode(available)?).await
+        }
+        ParentFrame::InteractionPublicationAdmissionResult(result) => {
+            write_frame(stream, KIND_INTERACTION_ADMISSION_RESULT, &encode(result)?).await
+        }
     }
 }
 
@@ -550,6 +684,24 @@ pub(crate) async fn read_parent_frame<R: tokio::io::AsyncRead + Unpin + ?Sized>(
         },
         KIND_ANCHOR_ACCEPTED => ParentFrame::AnchorAccepted(decode(&payload)?),
         KIND_ANCHOR_REFUSED => ParentFrame::AnchorRefused(decode(&payload)?),
+        KIND_INTERACTION_RESPOND => {
+            let (response_id, interaction, response): (
+                u64,
+                crate::runtime::interaction::InteractionRef,
+                crate::runtime::interaction::InteractionResponse,
+            ) = decode(&payload)?;
+            ParentFrame::InteractionRespond {
+                response_id,
+                interaction,
+                response,
+            }
+        }
+        KIND_PROVIDER_AVAILABILITY => ParentFrame::InteractionProviderAvailable {
+            available: decode(&payload)?,
+        },
+        KIND_INTERACTION_ADMISSION_RESULT => {
+            ParentFrame::InteractionPublicationAdmissionResult(decode(&payload)?)
+        }
         other => return Err(ProtocolError::UnknownKind { kind: other }),
     };
     Ok(Some(frame))
@@ -558,7 +710,11 @@ pub(crate) async fn read_parent_frame<R: tokio::io::AsyncRead + Unpin + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::identity::{McpServerId, ToolId};
+    use crate::runtime::identity::{InteractionId, McpServerId, ToolId};
+    use crate::runtime::interaction::{
+        InteractionKind, InteractionOutcome, InteractionRequest, InteractionResponse,
+        QuestionnaireResponse,
+    };
     use crate::runtime::subagent::catalog::SubagentName;
     use crate::runtime::subagent::resolver::ResolvedSubagentTool;
     use crate::tools::types::{
@@ -696,7 +852,7 @@ mod tests {
         ));
     }
 
-    /// IPC v9 carries the child→parent live activity projection on the
+    /// IPC v11 carries the child→parent live activity projection on the
     /// dedicated observation channel: the frame round-trips exactly and its
     /// payload is the typed `SubagentObservation`.
     #[tokio::test]
@@ -780,6 +936,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)] // one complete typed protocol round-trip
     async fn typed_frames_round_trip() {
         let (mut parent, mut child) = pair();
         let spec = SubagentChildSpec {
@@ -809,6 +966,7 @@ mod tests {
             &ParentFrame::Delegate(DelegationFrame {
                 task: "inspect".to_owned(),
                 context: Some("ctx".to_owned()),
+                interaction_provider_available: false,
             }),
         )
         .await
@@ -839,6 +997,166 @@ mod tests {
             Some(ParentFrame::Cancel {
                 reason: Some(CancellationReason::UserRequested),
             })
+        );
+
+        let routed_request = InteractionRequest {
+            id: InteractionId::new("interaction-questionnaire"),
+            conversation_id: ConversationId::new("child-conversation"),
+            attempt_id: crate::runtime::identity::AttemptId::new("attempt-1"),
+            turn: 3,
+            kind: InteractionKind::Questionnaire {
+                questionnaire: crate::runtime::interaction::QuestionnaireSpecification {
+                    questions: vec![crate::runtime::interaction::QuestionSpecification {
+                        question: "Which target?".to_owned(),
+                        header: "Target".to_owned(),
+                        options: vec![crate::runtime::interaction::OptionSpecification {
+                            label: "staging".to_owned(),
+                            description: "safe".to_owned(),
+                            preview: None,
+                        }],
+                        multi_select: false,
+                    }],
+                },
+            },
+        };
+        let routed_ref = routed_request.interaction_ref();
+        let response = InteractionResponse::Questionnaire {
+            response: QuestionnaireResponse::Declined,
+        };
+        write_parent_frame(
+            &mut parent,
+            &ParentFrame::InteractionRespond {
+                response_id: 44,
+                interaction: routed_ref.clone(),
+                response: response.clone(),
+            },
+        )
+        .await
+        .expect("write routed response");
+        write_parent_frame(
+            &mut parent,
+            &ParentFrame::InteractionProviderAvailable { available: true },
+        )
+        .await
+        .expect("write provider availability");
+        write_parent_frame(
+            &mut parent,
+            &ParentFrame::InteractionPublicationAdmissionResult(
+                InteractionPublicationAdmissionFrame {
+                    request_id: 17,
+                    interaction: routed_ref.clone(),
+                    admitted: true,
+                },
+            ),
+        )
+        .await
+        .expect("write publication admission result");
+        assert_eq!(
+            read_parent_frame(&mut child).await.expect("read response"),
+            Some(ParentFrame::InteractionRespond {
+                response_id: 44,
+                interaction: routed_ref.clone(),
+                response: response.clone(),
+            })
+        );
+        assert_eq!(
+            read_parent_frame(&mut child)
+                .await
+                .expect("read provider availability"),
+            Some(ParentFrame::InteractionProviderAvailable { available: true })
+        );
+        assert_eq!(
+            read_parent_frame(&mut child)
+                .await
+                .expect("read publication admission result"),
+            Some(ParentFrame::InteractionPublicationAdmissionResult(
+                InteractionPublicationAdmissionFrame {
+                    request_id: 17,
+                    interaction: routed_ref.clone(),
+                    admitted: true,
+                }
+            ))
+        );
+
+        write_child_frame(
+            &mut child,
+            &ChildFrame::InteractionRequested(routed_request.clone()),
+        )
+        .await
+        .expect("write routed request");
+        write_child_frame(
+            &mut child,
+            &ChildFrame::InteractionPublicationAdmissionRequested(
+                InteractionPublicationAdmissionFrame {
+                    request_id: 17,
+                    interaction: routed_ref.clone(),
+                    admitted: false,
+                },
+            ),
+        )
+        .await
+        .expect("write publication admission request");
+        write_child_frame(
+            &mut child,
+            &ChildFrame::InteractionSettled {
+                interaction: routed_ref.clone(),
+                outcome: InteractionOutcome::Responded {
+                    response: response.clone(),
+                },
+            },
+        )
+        .await
+        .expect("write routed settlement");
+        write_child_frame(
+            &mut child,
+            &ChildFrame::InteractionResponseResult(InteractionResponseResultFrame {
+                response_id: 44,
+                interaction: routed_ref.clone(),
+                result: Ok(()),
+            }),
+        )
+        .await
+        .expect("write routed response result");
+        assert_eq!(
+            read_child_frame(&mut parent)
+                .await
+                .expect("read routed request"),
+            Some(ChildFrame::InteractionRequested(routed_request.clone()))
+        );
+        assert_eq!(
+            read_child_frame(&mut parent)
+                .await
+                .expect("read publication admission request"),
+            Some(ChildFrame::InteractionPublicationAdmissionRequested(
+                InteractionPublicationAdmissionFrame {
+                    request_id: 17,
+                    interaction: routed_ref.clone(),
+                    admitted: false,
+                }
+            ))
+        );
+        assert_eq!(
+            read_child_frame(&mut parent)
+                .await
+                .expect("read routed settlement"),
+            Some(ChildFrame::InteractionSettled {
+                interaction: routed_ref.clone(),
+                outcome: InteractionOutcome::Responded {
+                    response: response.clone(),
+                },
+            })
+        );
+        assert_eq!(
+            read_child_frame(&mut parent)
+                .await
+                .expect("read routed response result"),
+            Some(ChildFrame::InteractionResponseResult(
+                InteractionResponseResultFrame {
+                    response_id: 44,
+                    interaction: routed_ref,
+                    result: Ok(()),
+                }
+            ))
         );
 
         write_child_frame(

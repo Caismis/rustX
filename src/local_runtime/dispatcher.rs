@@ -71,6 +71,9 @@ use std::sync::{Arc, Mutex};
 use futures_util::future::BoxFuture;
 
 use crate::runtime::identity::ProcessUnitId;
+use crate::runtime::interaction::{
+    InteractionAdmissionError, InteractionPublicationPermit, InteractionRef,
+};
 use crate::runtime::nested_containment::{AnchorError, NestedAnchorAuthority};
 use crate::runtime::subagent::activity::SubagentObservation;
 use crate::runtime::subagent::ipc::{
@@ -87,6 +90,11 @@ use crate::runtime::types::CancellationReason;
 /// the child accumulate unbounded pending frames.
 const OUTBOUND_CAPACITY: usize = 64;
 
+type InteractionAdmissionWaiter = (
+    InteractionRef,
+    tokio::sync::oneshot::Sender<Result<InteractionPublicationPermit, InteractionAdmissionError>>,
+);
+
 /// One control event the child's semantic driver must act on.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ChildControlEvent {
@@ -98,6 +106,22 @@ pub(crate) enum ChildControlEvent {
     Cancel {
         /// The first-winner semantic cancellation cause, when available.
         reason: Option<CancellationReason>,
+    },
+    /// A root Runtime Client response addressed to this child's coordinator.
+    InteractionRespond {
+        /// Transport-only response correlation identity.
+        response_id: u64,
+        /// The full routed semantic address.
+        interaction: crate::runtime::interaction::InteractionRef,
+        /// The typed response to validate at the child coordinator.
+        response: crate::runtime::interaction::InteractionResponse,
+    },
+    /// An early root Runtime Client human-provider availability hint.
+    /// Publication admission uses a separate authoritative handshake.
+    InteractionProviderAvailable {
+        /// Whether a root control attachment was present when this hint was
+        /// sent.
+        available: bool,
     },
     /// The parent violated the bounded control protocol.
     ProtocolViolation(String),
@@ -120,13 +144,36 @@ impl std::fmt::Debug for ChildControlHandle {
 
 struct DispatcherInner {
     /// The reliable lane: bounded, ordered, never silently dropped.
-    outbound: tokio::sync::mpsc::Sender<ChildFrame>,
+    outbound: tokio::sync::mpsc::Sender<ReliableFrame>,
     /// The disposable lane (Issue #178): the latest unpublished activity
     /// projection. A publication overwrites in place; the writer may skip
     /// intermediate values.
     activity: tokio::sync::watch::Sender<ActivityFrame>,
     pending: Mutex<HashMap<ProcessUnitId, tokio::sync::oneshot::Sender<Result<(), AnchorError>>>>,
+    /// Publication-admission replies awaiting the exact child-side route
+    /// call. This is transport correlation only; the originating coordinator
+    /// still owns the interaction and consumes the resulting permit.
+    interaction_admissions: Mutex<HashMap<u64, InteractionAdmissionWaiter>>,
+    next_interaction_admission_id: std::sync::atomic::AtomicU64,
     parent_lost: tokio::sync::watch::Sender<bool>,
+}
+
+/// One frame in the reliable outbound queue. Most control traffic only needs
+/// the established bounded-queue guarantee; routed interaction events also
+/// request a completion acknowledgement from the sole writer so their owner
+/// cannot wake before the control write either succeeds or fails.
+struct ReliableFrame {
+    frame: ChildFrame,
+    completion: Option<tokio::sync::oneshot::Sender<Result<(), AnchorError>>>,
+}
+
+impl ReliableFrame {
+    fn queued(frame: ChildFrame) -> Self {
+        Self {
+            frame,
+            completion: None,
+        }
+    }
 }
 
 impl ChildControlHandle {
@@ -139,9 +186,121 @@ impl ChildControlHandle {
     pub(crate) async fn send_reliable(&self, frame: ChildFrame) -> Result<(), AnchorError> {
         self.inner
             .outbound
-            .send(frame)
+            .send(ReliableFrame::queued(frame))
             .await
-            .map_err(|_| AnchorError::ParentLost)
+            .map_err(|_| {
+                self.inner.publish_parent_loss();
+                AnchorError::ParentLost
+            })
+    }
+
+    /// Sends one routed interaction event and waits for the reliable writer
+    /// to complete the control write. Queue acceptance alone is insufficient
+    /// for interaction settlement: the originating waiter must not wake as a
+    /// healthy execution if the peer has already rejected the frame.
+    pub(crate) async fn send_reliable_confirmed(
+        &self,
+        frame: ChildFrame,
+    ) -> Result<(), AnchorError> {
+        if self.parent_lost() {
+            return Err(AnchorError::ParentLost);
+        }
+        let (completion, receiver) = tokio::sync::oneshot::channel();
+        self.inner
+            .outbound
+            .send(ReliableFrame {
+                frame,
+                completion: Some(completion),
+            })
+            .await
+            .map_err(|_| {
+                self.inner.publish_parent_loss();
+                AnchorError::ParentLost
+            })?;
+        receiver.await.unwrap_or_else(|_| {
+            self.inner.publish_parent_loss();
+            Err(AnchorError::ParentLost)
+        })
+    }
+
+    /// Requests root publication admission for one exact routed interaction.
+    /// The response is correlated by both a transport request id and the
+    /// echoed `InteractionRef`; a stale or mismatched response is rejected.
+    pub(crate) fn admit_interaction_publication(
+        &self,
+        interaction: InteractionRef,
+    ) -> futures_util::future::BoxFuture<
+        'static,
+        Result<InteractionPublicationPermit, InteractionAdmissionError>,
+    > {
+        let request_id = self
+            .inner
+            .next_interaction_admission_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if request_id == 0 {
+            return Box::pin(std::future::ready(Err(
+                InteractionAdmissionError::ControlLost,
+            )));
+        }
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.inner
+            .interaction_admissions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(request_id, (interaction.clone(), sender));
+        let handle = self.clone();
+        Box::pin(async move {
+            if handle.parent_lost() {
+                handle
+                    .inner
+                    .interaction_admissions
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&request_id);
+                return Err(InteractionAdmissionError::ControlLost);
+            }
+            if handle
+                .send_reliable(ChildFrame::InteractionPublicationAdmissionRequested(
+                    crate::runtime::subagent::ipc::InteractionPublicationAdmissionFrame {
+                        request_id,
+                        interaction,
+                        admitted: false,
+                    },
+                ))
+                .await
+                .is_err()
+            {
+                handle
+                    .inner
+                    .interaction_admissions
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&request_id);
+                return Err(InteractionAdmissionError::ControlLost);
+            }
+            receiver
+                .await
+                .unwrap_or(Err(InteractionAdmissionError::ControlLost))
+        })
+    }
+
+    /// Attempts to enqueue one reliable frame without waiting. `Full` is
+    /// reported to the caller so a publication can fail closed; no semantic
+    /// frame is ever coalesced or silently discarded.
+    #[cfg(test)]
+    pub(crate) fn try_send_reliable(&self, frame: ChildFrame) -> Result<(), AnchorError> {
+        self.inner
+            .outbound
+            .try_send(ReliableFrame::queued(frame))
+            .map_err(|error| match error {
+                tokio::sync::mpsc::error::TrySendError::Full(_) => AnchorError::Refused(
+                    "the reliable child control lane is at capacity".to_owned(),
+                ),
+                tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+                    self.inner.publish_parent_loss();
+                    AnchorError::ParentLost
+                }
+            })
     }
 
     /// Publishes one **disposable** live-activity projection (Issue #178).
@@ -210,10 +369,10 @@ impl NestedAnchorAuthority for DispatcherInner {
             return Box::pin(std::future::ready(Err(AnchorError::ParentLost)));
         }
         let outbound = self.outbound.clone();
-        let frame = ChildFrame::AnchorOffered(ProcessUnitAnchorFrame {
+        let frame = ReliableFrame::queued(ChildFrame::AnchorOffered(ProcessUnitAnchorFrame {
             unit_id: unit,
             pgid,
-        });
+        }));
         Box::pin(async move {
             outbound
                 .send(frame)
@@ -230,10 +389,10 @@ impl NestedAnchorAuthority for DispatcherInner {
 
     fn release(&self, unit: ProcessUnitId, pgid: i32) -> BoxFuture<'static, ()> {
         let outbound = self.outbound.clone();
-        let frame = ChildFrame::AnchorReleased(ProcessUnitAnchorFrame {
+        let frame = ReliableFrame::queued(ChildFrame::AnchorReleased(ProcessUnitAnchorFrame {
             unit_id: unit,
             pgid,
-        });
+        }));
         Box::pin(async move {
             // A release is an ownership transition, not telemetry: while
             // the parent control plane is alive it is never silently
@@ -287,6 +446,75 @@ impl WriterGate {
     }
 }
 
+/// Test-only gate that delays delivery of one provider-detach notification
+/// after it has reached the child dispatcher. The root host's admission
+/// authority remains ungated; this exists solely to make stale child-cache
+/// interleavings explicit without scheduler timing.
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct ProviderAvailabilityGate {
+    armed: Arc<std::sync::atomic::AtomicBool>,
+    entered: Arc<tokio::sync::watch::Sender<bool>>,
+    release: Arc<tokio::sync::watch::Sender<bool>>,
+}
+
+#[cfg(test)]
+impl Default for ProviderAvailabilityGate {
+    fn default() -> Self {
+        let (entered, _) = tokio::sync::watch::channel(false);
+        let (release, _) = tokio::sync::watch::channel(false);
+        Self {
+            armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            entered: Arc::new(entered),
+            release: Arc::new(release),
+        }
+    }
+}
+
+#[cfg(test)]
+impl ProviderAvailabilityGate {
+    /// Arms the next false provider update and resets the deterministic
+    /// entered/released observations.
+    pub(crate) fn arm(&self) {
+        self.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.entered.send_replace(false);
+        self.release.send_replace(false);
+    }
+
+    /// Waits until the child reader has received the false update and is
+    /// deliberately holding it before converting it into a child event.
+    pub(crate) async fn wait_entered(&self) {
+        let mut entered = self.entered.subscribe();
+        while !*entered.borrow_and_update() {
+            if entered.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+
+    /// Releases the delayed provider update.
+    pub(crate) fn release(&self) {
+        self.release.send_replace(true);
+    }
+
+    fn should_delay(&self, available: bool) -> bool {
+        if available || !self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return false;
+        }
+        self.entered.send_replace(true);
+        true
+    }
+
+    async fn wait_released(&self) {
+        let mut release = self.release.subscribe();
+        while !*release.borrow_and_update() {
+            if release.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+}
+
 /// The started dispatcher: the handle every owner shares, the semantic
 /// control-event stream the driver consumes, and the three owned tasks.
 pub(crate) struct ChildControlDispatcher {
@@ -315,7 +543,7 @@ impl ChildControlDispatcher {
     ) -> Self {
         #[cfg(test)]
         {
-            Self::start_impl(control, observation, None, None)
+            Self::start_impl(control, observation, None, None, None)
         }
         #[cfg(not(test))]
         {
@@ -333,18 +561,32 @@ impl ChildControlDispatcher {
         writer_gate: Option<WriterGate>,
         observation_gate: Option<WriterGate>,
     ) -> Self {
-        Self::start_impl(control, observation, writer_gate, observation_gate)
+        Self::start_impl(control, observation, writer_gate, observation_gate, None)
     }
 
+    /// Starts the dispatcher with a deterministic provider-detach delivery
+    /// gate. This is a test seam for proving that root admission, rather than
+    /// the child's cached availability bit, decides publication.
+    #[cfg(test)]
+    pub(crate) fn start_with_provider_gate(
+        control: tokio::net::UnixStream,
+        observation: tokio::net::UnixStream,
+        provider_gate: ProviderAvailabilityGate,
+    ) -> Self {
+        Self::start_impl(control, observation, None, None, Some(provider_gate))
+    }
+
+    #[allow(clippy::too_many_lines)] // one owner initializes both reliable/disposable lanes
     fn start_impl(
         control: tokio::net::UnixStream,
         observation: tokio::net::UnixStream,
         #[cfg(test)] writer_gate: Option<WriterGate>,
         #[cfg(test)] observation_gate: Option<WriterGate>,
+        #[cfg(test)] provider_gate: Option<ProviderAvailabilityGate>,
     ) -> Self {
         let (read_half, write_half) = tokio::io::split(control);
         let (outbound_tx, outbound_rx) =
-            tokio::sync::mpsc::channel::<ChildFrame>(OUTBOUND_CAPACITY);
+            tokio::sync::mpsc::channel::<ReliableFrame>(OUTBOUND_CAPACITY);
         let (events_tx, events_rx) = tokio::sync::mpsc::channel::<ChildControlEvent>(4);
         let (lost_tx, _lost_rx) = tokio::sync::watch::channel(false);
         let (activity_tx, activity_rx) = tokio::sync::watch::channel(ActivityFrame {
@@ -354,14 +596,18 @@ impl ChildControlDispatcher {
             outbound: outbound_tx,
             activity: activity_tx,
             pending: Mutex::new(HashMap::new()),
+            interaction_admissions: Mutex::new(HashMap::new()),
+            next_interaction_admission_id: std::sync::atomic::AtomicU64::new(1),
             parent_lost: lost_tx,
         });
 
         let close = Arc::new(tokio::sync::Notify::new());
+        let writer_inner = Arc::clone(&inner);
         let writer = tokio::spawn(run_writer(
             write_half,
             outbound_rx,
             close.clone(),
+            writer_inner,
             #[cfg(test)]
             writer_gate,
         ));
@@ -394,6 +640,51 @@ impl ChildControlDispatcher {
                         {
                             break;
                         }
+                    }
+                    Ok(Some(ParentFrame::InteractionRespond {
+                        response_id,
+                        interaction,
+                        response,
+                    })) => {
+                        if events_tx
+                            .send(ChildControlEvent::InteractionRespond {
+                                response_id,
+                                interaction,
+                                response,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Ok(Some(ParentFrame::InteractionProviderAvailable { available })) => {
+                        #[cfg(test)]
+                        if let Some(gate) = &provider_gate
+                            && gate.should_delay(available)
+                        {
+                            let gate = gate.clone();
+                            let events_tx = events_tx.clone();
+                            tokio::spawn(async move {
+                                gate.wait_released().await;
+                                let _ = events_tx
+                                    .send(ChildControlEvent::InteractionProviderAvailable {
+                                        available,
+                                    })
+                                    .await;
+                            });
+                            continue;
+                        }
+                        if events_tx
+                            .send(ChildControlEvent::InteractionProviderAvailable { available })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Ok(Some(ParentFrame::InteractionPublicationAdmissionResult(result))) => {
+                        reader_inner.resolve_interaction_admission(&result);
                     }
                     Ok(Some(ParentFrame::AnchorAccepted(ack))) => {
                         reader_inner.resolve(&ack.unit_id, Ok(()));
@@ -481,8 +772,9 @@ impl ChildControlDispatcher {
 /// by observation traffic — and vice versa.
 async fn run_writer(
     mut write_half: tokio::io::WriteHalf<tokio::net::UnixStream>,
-    mut outbound_rx: tokio::sync::mpsc::Receiver<ChildFrame>,
+    mut outbound_rx: tokio::sync::mpsc::Receiver<ReliableFrame>,
     close: Arc<tokio::sync::Notify>,
+    inner: Arc<DispatcherInner>,
     #[cfg(test)] writer_gate: Option<WriterGate>,
 ) {
     let mut closing = false;
@@ -497,11 +789,26 @@ async fn run_writer(
         tokio::select! {
             biased;
             frame = outbound_rx.recv() => match frame {
-                Some(frame) => {
+                Some(ReliableFrame { frame, completion }) => {
                     if write_child_frame(&mut write_half, &frame).await.is_err() {
-                        // The parent is gone; the reader publishes
-                        // parent loss.
+                        // A failed reliable write is itself a parent-control
+                        // loss. Publish it immediately instead of relying on
+                        // a later send or on the read half also reaching EOF;
+                        // a frame accepted by the bounded queue is not
+                        // considered delivered until this write succeeds.
+                        if let Some(completion) = completion {
+                            let _ = completion.send(Err(AnchorError::ParentLost));
+                        }
+                        inner.publish_parent_loss();
                         break;
+                    }
+                    if let Some(completion) = completion {
+                        let result = if inner.is_parent_lost() {
+                            Err(AnchorError::ParentLost)
+                        } else {
+                            Ok(())
+                        };
+                        let _ = completion.send(result);
                     }
                 }
                 None => break,
@@ -565,6 +872,10 @@ async fn run_observation_writer(
 }
 
 impl DispatcherInner {
+    fn is_parent_lost(&self) -> bool {
+        *self.parent_lost.borrow()
+    }
+
     fn resolve(&self, unit: &ProcessUnitId, outcome: Result<(), AnchorError>) {
         let waiter = self
             .pending
@@ -574,6 +885,30 @@ impl DispatcherInner {
         if let Some(waiter) = waiter {
             let _ = waiter.send(outcome);
         }
+    }
+
+    fn resolve_interaction_admission(
+        &self,
+        result: &crate::runtime::subagent::ipc::InteractionPublicationAdmissionFrame,
+    ) {
+        let waiter = self
+            .interaction_admissions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&result.request_id);
+        let Some((expected, sender)) = waiter else {
+            return;
+        };
+        if expected != result.interaction || !result.admitted {
+            let failure = if expected == result.interaction {
+                InteractionAdmissionError::Unavailable
+            } else {
+                InteractionAdmissionError::ControlLost
+            };
+            let _ = sender.send(Err(failure));
+            return;
+        }
+        let _ = sender.send(Ok(InteractionPublicationPermit::for_interaction(expected)));
     }
 
     fn publish_parent_loss(&self) {
@@ -592,6 +927,15 @@ impl DispatcherInner {
         for (_, waiter) in pending {
             let _ = waiter.send(Err(AnchorError::ParentLost));
         }
+        let admissions = std::mem::take(
+            &mut *self
+                .interaction_admissions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        for (_, (_, waiter)) in admissions {
+            let _ = waiter.send(Err(InteractionAdmissionError::ControlLost));
+        }
     }
 }
 
@@ -599,14 +943,21 @@ impl DispatcherInner {
 mod tests {
     use super::{ChildControlDispatcher, ChildControlEvent};
     use crate::runtime::identity::ProcessUnitId;
+    use crate::runtime::identity::{AttemptId, ConversationId, InteractionId, ToolCallId, ToolId};
+    use crate::runtime::interaction::{
+        ApprovalDecision, InteractionAdmissionError, InteractionKind, InteractionOutcome,
+        InteractionRef, InteractionRequest, InteractionResponse,
+    };
     use crate::runtime::nested_containment::AnchorError;
     use crate::runtime::subagent::activity::SubagentObservation;
     use crate::runtime::subagent::ipc::{
-        ActivityFrame, ChildFrame, DelegationFrame, DiagnosticFrame, ParentFrame,
-        ProcessUnitAckFrame, ProcessUnitRefusalFrame, read_activity_frame, read_child_frame,
-        write_parent_frame,
+        ActivityFrame, ChildFrame, DelegationFrame, DiagnosticFrame,
+        InteractionPublicationAdmissionFrame, ParentFrame, ProcessUnitAckFrame,
+        ProcessUnitRefusalFrame, read_activity_frame, read_child_frame, write_parent_frame,
     };
     use crate::runtime::types::CancellationReason;
+    use crate::tools::types::{ToolInvocationMode, ToolOrigin};
+    use futures_util::FutureExt;
 
     fn pair() -> (tokio::net::UnixStream, tokio::net::UnixStream) {
         tokio::net::UnixStream::pair().expect("control socket pair")
@@ -824,6 +1175,7 @@ mod tests {
             &ParentFrame::Delegate(DelegationFrame {
                 task: "inspect".to_owned(),
                 context: None,
+                interaction_provider_available: false,
             }),
         )
         .await
@@ -846,6 +1198,78 @@ mod tests {
                 reason: Some(CancellationReason::UserRequested),
             })
         );
+    }
+
+    /// A mismatched admission result is rejected by the child-side transport
+    /// correlation and cannot authorize a different routed interaction. A
+    /// later exact response still resolves only its own request.
+    #[tokio::test]
+    async fn publication_admission_requires_exact_routed_identity() {
+        let (mut parent, child) = pair();
+        let (_observation_parent, observation_child) = pair();
+        let dispatcher = ChildControlDispatcher::start(child, observation_child);
+        let handle = dispatcher.handle();
+        let first = InteractionRef::new(
+            ConversationId::new("child-conversation"),
+            InteractionId::new("interaction-1"),
+        );
+        let first_waiter = tokio::spawn({
+            let handle = handle.clone();
+            let first = first.clone();
+            async move { handle.admit_interaction_publication(first).await }
+        });
+        let first_request = match read_child_frame(&mut parent).await.expect("read admission") {
+            Some(ChildFrame::InteractionPublicationAdmissionRequested(request)) => request,
+            other => panic!("unexpected admission frame: {other:?}"),
+        };
+        assert_eq!(first_request.interaction, first);
+        let mut mismatched = first_request.clone();
+        mismatched.interaction = InteractionRef::new(
+            ConversationId::new("child-conversation"),
+            InteractionId::new("interaction-2"),
+        );
+        mismatched.admitted = true;
+        write_parent_frame(
+            &mut parent,
+            &ParentFrame::InteractionPublicationAdmissionResult(mismatched),
+        )
+        .await
+        .expect("write mismatched admission");
+        assert_eq!(
+            first_waiter.await.expect("first waiter"),
+            Err(InteractionAdmissionError::ControlLost)
+        );
+
+        let second = InteractionRef::new(
+            ConversationId::new("child-conversation"),
+            InteractionId::new("interaction-2"),
+        );
+        let second_waiter = tokio::spawn({
+            let handle = handle.clone();
+            let second = second.clone();
+            async move { handle.admit_interaction_publication(second).await }
+        });
+        let second_request = match read_child_frame(&mut parent).await.expect("read admission") {
+            Some(ChildFrame::InteractionPublicationAdmissionRequested(request)) => request,
+            other => panic!("unexpected admission frame: {other:?}"),
+        };
+        assert_eq!(second_request.interaction, second);
+        write_parent_frame(
+            &mut parent,
+            &ParentFrame::InteractionPublicationAdmissionResult(
+                InteractionPublicationAdmissionFrame {
+                    request_id: second_request.request_id,
+                    interaction: second_request.interaction.clone(),
+                    admitted: true,
+                },
+            ),
+        )
+        .await
+        .expect("write exact admission");
+        let permit = second_waiter.await.expect("second waiter").expect("permit");
+        assert!(permit.matches(&second));
+
+        dispatcher.shutdown().await;
     }
 
     /// A proven-terminal release under bounded outbound backpressure is
@@ -1013,6 +1437,158 @@ mod tests {
             "activity never touches the reliable control channel"
         );
 
+        dispatcher.shutdown().await;
+    }
+
+    /// Routed interaction requests and settlements use the reliable control
+    /// lane, even while the disposable observation writer is stalled and its
+    /// latest-value slot is being overwritten. The exact pair identity and
+    /// both interaction kinds stay intact on the semantic lane.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // one deterministic two-lane transport proof
+    async fn routed_interactions_are_reliable_and_observation_independent() {
+        let (mut parent, child) = pair();
+        let (mut observation_parent, observation_child) = pair();
+        let observation_gate = super::WriterGate::default();
+        let dispatcher = ChildControlDispatcher::start_with_gates(
+            child,
+            observation_child,
+            None,
+            Some(observation_gate.clone()),
+        );
+        let handle = dispatcher.handle();
+
+        for revision in 1..=100u64 {
+            handle.publish_activity(activity(revision));
+        }
+
+        let approval = InteractionRequest {
+            id: InteractionId::new("approval-1"),
+            conversation_id: ConversationId::new("child-conversation"),
+            attempt_id: AttemptId::new("attempt-1"),
+            turn: 1,
+            kind: InteractionKind::Approval {
+                call_id: ToolCallId::new("call-1"),
+                tool_id: ToolId::new("tool-1"),
+                tool_name: "probe".to_owned(),
+                origin: ToolOrigin::Builtin,
+                mode: ToolInvocationMode::Foreground,
+                arguments: serde_json::json!({"path": "original"}),
+                reason: "approval required".to_owned(),
+            },
+        };
+        let questionnaire = InteractionRequest {
+            id: InteractionId::new("questionnaire-1"),
+            conversation_id: approval.conversation_id.clone(),
+            attempt_id: AttemptId::new("attempt-1"),
+            turn: 2,
+            kind: InteractionKind::Questionnaire {
+                questionnaire: crate::runtime::interaction::QuestionnaireSpecification {
+                    questions: vec![crate::runtime::interaction::QuestionSpecification {
+                        question: "Which target?".to_owned(),
+                        header: "Target".to_owned(),
+                        options: vec![
+                            crate::runtime::interaction::OptionSpecification {
+                                label: "staging".to_owned(),
+                                description: "safe".to_owned(),
+                                preview: None,
+                            },
+                            crate::runtime::interaction::OptionSpecification {
+                                label: "production".to_owned(),
+                                description: "live".to_owned(),
+                                preview: None,
+                            },
+                        ],
+                        multi_select: false,
+                    }],
+                },
+            },
+        };
+        let approval_ref =
+            InteractionRef::new(approval.conversation_id.clone(), approval.id.clone());
+        let questionnaire_ref = InteractionRef::new(
+            questionnaire.conversation_id.clone(),
+            questionnaire.id.clone(),
+        );
+        handle
+            .send_reliable(ChildFrame::InteractionRequested(approval.clone()))
+            .await
+            .expect("approval request is reliable");
+        handle
+            .send_reliable(ChildFrame::InteractionRequested(questionnaire.clone()))
+            .await
+            .expect("questionnaire request is reliable");
+        handle
+            .send_reliable(ChildFrame::InteractionSettled {
+                interaction: approval_ref.clone(),
+                outcome: InteractionOutcome::Responded {
+                    response: InteractionResponse::Approval {
+                        decision: ApprovalDecision::Allow,
+                    },
+                },
+            })
+            .await
+            .expect("approval settlement is reliable");
+        handle
+            .send_reliable(ChildFrame::InteractionSettled {
+                interaction: questionnaire_ref.clone(),
+                outcome: InteractionOutcome::Cancelled {
+                    reason: CancellationReason::UserRequested,
+                },
+            })
+            .await
+            .expect("questionnaire settlement is reliable");
+
+        assert_eq!(
+            read_child_frame(&mut parent)
+                .await
+                .expect("approval request"),
+            Some(ChildFrame::InteractionRequested(approval)),
+        );
+        assert_eq!(
+            read_child_frame(&mut parent)
+                .await
+                .expect("questionnaire request"),
+            Some(ChildFrame::InteractionRequested(questionnaire)),
+        );
+        assert_eq!(
+            read_child_frame(&mut parent)
+                .await
+                .expect("approval settlement"),
+            Some(ChildFrame::InteractionSettled {
+                interaction: approval_ref,
+                outcome: InteractionOutcome::Responded {
+                    response: InteractionResponse::Approval {
+                        decision: ApprovalDecision::Allow,
+                    },
+                },
+            }),
+        );
+        assert_eq!(
+            read_child_frame(&mut parent)
+                .await
+                .expect("questionnaire settlement"),
+            Some(ChildFrame::InteractionSettled {
+                interaction: questionnaire_ref,
+                outcome: InteractionOutcome::Cancelled {
+                    reason: CancellationReason::UserRequested,
+                },
+            }),
+        );
+        assert!(
+            read_activity_frame(&mut observation_parent)
+                .now_or_never()
+                .is_none(),
+            "semantic interaction traffic never uses the stalled observation lane"
+        );
+
+        observation_gate.open();
+        assert_eq!(
+            read_activity_frame(&mut observation_parent)
+                .await
+                .expect("coalesced activity"),
+            Some(activity(100)),
+        );
         dispatcher.shutdown().await;
     }
 

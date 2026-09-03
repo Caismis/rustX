@@ -51,6 +51,10 @@ use crate::runtime::RuntimeClock;
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::{AgentId, ConversationId, SubagentId, ToolCallId};
 use crate::runtime::inbound::ConversationInboundMailbox;
+use crate::runtime::interaction::{
+    InteractionOutcome, InteractionRef, InteractionRequest, RoutedInteraction,
+    RoutedInteractionError,
+};
 use crate::runtime::types::{CancellationReason, DurabilityGate};
 use crate::runtime::workflow::WorkflowId;
 
@@ -245,8 +249,14 @@ impl SubagentRecord {
 
 struct RegistryState {
     next_ordinal: u64,
+    next_response_id: u64,
     records: Vec<SubagentRecord>,
     index: HashMap<SubagentId, usize>,
+    /// Live routed interactions owned by child coordinators. This is a root
+    /// projection cache only: it contains no waiter, settlement, or
+    /// cancellation authority. The originating child coordinator remains the
+    /// semantic owner of every entry.
+    routed_interactions: HashMap<InteractionRef, RoutedInteraction>,
     observer: Option<Arc<dyn SubagentObserver>>,
     failure_sink: Option<Arc<dyn SubagentDurabilityFailureSink>>,
     /// The owning `ConversationRuntime`'s durability frontier (Issue #60):
@@ -587,6 +597,35 @@ pub trait SubagentObserver: Send + Sync {
     fn on_activity(&self, snapshot: &SubagentSnapshot) {
         self.on_snapshot(snapshot);
     }
+
+    /// Called under the registry lock when a child coordinator publishes a
+    /// live interaction request. This is reliable semantic control, not
+    /// disposable activity. Observers that only project lifecycle/activity
+    /// state can leave this callback empty.
+    fn on_interaction_pending(&self, _interaction: &RoutedInteraction) {}
+
+    /// Called under the registry lock when a child coordinator settles one
+    /// routed interaction. The child audit remains in the child's own
+    /// conversation; this callback carries only root projection data.
+    fn on_interaction_settled(&self, _interaction: &InteractionRef, _outcome: &InteractionOutcome) {
+    }
+
+    /// Called under the registry lock when a child process dies before its
+    /// interaction coordinator can publish a terminal transition. This is a
+    /// presentation removal only; it must not synthesize a child settlement.
+    fn on_interaction_removed(&self, _interaction: &InteractionRef) {}
+}
+
+/// The root Runtime Client's publication-admission authority.
+///
+/// The authority is intentionally narrower than the interaction domain: it
+/// answers only whether a capable root human-facing control attachment exists
+/// at the root host's synchronized admission frontier. It owns no child
+/// interaction state, waiter, audit, cancellation, settlement, or execution
+/// authority.
+pub(crate) trait InteractionPublicationAuthority: Send + Sync {
+    /// Attempts to admit publication of one exact routed interaction.
+    fn admit(&self, interaction: &InteractionRef) -> bool;
 }
 
 /// The durability-failure reporting seam of the subagent plane.
@@ -612,6 +651,39 @@ impl SubagentActivitySink {
     /// Applies one decoded child activity projection.
     pub(crate) fn apply(&self, observation: SubagentObservation) {
         self.registry.apply_activity(&self.subagent_id, observation);
+    }
+}
+
+/// The narrow reliable semantic sink the child driver task holds for one
+/// child. It can update the root's presentation projection only; it cannot
+/// answer, cancel, or settle the child's interaction.
+#[derive(Clone)]
+pub(crate) struct SubagentInteractionSink {
+    subagent_id: SubagentId,
+    registry: SubagentRegistry,
+}
+
+impl SubagentInteractionSink {
+    /// Applies one child-owned interaction request received over reliable
+    /// control transport.
+    pub(crate) fn apply_requested(&self, request: InteractionRequest) {
+        self.registry
+            .apply_child_interaction_requested(&self.subagent_id, request);
+    }
+
+    /// Applies one child-owned terminal interaction transition received over
+    /// reliable control transport.
+    pub(crate) fn apply_settled(&self, interaction: &InteractionRef, outcome: &InteractionOutcome) {
+        self.registry
+            .apply_child_interaction_settled(&self.subagent_id, interaction, outcome);
+    }
+
+    /// Checks publication admission at the root authority's linearization
+    /// frontier. A successful result is only an ephemeral transport permit;
+    /// the originating child coordinator still commits and owns the request.
+    pub(crate) fn admit_publication(&self, interaction: &InteractionRef) -> bool {
+        self.registry
+            .admit_child_interaction_publication(&self.subagent_id, interaction)
     }
 }
 
@@ -644,6 +716,15 @@ pub struct SubagentRegistry {
     config: SubagentRegistryConfig,
     state: Arc<Mutex<RegistryState>>,
     state_version: tokio::sync::watch::Sender<u64>,
+    /// An early root Runtime Client human-provider availability hint. Each
+    /// child driver receives a reliable subscription for fast fail-closed
+    /// behavior, but the publication authority below remains the admission
+    /// decision and is not inferred from this cached value.
+    provider_available: tokio::sync::watch::Sender<bool>,
+    /// The root Runtime Client publication frontier. This is installed by a
+    /// live root host before activation; without it, child publication fails
+    /// closed even if a stale provider watch says `true`.
+    publication_authority: Arc<Mutex<Option<Arc<dyn InteractionPublicationAuthority>>>>,
 }
 
 impl Clone for SubagentRegistry {
@@ -660,8 +741,10 @@ impl SubagentRegistry {
             config,
             state: Arc::new(Mutex::new(RegistryState {
                 next_ordinal: 1,
+                next_response_id: 1,
                 records: Vec::new(),
                 index: HashMap::new(),
+                routed_interactions: HashMap::new(),
                 observer: None,
                 failure_sink: None,
                 durability_gate: None,
@@ -675,6 +758,8 @@ impl SubagentRegistry {
                 staged_overrides: std::collections::VecDeque::new(),
             })),
             state_version: tokio::sync::watch::Sender::new(0),
+            provider_available: tokio::sync::watch::channel(false).0,
+            publication_authority: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -812,8 +897,78 @@ impl SubagentRegistry {
         for snapshot in &snapshots {
             observer.on_snapshot(snapshot);
         }
+        let interactions: Vec<RoutedInteraction> =
+            state.routed_interactions.values().cloned().collect();
+        for interaction in &interactions {
+            observer.on_interaction_pending(interaction);
+        }
         state.observer = Some(observer);
         snapshots
+    }
+
+    /// Updates the root human-provider state for all live and future child
+    /// conversations. This changes only whether a new interaction may be
+    /// published; it never settles an interaction already pending.
+    pub(crate) fn set_interaction_provider_available(&self, available: bool) {
+        self.provider_available.send_replace(available);
+    }
+
+    /// Installs the root Runtime Client's synchronized publication frontier.
+    /// This is a composition seam, not an interaction owner, and is installed
+    /// before the runtime activates so every child route sees one authority.
+    pub(crate) fn install_interaction_publication_authority(
+        &self,
+        authority: Arc<dyn InteractionPublicationAuthority>,
+    ) {
+        let mut installed = self
+            .publication_authority
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        debug_assert!(installed.is_none(), "one publication authority only");
+        *installed = Some(authority);
+    }
+
+    /// Subscribes one child driver to the current root provider state.
+    pub(crate) fn interaction_provider_receiver(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.provider_available.subscribe()
+    }
+
+    /// Admits one child interaction publication at the root Runtime Client's
+    /// synchronized provider frontier. The registry lock covers the child
+    /// liveness/identity check while the root authority lock defines the
+    /// attach-vs-detach ordering. No child semantic state is created here.
+    pub(crate) fn admit_child_interaction_publication(
+        &self,
+        subagent_id: &SubagentId,
+        interaction: &InteractionRef,
+    ) -> bool {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(&index) = state.index.get(subagent_id) else {
+            return false;
+        };
+        let record = &state.records[index];
+        if !record.lifecycle.is_active()
+            || record.publication_abandoned
+            || record.child_conversation_id != interaction.conversation_id
+        {
+            return false;
+        }
+        let authority = self
+            .publication_authority
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        authority.is_some_and(|authority| authority.admit(interaction))
+    }
+
+    /// Returns the live child interaction projection for the Runtime Client
+    /// bootstrap cut. These values are never used as recovery authority.
+    #[must_use]
+    pub(crate) fn pending_interaction_projection(&self) -> Vec<RoutedInteraction> {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut interactions: Vec<_> = state.routed_interactions.values().cloned().collect();
+        interactions.sort_by(|left, right| left.interaction.cmp(&right.interaction));
+        interactions
     }
 
     /// Installs the durability-failure sink.
@@ -1196,7 +1351,25 @@ impl SubagentRegistry {
                     subagent_id: subagent_id.clone(),
                     registry: self.clone_for_task(),
                 };
-                let driver = staged.into_driver(DelegationFrame { task, context }, Some(activity));
+                let interactions = SubagentInteractionSink {
+                    subagent_id: subagent_id.clone(),
+                    registry: self.clone_for_task(),
+                };
+                let provider_available = self.interaction_provider_receiver();
+                let driver = staged.into_driver(
+                    DelegationFrame {
+                        task,
+                        context,
+                        // The driver overwrites this with the watch's current
+                        // value immediately before sending Delegate. Keeping
+                        // the field explicit makes the wire contract clear
+                        // without creating a second provider authority.
+                        interaction_provider_available: false,
+                    },
+                    Some(activity),
+                    Some(interactions),
+                    Some(provider_available),
+                );
                 let (commands, start_gate, task) = driver.split();
                 // This hook is outside the registry lock and after the
                 // durable ownership fact, the Running record, and the
@@ -1300,6 +1473,8 @@ impl SubagentRegistry {
             config: self.config.clone(),
             state: Arc::clone(&self.state),
             state_version: self.state_version.clone(),
+            provider_available: self.provider_available.clone(),
+            publication_authority: Arc::clone(&self.publication_authority),
         }
     }
 
@@ -1340,6 +1515,135 @@ impl SubagentRegistry {
         }
         record.observation = observation;
         publish_activity_snapshot(&mut state, &self.state_version, index);
+    }
+
+    /// Applies one child-owned interaction request to the root-facing
+    /// projection cache. The request is accepted only from the active child
+    /// incarnation whose conversation identity it names; the cache has no
+    /// authority to settle the child.
+    pub(crate) fn apply_child_interaction_requested(
+        &self,
+        subagent_id: &SubagentId,
+        request: InteractionRequest,
+    ) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(&index) = state.index.get(subagent_id) else {
+            return;
+        };
+        let record = &state.records[index];
+        if !record.lifecycle.is_active()
+            || record.publication_abandoned
+            || record.child_conversation_id != request.conversation_id
+        {
+            return;
+        }
+        let routed = RoutedInteraction::subagent(
+            record.subagent_id.clone(),
+            record.child_conversation_id.clone(),
+            record.agent.clone(),
+            request,
+        );
+        let previous = state
+            .routed_interactions
+            .insert(routed.interaction.clone(), routed.clone());
+        debug_assert!(
+            previous.is_none(),
+            "a live child interaction identity was reused"
+        );
+        if let Some(observer) = state.observer.clone() {
+            observer.on_interaction_pending(&routed);
+        }
+    }
+
+    /// Applies one child-owned terminal interaction transition to the
+    /// root-facing projection. The originating child coordinator has already
+    /// selected and durably audited the outcome; this method only removes the
+    /// presentation entry and forwards its route event.
+    pub(crate) fn apply_child_interaction_settled(
+        &self,
+        subagent_id: &SubagentId,
+        interaction: &InteractionRef,
+        outcome: &InteractionOutcome,
+    ) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(&index) = state.index.get(subagent_id) else {
+            return;
+        };
+        let record = &state.records[index];
+        if record.child_conversation_id != interaction.conversation_id {
+            return;
+        }
+        let Some(_) = state.routed_interactions.remove(interaction) else {
+            // Duplicate/late child route events are harmless projection
+            // duplicates. The coordinator's own pending map already made the
+            // semantic transition exactly once.
+            return;
+        };
+        if let Some(observer) = state.observer.clone() {
+            observer.on_interaction_settled(interaction, outcome);
+        }
+    }
+
+    /// Forwards a root response to the live child identified by the routed
+    /// conversation identity. The response id is transport correlation only;
+    /// the child coordinator validates the semantic target and response.
+    pub(crate) async fn respond_interaction(
+        &self,
+        interaction: &InteractionRef,
+        response: crate::runtime::interaction::InteractionResponse,
+    ) -> Result<(), RoutedInteractionError> {
+        let (control, response_id, result, receiver) = {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            if !state.routed_interactions.contains_key(interaction) {
+                return Err(RoutedInteractionError::NotPending {
+                    interaction: interaction.clone(),
+                });
+            }
+            let control = state
+                .records
+                .iter()
+                .find(|record| {
+                    record.child_conversation_id == interaction.conversation_id
+                        && record.lifecycle.is_active()
+                        && !record.publication_abandoned
+                })
+                .and_then(|record| record.control.clone());
+            let Some(control) = control else {
+                return Err(RoutedInteractionError::NotPending {
+                    interaction: interaction.clone(),
+                });
+            };
+            let response_id = state.next_response_id;
+            if response_id == 0 {
+                return Err(RoutedInteractionError::NotPending {
+                    interaction: interaction.clone(),
+                });
+            }
+            state.next_response_id = response_id.checked_add(1).unwrap_or(0);
+            let (result, receiver) = tokio::sync::oneshot::channel();
+            (control, response_id, result, receiver)
+        };
+        // Keep the response's semantic identity intact across the process
+        // boundary; only the response_id is newly allocated transport data.
+        if control
+            .send(super::process::DriverCommand::InteractionRespond {
+                response_id,
+                interaction: interaction.clone(),
+                response,
+                result,
+            })
+            .await
+            .is_err()
+        {
+            return Err(RoutedInteractionError::NotPending {
+                interaction: interaction.clone(),
+            });
+        }
+        receiver.await.unwrap_or_else(|_| {
+            Err(RoutedInteractionError::NotPending {
+                interaction: interaction.clone(),
+            })
+        })
     }
 
     /// The durably committed Workflow output value of one settled
@@ -1551,6 +1855,11 @@ impl SubagentRegistry {
     /// exactly-once.
     #[allow(clippy::too_many_lines)] // one coherent physical-to-durable settlement pipeline
     fn settle_from_driver(&self, subagent_id: &SubagentId, settlement: PhysicalSettlement) {
+        // Child death is the end of interaction actionability even when the
+        // parent mailbox has already entered a degraded/draining state and
+        // cannot accept another lifecycle publication. Remove presentation
+        // entries first; the terminal lifecycle snapshot below is separate.
+        self.remove_child_interactions(subagent_id);
         if self.config.mailbox.begin_settlement_admission().is_err() {
             return;
         }
@@ -1785,6 +2094,33 @@ impl SubagentRegistry {
             candidate
         };
         self.publish_terminal(subagent_id, &candidate);
+    }
+
+    /// Removes every actionable interaction owned by one child incarnation.
+    ///
+    /// The registry deliberately has no terminal outcome to assign here: the
+    /// child coordinator is process-owned and dies with the child. The only
+    /// root-side fact is that the presentation entry is no longer answerable.
+    fn remove_child_interactions(&self, subagent_id: &SubagentId) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(&index) = state.index.get(subagent_id) else {
+            return;
+        };
+        let child_conversation_id = state.records[index].child_conversation_id.clone();
+        let mut removed = Vec::new();
+        state.routed_interactions.retain(|interaction, _| {
+            if interaction.conversation_id == child_conversation_id {
+                removed.push(interaction.clone());
+                false
+            } else {
+                true
+            }
+        });
+        if let Some(observer) = state.observer.clone() {
+            for interaction in removed {
+                observer.on_interaction_removed(&interaction);
+            }
+        }
     }
 
     /// Attempts the durable terminal publication; on failure, enters
@@ -3329,6 +3665,15 @@ mod tests {
                 }
                 Some(ParentFrame::AnchorAccepted(_) | ParentFrame::AnchorRefused(_)) => {
                     panic!("this child offered no nested process unit anchor")
+                }
+                Some(ParentFrame::InteractionRespond { .. }) => {
+                    panic!("the driver test did not offer an interaction response")
+                }
+                Some(ParentFrame::InteractionProviderAvailable { .. }) => {
+                    panic!("the driver test did not offer a provider update")
+                }
+                Some(ParentFrame::InteractionPublicationAdmissionResult(_)) => {
+                    panic!("the driver test did not offer an admission result")
                 }
                 None => break,
             }

@@ -44,8 +44,13 @@ import {
   toolResult,
 } from "./support/fixtures.ts";
 import { stateOf } from "./support/render.ts";
+import type { InteractionRef } from "../src/protocol/types.ts";
 
 const COLLIDING = "same";
+const INTERACTION: InteractionRef = {
+  conversation_id: "conv-test",
+  interaction_id: COLLIDING,
+};
 
 const longBody = Array.from({ length: 40 }, (_, index) => `line ${index}`).join(
   "\n",
@@ -58,7 +63,7 @@ function allExpanded() {
       withExpandedToolCalls(defaultPreferences(), [COLLIDING]),
       [COLLIDING],
     ),
-    [COLLIDING],
+    [INTERACTION],
   );
 }
 
@@ -92,14 +97,20 @@ function backgroundCard(preferences = defaultPreferences()): string {
  * so a cross-toggle would be visible rather than merely possible.
  */
 function interactionCard(preferences = defaultPreferences()): string {
-  const request = approvalInteraction(COLLIDING);
-  if (request.kind.type !== "approval") {
+  const interaction = approvalInteraction(COLLIDING);
+  if (interaction.request.kind.type !== "approval") {
     throw new Error("fixture must be an approval interaction");
   }
   return plainText(
     renderInteractionSection(
       stateOf({
-        pending_interactions: [{ ...request, kind: { ...request.kind, reason: longBody } }],
+        pending_interactions: [{
+          ...interaction,
+          request: {
+            ...interaction.request,
+            kind: { ...interaction.request.kind, reason: longBody },
+          },
+        }],
       }),
       preferences,
     ),
@@ -137,20 +148,20 @@ describe("identity domains never alias", () => {
   it("does not cross-toggle when all three domains hold the same string", () => {
     let preferences = withToggledToolCall(defaultPreferences(), COLLIDING);
     preferences = withToggledBackgroundExecution(preferences, COLLIDING);
-    preferences = withToggledInteraction(preferences, COLLIDING);
-    assert.equal(isToolCallExpanded(preferences, COLLIDING), true);
+    preferences = withToggledInteraction(preferences, INTERACTION);
+    assert.equal(isInteractionExpanded(preferences, INTERACTION), true);
     assert.equal(isBackgroundExecutionExpanded(preferences, COLLIDING), true);
-    assert.equal(isInteractionExpanded(preferences, COLLIDING), true);
+    assert.equal(isInteractionExpanded(preferences, INTERACTION), true);
 
     // Collapsing one leaves the other two exactly as they were.
     preferences = withToggledToolCall(preferences, COLLIDING);
     assert.equal(isToolCallExpanded(preferences, COLLIDING), false);
     assert.equal(isBackgroundExecutionExpanded(preferences, COLLIDING), true);
-    assert.equal(isInteractionExpanded(preferences, COLLIDING), true);
+    assert.equal(isInteractionExpanded(preferences, INTERACTION), true);
 
-    preferences = withToggledInteraction(preferences, COLLIDING);
+    preferences = withToggledInteraction(preferences, INTERACTION);
     assert.equal(isBackgroundExecutionExpanded(preferences, COLLIDING), true);
-    assert.equal(isInteractionExpanded(preferences, COLLIDING), false);
+    assert.equal(isInteractionExpanded(preferences, INTERACTION), false);
   });
 
   it("expands only the card whose domain was addressed", () => {
@@ -181,7 +192,7 @@ describe("identity domains never alias", () => {
 
     const interactionExpanded = withToggledInteraction(
       defaultPreferences(),
-      COLLIDING,
+      INTERACTION,
     );
     assert.ok(interactionCard(interactionExpanded).includes("line 39"));
     assert.ok(
@@ -198,7 +209,7 @@ describe("identity domains never alias", () => {
     const collapsed = withAllCollapsed(allExpanded());
     assert.equal(isToolCallExpanded(collapsed, COLLIDING), false);
     assert.equal(isBackgroundExecutionExpanded(collapsed, COLLIDING), false);
-    assert.equal(isInteractionExpanded(collapsed, COLLIDING), false);
+    assert.equal(isInteractionExpanded(collapsed, INTERACTION), false);
     assert.ok(!foregroundCard(collapsed).includes("line 39"));
     assert.ok(!backgroundCard(collapsed).includes("line 39"));
     assert.ok(!interactionCard(collapsed).includes("line 39"));
@@ -219,7 +230,7 @@ describe("identity domains never alias", () => {
     const misleading = withToggledToolCall(defaultPreferences(), "exec_7");
     assert.equal(isToolCallExpanded(misleading, "exec_7"), true);
     assert.equal(isBackgroundExecutionExpanded(misleading, "exec_7"), false);
-    assert.equal(isInteractionExpanded(misleading, "exec_7"), false);
+    assert.equal(isInteractionExpanded(misleading, INTERACTION), false);
   });
 
   it("changes no semantic display fact", () => {
@@ -272,11 +283,14 @@ describe("/expand addresses one domain at a time", () => {
   });
 
   it("addresses a pending interaction only when told to", async () => {
-    assert.deepEqual(await expand("interaction attempt-1-interaction-1"), {
+    assert.deepEqual(await expand("interaction conv-test::attempt-1-interaction-1"), {
       kind: "preference",
       preference: {
         type: "expand_interaction",
-        interactionId: "attempt-1-interaction-1",
+        interaction: {
+          conversation_id: "conv-test",
+          interaction_id: "attempt-1-interaction-1",
+        },
       },
     });
   });

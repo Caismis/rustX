@@ -891,6 +891,31 @@ loop checks cancellation again at the existing start frontier. A `Deny` is a
 normal structural Tool Plane result with `ToolExecutionStatus::Denied`, one
 canonical result slot, no `ToolExecutionStarted`, and no executor future.
 
+For a supervised child, the root Runtime Client is only the human-facing
+surface. The child coordinator publishes its own request over the reliable
+child control lane; the root projects it with an InteractionRef and
+Subagent source metadata, then forwards the human response back to that same
+child coordinator. The parent Agent Loop and model never see the question,
+approval, answer, or child ToolResult, and the route never creates a parent
+interaction or changes primary canonical history. A root attachment provides
+the route but does not select the child's ask_user capability.
+
+Publication has one root admission frontier. Before an exact ephemeral permit,
+absence of a capable root human surface is the narrow `Unavailable` case: no
+`InteractionRequested` fact exists and Approval/`ask_user` can fail closed
+through their ordinary product result. After the permit and the coordinator's
+requested audit commit, a failed reliable Requested route is not provider
+absence. It is a supervised control failure; the interaction is not converted
+into an `Unavailable` ToolResult, and the loop cannot take another healthy
+model turn. A response follows the same boundary in reverse: the coordinator
+selects and commits the terminal outcome, then awaits the reliable Settled
+route before waking its waiter. If that route fails, the selected outcome is
+preserved as coordinator-owned audit evidence, the waiter receives control
+failure, and the loop stops rather than crossing the normal ToolResult or
+`ToolExecutionStarted` frontier. Thus an Approved audit is necessary for the
+live ordering but is not sufficient to continue after mandatory supervision
+loss.
+
 For a parallel batch rustX resolves every policy/interaction decision in
 canonical call order before any executor starts. This is intentionally a
 strong batch boundary: response timing can neither reorder result slots nor
@@ -930,6 +955,14 @@ checkpoint and the start frontier are both strictly downstream of the durable
 decision. The audit is still only evidence — the `Responded(Allow)` recheck
 above is what grants execution authority in this process, and a historical
 approval read back after a restart grants none.
+
+The distinction is intentional for failures too: a provider refusal before the
+publication frontier is a product-level unavailable interaction, while loss of
+the reliable supervision route after that frontier is an attempt/control
+failure. Neither route failure synthesizes Allow, Deny, questionnaire decline,
+cancellation, or a model-visible human-unavailable answer. A physical child
+control EOF follows the existing orphan/interrupted lifecycle, and recovery
+never reconstructs the waiter from the open Requested audit.
 
 The approval subject the Loop hands the coordinator is derived from the exact
 canonical `ToolCall` of the committed Assistant message, not from the pending

@@ -126,7 +126,10 @@ invariant is a real process boundary.
 - `subagent/conformance` — the child ownership boundary with real staged
   children (`sh`, own process group, real control socket): frozen authority
   crossing, registry lifecycle, exactly one terminal child notice, parent
-  isolation, cancellation/drain across the boundary. Also the Issue #178
+  isolation, cancellation/drain across the boundary, and reliable routed
+  Approval/Questionnaire control addressed by full conversation-local
+  interaction references. It also proves root detach/reconnect presentation,
+  child-death removal, and stale-response rejection. Also the Issue #178
   live-activity observation plane: activity projects while the lifecycle
   stays `Running`, a stalled or absent consumer changes nothing about child
   execution (the same workload fingerprints identically with no observer, a

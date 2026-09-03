@@ -27,8 +27,10 @@ use futures_util::future::BoxFuture;
 use tokio::sync::{oneshot, watch};
 
 use crate::runtime::interaction::{
-    ApprovalDecision, ApprovalFacts, InteractionCoordinator, InteractionError, InteractionObserver,
-    InteractionOutcome, InteractionRequest, InteractionResponse, RecordingInteractionAudit,
+    ApprovalDecision, ApprovalFacts, InteractionAdmissionError, InteractionCoordinator,
+    InteractionError, InteractionObserver, InteractionOutcome, InteractionPublicationPermit,
+    InteractionRef, InteractionRequest, InteractionResponse, InteractionRoute,
+    InteractionRouteError, InteractionRouteEvent, RecordingInteractionAudit,
     TestInteractionRendezvous,
 };
 use rustx::agent::{
@@ -277,7 +279,7 @@ impl TestInteractionRendezvous for ScriptedInteractionRendezvous {
         Box::pin(async move {
             let outcome = tokio::select! {
                 biased;
-                response = receiver => response.unwrap_or(InteractionOutcome::Unavailable),
+                response = receiver => response.expect("scripted response channel stays open"),
                 () = cancellation.cancelled() => InteractionOutcome::Cancelled {
                     reason: cancellation.reason(),
                 },
@@ -339,6 +341,96 @@ impl InteractionObserver for NativePendingSignal {
             rustx::durable::TranscriptCursor,
         )>,
     ) {
+    }
+}
+
+/// A deterministic reliable route used to exercise the Agent Loop's
+/// post-frontier control-loss contract. Admission always grants the exact
+/// routed permit; the selected event type is then either accepted or refused
+/// at a known route-send boundary.
+struct FailingInteractionRoute {
+    fail_requested: bool,
+    fail_settled: bool,
+    events: Arc<Mutex<Vec<InteractionRouteEvent>>>,
+}
+
+impl FailingInteractionRoute {
+    fn requested() -> Arc<Self> {
+        Arc::new(Self {
+            fail_requested: true,
+            fail_settled: false,
+            events: Arc::new(Mutex::new(Vec::new())),
+        })
+    }
+
+    fn settled() -> Arc<Self> {
+        Arc::new(Self {
+            fail_requested: false,
+            fail_settled: true,
+            events: Arc::new(Mutex::new(Vec::new())),
+        })
+    }
+
+    fn events(&self) -> Vec<InteractionRouteEvent> {
+        self.events
+            .lock()
+            .expect("failing interaction route events lock")
+            .clone()
+    }
+
+    fn fails(&self, event: &InteractionRouteEvent) -> bool {
+        match event {
+            InteractionRouteEvent::Requested(_) => self.fail_requested,
+            InteractionRouteEvent::Settled { .. } => self.fail_settled,
+        }
+    }
+}
+
+impl InteractionRoute for FailingInteractionRoute {
+    fn admit_publication(
+        &self,
+        interaction: InteractionRef,
+    ) -> BoxFuture<'static, Result<InteractionPublicationPermit, InteractionAdmissionError>> {
+        Box::pin(std::future::ready(Ok(
+            InteractionPublicationPermit::for_interaction(interaction),
+        )))
+    }
+
+    fn publish(
+        &self,
+        event: InteractionRouteEvent,
+    ) -> BoxFuture<'static, Result<(), InteractionRouteError>> {
+        let fails = self.fails(&event);
+        let events = Arc::clone(&self.events);
+        Box::pin(async move {
+            if fails {
+                Err(InteractionRouteError::ControlLost)
+            } else {
+                events
+                    .lock()
+                    .expect("failing interaction route events lock")
+                    .push(event);
+                Ok(())
+            }
+        })
+    }
+
+    fn try_publish(&self, event: InteractionRouteEvent) -> Result<(), InteractionRouteError> {
+        if self.fails(&event) {
+            return Err(InteractionRouteError::ControlLost);
+        }
+        self.events
+            .lock()
+            .expect("failing interaction route events lock")
+            .push(event);
+        Ok(())
+    }
+
+    fn try_admit_publication(
+        &self,
+        interaction: InteractionRef,
+    ) -> Result<InteractionPublicationPermit, InteractionAdmissionError> {
+        Ok(InteractionPublicationPermit::for_interaction(interaction))
     }
 }
 
@@ -1189,6 +1281,237 @@ async fn native_ask_cancellation_settles_through_the_real_coordinator() {
         })
     );
     assert_cancelled_tool_slot_without_start(&result, 1, &tool_handle);
+}
+
+/// A requested-route failure happens after the exact permit and the child
+/// `InteractionRequested` audit commit. It is therefore a supervised
+/// control failure, not an ordinary unavailable-provider denial: the
+/// executor, `ToolResult`, and next model turn are all absent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn requested_route_loss_fails_the_attempt_after_publication() {
+    let lifecycle = ConversationLifecycle::new();
+    assert!(lifecycle.activate());
+    let conversation_id = ConversationId::new("conv-issue56");
+    let audit = RecordingInteractionAudit::new(conversation_id.clone());
+    let coordinator = Arc::new(InteractionCoordinator::new(
+        conversation_id,
+        lifecycle,
+        audit.clone(),
+    ));
+    let route = FailingInteractionRoute::requested();
+    coordinator.install_route(route.clone());
+    let (observer, _published) = NativePendingSignal::new();
+    coordinator.install_observer(observer.clone());
+
+    let policy = Arc::new(ScriptedPreToolPolicy::new(vec![PreToolDecision::Ask {
+        reason: "route-loss approval".to_owned(),
+    }]));
+    let mut tools = ToolRegistry::new();
+    let (tool, tool_handle) = GatedTool::new(
+        parallel_tool("alpha", "tool-alpha"),
+        Arc::new(Mutex::new(Vec::new())),
+    );
+    tool.register(&mut tools);
+    let model = fake_model(tool_turn_then_stop(&[scripted_call(
+        "call-route-loss",
+        "tool-alpha",
+        "alpha",
+    )]));
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let result = run(
+        &model,
+        tools,
+        ContextAssembly::new(),
+        AttemptLifecycle::inert()
+            .with_pre_tool_policy(policy)
+            .with_native_interaction(coordinator.clone()),
+        &cancellation,
+    )
+    .await;
+
+    assert!(matches!(
+        &result.outcome,
+        AttemptOutcome::Failed {
+            error: AttemptFailure::Runtime {
+                error: RuntimeError::Internal { message },
+            },
+        } if message.contains("reliable interaction control path")
+    ));
+    assert_eq!(
+        model.requests().len(),
+        1,
+        "only the triggering model turn ran"
+    );
+    assert!(
+        tool_handle.invocations().is_empty(),
+        "route loss starts no executor"
+    );
+    assert!(
+        !*tool_handle.started.borrow(),
+        "route loss starts no executor"
+    );
+    assert!(
+        result
+            .event_history
+            .iter()
+            .all(|event| !matches!(event, RuntimeEvent::ToolExecutionStarted { .. })),
+        "route loss cannot cross the executor-start frontier"
+    );
+    assert_eq!(
+        observer
+            .requests
+            .lock()
+            .expect("native pending requests lock")
+            .len(),
+        1,
+        "the root-facing request was observed after admission"
+    );
+    assert!(cancellation.interaction_failed());
+    assert_eq!(coordinator.pending_count(), 0);
+    assert!(matches!(
+        audit.events().as_slice(),
+        [RuntimeEvent::InteractionRequested { .. }]
+    ));
+    assert!(route.events().is_empty(), "the requested frame was refused");
+    assert!(
+        result
+            .messages()
+            .iter()
+            .all(|message| !matches!(message, MessageBlock::Tool(_))),
+        "route loss cannot produce an ordinary provider-unavailable ToolResult"
+    );
+    assert_single_terminal(&result.event_history);
+}
+
+/// A settled-route failure retains the child coordinator's selected and
+/// durably committed outcome, but the waiter receives control loss and the
+/// Agent Loop cannot continue into `ToolExecutionStarted` or another model
+/// request under a broken supervised route.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn settled_route_loss_is_not_a_healthy_waiter_release() {
+    let lifecycle = ConversationLifecycle::new();
+    assert!(lifecycle.activate());
+    let conversation_id = ConversationId::new("conv-issue56");
+    let audit = RecordingInteractionAudit::new(conversation_id.clone());
+    let coordinator = Arc::new(InteractionCoordinator::new(
+        conversation_id,
+        lifecycle,
+        audit.clone(),
+    ));
+    let route = FailingInteractionRoute::settled();
+    coordinator.install_route(route.clone());
+    let (observer, mut published) = NativePendingSignal::new();
+    coordinator.install_observer(observer.clone());
+
+    let policy = Arc::new(ScriptedPreToolPolicy::new(vec![PreToolDecision::Ask {
+        reason: "settled-route-loss approval".to_owned(),
+    }]));
+    let mut tools = ToolRegistry::new();
+    let (tool, tool_handle) = GatedTool::new(
+        parallel_tool("alpha", "tool-alpha"),
+        Arc::new(Mutex::new(Vec::new())),
+    );
+    tool.register(&mut tools);
+    let model = fake_model(tool_turn_then_stop(&[scripted_call(
+        "call-settled-route-loss",
+        "tool-alpha",
+        "alpha",
+    )]));
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let run_task = tokio::spawn({
+        let model = Arc::clone(&model);
+        let cancellation = cancellation.clone();
+        let coordinator = coordinator.clone();
+        async move {
+            run(
+                &model,
+                tools,
+                ContextAssembly::new(),
+                AttemptLifecycle::inert()
+                    .with_pre_tool_policy(policy)
+                    .with_native_interaction(coordinator),
+                &cancellation,
+            )
+            .await
+        }
+    });
+
+    published
+        .wait_for(|count| *count == 1)
+        .await
+        .expect("published interaction");
+    let interaction_id = observer
+        .requests
+        .lock()
+        .expect("native pending requests lock")
+        .first()
+        .expect("one pending interaction")
+        .id
+        .clone();
+    assert_eq!(
+        coordinator
+            .respond_async(
+                &interaction_id,
+                InteractionResponse::Approval {
+                    decision: ApprovalDecision::Allow,
+                },
+            )
+            .await,
+        Err(InteractionError::ControlLost {
+            interaction_id: interaction_id.clone(),
+        })
+    );
+    let result = run_task.await.expect("Agent Execution task");
+
+    assert!(matches!(
+        &result.outcome,
+        AttemptOutcome::Failed {
+            error: AttemptFailure::Runtime {
+                error: RuntimeError::Internal { message },
+            },
+        } if message.contains("reliable interaction control path")
+    ));
+    assert_eq!(
+        model.requests().len(),
+        1,
+        "no healthy continuation request ran"
+    );
+    assert!(
+        tool_handle.invocations().is_empty(),
+        "Approved cannot start after route loss"
+    );
+    assert!(
+        !*tool_handle.started.borrow(),
+        "Approved cannot start after route loss"
+    );
+    assert!(
+        result
+            .event_history
+            .iter()
+            .all(|event| !matches!(event, RuntimeEvent::ToolExecutionStarted { .. }))
+    );
+    assert_eq!(coordinator.pending_count(), 0);
+    assert!(cancellation.interaction_failed());
+    assert!(matches!(
+        audit.events().as_slice(),
+        [
+            RuntimeEvent::InteractionRequested { .. },
+            RuntimeEvent::InteractionSettled { .. }
+        ]
+    ));
+    assert_eq!(
+        route.events().len(),
+        1,
+        "only the requested route event was delivered"
+    );
+    assert!(
+        result
+            .messages()
+            .iter()
+            .all(|message| !matches!(message, MessageBlock::Tool(_))),
+        "settlement route loss cannot release a healthy ToolResult path"
+    );
+    assert_single_terminal(&result.event_history);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

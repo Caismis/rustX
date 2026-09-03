@@ -14,6 +14,7 @@
 //! [`AgentCancellation`]: crate::agent::cancellation::AgentCancellation
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio_util::sync::CancellationToken;
 
@@ -109,6 +110,11 @@ impl CancellationCause for DetachedCause {
 pub struct ExecutionCancellation {
     signal: CancellationSignal,
     cause: Arc<dyn CancellationCause>,
+    /// A process-local failure marker for semantic control paths that can no
+    /// longer safely release the owning execution. It is deliberately
+    /// separate from cancellation: a broken interaction route must not be
+    /// rewritten as a human cancellation outcome.
+    interaction_failure: InteractionFailureSignal,
 }
 
 impl std::fmt::Debug for ExecutionCancellation {
@@ -126,7 +132,23 @@ impl ExecutionCancellation {
     /// semantic cause.
     #[must_use]
     pub fn new(signal: CancellationSignal, cause: Arc<dyn CancellationCause>) -> Self {
-        Self { signal, cause }
+        Self {
+            signal,
+            cause,
+            interaction_failure: InteractionFailureSignal::default(),
+        }
+    }
+
+    /// Attaches the owning attempt's process-local interaction-failure
+    /// marker. The marker is shared by cloned execution views and never
+    /// becomes a durable or routable authority.
+    #[must_use]
+    pub(crate) fn with_interaction_failure(
+        mut self,
+        interaction_failure: InteractionFailureSignal,
+    ) -> Self {
+        self.interaction_failure = interaction_failure;
+        self
     }
 
     /// A view over a signal with no owning attempt/background authority.
@@ -135,6 +157,7 @@ impl ExecutionCancellation {
         Self {
             signal,
             cause: Arc::new(DetachedCause(reason)),
+            interaction_failure: InteractionFailureSignal::default(),
         }
     }
 
@@ -169,6 +192,32 @@ impl ExecutionCancellation {
     #[must_use]
     pub fn child_signal(&self) -> CancellationSignal {
         self.signal.child()
+    }
+
+    /// Marks the owning attempt as unable to continue because its semantic
+    /// interaction control path failed. This does not request cancellation or
+    /// choose an interaction outcome.
+    pub(crate) fn mark_interaction_failure(&self) {
+        self.interaction_failure.mark();
+    }
+}
+
+/// One shared, absorbing marker for a failed semantic interaction control
+/// path. It is process-local execution state, not durable interaction
+/// authority and not a second lifecycle/cancellation state machine.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct InteractionFailureSignal {
+    failed: Arc<AtomicBool>,
+}
+
+impl InteractionFailureSignal {
+    pub(crate) fn mark(&self) {
+        self.failed.store(true, Ordering::Release);
+    }
+
+    #[must_use]
+    pub(crate) fn is_marked(&self) -> bool {
+        self.failed.load(Ordering::Acquire)
     }
 }
 

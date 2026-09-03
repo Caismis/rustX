@@ -54,7 +54,7 @@
  * ```text
  * ToolCallId       a logical model-issued tool call
  * ToolExecutionId  a detached background execution instance
- * InteractionId    one runtime-owned pending interaction
+ * InteractionRef   one routed runtime-owned pending interaction
  * ```
  *
  * rustX models those as separate identity domains and this file preserves the
@@ -66,10 +66,18 @@
  */
 
 import type {
-  InteractionId,
+  InteractionRef,
   ToolCallId,
   ToolExecutionId,
 } from "../protocol/types.ts";
+
+/** Stable local key for the routed identity pair. */
+export function interactionKey(interaction: InteractionRef): string {
+  return JSON.stringify([
+    interaction.conversation_id,
+    interaction.interaction_id,
+  ]);
+}
 
 /**
  * The finite budget of one collapsed presentation band.
@@ -128,8 +136,8 @@ export interface PresentationPreferences {
   expandedToolCalls: ReadonlySet<ToolCallId>;
   /** Expanded background cards, keyed by the runtime's `ToolExecutionId`. */
   expandedBackgroundExecutions: ReadonlySet<ToolExecutionId>;
-  /** Expanded interaction cards, keyed by the runtime's `InteractionId`. */
-  expandedInteractions: ReadonlySet<InteractionId>;
+  /** Expanded interaction cards, keyed by the full routed identity pair. */
+  expandedInteractions: ReadonlySet<string>;
   /** The collapsed budget of one verbose detail section. */
   previewBudget: PreviewBudget;
 }
@@ -229,29 +237,32 @@ export function isBackgroundExecutionExpanded(
  */
 export function withToggledInteraction(
   preferences: PresentationPreferences,
-  interactionId: InteractionId,
+  interaction: InteractionRef,
 ): PresentationPreferences {
   return {
     ...preferences,
     expandedInteractions: toggled(
       preferences.expandedInteractions,
-      interactionId,
+      interactionKey(interaction),
     ),
   };
 }
 
 export function withExpandedInteractions(
   preferences: PresentationPreferences,
-  interactionIds: Iterable<InteractionId>,
+  interactions: Iterable<InteractionRef>,
 ): PresentationPreferences {
-  return { ...preferences, expandedInteractions: new Set(interactionIds) };
+  return {
+    ...preferences,
+    expandedInteractions: new Set([...interactions].map(interactionKey)),
+  };
 }
 
 export function isInteractionExpanded(
   preferences: PresentationPreferences,
-  interactionId: InteractionId,
+  interaction: InteractionRef,
 ): boolean {
-  return preferences.expandedInteractions.has(interactionId);
+  return preferences.expandedInteractions.has(interactionKey(interaction));
 }
 
 // ---------------------------------------------------------------------------

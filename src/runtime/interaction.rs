@@ -47,7 +47,6 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
-#[cfg(test)]
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -63,6 +62,7 @@ use crate::runtime::cancellation::ExecutionCancellation;
 use crate::runtime::identity::{
     AttemptId, ConversationId, EventId, InteractionId, ToolCallId, ToolId, TurnId,
 };
+use crate::runtime::subagent::SubagentName;
 use crate::runtime::types::{CancellationReason, ConversationLifecycle, LifecycleAdmission};
 use crate::tools::types::{ToolInvocationMode, ToolOrigin};
 
@@ -118,6 +118,119 @@ pub struct InteractionRequest {
     pub kind: InteractionKind,
 }
 
+impl InteractionRequest {
+    /// The address of this request at the root human-facing surface.
+    #[must_use]
+    pub fn interaction_ref(&self) -> InteractionRef {
+        InteractionRef {
+            conversation_id: self.conversation_id.clone(),
+            interaction_id: self.id.clone(),
+        }
+    }
+}
+
+/// The root-facing address of a conversation-local interaction.
+///
+/// `InteractionId` is allocated inside one conversation/attempt domain and is
+/// intentionally not globally unique. The pair is the only identity that
+/// crosses a Runtime Client or parent/child routing boundary.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InteractionRef {
+    /// The conversation-owned semantic interaction domain.
+    pub conversation_id: ConversationId,
+    /// The interaction identity allocated by that conversation's coordinator.
+    pub interaction_id: InteractionId,
+}
+
+impl InteractionRef {
+    /// Creates one routed address from the canonical identity pair.
+    #[must_use]
+    pub fn new(conversation_id: ConversationId, interaction_id: InteractionId) -> Self {
+        Self {
+            conversation_id,
+            interaction_id,
+        }
+    }
+}
+
+impl core::fmt::Display for InteractionRef {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            formatter,
+            "{}::{}",
+            self.conversation_id, self.interaction_id
+        )
+    }
+}
+
+/// Presentation metadata for the root interaction surface.
+///
+/// This is projection data only. It grants no authority to the root router,
+/// and it is never copied into either conversation's canonical history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum InteractionSource {
+    /// The root runtime's primary conversation.
+    Primary,
+    /// A live supervised child conversation.
+    Subagent {
+        /// The parent-owned child identity.
+        subagent_id: crate::runtime::identity::SubagentId,
+        /// The child conversation that owns the interaction.
+        child_conversation_id: ConversationId,
+        /// The frozen named definition used by the child.
+        agent_name: SubagentName,
+    },
+}
+
+/// One pending interaction projected to the root Runtime Client.
+///
+/// The request remains the originating conversation's immutable request. The
+/// routed address and source only make that request understandable and
+/// answerable at the shared human-facing surface.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoutedInteraction {
+    /// The stable address the human response must use.
+    pub interaction: InteractionRef,
+    /// Root-facing source metadata.
+    pub source: InteractionSource,
+    /// The originating conversation's request facts.
+    pub request: InteractionRequest,
+}
+
+impl RoutedInteraction {
+    /// Projects a primary-conversation request.
+    pub(crate) fn primary(request: InteractionRequest) -> Self {
+        Self {
+            interaction: request.interaction_ref(),
+            source: InteractionSource::Primary,
+            request,
+        }
+    }
+
+    /// Projects a child-conversation request with parent-owned source data.
+    pub(crate) fn subagent(
+        subagent_id: crate::runtime::identity::SubagentId,
+        child_conversation_id: ConversationId,
+        agent_name: SubagentName,
+        request: InteractionRequest,
+    ) -> Self {
+        let interaction = request.interaction_ref();
+        debug_assert_eq!(interaction.conversation_id, child_conversation_id);
+        Self {
+            interaction,
+            source: InteractionSource::Subagent {
+                subagent_id,
+                child_conversation_id,
+                agent_name,
+            },
+            request,
+        }
+    }
+}
+
 /// The finite approval decision accepted from a client.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -166,9 +279,84 @@ pub enum InteractionOutcome {
         /// The first-winner cancellation cause from the owning attempt.
         reason: CancellationReason,
     },
-    /// No interaction-capable Runtime Client was attached at publication.
-    /// Approval maps this outcome to a fail-closed denial.
+}
+
+/// An interaction-operation failure that is not itself a human decision.
+///
+/// `Unavailable` is reserved for refusal before the publication frontier:
+/// no capable provider admitted the request, so no `InteractionRequested`
+/// fact exists. Once a request has crossed that frontier, failures are
+/// runtime/control failures and must stop the owning supervised execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InteractionFailure {
+    /// Publication was refused before an `InteractionRequested` fact could
+    /// commit because no capable human provider was admitted.
     Unavailable,
+    /// The request was rejected before the publication frontier for an
+    /// internal reason: the subject facts failed bounded validation or the
+    /// per-attempt interaction ordinal space was exhausted. This is never
+    /// human provider absence.
+    Invalid,
+    /// The coordinator could not commit the requested fact or its lifecycle
+    /// admission after the root publication frontier was crossed.
+    PublicationFailed,
+    /// The reliable interaction-control path failed after publication.
+    ControlLost,
+    /// A required durable interaction fact could not commit.
+    AuditFailed,
+}
+
+impl InteractionFailure {
+    #[must_use]
+    pub(crate) fn is_unavailable(self) -> bool {
+        matches!(self, Self::Unavailable)
+    }
+}
+
+impl From<InteractionRouteError> for InteractionFailure {
+    fn from(error: InteractionRouteError) -> Self {
+        match error {
+            InteractionRouteError::ControlLost => Self::ControlLost,
+        }
+    }
+}
+
+/// The result of the root-side publication admission handshake.
+///
+/// Provider refusal and reliable control loss are deliberately distinct even
+/// though both happen before the requested fact can commit. Only the former
+/// is the product-level `Unavailable` interaction contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InteractionAdmissionError {
+    /// The root authority refused because no capable human surface was
+    /// attached at the admission frontier.
+    Unavailable,
+    /// The reliable child/parent control path failed before admission could
+    /// produce a permit.
+    ControlLost,
+}
+
+impl From<InteractionAdmissionError> for InteractionFailure {
+    fn from(error: InteractionAdmissionError) -> Self {
+        match error {
+            InteractionAdmissionError::Unavailable => Self::Unavailable,
+            InteractionAdmissionError::ControlLost => Self::ControlLost,
+        }
+    }
+}
+
+impl core::fmt::Display for InteractionFailure {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Unavailable => f.write_str("no capable human interaction provider was admitted"),
+            Self::Invalid => f.write_str("the interaction request was rejected before publication"),
+            Self::PublicationFailed => {
+                f.write_str("the interaction request could not be durably published")
+            }
+            Self::ControlLost => f.write_str("the reliable interaction control path was lost"),
+            Self::AuditFailed => f.write_str("the interaction audit could not be committed"),
+        }
+    }
 }
 
 /// The immutable facts used to construct one approval request.
@@ -316,33 +504,30 @@ pub(crate) fn interaction_settled_event_id(interaction_id: &InteractionId) -> Ev
 
 /// Projects one terminal outcome onto its bounded durable settlement.
 ///
-/// [`InteractionOutcome::Unavailable`] has no settlement: it is refused before
-/// the requested fact commits, so there is never an audit record for a prompt
-/// no user saw.
-fn audit_settlement(outcome: &InteractionOutcome) -> Option<InteractionSettlement> {
+/// Every outcome that reaches settlement has a committed requested fact
+/// behind it, so every settlement is recorded: there is never an audit gap
+/// for a prompt a user could have seen.
+fn audit_settlement(outcome: &InteractionOutcome) -> InteractionSettlement {
     match outcome {
         InteractionOutcome::Responded { response } => match response {
-            InteractionResponse::Approval { decision } => Some(match decision {
+            InteractionResponse::Approval { decision } => match decision {
                 ApprovalDecision::Allow => InteractionSettlement::Approved,
                 ApprovalDecision::Deny { reason } => InteractionSettlement::Denied {
                     reason: reason.clone(),
                 },
-            }),
+            },
             InteractionResponse::Questionnaire { response } => match response {
                 QuestionnaireResponse::Submitted(submission) => {
-                    Some(InteractionSettlement::QuestionnaireSubmitted {
+                    InteractionSettlement::QuestionnaireSubmitted {
                         submission: submission.clone(),
-                    })
+                    }
                 }
-                QuestionnaireResponse::Declined => {
-                    Some(InteractionSettlement::QuestionnaireDeclined)
-                }
+                QuestionnaireResponse::Declined => InteractionSettlement::QuestionnaireDeclined,
             },
         },
         InteractionOutcome::Cancelled { reason } => {
-            Some(InteractionSettlement::Cancelled { reason: *reason })
+            InteractionSettlement::Cancelled { reason: *reason }
         }
-        InteractionOutcome::Unavailable => None,
     }
 }
 
@@ -535,6 +720,93 @@ pub(crate) trait InteractionObserver: Send + Sync {
     );
 }
 
+/// One semantic interaction fact leaving its originating conversation.
+///
+/// The route carries only the already-authoritative request/settlement facts;
+/// it never receives a waiter, cancellation handle, audit capability, or
+/// execution object.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum InteractionRouteEvent {
+    /// A requested fact has committed and is now being exposed at the root
+    /// human-facing surface.
+    Requested(InteractionRequest),
+    /// The originating coordinator selected its terminal outcome.
+    Settled {
+        /// The originating conversation-local identity, addressed as a pair.
+        interaction: InteractionRef,
+        /// The selected terminal outcome.
+        outcome: InteractionOutcome,
+    },
+}
+
+/// The ephemeral proof that a root human-facing provider admitted one exact
+/// interaction publication. This is transport correlation only: it carries
+/// no waiter, pending state, audit capability, cancellation authority, or
+/// settlement authority, and it is consumed by the originating coordinator
+/// before its requested fact is committed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InteractionPublicationPermit {
+    interaction: InteractionRef,
+}
+
+/// A reliable interaction route can fail only as a control-path failure.
+/// Provider absence is decided by the separate root admission operation
+/// before the originating coordinator commits its requested fact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InteractionRouteError {
+    /// The reliable child/parent control path no longer accepts semantic
+    /// interaction traffic.
+    ControlLost,
+}
+
+impl InteractionPublicationPermit {
+    pub(crate) fn for_interaction(interaction: InteractionRef) -> Self {
+        Self { interaction }
+    }
+
+    pub(crate) fn matches(&self, interaction: &InteractionRef) -> bool {
+        self.interaction == *interaction
+    }
+}
+
+/// The reliable route installed on a child conversation coordinator.
+///
+/// The asynchronous operation is used by production request/response paths
+/// so a child can await bounded reliable-control capacity before releasing
+/// its semantic waiter. The synchronous attempt is retained for cancellation
+/// and deterministic local coordinator paths; implementations must never
+/// silently drop a frame from either operation.
+pub(crate) trait InteractionRoute: Send + Sync {
+    /// Asks the root human-provider authority to admit publication of one
+    /// exact interaction. A successful permit is the publication frontier:
+    /// the originating coordinator may commit its own requested fact even if
+    /// a later provider-detach notification reaches the child first.
+    fn admit_publication(
+        &self,
+        interaction: InteractionRef,
+    ) -> BoxFuture<'static, Result<InteractionPublicationPermit, InteractionAdmissionError>>;
+
+    /// Publishes one route event through reliable semantic control.
+    fn publish(
+        &self,
+        event: InteractionRouteEvent,
+    ) -> BoxFuture<'static, Result<(), InteractionRouteError>>;
+
+    /// Attempts the same publication without awaiting. `Err` means the
+    /// reliable control path could not accept the event; after publication
+    /// the caller must stop supervised execution rather than report provider
+    /// absence.
+    #[cfg(test)]
+    fn try_publish(&self, event: InteractionRouteEvent) -> Result<(), InteractionRouteError>;
+
+    /// Test-only synchronous form of the publication admission handshake.
+    #[cfg(test)]
+    fn try_admit_publication(
+        &self,
+        interaction: InteractionRef,
+    ) -> Result<InteractionPublicationPermit, InteractionAdmissionError>;
+}
+
 /// A test-only replacement for the concrete native binding.
 ///
 /// Production attempts can bind only the conversation-owned
@@ -555,7 +827,14 @@ pub(crate) trait TestInteractionRendezvous: Send + Sync {
 pub(crate) struct InteractionTicket {
     /// The interaction identity exposed to the client.
     pub(crate) id: InteractionId,
-    receiver: oneshot::Receiver<WaiterPayload>,
+    receiver: oneshot::Receiver<Result<WaiterPayload, InteractionFailure>>,
+}
+
+/// The result of the publication transition before the child reliable route
+/// has been awaited.
+struct PublishedInteraction {
+    ticket: InteractionTicket,
+    request: InteractionRequest,
 }
 
 impl core::fmt::Debug for InteractionTicket {
@@ -573,6 +852,19 @@ struct WaiterPayload {
     outcome: InteractionOutcome,
     waiter_admission: Option<LifecycleAdmission>,
     settlement: Option<SettlementNotification>,
+}
+
+/// A terminal transition whose route notification and waiter handoff have
+/// not yet been performed.
+struct SettlementDelivery {
+    transition: SettleTransition,
+    sender: oneshot::Sender<Result<WaiterPayload, InteractionFailure>>,
+    payload: WaiterPayload,
+    route: Option<Arc<dyn InteractionRoute>>,
+    route_event: Option<InteractionRouteEvent>,
+    /// The owning attempt's process-local failure marker. A route failure
+    /// stops that attempt without becoming an interaction outcome.
+    cancellation: ExecutionCancellation,
 }
 
 /// The observation callback is itself kept inside a counted settlement
@@ -625,7 +917,7 @@ struct PendingInteraction {
     /// coordinator never receives the authority that can request or
     /// arbitrate cancellation.
     cancellation: ExecutionCancellation,
-    sender: oneshot::Sender<WaiterPayload>,
+    sender: oneshot::Sender<Result<WaiterPayload, InteractionFailure>>,
     admission: LifecycleAdmission,
 }
 
@@ -762,6 +1054,10 @@ pub(crate) struct InteractionCoordinator {
     audit: Arc<dyn ConversationInteractionAudit>,
     state: Mutex<CoordinatorState>,
     observer: Mutex<Option<Arc<dyn InteractionObserver>>>,
+    /// A child-only reliable semantic route. This is deliberately separate
+    /// from the Runtime Client observation observer and never owns pending
+    /// state or settlement authority.
+    route: Mutex<Option<Arc<dyn InteractionRoute>>>,
     #[cfg(test)]
     settle_gate: Mutex<Option<Arc<InteractionSettleGate>>>,
     #[cfg(test)]
@@ -804,14 +1100,21 @@ impl QuestionnaireRequester {
     pub(crate) async fn request_questionnaire(
         &self,
         mut facts: QuestionnaireFacts,
-    ) -> InteractionOutcome {
+    ) -> Result<InteractionOutcome, InteractionFailure> {
         facts.turn = self.turn;
         if facts.validate().is_err() {
-            return InteractionOutcome::Unavailable;
+            return Err(InteractionFailure::Invalid);
         }
-        self.coordinator
+        let result = self
+            .coordinator
             .request_questionnaire(self.attempt_id.clone(), facts, self.cancellation.clone())
-            .await
+            .await;
+        if let Err(failure) = result
+            && !failure.is_unavailable()
+        {
+            self.cancellation.mark_interaction_failure();
+        }
+        result
     }
 }
 
@@ -845,6 +1148,7 @@ impl InteractionCoordinator {
             audit,
             state: Mutex::new(CoordinatorState::default()),
             observer: Mutex::new(None),
+            route: Mutex::new(None),
             #[cfg(test)]
             settle_gate: Mutex::new(None),
             #[cfg(test)]
@@ -906,6 +1210,17 @@ impl InteractionCoordinator {
         *installed = Some(observer);
     }
 
+    /// Installs the reliable route used by a child conversation to expose its
+    /// own interactions at the root Runtime Client surface.
+    ///
+    /// This is a pre-activation composition seam. The route is not a second
+    /// coordinator and receives no authority beyond typed route events.
+    pub(crate) fn install_route(&self, route: Arc<dyn InteractionRoute>) {
+        let mut installed = self.route.lock().expect("interaction route poisoned");
+        debug_assert!(installed.is_none(), "one interaction route only");
+        *installed = Some(route);
+    }
+
     /// Marks whether the one Runtime Client attachment is currently capable
     /// of answering newly published interactions.
     pub(crate) fn set_provider_available(&self, available: bool) {
@@ -936,19 +1251,21 @@ impl InteractionCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns [`InteractionOutcome::Unavailable`] when no interaction-capable
-    /// provider is present, the shared lifecycle has already closed semantic
-    /// admission, or the durable requested fact could not commit.
+    /// Returns [`InteractionFailure::Unavailable`] only when publication is
+    /// refused before the root publication frontier. Lifecycle, durability,
+    /// and reliable-route failures after that frontier remain internal
+    /// execution/control failures.
     ///
     /// # Panics
     ///
     /// Panics if the coordinator's internal synchronization state is poisoned.
+    #[cfg(test)]
     fn publish_approval_with_cancellation(
         &self,
         attempt_id: AttemptId,
         facts: ApprovalFacts,
         cancellation: &ExecutionCancellation,
-    ) -> Result<InteractionTicket, InteractionOutcome> {
+    ) -> Result<InteractionTicket, InteractionFailure> {
         let id = self.allocate_id(&attempt_id)?;
         let (request, subject) =
             facts.into_published(self.conversation_id.clone(), attempt_id, id.clone());
@@ -959,16 +1276,71 @@ impl InteractionCoordinator {
     /// waiter. It uses the exact same lifecycle admission, identity,
     /// durable-before-prompt publication, and terminal settlement path as
     /// Approval.
+    #[cfg(test)]
     fn publish_questionnaire_with_cancellation(
         &self,
         attempt_id: AttemptId,
         facts: QuestionnaireFacts,
         cancellation: &ExecutionCancellation,
-    ) -> Result<InteractionTicket, InteractionOutcome> {
+    ) -> Result<InteractionTicket, InteractionFailure> {
         let id = self.allocate_id(&attempt_id)?;
         let (request, subject) =
             facts.into_published(self.conversation_id.clone(), attempt_id, id.clone());
         self.publish(request, subject, cancellation)
+    }
+
+    /// The asynchronous publication path used by live child conversations.
+    /// Root publication admission is established before the requested audit
+    /// and originating pending entry are committed. The route permit is the
+    /// publication frontier; a later provider-detach notification cannot
+    /// revoke it. A reliable route failure after that frontier removes the
+    /// live waiter fail-closed; it never leaves an unanswered orphan in the
+    /// coordinator.
+    async fn publish_async(
+        &self,
+        request: InteractionRequest,
+        subject: InteractionSubject,
+        cancellation: &ExecutionCancellation,
+    ) -> Result<InteractionTicket, InteractionFailure> {
+        // Reject malformed facts before asking the root authority for a
+        // permit. A permit is the publication frontier, so no post-permit
+        // validation path may report provider-level `Unavailable`; a
+        // pre-permit validation rejection is an internal failure, never
+        // provider absence.
+        if validate_interaction_subject(&subject).is_err() {
+            return Err(InteractionFailure::Invalid);
+        }
+        let route = self
+            .route
+            .lock()
+            .expect("interaction route poisoned")
+            .clone();
+        let interaction = request.interaction_ref();
+        let publication_admitted = if let Some(route) = route.as_ref() {
+            let permit = route
+                .admit_publication(interaction.clone())
+                .await
+                .map_err(InteractionFailure::from)?;
+            if !permit.matches(&interaction) {
+                return Err(InteractionFailure::ControlLost);
+            }
+            true
+        } else {
+            false
+        };
+        let published = self.publish_inner(request, subject, cancellation, publication_admitted)?;
+        if let Some(route) = route
+            && let Err(error) = route
+                .publish(InteractionRouteEvent::Requested(published.request.clone()))
+                .await
+        {
+            // The requested fact already committed after the permit. A
+            // failed reliable route is therefore control loss, never human
+            // provider absence and never a synthetic settlement.
+            self.abandon_after_control_failure(&published.request.id, cancellation);
+            return Err(error.into());
+        }
+        Ok(published.ticket)
     }
 
     /// The one publication transition shared by Approval and Questionnaire.
@@ -977,30 +1349,71 @@ impl InteractionCoordinator {
     /// that admits the pending entry, and strictly **before**
     /// [`Self::notify_pending`] releases the prompt to a client. A failed
     /// commit therefore leaves no pending entry, publishes no prompt, and
-    /// fails closed as [`InteractionOutcome::Unavailable`] — the same
-    /// outcome as a missing provider — so no user is ever asked a question
-    /// that durable state does not record.
+    /// fails closed before publication. When a root permit was already
+    /// granted, a requested-commit failure is reported as an internal
+    /// publication failure rather than provider absence, so no user is ever
+    /// asked a question that durable state does not record.
     ///
     /// The bounded-payload contract is checked here through the same
     /// [`validate_interaction_subject`] the durable authority uses, so a
     /// payload the store would refuse never reaches a commit attempt and never
     /// reaches a user. There is one set of limits, not two.
+    #[cfg(test)]
     fn publish(
         &self,
         request: InteractionRequest,
         subject: InteractionSubject,
         cancellation: &ExecutionCancellation,
-    ) -> Result<InteractionTicket, InteractionOutcome> {
+    ) -> Result<InteractionTicket, InteractionFailure> {
         if validate_interaction_subject(&subject).is_err() {
-            return Err(InteractionOutcome::Unavailable);
+            return Err(InteractionFailure::Invalid);
         }
+        let route = self
+            .route
+            .lock()
+            .expect("interaction route poisoned")
+            .clone();
+        let interaction = request.interaction_ref();
+        let publication_admitted = if let Some(route) = route.as_ref() {
+            let permit = route
+                .try_admit_publication(interaction.clone())
+                .map_err(InteractionFailure::from)?;
+            if !permit.matches(&interaction) {
+                return Err(InteractionFailure::ControlLost);
+            }
+            true
+        } else {
+            false
+        };
+        let published = self.publish_inner(request, subject, cancellation, publication_admitted)?;
+        if let Some(route) = route
+            && let Err(error) =
+                route.try_publish(InteractionRouteEvent::Requested(published.request.clone()))
+        {
+            self.abandon_after_control_failure(&published.request.id, cancellation);
+            return Err(error.into());
+        }
+        Ok(published.ticket)
+    }
+
+    /// The coordinator-owned publication transition. It never awaits or
+    /// calls the child route while holding the returned ticket's owner.
+    fn publish_inner(
+        &self,
+        request: InteractionRequest,
+        subject: InteractionSubject,
+        cancellation: &ExecutionCancellation,
+        publication_admitted: bool,
+    ) -> Result<PublishedInteraction, InteractionFailure> {
         let id = request.id.clone();
+        let published_request = request.clone();
         let (sender, receiver) = oneshot::channel();
         self.lifecycle
             .admit_running_commit(|admission| {
                 let mut state = self.state.lock().expect("interaction state poisoned");
-                if !state.provider_available {
-                    return Err(InteractionOutcome::Unavailable);
+                let publication_admitted = publication_admitted || state.provider_available;
+                if !publication_admitted {
+                    return Err(InteractionFailure::Unavailable);
                 }
                 let (requested_audit, requested_cursor) = self
                     .audit
@@ -1009,7 +1422,7 @@ impl InteractionCoordinator {
                         subject.clone(),
                         Utc::now(),
                     ))
-                    .map_err(|_| InteractionOutcome::Unavailable)?;
+                    .map_err(|_| InteractionFailure::PublicationFailed)?;
                 let previous = state.pending.insert(
                     id.clone(),
                     PendingInteraction {
@@ -1030,9 +1443,22 @@ impl InteractionCoordinator {
                     requested_cursor,
                 );
                 drop(state);
-                Ok(InteractionTicket { id, receiver })
+                Ok(PublishedInteraction {
+                    ticket: InteractionTicket { id, receiver },
+                    request: published_request,
+                })
             })
-            .map_err(|_| InteractionOutcome::Unavailable)?
+            .map_err(|_| {
+                // The lifecycle refused the commit boundary. That is provider
+                // absence only when no capable provider is attached; an
+                // admitted provider makes this an internal publication
+                // failure (for example publication attempted after drain).
+                if publication_admitted || self.provider_available() {
+                    InteractionFailure::PublicationFailed
+                } else {
+                    InteractionFailure::Unavailable
+                }
+            })?
     }
 
     #[cfg(test)]
@@ -1040,11 +1466,33 @@ impl InteractionCoordinator {
         &self,
         attempt_id: AttemptId,
         facts: ApprovalFacts,
-    ) -> Result<InteractionTicket, InteractionOutcome> {
+    ) -> Result<InteractionTicket, InteractionFailure> {
         let owner =
             crate::agent::cancellation::AgentCancellation::new(CancellationReason::UserRequested);
         let cancellation = owner.execution_cancellation();
         self.publish_approval_with_cancellation(attempt_id, facts, &cancellation)
+    }
+
+    async fn publish_approval_async(
+        &self,
+        attempt_id: AttemptId,
+        facts: ApprovalFacts,
+        cancellation: &ExecutionCancellation,
+    ) -> Result<InteractionTicket, InteractionFailure> {
+        let id = self.allocate_id(&attempt_id)?;
+        let (request, subject) = facts.into_published(self.conversation_id.clone(), attempt_id, id);
+        self.publish_async(request, subject, cancellation).await
+    }
+
+    async fn publish_questionnaire_async(
+        &self,
+        attempt_id: AttemptId,
+        facts: QuestionnaireFacts,
+        cancellation: &ExecutionCancellation,
+    ) -> Result<InteractionTicket, InteractionFailure> {
+        let id = self.allocate_id(&attempt_id)?;
+        let (request, subject) = facts.into_published(self.conversation_id.clone(), attempt_id, id);
+        self.publish_async(request, subject, cancellation).await
     }
 
     /// Requests approval through the coordinator and waits for the owner.
@@ -1053,13 +1501,15 @@ impl InteractionCoordinator {
         attempt_id: AttemptId,
         facts: ApprovalFacts,
         cancellation: ExecutionCancellation,
-    ) -> InteractionOutcome {
-        let ticket = match self.publish_approval_with_cancellation(attempt_id, facts, &cancellation)
+    ) -> Result<InteractionOutcome, InteractionFailure> {
+        let ticket = match self
+            .publish_approval_async(attempt_id, facts, &cancellation)
+            .await
         {
             Ok(ticket) => ticket,
-            Err(outcome) => return outcome,
+            Err(failure) => return Err(failure),
         };
-        self.wait(ticket, cancellation).await
+        self.wait_result(ticket, cancellation).await
     }
 
     /// Publishes and awaits one Questionnaire through the runtime-owned
@@ -1069,41 +1519,70 @@ impl InteractionCoordinator {
         attempt_id: AttemptId,
         facts: QuestionnaireFacts,
         cancellation: ExecutionCancellation,
-    ) -> InteractionOutcome {
-        let ticket =
-            match self.publish_questionnaire_with_cancellation(attempt_id, facts, &cancellation) {
-                Ok(ticket) => ticket,
-                Err(outcome) => return outcome,
-            };
-        self.wait(ticket, cancellation).await
+    ) -> Result<InteractionOutcome, InteractionFailure> {
+        let ticket = match self
+            .publish_questionnaire_async(attempt_id, facts, &cancellation)
+            .await
+        {
+            Ok(ticket) => ticket,
+            Err(failure) => return Err(failure),
+        };
+        self.wait_result(ticket, cancellation).await
     }
 
     /// Waits for one published interaction using the existing attempt
     /// cancellation authority.
-    async fn wait(
+    async fn wait_result(
         &self,
         ticket: InteractionTicket,
         cancellation: ExecutionCancellation,
-    ) -> InteractionOutcome {
+    ) -> Result<InteractionOutcome, InteractionFailure> {
         let InteractionTicket { id, mut receiver } = ticket;
         let payload = tokio::select! {
             biased;
-            payload = &mut receiver => payload.ok(),
+            payload = &mut receiver => match payload {
+                Ok(Ok(payload)) => Ok(payload),
+                Ok(Err(failure)) => Err(failure),
+                Err(_) => Err(InteractionFailure::ControlLost),
+            },
             () = cancellation.cancelled() => {
                 // The response and cancellation paths use the same pending
                 // map transition.  If a response already won, this call is
                 // stale and the receiver still returns the response.
                 #[cfg(test)]
                 self.park_before_waiter_cancellation();
-                let _ = self.cancel(&id, cancellation.reason());
-                receiver.await.ok()
+                let _ = self.cancel_async(&id, cancellation.reason()).await;
+                match receiver.await {
+                    Ok(Ok(payload)) => Ok(payload),
+                    Ok(Err(failure)) => Err(failure),
+                    Err(_) => Err(InteractionFailure::ControlLost),
+                }
             }
         };
-        payload.map_or(InteractionOutcome::Unavailable, |payload| {
-            let outcome = payload.outcome.clone();
-            drop(payload);
-            outcome
-        })
+        match payload {
+            Ok(payload) => {
+                let outcome = payload.outcome.clone();
+                drop(payload);
+                Ok(outcome)
+            }
+            Err(failure) => Err(failure),
+        }
+    }
+
+    /// Test-only convenience wrapper for the historical local coordinator
+    /// contract. Production request paths use [`Self::wait_result`] so a
+    /// post-frontier control failure cannot be collapsed into a human outcome.
+    /// Tests using this wrapper expect a terminal outcome; an interaction
+    /// failure is a test bug and panics here.
+    #[cfg(test)]
+    async fn wait(
+        &self,
+        ticket: InteractionTicket,
+        cancellation: ExecutionCancellation,
+    ) -> InteractionOutcome {
+        self.wait_result(ticket, cancellation)
+            .await
+            .expect("the published interaction settles with an outcome")
     }
 
     /// Accepts one typed client response.  A missing entry is the complete
@@ -1118,16 +1597,72 @@ impl InteractionCoordinator {
     /// settled fact could not commit. The last case is reported to the client
     /// exactly because the response must never appear accepted ahead of the
     /// durable evidence that it existed.
+    #[cfg(test)]
     pub(crate) fn respond(
         &self,
         interaction_id: &InteractionId,
         response: InteractionResponse,
     ) -> Result<(), InteractionError> {
         let outcome = InteractionOutcome::Responded { response };
-        let transition = self.settle(interaction_id, outcome, true)?;
+        let delivery = self.begin_settle(interaction_id, outcome, true)?;
+        let transition = delivery.transition;
+        let delivery_result = self.deliver_sync(delivery);
         if transition.cancellation_won {
             return Err(InteractionError::NotPending {
                 interaction_id: interaction_id.clone(),
+            });
+        }
+        if let Err(failure) = delivery_result {
+            return Err(match failure {
+                InteractionFailure::AuditFailed => InteractionError::AuditFailed {
+                    interaction_id: interaction_id.clone(),
+                },
+                InteractionFailure::ControlLost
+                | InteractionFailure::Unavailable
+                | InteractionFailure::Invalid
+                | InteractionFailure::PublicationFailed => InteractionError::ControlLost {
+                    interaction_id: interaction_id.clone(),
+                },
+            });
+        }
+        if !transition.audit_committed {
+            return Err(InteractionError::AuditFailed {
+                interaction_id: interaction_id.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Accepts one response and waits for the originating conversation's
+    /// reliable route notification before releasing its semantic waiter.
+    /// Primary interactions use the same coordinator transition; child
+    /// interactions additionally use this path so the child-to-root settled
+    /// fact is never sent through the disposable observation lane.
+    pub(crate) async fn respond_async(
+        &self,
+        interaction_id: &InteractionId,
+        response: InteractionResponse,
+    ) -> Result<(), InteractionError> {
+        let outcome = InteractionOutcome::Responded { response };
+        let delivery = self.begin_settle(interaction_id, outcome, true)?;
+        let transition = delivery.transition;
+        let delivery_result = self.deliver_async(delivery).await;
+        if transition.cancellation_won {
+            return Err(InteractionError::NotPending {
+                interaction_id: interaction_id.clone(),
+            });
+        }
+        if let Err(failure) = delivery_result {
+            return Err(match failure {
+                InteractionFailure::AuditFailed => InteractionError::AuditFailed {
+                    interaction_id: interaction_id.clone(),
+                },
+                InteractionFailure::ControlLost
+                | InteractionFailure::Unavailable
+                | InteractionFailure::Invalid
+                | InteractionFailure::PublicationFailed => InteractionError::ControlLost {
+                    interaction_id: interaction_id.clone(),
+                },
             });
         }
         if !transition.audit_committed {
@@ -1139,6 +1674,7 @@ impl InteractionCoordinator {
     }
 
     /// Cancels one pending interaction with the owner's first-winner cause.
+    #[cfg(test)]
     pub(crate) fn cancel(
         &self,
         interaction_id: &InteractionId,
@@ -1152,10 +1688,37 @@ impl InteractionCoordinator {
         .map(|_| ())
     }
 
+    /// Cancels one pending interaction and awaits its reliable route removal.
+    pub(crate) async fn cancel_async(
+        &self,
+        interaction_id: &InteractionId,
+        reason: CancellationReason,
+    ) -> Result<(), InteractionError> {
+        let delivery = self.begin_settle(
+            interaction_id,
+            InteractionOutcome::Cancelled { reason },
+            false,
+        )?;
+        self.deliver_async(delivery)
+            .await
+            .map_err(|failure| match failure {
+                InteractionFailure::AuditFailed => InteractionError::AuditFailed {
+                    interaction_id: interaction_id.clone(),
+                },
+                InteractionFailure::ControlLost
+                | InteractionFailure::Unavailable
+                | InteractionFailure::Invalid
+                | InteractionFailure::PublicationFailed => InteractionError::ControlLost {
+                    interaction_id: interaction_id.clone(),
+                },
+            })
+    }
+
     /// Settles every interaction that was admitted before runtime drain.
     ///
     /// The runtime invokes this after `Running -> Draining`; no new entry can
     /// pass the lifecycle admission boundary after that transition.
+    #[cfg(test)]
     pub(crate) fn cancel_pending(&self, reason: CancellationReason) {
         let ids: Vec<_> = {
             let state = self.state.lock().expect("interaction state poisoned");
@@ -1163,6 +1726,19 @@ impl InteractionCoordinator {
         };
         for id in ids {
             let _ = self.cancel(&id, reason);
+        }
+    }
+
+    /// Async drain variant used by live child runtimes so each child-owned
+    /// terminal removal reaches the root over reliable control before the
+    /// child waiter is released.
+    pub(crate) async fn cancel_pending_async(&self, reason: CancellationReason) {
+        let ids: Vec<_> = {
+            let state = self.state.lock().expect("interaction state poisoned");
+            state.pending.keys().cloned().collect()
+        };
+        for id in ids {
+            let _ = self.cancel_async(&id, reason).await;
         }
     }
 
@@ -1196,7 +1772,7 @@ impl InteractionCoordinator {
             .len()
     }
 
-    fn allocate_id(&self, attempt_id: &AttemptId) -> Result<InteractionId, InteractionOutcome> {
+    fn allocate_id(&self, attempt_id: &AttemptId) -> Result<InteractionId, InteractionFailure> {
         let mut state = self.state.lock().expect("interaction state poisoned");
         let next = state
             .next_ordinal_by_attempt
@@ -1205,20 +1781,49 @@ impl InteractionCoordinator {
         // Zero is an internal exhausted sentinel. It means the maximum
         // representable ordinal was already issued; refusing the next
         // publication is what preserves non-reuse even at integer overflow.
+        // This is an internal limit, never human provider absence.
         if *next == 0 {
-            return Err(InteractionOutcome::Unavailable);
+            return Err(InteractionFailure::Invalid);
         }
         let ordinal = *next;
         *next = ordinal.checked_add(1).unwrap_or(0);
         Ok(InteractionId::for_attempt(attempt_id, ordinal))
     }
 
+    #[cfg(test)]
     fn settle(
+        &self,
+        interaction_id: &InteractionId,
+        outcome: InteractionOutcome,
+        validate_response: bool,
+    ) -> Result<SettleTransition, InteractionError> {
+        let delivery = self.begin_settle(interaction_id, outcome, validate_response)?;
+        let transition = delivery.transition;
+        self.deliver_sync(delivery)
+            .map_err(|failure| match failure {
+                InteractionFailure::AuditFailed => InteractionError::AuditFailed {
+                    interaction_id: interaction_id.clone(),
+                },
+                InteractionFailure::ControlLost
+                | InteractionFailure::Unavailable
+                | InteractionFailure::Invalid
+                | InteractionFailure::PublicationFailed => InteractionError::ControlLost {
+                    interaction_id: interaction_id.clone(),
+                },
+            })?;
+        Ok(transition)
+    }
+
+    /// Performs the coordinator-owned terminal map/audit transition and
+    /// prepares, but does not yet release, the waiter. This split lets child
+    /// response paths await reliable route delivery without moving any
+    /// pending or settlement authority out of this coordinator.
+    fn begin_settle(
         &self,
         interaction_id: &InteractionId,
         mut outcome: InteractionOutcome,
         validate_response: bool,
-    ) -> Result<SettleTransition, InteractionError> {
+    ) -> Result<SettlementDelivery, InteractionError> {
         // Keep the observer callback inside the lifecycle's narrow
         // settlement path. This admission is acquired before the pending
         // state lock, preserving the lifecycle -> coordinator lock order
@@ -1265,28 +1870,38 @@ impl InteractionCoordinator {
         // waiter cannot reach the tool-start frontier until this returns.
         //
         // A failed commit must not grant authority the durable record does not
-        // support, so the waiter receives `Unavailable` instead — the same
-        // fail-closed outcome Approval maps to a denial. The interaction stays
-        // durably open, which is the honest record: a prompt existed and its
-        // settlement never committed.
-        let settled_audit = audit_settlement(&outcome).and_then(|settlement| {
-            self.audit
-                .commit_interaction_settled(settled_envelope(
-                    &pending.request,
-                    settlement,
-                    Utc::now(),
-                ))
-                .ok()
-        });
+        // support. The interaction stays durably open, which is the honest
+        // record: a prompt existed and its settlement never committed. The
+        // waiter receives an internal audit failure, never a product-level
+        // provider-absence result.
+        let settled_audit = self
+            .audit
+            .commit_interaction_settled(settled_envelope(
+                &pending.request,
+                audit_settlement(&outcome),
+                Utc::now(),
+            ))
+            .ok();
         let settled = settled_audit.is_some();
-        if !settled {
-            outcome = InteractionOutcome::Unavailable;
-        }
         let observer = self
             .observer
             .lock()
             .expect("interaction observer poisoned")
             .clone();
+        let route = self
+            .route
+            .lock()
+            .expect("interaction route poisoned")
+            .clone();
+        let route_event = settled
+            .then(|| {
+                route.as_ref().map(|_| InteractionRouteEvent::Settled {
+                    interaction: pending.request.interaction_ref(),
+                    outcome: outcome.clone(),
+                })
+            })
+            .flatten();
+        let cancellation = pending.cancellation.clone();
         let payload = WaiterPayload {
             outcome: outcome.clone(),
             waiter_admission: Some(pending.admission),
@@ -1299,13 +1914,109 @@ impl InteractionCoordinator {
             }),
         };
         drop(state);
+        Ok(SettlementDelivery {
+            transition: SettleTransition {
+                cancellation_won,
+                audit_committed: settled,
+            },
+            sender: pending.sender,
+            payload,
+            route,
+            route_event,
+            cancellation,
+        })
+    }
+
+    /// Delivers a terminal transition from a synchronous caller. The route
+    /// implementation must make a non-blocking reliable acceptance decision;
+    /// a refused route never changes the already-linearized local outcome.
+    #[cfg(test)]
+    fn deliver_sync(&self, delivery: SettlementDelivery) -> Result<(), InteractionFailure> {
+        let SettlementDelivery {
+            sender,
+            payload,
+            route,
+            route_event,
+            cancellation,
+            transition,
+        } = delivery;
+        if !transition.audit_committed {
+            cancellation.mark_interaction_failure();
+            self.park_after_terminal_transition();
+            let _ = sender.send(Err(InteractionFailure::AuditFailed));
+            return Err(InteractionFailure::AuditFailed);
+        }
+        if let (Some(route), Some(event)) = (route, route_event)
+            && let Err(error) = route.try_publish(event)
+        {
+            cancellation.mark_interaction_failure();
+            self.park_after_terminal_transition();
+            let failure = InteractionFailure::from(error);
+            let _ = sender.send(Err(failure));
+            return Err(failure);
+        }
+        self.park_after_terminal_transition();
+        let _ = sender.send(Ok(payload));
+        Ok(())
+    }
+
+    /// Delivers a terminal transition after awaiting its reliable semantic
+    /// route. Only the final waiter handoff can wake the originating Agent
+    /// Loop, so the child cannot continue before the route event is queued on
+    /// the parent/child control lane.
+    async fn deliver_async(&self, delivery: SettlementDelivery) -> Result<(), InteractionFailure> {
+        let SettlementDelivery {
+            sender,
+            payload,
+            route,
+            route_event,
+            cancellation,
+            transition,
+        } = delivery;
+        if !transition.audit_committed {
+            cancellation.mark_interaction_failure();
+            #[cfg(test)]
+            self.park_after_terminal_transition();
+            let _ = sender.send(Err(InteractionFailure::AuditFailed));
+            return Err(InteractionFailure::AuditFailed);
+        }
+        if let (Some(route), Some(event)) = (route, route_event)
+            && let Err(error) = route.publish(event).await
+        {
+            cancellation.mark_interaction_failure();
+            #[cfg(test)]
+            self.park_after_terminal_transition();
+            let failure = InteractionFailure::from(error);
+            let _ = sender.send(Err(failure));
+            return Err(failure);
+        }
         #[cfg(test)]
         self.park_after_terminal_transition();
-        let _ = pending.sender.send(payload);
-        Ok(SettleTransition {
-            cancellation_won,
-            audit_committed: settled,
-        })
+        let _ = sender.send(Ok(payload));
+        Ok(())
+    }
+
+    /// Removes a pending interaction after its requested fact was committed
+    /// but the reliable requested route failed. This is not settlement: no
+    /// human outcome or `InteractionSettled` fact is fabricated. The open
+    /// requested audit remains historical evidence and process/control loss
+    /// owns the enclosing child lifecycle.
+    fn abandon_after_control_failure(
+        &self,
+        interaction_id: &InteractionId,
+        cancellation: &ExecutionCancellation,
+    ) {
+        cancellation.mark_interaction_failure();
+        let pending = self
+            .state
+            .lock()
+            .expect("interaction state poisoned")
+            .pending
+            .remove(interaction_id);
+        let Some(pending) = pending else {
+            return;
+        };
+        let _ = pending.sender.send(Err(InteractionFailure::ControlLost));
     }
 
     fn notify_pending(
@@ -1331,9 +2042,8 @@ struct SettleTransition {
     /// The owning attempt's cancellation authority had already won, so the
     /// terminal outcome is that cancellation rather than the response.
     cancellation_won: bool,
-    /// The durable settled fact committed. When false the waiter received the
-    /// fail-closed [`InteractionOutcome::Unavailable`] instead of the
-    /// requested terminal.
+    /// The durable settled fact committed. When false the waiter receives an
+    /// internal audit/control failure instead of a fabricated human outcome.
     audit_committed: bool,
 }
 
@@ -1349,6 +2059,42 @@ pub(crate) enum InteractionError {
     /// could not commit. The waiter was released fail-closed and no execution
     /// authority was granted.
     AuditFailed { interaction_id: InteractionId },
+    /// The reliable semantic route failed after the coordinator selected its
+    /// terminal transition. This is a control failure, not a human outcome.
+    ControlLost { interaction_id: InteractionId },
+}
+
+/// The routed error returned at the root Runtime Client boundary and across
+/// the child control lane. Its identity is always the full routed pair even
+/// though the originating coordinator reports its local `InteractionId`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum RoutedInteractionError {
+    /// The addressed owner has no live pending interaction at that identity.
+    NotPending { interaction: InteractionRef },
+    /// The response does not match the owner's immutable request facts.
+    InvalidResponse { message: String },
+    /// The owner selected a response but could not commit its durable audit.
+    AuditFailed { interaction: InteractionRef },
+}
+
+pub(crate) fn route_error(
+    interaction: &InteractionRef,
+    error: InteractionError,
+) -> RoutedInteractionError {
+    match error {
+        InteractionError::NotPending { .. } | InteractionError::ControlLost { .. } => {
+            RoutedInteractionError::NotPending {
+                interaction: interaction.clone(),
+            }
+        }
+        InteractionError::InvalidResponse { message } => {
+            RoutedInteractionError::InvalidResponse { message }
+        }
+        InteractionError::AuditFailed { .. } => RoutedInteractionError::AuditFailed {
+            interaction: interaction.clone(),
+        },
+    }
 }
 
 impl core::fmt::Display for InteractionError {
@@ -1361,6 +2107,10 @@ impl core::fmt::Display for InteractionError {
             Self::AuditFailed { interaction_id } => write!(
                 f,
                 "interaction {interaction_id} could not commit its durable settlement"
+            ),
+            Self::ControlLost { interaction_id } => write!(
+                f,
+                "the reliable route for interaction {interaction_id} was lost"
             ),
         }
     }
@@ -1430,6 +2180,7 @@ mod tests {
     use crate::events::interaction::{MAX_APPROVAL_REQUEST_REASON_CHARS, MAX_QUESTION_TEXT_CHARS};
     use crate::runtime::identity::ConversationId;
     use crate::runtime::types::ConversationLifecycleState;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use tokio::sync::oneshot;
 
     fn facts(call: &str) -> ApprovalFacts {
@@ -1450,7 +2201,7 @@ mod tests {
         coordinator: &InteractionCoordinator,
         attempt: &str,
         call: &str,
-    ) -> Result<InteractionTicket, InteractionOutcome> {
+    ) -> Result<InteractionTicket, InteractionFailure> {
         coordinator.publish_approval(AttemptId::new(attempt), facts(call))
     }
 
@@ -1524,7 +2275,7 @@ mod tests {
     fn publish_questionnaire(
         coordinator: &InteractionCoordinator,
         attempt: &str,
-    ) -> Result<InteractionTicket, InteractionOutcome> {
+    ) -> Result<InteractionTicket, InteractionFailure> {
         let cancellation =
             AgentCancellation::new(CancellationReason::UserRequested).execution_cancellation();
         coordinator.publish_questionnaire_with_cancellation(
@@ -1560,6 +2311,153 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((id.clone(), outcome.clone()));
+        }
+    }
+
+    #[derive(Clone)]
+    struct RecordingRoute {
+        events: tokio::sync::mpsc::UnboundedSender<InteractionRouteEvent>,
+    }
+
+    impl InteractionRoute for RecordingRoute {
+        fn admit_publication(
+            &self,
+            interaction: InteractionRef,
+        ) -> BoxFuture<'static, Result<InteractionPublicationPermit, InteractionAdmissionError>>
+        {
+            Box::pin(std::future::ready(Ok(
+                InteractionPublicationPermit::for_interaction(interaction),
+            )))
+        }
+
+        fn publish(
+            &self,
+            event: InteractionRouteEvent,
+        ) -> BoxFuture<'static, Result<(), InteractionRouteError>> {
+            let events = self.events.clone();
+            Box::pin(async move {
+                events
+                    .send(event)
+                    .map_err(|_| InteractionRouteError::ControlLost)
+            })
+        }
+
+        fn try_publish(&self, event: InteractionRouteEvent) -> Result<(), InteractionRouteError> {
+            self.events
+                .send(event)
+                .map_err(|_| InteractionRouteError::ControlLost)
+        }
+
+        fn try_admit_publication(
+            &self,
+            interaction: InteractionRef,
+        ) -> Result<InteractionPublicationPermit, InteractionAdmissionError> {
+            Ok(InteractionPublicationPermit::for_interaction(interaction))
+        }
+    }
+
+    /// A route whose admission future is explicitly released by the test and
+    /// whose requested frame then fails. The gate makes the permit frontier
+    /// observable: the audit is still empty while admission is waiting, and
+    /// the route failure occurs only after the coordinator commits the
+    /// requested fact.
+    struct RequestedRouteFailure {
+        admitted: Mutex<Option<oneshot::Sender<InteractionRef>>>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    impl InteractionRoute for RequestedRouteFailure {
+        fn admit_publication(
+            &self,
+            interaction: InteractionRef,
+        ) -> BoxFuture<'static, Result<InteractionPublicationPermit, InteractionAdmissionError>>
+        {
+            let admitted = self
+                .admitted
+                .lock()
+                .expect("requested-route admission lock")
+                .take();
+            let release = self.release.clone();
+            let permit = InteractionPublicationPermit::for_interaction(interaction.clone());
+            Box::pin(async move {
+                if let Some(sender) = admitted {
+                    let _ = sender.send(interaction);
+                }
+                release.notified().await;
+                Ok(permit)
+            })
+        }
+
+        fn publish(
+            &self,
+            _event: InteractionRouteEvent,
+        ) -> BoxFuture<'static, Result<(), InteractionRouteError>> {
+            Box::pin(std::future::ready(Err(InteractionRouteError::ControlLost)))
+        }
+
+        fn try_publish(&self, _event: InteractionRouteEvent) -> Result<(), InteractionRouteError> {
+            Err(InteractionRouteError::ControlLost)
+        }
+
+        fn try_admit_publication(
+            &self,
+            interaction: InteractionRef,
+        ) -> Result<InteractionPublicationPermit, InteractionAdmissionError> {
+            Ok(InteractionPublicationPermit::for_interaction(interaction))
+        }
+    }
+
+    /// A route that accepts the requested frame and can deterministically
+    /// refuse the later settled frame. This models a reliable control path
+    /// failing after the coordinator selected and audited its outcome.
+    struct SettledRouteFailure {
+        events: tokio::sync::mpsc::UnboundedSender<InteractionRouteEvent>,
+        fail_settlement: Arc<AtomicBool>,
+    }
+
+    impl InteractionRoute for SettledRouteFailure {
+        fn admit_publication(
+            &self,
+            interaction: InteractionRef,
+        ) -> BoxFuture<'static, Result<InteractionPublicationPermit, InteractionAdmissionError>>
+        {
+            Box::pin(std::future::ready(Ok(
+                InteractionPublicationPermit::for_interaction(interaction),
+            )))
+        }
+
+        fn publish(
+            &self,
+            event: InteractionRouteEvent,
+        ) -> BoxFuture<'static, Result<(), InteractionRouteError>> {
+            let events = self.events.clone();
+            let fail_settlement = self.fail_settlement.load(Ordering::SeqCst);
+            Box::pin(async move {
+                if fail_settlement && matches!(event, InteractionRouteEvent::Settled { .. }) {
+                    return Err(InteractionRouteError::ControlLost);
+                }
+                events
+                    .send(event)
+                    .map_err(|_| InteractionRouteError::ControlLost)
+            })
+        }
+
+        fn try_publish(&self, event: InteractionRouteEvent) -> Result<(), InteractionRouteError> {
+            if self.fail_settlement.load(Ordering::SeqCst)
+                && matches!(event, InteractionRouteEvent::Settled { .. })
+            {
+                return Err(InteractionRouteError::ControlLost);
+            }
+            self.events
+                .send(event)
+                .map_err(|_| InteractionRouteError::ControlLost)
+        }
+
+        fn try_admit_publication(
+            &self,
+            interaction: InteractionRef,
+        ) -> Result<InteractionPublicationPermit, InteractionAdmissionError> {
+            Ok(InteractionPublicationPermit::for_interaction(interaction))
         }
     }
 
@@ -1665,7 +2563,7 @@ mod tests {
         assert_eq!(first.id, InteractionId::for_attempt(&attempt_id, u64::MAX));
         assert!(matches!(
             coordinator.publish_approval(attempt_id.clone(), facts("c2")),
-            Err(InteractionOutcome::Unavailable)
+            Err(InteractionFailure::Invalid)
         ));
         assert_eq!(coordinator.pending_count(), 1);
     }
@@ -1772,9 +2670,9 @@ mod tests {
         assert!(owner.request_cancel(CancellationReason::RuntimeShutdown));
         assert_eq!(
             waiter.await.expect("Questionnaire waiter"),
-            InteractionOutcome::Cancelled {
+            Ok(InteractionOutcome::Cancelled {
                 reason: CancellationReason::RuntimeShutdown
-            }
+            })
         );
         assert_eq!(
             coordinator.respond(&interaction_id, single_response("staging"),),
@@ -1976,6 +2874,286 @@ mod tests {
             coordinator.respond(&id, single_response("staging"),),
             Err(InteractionError::NotPending { interaction_id: id })
         );
+    }
+
+    /// Approval and Questionnaire share one reliable routed interaction
+    /// boundary. The coordinator remains the only owner: the route sees the
+    /// originating request and terminal pair, while responses still enter
+    /// the coordinator's ordinary validation, audit, and waiter path.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // one deterministic multi-owner route proof
+    async fn routed_approval_and_questionnaire_keep_one_owner_and_identity() {
+        let (coordinator, _audit) = audited_coordinator();
+        coordinator.set_provider_available(true);
+        let (route_tx, mut route_rx) = tokio::sync::mpsc::unbounded_channel();
+        coordinator.install_route(Arc::new(RecordingRoute { events: route_tx }));
+
+        let approval_owner = AgentCancellation::new(CancellationReason::UserRequested);
+        let questionnaire_owner = AgentCancellation::new(CancellationReason::UserRequested);
+        let approval_task = {
+            let coordinator = coordinator.clone();
+            let cancellation = approval_owner.execution_cancellation();
+            tokio::spawn(async move {
+                coordinator
+                    .request_approval(
+                        AttemptId::new("approval-attempt"),
+                        facts("routed-approval"),
+                        cancellation,
+                    )
+                    .await
+            })
+        };
+        let questionnaire_task = {
+            let coordinator = coordinator.clone();
+            let cancellation = questionnaire_owner.execution_cancellation();
+            tokio::spawn(async move {
+                coordinator
+                    .request_questionnaire(
+                        AttemptId::new("questionnaire-attempt"),
+                        questionnaire_facts(),
+                        cancellation,
+                    )
+                    .await
+            })
+        };
+
+        let mut requested = Vec::new();
+        for _ in 0..2 {
+            match route_rx.recv().await.expect("routed request") {
+                InteractionRouteEvent::Requested(request) => requested.push(request),
+                other @ InteractionRouteEvent::Settled { .. } => {
+                    panic!("expected requested route event, got {other:?}")
+                }
+            }
+        }
+        assert_eq!(requested.len(), 2);
+        assert!(
+            requested
+                .iter()
+                .any(|request| { matches!(&request.kind, InteractionKind::Approval { .. }) })
+        );
+        assert!(
+            requested
+                .iter()
+                .any(|request| { matches!(&request.kind, InteractionKind::Questionnaire { .. }) })
+        );
+
+        // Deliberately answer in reverse publication order. The full local
+        // identity addresses the coordinator entry; no focus or array order
+        // participates in routing.
+        for request in requested.iter().rev() {
+            let response = match &request.kind {
+                InteractionKind::Approval { .. } => InteractionResponse::Approval {
+                    decision: ApprovalDecision::Allow,
+                },
+                InteractionKind::Questionnaire { .. } => single_response("staging"),
+            };
+            coordinator
+                .respond_async(&request.id, response)
+                .await
+                .expect("owner accepts its typed response");
+        }
+
+        let mut settled = Vec::new();
+        for _ in 0..2 {
+            match route_rx.recv().await.expect("routed settlement") {
+                InteractionRouteEvent::Settled {
+                    interaction,
+                    outcome,
+                } => settled.push((interaction, outcome)),
+                other @ InteractionRouteEvent::Requested(_) => {
+                    panic!("expected settled route event, got {other:?}")
+                }
+            }
+        }
+        let requested_refs: std::collections::BTreeSet<_> = requested
+            .iter()
+            .map(InteractionRequest::interaction_ref)
+            .collect();
+        let settled_refs: std::collections::BTreeSet<_> = settled
+            .iter()
+            .map(|(interaction, _)| interaction.clone())
+            .collect();
+        assert_eq!(settled_refs, requested_refs);
+        assert!(settled.iter().any(|(_, outcome)| {
+            matches!(
+                outcome,
+                InteractionOutcome::Responded {
+                    response: InteractionResponse::Approval {
+                        decision: ApprovalDecision::Allow
+                    }
+                }
+            )
+        }));
+        assert!(settled.iter().any(|(_, outcome)| {
+            matches!(
+                outcome,
+                InteractionOutcome::Responded {
+                    response: InteractionResponse::Questionnaire { .. }
+                }
+            )
+        }));
+        assert!(matches!(
+            approval_task.await.expect("approval owner"),
+            Ok(InteractionOutcome::Responded {
+                response: InteractionResponse::Approval {
+                    decision: ApprovalDecision::Allow
+                }
+            })
+        ));
+        assert!(matches!(
+            questionnaire_task.await.expect("questionnaire owner"),
+            Ok(InteractionOutcome::Responded {
+                response: InteractionResponse::Questionnaire { .. }
+            })
+        ));
+        assert_eq!(coordinator.pending_count(), 0);
+
+        for request in requested {
+            assert_eq!(
+                coordinator
+                    .respond_async(&request.id, single_response("stale"))
+                    .await,
+                Err(InteractionError::NotPending {
+                    interaction_id: request.id,
+                })
+            );
+        }
+    }
+
+    /// A successful publication permit is the only frontier at which the
+    /// root can admit a child interaction. Once the coordinator crosses it,
+    /// failure of the requested route is control loss: the requested audit is
+    /// retained as historical evidence, no human outcome is synthesized, and
+    /// the owning attempt is marked so supervision cannot continue normally.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn requested_route_failure_after_admission_is_control_loss() {
+        let (coordinator, audit) = audited_coordinator();
+        let (admitted_sender, admitted_receiver) = oneshot::channel();
+        let release = Arc::new(tokio::sync::Notify::new());
+        coordinator.install_route(Arc::new(RequestedRouteFailure {
+            admitted: Mutex::new(Some(admitted_sender)),
+            release: release.clone(),
+        }));
+        let owner = AgentCancellation::new(CancellationReason::UserRequested);
+        let request = {
+            let coordinator = coordinator.clone();
+            let cancellation = owner.execution_cancellation();
+            tokio::spawn(async move {
+                coordinator
+                    .request_approval(
+                        AttemptId::new("requested-route-loss"),
+                        facts("requested-route-call"),
+                        cancellation,
+                    )
+                    .await
+            })
+        };
+
+        let admitted = admitted_receiver.await.expect("admission frontier entered");
+        assert_eq!(
+            admitted.conversation_id,
+            ConversationId::new("conversation")
+        );
+        assert_eq!(coordinator.pending_count(), 0);
+        assert!(
+            audit.events().is_empty(),
+            "the requested fact is not committed before the permit returns"
+        );
+
+        // The permit now returns, so the coordinator commits its own
+        // InteractionRequested before the deliberately failing route call.
+        release.notify_one();
+        assert_eq!(
+            request.await.expect("request task"),
+            Err(InteractionFailure::ControlLost)
+        );
+        assert!(owner.interaction_failed());
+        assert_eq!(coordinator.pending_count(), 0);
+        assert!(
+            audit.events().iter().any(|event| matches!(
+                event,
+                RuntimeEvent::InteractionRequested { interaction_id, .. }
+                    if *interaction_id == admitted.interaction_id
+            )),
+            "the child committed InteractionRequested before route failure"
+        );
+        assert!(
+            audit
+                .events()
+                .iter()
+                .all(|event| !matches!(event, RuntimeEvent::InteractionSettled { .. })),
+            "control loss never fabricates a human settlement"
+        );
+    }
+
+    /// A response still selects and durably audits the originating semantic
+    /// outcome before the waiter can observe it. If the mandatory settled
+    /// route then fails, the selected `Approved` outcome is not rewritten and
+    /// the waiter receives control loss instead of waking a healthy tool turn.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn settled_route_failure_is_not_silently_ignored() {
+        let (coordinator, audit) = audited_coordinator();
+        let (route_sender, mut route_receiver) = tokio::sync::mpsc::unbounded_channel();
+        let fail_settlement = Arc::new(AtomicBool::new(false));
+        coordinator.install_route(Arc::new(SettledRouteFailure {
+            events: route_sender,
+            fail_settlement: fail_settlement.clone(),
+        }));
+        let owner = AgentCancellation::new(CancellationReason::UserRequested);
+        let request = {
+            let coordinator = coordinator.clone();
+            let cancellation = owner.execution_cancellation();
+            tokio::spawn(async move {
+                coordinator
+                    .request_approval(
+                        AttemptId::new("settled-route-loss"),
+                        facts("settled-route-call"),
+                        cancellation,
+                    )
+                    .await
+            })
+        };
+        let requested = route_receiver.recv().await.expect("requested route event");
+        let InteractionRouteEvent::Requested(requested) = requested else {
+            panic!("the first route event must be InteractionRequested");
+        };
+        let interaction_id = requested.id.clone();
+        fail_settlement.store(true, Ordering::SeqCst);
+
+        assert_eq!(
+            coordinator
+                .respond_async(
+                    &interaction_id,
+                    InteractionResponse::Approval {
+                        decision: ApprovalDecision::Allow,
+                    },
+                )
+                .await,
+            Err(InteractionError::ControlLost {
+                interaction_id: interaction_id.clone(),
+            })
+        );
+        assert_eq!(
+            request.await.expect("request task"),
+            Err(InteractionFailure::ControlLost)
+        );
+        assert!(owner.interaction_failed());
+        assert_eq!(coordinator.pending_count(), 0);
+        assert!(
+            route_receiver.try_recv().is_err(),
+            "the failed settled route did not expose a false successful frame"
+        );
+        assert!(matches!(
+            audit.events().as_slice(),
+            [
+                RuntimeEvent::InteractionRequested { .. },
+                RuntimeEvent::InteractionSettled {
+                    settlement: InteractionSettlement::Approved,
+                    interaction_id: settled_id,
+                }
+            ] if settled_id == &interaction_id
+        ));
     }
 
     /// The response winner is established while `settle` holds the pending
@@ -2331,7 +3509,10 @@ mod tests {
 
         let after_drain =
             coordinator.publish_approval(AttemptId::new("conversation-attempt-1"), facts("c2"));
-        assert!(matches!(after_drain, Err(InteractionOutcome::Unavailable)));
+        assert!(matches!(
+            after_drain,
+            Err(InteractionFailure::PublicationFailed)
+        ));
         assert_eq!(coordinator.pending_count(), 0);
     }
 
@@ -2373,7 +3554,7 @@ mod tests {
         let (coordinator, audit) = audited_coordinator();
         let outcome =
             coordinator.publish_approval(AttemptId::new("conversation-attempt-1"), facts("c1"));
-        assert!(matches!(outcome, Err(InteractionOutcome::Unavailable)));
+        assert!(matches!(outcome, Err(InteractionFailure::Unavailable)));
         assert_eq!(coordinator.pending_count(), 0);
         assert!(
             audit.events().is_empty(),
@@ -2450,8 +3631,9 @@ mod tests {
     }
 
     /// A requested fact that cannot commit publishes no prompt at all: the
-    /// interaction fails closed exactly like a missing provider, so a user is
-    /// never asked something durable state does not record.
+    /// interaction fails as a publication failure after local provider
+    /// admission, so a user is never asked something durable state does not
+    /// record.
     #[test]
     fn a_failed_requested_commit_publishes_no_prompt() {
         let (coordinator, audit) = audited_coordinator();
@@ -2462,7 +3644,7 @@ mod tests {
 
         assert!(matches!(
             coordinator.publish_approval(AttemptId::new("conversation-attempt-1"), facts("c1")),
-            Err(InteractionOutcome::Unavailable)
+            Err(InteractionFailure::PublicationFailed)
         ));
         assert_eq!(coordinator.pending_count(), 0);
         assert!(observer.pending.lock().unwrap().is_empty());
@@ -2479,10 +3661,10 @@ mod tests {
     /// The coordinator refuses exactly the payloads the durable authority
     /// refuses, because both call [`validate_interaction_subject`].
     ///
-    /// The publication fails closed as `Unavailable` before any commit is
-    /// attempted, so an out-of-contract payload never reaches a user and never
-    /// reaches the Journal. There is one set of limits, not a coordinator set
-    /// and a store set that can drift apart.
+    /// The publication fails closed as an internal `Invalid` rejection before
+    /// any commit is attempted, so an out-of-contract payload never reaches a
+    /// user and never reaches the Journal. There is one set of limits, not a
+    /// coordinator set and a store set that can drift apart.
     #[test]
     fn the_coordinator_refuses_every_subject_the_durable_authority_refuses() {
         let (coordinator, audit) = audited_coordinator();
@@ -2493,7 +3675,7 @@ mod tests {
         oversized_reason.reason = "r".repeat(MAX_APPROVAL_REQUEST_REASON_CHARS + 1);
         assert!(matches!(
             coordinator.publish_approval(attempt.clone(), oversized_reason),
-            Err(InteractionOutcome::Unavailable)
+            Err(InteractionFailure::Invalid)
         ));
 
         let cancellation =
@@ -2524,7 +3706,7 @@ mod tests {
                     facts,
                     &cancellation
                 ),
-                Err(InteractionOutcome::Unavailable)
+                Err(InteractionFailure::Invalid)
             ));
         }
 
@@ -2578,16 +3760,12 @@ mod tests {
     }
 
     /// The settled fact commits before the waiter is released. When that
-    /// commit fails the waiter receives the fail-closed `Unavailable` outcome
-    /// and the responding client is told, rather than being shown an
-    /// acceptance the audit does not support.
+    /// commit fails the waiter receives an internal audit failure and the
+    /// responding client is told, rather than being shown an acceptance the
+    /// audit does not support.
     ///
-    /// `Unavailable` is the same value a missing provider produces, and the
-    /// scripted suite's headless regression already proves that value maps to
-    /// a denied result slot with no executor call and no `ToolExecutionStarted`
-    /// — so a failed settled commit cannot authorize a side effect either. The
-    /// interaction stays durably open, and no second settlement is invented to
-    /// tidy the lifecycle.
+    /// The interaction stays durably open, and no second settlement is
+    /// invented to tidy the lifecycle.
     #[tokio::test]
     async fn a_failed_settled_commit_releases_the_waiter_fail_closed() {
         let (coordinator, audit) = audited_coordinator();
@@ -2597,7 +3775,7 @@ mod tests {
             .expect("provider is available");
         let id = ticket.id.clone();
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let wait = coordinator.wait(ticket, cancellation.execution_cancellation());
+        let wait = coordinator.wait_result(ticket, cancellation.execution_cancellation());
 
         audit.fail_next_settled();
         assert_eq!(
@@ -2611,7 +3789,7 @@ mod tests {
                 interaction_id: id.clone()
             })
         );
-        assert_eq!(wait.await, InteractionOutcome::Unavailable);
+        assert_eq!(wait.await, Err(InteractionFailure::AuditFailed));
         assert!(
             matches!(
                 audit.events().as_slice(),

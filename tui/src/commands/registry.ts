@@ -97,7 +97,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     description:
       "Expand or collapse foreground tool, background execution, and pending interaction detail. Purely visual: nothing is re-executed or re-fetched.",
     argumentHint:
-      "[latest|all|none|<tool-call-id>|background <execution-id>|interaction <interaction-id>]",
+      "[latest|all|none|<tool-call-id>|background <execution-id>|interaction <conversation-id>::<interaction-id>]",
   },
   {
     name: "/cancel",
@@ -108,7 +108,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     name: "/approve",
     description: "Answer one runtime-owned approval interaction.",
-    argumentHint: "<interaction-id> <allow|deny> [reason]",
+    argumentHint: "<conversation-id>::<interaction-id> <allow|deny> [reason]",
   },
   {
     name: "/approval",

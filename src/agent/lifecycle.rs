@@ -156,7 +156,8 @@ use crate::runtime::identity::{
 #[cfg(test)]
 use crate::runtime::interaction::TestInteractionRendezvous;
 use crate::runtime::interaction::{
-    ApprovalFacts, InteractionCoordinator, InteractionOutcome, QuestionnaireRequester,
+    ApprovalFacts, InteractionCoordinator, InteractionFailure, InteractionOutcome,
+    QuestionnaireRequester,
 };
 use crate::runtime::types::ApprovalMode;
 use crate::tools::types::{
@@ -358,21 +359,21 @@ enum InteractionBinding {
 }
 
 impl InteractionBinding {
-    async fn request_approval(
+    fn request_approval(
         &self,
         attempt_id: AttemptId,
         facts: ApprovalFacts,
         cancellation: ExecutionCancellation,
-    ) -> InteractionOutcome {
+    ) -> BoxFuture<'_, Result<InteractionOutcome, InteractionFailure>> {
         match self {
-            Self::Unavailable => InteractionOutcome::Unavailable,
+            Self::Unavailable => Box::pin(async { Err(InteractionFailure::Unavailable) }),
             Self::Native(coordinator) => {
-                coordinator
-                    .request_approval(attempt_id, facts, cancellation)
-                    .await
+                Box::pin(coordinator.request_approval(attempt_id, facts, cancellation))
             }
             #[cfg(test)]
-            Self::Test(rendezvous) => rendezvous.request_approval(facts, cancellation).await,
+            Self::Test(rendezvous) => {
+                Box::pin(async move { Ok(rendezvous.request_approval(facts, cancellation).await) })
+            }
         }
     }
 
@@ -746,15 +747,14 @@ impl AttemptLifecycle {
     }
 
     /// Requests approval through the attempt's runtime-owned binding.
-    pub(crate) async fn request_approval(
+    pub(crate) fn request_approval(
         &self,
         attempt_id: AttemptId,
         facts: ApprovalFacts,
         cancellation: ExecutionCancellation,
-    ) -> InteractionOutcome {
+    ) -> BoxFuture<'_, Result<InteractionOutcome, InteractionFailure>> {
         self.interaction
             .request_approval(attempt_id, facts, cancellation)
-            .await
     }
 
     /// Binds the one native Questionnaire capability for a foreground invocation.

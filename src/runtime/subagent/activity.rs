@@ -200,8 +200,8 @@ impl SubagentObservationProjector {
                 progress,
                 ..
             } => self.apply_tool_progress(tool_call_id, progress),
-            ConversationObservation::InteractionPending { request, .. } => {
-                let on = match &request.kind {
+            ConversationObservation::InteractionPending { interaction, .. } => {
+                let on = match &interaction.request.kind {
                     InteractionKind::Approval { tool_id, .. } => SubagentWaitReason::Approval {
                         tool_id: tool_id.clone(),
                     },
@@ -948,9 +948,11 @@ mod tests {
         assert_folded(
             &mut projector,
             &ConversationObservation::InteractionPending {
-                request,
-                audit: interaction_audit(),
-                transcript_cursor: crate::durable::TranscriptCursor::new(1),
+                interaction: crate::runtime::interaction::RoutedInteraction::primary(request),
+                audit: Some((
+                    interaction_audit(),
+                    crate::durable::TranscriptCursor::new(1),
+                )),
             },
         );
         assert_eq!(
@@ -967,7 +969,10 @@ mod tests {
         assert_folded(
             &mut projector,
             &ConversationObservation::InteractionSettled {
-                interaction_id: crate::runtime::identity::InteractionId::new("interaction-1"),
+                interaction: crate::runtime::interaction::InteractionRef::new(
+                    crate::runtime::identity::ConversationId::new("conv-1"),
+                    crate::runtime::identity::InteractionId::new("interaction-1"),
+                ),
                 outcome: crate::runtime::interaction::InteractionOutcome::Responded {
                     response: crate::runtime::interaction::InteractionResponse::Approval {
                         decision: crate::runtime::interaction::ApprovalDecision::Allow,
@@ -1021,9 +1026,11 @@ mod tests {
         assert_folded(
             &mut projector,
             &ConversationObservation::InteractionPending {
-                request,
-                audit: interaction_audit(),
-                transcript_cursor: crate::durable::TranscriptCursor::new(1),
+                interaction: crate::runtime::interaction::RoutedInteraction::primary(request),
+                audit: Some((
+                    interaction_audit(),
+                    crate::durable::TranscriptCursor::new(1),
+                )),
             },
         );
         assert_eq!(
@@ -1287,23 +1294,27 @@ mod tests {
         assert_folded(
             &mut projector,
             &ConversationObservation::InteractionPending {
-                request: crate::runtime::interaction::InteractionRequest {
-                    id: crate::runtime::identity::InteractionId::new("interaction-1"),
-                    conversation_id: crate::runtime::identity::ConversationId::new("conv-1"),
-                    attempt_id: AttemptId::new("attempt-1"),
-                    turn: 1,
-                    kind: InteractionKind::Approval {
-                        call_id: ToolCallId::new("call-a"),
-                        tool_id: ToolId::new("tool-bash"),
-                        tool_name: "bash".to_owned(),
-                        origin: crate::tools::types::ToolOrigin::Builtin,
-                        mode: crate::tools::types::ToolInvocationMode::Foreground,
-                        arguments: serde_json::json!({}),
-                        reason: "policy".to_owned(),
+                interaction: crate::runtime::interaction::RoutedInteraction::primary(
+                    crate::runtime::interaction::InteractionRequest {
+                        id: crate::runtime::identity::InteractionId::new("interaction-1"),
+                        conversation_id: crate::runtime::identity::ConversationId::new("conv-1"),
+                        attempt_id: AttemptId::new("attempt-1"),
+                        turn: 1,
+                        kind: InteractionKind::Approval {
+                            call_id: ToolCallId::new("call-a"),
+                            tool_id: ToolId::new("tool-bash"),
+                            tool_name: "bash".to_owned(),
+                            origin: crate::tools::types::ToolOrigin::Builtin,
+                            mode: crate::tools::types::ToolInvocationMode::Foreground,
+                            arguments: serde_json::json!({}),
+                            reason: "policy".to_owned(),
+                        },
                     },
-                },
-                audit: interaction_audit(),
-                transcript_cursor: crate::durable::TranscriptCursor::new(1),
+                ),
+                audit: Some((
+                    interaction_audit(),
+                    crate::durable::TranscriptCursor::new(1),
+                )),
             },
         );
         assert!(matches!(
@@ -1314,7 +1325,10 @@ mod tests {
         assert_folded(
             &mut projector,
             &ConversationObservation::InteractionSettled {
-                interaction_id: crate::runtime::identity::InteractionId::new("interaction-1"),
+                interaction: crate::runtime::interaction::InteractionRef::new(
+                    crate::runtime::identity::ConversationId::new("conv-1"),
+                    crate::runtime::identity::InteractionId::new("interaction-1"),
+                ),
                 outcome: crate::runtime::interaction::InteractionOutcome::Responded {
                     response: crate::runtime::interaction::InteractionResponse::Approval {
                         decision: crate::runtime::interaction::ApprovalDecision::Allow,

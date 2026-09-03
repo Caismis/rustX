@@ -171,16 +171,17 @@ impl ToolExecutor for AskUserExecutor {
                 })
                 .await;
             match outcome {
-                InteractionOutcome::Responded {
+                Ok(InteractionOutcome::Responded {
                     response: InteractionResponse::Questionnaire { response },
-                } => questionnaire_result(&specification, &response),
-                InteractionOutcome::Responded { .. } => {
+                }) => questionnaire_result(&specification, &response),
+                Ok(InteractionOutcome::Responded { .. }) => {
                     failed_result("ask_user received a mismatched interaction response")
                 }
-                InteractionOutcome::Cancelled { reason } => cancelled_result(reason),
-                InteractionOutcome::Unavailable => {
+                Ok(InteractionOutcome::Cancelled { reason }) => cancelled_result(reason),
+                Err(failure) if failure.is_unavailable() => {
                     failed_result("ask_user interaction provider unavailable")
                 }
+                Err(_) => failed_result("ask_user interaction control path failed"),
             }
         })
     }

@@ -121,11 +121,9 @@ impl RuntimeAttachment {
             RuntimeClientRequest::ReloadResources { .. } => {
                 unreachable!("resource reload is handled asynchronously")
             }
-            RuntimeClientRequest::InteractionRespond {
-                interaction_id,
-                response,
-                ..
-            } => self.inner.respond_interaction(&interaction_id, response),
+            RuntimeClientRequest::InteractionRespond { .. } => {
+                unreachable!("interaction responses are handled asynchronously")
+            }
             RuntimeClientRequest::SnapshotGet { .. } => self
                 .inner
                 .snapshot()
@@ -226,6 +224,25 @@ impl RuntimeAttachment {
             }
             if matches!(request, RuntimeClientRequest::ReloadResources { .. }) {
                 let result = self.inner.reload_resources().await;
+                return match result {
+                    Ok(result) => RuntimeClientResponse {
+                        id,
+                        result: Some(result),
+                        error: None,
+                    },
+                    Err(error) => Self::error_response(id, error),
+                };
+            }
+            if let RuntimeClientRequest::InteractionRespond {
+                interaction,
+                response,
+                ..
+            } = &request
+            {
+                let result = self
+                    .inner
+                    .respond_interaction(interaction, response.clone())
+                    .await;
                 return match result {
                     Ok(result) => RuntimeClientResponse {
                         id,

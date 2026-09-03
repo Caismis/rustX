@@ -96,11 +96,10 @@ use crate::message::types::MessageBlock;
 use crate::model::session::{AttemptModelView, SessionModelView};
 use crate::publication::{PublicationAudit, PublicationFrame, PublicationStreamStart};
 use crate::runtime::identity::AttemptId;
-use crate::runtime::identity::InteractionId;
 use crate::runtime::identity::SubagentId;
 use crate::runtime::identity::{ToolCallId, ToolId};
 use crate::runtime::inbound::{InboundBatch, InboundItem};
-use crate::runtime::interaction::{InteractionOutcome, InteractionRequest};
+use crate::runtime::interaction::{InteractionOutcome, InteractionRef, RoutedInteraction};
 use crate::runtime::subagent::SubagentSnapshot;
 use crate::runtime::types::ApprovalMode;
 use crate::tools::background::BackgroundExecutionSnapshot;
@@ -294,22 +293,31 @@ pub(crate) enum ConversationObservation {
     Shutdown,
     /// One native interaction became pending.
     InteractionPending {
-        /// The live pending request.
-        request: InteractionRequest,
-        /// The requested audit committed before the prompt was released.
-        audit: RuntimeEventEnvelope,
-        /// The durable transcript position allocated for this audit.
-        transcript_cursor: TranscriptCursor,
+        /// The root-facing routed request. The originating coordinator still
+        /// owns the pending waiter and settlement.
+        interaction: RoutedInteraction,
+        /// The originating conversation's requested audit and cursor, when
+        /// this is the primary conversation. Child audits stay child-local.
+        audit: Option<(RuntimeEventEnvelope, TranscriptCursor)>,
     },
     /// One native interaction reached its terminal rendezvous outcome.
     InteractionSettled {
-        /// The interaction identity.
-        interaction_id: InteractionId,
+        /// The full routed identity.
+        interaction: InteractionRef,
         /// The terminal outcome delivered to its semantic owner.
         outcome: InteractionOutcome,
-        /// The durable settled audit, when its commit succeeded. `None` is
-        /// the fail-closed unavailable outcome and creates no historical item.
+        /// The originating conversation's settled audit, when this is the
+        /// primary conversation and its commit succeeded.
         audit: Option<(RuntimeEventEnvelope, TranscriptCursor)>,
+    },
+    /// A child process died while owning one or more live interactions.
+    ///
+    /// This is a projection removal, not a synthetic interaction settlement:
+    /// the originating coordinator died with the child and no terminal
+    /// response is invented for the historical audit.
+    InteractionRemoved {
+        /// The no-longer-actionable routed identity.
+        interaction: InteractionRef,
     },
     /// The durable authority (Pending Inbound Inbox / Message Ledger) failed
     /// a storage operation the coordinator must not silently swallow

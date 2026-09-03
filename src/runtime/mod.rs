@@ -150,10 +150,11 @@ pub use inbound::{
     ConversationInboundMailbox, InboundBatch, InboundItem, InboundSequence, MailboxError,
 };
 pub use interaction::{
-    ApprovalDecision, CustomAnswer, InteractionKind, InteractionOutcome, InteractionRequest,
-    InteractionResponse, MultipleOptionAnswer, OptionSpecification, QuestionSpecification,
-    QuestionnaireAnswer, QuestionnaireAnswerEntry, QuestionnaireDeclined, QuestionnaireResponse,
-    QuestionnaireSpecification, QuestionnaireSubmission, SingleOptionAnswer,
+    ApprovalDecision, CustomAnswer, InteractionKind, InteractionOutcome, InteractionRef,
+    InteractionRequest, InteractionResponse, InteractionSource, MultipleOptionAnswer,
+    OptionSpecification, QuestionSpecification, QuestionnaireAnswer, QuestionnaireAnswerEntry,
+    QuestionnaireDeclined, QuestionnaireResponse, QuestionnaireSpecification,
+    QuestionnaireSubmission, RoutedInteraction, SingleOptionAnswer,
 };
 pub use monotonic::{ManualMonotonicClock, MonotonicClock, SystemMonotonicClock};
 pub use recovery::{

@@ -301,11 +301,12 @@ pub(crate) fn native_tool_registrations(
 ///
 /// It is a bounded `match` over the native capabilities a child may run —
 /// deliberately not a factory, plugin loader, strategy registry, or
-/// reflective lookup. Three capabilities are structurally absent from it and
+/// reflective lookup. Two capabilities are structurally absent from it and
 /// therefore unregistrable in a child however a definition was written:
-/// `subagent` (recursive delegation), and `ask_user` and `execution`
-/// (a headless child holds no Runtime Client questionnaire authority and no
-/// conversation-owned detached execution plane of its own).
+/// `subagent` (recursive delegation), and `execution` (a child holds no
+/// conversation-owned detached execution plane of its own). `ask_user` is
+/// intentionally present: its questionnaire is routed through the child
+/// conversation's coordinator to the root Runtime Client surface.
 ///
 /// The requested `policy` is the parent-frozen one, so the returned
 /// registration's definition is built from the frozen policy rather than
@@ -323,6 +324,7 @@ fn subagent_child_registration(
         "glob" => glob::registration(policy),
         "grep" => grep::registration(policy),
         "bash" => bash::registration(policy),
+        "ask_user" => ask_user::registration(),
         "todo" => todo::registration(),
         _ => return None,
     })
@@ -367,8 +369,8 @@ pub(crate) fn subagent_child_definition(
 /// - the `subagent` intrinsic is never registrable here, so recursive
 ///   delegation is structurally absent even if a definition somehow named
 ///   it (definition admission already rejects that selector);
-/// - `ask_user` is likewise absent, because a headless child has no Runtime
-///   Client questionnaire authority to satisfy it;
+/// - `ask_user` is available only when the frozen child definition selects it;
+///   the child interaction route does not add it implicitly;
 /// - no registration is marked mandatory, so the child's active set equals
 ///   its authorized set exactly rather than gaining an implicit Read.
 ///
@@ -475,11 +477,13 @@ mod tests {
         assert_eq!(narrower.names(), vec!["grep"]);
     }
 
-    /// Child-unsafe and recursive capabilities are structurally
-    /// unregistrable in a child, independently of definition admission.
+    /// Recursive and execution capabilities are structurally unregistrable
+    /// in a child, independently of definition admission. `ask_user` is a
+    /// valid explicit child capability because its coordinator route is
+    /// installed by child composition.
     #[test]
     fn child_unsafe_capabilities_are_structurally_absent() {
-        for name in ["subagent", "ask_user", "execution"] {
+        for name in ["subagent", "execution"] {
             assert!(
                 subagent_child_definition(name, ToolInvocationPolicy::default()).is_none(),
                 "{name} has no child-plane implementation at all"
@@ -495,6 +499,21 @@ mod tests {
                 "{name} must not be registrable in a subagent child"
             );
         }
+        assert!(subagent_child_definition("ask_user", ToolInvocationPolicy::default()).is_some());
+        let mut route_only_registry = ToolRegistry::new();
+        register_subagent_child_tools(&mut route_only_registry, &[])
+            .expect("an empty frozen capability selection is valid");
+        assert!(
+            !route_only_registry.names().contains(&"ask_user"),
+            "the interaction route does not grant ask_user implicitly"
+        );
+        let mut registry = ToolRegistry::new();
+        register_subagent_child_tools(
+            &mut registry,
+            &frozen(&["ask_user"], ToolInvocationPolicy::default()),
+        )
+        .expect("explicit ask_user selection is registrable in a child");
+        assert_eq!(registry.names(), vec!["ask_user"]);
     }
 
     /// Issue #144 blocker 2: the child registers the **exact** parent-frozen

@@ -29,7 +29,7 @@
  * The one thing the app owns that the projection does not is
  * {@link PresentationPreferences} — reasoning visibility, and which cards are
  * expanded in each of the three runtime identity domains (`ToolCallId` for
- * foreground tool cards, `ToolExecutionId` for background ones, `InteractionId`
+ * foreground tool cards, `ToolExecutionId` for background ones, `InteractionRef`
  * for pending approvals). Those are display choices, they are deliberately not
  * written into runtime state, and losing them on a rebuild costs nothing
  * semantic: every collapsed band is restored from `PresentationState` alone.
@@ -71,6 +71,7 @@ import type {
   SessionUserMessageBoundaryView,
   SessionView,
   ToolCallId,
+  InteractionRef,
 } from "../protocol/types.ts";
 import {
   BoundarySelector,
@@ -683,7 +684,10 @@ export class RustxTuiApp {
   async #onEscape(): Promise<void> {
     this.#acknowledgeTransient();
     if (this.#questionnaireOverlay !== undefined) {
-      this.#declineQuestionnaire(this.#questionnaireOverlay);
+      const interaction = focusedQuestionnaire(this.#session.state)?.interaction;
+      if (interaction !== undefined) {
+        this.#declineQuestionnaire(interaction, this.#questionnaireOverlay);
+      }
       return;
     }
     if (this.#overlay !== undefined) {
@@ -1301,7 +1305,7 @@ export class RustxTuiApp {
       case "expand_interaction":
         this.#preferences = withToggledInteraction(
           this.#preferences,
-          change.interactionId,
+          change.interaction,
         );
         break;
       case "expand":
@@ -1321,7 +1325,7 @@ export class RustxTuiApp {
    *
    * `all` and `none` cover *every* identity domain — each renderable tool card
    * keyed by `ToolCallId`, each renderable background card keyed by
-   * `ToolExecutionId`, and each pending approval keyed by `InteractionId`.
+   * `ToolExecutionId`, and each pending interaction keyed by `InteractionRef`.
    * The three sets are kept separate so ids that happen to serialize alike
    * never cross-toggle.
    *
@@ -1339,7 +1343,7 @@ export class RustxTuiApp {
         (execution) => execution.execution_id,
       );
       const interactions = state.pendingInteractions.map(
-        (interaction) => interaction.id,
+        (interaction) => interaction.interaction,
       );
       return withExpandedInteractions(
         withExpandedBackgroundExecutions(
@@ -1545,20 +1549,21 @@ export class RustxTuiApp {
     }
     if (
       this.#questionnaireOverlay !== undefined &&
-      this.#questionnaireOverlay.interactionId === interaction.id
+      this.#questionnaireOverlay.interactionId === interactionLabel(interaction.interaction)
     ) {
       return;
     }
 
     this.#closeOverlay();
     const lease = this.#presentationLease();
-    if (interaction.kind.type !== "questionnaire") return;
-    const questionnaire = interaction.kind.questionnaire;
+    if (interaction.request.kind.type !== "questionnaire") return;
+    const questionnaire = interaction.request.kind.questionnaire;
+    const interactionRef = interaction.interaction;
     const overlay = new QuestionnaireOverlay({
-      interactionId: interaction.id,
+      interactionId: interactionLabel(interactionRef),
       questionnaire,
-      onSubmit: (response) => this.#submitQuestionnaire(interaction.id, response, overlay, lease),
-      onDecline: () => this.#declineQuestionnaire(overlay, lease),
+      onSubmit: (response) => this.#submitQuestionnaire(interactionRef, response, overlay, lease),
+      onDecline: () => this.#declineQuestionnaire(interactionRef, overlay, lease),
       onInterrupt: () => void this.#onInterrupt(),
       onChange: () => this.#tui.requestRender(),
     });
@@ -1567,13 +1572,13 @@ export class RustxTuiApp {
   }
 
   #submitQuestionnaire(
-    interactionId: string,
+    interaction: InteractionRef,
     response: QuestionnaireResponse,
     overlay: QuestionnaireOverlay,
     lease: PresentationLease,
   ): void {
     void lease.session
-      .respondInteraction(interactionId, { type: "questionnaire", response })
+      .respondInteraction(interaction, { type: "questionnaire", response })
       .catch((error: unknown) => {
         if (!this.#isCurrentPresentationLease(lease)) return;
         overlay.submissionFailed();
@@ -1582,12 +1587,13 @@ export class RustxTuiApp {
   }
 
   #declineQuestionnaire(
+    interaction: InteractionRef,
     overlay: QuestionnaireOverlay,
     lease: PresentationLease = this.#presentationLease(),
   ): void {
     overlay.beginSubmitting();
     void lease.session
-      .respondInteraction(overlay.interactionId, {
+      .respondInteraction(interaction, {
         type: "questionnaire",
         response: { type: "declined" },
       })
@@ -1678,6 +1684,10 @@ function errorMessage(error: unknown): string {
 
 function compactDiagnostic(error: unknown): string {
   return errorMessage(error).replace(/\s*\r?\n\s*/g, " · ").trim();
+}
+
+function interactionLabel(interaction: InteractionRef): string {
+  return `${interaction.conversation_id}::${interaction.interaction_id}`;
 }
 
 function nextTick(): Promise<void> {

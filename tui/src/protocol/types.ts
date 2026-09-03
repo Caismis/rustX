@@ -24,14 +24,13 @@
  */
 
 /**
- * Version 11 adds the subagent live activity projection (`observation`),
- * the redacted `execution_profile`, and `started_at`, and retires the
- * successful terminal answer from `detail`, which is now diagnostics-only
- * (Issue #178). Version 10 added bounded subagent workspace facts and
- * preserved-worktree handoff metadata; version 9 added `interrupted` to the
- * closed lifecycle vocabulary.
+ * Version 12 adds routed live interactions across the primary conversation
+ * and supervised children, including `InteractionRef` addressing and source
+ * metadata. It retains the version 11 subagent activity projection, version
+ * 10 bounded workspace facts, and version 9's closed `interrupted` lifecycle
+ * vocabulary. Older schemas are not decoded.
  */
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 11;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 12;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -319,6 +318,12 @@ export const SUBAGENT_TERMINAL_STATES: ReadonlySet<SubagentState> =
 
 export type InteractionId = string;
 
+/** A conversation-local interaction address used at the shared root surface. */
+export type InteractionRef = {
+  conversation_id: ConversationId;
+  interaction_id: InteractionId;
+};
+
 export type ApprovalDecision =
   | { type: "allow" }
   | { type: "deny"; reason: string };
@@ -394,10 +399,26 @@ export type InteractionRequest = {
       };
 };
 
+/** Presentation-only origin metadata for one routed interaction. */
+export type InteractionSource =
+  | { type: "primary" }
+  | {
+      type: "subagent";
+      subagent_id: SubagentId;
+      child_conversation_id: ConversationId;
+      agent_name: string;
+    };
+
+/** One pending interaction projected at the root human-facing surface. */
+export type RoutedInteraction = {
+  interaction: InteractionRef;
+  source: InteractionSource;
+  request: InteractionRequest;
+};
+
 export type InteractionOutcome =
   | { type: "responded"; response: InteractionResponse }
-  | { type: "cancelled"; reason: CancellationReason }
-  | { type: "unavailable" };
+  | { type: "cancelled"; reason: CancellationReason };
 
 /** The bounded by-value subject retained by the durable interaction audit. */
 export type InteractionSubject =
@@ -1037,7 +1058,7 @@ export interface RuntimeClientSnapshot {
   attempt?: RuntimeClientAttempt;
   inbound: InboundDiagnostics;
   /** Live runtime-owned interactions; never client-owned approval truth. */
-  pending_interactions: InteractionRequest[];
+  pending_interactions: RoutedInteraction[];
   background?: RuntimeClientBackgroundExecution[];
   subagents?: RuntimeClientSubagent[];
   status?: AgentStatusView;
@@ -1158,12 +1179,13 @@ export type RuntimeClientEvent =
       attempt_id: AttemptId;
       usage: ModelUsage;
     }
-  | { type: "interaction_pending"; interaction: InteractionRequest }
+  | { type: "interaction_pending"; interaction: RoutedInteraction }
   | {
       type: "interaction_settled";
-      interaction_id: InteractionId;
+      interaction: InteractionRef;
       outcome: InteractionOutcome;
     }
+  | { type: "interaction_removed"; interaction: InteractionRef }
   | {
       type: "interaction_audit_requested";
       transcript_cursor: RuntimeClientTranscriptCursor;
@@ -1418,7 +1440,7 @@ export type RuntimeClientRequest =
   | {
       method: "interaction_respond";
       id: RequestId;
-      interaction_id: InteractionId;
+      interaction: InteractionRef;
       response: InteractionResponse;
     }
   | { method: "snapshot_get"; id: RequestId }
@@ -1558,7 +1580,7 @@ export type RuntimeClientResult =
       resource_revision: number;
       capability_revision: CapabilityRevision;
     }
-  | { type: "interaction_response_accepted"; interaction_id: InteractionId }
+  | { type: "interaction_response_accepted"; interaction: InteractionRef }
   | {
       type: "snapshot";
       snapshot: RuntimeClientSnapshot;
@@ -1630,9 +1652,9 @@ export type RuntimeClientError =
   | { type: "invalid_request"; message: string }
   | { type: "no_current_attempt" }
   | { type: "resource_reload_busy"; reason: string }
-  | { type: "interaction_not_pending"; interaction_id: InteractionId }
+  | { type: "interaction_not_pending"; interaction: InteractionRef }
   | { type: "interaction_invalid_response"; message: string }
-  | { type: "interaction_audit_failed"; interaction_id: InteractionId }
+  | { type: "interaction_audit_failed"; interaction: InteractionRef }
   | { type: "approval_mode_inactive" }
   | { type: "approval_mode_durability_failed"; message: string }
   | { type: "unknown_background_execution"; execution_id: ToolExecutionId }
@@ -1654,6 +1676,10 @@ export interface RuntimeClientResponse {
   id: RequestId;
   result?: RuntimeClientResult;
   error?: RuntimeClientError;
+}
+
+function formatInteractionRef(interaction: InteractionRef): string {
+  return `${interaction.conversation_id}::${interaction.interaction_id}`;
 }
 
 /** One record rustX writes on its transport output stream. */
@@ -1682,6 +1708,7 @@ export function isKnownRuntimeClientEvent(
     case "attempt_usage_updated":
     case "interaction_pending":
     case "interaction_settled":
+    case "interaction_removed":
     case "interaction_audit_requested":
     case "interaction_audit_settled":
     case "approval_mode_changed":
@@ -1771,11 +1798,11 @@ export function describeProtocolError(error: RuntimeClientError): string {
     case "resource_reload_busy":
       return `runtime resources are busy: ${error.reason}`;
     case "interaction_not_pending":
-      return `interaction ${error.interaction_id} is no longer pending`;
+      return `interaction ${formatInteractionRef(error.interaction)} is no longer pending`;
     case "interaction_invalid_response":
       return `invalid interaction response: ${error.message}`;
     case "interaction_audit_failed":
-      return `interaction ${error.interaction_id} was settled fail-closed: its durable audit could not be recorded`;
+      return `interaction ${formatInteractionRef(error.interaction)} was settled fail-closed: its durable audit could not be recorded`;
     case "approval_mode_inactive":
       return "the runtime is not activated for ApprovalMode changes";
     case "approval_mode_durability_failed":

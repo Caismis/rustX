@@ -10,9 +10,10 @@ use super::super::support;
 
 use rustx::runtime::identity::{AttemptId, ConversationId, InteractionId};
 use rustx::runtime::interaction::{
-    InteractionKind, InteractionOutcome, InteractionRequest, InteractionResponse,
-    OptionSpecification, QuestionSpecification, QuestionnaireAnswer, QuestionnaireAnswerEntry,
-    QuestionnaireResponse, QuestionnaireSpecification, QuestionnaireSubmission, SingleOptionAnswer,
+    InteractionKind, InteractionOutcome, InteractionRef, InteractionRequest, InteractionResponse,
+    InteractionSource, OptionSpecification, QuestionSpecification, QuestionnaireAnswer,
+    QuestionnaireAnswerEntry, QuestionnaireResponse, QuestionnaireSpecification,
+    QuestionnaireSubmission, RoutedInteraction, SingleOptionAnswer,
 };
 use rustx::runtime_client::RuntimeClientHost;
 use rustx::runtime_client::{
@@ -98,7 +99,7 @@ fn protocol_envelopes_round_trip_deterministically() {
 fn protocol_errors_round_trip_with_stable_categories() {
     let cases = [
         RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 11,
+            supported: 12,
             requested: 4,
         },
         RuntimeClientError::AttachmentInUse {
@@ -179,14 +180,20 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
     });
     let submitted_request = RuntimeClientRequest::InteractionRespond {
         id: request_id(20),
-        interaction_id: interaction_id.clone(),
+        interaction: InteractionRef::new(
+            ConversationId::new("conv-questionnaire-v3"),
+            interaction_id.clone(),
+        ),
         response: InteractionResponse::Questionnaire {
             response: submitted.clone(),
         },
     };
     let declined_request = RuntimeClientRequest::InteractionRespond {
         id: request_id(21),
-        interaction_id: interaction_id.clone(),
+        interaction: InteractionRef::new(
+            ConversationId::new("conv-questionnaire-v3"),
+            interaction_id.clone(),
+        ),
         response: InteractionResponse::Questionnaire {
             response: QuestionnaireResponse::Declined,
         },
@@ -194,13 +201,23 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
     let pending = RuntimeClientProtocolEvent {
         cursor: RuntimeClientCursor::new(20),
         event: RuntimeClientEvent::InteractionPending {
-            interaction: request.clone(),
+            interaction: RoutedInteraction {
+                interaction: InteractionRef::new(
+                    request.conversation_id.clone(),
+                    request.id.clone(),
+                ),
+                source: InteractionSource::Primary,
+                request: request.clone(),
+            },
         },
     };
     let submitted_settled = RuntimeClientProtocolEvent {
         cursor: RuntimeClientCursor::new(21),
         event: RuntimeClientEvent::InteractionSettled {
-            interaction_id: interaction_id.clone(),
+            interaction: InteractionRef::new(
+                ConversationId::new("conv-questionnaire-v3"),
+                interaction_id.clone(),
+            ),
             outcome: InteractionOutcome::Responded {
                 response: InteractionResponse::Questionnaire {
                     response: submitted,
@@ -211,7 +228,10 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
     let declined_settled = RuntimeClientProtocolEvent {
         cursor: RuntimeClientCursor::new(22),
         event: RuntimeClientEvent::InteractionSettled {
-            interaction_id,
+            interaction: InteractionRef::new(
+                ConversationId::new("conv-questionnaire-v3"),
+                interaction_id,
+            ),
             outcome: InteractionOutcome::Responded {
                 response: InteractionResponse::Questionnaire {
                     response: QuestionnaireResponse::Declined,
@@ -223,11 +243,11 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
     let pending_json = serde_json::to_value(&pending).expect("pending questionnaire JSON");
     assert_eq!(pending_json["event"]["type"], "interaction_pending");
     assert_eq!(
-        pending_json["event"]["interaction"]["kind"]["type"],
+        pending_json["event"]["interaction"]["request"]["kind"]["type"],
         "questionnaire"
     );
     assert_eq!(
-        pending_json["event"]["interaction"]["kind"]["questionnaire"],
+        pending_json["event"]["interaction"]["request"]["kind"]["questionnaire"],
         serde_json::to_value(&questionnaire).expect("questionnaire JSON")
     );
     assert_eq!(
@@ -336,19 +356,19 @@ async fn attachment_request_correlation_and_version_negotiation() {
 
     // Incompatible version negotiation fails explicitly, in both
     // directions and including every superseded wire contract.
-    let incompatible = host.attach(12);
+    let incompatible = host.attach(13);
     assert!(matches!(
         incompatible,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 11,
-            requested: 12,
+            supported: 12,
+            requested: 13,
         })
     ));
     let old_protocol = host.attach(7);
     assert!(matches!(
         old_protocol,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 11,
+            supported: 12,
             requested: 7,
         })
     ));
@@ -358,7 +378,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         profile_shaped,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 11,
+            supported: 12,
             requested: 6,
         })
     ));
@@ -366,7 +386,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     // The initialize method cannot re-initialize an admitted attachment.
     let reinit = attachment.handle_request(RuntimeClientRequest::Initialize {
         id: request_id(9),
-        protocol_version: 11,
+        protocol_version: 12,
     });
     assert!(matches!(
         reinit.error,

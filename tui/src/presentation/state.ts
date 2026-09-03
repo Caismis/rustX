@@ -37,7 +37,7 @@ import type {
   RuntimeClientResourcesView,
   RuntimeClientSubagent,
   RuntimeClientTranscriptCursor,
-  InteractionRequest,
+  RoutedInteraction,
   InteractionSettlement,
   InteractionSubject,
   PublicationAudit,
@@ -154,7 +154,7 @@ export interface PresentationState {
   attempt?: AttemptPresentation;
   inbound: InboundDiagnostics;
   /** Runtime-owned live interactions, reconstructed from snapshot/events. */
-  pendingInteractions: InteractionRequest[];
+  pendingInteractions: RoutedInteraction[];
   background: RuntimeClientBackgroundExecution[];
   subagents: RuntimeClientSubagent[];
   status?: AgentStatusView;

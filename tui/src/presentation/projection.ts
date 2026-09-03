@@ -28,7 +28,7 @@
 
 import type {
   AttemptModelView,
-  InteractionRequest,
+  RoutedInteraction,
   RuntimeClientCursor,
   RuntimeClientProtocolEvent,
   RuntimeClientSnapshot,
@@ -244,7 +244,13 @@ export function reduce(
 
     case "interaction_settled":
       next.pendingInteractions = state.pendingInteractions.filter(
-        (interaction) => interaction.id !== event.interaction_id,
+        (interaction) => !sameInteraction(interaction.interaction, event.interaction),
+      );
+      return next;
+
+    case "interaction_removed":
+      next.pendingInteractions = state.pendingInteractions.filter(
+        (interaction) => !sameInteraction(interaction.interaction, event.interaction),
       );
       return next;
 
@@ -937,16 +943,39 @@ function upsertSubagent(
 }
 
 function upsertInteraction(
-  interactions: InteractionRequest[],
-  interaction: InteractionRequest,
-): InteractionRequest[] {
-  const index = interactions.findIndex((entry) => entry.id === interaction.id);
+  interactions: RoutedInteraction[],
+  interaction: RoutedInteraction,
+): RoutedInteraction[] {
+  const index = interactions.findIndex((entry) =>
+    sameInteraction(entry.interaction, interaction.interaction)
+  );
   if (index === -1) {
     return [...interactions, interaction].sort((left, right) =>
-      left.id.localeCompare(right.id),
+      compareInteractions(left, right),
     );
   }
   const updated = [...interactions];
   updated[index] = interaction;
   return updated;
+}
+
+function sameInteraction(
+  left: RoutedInteraction["interaction"],
+  right: RoutedInteraction["interaction"],
+): boolean {
+  return (
+    left.conversation_id === right.conversation_id &&
+    left.interaction_id === right.interaction_id
+  );
+}
+
+function compareInteractions(
+  left: RoutedInteraction,
+  right: RoutedInteraction,
+): number {
+  return left.interaction.conversation_id.localeCompare(
+    right.interaction.conversation_id,
+  ) || left.interaction.interaction_id.localeCompare(
+    right.interaction.interaction_id,
+  );
 }

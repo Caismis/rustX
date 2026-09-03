@@ -44,7 +44,7 @@ import type {
   ApprovalDecision,
   ApprovalMode,
   CatalogModelView,
-  InteractionId,
+  InteractionRef,
   InteractionResponse,
   SessionNodeView,
   SessionSummaryView,
@@ -102,8 +102,8 @@ export type PreferenceChange =
   | { type: "expand_call"; callId: ToolCallId }
   /** One background card, addressed by its `ToolExecutionId`. */
   | { type: "expand_background"; executionId: ToolExecutionId }
-  /** One pending approval card, addressed by its `InteractionId`. */
-  | { type: "expand_interaction"; interactionId: InteractionId };
+  /** One pending interaction card, addressed by its full routed identity. */
+  | { type: "expand_interaction"; interaction: InteractionRef };
 
 /**
  * A bulk expansion target.
@@ -565,9 +565,12 @@ export class CommandDispatcher {
   ): Promise<CommandOutcome> {
     const parts = argument.split(/\s+/).filter((part) => part.length > 0);
     if (parts.length < 2) {
-      return transient("error", "usage: /approve <interaction-id> <allow|deny> [reason]");
+      return transient("error", "usage: /approve <conversation-id>::<interaction-id> <allow|deny> [reason]");
     }
-    const interactionId = parts[0]!;
+    const interaction = parseInteractionRef(parts[0]!);
+    if (interaction === undefined) {
+      return transient("error", "usage: /approve <conversation-id>::<interaction-id> <allow|deny> [reason]");
+    }
     const decision = parts[1]!;
     const reasonParts = parts.slice(2);
     let approval: ApprovalDecision;
@@ -582,11 +585,14 @@ export class CommandDispatcher {
         reason: reasonParts.join(" ") || "denied by Runtime Client",
       };
     } else {
-      return transient("error", "usage: /approve <interaction-id> <allow|deny> [reason]");
+      return transient("error", "usage: /approve <conversation-id>::<interaction-id> <allow|deny> [reason]");
     }
     const response: InteractionResponse = { type: "approval", decision: approval };
-    await session.respondInteraction(interactionId, response);
-    return transient("info", `response accepted for interaction ${interactionId}`);
+    await session.respondInteraction(interaction, response);
+    return transient(
+      "info",
+      `response accepted for interaction ${interaction.conversation_id}::${interaction.interaction_id}`,
+    );
   }
 
   async #approvalMode(
@@ -649,7 +655,7 @@ function reasoningPreference(argument: string): CommandOutcome {
  * /expand none                     collapse all three domains
  * /expand <tool-call-id>           toggle one foreground card
  * /expand background <exec-id>     toggle one background card
- * /expand interaction <interaction-id>  toggle one pending approval card
+ * /expand interaction <conversation-id>::<interaction-id>  toggle one pending card
  * ```
  *
  * A bare id addresses the `ToolCallId` domain, always. There is no search
@@ -681,16 +687,27 @@ function expandPreference(argument: string): CommandOutcome {
     };
   }
   if (head === "interaction") {
-    const interactionId = rest.join(" ");
-    if (interactionId.length === 0) {
-      return usage("/expand interaction <interaction-id>");
+    const interaction = parseInteractionRef(rest.join(" "));
+    if (interaction === undefined) {
+      return usage("/expand interaction <conversation-id>::<interaction-id>");
     }
     return {
       kind: "preference",
-      preference: { type: "expand_interaction", interactionId },
+      preference: { type: "expand_interaction", interaction },
     };
   }
   return { kind: "preference", preference: { type: "expand_call", callId: argument } };
+}
+
+function parseInteractionRef(value: string): InteractionRef | undefined {
+  const separator = value.indexOf("::");
+  if (separator <= 0 || separator === value.length - 2) {
+    return undefined;
+  }
+  return {
+    conversation_id: value.slice(0, separator),
+    interaction_id: value.slice(separator + 2),
+  };
 }
 
 function usage(spelling: string): CommandOutcome {
@@ -740,7 +757,7 @@ export function renderHelp(): string {
     "### Commands",
     ...rows,
     "",
-    "Plain text answers the focused runtime interaction when one is pending; otherwise it is submitted as an inbound message.",
+    "Questionnaire overlays submit a routed response; approvals use /approve with the full conversation-id::interaction-id. Plain text is always submitted as an inbound message.",
   ].join("\n");
 }
 

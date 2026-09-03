@@ -478,8 +478,8 @@ fn spawn_observer(
                     ConversationObservation::Event { event, .. } => {
                         log.push(Seen::Event(Box::new(event)));
                     }
-                    ConversationObservation::InteractionPending { request, .. } => {
-                        let id = request.id.clone();
+                    ConversationObservation::InteractionPending { interaction, .. } => {
+                        let id = interaction.interaction.clone();
                         log.push(Seen::InteractionPending);
                         if approve {
                             runtime
@@ -489,6 +489,7 @@ fn spawn_observer(
                                         decision: ApprovalDecision::Allow,
                                     },
                                 )
+                                .await
                                 .expect("answer the pending approval");
                         }
                     }
