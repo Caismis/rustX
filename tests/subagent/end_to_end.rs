@@ -813,7 +813,6 @@ async fn running_child_inspection_is_execution_independent() {
         );
 
         let mut inspector = match mode {
-            RunningChildInspection::None => None,
             RunningChildInspection::KeepAttached | RunningChildInspection::AttachThenDetach => {
                 let mut inspector = Process::inspect(
                     root.path(),
@@ -851,7 +850,7 @@ async fn running_child_inspection_is_execution_independent() {
                 );
                 Some(inspector)
             }
-            RunningChildInspection::AfterSettlement => None,
+            RunningChildInspection::None | RunningChildInspection::AfterSettlement => None,
         };
         assert_eq!(
             server.attempt_count(),
