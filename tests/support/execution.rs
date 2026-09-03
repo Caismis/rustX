@@ -38,12 +38,18 @@ pub(crate) struct SubagentPlane {
 }
 
 pub(crate) fn subagent_plane() -> SubagentPlane {
+    subagent_plane_for("conv-162")
+}
+
+/// The same plane under an explicit conversation identity, for the
+/// conversation-isolation regressions that need two distinct conversations.
+pub(crate) fn subagent_plane_for(conversation: &str) -> SubagentPlane {
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace = dir.path().join("workspace");
     let runtime_root = dir.path().join("runtime");
     std::fs::create_dir_all(&workspace).expect("workspace");
     std::fs::create_dir_all(&runtime_root).expect("runtime root");
-    let conversation_id = ConversationId::new("conv-162");
+    let conversation_id = ConversationId::new(conversation);
     let store = Arc::new(
         rustx::durable::SqliteConversationStore::in_memory(conversation_id.clone())
             .expect("in-memory store"),

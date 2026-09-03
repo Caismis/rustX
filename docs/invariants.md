@@ -2781,11 +2781,12 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   No unit conversion exists anywhere below it: the executor, supervisor,
   process-group lifecycle, cancellation, timeout settlement, descendant
   termination, and output capture keep their existing native representation.
-- `execution` is the single model-facing observation and cancellation
-  control plane for conversation-owned asynchronous executions (Issue
-  #162). Every model-visible creation result — a detached background tool
-  dispatch and a subagent start — returns a typed execution handle
-  (`kind` + `id`), and `execution(status|cancel)` dispatches an explicit
+- `execution` is the single model-facing observation, discovery, and
+  cancellation control plane for conversation-owned asynchronous
+  executions (Issues #162 and #180). Every model-visible creation result —
+  a detached background tool dispatch and a subagent start — returns a
+  typed execution handle (`kind` + `id`), and `execution(status|cancel)`
+  dispatches an explicit
   `kind = tool` target only to `ConversationBackgroundRegistry` and a
   `kind = subagent` target only to `SubagentRegistry`. The intrinsic owns
   no lifecycle state and no cancellation implementation: the domain
@@ -2817,6 +2818,46 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   `execution(status|cancel)` never exposes the answer. The projection is
   derived from the registry's authoritative read model at response time;
   it is not a second lifecycle record or authority.
+- **`execution(list)` is bounded conversation-scoped discovery, never a
+  second execution authority** (Issue #180). The input contract is
+  action-tagged: `status`/`cancel` require a `target` and reject a
+  `filter`, `list` accepts an optional `filter` and rejects a `target`,
+  and unknown fields are rejected at every level. Each owning registry
+  produces its own authoritative bounded listing, in a read-model type
+  that domain itself owns (`BackgroundExecutionListing`,
+  `SubagentListing`) — which records exist, in which order, which match
+  `active_only` under that domain's own lifecycle classification, and how
+  many matched before its caller's materialization bound — and the
+  intrinsic only converts, merges, bounds, and reports. The dependency
+  runs one way only: the model-facing control plane names both domain
+  authorities, and no domain authority names the control plane or its
+  response bound. `MAX_LISTED_EXECUTIONS` stays a control-plane response
+  policy and is never a domain invariant. Discovery is
+  conversation-scoped **by construction**: the intrinsic holds only the
+  registries its conversation owns, so a foreign execution is unreachable
+  rather than filtered, and stays indistinguishable from absence even when
+  the two conversations allocated structurally identical ids. The `kind`
+  filter selects which authority is consulted at all, so it can never fall
+  through into the other domain. The merged order is each domain's records
+  most-recently-allocated first *within that domain*, alternating between
+  the domains starting with `tool`, truncated to the single global
+  `MAX_LISTED_EXECUTIONS` bound with explicit
+  `returned`/`matched`/`truncated`/`limit` metadata; no per-domain quota
+  exists, ordering never depends on timestamps, and an identical request
+  against unchanged registries returns identical entries and metadata. The
+  merged listing is deterministic but never globally most-recent-first —
+  the domains share no ordinal or clock — and neither the model-facing
+  tool description nor this contract claims otherwise. Listing is
+  observation only: it mutates no lifecycle, cancellation, settlement,
+  terminal notification, capacity accounting, ordering, or — for
+  subagents — observation-plane revision or latest value. A listing entry
+  carries the typed handle, the owning domain's own lifecycle state, and
+  bounded identity facts only: never a detached tool
+  `result`/`progress`, never a subagent `detail`, never answer content, and
+  never child history, so `list` can no more become a result channel than
+  `status` can. Issue #178's live activity projection stays out of the
+  model-facing listing for the same reason `execution(status)` drops it —
+  observing a child never enlarges parent model context.
 - Model-facing output is bounded by named limits. Text overflow is not an
   artifact (Issue #86): native Bash and MCP logical results (a managed
   Python tool's results included — Python tools are MCP tools) all

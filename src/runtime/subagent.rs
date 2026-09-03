@@ -95,9 +95,10 @@ pub use process::SubagentSpawnPlan;
 #[cfg(test)]
 pub(crate) use registry::CommitBoundaryHook;
 pub use registry::{
-    PreparedSubagent, SubagentAccepted, SubagentDurabilityFailureSink, SubagentObserver,
-    SubagentRegistry, SubagentRegistryConfig, SubagentSnapshot, SubagentStartError,
-    SubagentStartOutcome, SubagentStartSpec, SubagentState, SubagentTerminalMode,
+    PreparedSubagent, SubagentAccepted, SubagentDurabilityFailureSink, SubagentListing,
+    SubagentObserver, SubagentRegistry, SubagentRegistryConfig, SubagentSnapshot,
+    SubagentStartError, SubagentStartOutcome, SubagentStartSpec, SubagentState,
+    SubagentTerminalMode,
 };
 pub use resolver::{
     ResolvedSubagentSkill, ResolvedSubagentSpec, ResolvedSubagentTool, SubagentDomain,
