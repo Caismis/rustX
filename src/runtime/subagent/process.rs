@@ -962,6 +962,7 @@ impl StagedChild {
         // workspace would otherwise leak runtime-private materialization and
         // diagnostics merely because the user work correctly survived.
         let runtime_root = self.runtime_root;
+        remove_inspection_liveness_marker(&runtime_root);
         let runtime_root_cleanup_error = if settlement.unproven.is_empty() {
             let path = runtime_root.path().display().to_string();
             let durable_error = runtime_root.remove_durable_store().err().map(|error| {
@@ -1533,6 +1534,7 @@ async fn settle_nested(
     workspace: Option<WorkspaceLease>,
 ) -> PhysicalSettlement {
     let nested = contain_retained(retained.take()).await;
+    remove_inspection_liveness_marker(&runtime_root);
     // Workspace inspection is deliberately after nested containment. A
     // nested process may still hold or mutate the worktree after the direct
     // child exits; only the complete physical settlement permits cleanup.
@@ -1564,6 +1566,17 @@ async fn settle_nested(
         runtime_root_cleanup_error,
         workspace,
     }
+}
+
+/// Removes the exact disposable live-inspection lease belonging to one
+/// physical child incarnation. The driver calls this only after the direct
+/// child has been reaped; the child itself removes the lease on its normal
+/// path, and this owner closes the abnormal-death gap.
+fn remove_inspection_liveness_marker(runtime_root: &PhysicalChildRuntimeRoot) {
+    let Some(semantic_root) = runtime_root.path().parent() else {
+        return;
+    };
+    let _ = std::fs::remove_file(semantic_root.join(".inspection-live"));
 }
 
 /// Reaps the direct child, escalating if it outlives its cancellation

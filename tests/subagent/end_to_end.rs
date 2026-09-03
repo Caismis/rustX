@@ -97,14 +97,26 @@ struct Process {
 impl Process {
     /// Spawns the binary with explicit startup arguments.
     fn spawn(root: &std::path::Path, models: &str, session: &str, key: &str) -> Self {
-        Self::launch(root, models, session, key, false, None)
+        Self::launch(root, models, session, key, false, None, false)
+    }
+
+    /// Spawns a parent whose real child process receives the deterministic
+    /// live-inspection bind fault seam. The parent itself never binds a child
+    /// endpoint, so the injected capability affects only the child startup.
+    fn spawn_with_live_inspection_failure(
+        root: &std::path::Path,
+        models: &str,
+        session: &str,
+        key: &str,
+    ) -> Self {
+        Self::launch(root, models, session, key, false, None, true)
     }
 
     /// Reopens the Session this runtime root already published as active. A
     /// launch is not a resume, so recovering a durable conversation across a
     /// process death is an explicit `--continue`.
     fn reopen(root: &std::path::Path, models: &str, session: &str, key: &str) -> Self {
-        Self::launch(root, models, session, key, true, None)
+        Self::launch(root, models, session, key, true, None, false)
     }
 
     /// Opens one durable child conversation through the ordinary local
@@ -117,7 +129,15 @@ impl Process {
         key: &str,
         conversation_id: &str,
     ) -> Self {
-        Self::launch(root, models, session, key, false, Some(conversation_id))
+        Self::launch(
+            root,
+            models,
+            session,
+            key,
+            false,
+            Some(conversation_id),
+            false,
+        )
     }
 
     fn launch(
@@ -127,6 +147,7 @@ impl Process {
         key: &str,
         continue_active: bool,
         inspect_conversation: Option<&str>,
+        fail_live_inspection: bool,
     ) -> Self {
         let workspace = root.join("workspace");
         std::fs::create_dir_all(workspace.join(".agents/subagents/explore")).expect("workspace");
@@ -155,6 +176,9 @@ impl Process {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if fail_live_inspection {
+            command.env("RUSTX_TEST_LIVE_INSPECTION_BIND_FAILURE", "1");
+        }
         if continue_active {
             command.arg("--continue");
         }
@@ -669,6 +693,7 @@ enum RunningChildInspection {
     KeepAttached,
     AttachThenDetach,
     AfterSettlement,
+    EndpointUnavailable,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -699,7 +724,7 @@ fn request_kind(body: &str) -> &'static str {
 
 /// Serializes the parent's captured provider context while normalizing the
 /// runtime-generated clock reminder. The reminder is expected to vary between
-/// the three sequential runs; every other provider-visible message must stay
+/// sequential matrix runs; every other provider-visible message must stay
 /// byte-identical when a child inspector is attached or detached.
 fn normalized_parent_context(body: &str) -> String {
     let mut body: serde_json::Value = serde_json::from_str(body).expect("provider request is JSON");
@@ -724,10 +749,11 @@ fn normalized_parent_context(body: &str) -> String {
     serde_json::to_string(&body["messages"]).expect("parent provider messages serialize")
 }
 
-/// Runs the same gated child workload with one of the three inspection
-/// lifetimes. The provider gate is the deterministic attachment frontier:
-/// the child is known to be running, but no terminal response can arrive
-/// until the test releases it.
+/// Runs the same gated child workload with each inspection lifetime. The
+/// provider gate is the deterministic attachment frontier: the child is known
+/// to be running, but no terminal response can arrive until the test releases
+/// it. The matrix also runs once with the child's live inspection bind
+/// deliberately rejected.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn running_child_inspection_is_execution_independent() {
@@ -740,7 +766,16 @@ async fn running_child_inspection_is_execution_independent() {
         .await;
         let root = tempfile::tempdir().expect("temp root");
         let models = models_json(&server.url("/v1"));
-        let mut parent = Process::spawn(root.path(), &models, SESSION_JSON, "subagent-secret");
+        let mut parent = if matches!(mode, RunningChildInspection::EndpointUnavailable) {
+            Process::spawn_with_live_inspection_failure(
+                root.path(),
+                &models,
+                SESSION_JSON,
+                "subagent-secret",
+            )
+        } else {
+            Process::spawn(root.path(), &models, SESSION_JSON, "subagent-secret")
+        };
 
         let response = parent
             .request(|id| RuntimeClientRequest::Initialize {
@@ -849,6 +884,32 @@ async fn running_child_inspection_is_execution_independent() {
                     "the running inspector reads the child's own durable user message"
                 );
                 Some(inspector)
+            }
+            RunningChildInspection::EndpointUnavailable => {
+                let inspector = Process::inspect(
+                    root.path(),
+                    &models,
+                    SESSION_JSON,
+                    "subagent-secret",
+                    child_conversation_id.as_str(),
+                );
+                let (status, stderr) = inspector.close_and_wait().await;
+                assert_eq!(
+                    status.code(),
+                    Some(2),
+                    "a live child with no inspection endpoint reports a bounded startup failure"
+                );
+                assert!(
+                    stderr.contains("live inspection of child conversation")
+                        && stderr.contains("is unavailable"),
+                    "the live/degraded distinction is surfaced explicitly: {stderr}"
+                );
+                assert_eq!(
+                    server.attempt_count(),
+                    provider_attempts_before_inspection,
+                    "a failed inspection setup cannot affect semantic execution"
+                );
+                None
             }
             RunningChildInspection::None | RunningChildInspection::AfterSettlement => None,
         };
@@ -1020,7 +1081,10 @@ async fn running_child_inspection_is_execution_independent() {
             parent_attempt_completed,
         };
 
-        let parent_was_shutdown = if matches!(mode, RunningChildInspection::AfterSettlement) {
+        let parent_was_shutdown = if matches!(
+            mode,
+            RunningChildInspection::AfterSettlement | RunningChildInspection::EndpointUnavailable
+        ) {
             // Shutting down the parent is the existing runtime-owned
             // quiescence boundary: it waits for the settled child process and
             // its disposable endpoint to be gone. Opening the identity after
@@ -1124,10 +1188,15 @@ async fn running_child_inspection_is_execution_independent() {
     let inspector_attached = Box::pin(run(RunningChildInspection::KeepAttached)).await;
     let attach_then_detach = Box::pin(run(RunningChildInspection::AttachThenDetach)).await;
     let durable_after_settlement = Box::pin(run(RunningChildInspection::AfterSettlement)).await;
+    let endpoint_unavailable = Box::pin(run(RunningChildInspection::EndpointUnavailable)).await;
 
     assert_eq!(without_inspector, inspector_attached);
     assert_eq!(without_inspector, attach_then_detach);
     assert_eq!(without_inspector, durable_after_settlement);
+    assert_eq!(
+        without_inspector, endpoint_unavailable,
+        "an unavailable observation endpoint changes no semantic execution"
+    );
     assert_eq!(without_inspector.provider_attempts, 4);
     assert_eq!(
         without_inspector.request_kinds,

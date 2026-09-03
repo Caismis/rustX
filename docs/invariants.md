@@ -874,8 +874,9 @@ execution history; the parent only references that conversation by
 
 Known conversation inspection resolves that identity to the best available
 normal Runtime Client read path: the child's live Runtime Client projection
-while its runtime endpoint exists, or the same conversation's durable
-authorities after that endpoint is gone.
+while its runtime endpoint exists, an explicit degraded/unavailable result if
+the runtime is live but optional endpoint setup failed, or the same
+conversation's durable authorities after the runtime is gone.
 
 - **Identity is singular.** `child_conversation_id` is the only identity used
   to resolve a child's live or durable conversation. There are no transcript,
@@ -910,6 +911,14 @@ authorities after that endpoint is gone.
   its bootstrap reads. Detach only releases the inspection client. It cannot
   change child progress, cancellation, settlement, provider/tool counts,
   journal ordering, terminal publication, or parent delivery.
+- **Endpoint availability is not execution admission.** Failure to create the
+  optional live inspection transport is a bounded diagnostic and does not
+  cancel or otherwise alter a valid child execution. A disposable locked
+  liveness marker distinguishes a live-but-uninspectable child from a dead
+  child; it is local routing metadata only, never Ledger, Event Journal,
+  model-context, parent transcript, or durable service-registry state. Once
+  the child is reaped and the marker is gone, the same identity uses durable
+  fallback.
 - **Navigation is presentation state.** Parent/child frames, selection, and
   the current-conversation label exist only in the TUI app. `Ctrl+Up`/`Ctrl+Down`
   selects a row, `Enter` attaches the exact child identity, and `Esc` returns

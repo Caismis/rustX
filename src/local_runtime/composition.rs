@@ -23,7 +23,7 @@
 //!         |
 //!         +-- into_subagent_child(): bind RuntimeClientHost, subscribe a
 //!         |       bounded parent-observation queue, then activate
-//!         |       -> child ConversationRuntime + live inspection endpoint
+//!         |       -> child ConversationRuntime + optional live inspection endpoint
 //!         |
 //!         +-- into_headless(): activate with no Runtime Client host
 //!                 -> HeadlessConversationRuntime
@@ -132,8 +132,9 @@ use crate::runtime::resources::{
 };
 use crate::runtime::subagent::{
     ResolvedSubagentTool, SubagentCatalog, SubagentDefinition, SubagentProjectInstructionPolicy,
-    SubagentResolver, SubagentWorkspaceManager, child_conversation_inspection_socket_path,
-    child_conversation_store_path, is_safe_child_conversation_component,
+    SubagentResolver, SubagentWorkspaceManager, child_conversation_inspection_liveness_path,
+    child_conversation_inspection_socket_path, child_conversation_store_path,
+    is_safe_child_conversation_component,
 };
 use crate::runtime::workflow::{
     MAX_WORKFLOW_BYTES, WorkflowCatalog, WorkflowDefinition, WorkflowOutputLatch, WorkflowProgram,
@@ -2183,8 +2184,12 @@ impl std::fmt::Debug for LocalConversationInspection {
 
 impl LocalConversationInspection {
     /// Resolves `conversation_id` to the child's live Runtime Client read
-    /// projection when its process is still running, otherwise to the stable
-    /// durable child conversation.
+    /// projection when its process is still running. If the process owns the
+    /// disposable liveness lease but endpoint setup failed, this returns an
+    /// explicit [`LocalRuntimeError::LiveInspectionUnavailable`] instead of
+    /// presenting a stale durable projection as live. Once the process is
+    /// gone, the same identity resolves to the stable durable child
+    /// conversation.
     ///
     /// The identity is resolved to the local runtime's stable child-store
     /// layout only at this Rust-owned composition boundary. The TUI and wire
@@ -2194,6 +2199,8 @@ impl LocalConversationInspection {
     ///
     /// Returns [`LocalRuntimeError::ConversationNotFound`] when the identity
     /// has no durable child store and no live endpoint, or
+    /// [`LocalRuntimeError::LiveInspectionUnavailable`] when the child is
+    /// still live but its optional endpoint is unavailable, or
     /// [`LocalRuntimeError::DurableConversation`] when that store cannot be
     /// opened.
     pub async fn compose(
@@ -2214,6 +2221,31 @@ impl LocalConversationInspection {
                 conversation_id: conversation_id.clone(),
                 authority: ConversationInspectionAuthority::Live(stream),
             });
+        }
+        let liveness_path =
+            child_conversation_inspection_liveness_path(&paths.runtime_root, conversation_id);
+        match crate::local_runtime::live_inspection::probe_liveness(&liveness_path) {
+            Ok(Some(true)) => {
+                return Err(LocalRuntimeError::LiveInspectionUnavailable {
+                    conversation_id: conversation_id.clone(),
+                    detail: format!(
+                        "the child runtime is live but its Runtime Client inspection endpoint \
+                         is unavailable ({})",
+                        socket_path.display()
+                    ),
+                });
+            }
+            Ok(Some(false) | None) => {}
+            Err(error) => {
+                return Err(LocalRuntimeError::LiveInspectionUnavailable {
+                    conversation_id: conversation_id.clone(),
+                    detail: format!(
+                        "the child runtime's live inspection status could not be resolved from \
+                         {}: {error}",
+                        liveness_path.display()
+                    ),
+                });
+            }
         }
         let database_path = child_conversation_store_path(&paths.runtime_root, conversation_id);
         if !database_path.is_file() {
@@ -2424,6 +2456,16 @@ pub enum LocalRuntimeError {
         /// The bounded store failure detail.
         detail: String,
     },
+    /// The child runtime is still live, but its optional read-only inspection
+    /// transport is unavailable. This must not be silently replaced by a
+    /// durable snapshot because the durable authorities cannot reproduce all
+    /// disposable live Runtime Client state.
+    LiveInspectionUnavailable {
+        /// The still-live child conversation identity.
+        conversation_id: ConversationId,
+        /// The bounded local routing diagnostic.
+        detail: String,
+    },
     /// The model catalog is invalid or its credentials are unresolved.
     Catalog(ModelCatalogError),
     /// A model binding or the initial session model could not be resolved.
@@ -2482,6 +2524,13 @@ impl std::fmt::Display for LocalRuntimeError {
                 f,
                 "cannot open durable conversation {}: {detail}",
                 path.display()
+            ),
+            Self::LiveInspectionUnavailable {
+                conversation_id,
+                detail,
+            } => write!(
+                f,
+                "live inspection of child conversation {conversation_id} is unavailable: {detail}"
             ),
             Self::Catalog(error) => write!(f, "model catalog: {error}"),
             Self::Model(error) => write!(f, "session model: {error}"),
@@ -3478,6 +3527,7 @@ mod subagent_child_tests {
 mod conversation_inspection_tests {
     use super::{LocalConversationInspection, LocalRuntimePaths, StartupSession};
     use crate::durable::{ConversationStore, SqliteConversationStore};
+    use crate::local_runtime::live_inspection::LiveConversationInspectionLease;
     use crate::message::content::TextBlock;
     use crate::message::types::{MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
     use crate::runtime::identity::{ConversationId, MessageId};
@@ -3551,8 +3601,71 @@ mod conversation_inspection_tests {
                     && user.content.iter().any(|content| matches!(
                         content,
                         UserContentBlock::Text(text) if text.text == "durable child message"
-                    ))
+                ))
         ));
+    }
+
+    /// A live child whose optional endpoint is unavailable is not silently
+    /// rebuilt from durable state. Once the child-owned lease is released,
+    /// the same identity resolves through the ordinary durable fallback.
+    #[tokio::test]
+    async fn live_uninspectable_identity_does_not_fake_a_durable_live_view() {
+        let root = tempfile::tempdir().expect("runtime root");
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let runtime_root = root.path().join("runtime");
+        let conversation_id = ConversationId::new("conversation-parent-subagent-live-gap");
+        let database_path = crate::runtime::subagent::child_conversation_store_path(
+            &runtime_root,
+            &conversation_id,
+        );
+        std::fs::create_dir_all(database_path.parent().expect("child store parent"))
+            .expect("child store directory");
+        let store = SqliteConversationStore::open(conversation_id.clone(), &database_path)
+            .expect("child store");
+        store.initialize(&[]).expect("child history");
+        let lease = LiveConversationInspectionLease::acquire(
+            crate::runtime::subagent::child_conversation_inspection_liveness_path(
+                &runtime_root,
+                &conversation_id,
+            ),
+        )
+        .expect("the running child owns its transient liveness lease");
+        let paths = LocalRuntimePaths {
+            models: root.path().join("models.jsonc"),
+            config: root.path().join("rustx.jsonc"),
+            skill_paths: Vec::new(),
+            no_skills: true,
+            no_builtin_tools: false,
+            no_tools: false,
+            startup_session: StartupSession::InspectConversation {
+                conversation_id: conversation_id.clone(),
+            },
+            session_name: None,
+            tools: None,
+            exclude_tools: Vec::new(),
+            workspace,
+            runtime_root,
+        };
+        let error = LocalConversationInspection::compose(&paths, &conversation_id)
+            .await
+            .expect_err("a live but uninspectable child must not fake a durable live view");
+        assert!(matches!(
+            error,
+            super::LocalRuntimeError::LiveInspectionUnavailable {
+                conversation_id: ref actual,
+                ..
+            } if actual == &conversation_id
+        ));
+
+        drop(lease);
+        let inspection = LocalConversationInspection::compose(&paths, &conversation_id)
+            .await
+            .expect("the same identity falls back after the live lease is gone");
+        assert!(
+            inspection.endpoint().is_ok(),
+            "the post-terminal fallback is the local durable Runtime Client host"
+        );
     }
 }
 

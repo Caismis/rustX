@@ -3646,7 +3646,10 @@ child_conversation_id
         +-- child runtime owns its live endpoint
         |       -> read-only attachment to the child's actual projection
         |
-        +-- no live endpoint
+        +-- child runtime owns a live liveness lease, but endpoint setup failed
+        |       -> explicit live-inspection-unavailable diagnostic
+        |
+        +-- no live liveness lease
                 -> RuntimeClientHost::new_durable over the stable store
 ```
 
@@ -3657,14 +3660,20 @@ probes the identity-derived child-owned Unix socket (whose short
 collision-resistant filename keeps the local endpoint within platform socket
 pathname limits). A successful connection is process-routing state only; the
 child remains the owner of the semantic Runtime Client endpoint and projection.
-If the probe cannot connect, the local runtime opens the stable child store and
-`RuntimeClientHost::new_durable`
-builds the ordinary projection from that conversation's durable Surface,
+If the probe cannot connect, the local runtime checks the child's disposable
+identity-derived liveness lease. A held lease means that the child is still
+live but its optional inspection transport is unavailable, so inspection
+returns an explicit bounded diagnostic rather than presenting a durable
+snapshot as the live projection. Only when no live lease is held does the
+local runtime open the stable child store and `RuntimeClientHost::new_durable`
+build the ordinary projection from that conversation's durable Surface,
 Message Ledger, Request Snapshots, transcript ordering spine, and Event
-Journal. The wire protocol remains the normal `initialize`, `snapshot_get`,
-`transcript_page_get`, and subscription shapes. There is no transcript
-identifier, inspection identifier, child-specific payload, or protocol
-compatibility mode.
+Journal. The lease is an OS-lifetime routing marker, not a registry or
+conversation fact; the child removes it normally, and its lock disappears on
+abnormal death. The wire protocol remains the normal `initialize`,
+`snapshot_get`, `transcript_page_get`, and subscription shapes. There is no
+transcript identifier, inspection identifier, child-specific payload, or
+protocol compatibility mode.
 
 The child's own conversation is the durable authority for its transcript and
 execution history. A child spawn keeps its stable `conversation.sqlite` under
@@ -3706,9 +3715,14 @@ terminal transition. At T2, when the child runtime/process closes the
 endpoint, the inspector transport closes cleanly; the terminal durable
 settlement is the authority used for reopening. At T3, or on any later open,
 the same `child_conversation_id` probes again and resolves the durable store.
-If the socket is unavailable at T0, durable bootstrap is selected
-immediately. Thus a stale socket never becomes a permanent dependency, and a
-removed physical incarnation does not change the conversation identity.
+If the socket is unavailable at T0, the liveness lease is the second
+linearization check. A held lease returns the explicit degraded-observation
+diagnostic; an absent or unlocked lease selects durable bootstrap. Thus a
+running child with a failed endpoint never masquerades as a durable live view,
+while a stale lease/socket cannot become a permanent dependency. Once the
+child is reaped and its live lease is gone, the same `child_conversation_id`
+resolves to the durable store; a removed physical incarnation does not change
+the conversation identity.
 
 The TUI keeps parent/child frames, the selected row, and the current
 conversation label as presentation state only. `Ctrl+Up`/`Ctrl+Down` selects

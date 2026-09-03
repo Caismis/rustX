@@ -111,8 +111,8 @@ pub(crate) fn child_conversation_store_path(
 /// with the child runtime. The filename is a deterministic short token rather
 /// than the full conversation identity so the Unix socket stays within
 /// platform pathname limits even when the stable store's identity component
-/// is long. A stale socket is harmless because an inspector probes it and
-/// falls back to the stable store.
+/// is long. A stale socket is harmless because an inspector probes the
+/// disposable liveness lease before selecting durable fallback.
 #[must_use]
 pub(crate) fn child_conversation_inspection_socket_path(
     parent_runtime_root: &Path,
@@ -121,6 +121,22 @@ pub(crate) fn child_conversation_inspection_socket_path(
     let digest = Sha256::digest(conversation_id.as_str().as_bytes());
     let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&digest[..16]);
     parent_runtime_root.join(format!(".{token}"))
+}
+
+/// Returns the disposable local-runtime lease that marks a child conversation
+/// as live while its process owns the Runtime Client projection. The lease is
+/// a locked sidecar, not a durable conversation authority: the child removes
+/// it on ordinary shutdown, and the OS releases its lock on abnormal death so
+/// a later resolver can distinguish a stale marker from a live runtime.
+#[must_use]
+pub(crate) fn child_conversation_inspection_liveness_path(
+    parent_runtime_root: &Path,
+    conversation_id: &ConversationId,
+) -> PathBuf {
+    child_conversation_store_path(parent_runtime_root, conversation_id)
+        .parent()
+        .expect("a child conversation database has a semantic parent")
+        .join(".inspection-live")
 }
 
 /// Child conversation identities are used as one filesystem component by the

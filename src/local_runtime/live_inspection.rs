@@ -2,12 +2,16 @@
 //!
 //! A running child owns its Runtime Client projection in the child process.
 //! This module provides only the bounded local IPC seam needed to attach a
-//! read-only client to that projection. The stable socket pathname is process
-//! routing state, never conversation history and never a discovery registry.
+//! read-only client to that projection. The socket pathname and the locked
+//! liveness sidecar are process routing state, never conversation history and
+//! never a discovery registry.
 
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use nix::errno::Errno;
+use nix::fcntl::{Flock, FlockArg};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::task::JoinSet;
@@ -17,6 +21,81 @@ use crate::runtime_client::host::RuntimeClientHost;
 use crate::runtime_client::transport::stdio::{
     StdioSessionEnd, StdioTransportError, serve_stdio_jsonl_with_io,
 };
+
+/// Test-only bind fault injection used by the real child-process regression.
+/// It is an environment seam because the child is a separately spawned rustX
+/// process; ordinary production launches never set it.
+pub(crate) const TEST_FAIL_BIND_ENV: &str = "RUSTX_TEST_LIVE_INSPECTION_BIND_FAILURE";
+
+/// The disposable process-local lease for one running child conversation.
+///
+/// The file is kept beside the stable child store only as a routing marker.
+/// The exclusive OS lock is the liveness signal: it disappears automatically
+/// if the child is killed, while the owning child removes the marker during
+/// normal shutdown. No conversation or observation state is written here.
+pub(crate) struct LiveConversationInspectionLease {
+    path: PathBuf,
+    lock: Option<Flock<File>>,
+}
+
+impl LiveConversationInspectionLease {
+    /// Acquires the child-owned liveness lease at the identity-derived path.
+    pub(crate) fn acquire(path: PathBuf) -> std::io::Result<Self> {
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)?;
+        let lock = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, error)| {
+            std::io::Error::other(format!("lock {}: {error}", path.display()))
+        })?;
+        Ok(Self {
+            path,
+            lock: Some(lock),
+        })
+    }
+}
+
+impl Drop for LiveConversationInspectionLease {
+    fn drop(&mut self) {
+        // Unlock before unlinking. A resolver that starts after the child has
+        // released the lease must either see the marker as stale or see no
+        // marker at all; it must never lose the live marker while the child
+        // still owns the lock.
+        drop(self.lock.take());
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Reports whether the identity-derived liveness lease is currently held.
+/// `Ok(None)` means that no marker exists; `Ok(Some(false))` means that a
+/// stale marker was found but its lock is no longer held.
+pub(crate) fn probe_liveness(path: &Path) -> std::io::Result<Option<bool>> {
+    let file = match OpenOptions::new().read(true).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    match Flock::lock(file, FlockArg::LockSharedNonblock) {
+        Ok(lock) => {
+            drop(lock);
+            let _ = std::fs::remove_file(path);
+            Ok(Some(false))
+        }
+        Err((file, error)) if error == Errno::EWOULDBLOCK => {
+            drop(file);
+            Ok(Some(true))
+        }
+        Err((file, error)) => {
+            drop(file);
+            Err(std::io::Error::other(format!(
+                "probe {}: {error}",
+                path.display()
+            )))
+        }
+    }
+}
 
 /// The live read-only Runtime Client endpoint of one child process.
 pub(crate) struct LiveConversationInspectionServer {
@@ -33,6 +112,11 @@ impl LiveConversationInspectionServer {
     /// physical incarnations. It is therefore safe to remove that exact
     /// socket and retry the bind.
     pub(crate) fn bind(path: PathBuf, host: RuntimeClientHost) -> std::io::Result<Self> {
+        if std::env::var_os(TEST_FAIL_BIND_ENV).is_some() {
+            return Err(std::io::Error::other(
+                "test-injected live inspection endpoint bind failure",
+            ));
+        }
         let listener = match UnixListener::bind(&path) {
             Ok(listener) => listener,
             Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {

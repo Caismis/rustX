@@ -13,7 +13,8 @@
 //!   -> dispatcher       the ONE owner of both raw transports from here on
 //!   -> compose          the real runtime stack, deny-by-construction, and
 //!                       cancellable owned work (Issue #145)
-//!   -> Ready            composition and activation complete
+//!   -> Ready            composition and activation complete; live
+//!                       inspection transport is optional
 //!   -> Delegate(task)   the task enters through the child's ORDINARY
 //!                       durable inbound path (UserSource::Agent(parent))
 //!   -> observe          the attempt's canonical terminal event
@@ -90,12 +91,13 @@ use crate::runtime::subagent::ipc::{
     ResultFrame, SUBAGENT_IPC_VERSION, SubagentChildSpec, read_parent_frame, write_child_frame,
 };
 use crate::runtime::subagent::{
-    MAX_RESULT_CONTENT_BYTES, bound_utf8, child_conversation_inspection_socket_path,
+    MAX_RESULT_CONTENT_BYTES, bound_utf8, child_conversation_inspection_liveness_path,
+    child_conversation_inspection_socket_path,
 };
 
 use super::composition::{ChildPreparation, LocalConversationCore, LocalRuntimeDependencies};
 use super::dispatcher::{ChildControlDispatcher, ChildControlEvent, ChildControlHandle};
-use super::live_inspection::LiveConversationInspectionServer;
+use super::live_inspection::{LiveConversationInspectionLease, LiveConversationInspectionServer};
 
 /// The process entry point of the internal subagent-child mode.
 ///
@@ -250,11 +252,45 @@ async fn run_child(
                 semantic_root.display()
             ))
         })?;
-    let live_server = LiveConversationInspectionServer::bind(
+    // This lease is disposable process-routing state, not a durable
+    // conversation fact. It lets an inspector distinguish a live child whose
+    // optional endpoint failed from a child whose runtime is already gone.
+    // If the lease itself cannot be created, execution still proceeds; the
+    // failure is diagnosable in the child's private stderr log and through
+    // the existing bounded Diagnostic frame.
+    let live_lease =
+        match LiveConversationInspectionLease::acquire(child_conversation_inspection_liveness_path(
+            parent_runtime_root,
+            &spec.child_conversation_id,
+        )) {
+            Ok(lease) => Some(lease),
+            Err(error) => {
+                let message = format!("live inspection liveness lease unavailable: {error}");
+                eprintln!("subagent child: {message}");
+                let _ = handle
+                    .send_reliable(ChildFrame::Diagnostic(DiagnosticFrame {
+                        message: bound_diagnostic(message),
+                    }))
+                    .await;
+                None
+            }
+        };
+    let live_server = match LiveConversationInspectionServer::bind(
         child_conversation_inspection_socket_path(parent_runtime_root, &spec.child_conversation_id),
         host,
-    )
-    .map_err(|error| ChildExit::Startup(format!("live inspection endpoint: {error}")))?;
+    ) {
+        Ok(server) => Some(server),
+        Err(error) => {
+            let message = format!("live inspection endpoint unavailable: {error}");
+            eprintln!("subagent child: {message}");
+            let _ = handle
+                .send_reliable(ChildFrame::Diagnostic(DiagnosticFrame {
+                    message: bound_diagnostic(message),
+                }))
+                .await;
+            None
+        }
+    };
 
     let result = async {
         handle
@@ -279,8 +315,11 @@ async fn run_child(
     // extend the child's semantic lifetime. Once the child reports its
     // bounded result (or loses its parent), close the endpoint and remove
     // exactly its disposable socket path.
-    live_server.shutdown().await;
+    if let Some(live_server) = live_server {
+        live_server.shutdown().await;
+    }
     drop(interactive);
+    drop(live_lease);
     result
 }
 
