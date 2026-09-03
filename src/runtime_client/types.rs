@@ -698,6 +698,32 @@ impl RuntimeClientRequest {
         ) || self.is_session_request()
     }
 
+    /// Whether this request changes conversation, runtime, Session, or
+    /// lifecycle authority. Read-only inspection attachments reject these
+    /// requests before dispatch; protocol reads and `detach` remain allowed.
+    #[must_use]
+    pub fn is_mutating(&self) -> bool {
+        matches!(
+            self,
+            Self::SubmitInbound { .. }
+                | Self::CancelCurrentAttempt { .. }
+                | Self::CompactContext { .. }
+                | Self::ReloadResources { .. }
+                | Self::InteractionRespond { .. }
+                | Self::ModelSet { .. }
+                | Self::ApprovalModeSet { .. }
+                | Self::SessionName { .. }
+                | Self::SessionNew { .. }
+                | Self::SessionSelect { .. }
+                | Self::SessionClone { .. }
+                | Self::SessionFork { .. }
+                | Self::SessionTreeBranch { .. }
+                | Self::BackgroundCancel { .. }
+                | Self::SubagentCancel { .. }
+                | Self::Shutdown { .. }
+        )
+    }
+
     /// Converts the wire request into the typed native Session control
     /// intent. The request id is intentionally absent from the intent: the
     /// Runtime Client endpoint remains the sole correlation owner.
@@ -973,8 +999,10 @@ pub enum RuntimeClientError {
         /// The version the client requested.
         requested: u16,
     },
-    /// An attachment is already active: the protocol allows at most one attachment
-    /// per runtime instance, and an attach never evicts the active one.
+    /// A control attachment is already active: the host allows one control
+    /// attachment per live runtime instance, and a second control attach
+    /// never evicts the active one. Read-only inspection attachments use a
+    /// separate admission lane.
     AttachmentInUse {
         /// The identity of the active attachment.
         existing_attachment_id: AttachmentId,

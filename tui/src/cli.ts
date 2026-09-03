@@ -4,21 +4,27 @@
  * ```text
  * rustx-tui --binary <path> --models <path> --config <path>
  *           --workspace <dir> --runtime-root <dir>
- *           [--continue | --resume | --session <id> [--node <id>]]
+ *           [--inspect-conversation <id> | --continue | --resume | --session <id> [--node <id>]]
  *           [--name <text>] [--skill <path>] [--no-skills]
  *           [--no-builtin-tools] [--no-tools]
  *           [--tools <a,b,c>] [--exclude-tools <a,b,c>]
  * ```
  *
  * Without a Session request the runtime starts on an empty Session and every
- * persisted Session stays reachable through `/resume`. Three requests change
- * that, and they are mutually exclusive:
+ * persisted Session stays reachable through `/resume`. Conversation inspection
+ * is a separate read-only attachment by known conversation identity. The
+ * remaining three requests change the startup Session, and they are mutually
+ * exclusive with inspection:
  *
  * - `--continue` starts on the Session the previous launch left active;
  * - `--session <id>` (optionally `--node <id>`) starts on a named persisted
  *   Session;
  * - `--resume` opens the `/resume` selector over the continued Session as
  *   soon as the client attaches, so a Session can be chosen instead of named.
+ * - `--inspect-conversation <id>` opens the ordinary Runtime Client projection
+ *   for that conversation, attaching to a running child's live projection or
+ *   falling back to durable authorities without composing a Session or
+ *   execution owner.
  *
  * `--name` is not one of those requests. It names the Session the launch
  * bound, whichever one that is, and it is forwarded to Rust like every other
@@ -44,7 +50,7 @@ import type {
 
 export const USAGE = `usage: rustx-tui --binary <rustx> --models <models.jsonc> \\
                  --config <rustx.jsonc> --workspace <dir> --runtime-root <dir> \\
-                 [--continue | --resume | --session <id> [--node <id>]] \\
+                 [--inspect-conversation <conversation-id> | --continue | --resume | --session <id> [--node <id>]] \\
                  [--name <text>] [--skill <path>] [--no-skills] [--no-builtin-tools] [--no-tools] \\
                  [--tools <a,b,c>] [--exclude-tools <a,b,c>]`;
 
@@ -74,6 +80,7 @@ const VALUE_FLAGS = [
   "--config",
   "--workspace",
   "--runtime-root",
+  "--inspect-conversation",
   "--session",
   "--node",
   "--name",
@@ -151,11 +158,13 @@ export function parseArguments(argv: readonly string[]): TuiArguments {
 
   const session = values.get("--session");
   const node = values.get("--node");
+  const inspectConversation = values.get("--inspect-conversation");
   const resume = booleans.has("--resume");
   const requests = [
     booleans.has("--continue") ? "--continue" : undefined,
     resume ? "--resume" : undefined,
     session !== undefined ? "--session" : undefined,
+    inspectConversation !== undefined ? "--inspect-conversation" : undefined,
   ].filter((flag): flag is string => flag !== undefined);
   if (requests.length > 1) {
     throw new ArgumentError(
@@ -164,6 +173,12 @@ export function parseArguments(argv: readonly string[]): TuiArguments {
   }
   if (node !== undefined && session === undefined) {
     throw new ArgumentError("argument --node requires --session");
+  }
+  if (inspectConversation !== undefined && node !== undefined) {
+    throw new ArgumentError("argument --inspect-conversation cannot be combined with --node");
+  }
+  if (inspectConversation !== undefined && values.has("--name")) {
+    throw new ArgumentError("argument --inspect-conversation cannot be combined with --name");
   }
 
   return {
@@ -181,6 +196,7 @@ export function parseArguments(argv: readonly string[]): TuiArguments {
       // leaves that Session bound rather than stranding an empty one in the
       // catalog beside it.
       continueActiveSession: booleans.has("--continue") || resume,
+      inspectConversation,
       session,
       node,
       sessionName: values.get("--name"),
@@ -215,6 +231,7 @@ export function replacementArguments(parsed: TuiArguments): TuiArguments {
     startup: {
       ...parsed.startup,
       continueActiveSession: true,
+      inspectConversation: undefined,
       session: undefined,
       node: undefined,
       sessionName: undefined,

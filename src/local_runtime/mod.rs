@@ -31,6 +31,7 @@ pub mod cli;
 pub mod composition;
 pub mod config;
 pub(crate) mod dispatcher;
+pub(crate) mod live_inspection;
 #[cfg(all(test, unix))]
 mod preparation_e2e;
 pub mod serve;
@@ -40,9 +41,9 @@ pub mod supervisor;
 
 pub use cli::{ArgumentError, USAGE, parse_arguments};
 pub use composition::{
-    HeadlessConversationRuntime, LocalConversationCore, LocalConversationRuntime,
-    LocalRuntimeDependencies, LocalRuntimeError, LocalRuntimePaths, LocalSessionProduct,
-    StartupSession,
+    HeadlessConversationRuntime, LocalConversationCore, LocalConversationInspection,
+    LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimeError, LocalRuntimePaths,
+    LocalSessionProduct, StartupSession,
 };
 pub use config::{
     CURRENT_RUNTIME_SCHEMA_VERSION, CurrentRuntimeConfig, CurrentRuntimeConfigError,

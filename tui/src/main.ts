@@ -40,12 +40,16 @@ import { RuntimeClientConnection } from "./runtime/connection.ts";
 import { RuntimeClientAttachment } from "./runtime/attachment.ts";
 import { RustxTuiApp, type RuntimeAttachmentHandle } from "./ui/app.ts";
 import type { TuiArguments } from "./cli.ts";
+import type { RuntimeStartupOptions } from "./runtime/child-process.ts";
 
-async function startRuntime(parsed: TuiArguments): Promise<RuntimeAttachmentHandle> {
+async function startRuntime(
+  parsed: TuiArguments,
+  startup: RuntimeStartupOptions = parsed.startup,
+): Promise<RuntimeAttachmentHandle> {
   const child = ChildRuntimeProcess.spawn({
     binary: parsed.binary,
     paths: parsed.paths,
-    startup: parsed.startup,
+    startup,
   });
 
   const connection = new RuntimeClientConnection({
@@ -95,8 +99,22 @@ async function main(argv: readonly string[]): Promise<number> {
   const app = new RustxTuiApp({
     ...runtime,
     openSessionSelector: parsed.openSessionSelector,
+    readOnly: parsed.startup.inspectConversation !== undefined,
     workspace: parsed.paths.workspace,
     restartRuntime: () => startRuntime(replacement),
+    openConversation: (conversationId) => startRuntime(parsed, {
+      continueActiveSession: false,
+      inspectConversation: conversationId,
+      session: undefined,
+      node: undefined,
+      sessionName: undefined,
+      skillPaths: [],
+      noSkills: false,
+      noBuiltinTools: false,
+      noTools: false,
+      tools: undefined,
+      excludeTools: undefined,
+    }),
   });
   return app.run();
 }

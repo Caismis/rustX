@@ -45,6 +45,8 @@ use super::super::{common, support};
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
 use rustx::durable::ConversationStore;
 use rustx::events::types::{RuntimeEvent, SubagentTerminalState};
 use rustx::message::types::{
@@ -146,10 +148,12 @@ fn answer_script(answer: &str) -> Vec<FakeStep> {
 // ---------------------------------------------------------------------------
 
 /// A real child `ConversationRuntime` over the scripted model with the
-/// observation bridge installed and the runtime activated — exactly the
-/// state the production child driver reaches before it would send `Ready`.
+/// ordinary live Runtime Client host and a separate bounded parent-observation
+/// subscriber installed before activation — exactly the state the production
+/// child driver reaches before it would send `Ready`.
 struct ChildFixture {
     runtime: ConversationRuntime,
+    host: rustx::runtime_client::RuntimeClientHost,
     observations: Arc<PendingObservations>,
     model: Arc<FakeModel>,
     store: Arc<dyn ConversationStore>,
@@ -167,12 +171,34 @@ async fn child_fixture(
     tools: ToolRegistry,
     initial_messages: Vec<MessageBlock>,
 ) -> ChildFixture {
+    child_fixture_at(
+        dir,
+        conversation_id,
+        scripts,
+        tools,
+        initial_messages,
+        dir.path().join("child-artifacts"),
+    )
+    .await
+}
+
+/// Builds the same fixture with an explicit artifact root. The live
+/// inspection regression places that root in the stable child conversation
+/// directory so its post-terminal resolver exercises the real durable path.
+async fn child_fixture_at(
+    dir: &tempfile::TempDir,
+    conversation_id: &ConversationId,
+    scripts: Vec<Vec<FakeStep>>,
+    tools: ToolRegistry,
+    initial_messages: Vec<MessageBlock>,
+    artifacts_dir: std::path::PathBuf,
+) -> ChildFixture {
     let workspace = dir.path().join("child-workspace");
     std::fs::create_dir_all(&workspace).expect("child workspace");
     let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::new(
         conversation_id.clone(),
         &workspace,
-        dir.path().join("child-artifacts"),
+        artifacts_dir,
     )
     .expect("child tool runtime");
     let capability = rustx::capabilities::CapabilityCoordinator::new(
@@ -230,14 +256,21 @@ async fn child_fixture(
         Arc::clone(&clock) as Arc<dyn MonotonicClock>,
     )
     .expect("child runtime composition");
-    let observations = Arc::new(PendingObservations::new());
-    runtime
-        .install_observation_bridge(Arc::clone(&observations))
-        .expect("observation bridge over the inactive child");
+    let host = rustx::runtime_client::RuntimeClientHost::new(
+        rustx::runtime_client::RuntimeClientHostConfig {
+            runtime: runtime.clone(),
+            replay_limit: None,
+        },
+    )
+    .expect("live child Runtime Client host");
+    let observations = runtime
+        .subscribe_observations()
+        .expect("bounded parent observation subscriber before activation");
     runtime.activate();
     let store = tool_runtime.durable_store();
     ChildFixture {
         runtime,
+        host,
         observations,
         model,
         store,
@@ -612,6 +645,21 @@ async fn launch_wired_child_full(
 // ---------------------------------------------------------------------------
 // Journal helpers
 // ---------------------------------------------------------------------------
+
+/// Writes one exact Runtime Client request through a JSONL byte stream.
+async fn send_runtime_client_request<W>(
+    writer: &mut W,
+    request: rustx::runtime_client::RuntimeClientRequest,
+) where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let mut record = serde_json::to_vec(&request).expect("Runtime Client request JSON");
+    record.push(b'\n');
+    writer
+        .write_all(&record)
+        .await
+        .expect("Runtime Client request transport");
+}
 
 /// Reads the whole durable event journal of one store.
 fn journal(store: &Arc<dyn ConversationStore>) -> Vec<RuntimeEvent> {
@@ -3046,6 +3094,7 @@ async fn a_stalled_parent_projection_coalesces_activity_and_converges() {
 async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
     let dir = tempfile::tempdir().expect("temp root");
     let plane = standalone_parent_plane(&dir, "conv-178-live-progress");
+    let child_conversation_id = ConversationId::new("conv-178-live-progress-child");
     let mut tools = ToolRegistry::new();
     // The phased tool parks first (a deterministic no-progress cut); each
     // gate release reports the next phase's progress and parks again, and
@@ -3063,9 +3112,16 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
     let mut phased_started = phased.started();
     phased.register(&mut tools);
     let (answer_release, answer_released) = support::fake::model_release();
-    let child = child_fixture(
+    let child_artifacts = crate::runtime::subagent::child_conversation_store_path(
+        &plane.runtime_root,
+        &child_conversation_id,
+    )
+    .parent()
+    .expect("stable child conversation directory")
+    .to_path_buf();
+    let child = child_fixture_at(
         &dir,
-        &ConversationId::new("conv-178-live-progress-child"),
+        &child_conversation_id,
         vec![
             tool_call_request(&support::fake::ScriptedCall {
                 id: "call-phased",
@@ -3082,6 +3138,7 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
         ],
         tools,
         Vec::new(),
+        child_artifacts,
     )
     .await;
     let wired = launch_wired_child(&plane, &child, "inspect").await;
@@ -3154,6 +3211,168 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
         "live progress is never durable before batch settlement"
     );
 
+    // The mandatory blocker regression: resolve the same child identity
+    // through the local inspection path while the child is still running.
+    // The resolver must attach to the child-owned Runtime Client projection,
+    // because the durable store intentionally has no progress fact yet.
+    let live_server =
+        crate::local_runtime::live_inspection::LiveConversationInspectionServer::bind(
+            crate::runtime::subagent::child_conversation_inspection_socket_path(
+                &plane.runtime_root,
+                &child_conversation_id,
+            ),
+            child.host.clone(),
+        )
+        .expect("child live inspection endpoint");
+    let inspection_paths = rustx::local_runtime::LocalRuntimePaths {
+        models: dir.path().join("unused-models.jsonc"),
+        config: dir.path().join("unused-config.jsonc"),
+        skill_paths: Vec::new(),
+        no_skills: true,
+        no_builtin_tools: false,
+        no_tools: false,
+        startup_session: rustx::local_runtime::StartupSession::InspectConversation {
+            conversation_id: child_conversation_id.clone(),
+        },
+        session_name: None,
+        tools: None,
+        exclude_tools: Vec::new(),
+        workspace: dir.path().join("child-workspace"),
+        runtime_root: plane.runtime_root.clone(),
+    };
+    let inspection = rustx::local_runtime::LocalConversationInspection::compose(
+        &inspection_paths,
+        &child_conversation_id,
+    )
+    .await
+    .expect("running child resolves to its live Runtime Client endpoint");
+    assert!(
+        inspection.endpoint().is_err(),
+        "a live inspection must remain attached to the child-owned endpoint"
+    );
+    let (proxy_io, client_io) = tokio::io::duplex(1024 * 1024);
+    let (proxy_reader, proxy_writer) = tokio::io::split(proxy_io);
+    let inspection_task =
+        tokio::spawn(async move { inspection.serve_with_io(proxy_reader, proxy_writer).await });
+    let (client_reader, mut client_writer) = tokio::io::split(client_io);
+    let mut client_lines = tokio::io::BufReader::new(client_reader).lines();
+
+    send_runtime_client_request(
+        &mut client_writer,
+        rustx::runtime_client::RuntimeClientRequest::Initialize {
+            id: rustx::runtime_client::RequestId::new(1),
+            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
+        },
+    )
+    .await;
+    let response: rustx::runtime_client::RuntimeClientResponse = serde_json::from_str(
+        &client_lines
+            .next_line()
+            .await
+            .expect("live inspection response transport")
+            .expect("live inspection initialization response"),
+    )
+    .expect("live inspection initialization JSON");
+    let rustx::runtime_client::RuntimeClientResult::Initialized {
+        conversation_id: attached_id,
+        ..
+    } = response.result.expect("live inspection initialized")
+    else {
+        panic!("live inspection returned an unexpected initialization result");
+    };
+    assert_eq!(attached_id, child_conversation_id);
+
+    // A live inspector has the ordinary snapshot read path, but none of the
+    // execution/control authority.
+    send_runtime_client_request(
+        &mut client_writer,
+        rustx::runtime_client::RuntimeClientRequest::CancelCurrentAttempt {
+            id: rustx::runtime_client::RequestId::new(2),
+        },
+    )
+    .await;
+    let response: rustx::runtime_client::RuntimeClientResponse = serde_json::from_str(
+        &client_lines
+            .next_line()
+            .await
+            .expect("read-only rejection transport")
+            .expect("read-only rejection response"),
+    )
+    .expect("read-only rejection JSON");
+    assert!(matches!(
+        response.error,
+        Some(rustx::runtime_client::RuntimeClientError::InvalidState { message })
+            if message == "conversation inspection is read-only"
+    ));
+
+    send_runtime_client_request(
+        &mut client_writer,
+        rustx::runtime_client::RuntimeClientRequest::SnapshotGet {
+            id: rustx::runtime_client::RequestId::new(3),
+        },
+    )
+    .await;
+    let response: rustx::runtime_client::RuntimeClientResponse = serde_json::from_str(
+        &client_lines
+            .next_line()
+            .await
+            .expect("live snapshot transport")
+            .expect("live snapshot response"),
+    )
+    .expect("live snapshot JSON");
+    let rustx::runtime_client::RuntimeClientResult::Snapshot { snapshot, .. } =
+        response.result.expect("live snapshot result")
+    else {
+        panic!("live inspection returned an unexpected snapshot result");
+    };
+    let Some(attempt) = snapshot.attempt.as_ref() else {
+        panic!("the live inspection snapshot has no running attempt");
+    };
+    assert!(matches!(
+        &attempt.phase,
+        rustx::runtime_client::RuntimeClientAttemptPhase::Running
+    ));
+    assert!(
+        attempt.foreground.iter().any(|execution| {
+            execution.call_id == ToolCallId::new("call-phased")
+                && matches!(
+                    &execution.state,
+                    rustx::runtime_client::ForegroundToolState::Running {
+                        progress: Some(progress),
+                        ..
+                    } if progress.message.as_deref() == Some("phase 1")
+                )
+        }),
+        "the running inspector reads non-durable foreground progress from the child's live projection"
+    );
+
+    send_runtime_client_request(
+        &mut client_writer,
+        rustx::runtime_client::RuntimeClientRequest::Detach {
+            id: rustx::runtime_client::RequestId::new(4),
+        },
+    )
+    .await;
+    let response: rustx::runtime_client::RuntimeClientResponse = serde_json::from_str(
+        &client_lines
+            .next_line()
+            .await
+            .expect("live detach transport")
+            .expect("live detach response"),
+    )
+    .expect("live detach JSON");
+    assert_eq!(
+        response.result,
+        Some(rustx::runtime_client::RuntimeClientResult::Detached)
+    );
+    drop(client_lines);
+    drop(client_writer);
+    tokio::time::timeout(LIVENESS, inspection_task)
+        .await
+        .expect("live inspection proxy liveness")
+        .expect("live inspection proxy task")
+        .expect("live inspection proxy closes cleanly");
+
     // Gate B: the second phase becomes the latest visible report
     // (intermediate coalescing is fine — the newest must land).
     gates[1].send_replace(true);
@@ -3211,6 +3430,53 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
     );
     assert_eq!(settled.observation.counters.tool_executions, 1);
     await_serve(wired.serve).await;
+    live_server.shutdown().await;
+
+    // The same identity now resolves through the durable authorities after
+    // the live endpoint is gone. This is the terminal continuity half of the
+    // two-path contract, not a second inspection identity.
+    let offline_inspection = rustx::local_runtime::LocalConversationInspection::compose(
+        &inspection_paths,
+        &child_conversation_id,
+    )
+    .await
+    .expect("the settled child resolves to durable inspection");
+    let offline_response = offline_inspection
+        .endpoint()
+        .expect("offline inspection exposes its durable Runtime Client endpoint")
+        .handle_request(rustx::runtime_client::RuntimeClientRequest::Initialize {
+            id: rustx::runtime_client::RequestId::new(5),
+            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
+        });
+    let rustx::runtime_client::RuntimeClientResult::Initialized {
+        conversation_id: offline_id,
+        snapshot: offline_snapshot,
+        ..
+    } = offline_response
+        .result
+        .expect("offline inspection initialized")
+    else {
+        panic!("offline inspection returned an unexpected result");
+    };
+    assert_eq!(offline_id, child_conversation_id);
+    assert!(matches!(
+        offline_snapshot
+            .attempt
+            .as_ref()
+            .map(|attempt| &attempt.phase),
+        Some(rustx::runtime_client::RuntimeClientAttemptPhase::Settled { .. })
+    ));
+    assert!(offline_snapshot.messages.iter().any(|message| {
+        matches!(
+            message,
+            MessageBlock::Assistant(assistant)
+                if assistant.content.iter().any(|block| matches!(
+                    block,
+                    rustx::message::types::AssistantContentBlock::Text(text)
+                        if text.text.contains("LIVE-PROGRESS-ANSWER")
+                ))
+        )
+    }));
     assert_eq!(
         terminal_publications(&journal(&plane.store)),
         vec![SubagentTerminalState::Succeeded]

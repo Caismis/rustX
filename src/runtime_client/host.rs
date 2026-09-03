@@ -21,7 +21,8 @@
 //!
 //! The host owns:
 //!
-//! - the one-active-attachment policy;
+//! - one control attachment plus any number of explicitly read-only
+//!   observation attachments;
 //! - the Runtime Client projection (snapshot read model, cursor allocation,
 //!   bounded replay, subscribers) and its linearization boundary;
 //! - protocol adaptation: request dispatch, `model_set`/`shutdown`/
@@ -50,16 +51,18 @@
 //! The conversation runtime publishes every semantically meaningful
 //! transition as a runtime-owned
 //! [`ConversationObservation`](crate::runtime::observation::ConversationObservation)
-//! into the shared leaf
+//! into the runtime-owned observation fan-out, whose primary queue is the
 //! [`PendingObservations`](crate::runtime::observation::PendingObservations)
-//! queue, which the runtime installs through its bootstrap handshake at
-//! host construction (see
+//! queue used by this projection. The runtime installs that fan-out through
+//! its bootstrap handshake at host construction (see
 //! `ConversationRuntime::install_observation_bridge`). The handshake runs
 //! over an inert, not-yet-activated runtime and captures the bootstrap
 //! snapshot and every subsystem observation seam at one global cut, so
 //! the projection's initial seed and the live observation stream cover
 //! the runtime's history with no gap and no duplication — and the seed
-//! itself publishes nothing and allocates no cursor.
+//! itself publishes nothing and allocates no cursor. Existing bounded local
+//! observers may receive a separate fan-out queue without becoming a second
+//! projection or history authority.
 //!
 //! Every host lock acquisition drains that queue first, so queued
 //! observations fold in enqueue order, ahead of whatever the acquiring
@@ -75,11 +78,11 @@
 //! # The lock-order graph
 //!
 //! ```text
-//!   ClientState ─────────────► PendingObservations (leaf)
+//!   ClientState ─────────────► PendingObservations (fan-out leaf)
 //!       ▲
 //!       │  (never; see below)
-//!   coordinator ─────────────► PendingObservations
-//!   mailbox / background / capability ─► PendingObservations
+//!   coordinator ─────────────► observation fan-out ─► PendingObservations
+//!   mailbox / background / capability ─► observation fan-out
 //! ```
 //!
 //! No authoritative subsystem ever acquires `ClientState`. The mailbox, the
@@ -87,7 +90,7 @@
 //! task all fire their observers while their own boundary is held, so
 //! [`ClientObserver`] is never used: the conversation runtime's own
 //! observers (see `crate::runtime::conversation_runtime::RuntimeObserver`)
-//! append to the leaf queue instead.
+//! append to the runtime-owned fan-out instead.
 //! There is therefore no `subsystem -> ClientState` edge to pair with any
 //! `ClientState -> mailbox` call on the host surface, and subscriber
 //! notification can never block authoritative runtime state.
@@ -98,7 +101,7 @@
 //! every direction: the host holds an `Arc<ConversationRuntime>` (control +
 //! seed reads), while the runtime holds only a `Weak` reference through its
 //! installed observation seams. Releasing the last host handle closes the
-//! shared observation queue (the projection worker's terminal condition);
+//! primary observation queue (the projection worker's terminal condition);
 //! releasing the last runtime handle closes the queue and the admission
 //! wake gate. A detached or absent Runtime Client never stops the
 //! conversation: admission, execution, settlement, and canonical state all
@@ -111,6 +114,7 @@
 //! attempt, conversation-owned background executions, mailbox contents,
 //! canonical conversation state, and capability state are untouched.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -125,8 +129,15 @@ use super::types::{
     AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientCursor, RuntimeClientError,
     RuntimeClientProtocolEvent, RuntimeClientResult, RuntimeClientSessionRequest,
 };
-use crate::durable::{TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT, TRANSCRIPT_PAGE_LIMIT_MAX};
-use crate::model::session::SessionModelConfig;
+use crate::durable::{
+    ConversationStore, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT, TRANSCRIPT_PAGE_LIMIT_MAX,
+};
+use crate::model::catalog::{ModelCapabilities, ModelCatalogView, ModelRef};
+use crate::model::invocation::ModelInvocationView;
+use crate::model::session::{
+    SessionModelConfig, SessionModelView, SummaryModelPolicy, SummaryModelView,
+};
+use crate::model::types::ModelProtocol;
 use crate::model::{ModelRequest, RequestIdentity};
 use crate::runtime::conversation_runtime::{
     CancelAttemptError, ConversationRuntime, InboundAdmissionError, ManualCompactionError,
@@ -248,8 +259,13 @@ pub(crate) struct ClientState {
     /// The Runtime Client projection: snapshot read model, cursor,
     /// bounded replay, subscribers.
     projection: RuntimeClientProjection,
-    /// The at-most-one active attachment of the Runtime Client protocol.
-    attachment: Option<AttachmentState>,
+    /// The one control-capable Runtime Client attachment. Read-only
+    /// inspection attachments are kept separately so observation subscribers
+    /// do not compete with execution/control ownership.
+    control_attachment: Option<AttachmentState>,
+    /// Read-only Runtime Client inspection attachments. They share the one
+    /// projection and replay ring, but never acquire control authority.
+    read_only_attachments: BTreeMap<AttachmentId, AttachmentState>,
     /// The next attachment identity sequence.
     next_attachment_seq: u64,
 }
@@ -309,8 +325,18 @@ impl ClientInner {
 pub(crate) struct ClientInner {
     conversation_id: ConversationId,
     agent_id: crate::runtime::identity::AgentId,
-    /// The conversation runtime this host observes and controls.
-    runtime: ConversationRuntime,
+    /// The live conversation runtime this host observes and controls. A
+    /// durable inspection host deliberately has no runtime owner here.
+    runtime: Option<ConversationRuntime>,
+    /// The one durable authority used for transcript/bootstrap reads by both
+    /// live and read-only hosts.
+    store: Arc<dyn ConversationStore>,
+    /// Whether this host is a read-only attachment to durable conversation
+    /// state rather than a control adapter over a live runtime.
+    read_only: bool,
+    /// The bounded replay setting used when a durable inspection projection is
+    /// rebuilt from authoritative state.
+    replay_limit: usize,
     /// Optional native product Session owner. Low-level conversation hosts
     /// intentionally leave this absent; the local product installs exactly
     /// one supervisor here.
@@ -350,8 +376,8 @@ impl ClientInner {
     /// owns transcript bodies or an unbounded historical collection.
     fn refresh_transcript_page(&self, state: &mut ClientState) -> Result<(), RuntimeClientError> {
         let page = self
-            .runtime
-            .transcript_page(None, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT)
+            .store
+            .load_transcript_page(None, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT)
             .map_err(|error| RuntimeClientError::RuntimeFailure {
                 message: format!("durable transcript bootstrap failed: {error}"),
             })?;
@@ -360,6 +386,34 @@ impl ClientInner {
                 message: format!("durable transcript bootstrap is invalid: {message}"),
             })?;
         state.projection.set_transcript_page(page);
+        Ok(())
+    }
+
+    /// Rebuilds a read-only projection from the durable authorities. This is
+    /// the resync boundary for an inspection attachment: no event is replayed
+    /// into the live cursor ring, and no previously materialized presentation
+    /// value is treated as recovery input.
+    fn refresh_durable_projection(
+        &self,
+        state: &mut ClientState,
+    ) -> Result<(), RuntimeClientError> {
+        debug_assert!(self.read_only);
+        state.projection =
+            durable_projection(self.store.as_ref(), self.replay_limit).map_err(|error| {
+                RuntimeClientError::RuntimeFailure {
+                    message: error.to_string(),
+                }
+            })?;
+        // Replacing the projection invalidates the old subscriber registration
+        // just as a fresh attachment would. The caller's next
+        // `subscribe_events` request installs a cursor against this rebuilt
+        // projection.
+        if let Some(attachment) = state.control_attachment.as_mut() {
+            attachment.subscriber_id = None;
+        }
+        for attachment in state.read_only_attachments.values_mut() {
+            attachment.subscriber_id = None;
+        }
         Ok(())
     }
 
@@ -420,16 +474,18 @@ impl ClientInner {
     /// Admits one attachment: the internal primitive behind the
     /// `initialize` protocol method.
     ///
-    /// The Runtime Client protocol allows at most one active attachment; a second
-    /// simultaneous attach fails deterministically and never evicts the
-    /// first. The returned snapshot and cursor are linearized with the
-    /// admission under the one projection synchronization boundary.
+    /// The Runtime Client host allows one control attachment. A second
+    /// simultaneous control attach fails deterministically and never evicts
+    /// the first; explicitly read-only inspection attachments use a separate
+    /// subscriber set and may coexist with it. The returned snapshot and
+    /// cursor are linearized with admission under the one projection
+    /// synchronization boundary.
     ///
     /// # Errors
     ///
     /// Returns [`RuntimeClientError::UnsupportedProtocolVersion`] for an
-    /// unsupported version, [`RuntimeClientError::AttachmentInUse`] when an
-    /// attachment is active, and
+    /// unsupported version, [`RuntimeClientError::AttachmentInUse`] when the
+    /// control attachment is active, and
     /// [`RuntimeClientError::ProjectionExhausted`] once the observation
     /// stream is over.
     pub(crate) fn attach(
@@ -437,6 +493,28 @@ impl ClientInner {
         protocol_version: u16,
     ) -> Result<(super::attachment::RuntimeAttachment, RuntimeClientResult), RuntimeClientError>
     {
+        self.attach_with_mode(protocol_version, false)
+    }
+
+    /// Admits one explicitly read-only attachment. Read-only attachments may
+    /// coexist with the one control attachment and with one another; they
+    /// consume only projection subscription state and never change provider
+    /// admission or runtime lifecycle state.
+    pub(crate) fn attach_read_only(
+        self: &Arc<Self>,
+        protocol_version: u16,
+    ) -> Result<(super::attachment::RuntimeAttachment, RuntimeClientResult), RuntimeClientError>
+    {
+        self.attach_with_mode(protocol_version, true)
+    }
+
+    fn attach_with_mode(
+        self: &Arc<Self>,
+        protocol_version: u16,
+        read_only_attachment: bool,
+    ) -> Result<(super::attachment::RuntimeAttachment, RuntimeClientResult), RuntimeClientError>
+    {
+        let read_only_attachment = self.read_only || read_only_attachment;
         self.ensure_session_runtime_live()?;
         if protocol_version != RUNTIME_CLIENT_PROTOCOL_VERSION {
             return Err(RuntimeClientError::UnsupportedProtocolVersion {
@@ -446,27 +524,43 @@ impl ClientInner {
         }
         self.ensure_worker();
         let mut state = self.lock_state();
-        if let Some(existing) = &state.attachment {
+        if !read_only_attachment && let Some(existing) = &state.control_attachment {
             return Err(RuntimeClientError::AttachmentInUse {
                 existing_attachment_id: existing.attachment_id.clone(),
             });
         }
-        self.refresh_transcript_page(&mut state)?;
+        if self.read_only {
+            self.refresh_durable_projection(&mut state)?;
+        } else {
+            self.refresh_transcript_page(&mut state)?;
+        }
         let (snapshot, cursor) = state.projection.snapshot()?;
         state.next_attachment_seq = state.next_attachment_seq.saturating_add(1);
         let attachment_id = AttachmentId::new(format!("attachment-{}", state.next_attachment_seq));
-        state.attachment = Some(AttachmentState {
+        let attachment_state = AttachmentState {
             attachment_id: attachment_id.clone(),
             subscriber_id: None,
-        });
+        };
+        if read_only_attachment {
+            state
+                .read_only_attachments
+                .insert(attachment_id.clone(), attachment_state);
+        } else {
+            state.control_attachment = Some(attachment_state);
+        }
         // Keep provider admission under the same host-state lock as the
         // attachment identity. A concurrent detach therefore cannot remove
         // the attachment and then be overwritten by this attach's provider
         // update after the lock is released.
-        self.runtime.set_interaction_provider_available(true);
+        if !read_only_attachment && let Some(runtime) = self.runtime.as_ref() {
+            runtime.set_interaction_provider_available(true);
+        }
         drop(state);
-        let attachment =
-            super::attachment::RuntimeAttachment::new(attachment_id.clone(), self.clone());
+        let attachment = super::attachment::RuntimeAttachment::new(
+            attachment_id.clone(),
+            self.clone(),
+            self.read_only || read_only_attachment,
+        );
         Ok((
             attachment,
             RuntimeClientResult::Initialized {
@@ -489,22 +583,30 @@ impl ClientInner {
     /// previous operation panicked while holding the lock.
     pub(crate) fn detach(&self, attachment_id: &AttachmentId) {
         let mut state = self.lock_state();
-        if state
-            .attachment
+        let control = state
+            .control_attachment
             .as_ref()
-            .is_some_and(|attachment| attachment.attachment_id == *attachment_id)
-        {
-            let attachment = state
-                .attachment
+            .is_some_and(|attachment| attachment.attachment_id == *attachment_id);
+        let attachment = if control {
+            state
+                .control_attachment
                 .take()
-                .expect("the attachment identity was just checked");
-            if let Some(subscriber_id) = attachment.subscriber_id {
-                state.projection.remove_subscriber(subscriber_id);
-            }
-            // Detach is non-semantic: it only closes the provider admission
-            // gate for future interactions. It does not settle any request
-            // already published by the coordinator.
-            self.runtime.set_interaction_provider_available(false);
+                .expect("the control attachment identity was just checked")
+        } else {
+            let Some(attachment) = state.read_only_attachments.remove(attachment_id) else {
+                return;
+            };
+            attachment
+        };
+        if let Some(subscriber_id) = attachment.subscriber_id {
+            state.projection.remove_subscriber(subscriber_id);
+        }
+        // Detach is non-semantic: it only closes the provider admission
+        // gate for future interactions. It does not settle any request
+        // already published by the coordinator. Read-only detaches never
+        // touch that gate.
+        if control && let Some(runtime) = self.runtime.as_ref() {
+            runtime.set_interaction_provider_available(false);
         }
     }
 
@@ -529,9 +631,12 @@ impl ClientInner {
         &self,
         content: Vec<crate::message::types::UserContentBlock>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.ensure_session_runtime_live()?;
-        let admission = self
+        self.ensure_writable_runtime()?;
+        let runtime = self
             .runtime
+            .as_ref()
+            .expect("a writable Runtime Client host has a runtime");
+        let admission = runtime
             .submit_inbound(content)
             .map_err(|error| match error {
                 InboundAdmissionError::Shutdown => RuntimeClientError::RuntimeShutdown,
@@ -568,7 +673,7 @@ impl ClientInner {
     /// Returns [`RuntimeClientError::NoCurrentAttempt`] when no attempt
     /// is currently cancellable.
     pub(crate) fn cancel_current_attempt(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.ensure_session_runtime_live()?;
+        self.ensure_writable_runtime()?;
         let attempt_id = {
             let state = self.lock_state();
             let Some(attempt) = state.projection.snapshot_ref().attempt.as_ref() else {
@@ -585,7 +690,12 @@ impl ClientInner {
         // The coordinator verifies under its own lock that the named attempt
         // is still the current one, so a settlement/admission race can
         // never cancel a newer attempt.
-        match self.runtime.cancel_current_attempt(&attempt_id) {
+        match self
+            .runtime
+            .as_ref()
+            .expect("a writable Runtime Client host has a runtime")
+            .cancel_current_attempt(&attempt_id)
+        {
             Ok(attempt_id) => Ok(RuntimeClientResult::AttemptCancellationAccepted { attempt_id }),
             Err(CancelAttemptError::NoCurrentAttempt) => Err(RuntimeClientError::NoCurrentAttempt),
         }
@@ -594,8 +704,10 @@ impl ClientInner {
     /// Runs one manual idle context compaction to its terminal result and
     /// returns the authoritative context projection after success.
     pub(crate) async fn compact_context(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.ensure_session_runtime_live()?;
+        self.ensure_writable_runtime()?;
         self.runtime
+            .as_ref()
+            .expect("a writable Runtime Client host has a runtime")
             .compact_context()
             .await
             .map_err(|error| match error {
@@ -630,9 +742,11 @@ impl ClientInner {
 
     /// Atomically reloads one complete resource/capability generation.
     pub(crate) async fn reload_resources(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.ensure_session_runtime_live()?;
+        self.ensure_writable_runtime()?;
         let reloaded = self
             .runtime
+            .as_ref()
+            .expect("a writable Runtime Client host has a runtime")
             .reload_resources()
             .await
             .map_err(|error| match error {
@@ -678,8 +792,10 @@ impl ClientInner {
         interaction_id: &InteractionId,
         response: InteractionResponse,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.ensure_session_runtime_live()?;
+        self.ensure_writable_runtime()?;
         self.runtime
+            .as_ref()
+            .expect("a writable Runtime Client host has a runtime")
             .respond_interaction(interaction_id, response)
             .map(|()| RuntimeClientResult::InteractionResponseAccepted {
                 interaction_id: interaction_id.clone(),
@@ -710,7 +826,11 @@ impl ClientInner {
     {
         self.ensure_session_runtime_live()?;
         let mut state = self.lock_state();
-        self.refresh_transcript_page(&mut state)?;
+        if self.read_only {
+            self.refresh_durable_projection(&mut state)?;
+        } else {
+            self.refresh_transcript_page(&mut state)?;
+        }
         state.projection.snapshot()
     }
 
@@ -730,8 +850,8 @@ impl ClientInner {
             });
         }
         let page = self
-            .runtime
-            .transcript_page(before.map(Into::into), limit)
+            .store
+            .load_transcript_page(before.map(Into::into), limit)
             .map_err(|error| RuntimeClientError::RuntimeFailure {
                 message: format!("durable transcript page failed: {error}"),
             })?;
@@ -751,7 +871,7 @@ impl ClientInner {
     /// transcript authority.
     #[must_use]
     pub(crate) fn request_history(&self) -> RequestHistory {
-        self.runtime.request_history()
+        RequestHistory::new(self.store.clone())
     }
 
     /// Reconstructs one retained provider-neutral request from durable facts.
@@ -764,7 +884,7 @@ impl ClientInner {
         &self,
         identity: &RequestIdentity,
     ) -> Result<ModelRequest, RequestHistoryError> {
-        self.runtime.reconstruct_request(identity)
+        self.request_history().reconstruct(identity)
     }
 
     /// Subscribes one attachment to the observation stream after a
@@ -787,21 +907,45 @@ impl ClientInner {
         self.ensure_session_runtime_live()?;
         self.ensure_worker();
         let mut state = self.lock_state();
-        let previous_subscriber = match &state.attachment {
-            Some(attachment) if attachment.attachment_id == *attachment_id => {
-                attachment.subscriber_id
-            }
-            _ => return Err(RuntimeClientError::NotAttached),
+        let previous_subscriber = if state
+            .control_attachment
+            .as_ref()
+            .is_some_and(|attachment| attachment.attachment_id == *attachment_id)
+        {
+            state
+                .control_attachment
+                .as_ref()
+                .expect("the control attachment identity was just checked")
+                .subscriber_id
+        } else {
+            state
+                .read_only_attachments
+                .get(attachment_id)
+                .map_or(Err(RuntimeClientError::NotAttached), |attachment| {
+                    Ok(attachment.subscriber_id)
+                })?
         };
         if let Some(subscriber_id) = previous_subscriber {
             state.projection.remove_subscriber(subscriber_id);
         }
         let (subscriber_id, notify) = state.projection.subscribe(after_cursor)?;
-        state
-            .attachment
-            .as_mut()
-            .expect("the attachment identity was just checked")
-            .subscriber_id = Some(subscriber_id);
+        if state
+            .control_attachment
+            .as_ref()
+            .is_some_and(|attachment| attachment.attachment_id == *attachment_id)
+        {
+            state
+                .control_attachment
+                .as_mut()
+                .expect("the control attachment identity was just checked")
+                .subscriber_id = Some(subscriber_id);
+        } else {
+            state
+                .read_only_attachments
+                .get_mut(attachment_id)
+                .expect("the read-only attachment identity was just checked")
+                .subscriber_id = Some(subscriber_id);
+        }
         drop(state);
         Ok((
             EventSubscription {
@@ -846,9 +990,11 @@ impl ClientInner {
         let state = self.lock_state();
         state.projection.snapshot_ref_checked()?;
         drop(state);
-        Ok(RuntimeClientResult::ModelCatalog {
-            catalog: self.runtime.model_catalog(),
-        })
+        let catalog = self.runtime.as_ref().map_or_else(
+            || ModelCatalogView { models: Vec::new() },
+            super::super::runtime::conversation_runtime::ConversationRuntime::model_catalog,
+        );
+        Ok(RuntimeClientResult::ModelCatalog { catalog })
     }
 
     /// Reads the authoritative session model state through the folded
@@ -895,13 +1041,15 @@ impl ClientInner {
         &self,
         config: SessionModelConfig,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.ensure_session_runtime_live()?;
+        self.ensure_writable_runtime()?;
         let state = self.lock_state();
         state.projection.snapshot_ref_checked()?;
         drop(state);
         let control = self.session_control.as_ref().map(Arc::clone);
         let view = self
             .runtime
+            .as_ref()
+            .expect("a writable Runtime Client host has a runtime")
             .model_set_with_persistence(config, |config| {
                 if let Some(control) = control {
                     control.persist_model(config).map_err(|error| match error {
@@ -942,12 +1090,14 @@ impl ClientInner {
         &self,
         mode: crate::runtime::ApprovalMode,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.ensure_session_runtime_live()?;
+        self.ensure_writable_runtime()?;
         let state = self.lock_state();
         state.projection.snapshot_ref_checked()?;
         drop(state);
         let state = self
             .runtime
+            .as_ref()
+            .expect("a writable Runtime Client host has a runtime")
             .approval_mode_set(mode)
             .map_err(|error| match error {
                 crate::runtime::ApprovalModeUpdateError::Inactive => {
@@ -976,7 +1126,11 @@ impl ClientInner {
         execution_id: &ToolExecutionId,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_session_runtime_live()?;
-        let Some(snapshot) = self.runtime.background_status(execution_id) else {
+        let Some(snapshot) = self
+            .runtime
+            .as_ref()
+            .and_then(|runtime| runtime.background_status(execution_id))
+        else {
             return Err(RuntimeClientError::UnknownBackgroundExecution {
                 execution_id: execution_id.clone(),
             });
@@ -998,8 +1152,13 @@ impl ClientInner {
         &self,
         execution_id: &ToolExecutionId,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.ensure_session_runtime_live()?;
-        let Some(snapshot) = self.runtime.background_cancel(execution_id) else {
+        self.ensure_writable_runtime()?;
+        let Some(snapshot) = self
+            .runtime
+            .as_ref()
+            .expect("a writable Runtime Client host has a runtime")
+            .background_cancel(execution_id)
+        else {
             return Err(RuntimeClientError::UnknownBackgroundExecution {
                 execution_id: execution_id.clone(),
             });
@@ -1021,7 +1180,11 @@ impl ClientInner {
         subagent_id: &crate::runtime::identity::SubagentId,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_session_runtime_live()?;
-        let Some(snapshot) = self.runtime.subagent_status(subagent_id) else {
+        let Some(snapshot) = self
+            .runtime
+            .as_ref()
+            .and_then(|runtime| runtime.subagent_status(subagent_id))
+        else {
             return Err(RuntimeClientError::UnknownSubagent {
                 subagent_id: subagent_id.clone(),
             });
@@ -1043,8 +1206,13 @@ impl ClientInner {
         &self,
         subagent_id: &crate::runtime::identity::SubagentId,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.ensure_session_runtime_live()?;
-        let Some(snapshot) = self.runtime.subagent_cancel(subagent_id) else {
+        self.ensure_writable_runtime()?;
+        let Some(snapshot) = self
+            .runtime
+            .as_ref()
+            .expect("a writable Runtime Client host has a runtime")
+            .subagent_cancel(subagent_id)
+        else {
             return Err(RuntimeClientError::UnknownSubagent {
                 subagent_id: subagent_id.clone(),
             });
@@ -1064,19 +1232,24 @@ impl ClientInner {
     /// not yet activated: an inert conversation has no runtime lifecycle
     /// to end, so the request is refused and nothing is published.
     pub(crate) async fn shutdown(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.ensure_session_runtime_live()?;
-        self.runtime.shutdown().await.map_err(|error| match error {
-            crate::runtime::conversation_runtime::ShutdownError::Inactive => {
-                RuntimeClientError::InvalidState {
-                    message: "the conversation runtime is not activated".to_owned(),
+        self.ensure_writable_runtime()?;
+        self.runtime
+            .as_ref()
+            .expect("a writable Runtime Client host has a runtime")
+            .shutdown()
+            .await
+            .map_err(|error| match error {
+                crate::runtime::conversation_runtime::ShutdownError::Inactive => {
+                    RuntimeClientError::InvalidState {
+                        message: "the conversation runtime is not activated".to_owned(),
+                    }
                 }
-            }
-            crate::runtime::conversation_runtime::ShutdownError::RuntimeOwnedSettlement {
-                detail,
-            } => RuntimeClientError::RuntimeFailure {
-                message: format!("runtime-owned shutdown settlement failed: {detail}"),
-            },
-        })?;
+                crate::runtime::conversation_runtime::ShutdownError::RuntimeOwnedSettlement {
+                    detail,
+                } => RuntimeClientError::RuntimeFailure {
+                    message: format!("runtime-owned shutdown settlement failed: {detail}"),
+                },
+            })?;
         Ok(RuntimeClientResult::ShutdownCompleted)
     }
 
@@ -1100,6 +1273,178 @@ impl ClientInner {
             .as_ref()
             .map_or(Ok(()), |control| control.ensure_live())
     }
+
+    /// Fences every semantic mutation from a durable inspection host. The
+    /// read-only host owns no coordinator, mailbox, registry, or lifecycle
+    /// handle, so an inspection client cannot accidentally become an
+    /// execution owner through a control request.
+    fn ensure_writable_runtime(&self) -> Result<(), RuntimeClientError> {
+        if self.read_only {
+            return Err(RuntimeClientError::InvalidState {
+                message: "conversation inspection is read-only".to_owned(),
+            });
+        }
+        self.ensure_session_runtime_live()?;
+        if self.runtime.is_none() {
+            return Err(RuntimeClientError::InvalidState {
+                message: "the conversation runtime is unavailable".to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Rebuilds the redacted session-model view needed by the ordinary Runtime
+/// Client snapshot from the newest durable Request Snapshot. A completed or
+/// failed child may no longer have a live model catalog, so the historical
+/// request invocation is the only honest model authority available to an
+/// inspector. Conversations with no started model request receive a
+/// deliberately inert display model.
+fn durable_model_view(
+    store: &dyn ConversationStore,
+) -> Result<SessionModelView, HostConstructionError> {
+    const REQUEST_SNAPSHOT_PAGE_LIMIT: usize = 256;
+
+    let mut latest = None;
+    let mut after_sequence = None;
+    loop {
+        let page = store
+            .read_request_snapshots(after_sequence, REQUEST_SNAPSHOT_PAGE_LIMIT)
+            .map_err(|error| HostConstructionError::Durable(error.to_string()))?;
+        let next_sequence = page.next_sequence;
+        latest = page.snapshots.into_iter().last().or(latest);
+        if next_sequence.is_none() || next_sequence == after_sequence {
+            break;
+        }
+        after_sequence = next_sequence;
+    }
+
+    let Some(snapshot) = latest else {
+        let model = ModelRef::parse("inspection/durable")
+            .expect("the fixed durable inspection model reference is valid");
+        let capabilities = ModelCapabilities::text_only(false, false);
+        let invocation = ModelInvocationView {
+            model: model.clone(),
+            protocol: ModelProtocol::OpenAiChatCompletions,
+            context_window: 0,
+            model_max_output_tokens: 0,
+            max_output_tokens: 0,
+            reasoning_profile: None,
+            reasoning_enabled: false,
+            request_params: serde_json::Map::new(),
+            capabilities: capabilities.clone(),
+            declared_capabilities: capabilities,
+        };
+        return Ok(SessionModelView {
+            configured: SessionModelConfig::of(model),
+            effective: invocation,
+            summary: SummaryModelView::Session,
+        });
+    };
+
+    // Request Snapshots intentionally persist the provider-facing model
+    // identifier, not the catalog's provider-qualified ModelRef. A child
+    // inspector has no live catalog to recover that qualification from, so
+    // retain the historical invocation values while using the inert display
+    // identity already used for conversations with no request history.
+    let model = ModelRef::parse(&snapshot.invocation.model).unwrap_or_else(|_| {
+        ModelRef::parse("inspection/durable")
+            .expect("the fixed durable inspection model reference is valid")
+    });
+    let invocation = ModelInvocationView {
+        model: model.clone(),
+        protocol: snapshot.invocation.protocol,
+        context_window: snapshot.context_window_tokens,
+        model_max_output_tokens: snapshot.invocation.max_output_tokens,
+        max_output_tokens: snapshot.invocation.max_output_tokens,
+        reasoning_profile: snapshot.reasoning_profile.clone(),
+        reasoning_enabled: snapshot.reasoning_enabled,
+        request_params: snapshot.invocation.request_params.clone(),
+        capabilities: snapshot.invocation.capabilities.clone(),
+        declared_capabilities: snapshot.invocation.capabilities.clone(),
+    };
+    Ok(SessionModelView {
+        configured: SessionModelConfig {
+            model,
+            reasoning_profile: snapshot.reasoning_profile,
+            request_params: snapshot.invocation.request_params,
+            max_output_tokens: Some(snapshot.invocation.max_output_tokens),
+            summary_model: SummaryModelPolicy::Session,
+        },
+        effective: invocation,
+        summary: SummaryModelView::Session,
+    })
+}
+
+/// Builds the ordinary Runtime Client projection from one conversation's
+/// durable authorities. Durable journal facts update the read model only;
+/// they do not become live Runtime Client events or consume the live cursor
+/// domain.
+fn durable_projection(
+    store: &dyn ConversationStore,
+    replay_limit: usize,
+) -> Result<RuntimeClientProjection, HostConstructionError> {
+    const DURABLE_EVENT_PAGE_LIMIT: usize = 256;
+
+    let conversation_id = store.conversation_id().clone();
+    let head = store
+        .load_head()
+        .map_err(|error| HostConstructionError::Durable(error.to_string()))?;
+    let messages = store
+        .load_surface_snapshot(head.revision)
+        .map_err(|error| HostConstructionError::Durable(error.to_string()))?;
+    let canonical = store
+        .load_canonical()
+        .map_err(|error| HostConstructionError::Durable(error.to_string()))?;
+    let transcript = store
+        .load_transcript_page(None, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT)
+        .map_err(|error| HostConstructionError::Durable(error.to_string()))?;
+    let model = durable_model_view(store)?;
+    let capabilities = super::snapshot::CapabilityView {
+        revision: crate::runtime::identity::CapabilityRevision::new(0),
+        tools: Vec::new(),
+        available_tools: Vec::new(),
+        skills: Vec::new(),
+        sources: Vec::new(),
+    };
+    let mut projection =
+        RuntimeClientProjection::new(conversation_id, messages, capabilities, model, replay_limit);
+    projection.set_transcript_page(
+        transcript_page_view(transcript).map_err(HostConstructionError::Durable)?,
+    );
+
+    let mut after_sequence = None;
+    loop {
+        let page = store
+            .read_events(after_sequence, DURABLE_EVENT_PAGE_LIMIT)
+            .map_err(|error| HostConstructionError::Durable(error.to_string()))?;
+        let next_sequence = page.next_sequence;
+        for event in &page.events {
+            let committed_message_id = match &event.event {
+                crate::events::types::RuntimeEvent::AssistantMessageCommitted { message_id }
+                | crate::events::types::RuntimeEvent::ToolMessageCommitted { message_id, .. } => {
+                    Some(message_id)
+                }
+                _ => None,
+            };
+            if let (Some(attempt_id), Some(message_id)) =
+                (event.attempt_id.as_ref(), committed_message_id)
+                && let Some(message) = canonical.iter().find(|message| message.id() == message_id)
+            {
+                projection.bootstrap_durable_message(attempt_id, message);
+            }
+            projection.bootstrap_durable_event(event);
+        }
+        if page.events.is_empty() || next_sequence == after_sequence {
+            break;
+        }
+        let Some(next_sequence) = next_sequence else {
+            break;
+        };
+        after_sequence = Some(next_sequence);
+    }
+
+    Ok(projection)
 }
 
 /// The Runtime Client host of one conversation.
@@ -1184,6 +1529,65 @@ impl RuntimeClientHost {
         Self::construct(config, None)
     }
 
+    /// Creates a read-only Runtime Client host over a known conversation's
+    /// durable store.
+    ///
+    /// This is the generic conversation-attachment primitive used by child
+    /// inspection. It does not construct a [`ConversationRuntime`], install
+    /// an observation bridge, claim a mailbox, or acquire an execution
+    /// lifecycle. The store supplies the current Surface/transcript and the
+    /// Event Journal is folded into the same ordinary Runtime Client
+    /// projection used by a live host. No child-specific transcript payload
+    /// or parent-side history is introduced.
+    ///
+    /// The attachment linearizes at the durable reads performed here. A
+    /// concurrent writer may advance the append-only authorities while those
+    /// reads occur; a later `snapshot_get`/fresh attachment repairs from the
+    /// store again, and no live event cursor is fabricated for the read-only
+    /// view.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HostConstructionError::Durable`] when the durable
+    /// conversation cannot provide a coherent current Surface, transcript,
+    /// request-model, or Event Journal bootstrap.
+    pub fn new_durable(
+        store: Arc<dyn ConversationStore>,
+        replay_limit: Option<usize>,
+    ) -> Result<Self, HostConstructionError> {
+        let replay_limit =
+            replay_limit.unwrap_or(super::projection::RUNTIME_CLIENT_REPLAY_LIMIT_DEFAULT);
+        let conversation_id = store.conversation_id().clone();
+        let projection = durable_projection(store.as_ref(), replay_limit)?;
+
+        let pending = Arc::new(PendingObservations::new());
+        let inner = Arc::new(ClientInner {
+            conversation_id,
+            agent_id: crate::runtime::identity::AgentId::new(format!(
+                "inspection:{}",
+                store.conversation_id()
+            )),
+            runtime: None,
+            store,
+            read_only: true,
+            replay_limit,
+            session_control: None,
+            state: Mutex::new(ClientState {
+                projection,
+                control_attachment: None,
+                read_only_attachments: BTreeMap::new(),
+                next_attachment_seq: 0,
+            }),
+            pending,
+            worker_started: AtomicBool::new(false),
+        });
+        // No authoritative runtime can enqueue observations into this host,
+        // but using the normal worker setup keeps attachment/subscription
+        // lifetime semantics identical to a live host.
+        inner.ensure_worker();
+        Ok(Self { inner })
+    }
+
     /// Creates a host over one runtime and installs the native Session
     /// control seam used by the local product composition.
     ///
@@ -1222,6 +1626,7 @@ impl RuntimeClientHost {
         let replay_limit = config
             .replay_limit
             .unwrap_or(super::projection::RUNTIME_CLIENT_REPLAY_LIMIT_DEFAULT);
+        let store = config.runtime.tool_runtime().durable_store();
         let pending = Arc::new(PendingObservations::new());
         let seed = match config
             .runtime
@@ -1267,11 +1672,15 @@ impl RuntimeClientHost {
         let inner = Arc::new(ClientInner {
             conversation_id: seed.conversation_id,
             agent_id: config.runtime.agent_id().clone(),
-            runtime: config.runtime,
+            runtime: Some(config.runtime),
+            store,
+            read_only: false,
+            replay_limit,
             session_control,
             state: Mutex::new(ClientState {
                 projection,
-                attachment: None,
+                control_attachment: None,
+                read_only_attachments: BTreeMap::new(),
                 next_attachment_seq: 0,
             }),
             pending,
@@ -1320,7 +1729,11 @@ impl RuntimeClientHost {
     /// itself.
     #[must_use]
     pub fn endpoint(&self) -> super::endpoint::RuntimeClientEndpoint {
-        super::endpoint::RuntimeClientEndpoint::new(self.clone())
+        if self.inner.read_only {
+            super::endpoint::RuntimeClientEndpoint::new_read_only(self.clone())
+        } else {
+            super::endpoint::RuntimeClientEndpoint::new(self.clone())
+        }
     }
 
     /// Admits one attachment: the internal primitive behind the
@@ -1329,8 +1742,8 @@ impl RuntimeClientHost {
     /// # Errors
     ///
     /// Returns [`RuntimeClientError::UnsupportedProtocolVersion`] for an
-    /// unsupported version, [`RuntimeClientError::AttachmentInUse`] when an
-    /// attachment is active, and
+    /// unsupported version, [`RuntimeClientError::AttachmentInUse`] when the
+    /// control attachment is active, and
     /// [`RuntimeClientError::ProjectionExhausted`] once the observation
     /// stream is over.
     pub fn attach(
@@ -1339,6 +1752,19 @@ impl RuntimeClientHost {
     ) -> Result<(super::attachment::RuntimeAttachment, RuntimeClientResult), RuntimeClientError>
     {
         self.inner.attach(protocol_version)
+    }
+
+    /// Admits one explicitly read-only attachment to the live projection.
+    ///
+    /// The attachment can read the same projection as the Runtime Client
+    /// control owner, including disposable live state, but every semantic
+    /// mutation is rejected before it reaches the conversation runtime.
+    pub(crate) fn attach_read_only(
+        &self,
+        protocol_version: u16,
+    ) -> Result<(super::attachment::RuntimeAttachment, RuntimeClientResult), RuntimeClientError>
+    {
+        self.inner.attach_read_only(protocol_version)
     }
 
     /// Releases one attachment. Idempotent. Detach is never cancellation
@@ -1614,20 +2040,29 @@ impl RuntimeClientHost {
     /// forward to the conversation runtime.
     #[cfg(test)]
     pub(crate) fn host_ledger(&self) -> Option<Vec<crate::message::types::MessageBlock>> {
-        self.inner.runtime.coordinator_ledger()
+        self.inner
+            .runtime
+            .as_ref()
+            .and_then(ConversationRuntime::coordinator_ledger)
     }
 
     /// The runtime's active Surface identities, or `None` while an attempt
     /// owns the conversation state.
     #[cfg(test)]
     pub(crate) fn host_active_ids(&self) -> Option<Vec<crate::runtime::identity::MessageId>> {
-        self.inner.runtime.coordinator_active_ids()
+        self.inner
+            .runtime
+            .as_ref()
+            .and_then(ConversationRuntime::coordinator_active_ids)
     }
 
     #[cfg(test)]
     #[allow(dead_code)] // used by the race regression tests
     pub(crate) fn has_current_attempt(&self) -> bool {
-        self.inner.runtime.has_current_attempt()
+        self.inner
+            .runtime
+            .as_ref()
+            .is_some_and(ConversationRuntime::has_current_attempt)
     }
 
     /// A non-owning handle to the shared host state, for lifetime tests.
@@ -1642,7 +2077,11 @@ impl RuntimeClientHost {
     pub(crate) fn weak_runtime_inner(
         &self,
     ) -> Weak<crate::runtime::conversation_runtime::RuntimeInner> {
-        self.inner.runtime.weak_inner()
+        self.inner
+            .runtime
+            .as_ref()
+            .expect("live host has a conversation runtime")
+            .weak_inner()
     }
 
     /// Installs the deterministic worker-exit signal of the projection
@@ -1656,13 +2095,20 @@ impl RuntimeClientHost {
     /// worker, for lifetime tests.
     #[cfg(test)]
     pub(crate) fn install_admission_worker_exit_probe(&self, sender: std::sync::mpsc::Sender<()>) {
-        self.inner.runtime.install_worker_exit_probe(sender);
+        self.inner
+            .runtime
+            .as_ref()
+            .expect("live host has a conversation runtime")
+            .install_worker_exit_probe(sender);
     }
 
     /// The conversation runtime this host observes and controls.
     #[cfg(test)]
     pub(crate) fn runtime(&self) -> &ConversationRuntime {
-        &self.inner.runtime
+        self.inner
+            .runtime
+            .as_ref()
+            .expect("live host has a conversation runtime")
     }
 }
 
@@ -1816,12 +2262,13 @@ mod tests {
     };
     use crate::conversation::SurfaceRevision;
     use crate::durable::{ConversationStore, SqliteConversationStore};
+    use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
     use crate::local_runtime::session::SessionPersistentState;
     use crate::local_runtime::{CurrentRuntimeConfig, LocalSessionSupervisor, SessionCatalog};
     use crate::message::content::TextBlock;
     use crate::message::types::{
-        ContentBlockIndex, InboundKind, MessageBlock, UserContentBlock, UserMessageBlock,
-        UserSource,
+        AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, InboundKind, MessageBlock,
+        ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::model::adapter::{ModelAdapter, ModelStream};
     use crate::model::error::{ModelError, ModelErrorKind};
@@ -1834,7 +2281,7 @@ mod tests {
         InboundAdmissionError, ModelUpdateError, RuntimeConversationConfig,
     };
     use crate::runtime::identity::{
-        AgentId, ConversationId, MessageId, ToolCallId, ToolExecutionId, ToolId,
+        AgentId, AttemptId, ConversationId, EventId, MessageId, ToolCallId, ToolExecutionId, ToolId,
     };
     use crate::runtime::request_history::RequestHistory;
     use crate::runtime::types::RuntimeClock;
@@ -1853,8 +2300,9 @@ mod tests {
     };
     use crate::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
     use crate::tools::types::{
-        ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
+        ToolCall, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
         ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolOrigin, ToolReplayPolicy,
+        ToolResultContent,
     };
 
     fn test_resources(
@@ -2368,6 +2816,40 @@ mod tests {
         })]
     }
 
+    fn durable_event(
+        conversation_id: &ConversationId,
+        event_id: &str,
+        attempt_id: &AttemptId,
+        event: RuntimeEvent,
+    ) -> RuntimeEventEnvelope {
+        RuntimeEventEnvelope {
+            schema_version: EVENT_SCHEMA_VERSION,
+            event_id: EventId::new(event_id),
+            sequence: 0,
+            conversation_id: conversation_id.clone(),
+            attempt_id: Some(attempt_id.clone()),
+            turn_id: None,
+            timestamp: chrono::DateTime::parse_from_rfc3339("2026-08-07T12:00:00Z")
+                .expect("fixed event timestamp")
+                .with_timezone(&chrono::Utc),
+            event,
+        }
+    }
+
+    fn durable_tool_result() -> ToolExecutionResult {
+        ToolExecutionResult {
+            status: ToolExecutionStatus::Success,
+            content: vec![ToolResultContent::Text(TextBlock {
+                text: "child tool output".to_owned(),
+            })],
+            duration_ms: 7,
+            exit_code: Some(0),
+            artifacts: Vec::new(),
+            truncation: None,
+            managed_output: None,
+        }
+    }
+
     fn one_turn_stop() -> Vec<GatedStep> {
         vec![
             GatedStep::Emit(ModelEvent::Started),
@@ -2380,6 +2862,149 @@ mod tests {
                 usage: None,
             }),
         ]
+    }
+
+    struct DurableHistoryFixture {
+        conversation_id: ConversationId,
+        store: Arc<SqliteConversationStore>,
+        user: MessageBlock,
+        assistant: MessageBlock,
+        tool: MessageBlock,
+        call: ToolCall,
+        tool_result: ToolExecutionResult,
+    }
+
+    fn durable_history_fixture() -> DurableHistoryFixture {
+        let conversation_id = ConversationId::new("conversation-child-inspection");
+        let store = Arc::new(
+            SqliteConversationStore::in_memory(conversation_id.clone()).expect("child store"),
+        );
+        let user = MessageBlock::User(inbound_text("child-user", "inspect this child"));
+        let call = ToolCall {
+            id: ToolCallId::new("child-call-1"),
+            tool_id: ToolId::new("tool-read"),
+            name: "read".to_owned(),
+            arguments: serde_json::json!({"path": "README.md"}),
+        };
+        let assistant = MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("child-assistant"),
+            content: vec![
+                AssistantContentBlock::Text(TextBlock {
+                    text: "I will inspect the file.".to_owned(),
+                }),
+                AssistantContentBlock::ToolCall(call.clone()),
+            ],
+        });
+        let tool_result = durable_tool_result();
+        let tool = MessageBlock::Tool(ToolMessageBlock {
+            id: MessageId::new("child-tool-result"),
+            tool_call_id: call.id.clone(),
+            tool_id: call.tool_id.clone(),
+            result: tool_result.clone(),
+        });
+        append_durable_history(
+            &store,
+            &conversation_id,
+            &assistant,
+            &tool,
+            &call,
+            &tool_result,
+        );
+        DurableHistoryFixture {
+            conversation_id,
+            store,
+            user,
+            assistant,
+            tool,
+            call,
+            tool_result,
+        }
+    }
+
+    fn append_durable_history(
+        store: &SqliteConversationStore,
+        conversation_id: &ConversationId,
+        assistant: &MessageBlock,
+        tool: &MessageBlock,
+        call: &ToolCall,
+        tool_result: &ToolExecutionResult,
+    ) {
+        let user = MessageBlock::User(inbound_text("child-user", "inspect this child"));
+        store
+            .initialize(std::slice::from_ref(&user))
+            .expect("child seed");
+        let attempt_id = AttemptId::new("child-attempt-1");
+        store
+            .append_event(durable_event(
+                conversation_id,
+                "child-attempt-started",
+                &attempt_id,
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt_id.clone(),
+                },
+            ))
+            .expect("attempt start");
+        store
+            .append_canonical_with_event(
+                assistant,
+                durable_event(
+                    conversation_id,
+                    "child-assistant-committed",
+                    &attempt_id,
+                    RuntimeEvent::AssistantMessageCommitted {
+                        message_id: assistant.id().clone(),
+                    },
+                ),
+            )
+            .expect("assistant commit");
+        store
+            .append_event(durable_event(
+                conversation_id,
+                "child-tool-started",
+                &attempt_id,
+                RuntimeEvent::ToolExecutionStarted {
+                    tool_call_id: call.id.clone(),
+                    tool_id: call.tool_id.clone(),
+                },
+            ))
+            .expect("tool start");
+        store
+            .append_event(durable_event(
+                conversation_id,
+                "child-tool-completed",
+                &attempt_id,
+                RuntimeEvent::ToolExecutionCompleted {
+                    tool_call_id: call.id.clone(),
+                    tool_id: call.tool_id.clone(),
+                    result: tool_result.clone(),
+                },
+            ))
+            .expect("tool completion");
+        store
+            .append_canonical_with_event(
+                tool,
+                durable_event(
+                    conversation_id,
+                    "child-tool-committed",
+                    &attempt_id,
+                    RuntimeEvent::ToolMessageCommitted {
+                        message_id: tool.id().clone(),
+                        tool_call_id: call.id.clone(),
+                    },
+                ),
+            )
+            .expect("tool result commit");
+        store
+            .append_event(durable_event(
+                conversation_id,
+                "child-attempt-completed",
+                &attempt_id,
+                RuntimeEvent::AttemptCompleted {
+                    attempt_id: attempt_id.clone(),
+                    finish_reason: ModelFinishReason::Stop,
+                },
+            ))
+            .expect("attempt completion");
     }
 
     /// The outer liveness guard of the event-stream helpers.
@@ -2414,6 +3039,171 @@ mod tests {
         })
         .await
         .expect("the observation stream must not stall")
+    }
+
+    /// A durable attachment reads the child's canonical Ledger and Event
+    /// Journal through the ordinary Runtime Client snapshot. It has no live
+    /// runtime to mutate, and detaching it leaves both authorities byte-for-
+    /// byte semantically unchanged.
+    #[test]
+    fn durable_attachment_replays_child_history_without_writing_or_copying() {
+        let fixture = durable_history_fixture();
+
+        let canonical_before = fixture
+            .store
+            .load_canonical()
+            .expect("canonical before inspection");
+        let events_before = fixture
+            .store
+            .read_events(None, 64)
+            .expect("journal before inspection")
+            .events;
+        let host = RuntimeClientHost::new_durable(fixture.store.clone(), Some(16))
+            .expect("inspection host");
+        assert!(host.inner.runtime.is_none(), "inspection owns no runtime");
+
+        let (attachment, initialized) = host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .expect("attach child conversation");
+        let RuntimeClientResult::Initialized {
+            conversation_id: attached_id,
+            snapshot,
+            cursor,
+            ..
+        } = initialized
+        else {
+            panic!("durable attach must initialize the ordinary snapshot");
+        };
+        assert_eq!(attached_id, fixture.conversation_id);
+        assert_eq!(cursor, RuntimeClientCursor::new(0));
+        assert_eq!(
+            snapshot.messages,
+            vec![
+                fixture.user.clone(),
+                fixture.assistant.clone(),
+                fixture.tool.clone()
+            ]
+        );
+        assert!(snapshot.transcript.entries.iter().any(|entry| {
+            matches!(
+                &entry.item,
+                crate::runtime_client::snapshot::RuntimeClientTranscriptItem::Message { message }
+                    if message == &fixture.assistant
+            )
+        }));
+        assert!(snapshot.transcript.entries.iter().any(|entry| {
+            matches!(
+                &entry.item,
+                crate::runtime_client::snapshot::RuntimeClientTranscriptItem::Message { message }
+                    if message == &fixture.tool
+            )
+        }));
+        let attempt = snapshot.attempt.expect("durable attempt history");
+        assert!(matches!(
+            attempt.phase,
+            RuntimeClientAttemptPhase::Settled {
+                outcome: crate::runtime_client::event::RuntimeClientOutcome::Completed {
+                    finish_reason: ModelFinishReason::Stop,
+                }
+            }
+        ));
+        assert!(matches!(
+            attempt.foreground.as_slice(),
+            [crate::runtime_client::snapshot::ForegroundToolExecution {
+                call_id,
+                state: crate::runtime_client::snapshot::ForegroundToolState::Settled { result, .. },
+                ..
+            }] if call_id == &fixture.call.id && result == &fixture.tool_result
+        ));
+
+        let rejected = attachment.handle_request(RuntimeClientRequest::SubmitInbound {
+            id: crate::runtime_client::RequestId::new(1),
+            content: submit_content("must not mutate child"),
+        });
+        assert!(matches!(
+            rejected.error,
+            Some(RuntimeClientError::InvalidState { message })
+                if message == "conversation inspection is read-only"
+        ));
+        attachment.detach();
+        assert_eq!(
+            fixture
+                .store
+                .load_canonical()
+                .expect("canonical after inspection"),
+            canonical_before
+        );
+        assert_eq!(
+            fixture
+                .store
+                .read_events(None, 64)
+                .expect("journal after inspection")
+                .events,
+            events_before
+        );
+    }
+
+    /// A `snapshot_get` on a still-open durable attachment repairs a projection
+    /// after journal state advances out of band. The read-only cursor remains
+    /// at zero because durable history is bootstrap/resync input, never a live
+    /// observation stream.
+    #[test]
+    fn durable_attachment_resyncs_cancelled_child_after_runtime_disappears() {
+        let conversation_id = ConversationId::new("conversation-cancelled-child");
+        let store = Arc::new(
+            SqliteConversationStore::in_memory(conversation_id.clone()).expect("child store"),
+        );
+        let partial_user = MessageBlock::User(inbound_text(
+            "cancelled-child-user",
+            "the cancelled child started this durable turn",
+        ));
+        store
+            .initialize(std::slice::from_ref(&partial_user))
+            .expect("partial child seed");
+        let host = RuntimeClientHost::new_durable(store.clone(), None).expect("inspection host");
+        let (attachment, initialized) = host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .expect("initial attach");
+        let RuntimeClientResult::Initialized { snapshot, .. } = initialized else {
+            panic!("durable attach must initialize");
+        };
+        assert_eq!(snapshot.messages, vec![partial_user]);
+        assert!(snapshot.attempt.is_none());
+
+        let attempt_id = AttemptId::new("cancelled-attempt");
+        store
+            .append_event(durable_event(
+                &conversation_id,
+                "cancelled-attempt-started",
+                &attempt_id,
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt_id.clone(),
+                },
+            ))
+            .expect("attempt start");
+        store
+            .append_event(durable_event(
+                &conversation_id,
+                "cancelled-attempt-cancelled",
+                &attempt_id,
+                RuntimeEvent::AttemptCancelled {
+                    attempt_id: attempt_id.clone(),
+                    reason: crate::runtime::types::CancellationReason::UserRequested,
+                },
+            ))
+            .expect("attempt cancellation");
+
+        let (repaired, cursor) = host.snapshot().expect("durable resync");
+        assert_eq!(cursor, RuntimeClientCursor::new(0));
+        assert!(matches!(
+            repaired.attempt.expect("cancelled attempt").phase,
+            RuntimeClientAttemptPhase::Settled {
+                outcome: crate::runtime_client::event::RuntimeClientOutcome::Cancelled {
+                    reason: crate::runtime::types::CancellationReason::UserRequested,
+                }
+            }
+        ));
+        attachment.detach();
     }
 
     /// First attachment succeeds, the second concurrent attachment is
@@ -2492,6 +3282,55 @@ mod tests {
         });
         assert_eq!(response.id.get(), 1, "request ids are attachment-scoped");
         assert!(response.error.is_none());
+    }
+
+    /// Read-only inspection attachments share the live projection without
+    /// competing with the one control owner or changing provider admission.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn read_only_attachments_coexist_with_the_control_attachment() {
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+        let (control, _) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .expect("control attachment");
+        let (inspection_one, _) = fixture
+            .host
+            .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .expect("first read-only attachment");
+        let (inspection_two, _) = fixture
+            .host
+            .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .expect("second read-only attachment");
+        assert_ne!(
+            inspection_one.attachment_id(),
+            inspection_two.attachment_id()
+        );
+
+        let rejection = inspection_one.handle_request(RuntimeClientRequest::CancelCurrentAttempt {
+            id: crate::runtime_client::RequestId::new(1),
+        });
+        assert!(matches!(
+            rejection.error,
+            Some(RuntimeClientError::InvalidState { message })
+                if message == "conversation inspection is read-only"
+        ));
+        assert!(
+            inspection_two
+                .handle_request(RuntimeClientRequest::SnapshotGet {
+                    id: crate::runtime_client::RequestId::new(2),
+                })
+                .error
+                .is_none()
+        );
+        assert!(
+            control
+                .handle_request(RuntimeClientRequest::SnapshotGet {
+                    id: crate::runtime_client::RequestId::new(3),
+                })
+                .error
+                .is_none(),
+            "read-only attachments do not displace control ownership"
+        );
     }
 
     /// Dropping the attachment releases it (RAII detach semantics).

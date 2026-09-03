@@ -1209,6 +1209,7 @@ describe("CLI arguments", () => {
     assert.equal(parsed.openSessionSelector, false);
     assert.deepEqual(parsed.startup, {
       continueActiveSession: false,
+      inspectConversation: undefined,
       session: undefined,
       node: undefined,
       sessionName: undefined,
@@ -1239,6 +1240,7 @@ describe("CLI arguments", () => {
     ]);
     assert.deepEqual(parsed.startup, {
       continueActiveSession: true,
+      inspectConversation: undefined,
       session: undefined,
       node: undefined,
       sessionName: undefined,
@@ -1276,6 +1278,29 @@ describe("CLI arguments", () => {
       replacementArguments(parseArguments([...complete, "--continue"])).startup
         .continueActiveSession,
       true,
+    );
+  });
+
+  it("parses a durable conversation inspection target without Session controls", () => {
+    const parsed = parseArguments([
+      ...complete,
+      "--inspect-conversation",
+      "conversation-1-subagent-1",
+    ]);
+    assert.equal(parsed.startup.inspectConversation, "conversation-1-subagent-1");
+    assert.equal(parsed.startup.continueActiveSession, false);
+    assert.equal(parsed.startup.session, undefined);
+    assert.equal(parsed.startup.node, undefined);
+    assert.equal(parsed.startup.sessionName, undefined);
+    assert.equal(parsed.openSessionSelector, false);
+
+    assert.throws(
+      () => parseArguments([...complete, "--inspect-conversation", "child", "--continue"]),
+      /cannot be combined/,
+    );
+    assert.throws(
+      () => parseArguments([...complete, "--inspect-conversation", "child", "--name", "parent"]),
+      /cannot be combined/,
     );
   });
 

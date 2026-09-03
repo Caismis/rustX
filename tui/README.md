@@ -151,6 +151,34 @@ Session read is available, and the basic keyboard hints. Once a real turn or
 durably accepted transcript content exists, that block is reclaimed and the
 compact footer carries the durable Session metadata and live status instead.
 
+### Conversation inspection
+
+The parent subagent section is a navigation source, not a child-history
+cache. It shows every known child with its `child_conversation_id`; active
+rows may also show the disposable live observation from the parent Runtime
+Client projection. Use `Ctrl+Up`/`Ctrl+Down` to select a row and `Enter` to
+open that exact identity in the ordinary Runtime Client conversation view.
+The child view is explicitly read-only and the footer identifies the current
+conversation. `Esc` detaches the child inspection and restores the existing
+parent attachment; the parent process and its execution continue throughout.
+Direct `--inspect-conversation <id>` launches the same read-only view without a
+parent frame and exits on `Ctrl+C`.
+
+The child's own conversation is the durable authority for its full transcript
+and execution history. The inspector reads the normal child Message Ledger,
+transcript ordering, Request Snapshots, and Event Journal projection; it does
+not receive or accumulate a subagent transcript payload. Live observation is
+disposable, and navigation state is presentation-only. For a running child,
+the same `child_conversation_id` first attaches read-only to the child's live
+Runtime Client projection, so current model/attempt state and foreground tool
+progress are visible before durable settlement. Once the live child endpoint
+is gone, reopening the identity uses the durable conversation authorities;
+the durable fallback does not reconstruct the disposable #181 observation
+plane. If a child exits while an inspection is attached, that local view
+closes cleanly and reopening the same identity shows the durable terminal
+state. Inspecting a child is not parent-model context transfer: it does not
+modify the parent transcript or the next parent model request.
+
 ## Owners
 
 | Module | Owns | Does not own |
@@ -336,9 +364,11 @@ resync uses the same rule in reverse by closing every overlay before any new
 input is interpreted.
 
 There is deliberately **no** `!bash`, no `@file` attachment, no client-side
-file read, and no client-side Skill execution. Shell, file, and Skill behaviour
-must travel through the real rustX tool and capability path, and rustX has not
-yet defined a client-facing attachment contract.
+file read, and no client-side Skill execution. Shell, file, and Skill
+behaviour must travel through the real rustX tool and capability path. The
+conversation inspection capability is a read-only attachment to a known
+conversation identity; it does not grant the TUI a filesystem or capability
+authority.
 
 ## Native HITL
 

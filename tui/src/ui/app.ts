@@ -83,6 +83,10 @@ import {
   renderOrphanExecutions,
   renderSubagentSection,
 } from "./components/activity.ts";
+import {
+  cycleSubagentSelection,
+  hasSubagentSelection,
+} from "./subagent-navigation.ts";
 import { ModelSelector } from "./components/model-selector.ts";
 import { InspectionView } from "./components/inspection-view.ts";
 import { PopupFrame, type PopupContent } from "./components/popup-frame.ts";
@@ -93,6 +97,7 @@ import {
   startupVisible,
   workingStatus,
 } from "./components/status.ts";
+import type { ConversationContext } from "./components/status.ts";
 import { renderResourceBanner } from "./components/resources.ts";
 import { renderTranscript } from "./components/transcript.ts";
 import { renderTodoPanel } from "./components/todos.ts";
@@ -125,6 +130,12 @@ export interface RustxTuiAppOptions {
    */
   openSessionSelector?: boolean;
   /**
+   * Whether the initial attachment is a read-only conversation inspection.
+   * A child opened from this app sets the same presentation state internally;
+   * neither form changes Runtime Client ownership.
+   */
+  readOnly?: boolean;
+  /**
    * The workspace the runtime was launched against.
    *
    * Presentation only: it shortens the absolute paths the runtime publishes
@@ -134,6 +145,8 @@ export interface RustxTuiAppOptions {
   workspace?: string;
   /** Re-spawns and re-attaches after Rust publishes a lineage switch. */
   restartRuntime?: () => Promise<RuntimeAttachmentHandle>;
+  /** Opens a known conversation identity in a fresh ordinary attachment. */
+  openConversation?: (conversationId: string) => Promise<RuntimeAttachmentHandle>;
   /** How long the child gets to exit after the shutdown sequence. */
   terminationGraceMs?: number;
 }
@@ -156,15 +169,26 @@ interface PresentationLease {
   session: RuntimeClientAttachment;
 }
 
+/** One presentation frame kept so Esc can return to the existing parent view. */
+interface NavigationFrame {
+  handle: RuntimeAttachmentHandle;
+  readOnly: boolean;
+  parentConversationId?: string;
+}
+
 export class RustxTuiApp {
   #session: RuntimeClientAttachment;
   #connection: RuntimeClientConnection;
   #child: ChildRuntimeProcess;
   readonly #dispatcher: CommandDispatcher;
   readonly #restartRuntime: (() => Promise<RuntimeAttachmentHandle>) | undefined;
+  readonly #openConversation: ((conversationId: string) => Promise<RuntimeAttachmentHandle>) | undefined;
   readonly #openSessionSelectorAtStartup: boolean;
   readonly #workspace: string | undefined;
   readonly #terminationGraceMs: number | undefined;
+  #readOnly: boolean;
+  #parentConversationId: string | undefined;
+  readonly #navigationStack: NavigationFrame[] = [];
 
   readonly #tui: TUI;
   readonly #startup = new Container();
@@ -191,6 +215,9 @@ export class RustxTuiApp {
   #finished = false;
   #started = false;
   #restarting = false;
+  #navigating = false;
+  #subagentListFocused = false;
+  #selectedSubagentId: string | undefined;
   #presentationEpoch = 0;
   #terminalFinishStarted = false;
   #removeStateListener: (() => void) | undefined;
@@ -203,9 +230,11 @@ export class RustxTuiApp {
     this.#connection = options.connection;
     this.#child = options.child;
     this.#restartRuntime = options.restartRuntime;
+    this.#openConversation = options.openConversation;
     this.#openSessionSelectorAtStartup = options.openSessionSelector ?? false;
     this.#workspace = options.workspace;
     this.#terminationGraceMs = options.terminationGraceMs;
+    this.#readOnly = options.readOnly ?? false;
 
     this.#tui = new TUI(new ProcessTerminal());
     this.#editor = new Editor(this.#tui, editorTheme, { paddingX: 1 });
@@ -213,6 +242,7 @@ export class RustxTuiApp {
     this.#editor.onSubmit = (text) => {
       void this.#onSubmit(text);
     };
+    this.#editor.disableSubmit = this.#readOnly;
     this.#loader = new Loader(this.#tui, style.cyan, style.dim, "");
 
     this.#dispatcher = new CommandDispatcher({
@@ -265,6 +295,14 @@ export class RustxTuiApp {
     this.#removeCloseListener = connection.onClose((error) => {
       if (this.#connection !== connection || this.#session !== boundSession) return;
       if (this.#restarting || this.#quitting || this.#terminalFinishStarted) return;
+      if (this.#navigating) return;
+      if (this.#navigationStack.length > 0) {
+        this.#editor.disableSubmit = true;
+        void this.#returnToParent(
+          `inspection connection lost: ${compactDiagnostic(error)}`,
+        );
+        return;
+      }
       // Transport loss is not cancellation. It only ends observation, so the
       // client says exactly that and stops accepting input.
       this.#editor.disableSubmit = true;
@@ -300,24 +338,26 @@ export class RustxTuiApp {
       // startup remains the same initialize/subscribe cut used by existing
       // Runtime Client consumers, while the footer still becomes session-aware
       // as soon as the authoritative read returns.
-      const refreshLease = this.#presentationLease();
-      const refreshSession = (
-        refreshLease.session as unknown as {
-          refreshSession?: () => Promise<unknown>;
+      if (!this.#isInspection()) {
+        const refreshLease = this.#presentationLease();
+        const refreshSession = (
+          refreshLease.session as unknown as {
+            refreshSession?: () => Promise<unknown>;
+          }
+        ).refreshSession;
+        if (refreshSession !== undefined) {
+          void refreshSession.call(refreshLease.session).then(
+            () => {
+              if (!this.#isCurrentPresentationLease(refreshLease)) return;
+              const refreshed = refreshLease.session.state;
+              if (refreshed !== undefined) this.#renderState(refreshed);
+            },
+            (error: unknown) => {
+              if (!this.#isCurrentPresentationLease(refreshLease)) return;
+              this.#showTransient("error", `session metadata unavailable: ${compactDiagnostic(error)}`);
+            },
+          );
         }
-      ).refreshSession;
-      if (refreshSession !== undefined) {
-        void refreshSession.call(refreshLease.session).then(
-          () => {
-            if (!this.#isCurrentPresentationLease(refreshLease)) return;
-            const refreshed = refreshLease.session.state;
-            if (refreshed !== undefined) this.#renderState(refreshed);
-          },
-          (error: unknown) => {
-            if (!this.#isCurrentPresentationLease(refreshLease)) return;
-            this.#showTransient("error", `session metadata unavailable: ${compactDiagnostic(error)}`);
-          },
-        );
       }
       // `--resume` is the same selection `/resume` performs, asked for on the
       // command line: the runtime is already attached to the Session the
@@ -348,6 +388,23 @@ export class RustxTuiApp {
         // Any user input acknowledges the one current transient feedback item.
         // A later command or lifecycle result may replace it explicitly.
         this.#acknowledgeTransient();
+        // The subagent list is an explicit presentation focus. Ctrl+Up/Down
+        // enters that focus so ordinary editor Enter remains ordinary message
+        // submission until the user has selected a row.
+        if (this.#overlay === undefined && !this.#restarting && !this.#navigating) {
+          if (matchesKey(data, "ctrl+up")) {
+            this.#moveSubagentSelection(-1);
+            return { consume: true };
+          }
+          if (matchesKey(data, "ctrl+down")) {
+            this.#moveSubagentSelection(1);
+            return { consume: true };
+          }
+          if (matchesKey(data, "enter") && this.#subagentListFocused && this.#selectedSubagentId !== undefined) {
+            void this.#inspectSelectedSubagent();
+            return { consume: true };
+          }
+        }
         // Ctrl+L is presentation-only input. `/model` remains the canonical
         // semantic command, and its complete CommandOutcome comes back
         // through the one app-level interpreter below.
@@ -372,6 +429,9 @@ export class RustxTuiApp {
           if (this.#overlay !== undefined) {
             return undefined;
           }
+          if (this.#isInspection()) {
+            return { consume: true };
+          }
           const lease = this.#presentationLease();
           void this.#dispatcher
             .submit("/model")
@@ -394,6 +454,8 @@ export class RustxTuiApp {
           const attempt = state?.attempt;
           const questionnaireFocused = this.#questionnaireOverlay !== undefined;
           const acted = questionnaireFocused || this.#overlay !== undefined || (
+            this.#subagentListFocused ||
+            this.#navigationStack.length > 0 ||
             !this.#restarting &&
             (focusedInteraction(state) !== undefined ||
               (attempt !== undefined && attempt.phase.type !== "settled"))
@@ -417,7 +479,7 @@ export class RustxTuiApp {
   }
 
   async #onSubmit(text: string): Promise<void> {
-    if (this.#restarting || this.#finished) return;
+    if (this.#restarting || this.#navigating || this.#finished || this.#isInspection()) return;
     const lease = this.#presentationLease();
     const line = text.trim();
     if (line.length === 0) {
@@ -434,6 +496,133 @@ export class RustxTuiApp {
       if (this.#isCurrentPresentationLease(lease)) {
         this.#showTransient("error", `command failed: ${compactDiagnostic(error)}`);
       }
+    }
+  }
+
+  /** Moves the presentation focus through the authoritative child rows. */
+  #moveSubagentSelection(direction: -1 | 1): void {
+    const state = this.#session.state;
+    if (state === undefined) return;
+    const selected = cycleSubagentSelection(
+      state.subagents,
+      this.#selectedSubagentId,
+      direction,
+    );
+    if (selected === undefined) {
+      this.#subagentListFocused = false;
+      this.#selectedSubagentId = undefined;
+      return;
+    }
+    this.#subagentListFocused = true;
+    this.#selectedSubagentId = selected;
+    this.#renderState(state);
+  }
+
+  /** Opens the selected row by its canonical child conversation identity. */
+  async #inspectSelectedSubagent(): Promise<void> {
+    if (
+      !this.#subagentListFocused ||
+      this.#selectedSubagentId === undefined ||
+      this.#finished ||
+      this.#navigating ||
+      this.#isInspection()
+    ) {
+      return;
+    }
+    const openConversation = this.#openConversation;
+    const state = this.#session.state;
+    const selected = state?.subagents.find(
+      (subagent) => subagent.subagent_id === this.#selectedSubagentId,
+    );
+    if (openConversation === undefined) {
+      this.#showTransient("error", "conversation inspection is unavailable from this attachment");
+      return;
+    }
+    if (selected === undefined || selected.child_conversation_id.length === 0) {
+      this.#showTransient("error", "the selected subagent has no child conversation identity");
+      return;
+    }
+    const parentConversationId = this.#session.identity?.conversationId;
+    if (parentConversationId === undefined) {
+      this.#showTransient("error", "the parent conversation identity is not available");
+      return;
+    }
+
+    const parent: NavigationFrame = {
+      handle: {
+        session: this.#session,
+        connection: this.#connection,
+        child: this.#child,
+      },
+      readOnly: this.#readOnly,
+      parentConversationId: this.#parentConversationId,
+    };
+    this.#navigating = true;
+    this.#editor.disableSubmit = true;
+    try {
+      const next = await openConversation(selected.child_conversation_id);
+      this.#navigationStack.push(parent);
+      this.#readOnly = true;
+      this.#parentConversationId = parentConversationId;
+      this.#subagentListFocused = false;
+      this.#selectedSubagentId = undefined;
+      this.#bindRuntime(next.session, next.connection, next.child);
+      this.#editor.disableSubmit = true;
+      const nextState = next.session.state;
+      if (nextState !== undefined) this.#renderState(nextState);
+      this.#showTransient(
+        "info",
+        `inspecting child conversation ${selected.child_conversation_id} · read-only · Esc returns to parent`,
+      );
+    } catch (error: unknown) {
+      this.#showTransient("error", `conversation inspection failed: ${compactDiagnostic(error)}`);
+    } finally {
+      this.#navigating = false;
+      if (!this.#finished) {
+        this.#editor.disableSubmit = this.#isInspection() || this.#quitting;
+      }
+    }
+  }
+
+  /** Detaches only the inspection client and restores the parent frame. */
+  async #returnToParent(reason?: string): Promise<void> {
+    const frame = this.#navigationStack[this.#navigationStack.length - 1];
+    if (frame === undefined || this.#navigating) return;
+    const inspected = this.#session;
+    const inspectedConnection = this.#connection;
+    const inspectedChild = this.#child;
+    this.#navigating = true;
+    this.#editor.disableSubmit = true;
+    this.#subagentListFocused = false;
+    this.#selectedSubagentId = undefined;
+    let closeFailure: string | undefined;
+    try {
+      await this.#detachOldAttachment(inspected, inspectedConnection);
+      inspectedChild.closeStdin();
+      await inspectedChild.waitOrTerminate(this.#terminationGraceMs);
+    } catch (error: unknown) {
+      closeFailure = compactDiagnostic(error);
+    }
+
+    this.#navigationStack.pop();
+    this.#readOnly = frame.readOnly;
+    this.#parentConversationId = frame.parentConversationId;
+    this.#bindRuntime(frame.handle.session, frame.handle.connection, frame.handle.child);
+    this.#editor.disableSubmit = this.#isInspection() || this.#quitting;
+    const state = this.#session.state;
+    if (state !== undefined) this.#renderState(state);
+    this.#navigating = false;
+    if (this.#finished || this.#quitting) return;
+    if (reason !== undefined || closeFailure !== undefined) {
+      this.#showTransient(
+        "error",
+        `${reason ?? "inspection detach failed"}${closeFailure === undefined ? "" : ` · ${closeFailure}`}; returned to parent`,
+      );
+    } else {
+      this.#showTransient(
+        "info",
+        `returned to parent conversation ${this.#session.identity?.conversationId ?? "unknown"}`,
+      );
     }
   }
 
@@ -501,6 +690,18 @@ export class RustxTuiApp {
       this.#closeOverlay();
       return;
     }
+    if (this.#navigationStack.length > 0) {
+      await this.#returnToParent();
+      return;
+    }
+    if (this.#subagentListFocused) {
+      this.#subagentListFocused = false;
+      this.#selectedSubagentId = undefined;
+      const state = this.#session.state;
+      if (state !== undefined) this.#renderState(state);
+      return;
+    }
+    if (this.#isInspection()) return;
     if (this.#restarting) return;
     const state = this.#session.state;
     const attempt = state?.attempt;
@@ -522,6 +723,14 @@ export class RustxTuiApp {
 
   async #onInterrupt(): Promise<void> {
     this.#acknowledgeTransient();
+    if (this.#navigationStack.length > 0) {
+      await this.#returnToParent();
+      return;
+    }
+    if (this.#isInspection()) {
+      await this.#closeInspection();
+      return;
+    }
     if (this.#restarting) return;
     const state = this.#session.state;
     if (focusedInteraction(state) !== undefined ||
@@ -542,6 +751,18 @@ export class RustxTuiApp {
     await this.quit();
   }
 
+  /** Closes a direct read-only inspection without asking it to shut down. */
+  async #closeInspection(): Promise<void> {
+    if (this.#quitting || this.#finished) return;
+    this.#quitting = true;
+    this.#invalidatePresentation();
+    this.#editor.disableSubmit = true;
+    await this.#detachOldAttachment(this.#session, this.#connection);
+    this.#child.closeStdin();
+    const exit = await this.#child.waitOrTerminate(this.#terminationGraceMs);
+    this.#finish(exit.code ?? 1);
+  }
+
   /**
    * The controlling-client shutdown sequence.
    *
@@ -557,6 +778,9 @@ export class RustxTuiApp {
    * stopping is not a semantic settlement, and this client never reports one.
    */
   async quit(): Promise<void> {
+    while (this.#navigationStack.length > 0) {
+      await this.#returnToParent();
+    }
     if (this.#quitting) {
       return;
     }
@@ -1143,6 +1367,11 @@ export class RustxTuiApp {
     };
   }
 
+  /** Whether the current attachment is a read-only conversation inspection. */
+  #isInspection(): boolean {
+    return this.#readOnly || this.#navigationStack.length > 0;
+  }
+
   #isCurrentPresentationLease(lease: PresentationLease): boolean {
     return !this.#finished &&
       !this.#quitting &&
@@ -1213,6 +1442,10 @@ export class RustxTuiApp {
    * no Pi component carries state the projection does not have.
    */
   #renderState(state: PresentationState): void {
+    if (!hasSubagentSelection(state.subagents, this.#selectedSubagentId)) {
+      this.#selectedSubagentId = undefined;
+      this.#subagentListFocused = false;
+    }
     // Correlated once per render and shared: the transcript and the activity
     // area must agree on which calls have a transcript anchor.
     const correlation = correlateTools(state);
@@ -1258,7 +1491,12 @@ export class RustxTuiApp {
     for (const section of [
       renderOrphanExecutions(correlation, this.#preferences),
       renderBackgroundSection(state, this.#preferences),
-      renderSubagentSection(state, this.#preferences),
+      renderSubagentSection(
+        state,
+        this.#preferences,
+        new Date(),
+        this.#subagentListFocused ? this.#selectedSubagentId : undefined,
+      ),
       renderInteractionSection(state, this.#preferences),
     ]) {
       if (section.length > 0) {
@@ -1291,6 +1529,7 @@ export class RustxTuiApp {
         this.#connectionLabel(),
         this.#tui.terminal.columns,
         this.#session.sessionInfo,
+        this.#conversationContext(),
       ),
     );
     this.#syncQuestionnaireOverlay(state);
@@ -1362,6 +1601,17 @@ export class RustxTuiApp {
   #connectionLabel(): string {
     const closed = this.#connection.closed;
     return closed === undefined ? "connected" : `closed: ${closed.reason}`;
+  }
+
+  /** Builds the footer's current-conversation label from attachment identity. */
+  #conversationContext(): ConversationContext | undefined {
+    const conversationId = this.#session.identity?.conversationId;
+    if (conversationId === undefined) return undefined;
+    return {
+      conversationId,
+      parentConversationId: this.#parentConversationId,
+      readOnly: this.#readOnly,
+    };
   }
 
   #diagnostics(): DebugDiagnostics {

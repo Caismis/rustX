@@ -597,7 +597,8 @@ Implemented in the current architecture:
   `AgentExecution`/Context Assembly/ToolRuntime/Capability/provider path).
 - `RuntimeClientHost` is the projection + control + attachment adapter over
   the coordinator: it owns the projection read model (snapshot/cursor/
-  bounded replay/subscribers), the one-active-attachment policy, and
+  bounded replay/subscribers), one control attachment plus explicitly
+  read-only observation attachments, and
   protocol adaptation, and it forwards control (`model_set`, `shutdown`,
   `cancel_current_attempt`, background queries) to the coordinator. It no
   longer owns canonical conversation/session/admission state.
@@ -610,11 +611,12 @@ Implemented in the current architecture:
   observation, finite drain, canonical commit, attempt-id allocation, model
   freeze, current-attempt publication) under the one coordinator lock.
 - Runtime-owned observation contract: `src/runtime/observation.rs` defines
-  `ConversationObservation` (semantic source types only) and the leaf
-  `PendingObservations` queue. There is exactly **one** fold of that
-  vocabulary — the Runtime Client projection — and the runtime keeps no
-  mirrored client read model. The runtime never imports Runtime Client
-  projection/snapshot types.
+  `ConversationObservation` (semantic source types only), the primary
+  `PendingObservations` queue, and a bounded fan-out for existing local
+  observers. There is exactly **one** full Runtime Client fold of that
+  vocabulary; the runtime keeps no mirrored client read model and local
+  observer queues are disposable, not history. The runtime never imports
+  Runtime Client projection/snapshot types.
 - Observation handoff: the coordinator publishes semantic observations into
   a shared leaf queue; every projection lock acquisition drains it first, so
   `snapshot + cursor C` remains linearizable and `resume(after C)` observes

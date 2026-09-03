@@ -50,7 +50,8 @@
 //! - [`RuntimeClientHost`](host::RuntimeClientHost) is the projection +
 //!   control + attachment adapter over the conversation runtime: it owns
 //!   the projection (snapshot read model, cursor allocation, bounded
-//!   replay, subscribers), the one-active-attachment policy, and
+//!   replay, subscribers), one control attachment plus read-only
+//!   observation attachments, and
 //!   protocol adaptation. `AgentExecution` remains the attempt settlement
 //!   authority and the conversation runtime remains the admission owner.
 //! - [`RuntimeClientProjection`](projection::RuntimeClientProjection) is
@@ -71,7 +72,8 @@
 //!
 //! # Protocol scope
 //!
-//! - one active attachment per runtime instance;
+//! - one control attachment per live runtime instance, plus explicitly
+//!   read-only observation attachments;
 //! - detach is never cancellation;
 //! - no capable attachment at interaction publication fails approval closed;
 //! - live pending interactions are reconstructed from the snapshot/cursor

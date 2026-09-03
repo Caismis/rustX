@@ -165,6 +165,15 @@ interface Segment {
   priority: number;
 }
 
+/** The presentation label for the currently attached conversation. */
+export interface ConversationContext {
+  conversationId: string;
+  /** The parent identity when this view was opened from a subagent row. */
+  parentConversationId?: string;
+  /** Direct `--inspect-conversation` attachments have no parent in this UI. */
+  readOnly?: boolean;
+}
+
 /** How many footer lines a wide terminal may use. */
 const MAX_FOOTER_LINES = 2;
 
@@ -183,8 +192,9 @@ export function renderFooter(
   connectionState: string,
   width = 120,
   session?: SessionView,
+  conversation?: ConversationContext,
 ): string {
-  const segments = footerSegments(state, connectionState, session);
+  const segments = footerSegments(state, connectionState, session, conversation);
   return layout(segments, width).join("\n");
 }
 
@@ -193,10 +203,20 @@ export function footerSegments(
   state: PresentationState,
   connectionState: string,
   session?: SessionView,
+  conversation?: ConversationContext,
 ): Segment[] {
   const segments: Segment[] = [];
   const attempt = state.attempt;
 
+  if (conversation !== undefined) {
+    const parent = conversation.parentConversationId;
+    const label = parent === undefined
+      ? conversation.readOnly === true
+        ? `inspect ${conversation.conversationId} · read-only`
+        : `parent ${conversation.conversationId}`
+      : `child ${conversation.conversationId} · read-only · Esc parent`;
+    segments.push({ text: role.accent(label), priority: 0 });
+  }
   segments.push(...modelSegments(state));
   if (session !== undefined) {
     segments.push({

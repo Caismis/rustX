@@ -117,6 +117,37 @@ describe("ChildRuntimeProcess", () => {
     ]);
   });
 
+  it("forwards a known conversation identity as a read-only attachment target", async () => {
+    const child = ChildRuntimeProcess.spawn({
+      binary: FAKE_RUNTIME,
+      paths: PATHS,
+      startup: {
+        continueActiveSession: false,
+        inspectConversation: "conversation-1-subagent-1",
+        skillPaths: [],
+        noSkills: false,
+        noBuiltinTools: false,
+        noTools: false,
+      },
+    });
+    const output = readAll(child);
+    child.closeStdin();
+    await child.wait();
+
+    assert.deepEqual(JSON.parse((await output).trim()), [
+      "--models",
+      "/models.jsonc",
+      "--config",
+      "/rustx.jsonc",
+      "--workspace",
+      "/ws",
+      "--runtime-root",
+      "/private",
+      "--inspect-conversation",
+      "conversation-1-subagent-1",
+    ]);
+  });
+
   it("exits cleanly on stdin EOF", async () => {
     const child = spawn({ FAKE_EXIT_CODE: "0" });
     child.closeStdin();

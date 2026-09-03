@@ -13,7 +13,8 @@
 //!   -> dispatcher       the ONE owner of both raw transports from here on
 //!   -> compose          the real runtime stack, deny-by-construction, and
 //!                       cancellable owned work (Issue #145)
-//!   -> Ready            composition and activation complete
+//!   -> Ready            composition and activation complete; live
+//!                       inspection transport is optional
 //!   -> Delegate(task)   the task enters through the child's ORDINARY
 //!                       durable inbound path (UserSource::Agent(parent))
 //!   -> observe          the attempt's canonical terminal event
@@ -89,10 +90,14 @@ use crate::runtime::subagent::ipc::{
     ActivityFrame, ChildFrame, ChildResultStatus, DiagnosticFrame, ParentFrame, ReadyFrame,
     ResultFrame, SUBAGENT_IPC_VERSION, SubagentChildSpec, read_parent_frame, write_child_frame,
 };
-use crate::runtime::subagent::{MAX_RESULT_CONTENT_BYTES, bound_utf8};
+use crate::runtime::subagent::{
+    MAX_RESULT_CONTENT_BYTES, bound_utf8, child_conversation_inspection_liveness_path,
+    child_conversation_inspection_socket_path,
+};
 
 use super::composition::{ChildPreparation, LocalConversationCore, LocalRuntimeDependencies};
 use super::dispatcher::{ChildControlDispatcher, ChildControlEvent, ChildControlHandle};
+use super::live_inspection::{LiveConversationInspectionLease, LiveConversationInspectionServer};
 
 /// The process entry point of the internal subagent-child mode.
 ///
@@ -221,31 +226,101 @@ async fn run_child(
         return Ok(());
     };
     let workflow_output = core.workflow_output();
-    // The observation bridge is installed over the still-inactive runtime,
-    // so the attempt's canonical terminal event can never be missed.
-    let observations = Arc::new(PendingObservations::new());
-    core.runtime()
-        .install_observation_bridge(Arc::clone(&observations))
-        .map_err(|error| ChildExit::Startup(format!("{error:?}")))?;
-    let runtime = core.runtime().clone();
-    let headless = core.into_headless();
-    drop(headless);
-    handle
-        .send_reliable(ChildFrame::Ready(ReadyFrame {
-            subagent_id: spec.subagent_id.clone(),
-        }))
+    // The child is a real live Runtime Client owner. Its host receives the
+    // primary projection queue, while the bounded parent activity projector
+    // receives a separate fan-out queue; both are installed before the
+    // activation cut, so live non-durable state belongs to the child's own
+    // projection instead of being reconstructed from SQLite or tunneled as a
+    // transcript through the parent observation lane.
+    let (interactive, observations) = core
+        .into_subagent_child()
+        .map_err(|error| ChildExit::Startup(error.to_string()))?;
+    let runtime = interactive.runtime().clone();
+    let host = interactive.host().clone();
+    let semantic_root = spec.runtime_root.parent().ok_or_else(|| {
+        ChildExit::Startup(format!(
+            "physical child runtime root {} has no stable semantic parent",
+            spec.runtime_root.display()
+        ))
+    })?;
+    let parent_runtime_root = semantic_root
+        .parent()
+        .and_then(std::path::Path::parent)
+        .ok_or_else(|| {
+            ChildExit::Startup(format!(
+                "stable child semantic root {} has no parent runtime root",
+                semantic_root.display()
+            ))
+        })?;
+    // This lease is disposable process-routing state, not a durable
+    // conversation fact. It lets an inspector distinguish a live child whose
+    // optional endpoint failed from a child whose runtime is already gone.
+    // If the lease itself cannot be created, execution still proceeds; the
+    // failure is diagnosable in the child's private stderr log and through
+    // the existing bounded Diagnostic frame.
+    let live_lease =
+        match LiveConversationInspectionLease::acquire(child_conversation_inspection_liveness_path(
+            parent_runtime_root,
+            &spec.child_conversation_id,
+        )) {
+            Ok(lease) => Some(lease),
+            Err(error) => {
+                let message = format!("live inspection liveness lease unavailable: {error}");
+                eprintln!("subagent child: {message}");
+                let _ = handle
+                    .send_reliable(ChildFrame::Diagnostic(DiagnosticFrame {
+                        message: bound_diagnostic(message),
+                    }))
+                    .await;
+                None
+            }
+        };
+    let live_server = match LiveConversationInspectionServer::bind(
+        child_conversation_inspection_socket_path(parent_runtime_root, &spec.child_conversation_id),
+        host,
+    ) {
+        Ok(server) => Some(server),
+        Err(error) => {
+            let message = format!("live inspection endpoint unavailable: {error}");
+            eprintln!("subagent child: {message}");
+            let _ = handle
+                .send_reliable(ChildFrame::Diagnostic(DiagnosticFrame {
+                    message: bound_diagnostic(message),
+                }))
+                .await;
+            None
+        }
+    };
+
+    let result = async {
+        handle
+            .send_reliable(ChildFrame::Ready(ReadyFrame {
+                subagent_id: spec.subagent_id.clone(),
+            }))
+            .await
+            .map_err(|error| ChildExit::Protocol(error.to_string()))?;
+        mark_ready_sent_if_armed();
+        serve_child_delegation(
+            dispatcher,
+            handle,
+            spec.parent_agent_id,
+            runtime,
+            observations,
+            workflow_output,
+        )
         .await
-        .map_err(|error| ChildExit::Protocol(error.to_string()))?;
-    mark_ready_sent_if_armed();
-    serve_child_delegation(
-        dispatcher,
-        handle,
-        spec.parent_agent_id,
-        runtime,
-        observations,
-        workflow_output,
-    )
-    .await
+    }
+    .await;
+    // A read-only inspector is a client of this process, not a reason to
+    // extend the child's semantic lifetime. Once the child reports its
+    // bounded result (or loses its parent), close the endpoint and remove
+    // exactly its disposable socket path.
+    if let Some(live_server) = live_server {
+        live_server.shutdown().await;
+    }
+    drop(interactive);
+    drop(live_lease);
+    result
 }
 
 /// The child semantic loop after composition, activation, and the `Ready`

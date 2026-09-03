@@ -106,7 +106,7 @@ use super::types::{RuntimeClientCursor, RuntimeClientError, RuntimeClientProtoco
 use crate::agent::observer::AgentStatusObservation;
 use crate::context::status::{AgentStatusSectionData, render_agent_status};
 use crate::events::types::{AttemptFailure, RuntimeEvent};
-use crate::message::types::{ContentBlockIndex, MessageBlock};
+use crate::message::types::{AssistantContentBlock, ContentBlockIndex, MessageBlock};
 use crate::model::session::{AttemptModelView, SessionModelView};
 use crate::publication::{PublicationFrame, PublicationPayload};
 use crate::runtime::identity::{AttemptId, ConversationId, ToolCallId};
@@ -319,6 +319,97 @@ impl RuntimeClientProjection {
         // `context` keep their empty initial values by construction.
     }
 
+    /// Folds one durable Event Journal fact into a read-only conversation
+    /// attachment without publishing a live Runtime Client event.
+    ///
+    /// Durable inspection has no observation bridge and therefore no live
+    /// cursor stream to replay. The journal is still the child conversation's
+    /// execution-history authority, so a fresh attachment folds its bounded
+    /// execution facts into the ordinary snapshot projection before the
+    /// client is initialized. Message bodies are intentionally absent here:
+    /// committed messages are loaded separately from the child Message
+    /// Ledger/transcript authority.
+    pub(crate) fn bootstrap_durable_event(
+        &mut self,
+        envelope: &crate::events::types::RuntimeEventEnvelope,
+    ) {
+        if self.exhausted {
+            return;
+        }
+        let event = &envelope.event;
+        match event {
+            RuntimeEvent::CompactionStarted
+            | RuntimeEvent::CompactionCompleted { .. }
+            | RuntimeEvent::CompactionFailed { .. } => {
+                self.fold_compaction_event(envelope.attempt_id.as_ref(), event);
+            }
+            _ => {
+                let Some(attempt_id) = envelope.attempt_id.as_ref().or(match event {
+                    RuntimeEvent::AttemptStarted { attempt_id }
+                    | RuntimeEvent::AttemptCompleted { attempt_id, .. }
+                    | RuntimeEvent::AttemptCancelled { attempt_id, .. }
+                    | RuntimeEvent::AttemptTimedOut { attempt_id, .. }
+                    | RuntimeEvent::AttemptLimitExceeded { attempt_id, .. }
+                    | RuntimeEvent::AttemptFailed { attempt_id, .. } => Some(attempt_id),
+                    _ => None,
+                }) else {
+                    // Journal facts without attempt attribution either have
+                    // no client snapshot representation or are represented
+                    // by the durable transcript itself.
+                    return;
+                };
+                self.fold_event(attempt_id, event);
+            }
+        }
+    }
+
+    /// Seeds the normal foreground-tool read model from one canonical child
+    /// message while replaying the child's durable Event Journal. The
+    /// assistant message remains in the Message Ledger; this only gives the
+    /// projection the same call slots that live publication frames create
+    /// before `ToolExecutionStarted`/`ToolExecutionCompleted` facts arrive.
+    ///
+    /// No message is copied into another durable authority and no client event
+    /// is published by this bootstrap-only operation.
+    pub(crate) fn bootstrap_durable_message(
+        &mut self,
+        attempt_id: &AttemptId,
+        message: &MessageBlock,
+    ) {
+        let MessageBlock::Assistant(assistant) = message else {
+            if let MessageBlock::Tool(tool) = message {
+                let _ = self.settle_foreground(attempt_id, &tool.tool_call_id, tool.result.clone());
+            }
+            return;
+        };
+        self.ensure_attempt(attempt_id);
+        let attempt = self
+            .snapshot
+            .attempt
+            .as_mut()
+            .expect("durable message bootstrap creates the attempt view");
+        for block in &assistant.content {
+            let AssistantContentBlock::ToolCall(call) = block else {
+                continue;
+            };
+            if attempt
+                .foreground
+                .iter()
+                .any(|slot| slot.call_id == call.id)
+            {
+                continue;
+            }
+            attempt.foreground.push(ForegroundToolExecution {
+                call_id: call.id.clone(),
+                tool_id: call.tool_id.clone(),
+                name: call.name.clone(),
+                state: ForegroundToolState::Assembled {
+                    arguments: call.arguments.to_string(),
+                },
+            });
+        }
+    }
+
     /// Applies one authoritative observation: fold the snapshot read
     /// model, publish the resulting events, and deliver to subscribers.
     ///
@@ -517,14 +608,36 @@ impl RuntimeClientProjection {
                 upsert_background(&mut self.snapshot.background, view.clone());
                 vec![RuntimeClientEvent::BackgroundExecutionUpdated { execution: view }]
             }
-            ConversationObservation::ToolProgress { .. } => {
-                // Live-only, latest-value (Issue #178): a not-yet-durable
-                // foreground tool progress report folds to NO client events.
-                // The client already receives the durable progress facts at
-                // batch settlement through the `Event` lane; the runtime
-                // client protocol has no live-progress surface (no version
-                // bump), so there is nothing to project.
-                Vec::new()
+            ConversationObservation::ToolProgress {
+                attempt_id,
+                tool_call_id,
+                tool_id,
+                progress,
+            } => {
+                // Live-only, latest-value (Issue #178): the report is folded
+                // directly into the running foreground slot owned by this
+                // projection. It is never written to the Event Journal. A
+                // read-only attachment therefore sees the same disposable
+                // state as the child runtime's ordinary Runtime Client
+                // projection, while durable bootstrap still reconstructs
+                // only committed progress facts.
+                if let Some(attempt) = &mut self.snapshot.attempt
+                    && attempt.attempt_id == attempt_id
+                    && let Some(slot) = foreground_slot_mut(&mut attempt.foreground, &tool_call_id)
+                    && let ForegroundToolState::Running { arguments, .. } = &slot.state
+                {
+                    slot.state = ForegroundToolState::Running {
+                        arguments: arguments.clone(),
+                        progress: Some(progress.clone()),
+                    };
+                }
+                vec![RuntimeClientEvent::ToolExecutionProgress {
+                    attempt_id,
+                    tool_call_id,
+                    tool_id,
+                    execution_id: None,
+                    progress,
+                }]
             }
             ConversationObservation::SubagentLifecycle(snapshot)
             | ConversationObservation::SubagentActivity(snapshot) => {

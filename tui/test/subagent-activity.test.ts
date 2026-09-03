@@ -22,9 +22,17 @@ import { subagent, subagentObservation } from "./support/fixtures.ts";
 
 const NOW = new Date("2026-09-02T10:03:00Z");
 
-function render(children: RuntimeClientSubagent[]): string {
+function render(
+  children: RuntimeClientSubagent[],
+  selectedSubagentId?: string,
+): string {
   return plain(
-    renderSubagentSection(stateOf({ subagents: children }), prefs(), NOW),
+    renderSubagentSection(
+      stateOf({ subagents: children }),
+      prefs(),
+      NOW,
+      selectedSubagentId,
+    ),
   );
 }
 
@@ -46,16 +54,13 @@ describe("subagent activity section", () => {
     assert.equal(render([]), "");
   });
 
-  it("renders nothing when every child is terminal", () => {
-    for (const state of ["succeeded", "failed", "cancelled", "interrupted"]) {
-      assert.equal(
-        render([
-          subagent("explore", "sha256:d1", state as RuntimeClientSubagent["state"]),
-        ]),
-        "",
-        `${state} is terminal and renders no live-activity row`,
-      );
-    }
+  it("keeps terminal children as durable conversation navigation targets", () => {
+    const rendered = render([
+      subagent("explore", "sha256:d1", "succeeded"),
+    ]);
+    assert.match(rendered, /Subagents · 0 active of 1 known/);
+    assert.match(rendered, /explore · succeeded · conv-1-subagent-1/);
+    assert.doesNotMatch(rendered, /awaiting activity/);
   });
 
   it("shows the header count and the lifecycle of active children only", () => {
@@ -63,11 +68,25 @@ describe("subagent activity section", () => {
       child({ type: "awaiting_activity" }),
       subagent("worker", "sha256:d2", "succeeded", {
         subagent_id: "conv-1-subagent-2",
+        child_conversation_id: "conv-1-subagent-2",
       }),
     ]);
     assert.match(rendered, /Subagents · 1 active of 2 known/);
     assert.match(rendered, /explore · running/);
-    assert.doesNotMatch(rendered, /worker/);
+    assert.match(rendered, /worker/);
+    assert.match(rendered, /conv-1-subagent-2/);
+  });
+
+  it("marks only the selected row without changing the observation payload", () => {
+    const rendered = render([
+      child({ type: "awaiting_activity" }),
+      subagent("worker", "sha256:d2", "failed", {
+        subagent_id: "conv-1-subagent-2",
+        child_conversation_id: "conv-1-subagent-2",
+      }),
+    ], "conv-1-subagent-2");
+    assert.match(rendered, /▸ .*worker · failed · conv-1-subagent-2/);
+    assert.doesNotMatch(rendered, /detail/);
   });
 
   it("derives elapsed time from started_at at render time", () => {

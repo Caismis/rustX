@@ -646,9 +646,13 @@ crosses a live, never-durable seam (Issue #178):
 `AgentExecutionObserver::observe_tool_progress` fires while the tool still
 executes and reaches runtime observers as
 `ConversationObservation::ToolProgress`, latest-value coalesced per tool
-call. It never enters the Event Journal, and the Runtime Client projection
-folds it to no events — the client already receives the durable progress
-facts at batch settlement through the ordinary event lane.
+call. It never enters the Event Journal. The live Runtime Client projection
+folds it directly into the running foreground slot and publishes the
+existing `ToolExecutionProgress` projection event; that event and snapshot
+state are disposable and disappear with the live projection. The client
+therefore sees current progress before settlement, while a durable bootstrap
+after process death reconstructs only the progress facts committed at batch
+settlement.
 
 The observer receives `ToolResultObservation`, a borrow of already-canonical
 facts: attempt/conversation identity, the turn, the canonical

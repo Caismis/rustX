@@ -861,40 +861,49 @@ impl SubagentRegistry {
         if self.config.mailbox.begin_running_admission().is_err() {
             return Err(SubagentStartError::ConversationInactive);
         }
-        let ordinal = {
-            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-            let ordinal = state.next_ordinal;
-            state.next_ordinal += 1;
-            ordinal
-        };
-        let subagent_id = SubagentId::for_conversation(&self.config.conversation_id, ordinal);
-        let child_conversation_id = ConversationId::new(subagent_id.as_str());
-        let child_agent_id = AgentId::new(format!("agent-{subagent_id}"));
         // The redacted observation-plane profile derives from the frozen
         // model authority exactly once, at preparation time.
         let profile = SubagentExecutionProfile::from_frozen(&spec.resolved.model);
-        // Workspace acquisition is staged child ownership. It happens after
-        // resolution/freeze and before any child preparation, but the lease
-        // is not durable until the commit below succeeds.
-        let workspace_lease = self
-            .config
-            .workspace
-            .acquire(
-                spec.resolved.workspace_policy,
-                &subagent_id,
-                preparation_cancellation,
-            )
-            .await
-            .map_err(|error| match error {
-                super::workspace::WorkspaceAcquireError::Cancelled => SubagentStartError::Cancelled,
-                super::workspace::WorkspaceAcquireError::Settlement { detail } => {
-                    SubagentStartError::Rollback { detail }
-                }
-                error => SubagentStartError::Workspace {
-                    detail: error.to_string(),
-                },
-            })?;
-        let staged = {
+        // Workspace acquisition and physical-root allocation are both staged
+        // child ownership. A pre-commit crash can leave a durable store for
+        // the ordinal that was never published; skip that identity rather
+        // than ever allowing a new child to append to its history.
+        let (subagent_id, child_conversation_id, child_agent_id, workspace_lease, runtime_root) = loop {
+            if preparation_cancellation.is_cancelled() {
+                return Err(SubagentStartError::Cancelled);
+            }
+            let ordinal = {
+                let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+                let ordinal = state.next_ordinal;
+                state.next_ordinal += 1;
+                ordinal
+            };
+            let subagent_id = SubagentId::for_conversation(&self.config.conversation_id, ordinal);
+            let child_conversation_id = ConversationId::new(subagent_id.as_str());
+            let child_agent_id = AgentId::new(format!("agent-{subagent_id}"));
+            // Workspace acquisition is staged child ownership. It happens
+            // after resolution/freeze and before any child preparation, but
+            // the lease is not durable until the commit below succeeds.
+            let workspace_lease = self
+                .config
+                .workspace
+                .acquire(
+                    spec.resolved.workspace_policy,
+                    &subagent_id,
+                    preparation_cancellation,
+                )
+                .await
+                .map_err(|error| match error {
+                    super::workspace::WorkspaceAcquireError::Cancelled => {
+                        SubagentStartError::Cancelled
+                    }
+                    super::workspace::WorkspaceAcquireError::Settlement { detail } => {
+                        SubagentStartError::Rollback { detail }
+                    }
+                    error => SubagentStartError::Workspace {
+                        detail: error.to_string(),
+                    },
+                })?;
             #[cfg(test)]
             {
                 let override_child = self
@@ -919,11 +928,16 @@ impl SubagentRegistry {
                     });
                 }
             }
-            // Semantic identity may be reused after a pre-commit crash, so
-            // reserve its mutable physical namespace independently of the
-            // durable ordinal before launching the child.
             let runtime_root = match self.config.spawn.allocate_child_runtime_root(&subagent_id) {
                 Ok(runtime_root) => runtime_root,
+                Err(super::process::SpawnError::ConversationIdentityInUse { .. }) => {
+                    if let Err(error) = workspace_lease.settle_staged().await {
+                        return Err(SubagentStartError::Rollback {
+                            detail: error.detail,
+                        });
+                    }
+                    continue;
+                }
                 Err(error) => {
                     let start_error = SubagentStartError::Spawn {
                         detail: error.to_string(),
@@ -931,36 +945,43 @@ impl SubagentRegistry {
                     return Err(settle_staged_workspace(workspace_lease, start_error).await);
                 }
             };
-            let child_spec = self.config.spawn.child_spec(
-                &subagent_id,
-                &child_conversation_id,
-                &child_agent_id,
-                &self.config.agent_id,
-                &spec.resolved,
-                spec.approval_mode,
-                &runtime_root,
-                &workspace_lease,
-                &spec.terminal,
-            );
-            let staged = super::process::spawn_staged(
-                &self.config.spawn,
-                &child_spec,
-                runtime_root,
+            break (
+                subagent_id,
+                child_conversation_id,
+                child_agent_id,
                 workspace_lease,
-                preparation_cancellation,
-            )
-            .await;
-            match staged {
-                Ok(staged) => staged,
-                Err(error) => {
-                    let start_error = match error {
-                        super::process::SpawnError::Cancelled => SubagentStartError::Cancelled,
-                        error => SubagentStartError::Spawn {
-                            detail: error.to_string(),
-                        },
-                    };
-                    return Err(start_error);
-                }
+                runtime_root,
+            );
+        };
+        let child_spec = self.config.spawn.child_spec(
+            &subagent_id,
+            &child_conversation_id,
+            &child_agent_id,
+            &self.config.agent_id,
+            &spec.resolved,
+            spec.approval_mode,
+            &runtime_root,
+            &workspace_lease,
+            &spec.terminal,
+        );
+        let staged = match super::process::spawn_staged(
+            &self.config.spawn,
+            &child_spec,
+            runtime_root,
+            workspace_lease,
+            preparation_cancellation,
+        )
+        .await
+        {
+            Ok(staged) => staged,
+            Err(error) => {
+                let start_error = match error {
+                    super::process::SpawnError::Cancelled => SubagentStartError::Cancelled,
+                    error => SubagentStartError::Spawn {
+                        detail: error.to_string(),
+                    },
+                };
+                return Err(start_error);
             }
         };
         Ok(PreparedSubagent {
@@ -3765,6 +3786,53 @@ mod tests {
             .wait_until_settled(&accepted.subagent_id)
             .await
             .expect("settled");
+    }
+
+    /// A parent generation can die after a child opened its durable store but
+    /// before the parent's ownership event committed. The next generation
+    /// must preserve that store as an orphaned history boundary and advance
+    /// to a fresh child identity instead of reusing it.
+    #[tokio::test]
+    async fn prepare_skips_an_unpublished_durable_child_identity() {
+        let plane = plane(4);
+        let stale_id = SubagentId::new("conv-test-subagent-1");
+        let stale_store = crate::runtime::subagent::child_conversation_store_path(
+            &plane.runtime_root,
+            &ConversationId::new(stale_id.as_str()),
+        );
+        std::fs::create_dir_all(
+            stale_store
+                .parent()
+                .expect("the stale semantic child directory"),
+        )
+        .expect("stale child directory");
+        std::fs::write(&stale_store, b"orphaned durable state").expect("stale durable store");
+
+        let error = plane
+            .registry
+            .prepare(
+                &start_spec("skip stale identity"),
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect_err("the next identity should reach the intentionally missing child binary");
+        assert!(matches!(error, SubagentStartError::Spawn { .. }));
+
+        let _child = stage_exit0(&plane);
+        let prepared = plane
+            .registry
+            .prepare(&start_spec("fresh identity"), &CancellationSignal::new())
+            .await
+            .expect("the following identity is fresh");
+        assert_eq!(
+            prepared.child_conversation_id.as_str(),
+            "conv-test-subagent-3"
+        );
+        prepared.staged.rollback().await.expect("rollback");
+        assert_eq!(
+            std::fs::read(&stale_store).expect("the orphaned store remains authoritative"),
+            b"orphaned durable state"
+        );
     }
 
     #[tokio::test]
