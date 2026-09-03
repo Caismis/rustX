@@ -1180,7 +1180,8 @@ async fn handshake_core(
                 Ok(Some(
                     ChildFrame::InteractionRequested(_)
                     | ChildFrame::InteractionSettled { .. }
-                    | ChildFrame::InteractionResponseResult(_),
+                    | ChildFrame::InteractionResponseResult(_)
+                    | ChildFrame::InteractionPublicationAdmissionRequested(_),
                 )) => {
                     return Err(SpawnError::Handshake {
                         detail: "the child produced an interaction frame before Ready".to_owned(),
@@ -1577,6 +1578,28 @@ async fn drive_child_control(
                                 "child returned a mismatched interaction response identity"
                                     .to_owned(),
                             );
+                        }
+                    }
+                    Ok(Some(
+                        ChildFrame::InteractionPublicationAdmissionRequested(request),
+                    )) => {
+                        let admitted = interactions
+                            .as_ref()
+                            .is_some_and(|sink| sink.admit_publication(&request.interaction));
+                        // The request frame uses `admitted = false` as its
+                        // wire shape; the root authority's answer must echo
+                        // the exact identity and set the decision explicitly.
+                        let mut result = request;
+                        result.admitted = admitted;
+                        if let Err(error) = write_parent_frame(
+                            &mut control,
+                            &ParentFrame::InteractionPublicationAdmissionResult(result),
+                        )
+                        .await
+                        {
+                            violation = Some(format!(
+                                "control channel lost while delivering interaction publication admission: {error}"
+                            ));
                         }
                     }
                     Ok(Some(_)) => {

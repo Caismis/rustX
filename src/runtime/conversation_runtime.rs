@@ -3367,9 +3367,23 @@ impl ConversationRuntime {
         self.inner.interaction.install_route(route);
     }
 
-    /// Changes provider admission for future interactions. Runtime Client
-    /// attachment state is the only production caller; existing pending work
-    /// is intentionally unaffected.
+    /// Installs the root Runtime Client's synchronized publication-admission
+    /// frontier for child interaction routes. The authority answers only
+    /// whether a capable root control attachment exists; the child
+    /// coordinator remains the semantic owner of every interaction.
+    pub(crate) fn install_interaction_publication_authority(
+        &self,
+        authority: Arc<dyn crate::runtime::subagent::InteractionPublicationAuthority>,
+    ) {
+        if let Some(subagents) = &self.inner.subagents {
+            subagents.install_interaction_publication_authority(authority);
+        }
+    }
+
+    /// Publishes an early provider-availability hint for future interactions.
+    /// Runtime Client attachment state is the only production caller; the
+    /// root host's publication authority is the actual admission frontier,
+    /// and existing pending work is intentionally unaffected.
     pub(crate) fn set_interaction_provider_available(&self, available: bool) {
         self.inner.interaction.set_provider_available(available);
         if let Some(subagents) = &self.inner.subagents {

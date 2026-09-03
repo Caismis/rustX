@@ -165,6 +165,7 @@ pub use catalog::{
 pub use process::SubagentSpawnPlan;
 #[cfg(test)]
 pub(crate) use registry::CommitBoundaryHook;
+pub(crate) use registry::InteractionPublicationAuthority;
 pub use registry::{
     PreparedSubagent, SubagentAccepted, SubagentDurabilityFailureSink, SubagentListing,
     SubagentObserver, SubagentRegistry, SubagentRegistryConfig, SubagentSnapshot,

@@ -616,6 +616,18 @@ pub trait SubagentObserver: Send + Sync {
     fn on_interaction_removed(&self, _interaction: &InteractionRef) {}
 }
 
+/// The root Runtime Client's publication-admission authority.
+///
+/// The authority is intentionally narrower than the interaction domain: it
+/// answers only whether a capable root human-facing control attachment exists
+/// at the root host's synchronized admission frontier. It owns no child
+/// interaction state, waiter, audit, cancellation, settlement, or execution
+/// authority.
+pub(crate) trait InteractionPublicationAuthority: Send + Sync {
+    /// Attempts to admit publication of one exact routed interaction.
+    fn admit(&self, interaction: &InteractionRef) -> bool;
+}
+
 /// The durability-failure reporting seam of the subagent plane.
 pub trait SubagentDurabilityFailureSink: Send + Sync {
     /// A terminal publication could not reach the durable authority.
@@ -665,6 +677,14 @@ impl SubagentInteractionSink {
         self.registry
             .apply_child_interaction_settled(&self.subagent_id, interaction, outcome);
     }
+
+    /// Checks publication admission at the root authority's linearization
+    /// frontier. A successful result is only an ephemeral transport permit;
+    /// the originating child coordinator still commits and owns the request.
+    pub(crate) fn admit_publication(&self, interaction: &InteractionRef) -> bool {
+        self.registry
+            .admit_child_interaction_publication(&self.subagent_id, interaction)
+    }
 }
 
 /// The composition inputs of the registry.
@@ -696,10 +716,15 @@ pub struct SubagentRegistry {
     config: SubagentRegistryConfig,
     state: Arc<Mutex<RegistryState>>,
     state_version: tokio::sync::watch::Sender<u64>,
-    /// The root Runtime Client's current human-provider availability. Each
-    /// child driver receives a subscription so a provider attach/detach is a
-    /// reliable control fact rather than an inference from process liveness.
+    /// An early root Runtime Client human-provider availability hint. Each
+    /// child driver receives a reliable subscription for fast fail-closed
+    /// behavior, but the publication authority below remains the admission
+    /// decision and is not inferred from this cached value.
     provider_available: tokio::sync::watch::Sender<bool>,
+    /// The root Runtime Client publication frontier. This is installed by a
+    /// live root host before activation; without it, child publication fails
+    /// closed even if a stale provider watch says `true`.
+    publication_authority: Arc<Mutex<Option<Arc<dyn InteractionPublicationAuthority>>>>,
 }
 
 impl Clone for SubagentRegistry {
@@ -734,6 +759,7 @@ impl SubagentRegistry {
             })),
             state_version: tokio::sync::watch::Sender::new(0),
             provider_available: tokio::sync::watch::channel(false).0,
+            publication_authority: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -887,9 +913,52 @@ impl SubagentRegistry {
         self.provider_available.send_replace(available);
     }
 
+    /// Installs the root Runtime Client's synchronized publication frontier.
+    /// This is a composition seam, not an interaction owner, and is installed
+    /// before the runtime activates so every child route sees one authority.
+    pub(crate) fn install_interaction_publication_authority(
+        &self,
+        authority: Arc<dyn InteractionPublicationAuthority>,
+    ) {
+        let mut installed = self
+            .publication_authority
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        debug_assert!(installed.is_none(), "one publication authority only");
+        *installed = Some(authority);
+    }
+
     /// Subscribes one child driver to the current root provider state.
     pub(crate) fn interaction_provider_receiver(&self) -> tokio::sync::watch::Receiver<bool> {
         self.provider_available.subscribe()
+    }
+
+    /// Admits one child interaction publication at the root Runtime Client's
+    /// synchronized provider frontier. The registry lock covers the child
+    /// liveness/identity check while the root authority lock defines the
+    /// attach-vs-detach ordering. No child semantic state is created here.
+    pub(crate) fn admit_child_interaction_publication(
+        &self,
+        subagent_id: &SubagentId,
+        interaction: &InteractionRef,
+    ) -> bool {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(&index) = state.index.get(subagent_id) else {
+            return false;
+        };
+        let record = &state.records[index];
+        if !record.lifecycle.is_active()
+            || record.publication_abandoned
+            || record.child_conversation_id != interaction.conversation_id
+        {
+            return false;
+        }
+        let authority = self
+            .publication_authority
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        authority.is_some_and(|authority| authority.admit(interaction))
     }
 
     /// Returns the live child interaction projection for the Runtime Client
@@ -1405,6 +1474,7 @@ impl SubagentRegistry {
             state: Arc::clone(&self.state),
             state_version: self.state_version.clone(),
             provider_available: self.provider_available.clone(),
+            publication_authority: Arc::clone(&self.publication_authority),
         }
     }
 
@@ -3601,6 +3671,9 @@ mod tests {
                 }
                 Some(ParentFrame::InteractionProviderAvailable { .. }) => {
                     panic!("the driver test did not offer a provider update")
+                }
+                Some(ParentFrame::InteractionPublicationAdmissionResult(_)) => {
+                    panic!("the driver test did not offer an admission result")
                 }
                 None => break,
             }

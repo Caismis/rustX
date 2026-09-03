@@ -85,7 +85,9 @@ use crate::events::types::RuntimeEvent;
 use crate::message::content::TextBlock;
 use crate::message::types::{MessageBlock, UserContentBlock, UserSource};
 use crate::runtime::cancellation::CancellationSignal;
-use crate::runtime::interaction::{InteractionRoute, InteractionRouteEvent};
+use crate::runtime::interaction::{
+    InteractionPublicationPermit, InteractionRef, InteractionRoute, InteractionRouteEvent,
+};
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::subagent::activity::SubagentObservationProjector;
 use crate::runtime::subagent::ipc::{
@@ -129,6 +131,13 @@ impl ChildInteractionRoute {
 }
 
 impl InteractionRoute for ChildInteractionRoute {
+    fn admit_publication(
+        &self,
+        interaction: InteractionRef,
+    ) -> BoxFuture<'static, Result<InteractionPublicationPermit, ()>> {
+        self.handle.admit_interaction_publication(interaction)
+    }
+
     fn publish(&self, event: InteractionRouteEvent) -> BoxFuture<'static, Result<(), ()>> {
         let handle = self.handle.clone();
         Box::pin(async move {
@@ -144,6 +153,14 @@ impl InteractionRoute for ChildInteractionRoute {
         self.handle
             .try_send_reliable(Self::frame(event))
             .map_err(|_| ())
+    }
+
+    #[cfg(test)]
+    fn try_admit_publication(
+        &self,
+        _interaction: InteractionRef,
+    ) -> Result<InteractionPublicationPermit, ()> {
+        Err(())
     }
 }
 

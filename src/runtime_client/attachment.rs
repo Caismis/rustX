@@ -121,11 +121,9 @@ impl RuntimeAttachment {
             RuntimeClientRequest::ReloadResources { .. } => {
                 unreachable!("resource reload is handled asynchronously")
             }
-            RuntimeClientRequest::InteractionRespond {
-                interaction: _,
-                response: _,
-                ..
-            } => unreachable!("interaction responses are handled asynchronously"),
+            RuntimeClientRequest::InteractionRespond { .. } => {
+                unreachable!("interaction responses are handled asynchronously")
+            }
             RuntimeClientRequest::SnapshotGet { .. } => self
                 .inner
                 .snapshot()

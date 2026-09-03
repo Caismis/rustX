@@ -70,11 +70,12 @@ use super::workspace::WorkspaceSnapshot;
 /// version 9 moves them onto the dedicated disposable observation channel
 /// (fd 1), so observation backpressure can never occupy the reliable
 /// control transport. Version 10 adds bidirectional routed interaction
-/// control frames and root-provider availability state; HITL traffic remains
-/// on fd 0 and never uses the disposable activity lane.
+/// control frames and root-provider availability state; version 11 adds the
+/// root publication-admission handshake. HITL traffic remains on fd 0 and
+/// never uses the disposable activity lane.
 /// There is no compatibility decoding: a peer that does not speak exactly
 /// this version exits before composing anything.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 10;
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 11;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -92,6 +93,7 @@ const KIND_ANCHOR_ACCEPTED: u8 = 4;
 const KIND_ANCHOR_REFUSED: u8 = 5;
 const KIND_INTERACTION_RESPOND: u8 = 6;
 const KIND_PROVIDER_AVAILABILITY: u8 = 7;
+const KIND_INTERACTION_ADMISSION_RESULT: u8 = 8;
 
 // Child -> parent frame kinds (reliable control channel, fd 0).
 const KIND_READY: u8 = 101;
@@ -103,6 +105,7 @@ const KIND_ANCHOR_RELEASED: u8 = 106;
 const KIND_INTERACTION_REQUESTED: u8 = 108;
 const KIND_INTERACTION_SETTLED: u8 = 109;
 const KIND_INTERACTION_RESPONSE_RESULT: u8 = 110;
+const KIND_INTERACTION_ADMISSION_REQUESTED: u8 = 111;
 
 // Observation channel frame kind (disposable, fd 1, child -> parent only).
 const KIND_ACTIVITY: u8 = 107;
@@ -311,6 +314,20 @@ pub(crate) struct ActivityFrame {
     pub observation: super::activity::SubagentObservation,
 }
 
+/// One child publication-admission request/result. `request_id` is
+/// transport correlation only; the exact `InteractionRef` is echoed so a
+/// stale or mismatched result can never authorize another interaction.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct InteractionPublicationAdmissionFrame {
+    /// Transport-only admission correlation identity.
+    pub request_id: u64,
+    /// The exact interaction whose publication is asking for admission.
+    pub interaction: crate::runtime::interaction::InteractionRef,
+    /// Whether the root human-facing provider admitted this publication.
+    pub admitted: bool,
+}
+
 /// One decoded parent-bound frame of the reliable control channel.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ChildFrame {
@@ -339,6 +356,9 @@ pub(crate) enum ChildFrame {
     },
     /// The result of one parent-routed response.
     InteractionResponseResult(InteractionResponseResultFrame),
+    /// A child asks the root provider authority to admit one exact
+    /// interaction publication before the child commits `InteractionRequested`.
+    InteractionPublicationAdmissionRequested(InteractionPublicationAdmissionFrame),
 }
 
 /// One decoded child-bound frame.
@@ -373,12 +393,15 @@ pub(crate) enum ParentFrame {
         /// The typed response; the child coordinator validates it.
         response: crate::runtime::interaction::InteractionResponse,
     },
-    /// Current root Runtime Client human-provider availability for future
-    /// child publications. Existing pending interactions are unaffected.
+    /// Early root Runtime Client human-provider availability hint for future
+    /// child publications. The admission result is authoritative, and
+    /// existing pending interactions are unaffected.
     InteractionProviderAvailable {
         /// Whether a capable root Runtime Client control attachment exists.
         available: bool,
     },
+    /// The root provider authority's answer to one child publication request.
+    InteractionPublicationAdmissionResult(InteractionPublicationAdmissionFrame),
 }
 
 /// A control-protocol violation of the peer.
@@ -536,6 +559,14 @@ pub(crate) async fn write_child_frame<W: tokio::io::AsyncWrite + Unpin + ?Sized>
         ChildFrame::InteractionResponseResult(result) => {
             write_frame(stream, KIND_INTERACTION_RESPONSE_RESULT, &encode(result)?).await
         }
+        ChildFrame::InteractionPublicationAdmissionRequested(request) => {
+            write_frame(
+                stream,
+                KIND_INTERACTION_ADMISSION_REQUESTED,
+                &encode(request)?,
+            )
+            .await
+        }
     }
 }
 
@@ -568,6 +599,9 @@ pub(crate) async fn read_child_frame<R: tokio::io::AsyncRead + Unpin + ?Sized>(
         }
         KIND_INTERACTION_RESPONSE_RESULT => {
             ChildFrame::InteractionResponseResult(decode(&payload)?)
+        }
+        KIND_INTERACTION_ADMISSION_REQUESTED => {
+            ChildFrame::InteractionPublicationAdmissionRequested(decode(&payload)?)
         }
         other => return Err(ProtocolError::UnknownKind { kind: other }),
     };
@@ -629,6 +663,9 @@ pub(crate) async fn write_parent_frame<W: tokio::io::AsyncWrite + Unpin + ?Sized
         ParentFrame::InteractionProviderAvailable { available } => {
             write_frame(stream, KIND_PROVIDER_AVAILABILITY, &encode(available)?).await
         }
+        ParentFrame::InteractionPublicationAdmissionResult(result) => {
+            write_frame(stream, KIND_INTERACTION_ADMISSION_RESULT, &encode(result)?).await
+        }
     }
 }
 
@@ -662,6 +699,9 @@ pub(crate) async fn read_parent_frame<R: tokio::io::AsyncRead + Unpin + ?Sized>(
         KIND_PROVIDER_AVAILABILITY => ParentFrame::InteractionProviderAvailable {
             available: decode(&payload)?,
         },
+        KIND_INTERACTION_ADMISSION_RESULT => {
+            ParentFrame::InteractionPublicationAdmissionResult(decode(&payload)?)
+        }
         other => return Err(ProtocolError::UnknownKind { kind: other }),
     };
     Ok(Some(frame))
@@ -812,7 +852,7 @@ mod tests {
         ));
     }
 
-    /// IPC v10 carries the child→parent live activity projection on the
+    /// IPC v11 carries the child→parent live activity projection on the
     /// dedicated observation channel: the frame round-trips exactly and its
     /// payload is the typed `SubagentObservation`.
     #[tokio::test]
@@ -999,6 +1039,18 @@ mod tests {
         )
         .await
         .expect("write provider availability");
+        write_parent_frame(
+            &mut parent,
+            &ParentFrame::InteractionPublicationAdmissionResult(
+                InteractionPublicationAdmissionFrame {
+                    request_id: 17,
+                    interaction: routed_ref.clone(),
+                    admitted: true,
+                },
+            ),
+        )
+        .await
+        .expect("write publication admission result");
         assert_eq!(
             read_parent_frame(&mut child).await.expect("read response"),
             Some(ParentFrame::InteractionRespond {
@@ -1013,6 +1065,18 @@ mod tests {
                 .expect("read provider availability"),
             Some(ParentFrame::InteractionProviderAvailable { available: true })
         );
+        assert_eq!(
+            read_parent_frame(&mut child)
+                .await
+                .expect("read publication admission result"),
+            Some(ParentFrame::InteractionPublicationAdmissionResult(
+                InteractionPublicationAdmissionFrame {
+                    request_id: 17,
+                    interaction: routed_ref.clone(),
+                    admitted: true,
+                }
+            ))
+        );
 
         write_child_frame(
             &mut child,
@@ -1020,6 +1084,18 @@ mod tests {
         )
         .await
         .expect("write routed request");
+        write_child_frame(
+            &mut child,
+            &ChildFrame::InteractionPublicationAdmissionRequested(
+                InteractionPublicationAdmissionFrame {
+                    request_id: 17,
+                    interaction: routed_ref.clone(),
+                    admitted: false,
+                },
+            ),
+        )
+        .await
+        .expect("write publication admission request");
         write_child_frame(
             &mut child,
             &ChildFrame::InteractionSettled {
@@ -1046,6 +1122,18 @@ mod tests {
                 .await
                 .expect("read routed request"),
             Some(ChildFrame::InteractionRequested(routed_request.clone()))
+        );
+        assert_eq!(
+            read_child_frame(&mut parent)
+                .await
+                .expect("read publication admission request"),
+            Some(ChildFrame::InteractionPublicationAdmissionRequested(
+                InteractionPublicationAdmissionFrame {
+                    request_id: 17,
+                    interaction: routed_ref.clone(),
+                    admitted: false,
+                }
+            ))
         );
         assert_eq!(
             read_child_frame(&mut parent)

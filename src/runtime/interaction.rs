@@ -667,6 +667,26 @@ pub(crate) enum InteractionRouteEvent {
     },
 }
 
+/// The ephemeral proof that a root human-facing provider admitted one exact
+/// interaction publication. This is transport correlation only: it carries
+/// no waiter, pending state, audit capability, cancellation authority, or
+/// settlement authority, and it is consumed by the originating coordinator
+/// before its requested fact is committed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InteractionPublicationPermit {
+    interaction: InteractionRef,
+}
+
+impl InteractionPublicationPermit {
+    pub(crate) fn for_interaction(interaction: InteractionRef) -> Self {
+        Self { interaction }
+    }
+
+    pub(crate) fn matches(&self, interaction: &InteractionRef) -> bool {
+        self.interaction == *interaction
+    }
+}
+
 /// The reliable route installed on a child conversation coordinator.
 ///
 /// The asynchronous operation is used by production request/response paths
@@ -675,6 +695,15 @@ pub(crate) enum InteractionRouteEvent {
 /// and deterministic local coordinator paths; implementations must never
 /// silently drop a frame from either operation.
 pub(crate) trait InteractionRoute: Send + Sync {
+    /// Asks the root human-provider authority to admit publication of one
+    /// exact interaction. A successful permit is the publication frontier:
+    /// the originating coordinator may commit its own requested fact even if
+    /// a later provider-detach notification reaches the child first.
+    fn admit_publication(
+        &self,
+        interaction: InteractionRef,
+    ) -> BoxFuture<'static, Result<InteractionPublicationPermit, ()>>;
+
     /// Publishes one route event through reliable semantic control.
     fn publish(&self, event: InteractionRouteEvent) -> BoxFuture<'static, Result<(), ()>>;
 
@@ -682,6 +711,13 @@ pub(crate) trait InteractionRoute: Send + Sync {
     /// route could not accept the event and the caller must fail closed.
     #[cfg(test)]
     fn try_publish(&self, event: InteractionRouteEvent) -> Result<(), ()>;
+
+    /// Test-only synchronous form of the publication admission handshake.
+    #[cfg(test)]
+    fn try_admit_publication(
+        &self,
+        interaction: InteractionRef,
+    ) -> Result<InteractionPublicationPermit, ()>;
 }
 
 /// A test-only replacement for the concrete native binding.
@@ -1156,8 +1192,10 @@ impl InteractionCoordinator {
     }
 
     /// The asynchronous publication path used by live child conversations.
-    /// The requested audit and originating pending entry are committed before
-    /// this method awaits reliable route capacity. A route failure removes the
+    /// Root publication admission is established before the requested audit
+    /// and originating pending entry are committed. The route permit is the
+    /// publication frontier; a later provider-detach notification cannot
+    /// revoke it. A reliable route failure after that frontier removes the
     /// live waiter fail-closed; it never leaves an unanswered orphan in the
     /// coordinator.
     async fn publish_async(
@@ -1166,12 +1204,25 @@ impl InteractionCoordinator {
         subject: InteractionSubject,
         cancellation: &ExecutionCancellation,
     ) -> Result<InteractionTicket, InteractionOutcome> {
-        let published = self.publish_inner(request, subject, cancellation)?;
         let route = self
             .route
             .lock()
             .expect("interaction route poisoned")
             .clone();
+        let interaction = request.interaction_ref();
+        let publication_admitted = if let Some(route) = route.as_ref() {
+            let permit = route
+                .admit_publication(interaction.clone())
+                .await
+                .map_err(|()| InteractionOutcome::Unavailable)?;
+            if !permit.matches(&interaction) {
+                return Err(InteractionOutcome::Unavailable);
+            }
+            true
+        } else {
+            false
+        };
+        let published = self.publish_inner(request, subject, cancellation, publication_admitted)?;
         if let Some(route) = route
             && route
                 .publish(InteractionRouteEvent::Requested(published.request.clone()))
@@ -1214,12 +1265,24 @@ impl InteractionCoordinator {
         subject: InteractionSubject,
         cancellation: &ExecutionCancellation,
     ) -> Result<InteractionTicket, InteractionOutcome> {
-        let published = self.publish_inner(request, subject, cancellation)?;
         let route = self
             .route
             .lock()
             .expect("interaction route poisoned")
             .clone();
+        let interaction = request.interaction_ref();
+        let publication_admitted = if let Some(route) = route.as_ref() {
+            let permit = route
+                .try_admit_publication(interaction.clone())
+                .map_err(|()| InteractionOutcome::Unavailable)?;
+            if !permit.matches(&interaction) {
+                return Err(InteractionOutcome::Unavailable);
+            }
+            true
+        } else {
+            false
+        };
+        let published = self.publish_inner(request, subject, cancellation, publication_admitted)?;
         if let Some(route) = route
             && route
                 .try_publish(InteractionRouteEvent::Requested(published.request.clone()))
@@ -1242,6 +1305,7 @@ impl InteractionCoordinator {
         request: InteractionRequest,
         subject: InteractionSubject,
         cancellation: &ExecutionCancellation,
+        publication_admitted: bool,
     ) -> Result<PublishedInteraction, InteractionOutcome> {
         if validate_interaction_subject(&subject).is_err() {
             return Err(InteractionOutcome::Unavailable);
@@ -1252,7 +1316,7 @@ impl InteractionCoordinator {
         self.lifecycle
             .admit_running_commit(|admission| {
                 let mut state = self.state.lock().expect("interaction state poisoned");
-                if !state.provider_available {
+                if !publication_admitted && !state.provider_available {
                     return Err(InteractionOutcome::Unavailable);
                 }
                 let (requested_audit, requested_cursor) = self
@@ -2023,6 +2087,15 @@ mod tests {
     }
 
     impl InteractionRoute for RecordingRoute {
+        fn admit_publication(
+            &self,
+            interaction: InteractionRef,
+        ) -> BoxFuture<'static, Result<InteractionPublicationPermit, ()>> {
+            Box::pin(std::future::ready(Ok(
+                InteractionPublicationPermit::for_interaction(interaction),
+            )))
+        }
+
         fn publish(&self, event: InteractionRouteEvent) -> BoxFuture<'static, Result<(), ()>> {
             let events = self.events.clone();
             Box::pin(async move { events.send(event).map_err(|_| ()) })
@@ -2030,6 +2103,13 @@ mod tests {
 
         fn try_publish(&self, event: InteractionRouteEvent) -> Result<(), ()> {
             self.events.send(event).map_err(|_| ())
+        }
+
+        fn try_admit_publication(
+            &self,
+            interaction: InteractionRef,
+        ) -> Result<InteractionPublicationPermit, ()> {
+            Ok(InteractionPublicationPermit::for_interaction(interaction))
         }
     }
 

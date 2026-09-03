@@ -71,6 +71,7 @@ use std::sync::{Arc, Mutex};
 use futures_util::future::BoxFuture;
 
 use crate::runtime::identity::ProcessUnitId;
+use crate::runtime::interaction::{InteractionPublicationPermit, InteractionRef};
 use crate::runtime::nested_containment::{AnchorError, NestedAnchorAuthority};
 use crate::runtime::subagent::activity::SubagentObservation;
 use crate::runtime::subagent::ipc::{
@@ -86,6 +87,11 @@ use crate::runtime::types::CancellationReason;
 /// bound exists so a stalled parent applies backpressure instead of letting
 /// the child accumulate unbounded pending frames.
 const OUTBOUND_CAPACITY: usize = 64;
+
+type InteractionAdmissionWaiter = (
+    InteractionRef,
+    tokio::sync::oneshot::Sender<Result<InteractionPublicationPermit, ()>>,
+);
 
 /// One control event the child's semantic driver must act on.
 #[derive(Debug, Clone, PartialEq)]
@@ -108,10 +114,11 @@ pub(crate) enum ChildControlEvent {
         /// The typed response to validate at the child coordinator.
         response: crate::runtime::interaction::InteractionResponse,
     },
-    /// The current root Runtime Client human-provider availability state.
+    /// An early root Runtime Client human-provider availability hint.
+    /// Publication admission uses a separate authoritative handshake.
     InteractionProviderAvailable {
-        /// Whether the root control attachment is capable of answering new
-        /// interactions.
+        /// Whether a root control attachment was present when this hint was
+        /// sent.
         available: bool,
     },
     /// The parent violated the bounded control protocol.
@@ -141,6 +148,11 @@ struct DispatcherInner {
     /// intermediate values.
     activity: tokio::sync::watch::Sender<ActivityFrame>,
     pending: Mutex<HashMap<ProcessUnitId, tokio::sync::oneshot::Sender<Result<(), AnchorError>>>>,
+    /// Publication-admission replies awaiting the exact child-side route
+    /// call. This is transport correlation only; the originating coordinator
+    /// still owns the interaction and consumes the resulting permit.
+    interaction_admissions: Mutex<HashMap<u64, InteractionAdmissionWaiter>>,
+    next_interaction_admission_id: std::sync::atomic::AtomicU64,
     parent_lost: tokio::sync::watch::Sender<bool>,
 }
 
@@ -157,6 +169,60 @@ impl ChildControlHandle {
             .send(frame)
             .await
             .map_err(|_| AnchorError::ParentLost)
+    }
+
+    /// Requests root publication admission for one exact routed interaction.
+    /// The response is correlated by both a transport request id and the
+    /// echoed `InteractionRef`; a stale or mismatched response is rejected.
+    pub(crate) fn admit_interaction_publication(
+        &self,
+        interaction: InteractionRef,
+    ) -> futures_util::future::BoxFuture<'static, Result<InteractionPublicationPermit, ()>> {
+        let request_id = self
+            .inner
+            .next_interaction_admission_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if request_id == 0 {
+            return Box::pin(std::future::ready(Err(())));
+        }
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.inner
+            .interaction_admissions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(request_id, (interaction.clone(), sender));
+        let handle = self.clone();
+        Box::pin(async move {
+            if handle.parent_lost() {
+                handle
+                    .inner
+                    .interaction_admissions
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&request_id);
+                return Err(());
+            }
+            if handle
+                .send_reliable(ChildFrame::InteractionPublicationAdmissionRequested(
+                    crate::runtime::subagent::ipc::InteractionPublicationAdmissionFrame {
+                        request_id,
+                        interaction,
+                        admitted: false,
+                    },
+                ))
+                .await
+                .is_err()
+            {
+                handle
+                    .inner
+                    .interaction_admissions
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&request_id);
+                return Err(());
+            }
+            receiver.await.unwrap_or(Err(()))
+        })
     }
 
     /// Attempts to enqueue one reliable frame without waiting. `Full` is
@@ -318,6 +384,75 @@ impl WriterGate {
     }
 }
 
+/// Test-only gate that delays delivery of one provider-detach notification
+/// after it has reached the child dispatcher. The root host's admission
+/// authority remains ungated; this exists solely to make stale child-cache
+/// interleavings explicit without scheduler timing.
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct ProviderAvailabilityGate {
+    armed: Arc<std::sync::atomic::AtomicBool>,
+    entered: Arc<tokio::sync::watch::Sender<bool>>,
+    release: Arc<tokio::sync::watch::Sender<bool>>,
+}
+
+#[cfg(test)]
+impl Default for ProviderAvailabilityGate {
+    fn default() -> Self {
+        let (entered, _) = tokio::sync::watch::channel(false);
+        let (release, _) = tokio::sync::watch::channel(false);
+        Self {
+            armed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            entered: Arc::new(entered),
+            release: Arc::new(release),
+        }
+    }
+}
+
+#[cfg(test)]
+impl ProviderAvailabilityGate {
+    /// Arms the next false provider update and resets the deterministic
+    /// entered/released observations.
+    pub(crate) fn arm(&self) {
+        self.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.entered.send_replace(false);
+        self.release.send_replace(false);
+    }
+
+    /// Waits until the child reader has received the false update and is
+    /// deliberately holding it before converting it into a child event.
+    pub(crate) async fn wait_entered(&self) {
+        let mut entered = self.entered.subscribe();
+        while !*entered.borrow_and_update() {
+            if entered.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+
+    /// Releases the delayed provider update.
+    pub(crate) fn release(&self) {
+        self.release.send_replace(true);
+    }
+
+    fn should_delay(&self, available: bool) -> bool {
+        if available || !self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return false;
+        }
+        self.entered.send_replace(true);
+        true
+    }
+
+    async fn wait_released(&self) {
+        let mut release = self.release.subscribe();
+        while !*release.borrow_and_update() {
+            if release.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+}
+
 /// The started dispatcher: the handle every owner shares, the semantic
 /// control-event stream the driver consumes, and the three owned tasks.
 pub(crate) struct ChildControlDispatcher {
@@ -346,7 +481,7 @@ impl ChildControlDispatcher {
     ) -> Self {
         #[cfg(test)]
         {
-            Self::start_impl(control, observation, None, None)
+            Self::start_impl(control, observation, None, None, None)
         }
         #[cfg(not(test))]
         {
@@ -364,7 +499,19 @@ impl ChildControlDispatcher {
         writer_gate: Option<WriterGate>,
         observation_gate: Option<WriterGate>,
     ) -> Self {
-        Self::start_impl(control, observation, writer_gate, observation_gate)
+        Self::start_impl(control, observation, writer_gate, observation_gate, None)
+    }
+
+    /// Starts the dispatcher with a deterministic provider-detach delivery
+    /// gate. This is a test seam for proving that root admission, rather than
+    /// the child's cached availability bit, decides publication.
+    #[cfg(test)]
+    pub(crate) fn start_with_provider_gate(
+        control: tokio::net::UnixStream,
+        observation: tokio::net::UnixStream,
+        provider_gate: ProviderAvailabilityGate,
+    ) -> Self {
+        Self::start_impl(control, observation, None, None, Some(provider_gate))
     }
 
     #[allow(clippy::too_many_lines)] // one owner initializes both reliable/disposable lanes
@@ -373,6 +520,7 @@ impl ChildControlDispatcher {
         observation: tokio::net::UnixStream,
         #[cfg(test)] writer_gate: Option<WriterGate>,
         #[cfg(test)] observation_gate: Option<WriterGate>,
+        #[cfg(test)] provider_gate: Option<ProviderAvailabilityGate>,
     ) -> Self {
         let (read_half, write_half) = tokio::io::split(control);
         let (outbound_tx, outbound_rx) =
@@ -386,6 +534,8 @@ impl ChildControlDispatcher {
             outbound: outbound_tx,
             activity: activity_tx,
             pending: Mutex::new(HashMap::new()),
+            interaction_admissions: Mutex::new(HashMap::new()),
+            next_interaction_admission_id: std::sync::atomic::AtomicU64::new(1),
             parent_lost: lost_tx,
         });
 
@@ -445,6 +595,22 @@ impl ChildControlDispatcher {
                         }
                     }
                     Ok(Some(ParentFrame::InteractionProviderAvailable { available })) => {
+                        #[cfg(test)]
+                        if let Some(gate) = &provider_gate
+                            && gate.should_delay(available)
+                        {
+                            let gate = gate.clone();
+                            let events_tx = events_tx.clone();
+                            tokio::spawn(async move {
+                                gate.wait_released().await;
+                                let _ = events_tx
+                                    .send(ChildControlEvent::InteractionProviderAvailable {
+                                        available,
+                                    })
+                                    .await;
+                            });
+                            continue;
+                        }
                         if events_tx
                             .send(ChildControlEvent::InteractionProviderAvailable { available })
                             .await
@@ -452,6 +618,9 @@ impl ChildControlDispatcher {
                         {
                             break;
                         }
+                    }
+                    Ok(Some(ParentFrame::InteractionPublicationAdmissionResult(result))) => {
+                        reader_inner.resolve_interaction_admission(&result);
                     }
                     Ok(Some(ParentFrame::AnchorAccepted(ack))) => {
                         reader_inner.resolve(&ack.unit_id, Ok(()));
@@ -634,6 +803,25 @@ impl DispatcherInner {
         }
     }
 
+    fn resolve_interaction_admission(
+        &self,
+        result: &crate::runtime::subagent::ipc::InteractionPublicationAdmissionFrame,
+    ) {
+        let waiter = self
+            .interaction_admissions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&result.request_id);
+        let Some((expected, sender)) = waiter else {
+            return;
+        };
+        if expected != result.interaction || !result.admitted {
+            let _ = sender.send(Err(()));
+            return;
+        }
+        let _ = sender.send(Ok(InteractionPublicationPermit::for_interaction(expected)));
+    }
+
     fn publish_parent_loss(&self) {
         // `send_replace`, not `send`: a `watch` send fails and leaves the
         // value untouched when no receiver is currently subscribed, and both
@@ -650,6 +838,15 @@ impl DispatcherInner {
         for (_, waiter) in pending {
             let _ = waiter.send(Err(AnchorError::ParentLost));
         }
+        let admissions = std::mem::take(
+            &mut *self
+                .interaction_admissions
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        for (_, (_, waiter)) in admissions {
+            let _ = waiter.send(Err(()));
+        }
     }
 }
 
@@ -665,9 +862,9 @@ mod tests {
     use crate::runtime::nested_containment::AnchorError;
     use crate::runtime::subagent::activity::SubagentObservation;
     use crate::runtime::subagent::ipc::{
-        ActivityFrame, ChildFrame, DelegationFrame, DiagnosticFrame, ParentFrame,
-        ProcessUnitAckFrame, ProcessUnitRefusalFrame, read_activity_frame, read_child_frame,
-        write_parent_frame,
+        ActivityFrame, ChildFrame, DelegationFrame, DiagnosticFrame,
+        InteractionPublicationAdmissionFrame, ParentFrame, ProcessUnitAckFrame,
+        ProcessUnitRefusalFrame, read_activity_frame, read_child_frame, write_parent_frame,
     };
     use crate::runtime::types::CancellationReason;
     use crate::tools::types::{ToolInvocationMode, ToolOrigin};
@@ -912,6 +1109,75 @@ mod tests {
                 reason: Some(CancellationReason::UserRequested),
             })
         );
+    }
+
+    /// A mismatched admission result is rejected by the child-side transport
+    /// correlation and cannot authorize a different routed interaction. A
+    /// later exact response still resolves only its own request.
+    #[tokio::test]
+    async fn publication_admission_requires_exact_routed_identity() {
+        let (mut parent, child) = pair();
+        let (_observation_parent, observation_child) = pair();
+        let dispatcher = ChildControlDispatcher::start(child, observation_child);
+        let handle = dispatcher.handle();
+        let first = InteractionRef::new(
+            ConversationId::new("child-conversation"),
+            InteractionId::new("interaction-1"),
+        );
+        let first_waiter = tokio::spawn({
+            let handle = handle.clone();
+            let first = first.clone();
+            async move { handle.admit_interaction_publication(first).await }
+        });
+        let first_request = match read_child_frame(&mut parent).await.expect("read admission") {
+            Some(ChildFrame::InteractionPublicationAdmissionRequested(request)) => request,
+            other => panic!("unexpected admission frame: {other:?}"),
+        };
+        assert_eq!(first_request.interaction, first);
+        let mut mismatched = first_request.clone();
+        mismatched.interaction = InteractionRef::new(
+            ConversationId::new("child-conversation"),
+            InteractionId::new("interaction-2"),
+        );
+        mismatched.admitted = true;
+        write_parent_frame(
+            &mut parent,
+            &ParentFrame::InteractionPublicationAdmissionResult(mismatched),
+        )
+        .await
+        .expect("write mismatched admission");
+        assert_eq!(first_waiter.await.expect("first waiter"), Err(()));
+
+        let second = InteractionRef::new(
+            ConversationId::new("child-conversation"),
+            InteractionId::new("interaction-2"),
+        );
+        let second_waiter = tokio::spawn({
+            let handle = handle.clone();
+            let second = second.clone();
+            async move { handle.admit_interaction_publication(second).await }
+        });
+        let second_request = match read_child_frame(&mut parent).await.expect("read admission") {
+            Some(ChildFrame::InteractionPublicationAdmissionRequested(request)) => request,
+            other => panic!("unexpected admission frame: {other:?}"),
+        };
+        assert_eq!(second_request.interaction, second);
+        write_parent_frame(
+            &mut parent,
+            &ParentFrame::InteractionPublicationAdmissionResult(
+                InteractionPublicationAdmissionFrame {
+                    request_id: second_request.request_id,
+                    interaction: second_request.interaction.clone(),
+                    admitted: true,
+                },
+            ),
+        )
+        .await
+        .expect("write exact admission");
+        let permit = second_waiter.await.expect("second waiter").expect("permit");
+        assert!(permit.matches(&second));
+
+        dispatcher.shutdown().await;
     }
 
     /// A proven-terminal release under bounded outbound backpressure is

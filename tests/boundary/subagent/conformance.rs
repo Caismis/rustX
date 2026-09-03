@@ -589,7 +589,28 @@ async fn launch_wired_child_with_shell(
     task: &str,
     shell: &str,
 ) -> WiredChild {
-    launch_wired_child_full(plane, child, task, shell, ObservationWiring::Live).await
+    launch_wired_child_full(plane, child, task, shell, ObservationWiring::Live, None).await
+}
+
+/// Launches one child with a test-only gate that delays the child's local
+/// processing of the root provider-detach notification while leaving the
+/// reliable control reader able to process publication-admission replies.
+#[cfg(test)]
+async fn launch_wired_child_with_provider_gate(
+    plane: &ParentPlane,
+    child: &ChildFixture,
+    task: &str,
+    provider_gate: crate::local_runtime::dispatcher::ProviderAvailabilityGate,
+) -> WiredChild {
+    launch_wired_child_full(
+        plane,
+        child,
+        task,
+        "true",
+        ObservationWiring::Live,
+        Some(provider_gate),
+    )
+    .await
 }
 
 async fn launch_wired_child_full(
@@ -598,6 +619,7 @@ async fn launch_wired_child_full(
     task: &str,
     shell: &str,
     observation_wiring: ObservationWiring,
+    provider_gate: Option<crate::local_runtime::dispatcher::ProviderAvailabilityGate>,
 ) -> WiredChild {
     let (driver_end, child_end) = tokio::net::UnixStream::pair().expect("control pair");
     // The disposable observation channel (Issue #178): a second socket pair
@@ -663,10 +685,19 @@ async fn launch_wired_child_full(
     let child_observations = Arc::clone(&child.observations);
     let (stop_serve, stop_receiver) = tokio::sync::oneshot::channel();
     let serve = tokio::spawn(async move {
-        let mut dispatcher = crate::local_runtime::dispatcher::ChildControlDispatcher::start(
-            child_end,
-            observation_child_end,
-        );
+        let mut dispatcher = match provider_gate {
+            Some(provider_gate) => {
+                crate::local_runtime::dispatcher::ChildControlDispatcher::start_with_provider_gate(
+                    child_end,
+                    observation_child_end,
+                    provider_gate,
+                )
+            }
+            None => crate::local_runtime::dispatcher::ChildControlDispatcher::start(
+                child_end,
+                observation_child_end,
+            ),
+        };
         let handle = dispatcher.handle();
         child_runtime.install_interaction_route(Arc::new(
             crate::local_runtime::subagent_child::ChildInteractionRoute::new(handle.clone()),
@@ -2537,6 +2568,10 @@ async fn routed_interaction_survives_root_detach_and_reconnect() {
     )
     .await;
 
+    // Receiving InteractionPending witnesses that the child coordinator has
+    // already won root publication admission and committed its own requested
+    // fact. Detach is now deterministically after that frontier and before
+    // the human response.
     first.detach();
     assert!(
         parent
@@ -3147,6 +3182,166 @@ async fn child_questionnaire_fails_closed_without_root_provider() {
         "no root projection exists without a capable provider"
     );
     child.runtime.shutdown().await.expect("child drains");
+}
+
+/// Root detach wins the publication-admission frontier even while the child
+/// still holds a stale `provider_available = true` cache. The false
+/// notification is deliberately delayed after reaching the child dispatcher;
+/// only the authoritative root host admission check can make this test pass.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn root_detach_rejects_publication_with_stale_child_provider_state() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let (parent, host) =
+        parent_runtime_host_plane(&dir, "conv-184-admission-race", Vec::new()).await;
+    let (attachment, initialized) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .expect("root Runtime Client attaches");
+    match initialized {
+        rustx::runtime_client::RuntimeClientResult::Initialized { .. } => {}
+        other => panic!("root attach result: {other:?}"),
+    }
+
+    let (release_model, model_released) = support::fake::model_release();
+    let (tools, calls, executor_started) = child_approval_tools();
+    let invocation_arguments = serde_json::json!({"target": "stale-cache"});
+    let call = support::fake::ScriptedCall {
+        id: "call-admission-race",
+        tool_id: "tool-approved",
+        name: "approved_tool",
+        arguments: invocation_arguments,
+    };
+    let mut approval_script = vec![
+        FakeStep::Emit(started()),
+        FakeStep::ParkUntilReleased(model_released),
+    ];
+    approval_script.extend(
+        support::fake::tool_call_events(0, &call)
+            .into_iter()
+            .map(FakeStep::Emit),
+    );
+    approval_script.push(FakeStep::Emit(ModelEvent::Completed {
+        finish_reason: ModelFinishReason::ToolCalls,
+        usage: None,
+    }));
+    let child = child_fixture(
+        &dir,
+        &ConversationId::new("conv-184-admission-race-subagent-1"),
+        vec![approval_script, answer_script("ADMISSION-RACE-CONTINUED")],
+        tools,
+        Vec::new(),
+    )
+    .await;
+
+    let provider_gate = crate::local_runtime::dispatcher::ProviderAvailabilityGate::default();
+    provider_gate.arm();
+    let wired = launch_wired_child_with_provider_gate(
+        &parent.plane,
+        &child,
+        "prove publication admission",
+        provider_gate.clone(),
+    )
+    .await;
+    await_journal_fact(
+        &child.store,
+        1,
+        is_request_started,
+        "the child starts its gated model request",
+    )
+    .await;
+
+    // This synchronous detach commits the root host's authoritative
+    // `control_attachment = None` transition. The child still has the true
+    // value sent in its Delegate frame.
+    attachment.detach();
+    tokio::time::timeout(LIVENESS, provider_gate.wait_entered())
+        .await
+        .expect("the false provider update reaches the deterministic gate");
+    release_model.send_replace(true);
+
+    // The control attachment is gone, so its subscription is intentionally
+    // closed. A read-only attachment can inspect the projection without
+    // becoming a capable provider; it lets the test detect the forbidden
+    // stale publication without reopening admission.
+    let (inspection, initialized) = host
+        .attach_read_only(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .expect("read-only projection attachment");
+    let (initial_snapshot, cursor) = match initialized {
+        rustx::runtime_client::RuntimeClientResult::Initialized {
+            snapshot, cursor, ..
+        } => (snapshot, cursor),
+        other => panic!("read-only attach result: {other:?}"),
+    };
+    assert!(
+        initial_snapshot.pending_interactions.is_empty(),
+        "no stale interaction was already projected at the post-detach cut"
+    );
+    let subscription = inspection
+        .subscribe_events(cursor)
+        .expect("read-only event subscription");
+
+    // A pre-fix implementation publishes an actionable InteractionRequested
+    // here and remains pending. Race the owning child settlement against the
+    // root stream so that stale publication fails immediately rather than
+    // relying on a timing-based absence assertion.
+    let settled = tokio::time::timeout(LIVENESS, async {
+        loop {
+            tokio::select! {
+                settled = parent.plane.registry.wait_until_settled(&wired.accepted.subagent_id) => {
+                    break settled.expect("child snapshot");
+                }
+                delivery = subscription.next() => match delivery {
+                    rustx::runtime_client::EventDelivery::Event(event) => {
+                        if let rustx::runtime_client::RuntimeClientEvent::InteractionPending { interaction } = event.event {
+                            panic!("stale child availability published an interaction: {interaction:?}");
+                        }
+                    }
+                    rustx::runtime_client::EventDelivery::ResyncRequired { .. } => {
+                        panic!("admission race unexpectedly requires root resync");
+                    }
+                    rustx::runtime_client::EventDelivery::Closed
+                    | rustx::runtime_client::EventDelivery::Exhausted => {
+                        panic!("root interaction subscription closed during admission race");
+                    }
+                    rustx::runtime_client::EventDelivery::Pending => {
+                        unreachable!("EventSubscription::next never returns Pending");
+                    }
+                }
+            }
+        }
+    })
+    .await
+    .expect("the child fails closed instead of waiting for stale publication");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    provider_gate.release();
+    await_serve(wired.serve).await;
+
+    assert!(
+        calls.borrow().is_empty(),
+        "unavailable approval never executes"
+    );
+    assert!(
+        !*executor_started.borrow(),
+        "unavailable approval never starts execution"
+    );
+    let child_events = journal(&child.store);
+    assert!(
+        child_events
+            .iter()
+            .all(|event| !matches!(event, RuntimeEvent::InteractionRequested { .. })),
+        "root detach before admission leaves no child InteractionRequested fact"
+    );
+    assert!(
+        parent
+            .plane
+            .registry
+            .pending_interaction_projection()
+            .is_empty(),
+        "root projection has no actionable interaction"
+    );
+
+    inspection.detach();
+    child.runtime.shutdown().await.expect("child drains");
+    parent.runtime.shutdown().await.expect("parent drains");
 }
 
 /// The durable event-kind sequence of one store. Event payloads carry
@@ -3906,8 +4101,15 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
             Topology::ObservationBroken => ObservationWiring::Broken,
             _ => ObservationWiring::Live,
         };
-        let wired =
-            launch_wired_child_full(&plane, &child, "inspect the workspace", "true", wiring).await;
+        let wired = launch_wired_child_full(
+            &plane,
+            &child,
+            "inspect the workspace",
+            "true",
+            wiring,
+            None,
+        )
+        .await;
         let subagent_id = wired.accepted.subagent_id.clone();
 
         // The reliable baseline of the stalled consumer: once the Running

@@ -3584,16 +3584,23 @@ Runtime Client is a projection/control/attachment adapter over it.
   and has no semantic effect.
 - **Attachment availability is bounded and non-semantic.** The one control
   attachment represents the 0.1 interaction provider; read-only inspection
-  attachments never do. If no control attachment is present at
-  publication, approval fails closed as `Unavailable`; detaching later only
-  closes admission for future requests. It does not answer or cancel a live
+  attachments never do. Publication admission is checked by the root host
+  under the same `ClientState` mutex that installs/removes that attachment.
+  The child must receive an ephemeral permit for its exact `InteractionRef`
+  before its coordinator commits `InteractionRequested`; therefore a detach
+  that wins the host mutex rejects publication as `Unavailable` without a
+  requested audit, while a permit that wins remains valid for that one
+  originating publication. The propagated availability watch is an early
+  fail-closed hint only, not this authority. Detaching after publication only
+  closes admission for future requests: it does not answer or cancel a live
   interaction, and a reattached client repairs from the runtime snapshot and
   cursor rather than from local prompt state.
 - **Interaction routing is reliable semantic control.** Child
-  InteractionRequested, InteractionSettled, and response acknowledgements use
-  the reliable bidirectional child control protocol. They do not use the
-  disposable activity/observation lane, whose latest-value loss and
-  backpressure remain irrelevant to execution control.
+  publication-admission requests/results, InteractionRequested,
+  InteractionSettled, and response acknowledgements use the reliable
+  bidirectional child control protocol. They do not use the disposable
+  activity/observation lane, whose latest-value loss and backpressure remain
+  irrelevant to execution control.
 - **Human-provider availability is separate from capability selection.** A
   root control attachment makes the root human surface available to live
   children; detaching after publication leaves the originating waiter
@@ -4964,7 +4971,7 @@ child dispatcher        two delivery classes on two independent
         |               stream; publishing can never block the child Agent
         |               Loop or crowd out a terminal Result
         v
-Subagent IPC v10        reliable control frames on the fd 0 stream,
+Subagent IPC v11        reliable control frames on the fd 0 stream,
         |               disposable Activity frames
         |               (kind 107) on the fd 1 stream — independent
         |               backpressure domains, so a stalled observation
@@ -5609,18 +5616,21 @@ order, so two units with outstanding offers cannot open each other's gates.
 The control read half remains the parent-liveness authority, and its EOF is
 what `ChildPreparation` observes during composition. Channels are bounded,
 there is no listener and no network service. The subagent IPC version is
-**10**: its typed `Cancel` frame carries the parent registry's semantic
+**11**: its typed `Cancel` frame carries the parent registry's semantic
 `CancellationReason` (with an absent reason only for pre-ownership
 preparation cancellation, where no child attempt exists), the child→parent
 `Activity` frame (kind 107) carries the Issue #178 live activity projection
 on the dedicated fd 1 observation stream, and routed interaction
-request/settlement/response frames plus root-provider availability use the
-reliable fd 0 control stream. Reliable control and disposable observation
-never share a transport backpressure dependency, so a stalled observation
-writer can never delay a `Result`, an `AnchorReleased`, or any other control
-frame. The parent's observation receiver only decodes `Activity` into the
-registry read model; observation EOF is diagnostics loss, never process or
-lifecycle evidence. There is no compatibility decoding for older versions.
+publication-admission, request/settlement/response frames plus the early
+root-provider availability hint use the reliable fd 0 control stream. The
+parent answers admission from the root host's synchronized control-attachment
+frontier and echoes the exact `InteractionRef`; the permit is transport
+correlation only and the child coordinator commits the requested fact. A
+stalled observation writer can never delay a `Result`, an `AnchorReleased`, or
+any other control frame. The parent's observation receiver only decodes
+`Activity` into the registry read model; observation EOF is diagnostics loss,
+never process or lifecycle evidence. There is no compatibility decoding for
+older versions.
 
 ##### Recovery-semantics conformance (Issue #138)
 

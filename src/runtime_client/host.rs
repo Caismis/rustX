@@ -25,6 +25,8 @@
 //!   observation attachments;
 //! - the Runtime Client projection (snapshot read model, cursor allocation,
 //!   bounded replay, subscribers) and its linearization boundary;
+//! - the root publication-admission check for child interactions, limited to
+//!   the synchronized presence of the control attachment;
 //! - protocol adaptation: request dispatch, `model_set`/`shutdown`/
 //!   `cancel_current_attempt` forwarding, native Session intent forwarding,
 //!   and inbound publish forwarding;
@@ -40,6 +42,8 @@
 //! - mailbox semantic sequencing (the coordinator owns the
 //!   mailbox/admission relationship);
 //! - `ConversationToolRuntime` / `CapabilityCoordinator` semantic ownership;
+//! - child interaction waiters, pending state, audit, cancellation,
+//!   settlement, or execution authority;
 //! - SessionCatalog/SessionGraph ownership (the optional native Session
 //!   control seam forwards to `LocalSessionSupervisor`);
 //! - cancellation terminal settlement (`AgentExecution` remains the attempt
@@ -147,6 +151,7 @@ use crate::runtime::identity::{ConversationId, ToolExecutionId};
 use crate::runtime::interaction::{InteractionRef, InteractionResponse, RoutedInteractionError};
 use crate::runtime::observation::PendingObservations;
 use crate::runtime::request_history::{RequestHistory, RequestHistoryError};
+use crate::runtime::subagent::InteractionPublicationAuthority;
 
 /// The one Runtime Client host construction failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -350,6 +355,21 @@ pub(crate) struct ClientInner {
     worker_started: AtomicBool,
 }
 
+/// Root-side publication authority installed into the parent subagent
+/// registry. It is a weak adapter over the Runtime Client host's attachment
+/// lock, not an interaction owner.
+struct RootInteractionPublicationAuthority {
+    inner: Weak<ClientInner>,
+}
+
+impl InteractionPublicationAuthority for RootInteractionPublicationAuthority {
+    fn admit(&self, _interaction: &InteractionRef) -> bool {
+        self.inner
+            .upgrade()
+            .is_some_and(|inner| inner.admits_interaction_publication())
+    }
+}
+
 /// Releasing the last host handle closes the shared observation queue,
 /// which is the projection worker's terminal condition.
 impl Drop for ClientInner {
@@ -369,6 +389,15 @@ impl ClientInner {
             .expect("runtime client host lock poisoned");
         guard.apply_pending(&self.pending);
         guard
+    }
+
+    /// The root publication-admission frontier. The same host mutex that
+    /// removes/installs the control attachment on detach/attach is used for
+    /// this check, so an admission and a detach have exactly one ordering:
+    /// whichever operation acquires this boundary first wins.
+    pub(crate) fn admits_interaction_publication(&self) -> bool {
+        let state = self.lock_state();
+        state.control_attachment.is_some()
     }
 
     /// Refreshes the bounded transcript bootstrap page from the durable
@@ -1687,6 +1716,13 @@ impl RuntimeClientHost {
             pending,
             worker_started: AtomicBool::new(false),
         });
+        if let Some(runtime) = inner.runtime.as_ref() {
+            runtime.install_interaction_publication_authority(Arc::new(
+                RootInteractionPublicationAuthority {
+                    inner: Arc::downgrade(&inner),
+                },
+            ));
+        }
         // Only the projection worker: activating the conversation runtime
         // is the composition's explicit next step, never a side effect of
         // binding a client.

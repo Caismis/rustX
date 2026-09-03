@@ -560,15 +560,30 @@ the full InteractionRef, independently of selected conversation or current
 TUI focus, so multiple primary and child Approval/Questionnaire interactions
 can remain pending and settle in any order without cross-talk.
 
-Child interaction request, settlement, and response traffic uses the reliable
-bidirectional child control lane. The disposable activity lane is
-diagnostics-only and can coalesce or lose observations without affecting
-interaction correctness. A capable root control attachment makes the human
-provider available to live children; it does not grant ask_user, which remains
-available only when the frozen child capability definition explicitly selects
-it. If the route is unavailable before publication, the interaction fails
-closed. Detaching after publication leaves the originating waiter pending,
-and reconnect reconstructs its presentation from live runtime state.
+Child interaction request, settlement, response, and publication-admission
+traffic uses the reliable bidirectional child control lane. The disposable
+activity lane is diagnostics-only and can coalesce or lose observations
+without affecting interaction correctness.
+
+Publication eligibility has one explicit root-side linearization point. The
+root host's `ClientState.control_attachment` slot is guarded by the same mutex
+for attach, detach, and the admission check. A child first asks the parent
+driver for admission with its full `InteractionRef`; the driver asks the
+`SubagentRegistry`, which verifies the live child incarnation and delegates
+the check to that root host authority. Only an exact, ephemeral permit allows
+the child coordinator to commit `InteractionRequested`. Thus, if detach wins
+that synchronized frontier, publication fails closed before any requested
+audit; if admission wins, the originating coordinator may remain pending even
+when the later detach notification is still in flight. The propagated
+`provider_available` watch is only an early fail-closed hint and is never the
+authority proving publication eligibility. A permit carries no waiter or
+settlement authority and cannot authorize another `InteractionRef`.
+
+A capable root control attachment makes the human provider available to live
+children; it does not grant `ask_user`, which remains available only when the
+frozen child capability definition explicitly selects it. Detaching after
+publication leaves the originating waiter pending, and reconnect reconstructs
+its presentation from live runtime state.
 
 Live reconnect and process recovery are different operations. Reconnect may
 rebuild presentation for still-live coordinators; recovery never recreates a
@@ -1806,7 +1821,7 @@ second authority:
   either `UnixStream`; there is no listener and no network service.
 - **Anchor acknowledgements route by exact typed identity.** Two units with
   outstanding offers cannot open each other's start gates.
-- **The subagent IPC version is 10 and there is no compatibility decoding.** A
+- **The subagent IPC version is 11 and there is no compatibility decoding.** A
   peer that does not speak exactly this version exits before composing
   anything. The typed `Cancel` payload carries the parent registry's semantic
   `CancellationReason`; only pre-ownership preparation cancellation uses an
@@ -1815,8 +1830,11 @@ second authority:
   `SubagentObservation` of the Issue #178 observation plane onto the
   dedicated fd 1 observation stream; version 10 adds routed interaction
   request/settlement/response frames and root-provider availability on the
-  reliable fd 0 control stream. HITL traffic is never a control
-  acknowledgement and never uses the disposable observation lane.
+  reliable fd 0 control stream. Version 11 adds a bidirectional
+  publication-admission request/result pair: the parent answers the child's
+  exact `InteractionRef` from the root host's synchronized control-attachment
+  frontier before the child commits its requested fact. HITL traffic is never
+  a control acknowledgement and never uses the disposable observation lane.
 
 ## Issue #146: deterministic worktree isolation and workspace handoff
 
