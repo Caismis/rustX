@@ -99,6 +99,21 @@ pub(crate) enum ChildControlEvent {
         /// The first-winner semantic cancellation cause, when available.
         reason: Option<CancellationReason>,
     },
+    /// A root Runtime Client response addressed to this child's coordinator.
+    InteractionRespond {
+        /// Transport-only response correlation identity.
+        response_id: u64,
+        /// The full routed semantic address.
+        interaction: crate::runtime::interaction::InteractionRef,
+        /// The typed response to validate at the child coordinator.
+        response: crate::runtime::interaction::InteractionResponse,
+    },
+    /// The current root Runtime Client human-provider availability state.
+    InteractionProviderAvailable {
+        /// Whether the root control attachment is capable of answering new
+        /// interactions.
+        available: bool,
+    },
     /// The parent violated the bounded control protocol.
     ProtocolViolation(String),
 }
@@ -142,6 +157,22 @@ impl ChildControlHandle {
             .send(frame)
             .await
             .map_err(|_| AnchorError::ParentLost)
+    }
+
+    /// Attempts to enqueue one reliable frame without waiting. `Full` is
+    /// reported to the caller so a publication can fail closed; no semantic
+    /// frame is ever coalesced or silently discarded.
+    #[cfg(test)]
+    pub(crate) fn try_send_reliable(&self, frame: ChildFrame) -> Result<(), AnchorError> {
+        self.inner
+            .outbound
+            .try_send(frame)
+            .map_err(|error| match error {
+                tokio::sync::mpsc::error::TrySendError::Full(_) => AnchorError::Refused(
+                    "the reliable child control lane is at capacity".to_owned(),
+                ),
+                tokio::sync::mpsc::error::TrySendError::Closed(_) => AnchorError::ParentLost,
+            })
     }
 
     /// Publishes one **disposable** live-activity projection (Issue #178).
@@ -336,6 +367,7 @@ impl ChildControlDispatcher {
         Self::start_impl(control, observation, writer_gate, observation_gate)
     }
 
+    #[allow(clippy::too_many_lines)] // one owner initializes both reliable/disposable lanes
     fn start_impl(
         control: tokio::net::UnixStream,
         observation: tokio::net::UnixStream,
@@ -389,6 +421,32 @@ impl ChildControlDispatcher {
                     Ok(Some(ParentFrame::Cancel { reason })) => {
                         if events_tx
                             .send(ChildControlEvent::Cancel { reason })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Ok(Some(ParentFrame::InteractionRespond {
+                        response_id,
+                        interaction,
+                        response,
+                    })) => {
+                        if events_tx
+                            .send(ChildControlEvent::InteractionRespond {
+                                response_id,
+                                interaction,
+                                response,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Ok(Some(ParentFrame::InteractionProviderAvailable { available })) => {
+                        if events_tx
+                            .send(ChildControlEvent::InteractionProviderAvailable { available })
                             .await
                             .is_err()
                         {
@@ -599,6 +657,11 @@ impl DispatcherInner {
 mod tests {
     use super::{ChildControlDispatcher, ChildControlEvent};
     use crate::runtime::identity::ProcessUnitId;
+    use crate::runtime::identity::{AttemptId, ConversationId, InteractionId, ToolCallId, ToolId};
+    use crate::runtime::interaction::{
+        ApprovalDecision, InteractionKind, InteractionOutcome, InteractionRef, InteractionRequest,
+        InteractionResponse,
+    };
     use crate::runtime::nested_containment::AnchorError;
     use crate::runtime::subagent::activity::SubagentObservation;
     use crate::runtime::subagent::ipc::{
@@ -607,6 +670,8 @@ mod tests {
         write_parent_frame,
     };
     use crate::runtime::types::CancellationReason;
+    use crate::tools::types::{ToolInvocationMode, ToolOrigin};
+    use futures_util::FutureExt;
 
     fn pair() -> (tokio::net::UnixStream, tokio::net::UnixStream) {
         tokio::net::UnixStream::pair().expect("control socket pair")
@@ -824,6 +889,7 @@ mod tests {
             &ParentFrame::Delegate(DelegationFrame {
                 task: "inspect".to_owned(),
                 context: None,
+                interaction_provider_available: false,
             }),
         )
         .await
@@ -1013,6 +1079,154 @@ mod tests {
             "activity never touches the reliable control channel"
         );
 
+        dispatcher.shutdown().await;
+    }
+
+    /// Routed interaction requests and settlements use the reliable control
+    /// lane, even while the disposable observation writer is stalled and its
+    /// latest-value slot is being overwritten. The exact pair identity and
+    /// both interaction kinds stay intact on the semantic lane.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // one deterministic two-lane transport proof
+    async fn routed_interactions_are_reliable_and_observation_independent() {
+        let (mut parent, child) = pair();
+        let (mut observation_parent, observation_child) = pair();
+        let observation_gate = super::WriterGate::default();
+        let dispatcher = ChildControlDispatcher::start_with_gates(
+            child,
+            observation_child,
+            None,
+            Some(observation_gate.clone()),
+        );
+        let handle = dispatcher.handle();
+
+        for revision in 1..=100u64 {
+            handle.publish_activity(activity(revision));
+        }
+
+        let approval = InteractionRequest {
+            id: InteractionId::new("approval-1"),
+            conversation_id: ConversationId::new("child-conversation"),
+            attempt_id: AttemptId::new("attempt-1"),
+            turn: 1,
+            kind: InteractionKind::Approval {
+                call_id: ToolCallId::new("call-1"),
+                tool_id: ToolId::new("tool-1"),
+                tool_name: "probe".to_owned(),
+                origin: ToolOrigin::Builtin,
+                mode: ToolInvocationMode::Foreground,
+                arguments: serde_json::json!({"path": "original"}),
+                reason: "approval required".to_owned(),
+            },
+        };
+        let questionnaire = InteractionRequest {
+            id: InteractionId::new("questionnaire-1"),
+            conversation_id: approval.conversation_id.clone(),
+            attempt_id: AttemptId::new("attempt-1"),
+            turn: 2,
+            kind: InteractionKind::Questionnaire {
+                questionnaire: crate::runtime::interaction::QuestionnaireSpecification {
+                    questions: vec![crate::runtime::interaction::QuestionSpecification {
+                        question: "Which target?".to_owned(),
+                        header: "Target".to_owned(),
+                        options: vec![
+                            crate::runtime::interaction::OptionSpecification {
+                                label: "staging".to_owned(),
+                                description: "safe".to_owned(),
+                                preview: None,
+                            },
+                            crate::runtime::interaction::OptionSpecification {
+                                label: "production".to_owned(),
+                                description: "live".to_owned(),
+                                preview: None,
+                            },
+                        ],
+                        multi_select: false,
+                    }],
+                },
+            },
+        };
+        let approval_ref =
+            InteractionRef::new(approval.conversation_id.clone(), approval.id.clone());
+        let questionnaire_ref = InteractionRef::new(
+            questionnaire.conversation_id.clone(),
+            questionnaire.id.clone(),
+        );
+        handle
+            .send_reliable(ChildFrame::InteractionRequested(approval.clone()))
+            .await
+            .expect("approval request is reliable");
+        handle
+            .send_reliable(ChildFrame::InteractionRequested(questionnaire.clone()))
+            .await
+            .expect("questionnaire request is reliable");
+        handle
+            .send_reliable(ChildFrame::InteractionSettled {
+                interaction: approval_ref.clone(),
+                outcome: InteractionOutcome::Responded {
+                    response: InteractionResponse::Approval {
+                        decision: ApprovalDecision::Allow,
+                    },
+                },
+            })
+            .await
+            .expect("approval settlement is reliable");
+        handle
+            .send_reliable(ChildFrame::InteractionSettled {
+                interaction: questionnaire_ref.clone(),
+                outcome: InteractionOutcome::Unavailable,
+            })
+            .await
+            .expect("questionnaire settlement is reliable");
+
+        assert_eq!(
+            read_child_frame(&mut parent)
+                .await
+                .expect("approval request"),
+            Some(ChildFrame::InteractionRequested(approval)),
+        );
+        assert_eq!(
+            read_child_frame(&mut parent)
+                .await
+                .expect("questionnaire request"),
+            Some(ChildFrame::InteractionRequested(questionnaire)),
+        );
+        assert_eq!(
+            read_child_frame(&mut parent)
+                .await
+                .expect("approval settlement"),
+            Some(ChildFrame::InteractionSettled {
+                interaction: approval_ref,
+                outcome: InteractionOutcome::Responded {
+                    response: InteractionResponse::Approval {
+                        decision: ApprovalDecision::Allow,
+                    },
+                },
+            }),
+        );
+        assert_eq!(
+            read_child_frame(&mut parent)
+                .await
+                .expect("questionnaire settlement"),
+            Some(ChildFrame::InteractionSettled {
+                interaction: questionnaire_ref,
+                outcome: InteractionOutcome::Unavailable,
+            }),
+        );
+        assert!(
+            read_activity_frame(&mut observation_parent)
+                .now_or_never()
+                .is_none(),
+            "semantic interaction traffic never uses the stalled observation lane"
+        );
+
+        observation_gate.open();
+        assert_eq!(
+            read_activity_frame(&mut observation_parent)
+                .await
+                .expect("coalesced activity"),
+            Some(activity(100)),
+        );
         dispatcher.shutdown().await;
     }
 

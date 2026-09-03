@@ -594,21 +594,21 @@ describe("real rustx structured ask_user questionnaire", { skip: SKIP }, () => {
     await until(
       () =>
         (session.state?.pendingInteractions ?? []).some(
-          (interaction) => interaction.kind.type === "questionnaire",
+          (interaction) => interaction.request.kind.type === "questionnaire",
         ),
       "the structured questionnaire to become pending",
     );
 
     const pending = session.state?.pendingInteractions.find(
-      (interaction) => interaction.kind.type === "questionnaire",
+      (interaction) => interaction.request.kind.type === "questionnaire",
     );
     assert.ok(pending);
-    assert.equal(pending.kind.type, "questionnaire");
-    if (pending.kind.type !== "questionnaire") throw new Error("not a questionnaire");
-    assert.equal(pending.kind.questionnaire.questions.length, 2);
-    assert.equal(pending.kind.questionnaire.questions[1]?.multi_select, true);
+    assert.equal(pending.request.kind.type, "questionnaire");
+    if (pending.request.kind.type !== "questionnaire") throw new Error("not a questionnaire");
+    assert.equal(pending.request.kind.questionnaire.questions.length, 2);
+    assert.equal(pending.request.kind.questionnaire.questions[1]?.multi_select, true);
     assert.equal(
-      pending.kind.questionnaire.questions[0]?.options[0]?.label,
+      pending.request.kind.questionnaire.questions[0]?.options[0]?.label,
       "Swiss / Klein blue",
     );
 
@@ -616,11 +616,13 @@ describe("real rustx structured ask_user questionnaire", { skip: SKIP }, () => {
     // client-side draft or echoed prose is needed to restore the overlay.
     await session.resync();
     const reconstructed = session.state?.pendingInteractions.find(
-      (interaction) => interaction.id === pending.id,
+      (interaction) =>
+        interaction.interaction.conversation_id === pending.interaction.conversation_id &&
+        interaction.interaction.interaction_id === pending.interaction.interaction_id,
     );
     assert.ok(reconstructed);
-    assert.deepEqual(reconstructed.kind, pending.kind);
-    if (reconstructed.kind.type !== "questionnaire") {
+    assert.deepEqual(reconstructed.request.kind, pending.request.kind);
+    if (reconstructed.request.kind.type !== "questionnaire") {
       throw new Error("resynchronized interaction is not a questionnaire");
     }
 
@@ -628,8 +630,8 @@ describe("real rustx structured ask_user questionnaire", { skip: SKIP }, () => {
       | import("../src/protocol/types.ts").QuestionnaireResponse
       | undefined;
     const overlay = new QuestionnaireOverlay({
-      interactionId: reconstructed.id,
-      questionnaire: reconstructed.kind.questionnaire,
+      interactionId: `${reconstructed.interaction.conversation_id}::${reconstructed.interaction.interaction_id}`,
+      questionnaire: reconstructed.request.kind.questionnaire,
       onSubmit: (response) => {
         submitted = response;
       },
@@ -660,14 +662,16 @@ describe("real rustx structured ask_user questionnaire", { skip: SKIP }, () => {
       },
     });
 
-    await session.respondInteraction(reconstructed.id, {
+    await session.respondInteraction(reconstructed.interaction, {
       type: "questionnaire",
       response: submitted!,
     });
     await until(
       () =>
         !(session.state?.pendingInteractions ?? []).some(
-          (interaction) => interaction.id === reconstructed.id,
+          (interaction) =>
+            interaction.interaction.conversation_id === reconstructed.interaction.conversation_id &&
+            interaction.interaction.interaction_id === reconstructed.interaction.interaction_id,
         ),
       "the questionnaire to settle",
     );

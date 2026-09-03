@@ -69,7 +69,7 @@ describe("RuntimeClientAttachment", () => {
     assert.equal(initialize?.method, "initialize");
     assert.equal(
       initialize?.method === "initialize" ? initialize.protocol_version : null,
-      11,
+      12,
     );
     assert.equal(subscribe?.method, "subscribe_events");
     assert.equal(
@@ -166,19 +166,22 @@ describe("RuntimeClientAttachment", () => {
     const { peer, session } = connect();
     await attach(peer, session);
 
-    const responding = session.respondInteraction("attempt-1-interaction-1", {
+    const responding = session.respondInteraction(
+      { conversation_id: "conv-test", interaction_id: "attempt-1-interaction-1" },
+      {
       type: "approval",
       decision: { type: "allow" },
-    });
+      },
+    );
     await peer.awaitRequests(3);
 
     const request = peer.requests[2];
     assert.equal(request?.method, "interaction_respond");
-    assert.equal(
+    assert.deepEqual(
       request?.method === "interaction_respond"
-        ? request.interaction_id
+        ? request.interaction
         : undefined,
-      "attempt-1-interaction-1",
+      { conversation_id: "conv-test", interaction_id: "attempt-1-interaction-1" },
     );
     assert.deepEqual(
       request?.method === "interaction_respond" ? request.response : undefined,
@@ -187,7 +190,7 @@ describe("RuntimeClientAttachment", () => {
 
     peer.respond(3, {
       type: "interaction_response_accepted",
-      interaction_id: "attempt-1-interaction-1",
+      interaction: { conversation_id: "conv-test", interaction_id: "attempt-1-interaction-1" },
     });
     await responding;
   });

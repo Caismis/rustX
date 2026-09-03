@@ -39,6 +39,10 @@ const NO_DIAGNOSTICS = () => ({
   resyncCount: 0,
 });
 
+function interactionLabel(interaction: { conversation_id: string; interaction_id: string }): string {
+  return `${interaction.conversation_id}::${interaction.interaction_id}`;
+}
+
 function deferred<T>(): {
   promise: Promise<T>;
   resolve: (value: T) => void;
@@ -246,7 +250,7 @@ describe("CommandDispatcher", () => {
     const approval = approvalInteraction("attempt-1-interaction-approval-1");
     const second = await harness(snapshot({ pending_interactions: [approval] }));
     const approving = second.dispatcher.submit(
-      `/approve ${approval.id} deny because it is unsafe`,
+      `/approve ${interactionLabel(approval.interaction)} deny because it is unsafe`,
     );
     await second.peer.awaitRequests(3);
     assert.deepEqual(
@@ -260,7 +264,7 @@ describe("CommandDispatcher", () => {
     );
     second.peer.respond(3, {
       type: "interaction_response_accepted",
-      interaction_id: approval.id,
+      interaction: approval.interaction,
     });
     assert.equal((await approving).kind, "transient");
   });
@@ -311,7 +315,7 @@ describe("CommandDispatcher", () => {
     for (const command of COMMANDS) {
       assert.ok(outcome.body.includes(command.name), command.name);
     }
-    assert.match(outcome.body, /focused runtime interaction/);
+    assert.match(outcome.body, /routed response/);
   });
 
   it("renders /model show from the runtime-owned session state", async () => {
@@ -1070,7 +1074,7 @@ describe("CommandDispatcher", () => {
   it("sends /approve through Runtime Client without local outcome state", async () => {
     const { peer, dispatcher } = await harness();
     const responding = dispatcher.submit(
-      "/approve attempt-1-interaction-1 deny human said no",
+      "/approve conv-test::attempt-1-interaction-1 deny human said no",
     );
     await peer.awaitRequests(3);
 
@@ -1079,12 +1083,15 @@ describe("CommandDispatcher", () => {
     assert.deepEqual(
       request?.method === "interaction_respond"
         ? {
-            interaction_id: request.interaction_id,
+            interaction: request.interaction,
             response: request.response,
           }
         : null,
       {
-        interaction_id: "attempt-1-interaction-1",
+        interaction: {
+          conversation_id: "conv-test",
+          interaction_id: "attempt-1-interaction-1",
+        },
         response: {
           type: "approval",
           decision: { type: "deny", reason: "human said no" },
@@ -1094,7 +1101,10 @@ describe("CommandDispatcher", () => {
 
     peer.respond(3, {
       type: "interaction_response_accepted",
-      interaction_id: "attempt-1-interaction-1",
+      interaction: {
+        conversation_id: "conv-test",
+        interaction_id: "attempt-1-interaction-1",
+      },
     });
     const outcome = await responding;
     assert.equal(outcome.kind, "transient");

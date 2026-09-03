@@ -533,6 +533,50 @@ recovery settles the owning interrupted work from durable evidence, does not
 replay the old request, and does not regenerate it from current policy or
 tool configuration.
 
+### Routed interactions and the root human surface
+
+The semantic interaction owner is not the human-facing interaction surface.
+The originating conversation's InteractionCoordinator remains the sole owner
+of its InteractionId, pending state, response validation, cancellation race,
+audit events, terminal settlement, and continuation. The root Runtime Client
+owns only the aggregate live projection and reliable forwarding seam. It
+never creates a parent interaction, settles a child, wakes the parent model,
+or adds child interaction content to primary canonical history.
+
+Because InteractionId is conversation-local, every root-facing request and
+response uses:
+
+```text
+InteractionRef {
+    conversation_id,
+    interaction_id,
+}
+```
+
+The projection also carries InteractionSource::Primary or
+InteractionSource::Subagent { subagent_id, child_conversation_id, agent_name }
+for presentation. Source metadata is not authority. A response is routed by
+the full InteractionRef, independently of selected conversation or current
+TUI focus, so multiple primary and child Approval/Questionnaire interactions
+can remain pending and settle in any order without cross-talk.
+
+Child interaction request, settlement, and response traffic uses the reliable
+bidirectional child control lane. The disposable activity lane is
+diagnostics-only and can coalesce or lose observations without affecting
+interaction correctness. A capable root control attachment makes the human
+provider available to live children; it does not grant ask_user, which remains
+available only when the frozen child capability definition explicitly selects
+it. If the route is unavailable before publication, the interaction fails
+closed. Detaching after publication leaves the originating waiter pending,
+and reconnect reconstructs its presentation from live runtime state.
+
+Live reconnect and process recovery are different operations. Reconnect may
+rebuild presentation for still-live coordinators; recovery never recreates a
+pending waiter, synthesizes a response, or treats historical
+`InteractionSettled(Approved)` as execution authority. When a child
+dies, its projected controls are removed and delayed responses fail closed; no
+router record prolongs the child's lifetime or becomes a replacement authority.
+
 ### Durable interaction audit (FND-04 / Issue #109)
 
 Pending interaction is workflow state; requested/settled facts are audit:
@@ -1762,15 +1806,17 @@ second authority:
   either `UnixStream`; there is no listener and no network service.
 - **Anchor acknowledgements route by exact typed identity.** Two units with
   outstanding offers cannot open each other's start gates.
-- **The subagent IPC version is 9 and there is no compatibility decoding.** A
+- **The subagent IPC version is 10 and there is no compatibility decoding.** A
   peer that does not speak exactly this version exits before composing
   anything. The typed `Cancel` payload carries the parent registry's semantic
   `CancellationReason`; only pre-ownership preparation cancellation uses an
-  absent reason because no child attempt exists yet. Version 9 moves the
+  absent reason because no child attempt exists yet. Version 9 moved the
   child→parent `Activity` frame (kind 107) carrying the latest-value
   `SubagentObservation` of the Issue #178 observation plane onto the
-  dedicated fd 1 observation stream; it is observation-plane traffic only
-  and never a control acknowledgement.
+  dedicated fd 1 observation stream; version 10 adds routed interaction
+  request/settlement/response frames and root-provider availability on the
+  reliable fd 0 control stream. HITL traffic is never a control
+  acknowledgement and never uses the disposable observation lane.
 
 ## Issue #146: deterministic worktree isolation and workspace handoff
 
@@ -4360,18 +4406,16 @@ semantic normalization boundary. The frozen invariants:
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
   explicit at attachment admission; the current protocol is the sole
   supported version, and every superseded version is rejected explicitly.
-- **Runtime Client protocol v11 adds the subagent live-activity
-  projection.** `RuntimeClientSubagent` gains the child's latest-value
-  `observation` (`SubagentObservation`: revision, activity, timestamp,
-  counters), the redacted `execution_profile` (wire key
-  `execution_profile`; the bare `profile` key was the retired pre-#144
-  profile-name field), and `started_at`. These are observation-plane facts:
-  the closed `SubagentState` lifecycle remains the only authority on whether
-  the child is alive, settling, or settled. Version 10 added subagent
-  workspace facts and preserved handoff metadata; version 9 added
-  `interrupted` to the closed `SubagentState` vocabulary. Rust serialization
-  and the maintained TUI mirror describe the same states and projections.
-  Superseded versions are not decoded compatibly.
+- **Runtime Client protocol v12 adds the routed interaction projection.** The
+  root-facing pending-interaction set carries Approval and Questionnaire
+  requests from the primary conversation and live supervised children. Each
+  entry is addressed by `InteractionRef` and carries `InteractionSource`
+  metadata; the v11 subagent live-activity projection remains a separate
+  observation-plane fact. Version 10 added subagent workspace facts and
+  preserved handoff metadata; version 9 added `interrupted` to the closed
+  `SubagentState` vocabulary. Rust serialization and the maintained TUI
+  mirror describe the same states and projections. Superseded versions are
+  not decoded compatibly.
 - **The semantic layer owns protocol negotiation and attachment
   admission; transports are framing only.** `initialize` is dispatched by
   `RuntimeClientEndpoint` and is by itself sufficient to establish the

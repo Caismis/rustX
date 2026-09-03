@@ -321,8 +321,8 @@ use crate::runtime::inbound::{
     InboundSequence, InitialTurnTrigger, MailboxError,
 };
 use crate::runtime::interaction::{
-    InteractionCoordinator, InteractionError, InteractionObserver, InteractionOutcome,
-    InteractionRequest,
+    InteractionCoordinator, InteractionObserver, InteractionOutcome, InteractionRef,
+    InteractionRequest, InteractionRoute, RoutedInteraction, RoutedInteractionError, route_error,
 };
 use crate::runtime::monotonic::{MonotonicClock, SystemMonotonicClock};
 use crate::runtime::observation::{
@@ -1382,7 +1382,6 @@ impl RuntimeInner {
             // map may become empty before its waiter consumes the terminal
             // payload; the retained lifecycle guard keeps quiescence behind
             // that callback-authority settlement.
-            self.interaction.cancel_pending(interaction_cancel_reason);
             // Cancellation intent is requested synchronously after the drain
             // transition wins, so a client-side background cancel cannot
             // create an unchecked post-drain ownership window. The registry
@@ -1420,7 +1419,9 @@ impl RuntimeInner {
                 let inner = Arc::clone(self);
                 let completion_for_task = completion.clone();
                 self.executor.spawn(async move {
-                    let result = inner.drain_to_quiescence(completion_for_task.clone()).await;
+                    let result = inner
+                        .drain_to_quiescence(completion_for_task.clone(), interaction_cancel_reason)
+                        .await;
                     completion_for_task.complete(result);
                 });
             }
@@ -1483,8 +1484,17 @@ impl RuntimeInner {
     async fn drain_to_quiescence(
         self: &Arc<Self>,
         _completion: Arc<DrainCompletion>,
+        interaction_cancel_reason: CancellationReason,
     ) -> Result<(), ShutdownError> {
         let mut failures: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        // This is the async reliable route boundary for child-owned
+        // interactions. It runs after `Running -> Draining` has closed new
+        // admission, but before the drain waits for foreground ownership, so
+        // every child settlement can reach the parent control lane without a
+        // lossy synchronous try-send.
+        self.interaction
+            .cancel_pending_async(interaction_cancel_reason)
+            .await;
         loop {
             self.wait_for_foreground_operation().await;
 
@@ -1864,7 +1874,17 @@ impl RuntimeInner {
         // it still participates in the same bootstrap cut as every other
         // live projection fact. Installing the observer here means all later
         // pending/settled transitions enter the one observation queue.
-        let pending_interactions = self.interaction.pending_snapshot();
+        let mut pending_interactions: Vec<RoutedInteraction> = self
+            .interaction
+            .pending_snapshot()
+            .into_iter()
+            .map(RoutedInteraction::primary)
+            .collect();
+        let child_pending_interactions = self
+            .subagents
+            .as_ref()
+            .map(crate::runtime::subagent::SubagentRegistry::pending_interaction_projection)
+            .unwrap_or_default();
         // The list is not a live subsystem with an observer of its own: it
         // is a derivation of canonical tool results, and it moves only when
         // one of those commits. Reading the committed list inside the same
@@ -1890,6 +1910,8 @@ impl RuntimeInner {
             .as_ref()
             .map(|subagents| subagents.install_observer_and_snapshots(observer.clone()))
             .unwrap_or_default();
+        pending_interactions.extend(child_pending_interactions);
+        pending_interactions.sort_by(|left, right| left.interaction.cmp(&right.interaction));
         // No fallible subsystem has been mutated after the pending read. The
         // pre-check above and the coordinator lock make this set infallible;
         // keep the explicit branch as a defensive invariant assertion.
@@ -3313,16 +3335,36 @@ impl ConversationRuntime {
         &self.inner.capability
     }
 
-    /// Answers one live native interaction through the owning coordinator.
-    ///
-    /// This is a narrow control seam: callers can answer an existing
-    /// `InteractionId`, but cannot publish work or obtain the coordinator.
-    pub(crate) fn respond_interaction(
+    /// Answers one live native interaction through its originating
+    /// conversation. The root runtime is only a routing surface: it never
+    /// creates a parent interaction for a child and never settles a child
+    /// coordinator itself.
+    pub(crate) async fn respond_interaction(
         &self,
-        interaction_id: &crate::runtime::identity::InteractionId,
+        interaction: &InteractionRef,
         response: crate::runtime::interaction::InteractionResponse,
-    ) -> Result<(), InteractionError> {
-        self.inner.interaction.respond(interaction_id, response)
+    ) -> Result<(), RoutedInteractionError> {
+        if interaction.conversation_id == self.inner.conversation_id {
+            return self
+                .inner
+                .interaction
+                .respond_async(&interaction.interaction_id, response)
+                .await
+                .map_err(|error| route_error(interaction, error));
+        }
+        if let Some(subagents) = &self.inner.subagents {
+            return subagents.respond_interaction(interaction, response).await;
+        }
+        Err(RoutedInteractionError::NotPending {
+            interaction: interaction.clone(),
+        })
+    }
+
+    /// Installs the reliable parent route on a child conversation's own
+    /// coordinator. The route receives only already-authoritative semantic
+    /// request/settlement facts and no interaction ownership state.
+    pub(crate) fn install_interaction_route(&self, route: Arc<dyn InteractionRoute>) {
+        self.inner.interaction.install_route(route);
     }
 
     /// Changes provider admission for future interactions. Runtime Client
@@ -3330,6 +3372,9 @@ impl ConversationRuntime {
     /// is intentionally unaffected.
     pub(crate) fn set_interaction_provider_available(&self, available: bool) {
         self.inner.interaction.set_provider_available(available);
+        if let Some(subagents) = &self.inner.subagents {
+            subagents.set_interaction_provider_available(available);
+        }
     }
 
     /// The immutable result of this runtime's startup recovery (Issue #12,
@@ -4625,7 +4670,7 @@ pub(crate) struct RuntimeBootstrapSnapshot {
     /// The immutable runtime resource generation current at the cut.
     pub resources: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
     /// Live process-owned native interactions at the bootstrap cut.
-    pub pending_interactions: Vec<crate::runtime::interaction::InteractionRequest>,
+    pub pending_interactions: Vec<crate::runtime::interaction::RoutedInteraction>,
     /// The conversation's committed task list at the cut.
     ///
     /// The tool runtime rebuilt it from the whole canonical history at
@@ -5135,6 +5180,27 @@ impl crate::runtime::subagent::SubagentObserver for RuntimeObserver {
     fn on_activity(&self, snapshot: &crate::runtime::subagent::SubagentSnapshot) {
         self.push(ConversationObservation::SubagentActivity(snapshot.clone()));
     }
+
+    fn on_interaction_pending(&self, interaction: &RoutedInteraction) {
+        self.push(ConversationObservation::InteractionPending {
+            interaction: interaction.clone(),
+            audit: None,
+        });
+    }
+
+    fn on_interaction_settled(&self, interaction: &InteractionRef, outcome: &InteractionOutcome) {
+        self.push(ConversationObservation::InteractionSettled {
+            interaction: interaction.clone(),
+            outcome: outcome.clone(),
+            audit: None,
+        });
+    }
+
+    fn on_interaction_removed(&self, interaction: &InteractionRef) {
+        self.push(ConversationObservation::InteractionRemoved {
+            interaction: interaction.clone(),
+        });
+    }
 }
 
 // The coordinator fires `on_snapshot` while the capability state lock is
@@ -5169,9 +5235,8 @@ impl InteractionObserver for RuntimeObserver {
         transcript_cursor: crate::durable::TranscriptCursor,
     ) {
         self.push(ConversationObservation::InteractionPending {
-            request: request.clone(),
-            audit: audit.clone(),
-            transcript_cursor,
+            interaction: RoutedInteraction::primary(request.clone()),
+            audit: Some((audit.clone(), transcript_cursor)),
         });
     }
 
@@ -5184,8 +5249,11 @@ impl InteractionObserver for RuntimeObserver {
             crate::durable::TranscriptCursor,
         )>,
     ) {
+        let Some(inner) = self.inner.upgrade() else {
+            return;
+        };
         self.push(ConversationObservation::InteractionSettled {
-            interaction_id: interaction_id.clone(),
+            interaction: InteractionRef::new(inner.conversation_id.clone(), interaction_id.clone()),
             outcome: outcome.clone(),
             audit: audit.cloned(),
         });
@@ -10070,10 +10138,10 @@ mod tests {
             match subscription.next().await {
                 EventDelivery::Event(RuntimeClientProtocolEvent { event, .. }) => {
                     if let RuntimeClientEvent::InteractionSettled {
-                        interaction_id,
+                        interaction,
                         outcome,
                     } = event
-                        && interaction_id == pending.id
+                        && interaction == pending.interaction
                     {
                         break outcome;
                     }
@@ -10092,17 +10160,19 @@ mod tests {
         let (after_shutdown, _) = host.snapshot().expect("post-shutdown snapshot");
         assert!(after_shutdown.pending_interactions.is_empty());
 
-        let stale = attachment.handle_request(RuntimeClientRequest::InteractionRespond {
-            id: RequestId::new(2),
-            interaction_id: pending.id.clone(),
-            response: InteractionResponse::Approval {
-                decision: ApprovalDecision::Allow,
-            },
-        });
+        let stale = attachment
+            .handle_request_async(RuntimeClientRequest::InteractionRespond {
+                id: RequestId::new(2),
+                interaction: pending.interaction.clone(),
+                response: InteractionResponse::Approval {
+                    decision: ApprovalDecision::Allow,
+                },
+            })
+            .await;
         assert_eq!(
             stale.error,
             Some(RuntimeClientError::InteractionNotPending {
-                interaction_id: pending.id.clone()
+                interaction: pending.interaction.clone()
             })
         );
 
@@ -10301,7 +10371,7 @@ mod tests {
             matches!(
                 facts_at_prompt.as_slice(),
                 [RuntimeEvent::InteractionRequested { interaction_id, .. }]
-                    if *interaction_id == pending.id
+                    if *interaction_id == pending.request.id
             ),
             "expected exactly the requested fact, saw {facts_at_prompt:?}"
         );
@@ -10355,13 +10425,15 @@ mod tests {
         assert_eq!(interaction_journal(&runtime), facts_at_prompt);
 
         // The decision proceeds under the generation it was admitted with.
-        let answered = attachment.handle_request(RuntimeClientRequest::InteractionRespond {
-            id: RequestId::new(2),
-            interaction_id: pending.id.clone(),
-            response: InteractionResponse::Approval {
-                decision: ApprovalDecision::Allow,
-            },
-        });
+        let answered = attachment
+            .handle_request_async(RuntimeClientRequest::InteractionRespond {
+                id: RequestId::new(2),
+                interaction: pending.interaction.clone(),
+                response: InteractionResponse::Approval {
+                    decision: ApprovalDecision::Allow,
+                },
+            })
+            .await;
         assert!(matches!(
             answered.result,
             Some(RuntimeClientResult::InteractionResponseAccepted { .. })
@@ -10585,7 +10657,7 @@ mod tests {
                 .expect("pending interaction has an active attempt");
             (current.attempt_id.clone(), current.cancellation.clone())
         };
-        assert_eq!(pending.attempt_id, attempt_id);
+        assert_eq!(pending.request.attempt_id, attempt_id);
 
         // This is the first-winner commit. The waiter observes the signal but
         // is then parked before it can call coordinator.cancel.
@@ -10647,10 +10719,10 @@ mod tests {
             match subscription.next().await {
                 EventDelivery::Event(RuntimeClientProtocolEvent { event, .. }) => {
                     if let RuntimeClientEvent::InteractionSettled {
-                        interaction_id,
+                        interaction,
                         outcome,
                     } = event
-                        && interaction_id == pending.id
+                        && interaction == pending.interaction
                     {
                         break outcome;
                     }
@@ -10668,17 +10740,19 @@ mod tests {
         let (snapshot, _) = host.snapshot().expect("post-shutdown snapshot");
         assert!(snapshot.pending_interactions.is_empty());
 
-        let stale = attachment.handle_request(RuntimeClientRequest::InteractionRespond {
-            id: RequestId::new(2),
-            interaction_id: pending.id.clone(),
-            response: InteractionResponse::Approval {
-                decision: ApprovalDecision::Allow,
-            },
-        });
+        let stale = attachment
+            .handle_request_async(RuntimeClientRequest::InteractionRespond {
+                id: RequestId::new(2),
+                interaction: pending.interaction.clone(),
+                response: InteractionResponse::Approval {
+                    decision: ApprovalDecision::Allow,
+                },
+            })
+            .await;
         assert_eq!(
             stale.error,
             Some(RuntimeClientError::InteractionNotPending {
-                interaction_id: pending.id.clone()
+                interaction: pending.interaction.clone()
             })
         );
 

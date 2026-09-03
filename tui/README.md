@@ -313,13 +313,13 @@ does not implement a parallel Session system.
   a background execution by id.
 - `/compact` — ask the runtime to compact the canonical context while idle;
   progress and completion remain authoritative Runtime Client facts.
-- `/approve <interaction-id> <allow|deny> [reason]` — answer one runtime-owned
+- `/approve <conversation-id>::<interaction-id> <allow|deny> [reason]` — answer one runtime-owned
   Approval interaction.
 - `/approval <policy|full_access>` — request the runtime ApprovalMode.
 - `/debug` — show bounded presentation and protocol diagnostics.
 - `/reasoning [on|off]` — change the display preference for model reasoning;
   it does not change runtime model configuration.
-- `/expand [latest|all|none|<tool-call-id>|background <execution-id>|interaction <interaction-id>]` —
+- `/expand [latest|all|none|<tool-call-id>|background <execution-id>|interaction <conversation-id>::<interaction-id>]` —
   expand or collapse display detail without re-executing or re-fetching.
 
 ### Lifecycle and help
@@ -344,7 +344,7 @@ edits displayed Tool arguments, suppresses pending prompts, auto-answers them,
 or keeps a local outcome.
 
 `/reasoning [on|off]` and `/expand [latest|all|none|<tool-call-id>|background
-<exec-id>|interaction <interaction-id>]` are the two commands that touch
+<exec-id>|interaction <conversation-id>::<interaction-id>]` are the two commands that touch
 nothing but the screen. They send no request, and they are also bound to keys:
 
 | Key | Effect |
@@ -655,7 +655,7 @@ never undoes it.
 
 A 50 kB approval reason or a `Write` request carrying 50 kB of content is
 collapsed by default, because an approval prompt that scrolls its own question
-off the screen is one nobody can answer. `/expand interaction <id>` reveals
+off the screen is one nobody can answer. `/expand interaction <conversation-id>::<interaction-id>` reveals
 the complete reason and the complete validated arguments, rendered from the
 interaction the client already holds — no runtime request, no re-execution, no
 read.
@@ -686,7 +686,7 @@ on anywhere — a wire spelling is not a type.
 /expand none                          collapse all three domains
 /expand <tool-call-id>                toggle one foreground card
 /expand background <exec-id>          toggle one background card
-/expand interaction <interaction-id>  toggle one pending approval card
+/expand interaction <conversation-id>::<interaction-id>  toggle one pending interaction card
 ```
 
 A bare id addresses the `ToolCallId` domain, always: there is no search across

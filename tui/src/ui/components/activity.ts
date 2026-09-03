@@ -17,7 +17,7 @@
  * client never simulates either lifecycle locally.
  *
  * Foreground cards are keyed by `ToolCallId`, background cards by
- * `ToolExecutionId`, and interaction cards by `InteractionId`. Those are three
+ * `ToolExecutionId`, and interaction cards by `InteractionRef`. Those are three
  * runtime identity domains, so their expansion preferences are three sets —
  * never one string set all three would index.
  *
@@ -37,7 +37,7 @@
  */
 
 import type {
-  InteractionRequest,
+  RoutedInteraction,
   RuntimeClientBackgroundExecution,
   RuntimeClientSubagent,
   RuntimeClientSubagentActivity,
@@ -58,6 +58,7 @@ import {
   HEADER_BUDGET,
   isBackgroundExecutionExpanded,
   isInteractionExpanded,
+  interactionKey,
   isToolCallExpanded,
 } from "../preferences.ts";
 import { role, style } from "../theme.ts";
@@ -314,7 +315,7 @@ export function renderInteractionSection(
     return "";
   }
   const approvals = state.pendingInteractions.filter(
-    (interaction) => interaction.kind.type === "approval",
+    (interaction) => interaction.request.kind.type === "approval",
   ).length;
   const questions = state.pendingInteractions.length - approvals;
   const header =
@@ -325,7 +326,7 @@ export function renderInteractionSection(
         : `Human input required · ${state.pendingInteractions.length} pending`;
   const commands: string[] = [];
   if (approvals > 0) {
-    commands.push("/approve <interaction-id> <allow|deny> [reason]");
+    commands.push("/approve <conversation-id>::<interaction-id> <allow|deny> [reason]");
   }
   if (questions > 0) {
     commands.push("questionnaire overlay opens automatically");
@@ -339,12 +340,19 @@ export function renderInteractionSection(
     role.pending(header),
     ...(focused === undefined
       ? []
-      : [role.accent(`Focused interaction: ${focused.id}`)]),
+      : [role.accent(`Focused interaction: ${formatInteraction(focused)}`)]),
     ...state.pendingInteractions.map((interaction) =>
-      renderInteraction(interaction, preferences, interaction.id === focused?.id),
+      renderInteraction(
+        interaction,
+        preferences,
+        focused !== undefined &&
+          interactionKey(interaction.interaction) === interactionKey(focused.interaction),
+      ),
     ),
     ...commands.map((command) => role.meta(command)),
-    role.meta("/expand interaction <interaction-id> to see the full request"),
+    role.meta(
+      "/expand interaction <conversation-id>::<interaction-id> to see the full request",
+    ),
   ].join("\n");
 }
 
@@ -355,7 +363,7 @@ export function renderInteractionSection(
  * externally derived and both are bounded by default — an approval prompt
  * that scrolls its own question off the screen is one nobody can answer. But
  * they are also the facts the decision is *made from*, so the bound must be
- * one the reader can lift: `/expand interaction <id>` reveals the complete
+ * one the reader can lift: `/expand interaction <conversation-id>::<interaction-id>` reveals the complete
  * reason and the complete validated arguments, rendered from the interaction
  * the client already holds.
  *
@@ -365,33 +373,38 @@ export function renderInteractionSection(
  * this client never sends back a modified call.
  */
 function renderInteraction(
-  interaction: InteractionRequest,
+  routed: RoutedInteraction,
   preferences: PresentationPreferences,
   focused: boolean,
 ): string {
+  const interaction = routed.request;
+  const identity = formatInteraction(routed);
+  const source = sourceLabel(routed);
   if (interaction.kind.type === "questionnaire") {
     const questions = interaction.kind.questionnaire.questions.flatMap((question, index) => [
       `${index + 1}. ${question.header}: ${clipText(question.question, HEADER_BUDGET.maxChars)}`,
       ...question.options.map((option) => `   • ${option.label}`),
     ]);
     return [
-      `${focused ? role.accent("→") : role.pending("?")} ${role.toolTitle(style.bold("Questionnaire"))} ${role.meta(interaction.id)}`,
+      `${focused ? role.accent("→") : role.pending("?")} ${role.toolTitle(style.bold("Questionnaire"))} ${role.meta(identity)}`,
+      `  ${role.meta(source)}`,
       ...questions.map((question) => `  ${role.meta(question)}`),
       `  ${role.meta("custom answer is always available in the questionnaire")}`,
     ].join("\n");
   }
   const kind = interaction.kind;
-  // Keyed by `InteractionId`, its own preference domain. A `ToolCallId` or a
+  // Keyed by `InteractionRef`, its own preference domain. A `ToolCallId` or a
   // `ToolExecutionId` that serializes to the same string is a different
   // identity and never expands this card — note that `kind.call_id` is a
   // genuinely different identity of the same request, and is displayed, not
   // used as the expansion key.
   const context: ToolRenderContext = {
-    expanded: isInteractionExpanded(preferences, interaction.id),
+    expanded: isInteractionExpanded(preferences, routed.interaction),
     budget: preferences.previewBudget,
   };
   return [
-    `${focused ? role.accent("→") : role.pending("?")} ${role.toolTitle(style.bold(clipText(kind.tool_name, HEADER_BUDGET.maxChars)))} ${role.meta(interaction.id)}`,
+    `${focused ? role.accent("→") : role.pending("?")} ${role.toolTitle(style.bold(clipText(kind.tool_name, HEADER_BUDGET.maxChars)))} ${role.meta(identity)}`,
+    `  ${role.meta(source)}`,
     `  ${role.meta(`${kind.mode} · ${originLabel(kind.origin)} · call ${kind.call_id}`)}`,
     ...preview(toLines(kind.reason), context, "reason line").map(
       (line) => `  ${line}`,
@@ -400,4 +413,15 @@ function renderInteraction(
       (line) => `  ${role.meta(line)}`,
     ),
   ].join("\n");
+}
+
+function formatInteraction(interaction: RoutedInteraction): string {
+  return `${interaction.interaction.conversation_id}::${interaction.interaction.interaction_id}`;
+}
+
+function sourceLabel(interaction: RoutedInteraction): string {
+  if (interaction.source.type === "primary") {
+    return "source · primary conversation";
+  }
+  return `source · subagent ${bounded(interaction.source.agent_name)} · ${bounded(interaction.source.child_conversation_id)}`;
 }

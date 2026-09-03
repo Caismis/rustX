@@ -439,25 +439,20 @@ impl SubagentDefinition {
     }
 }
 
-/// Native capabilities whose lifecycle owner cannot exist in a headless
-/// child, and which are therefore not selectable by a named definition.
+/// Native capabilities whose lifecycle owner cannot exist in a child, and
+/// which are therefore not selectable by a named definition.
 ///
-/// `ask_user` is the exact case: the native Questionnaire capability needs a
-/// Runtime Client questionnaire authority, and a subagent child is composed
-/// without any Runtime Client host at all. `execution` is the second: its
-/// control plane owns no lifecycle of its own and routes to the
+/// `execution` is the exact case: its control plane owns no lifecycle of its
+/// own and routes to the
 /// conversation-owned registries, and a one-shot child conversation
 /// terminates with its single answer, so there is no detached execution or
 /// child registry in a child for it to control.
 ///
-/// Naming either is a configuration error rather than a silently dropped
+/// Naming it is a configuration error rather than a silently dropped
 /// capability. This is a short explicit list of known lifecycle owners
 /// reviewed against their actual owners, not a generic deny-policy
 /// framework.
-pub const CHILD_UNSAFE_BUILTIN_TOOLS: [&str; 2] = [
-    crate::tools::executor::ASK_USER_TOOL_NAME,
-    crate::tools::executor::EXECUTION_TOOL_NAME,
-];
+pub const CHILD_UNSAFE_BUILTIN_TOOLS: [&str; 1] = [crate::tools::executor::EXECUTION_TOOL_NAME];
 
 /// A definition-level validation failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1066,7 +1061,7 @@ mod tests {
     }
 
     #[test]
-    fn recursive_and_child_unsafe_selectors_are_rejected_structurally() {
+    fn recursive_and_execution_selectors_are_rejected_structurally() {
         assert!(matches!(
             definition(
                 "explore",
@@ -1081,12 +1076,22 @@ mod tests {
             definition(
                 "explore",
                 vec![SubagentToolSelector::Builtin {
-                    name: "ask_user".to_owned()
+                    name: "execution".to_owned()
                 }],
                 Vec::new(),
             ),
             Err(SubagentDefinitionError::ChildUnsafeSelector { .. })
         ));
+        assert!(
+            definition(
+                "explore",
+                vec![SubagentToolSelector::Builtin {
+                    name: "ask_user".to_owned()
+                }],
+                Vec::new(),
+            )
+            .is_ok()
+        );
     }
 
     #[test]

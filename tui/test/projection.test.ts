@@ -385,7 +385,7 @@ describe("presentation projection", () => {
     const settled = fold(pending, [
       {
         type: "interaction_settled",
-        interaction_id: interaction.id,
+        interaction: interaction.interaction,
         outcome: {
           type: "responded",
           response: { type: "approval", decision: { type: "allow" } },

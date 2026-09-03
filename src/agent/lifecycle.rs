@@ -358,21 +358,19 @@ enum InteractionBinding {
 }
 
 impl InteractionBinding {
-    async fn request_approval(
+    fn request_approval(
         &self,
         attempt_id: AttemptId,
         facts: ApprovalFacts,
         cancellation: ExecutionCancellation,
-    ) -> InteractionOutcome {
+    ) -> BoxFuture<'_, InteractionOutcome> {
         match self {
-            Self::Unavailable => InteractionOutcome::Unavailable,
+            Self::Unavailable => Box::pin(async { InteractionOutcome::Unavailable }),
             Self::Native(coordinator) => {
-                coordinator
-                    .request_approval(attempt_id, facts, cancellation)
-                    .await
+                Box::pin(coordinator.request_approval(attempt_id, facts, cancellation))
             }
             #[cfg(test)]
-            Self::Test(rendezvous) => rendezvous.request_approval(facts, cancellation).await,
+            Self::Test(rendezvous) => rendezvous.request_approval(facts, cancellation),
         }
     }
 
@@ -746,15 +744,14 @@ impl AttemptLifecycle {
     }
 
     /// Requests approval through the attempt's runtime-owned binding.
-    pub(crate) async fn request_approval(
+    pub(crate) fn request_approval(
         &self,
         attempt_id: AttemptId,
         facts: ApprovalFacts,
         cancellation: ExecutionCancellation,
-    ) -> InteractionOutcome {
+    ) -> BoxFuture<'_, InteractionOutcome> {
         self.interaction
             .request_approval(attempt_id, facts, cancellation)
-            .await
     }
 
     /// Binds the one native Questionnaire capability for a foreground invocation.

@@ -679,11 +679,11 @@ async fn statically_invalid_references_fail_composition_closed() {
     }
 }
 
-/// Recursive and child-unsafe capability selections are rejected at
-/// definition admission, so no resolution path has to defend against them.
+/// Recursive and execution capability selections are rejected at definition
+/// admission, while `ask_user` is a valid explicit child capability.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn recursive_and_child_unsafe_selections_are_rejected_at_admission() {
-    for capability in ["subagent", "ask_user", "execution"] {
+async fn recursive_and_execution_selections_are_rejected_at_admission() {
+    for capability in ["subagent", "execution"] {
         let lab = Lab::new();
         lab.write_config(&explore(&[capability]));
         let error = LocalSessionProduct::compose(&lab.paths(), &dependencies())
@@ -695,6 +695,15 @@ async fn recursive_and_child_unsafe_selections_are_rejected_at_admission() {
             "the refusal names {capability}: {error}"
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_explicit_ask_user_selection_is_admitted_for_a_child() {
+    let lab = Lab::new();
+    lab.write_config(&explore(&["ask_user"]));
+    LocalSessionProduct::compose(&lab.paths(), &dependencies())
+        .await
+        .expect("ask_user is a routed child capability when explicitly selected");
 }
 
 /// An unavailable optional source keeps the runtime healthy, while an agent

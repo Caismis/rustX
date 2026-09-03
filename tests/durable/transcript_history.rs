@@ -49,7 +49,7 @@ use rustx::runtime::identity::{
     PublicationStreamId, RequestId, ToolCallId, ToolId, TurnId,
 };
 use rustx::runtime::types::{TokenMeasurement, TokenMeasurementSource};
-use rustx::runtime::{InteractionResponse, RuntimeResourceRevision};
+use rustx::runtime::{InteractionRef, InteractionResponse, RuntimeResourceRevision};
 use rustx::runtime_client::{RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientResult};
 use rustx::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
 
@@ -904,19 +904,25 @@ async fn requirement_11_interaction_audits_page_without_recovering_a_waiter() {
         rustx::runtime_client::RuntimeClientTranscriptItem::InteractionSettled { .. }
     ));
     assert!(matches!(
-        runtime.host().respond_interaction(
-            &interaction_id,
-            InteractionResponse::Questionnaire {
-                response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
-                    answers: vec![QuestionnaireAnswerEntry {
-                        question_index: 0,
-                        answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
-                            label: "staging".to_owned(),
-                        }),
-                    }],
-                }),
-            },
-        ),
+        runtime
+            .host()
+            .respond_interaction(
+                &InteractionRef::new(
+                    ConversationId::new("conversation-standalone"),
+                    interaction_id,
+                ),
+                InteractionResponse::Questionnaire {
+                    response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
+                        answers: vec![QuestionnaireAnswerEntry {
+                            question_index: 0,
+                            answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
+                                label: "staging".to_owned(),
+                            }),
+                        }],
+                    }),
+                },
+            )
+            .await,
         Err(rustx::runtime_client::RuntimeClientError::InteractionNotPending { .. })
     ));
     drop(attachment);

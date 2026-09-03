@@ -38,7 +38,7 @@ use crate::runtime::identity::{
     RuntimeResourceRevision, SkillId, SkillVersionId, ToolCallId, ToolExecutionId, ToolId, TurnId,
 };
 use crate::runtime::inbound::InboundSequence;
-use crate::runtime::interaction::InteractionRequest;
+use crate::runtime::interaction::RoutedInteraction;
 use crate::runtime::types::{ApprovalMode, TokenMeasurement};
 use crate::tools::background::BackgroundLifecycle;
 use crate::tools::todo::{TodoSnapshot, TodoStatus};
@@ -107,7 +107,7 @@ pub struct RuntimeClientSnapshot {
     /// Live process-owned native interaction requests. This is projection
     /// state, never durable recovery input or client-owned truth.
     #[serde(default)]
-    pub pending_interactions: Vec<InteractionRequest>,
+    pub pending_interactions: Vec<RoutedInteraction>,
     /// All background executions in execution allocation order, including
     /// terminal records retained by the authoritative registry.
     #[serde(default)]

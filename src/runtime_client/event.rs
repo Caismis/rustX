@@ -35,7 +35,7 @@ use crate::model::session::{AttemptModelView, SessionModelView};
 use crate::publication::PublicationAudit;
 use crate::runtime::identity::{AttemptId, MessageId, ToolCallId, ToolExecutionId, ToolId};
 use crate::runtime::inbound::InboundSequence;
-use crate::runtime::interaction::{InteractionOutcome, InteractionRequest};
+use crate::runtime::interaction::{InteractionOutcome, InteractionRef, RoutedInteraction};
 use crate::runtime::types::ApprovalMode;
 use crate::runtime::types::{CancellationReason, RuntimeError};
 use crate::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolProgress};
@@ -93,15 +93,22 @@ pub enum RuntimeClientEvent {
     /// A native interaction is pending. The request is authoritative runtime
     /// projection state; it is not a client-owned prompt.
     InteractionPending {
-        /// The complete bounded interaction request.
-        interaction: InteractionRequest,
+        /// The complete routed interaction projection.
+        interaction: RoutedInteraction,
     },
     /// A native interaction was removed from the live pending projection.
     InteractionSettled {
-        /// The terminal interaction identity.
-        interaction_id: crate::runtime::identity::InteractionId,
+        /// The terminal routed interaction identity.
+        interaction: InteractionRef,
         /// The exact terminal rendezvous outcome.
         outcome: InteractionOutcome,
+    },
+    /// A child died or otherwise lost its process-owned interaction authority.
+    /// This removes the root presentation without inventing a response or a
+    /// child settlement outcome.
+    InteractionRemoved {
+        /// The no-longer-actionable routed identity.
+        interaction: InteractionRef,
     },
     /// A durable interaction request audit became visible in the transcript.
     ///

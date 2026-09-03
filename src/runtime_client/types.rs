@@ -56,12 +56,11 @@ use crate::conversation::SurfaceRevision;
 use crate::message::types::UserContentBlock;
 use crate::model::catalog::ModelCatalogView;
 use crate::model::session::{SessionModelConfig, SessionModelView};
-use crate::runtime::identity::InteractionId;
 use crate::runtime::identity::{
     AgentId, AttemptId, CapabilityRevision, ConversationId, MessageId, ToolExecutionId,
 };
 use crate::runtime::inbound::InboundSequence;
-use crate::runtime::interaction::InteractionResponse;
+use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 use crate::runtime::types::ApprovalMode;
 
 /// The protocol view of one native Session graph node.
@@ -239,9 +238,11 @@ pub enum RuntimeClientSessionRequest {
 /// subagent view gains the latest-value `observation`, the redacted
 /// `execution_profile`, and `started_at`, and its `detail` is now
 /// diagnostics-only (a successful child's answer rides only the durable
-/// terminal inbound publication). There is no compatibility decoding of
-/// version 10.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 11;
+/// terminal inbound publication). Version 12 carries the shared routed
+/// interaction projection: pending interactions are addressed by
+/// `InteractionRef` and include source metadata for primary and live child
+/// conversations. There is no compatibility decoding of version 11.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 12;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -396,8 +397,8 @@ pub enum RuntimeClientRequest {
     InteractionRespond {
         /// Attachment-scoped request id.
         id: RequestId,
-        /// The live interaction identity.
-        interaction_id: InteractionId,
+        /// The full routed interaction identity.
+        interaction: InteractionRef,
         /// The finite typed response.
         response: InteractionResponse,
     },
@@ -694,7 +695,10 @@ impl RuntimeClientRequest {
     pub fn requires_async(&self) -> bool {
         matches!(
             self,
-            Self::CompactContext { .. } | Self::ReloadResources { .. } | Self::Shutdown { .. }
+            Self::CompactContext { .. }
+                | Self::ReloadResources { .. }
+                | Self::InteractionRespond { .. }
+                | Self::Shutdown { .. }
         ) || self.is_session_request()
     }
 
@@ -847,8 +851,8 @@ pub enum RuntimeClientResult {
     /// `interaction_respond` succeeded: the coordinator accepted the one
     /// terminal response transition.
     InteractionResponseAccepted {
-        /// The interaction identity.
-        interaction_id: InteractionId,
+        /// The full routed interaction identity.
+        interaction: InteractionRef,
     },
     /// `snapshot_get` succeeded.
     Snapshot {
@@ -1024,8 +1028,8 @@ pub enum RuntimeClientError {
     /// The interaction was no longer pending. Duplicate, stale, pre-crash,
     /// and post-quiescent responses all use this bounded contract.
     InteractionNotPending {
-        /// The stale interaction identity.
-        interaction_id: InteractionId,
+        /// The stale routed interaction identity.
+        interaction: InteractionRef,
     },
     /// The response was typed but invalid for the pending interaction.
     InteractionInvalidResponse {
@@ -1037,8 +1041,8 @@ pub enum RuntimeClientError {
     /// fail-closed and the decision granted no authority; the client is told
     /// rather than shown an acceptance the durable audit does not support.
     InteractionAuditFailed {
-        /// The interaction whose settlement was not durably recorded.
-        interaction_id: InteractionId,
+        /// The routed interaction whose settlement was not durably recorded.
+        interaction: InteractionRef,
     },
     /// The runtime has not been activated for an `ApprovalMode` update.
     ApprovalModeInactive,
@@ -1142,7 +1146,7 @@ mod tests {
     use crate::message::content::TextBlock;
     use crate::message::types::UserContentBlock;
     use crate::runtime::identity::{AttemptId, ConversationId, InteractionId, ToolExecutionId};
-    use crate::runtime::interaction::{ApprovalDecision, InteractionResponse};
+    use crate::runtime::interaction::{ApprovalDecision, InteractionRef, InteractionResponse};
     use crate::runtime_client::event::RuntimeClientEvent;
 
     /// The Runtime Client protocol version is a distinct constant from the
@@ -1151,7 +1155,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 11);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 12);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1168,7 +1172,7 @@ mod tests {
     /// `Interrupted` terminal state, plus the Issue #178 observation-plane
     /// fields.
     #[test]
-    fn interrupted_subagent_projection_serializes_as_the_v11_wire_state() {
+    fn interrupted_subagent_projection_serializes_as_the_v12_wire_state() {
         let subagent = RuntimeClientSubagent {
             subagent_id: crate::runtime::identity::SubagentId::new("subagent-1"),
             child_agent_id: crate::runtime::identity::AgentId::new("agent-child"),
@@ -1258,7 +1262,10 @@ mod tests {
     fn interaction_response_request_round_trips_without_replacement_arguments() {
         let request = RuntimeClientRequest::InteractionRespond {
             id: super::RequestId::new(11),
-            interaction_id: InteractionId::new("attempt-1-interaction-1"),
+            interaction: InteractionRef::new(
+                ConversationId::new("conversation-1"),
+                InteractionId::new("attempt-1-interaction-1"),
+            ),
             response: InteractionResponse::Approval {
                 decision: ApprovalDecision::Deny {
                     reason: "human denied".to_owned(),
@@ -1267,7 +1274,11 @@ mod tests {
         };
         let value = serde_json::to_value(&request).expect("serialize request");
         assert_eq!(value["method"], "interaction_respond");
-        assert_eq!(value["interaction_id"], "attempt-1-interaction-1");
+        assert_eq!(value["interaction"]["conversation_id"], "conversation-1");
+        assert_eq!(
+            value["interaction"]["interaction_id"],
+            "attempt-1-interaction-1"
+        );
         assert_eq!(value["response"]["type"], "approval");
         assert!(value["response"].get("arguments").is_none());
         let decoded: RuntimeClientRequest =
@@ -1407,7 +1418,10 @@ mod tests {
             },
             RuntimeClientError::NoCurrentAttempt,
             RuntimeClientError::InteractionNotPending {
-                interaction_id: InteractionId::new("attempt-1-interaction-1"),
+                interaction: InteractionRef::new(
+                    ConversationId::new("conversation-1"),
+                    InteractionId::new("attempt-1-interaction-1"),
+                ),
             },
             RuntimeClientError::InteractionInvalidResponse {
                 message: "bounded".to_owned(),

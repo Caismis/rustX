@@ -47,7 +47,6 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
-#[cfg(test)]
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -63,6 +62,7 @@ use crate::runtime::cancellation::ExecutionCancellation;
 use crate::runtime::identity::{
     AttemptId, ConversationId, EventId, InteractionId, ToolCallId, ToolId, TurnId,
 };
+use crate::runtime::subagent::SubagentName;
 use crate::runtime::types::{CancellationReason, ConversationLifecycle, LifecycleAdmission};
 use crate::tools::types::{ToolInvocationMode, ToolOrigin};
 
@@ -116,6 +116,119 @@ pub struct InteractionRequest {
     pub turn: u32,
     /// The bounded interaction facts.
     pub kind: InteractionKind,
+}
+
+impl InteractionRequest {
+    /// The address of this request at the root human-facing surface.
+    #[must_use]
+    pub fn interaction_ref(&self) -> InteractionRef {
+        InteractionRef {
+            conversation_id: self.conversation_id.clone(),
+            interaction_id: self.id.clone(),
+        }
+    }
+}
+
+/// The root-facing address of a conversation-local interaction.
+///
+/// `InteractionId` is allocated inside one conversation/attempt domain and is
+/// intentionally not globally unique. The pair is the only identity that
+/// crosses a Runtime Client or parent/child routing boundary.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InteractionRef {
+    /// The conversation-owned semantic interaction domain.
+    pub conversation_id: ConversationId,
+    /// The interaction identity allocated by that conversation's coordinator.
+    pub interaction_id: InteractionId,
+}
+
+impl InteractionRef {
+    /// Creates one routed address from the canonical identity pair.
+    #[must_use]
+    pub fn new(conversation_id: ConversationId, interaction_id: InteractionId) -> Self {
+        Self {
+            conversation_id,
+            interaction_id,
+        }
+    }
+}
+
+impl core::fmt::Display for InteractionRef {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            formatter,
+            "{}::{}",
+            self.conversation_id, self.interaction_id
+        )
+    }
+}
+
+/// Presentation metadata for the root interaction surface.
+///
+/// This is projection data only. It grants no authority to the root router,
+/// and it is never copied into either conversation's canonical history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum InteractionSource {
+    /// The root runtime's primary conversation.
+    Primary,
+    /// A live supervised child conversation.
+    Subagent {
+        /// The parent-owned child identity.
+        subagent_id: crate::runtime::identity::SubagentId,
+        /// The child conversation that owns the interaction.
+        child_conversation_id: ConversationId,
+        /// The frozen named definition used by the child.
+        agent_name: SubagentName,
+    },
+}
+
+/// One pending interaction projected to the root Runtime Client.
+///
+/// The request remains the originating conversation's immutable request. The
+/// routed address and source only make that request understandable and
+/// answerable at the shared human-facing surface.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoutedInteraction {
+    /// The stable address the human response must use.
+    pub interaction: InteractionRef,
+    /// Root-facing source metadata.
+    pub source: InteractionSource,
+    /// The originating conversation's request facts.
+    pub request: InteractionRequest,
+}
+
+impl RoutedInteraction {
+    /// Projects a primary-conversation request.
+    pub(crate) fn primary(request: InteractionRequest) -> Self {
+        Self {
+            interaction: request.interaction_ref(),
+            source: InteractionSource::Primary,
+            request,
+        }
+    }
+
+    /// Projects a child-conversation request with parent-owned source data.
+    pub(crate) fn subagent(
+        subagent_id: crate::runtime::identity::SubagentId,
+        child_conversation_id: ConversationId,
+        agent_name: SubagentName,
+        request: InteractionRequest,
+    ) -> Self {
+        let interaction = request.interaction_ref();
+        debug_assert_eq!(interaction.conversation_id, child_conversation_id);
+        Self {
+            interaction,
+            source: InteractionSource::Subagent {
+                subagent_id,
+                child_conversation_id,
+                agent_name,
+            },
+            request,
+        }
+    }
 }
 
 /// The finite approval decision accepted from a client.
@@ -535,6 +648,42 @@ pub(crate) trait InteractionObserver: Send + Sync {
     );
 }
 
+/// One semantic interaction fact leaving its originating conversation.
+///
+/// The route carries only the already-authoritative request/settlement facts;
+/// it never receives a waiter, cancellation handle, audit capability, or
+/// execution object.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum InteractionRouteEvent {
+    /// A requested fact has committed and is now being exposed at the root
+    /// human-facing surface.
+    Requested(InteractionRequest),
+    /// The originating coordinator selected its terminal outcome.
+    Settled {
+        /// The originating conversation-local identity, addressed as a pair.
+        interaction: InteractionRef,
+        /// The selected terminal outcome.
+        outcome: InteractionOutcome,
+    },
+}
+
+/// The reliable route installed on a child conversation coordinator.
+///
+/// The asynchronous operation is used by production request/response paths
+/// so a child can await bounded reliable-control capacity before releasing
+/// its semantic waiter. The synchronous attempt is retained for cancellation
+/// and deterministic local coordinator paths; implementations must never
+/// silently drop a frame from either operation.
+pub(crate) trait InteractionRoute: Send + Sync {
+    /// Publishes one route event through reliable semantic control.
+    fn publish(&self, event: InteractionRouteEvent) -> BoxFuture<'static, Result<(), ()>>;
+
+    /// Attempts the same publication without awaiting. `Err` means the
+    /// route could not accept the event and the caller must fail closed.
+    #[cfg(test)]
+    fn try_publish(&self, event: InteractionRouteEvent) -> Result<(), ()>;
+}
+
 /// A test-only replacement for the concrete native binding.
 ///
 /// Production attempts can bind only the conversation-owned
@@ -558,6 +707,13 @@ pub(crate) struct InteractionTicket {
     receiver: oneshot::Receiver<WaiterPayload>,
 }
 
+/// The result of the publication transition before the child reliable route
+/// has been awaited.
+struct PublishedInteraction {
+    ticket: InteractionTicket,
+    request: InteractionRequest,
+}
+
 impl core::fmt::Debug for InteractionTicket {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("InteractionTicket")
@@ -573,6 +729,16 @@ struct WaiterPayload {
     outcome: InteractionOutcome,
     waiter_admission: Option<LifecycleAdmission>,
     settlement: Option<SettlementNotification>,
+}
+
+/// A terminal transition whose route notification and waiter handoff have
+/// not yet been performed.
+struct SettlementDelivery {
+    transition: SettleTransition,
+    sender: oneshot::Sender<WaiterPayload>,
+    payload: WaiterPayload,
+    route: Option<Arc<dyn InteractionRoute>>,
+    route_event: Option<InteractionRouteEvent>,
 }
 
 /// The observation callback is itself kept inside a counted settlement
@@ -762,6 +928,10 @@ pub(crate) struct InteractionCoordinator {
     audit: Arc<dyn ConversationInteractionAudit>,
     state: Mutex<CoordinatorState>,
     observer: Mutex<Option<Arc<dyn InteractionObserver>>>,
+    /// A child-only reliable semantic route. This is deliberately separate
+    /// from the Runtime Client observation observer and never owns pending
+    /// state or settlement authority.
+    route: Mutex<Option<Arc<dyn InteractionRoute>>>,
     #[cfg(test)]
     settle_gate: Mutex<Option<Arc<InteractionSettleGate>>>,
     #[cfg(test)]
@@ -845,6 +1015,7 @@ impl InteractionCoordinator {
             audit,
             state: Mutex::new(CoordinatorState::default()),
             observer: Mutex::new(None),
+            route: Mutex::new(None),
             #[cfg(test)]
             settle_gate: Mutex::new(None),
             #[cfg(test)]
@@ -906,6 +1077,17 @@ impl InteractionCoordinator {
         *installed = Some(observer);
     }
 
+    /// Installs the reliable route used by a child conversation to expose its
+    /// own interactions at the root Runtime Client surface.
+    ///
+    /// This is a pre-activation composition seam. The route is not a second
+    /// coordinator and receives no authority beyond typed route events.
+    pub(crate) fn install_route(&self, route: Arc<dyn InteractionRoute>) {
+        let mut installed = self.route.lock().expect("interaction route poisoned");
+        debug_assert!(installed.is_none(), "one interaction route only");
+        *installed = Some(route);
+    }
+
     /// Marks whether the one Runtime Client attachment is currently capable
     /// of answering newly published interactions.
     pub(crate) fn set_provider_available(&self, available: bool) {
@@ -943,6 +1125,7 @@ impl InteractionCoordinator {
     /// # Panics
     ///
     /// Panics if the coordinator's internal synchronization state is poisoned.
+    #[cfg(test)]
     fn publish_approval_with_cancellation(
         &self,
         attempt_id: AttemptId,
@@ -959,6 +1142,7 @@ impl InteractionCoordinator {
     /// waiter. It uses the exact same lifecycle admission, identity,
     /// durable-before-prompt publication, and terminal settlement path as
     /// Approval.
+    #[cfg(test)]
     fn publish_questionnaire_with_cancellation(
         &self,
         attempt_id: AttemptId,
@@ -969,6 +1153,44 @@ impl InteractionCoordinator {
         let (request, subject) =
             facts.into_published(self.conversation_id.clone(), attempt_id, id.clone());
         self.publish(request, subject, cancellation)
+    }
+
+    /// The asynchronous publication path used by live child conversations.
+    /// The requested audit and originating pending entry are committed before
+    /// this method awaits reliable route capacity. A route failure removes the
+    /// live waiter fail-closed; it never leaves an unanswered orphan in the
+    /// coordinator.
+    async fn publish_async(
+        &self,
+        request: InteractionRequest,
+        subject: InteractionSubject,
+        cancellation: &ExecutionCancellation,
+    ) -> Result<InteractionTicket, InteractionOutcome> {
+        let published = self.publish_inner(request, subject, cancellation)?;
+        let route = self
+            .route
+            .lock()
+            .expect("interaction route poisoned")
+            .clone();
+        if let Some(route) = route
+            && route
+                .publish(InteractionRouteEvent::Requested(published.request.clone()))
+                .await
+                .is_err()
+        {
+            // This is an unavailable publication, not a cancellation and not
+            // an approval decision. The requested audit remains historical
+            // evidence, while the live owner is released fail-closed.
+            let _ = self
+                .settle_async(
+                    &published.request.id,
+                    InteractionOutcome::Unavailable,
+                    false,
+                )
+                .await;
+            return Err(InteractionOutcome::Unavailable);
+        }
+        Ok(published.ticket)
     }
 
     /// The one publication transition shared by Approval and Questionnaire.
@@ -985,16 +1207,47 @@ impl InteractionCoordinator {
     /// [`validate_interaction_subject`] the durable authority uses, so a
     /// payload the store would refuse never reaches a commit attempt and never
     /// reaches a user. There is one set of limits, not two.
+    #[cfg(test)]
     fn publish(
         &self,
         request: InteractionRequest,
         subject: InteractionSubject,
         cancellation: &ExecutionCancellation,
     ) -> Result<InteractionTicket, InteractionOutcome> {
+        let published = self.publish_inner(request, subject, cancellation)?;
+        let route = self
+            .route
+            .lock()
+            .expect("interaction route poisoned")
+            .clone();
+        if let Some(route) = route
+            && route
+                .try_publish(InteractionRouteEvent::Requested(published.request.clone()))
+                .is_err()
+        {
+            let _ = self.settle(
+                &published.request.id,
+                InteractionOutcome::Unavailable,
+                false,
+            );
+            return Err(InteractionOutcome::Unavailable);
+        }
+        Ok(published.ticket)
+    }
+
+    /// The coordinator-owned publication transition. It never awaits or
+    /// calls the child route while holding the returned ticket's owner.
+    fn publish_inner(
+        &self,
+        request: InteractionRequest,
+        subject: InteractionSubject,
+        cancellation: &ExecutionCancellation,
+    ) -> Result<PublishedInteraction, InteractionOutcome> {
         if validate_interaction_subject(&subject).is_err() {
             return Err(InteractionOutcome::Unavailable);
         }
         let id = request.id.clone();
+        let published_request = request.clone();
         let (sender, receiver) = oneshot::channel();
         self.lifecycle
             .admit_running_commit(|admission| {
@@ -1030,7 +1283,10 @@ impl InteractionCoordinator {
                     requested_cursor,
                 );
                 drop(state);
-                Ok(InteractionTicket { id, receiver })
+                Ok(PublishedInteraction {
+                    ticket: InteractionTicket { id, receiver },
+                    request: published_request,
+                })
             })
             .map_err(|_| InteractionOutcome::Unavailable)?
     }
@@ -1047,6 +1303,28 @@ impl InteractionCoordinator {
         self.publish_approval_with_cancellation(attempt_id, facts, &cancellation)
     }
 
+    async fn publish_approval_async(
+        &self,
+        attempt_id: AttemptId,
+        facts: ApprovalFacts,
+        cancellation: &ExecutionCancellation,
+    ) -> Result<InteractionTicket, InteractionOutcome> {
+        let id = self.allocate_id(&attempt_id)?;
+        let (request, subject) = facts.into_published(self.conversation_id.clone(), attempt_id, id);
+        self.publish_async(request, subject, cancellation).await
+    }
+
+    async fn publish_questionnaire_async(
+        &self,
+        attempt_id: AttemptId,
+        facts: QuestionnaireFacts,
+        cancellation: &ExecutionCancellation,
+    ) -> Result<InteractionTicket, InteractionOutcome> {
+        let id = self.allocate_id(&attempt_id)?;
+        let (request, subject) = facts.into_published(self.conversation_id.clone(), attempt_id, id);
+        self.publish_async(request, subject, cancellation).await
+    }
+
     /// Requests approval through the coordinator and waits for the owner.
     pub(crate) async fn request_approval(
         &self,
@@ -1054,7 +1332,9 @@ impl InteractionCoordinator {
         facts: ApprovalFacts,
         cancellation: ExecutionCancellation,
     ) -> InteractionOutcome {
-        let ticket = match self.publish_approval_with_cancellation(attempt_id, facts, &cancellation)
+        let ticket = match self
+            .publish_approval_async(attempt_id, facts, &cancellation)
+            .await
         {
             Ok(ticket) => ticket,
             Err(outcome) => return outcome,
@@ -1070,11 +1350,13 @@ impl InteractionCoordinator {
         facts: QuestionnaireFacts,
         cancellation: ExecutionCancellation,
     ) -> InteractionOutcome {
-        let ticket =
-            match self.publish_questionnaire_with_cancellation(attempt_id, facts, &cancellation) {
-                Ok(ticket) => ticket,
-                Err(outcome) => return outcome,
-            };
+        let ticket = match self
+            .publish_questionnaire_async(attempt_id, facts, &cancellation)
+            .await
+        {
+            Ok(ticket) => ticket,
+            Err(outcome) => return outcome,
+        };
         self.wait(ticket, cancellation).await
     }
 
@@ -1095,7 +1377,7 @@ impl InteractionCoordinator {
                 // stale and the receiver still returns the response.
                 #[cfg(test)]
                 self.park_before_waiter_cancellation();
-                let _ = self.cancel(&id, cancellation.reason());
+                let _ = self.cancel_async(&id, cancellation.reason()).await;
                 receiver.await.ok()
             }
         };
@@ -1118,6 +1400,7 @@ impl InteractionCoordinator {
     /// settled fact could not commit. The last case is reported to the client
     /// exactly because the response must never appear accepted ahead of the
     /// durable evidence that it existed.
+    #[cfg(test)]
     pub(crate) fn respond(
         &self,
         interaction_id: &InteractionId,
@@ -1138,7 +1421,35 @@ impl InteractionCoordinator {
         Ok(())
     }
 
+    /// Accepts one response and waits for the originating conversation's
+    /// reliable route notification before releasing its semantic waiter.
+    /// Primary interactions use the same coordinator transition; child
+    /// interactions additionally use this path so the child-to-root settled
+    /// fact is never sent through the disposable observation lane.
+    pub(crate) async fn respond_async(
+        &self,
+        interaction_id: &InteractionId,
+        response: InteractionResponse,
+    ) -> Result<(), InteractionError> {
+        let outcome = InteractionOutcome::Responded { response };
+        let delivery = self.begin_settle(interaction_id, outcome, true)?;
+        let transition = delivery.transition;
+        self.deliver_async(delivery).await;
+        if transition.cancellation_won {
+            return Err(InteractionError::NotPending {
+                interaction_id: interaction_id.clone(),
+            });
+        }
+        if !transition.audit_committed {
+            return Err(InteractionError::AuditFailed {
+                interaction_id: interaction_id.clone(),
+            });
+        }
+        Ok(())
+    }
+
     /// Cancels one pending interaction with the owner's first-winner cause.
+    #[cfg(test)]
     pub(crate) fn cancel(
         &self,
         interaction_id: &InteractionId,
@@ -1152,10 +1463,26 @@ impl InteractionCoordinator {
         .map(|_| ())
     }
 
+    /// Cancels one pending interaction and awaits its reliable route removal.
+    pub(crate) async fn cancel_async(
+        &self,
+        interaction_id: &InteractionId,
+        reason: CancellationReason,
+    ) -> Result<(), InteractionError> {
+        let delivery = self.begin_settle(
+            interaction_id,
+            InteractionOutcome::Cancelled { reason },
+            false,
+        )?;
+        self.deliver_async(delivery).await;
+        Ok(())
+    }
+
     /// Settles every interaction that was admitted before runtime drain.
     ///
     /// The runtime invokes this after `Running -> Draining`; no new entry can
     /// pass the lifecycle admission boundary after that transition.
+    #[cfg(test)]
     pub(crate) fn cancel_pending(&self, reason: CancellationReason) {
         let ids: Vec<_> = {
             let state = self.state.lock().expect("interaction state poisoned");
@@ -1163,6 +1490,19 @@ impl InteractionCoordinator {
         };
         for id in ids {
             let _ = self.cancel(&id, reason);
+        }
+    }
+
+    /// Async drain variant used by live child runtimes so each child-owned
+    /// terminal removal reaches the root over reliable control before the
+    /// child waiter is released.
+    pub(crate) async fn cancel_pending_async(&self, reason: CancellationReason) {
+        let ids: Vec<_> = {
+            let state = self.state.lock().expect("interaction state poisoned");
+            state.pending.keys().cloned().collect()
+        };
+        for id in ids {
+            let _ = self.cancel_async(&id, reason).await;
         }
     }
 
@@ -1213,12 +1553,43 @@ impl InteractionCoordinator {
         Ok(InteractionId::for_attempt(attempt_id, ordinal))
     }
 
+    #[cfg(test)]
     fn settle(
+        &self,
+        interaction_id: &InteractionId,
+        outcome: InteractionOutcome,
+        validate_response: bool,
+    ) -> Result<SettleTransition, InteractionError> {
+        let delivery = self.begin_settle(interaction_id, outcome, validate_response)?;
+        let transition = delivery.transition;
+        self.deliver_sync(delivery);
+        Ok(transition)
+    }
+
+    /// Async counterpart used when the coordinator has a reliable child
+    /// interaction route installed.
+    async fn settle_async(
+        &self,
+        interaction_id: &InteractionId,
+        outcome: InteractionOutcome,
+        validate_response: bool,
+    ) -> Result<SettleTransition, InteractionError> {
+        let delivery = self.begin_settle(interaction_id, outcome, validate_response)?;
+        let transition = delivery.transition;
+        self.deliver_async(delivery).await;
+        Ok(transition)
+    }
+
+    /// Performs the coordinator-owned terminal map/audit transition and
+    /// prepares, but does not yet release, the waiter. This split lets child
+    /// response paths await reliable route delivery without moving any
+    /// pending or settlement authority out of this coordinator.
+    fn begin_settle(
         &self,
         interaction_id: &InteractionId,
         mut outcome: InteractionOutcome,
         validate_response: bool,
-    ) -> Result<SettleTransition, InteractionError> {
+    ) -> Result<SettlementDelivery, InteractionError> {
         // Keep the observer callback inside the lifecycle's narrow
         // settlement path. This admission is acquired before the pending
         // state lock, preserving the lifecycle -> coordinator lock order
@@ -1287,6 +1658,15 @@ impl InteractionCoordinator {
             .lock()
             .expect("interaction observer poisoned")
             .clone();
+        let route = self
+            .route
+            .lock()
+            .expect("interaction route poisoned")
+            .clone();
+        let route_event = route.as_ref().map(|_| InteractionRouteEvent::Settled {
+            interaction: pending.request.interaction_ref(),
+            outcome: outcome.clone(),
+        });
         let payload = WaiterPayload {
             outcome: outcome.clone(),
             waiter_admission: Some(pending.admission),
@@ -1299,13 +1679,56 @@ impl InteractionCoordinator {
             }),
         };
         drop(state);
+        Ok(SettlementDelivery {
+            transition: SettleTransition {
+                cancellation_won,
+                audit_committed: settled,
+            },
+            sender: pending.sender,
+            payload,
+            route,
+            route_event,
+        })
+    }
+
+    /// Delivers a terminal transition from a synchronous caller. The route
+    /// implementation must make a non-blocking reliable acceptance decision;
+    /// a refused route never changes the already-linearized local outcome.
+    #[cfg(test)]
+    fn deliver_sync(&self, delivery: SettlementDelivery) {
+        let SettlementDelivery {
+            sender,
+            payload,
+            route,
+            route_event,
+            ..
+        } = delivery;
+        if let (Some(route), Some(event)) = (route, route_event) {
+            let _ = route.try_publish(event);
+        }
         #[cfg(test)]
         self.park_after_terminal_transition();
-        let _ = pending.sender.send(payload);
-        Ok(SettleTransition {
-            cancellation_won,
-            audit_committed: settled,
-        })
+        let _ = sender.send(payload);
+    }
+
+    /// Delivers a terminal transition after awaiting its reliable semantic
+    /// route. Only the final waiter handoff can wake the originating Agent
+    /// Loop, so the child cannot continue before the route event is queued on
+    /// the parent/child control lane.
+    async fn deliver_async(&self, delivery: SettlementDelivery) {
+        let SettlementDelivery {
+            sender,
+            payload,
+            route,
+            route_event,
+            ..
+        } = delivery;
+        if let (Some(route), Some(event)) = (route, route_event) {
+            let _ = route.publish(event).await;
+        }
+        #[cfg(test)]
+        self.park_after_terminal_transition();
+        let _ = sender.send(payload);
     }
 
     fn notify_pending(
@@ -1349,6 +1772,37 @@ pub(crate) enum InteractionError {
     /// could not commit. The waiter was released fail-closed and no execution
     /// authority was granted.
     AuditFailed { interaction_id: InteractionId },
+}
+
+/// The routed error returned at the root Runtime Client boundary and across
+/// the child control lane. Its identity is always the full routed pair even
+/// though the originating coordinator reports its local `InteractionId`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum RoutedInteractionError {
+    /// The addressed owner has no live pending interaction at that identity.
+    NotPending { interaction: InteractionRef },
+    /// The response does not match the owner's immutable request facts.
+    InvalidResponse { message: String },
+    /// The owner selected a response but could not commit its durable audit.
+    AuditFailed { interaction: InteractionRef },
+}
+
+pub(crate) fn route_error(
+    interaction: &InteractionRef,
+    error: InteractionError,
+) -> RoutedInteractionError {
+    match error {
+        InteractionError::NotPending { .. } => RoutedInteractionError::NotPending {
+            interaction: interaction.clone(),
+        },
+        InteractionError::InvalidResponse { message } => {
+            RoutedInteractionError::InvalidResponse { message }
+        }
+        InteractionError::AuditFailed { .. } => RoutedInteractionError::AuditFailed {
+            interaction: interaction.clone(),
+        },
+    }
 }
 
 impl core::fmt::Display for InteractionError {
@@ -1560,6 +2014,22 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((id.clone(), outcome.clone()));
+        }
+    }
+
+    #[derive(Clone)]
+    struct RecordingRoute {
+        events: tokio::sync::mpsc::UnboundedSender<InteractionRouteEvent>,
+    }
+
+    impl InteractionRoute for RecordingRoute {
+        fn publish(&self, event: InteractionRouteEvent) -> BoxFuture<'static, Result<(), ()>> {
+            let events = self.events.clone();
+            Box::pin(async move { events.send(event).map_err(|_| ()) })
+        }
+
+        fn try_publish(&self, event: InteractionRouteEvent) -> Result<(), ()> {
+            self.events.send(event).map_err(|_| ())
         }
     }
 
@@ -1976,6 +2446,151 @@ mod tests {
             coordinator.respond(&id, single_response("staging"),),
             Err(InteractionError::NotPending { interaction_id: id })
         );
+    }
+
+    /// Approval and Questionnaire share one reliable routed interaction
+    /// boundary. The coordinator remains the only owner: the route sees the
+    /// originating request and terminal pair, while responses still enter
+    /// the coordinator's ordinary validation, audit, and waiter path.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // one deterministic multi-owner route proof
+    async fn routed_approval_and_questionnaire_keep_one_owner_and_identity() {
+        let (coordinator, _audit) = audited_coordinator();
+        coordinator.set_provider_available(true);
+        let (route_tx, mut route_rx) = tokio::sync::mpsc::unbounded_channel();
+        coordinator.install_route(Arc::new(RecordingRoute { events: route_tx }));
+
+        let approval_owner = AgentCancellation::new(CancellationReason::UserRequested);
+        let questionnaire_owner = AgentCancellation::new(CancellationReason::UserRequested);
+        let approval_task = {
+            let coordinator = coordinator.clone();
+            let cancellation = approval_owner.execution_cancellation();
+            tokio::spawn(async move {
+                coordinator
+                    .request_approval(
+                        AttemptId::new("approval-attempt"),
+                        facts("routed-approval"),
+                        cancellation,
+                    )
+                    .await
+            })
+        };
+        let questionnaire_task = {
+            let coordinator = coordinator.clone();
+            let cancellation = questionnaire_owner.execution_cancellation();
+            tokio::spawn(async move {
+                coordinator
+                    .request_questionnaire(
+                        AttemptId::new("questionnaire-attempt"),
+                        questionnaire_facts(),
+                        cancellation,
+                    )
+                    .await
+            })
+        };
+
+        let mut requested = Vec::new();
+        for _ in 0..2 {
+            match route_rx.recv().await.expect("routed request") {
+                InteractionRouteEvent::Requested(request) => requested.push(request),
+                other @ InteractionRouteEvent::Settled { .. } => {
+                    panic!("expected requested route event, got {other:?}")
+                }
+            }
+        }
+        assert_eq!(requested.len(), 2);
+        assert!(
+            requested
+                .iter()
+                .any(|request| { matches!(&request.kind, InteractionKind::Approval { .. }) })
+        );
+        assert!(
+            requested
+                .iter()
+                .any(|request| { matches!(&request.kind, InteractionKind::Questionnaire { .. }) })
+        );
+
+        // Deliberately answer in reverse publication order. The full local
+        // identity addresses the coordinator entry; no focus or array order
+        // participates in routing.
+        for request in requested.iter().rev() {
+            let response = match &request.kind {
+                InteractionKind::Approval { .. } => InteractionResponse::Approval {
+                    decision: ApprovalDecision::Allow,
+                },
+                InteractionKind::Questionnaire { .. } => single_response("staging"),
+            };
+            coordinator
+                .respond_async(&request.id, response)
+                .await
+                .expect("owner accepts its typed response");
+        }
+
+        let mut settled = Vec::new();
+        for _ in 0..2 {
+            match route_rx.recv().await.expect("routed settlement") {
+                InteractionRouteEvent::Settled {
+                    interaction,
+                    outcome,
+                } => settled.push((interaction, outcome)),
+                other @ InteractionRouteEvent::Requested(_) => {
+                    panic!("expected settled route event, got {other:?}")
+                }
+            }
+        }
+        let requested_refs: std::collections::BTreeSet<_> = requested
+            .iter()
+            .map(InteractionRequest::interaction_ref)
+            .collect();
+        let settled_refs: std::collections::BTreeSet<_> = settled
+            .iter()
+            .map(|(interaction, _)| interaction.clone())
+            .collect();
+        assert_eq!(settled_refs, requested_refs);
+        assert!(settled.iter().any(|(_, outcome)| {
+            matches!(
+                outcome,
+                InteractionOutcome::Responded {
+                    response: InteractionResponse::Approval {
+                        decision: ApprovalDecision::Allow
+                    }
+                }
+            )
+        }));
+        assert!(settled.iter().any(|(_, outcome)| {
+            matches!(
+                outcome,
+                InteractionOutcome::Responded {
+                    response: InteractionResponse::Questionnaire { .. }
+                }
+            )
+        }));
+        assert!(matches!(
+            approval_task.await.expect("approval owner"),
+            InteractionOutcome::Responded {
+                response: InteractionResponse::Approval {
+                    decision: ApprovalDecision::Allow
+                }
+            }
+        ));
+        assert!(matches!(
+            questionnaire_task.await.expect("questionnaire owner"),
+            InteractionOutcome::Responded {
+                response: InteractionResponse::Questionnaire { .. }
+            }
+        ));
+        assert_eq!(coordinator.pending_count(), 0);
+
+        for request in requested {
+            assert_eq!(
+                coordinator
+                    .respond_async(&request.id, single_response("stale"))
+                    .await,
+                Err(InteractionError::NotPending {
+                    interaction_id: request.id,
+                })
+            );
+        }
     }
 
     /// The response winner is established while `settle` holds the pending

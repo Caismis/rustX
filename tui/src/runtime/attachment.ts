@@ -63,7 +63,7 @@ import {
   type SessionNodeId,
   type SessionId,
   type SurfaceRevision,
-  type InteractionId,
+  type InteractionRef,
   type InteractionResponse,
   type SessionModelConfig,
   type SessionModelView,
@@ -266,12 +266,12 @@ export class RuntimeClientAttachment {
 
   /** Answers one runtime-owned approval interaction. */
   async respondInteraction(
-    interactionId: InteractionId,
+    interaction: InteractionRef,
     response: InteractionResponse,
   ): Promise<void> {
     const result = await this.#connection.request({
       method: "interaction_respond",
-      interaction_id: interactionId,
+      interaction,
       response,
     });
     if (result.type !== "interaction_response_accepted") {

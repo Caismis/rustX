@@ -175,7 +175,7 @@ describe("working status", () => {
     );
   });
 
-  it("does not attribute another attempt's approval to this one", () => {
+  it("surfaces a pending interaction even when another attempt is active", () => {
     assert.equal(
       workingStatus(
         stateOf({
@@ -183,7 +183,7 @@ describe("working status", () => {
           pending_interactions: [approvalInteraction()],
         }),
       ),
-      "Working…",
+      "Waiting for approval of bash…",
     );
   });
 });
@@ -542,7 +542,10 @@ describe("activity area", () => {
     assert.match(rendered, /attempt-1-interaction-1/);
     assert.match(rendered, /native policy requires approval/);
     assert.match(rendered, /printf original/);
-    assert.match(rendered, /\/approve <interaction-id> <allow\|deny> \[reason\]/);
+    assert.match(
+      rendered,
+      /\/approve <conversation-id>::<interaction-id> <allow\|deny> \[reason\]/,
+    );
   });
 
   it("marks the deterministic focused questionnaire for the overlay", () => {
@@ -554,7 +557,7 @@ describe("activity area", () => {
         prefs(),
       ),
     );
-    assert.match(rendered, /Focused interaction: attempt-1-interaction-a/);
+    assert.match(rendered, /Focused interaction: conv-test::attempt-1-interaction-a/);
     assert.match(rendered, /questionnaire overlay opens automatically/);
   });
 
@@ -652,17 +655,23 @@ describe("client collapse is finite and reversible", () => {
     expanded: boolean,
   ): string {
     const request = approvalInteraction();
-    if (request.kind.type !== "approval") {
+    if (request.request.kind.type !== "approval") {
       throw new Error("fixture must be an approval interaction");
     }
     const preferences = expanded
-      ? withExpandedInteractions(prefs(), [request.id])
+      ? withExpandedInteractions(prefs(), [request.interaction])
       : prefs();
     return plainText(
       renderInteractionSection(
         stateOf({
           pending_interactions: [
-            { ...request, kind: { ...request.kind, ...kind, type: "approval" } },
+            {
+              ...request,
+              request: {
+                ...request.request,
+                kind: { ...request.request.kind, ...kind, type: "approval" },
+              },
+            },
           ],
         }),
         preferences,
@@ -781,7 +790,10 @@ describe("client collapse is finite and reversible", () => {
 
   it("tells the reader how to see the rest", () => {
     const collapsed = interaction({ reason: HUGE }, false);
-    assert.match(collapsed, /\/expand interaction <interaction-id>/);
-    assert.match(collapsed, /\/approve <interaction-id> <allow\|deny> \[reason\]/);
+    assert.match(collapsed, /\/expand interaction <conversation-id>::<interaction-id>/);
+    assert.match(
+      collapsed,
+      /\/approve <conversation-id>::<interaction-id> <allow\|deny> \[reason\]/,
+    );
   });
 });

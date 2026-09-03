@@ -8,7 +8,7 @@
  *
  * ```text
  * Compacting context…    context.compaction_in_progress
- * Waiting for approval…   pendingInteractions for the active attempt
+ * Waiting for approval…   pendingInteractions across the supervised tree
  * Running <tool>…         a foreground execution in state `running`
  * Preparing tool call…    a foreground execution in state `assembled`
  * Thinking…               the streaming message's latest block is reasoning
@@ -47,29 +47,30 @@ export function workingStatus(state: PresentationState): string | undefined {
   if (state.context.compaction_in_progress) {
     return "Compacting context…";
   }
+  const waiting = state.pendingInteractions;
+  if (waiting.length > 0) {
+    const questions = waiting.filter(
+      (interaction) => interaction.request.kind.type === "questionnaire",
+    );
+    const approvals = waiting.length - questions.length;
+    if (questions.length > 0 && approvals === 0) {
+      return questions.length === 1
+        ? "Waiting for questionnaire…"
+        : `Waiting for ${questions.length} questionnaires…`;
+    }
+    if (questions.length > 0) {
+      return `Waiting for ${waiting.length} human responses…`;
+    }
+    return waiting.length === 1
+      ? `Waiting for approval of ${waiting[0]!.request.kind.type === "approval" ? waiting[0]!.request.kind.tool_name : "tool"}…`
+      : `Waiting for ${waiting.length} approvals…`;
+  }
   const attempt = state.attempt;
   if (attempt === undefined || attempt.phase.type === "settled") {
     return undefined;
   }
   if (attempt.phase.type === "admitted") {
     return "Admitted…";
-  }
-
-  const waiting = state.pendingInteractions.filter(
-    (interaction) => interaction.attempt_id === attempt.attemptId,
-  );
-  if (waiting.length > 0) {
-    const questions = waiting.filter((interaction) => interaction.kind.type === "questionnaire");
-    const approvals = waiting.length - questions.length;
-    if (questions.length > 0 && approvals === 0) {
-      return questions.length === 1 ? "Waiting for questionnaire…" : `Waiting for ${questions.length} questionnaires…`;
-    }
-    if (questions.length > 0) {
-      return `Waiting for ${waiting.length} human responses…`;
-    }
-    return waiting.length === 1
-      ? `Waiting for approval of ${waiting[0]!.kind.type === "approval" ? waiting[0]!.kind.tool_name : "tool"}…`
-      : `Waiting for ${waiting.length} approvals…`;
   }
 
   const correlation = correlateTools(state);

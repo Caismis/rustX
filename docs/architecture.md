@@ -3422,9 +3422,10 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
-The current Runtime Client protocol is version 11. It adds the subagent
-live-activity projection after version 10 added subagent workspace facts and
-preserved-worktree handoff metadata and version 9 added `interrupted` to the
+The current Runtime Client protocol is version 12. It adds routed
+interaction projection for the root human surface. Version 11 added the
+subagent live-activity projection; version 10 added subagent workspace facts
+and preserved-worktree handoff metadata; and version 9 added `interrupted` to the
 closed `SubagentState` vocabulary: `RuntimeClientSubagent` now carries the
 child's latest-value `observation` (revision, activity, timestamp,
 counters), the redacted `execution_profile` (wire key `execution_profile`;
@@ -3435,6 +3436,12 @@ diagnostics-only — the closed `SubagentState` lifecycle remains the only
 authority on whether a child is alive, settling, or settled. Superseded
 Runtime Client versions are rejected explicitly;
 there is no compatibility decoder.
+
+Version 12 carries a set of pending Approval and Questionnaire projections
+from the primary conversation and every live child. Each projection has an
+InteractionRef containing the conversation_id and conversation-local
+interaction_id, plus source metadata, so a response never relies on TUI
+focus or on a bare local identifier.
 
 Module ownership:
 
@@ -3563,14 +3570,18 @@ Runtime Client is a projection/control/attachment adapter over it.
   therefore still linearize by synchronization, never by timing — the
   coordinator's admission linearization is one documented point, and the
   projection's snapshot/cursor linearization is another.
-- **Native interactions use the same semantic boundary.** A pending approval
-  is folded from `ConversationObservation::InteractionPending` into
-  `RuntimeClientSnapshot.pending_interactions`; its terminal outcome folds
-  through `InteractionSettled` and removes the live entry. Clients answer
-  with the typed `interaction_respond` request, which contains only an
-  `Allow` or `Deny` decision and never replacement tool arguments. A stale,
-  duplicate, pre-crash, or post-quiescent response is the typed
-  `interaction_not_pending` error and has no semantic effect.
+- **Native interactions use the same semantic boundary.** A pending Approval
+  or Questionnaire is folded from `ConversationObservation::InteractionPending`
+  into `RuntimeClientSnapshot.pending_interactions`; its terminal outcome
+  folds through `InteractionSettled` and removes only that live entry.
+  The originating conversation's `InteractionCoordinator` remains the
+  semantic owner. The root Runtime Client is only the human-facing surface:
+  it aggregates primary and live-child projections and forwards a response
+  addressed by the full `InteractionRef`. It never creates a parent
+  interaction, wakes the parent model, settles a child, or writes child
+  content into primary history. A stale, duplicate, pre-crash, or
+  post-quiescent response is the typed `interaction_not_pending` error
+  and has no semantic effect.
 - **Attachment availability is bounded and non-semantic.** The one control
   attachment represents the 0.1 interaction provider; read-only inspection
   attachments never do. If no control attachment is present at
@@ -3578,6 +3589,18 @@ Runtime Client is a projection/control/attachment adapter over it.
   closes admission for future requests. It does not answer or cancel a live
   interaction, and a reattached client repairs from the runtime snapshot and
   cursor rather than from local prompt state.
+- **Interaction routing is reliable semantic control.** Child
+  InteractionRequested, InteractionSettled, and response acknowledgements use
+  the reliable bidirectional child control protocol. They do not use the
+  disposable activity/observation lane, whose latest-value loss and
+  backpressure remain irrelevant to execution control.
+- **Human-provider availability is separate from capability selection.** A
+  root control attachment makes the root human surface available to live
+  children; detaching after publication leaves the originating waiter
+  pending, and reconnect rebuilds presentation from live authoritative state.
+  This route does not grant ask_user: only a frozen subagent definition that
+  explicitly selects that capability receives it. Process recovery never
+  recreates a waiter or treats historical approval as execution authority.
 - **The Runtime Client host binds before activation.** A conversation
   runtime has four lifecycle states and one explicit admission/drain
   authority:
@@ -3694,6 +3717,16 @@ interactions, execute tools, mutate models or Session state, settle lifecycle,
 or shut down the child. The host's one control attachment remains separate
 from read-only subscribers; a child inspector never takes execution or
 interaction ownership.
+
+The root control-capable Runtime Client is the one human-facing interaction
+surface for the supervised tree. A child still owns every Approval and
+Questionnaire through its own InteractionCoordinator; the root only projects
+the child's live request, adds Subagent source metadata, and forwards the
+response using InteractionRef. This is a presentation route, not parent
+mediation: no parent interaction, model prompt/result, canonical-history
+entry, or replacement invocation is created. Child death removes its pending
+projections without synthesizing a terminal answer, while pending authority
+in another live conversation is unchanged.
 
 The durable host has no `ConversationRuntime`, mailbox, subagent registry,
 provider adapter, or lifecycle handle. Its attachment linearizes at the
@@ -4931,8 +4964,8 @@ child dispatcher        two delivery classes on two independent
         |               stream; publishing can never block the child Agent
         |               Loop or crowd out a terminal Result
         v
-Activity IPC frame      subagent IPC version 9: reliable control frames
-        |               on the fd 0 stream, disposable Activity frames
+Subagent IPC v10        reliable control frames on the fd 0 stream,
+        |               disposable Activity frames
         |               (kind 107) on the fd 1 stream — independent
         |               backpressure domains, so a stalled observation
         |               transport can never delay Result, AnchorReleased,
@@ -4986,11 +5019,12 @@ the only terminal truth.
 
 Reliable subagent control and disposable live observation have independent
 backpressure domains: the reliable control protocol (Ready, Result,
-StartupError, AnchorOffered, AnchorReleased, Diagnostic) runs on the fd 0
-stream with its own writer, while disposable Activity frames run on the fd 1
-stream with a dedicated observation writer and receiver. Observation loss or
-stalling cannot delay lifecycle, containment, or terminal control traffic —
-a blocked observation writer stalls only itself, and losing the observation
+StartupError, AnchorOffered, AnchorReleased, Diagnostic, and routed
+interaction request/response frames) runs on the fd 0 stream with its own
+writer, while disposable Activity frames run on the fd 1 stream with a
+dedicated observation writer and receiver. Observation loss or stalling
+cannot delay lifecycle, containment, terminal, or HITL control traffic — a
+blocked observation writer stalls only itself, and losing the observation
 transport is diagnostics-only: child execution, settlement, and the existing
 parent-liveness semantics of the control transport are unchanged.
 
@@ -5171,10 +5205,11 @@ scan — so a repeated or caller-controlled `child_agent_id` in a terminal
 event is not authority. Success is
 `UserSource::Agent(child)`; failure, cancellation, and recovery interruption
 are `UserSource::Runtime`. The child capability snapshot contains exactly the
-Builtin capabilities its named definition resolved to; `subagent` and
-`ask_user` are structurally unregistrable there, so recursion and
-headless-only surfaces cannot appear whatever a definition names. Parent hard
-death closes the control channel; the child
+Builtin capabilities its named definition resolved to; `subagent` is
+structurally unregistrable there, while `ask_user` is materialized only when
+the frozen definition explicitly selects it, so recursion cannot be smuggled
+across the boundary and human interaction is never granted implicitly. Parent
+hard death closes the control channel; the child
 exits, and restart classifies the old nonterminal ownership as Interrupted
 without reattach, replay, PID adoption, or relaunch.
 
@@ -5574,17 +5609,18 @@ order, so two units with outstanding offers cannot open each other's gates.
 The control read half remains the parent-liveness authority, and its EOF is
 what `ChildPreparation` observes during composition. Channels are bounded,
 there is no listener and no network service. The subagent IPC version is
-**9**: its typed `Cancel` frame carries the parent registry's semantic
+**10**: its typed `Cancel` frame carries the parent registry's semantic
 `CancellationReason` (with an absent reason only for pre-ownership
-preparation cancellation, where no child attempt exists), and the
-child→parent `Activity` frame (kind 107) carries the Issue #178 live
-activity projection on the dedicated fd 1 observation stream — reliable
-control and disposable observation never share a transport backpressure
-dependency, so a stalled observation writer can never delay a `Result`, an
-`AnchorReleased`, or any other control frame. The parent's observation
-receiver only decodes `Activity` into the registry read model; observation
-EOF is diagnostics loss, never process or lifecycle evidence. There is no
-compatibility decoding for older versions.
+preparation cancellation, where no child attempt exists), the child→parent
+`Activity` frame (kind 107) carries the Issue #178 live activity projection
+on the dedicated fd 1 observation stream, and routed interaction
+request/settlement/response frames plus root-provider availability use the
+reliable fd 0 control stream. Reliable control and disposable observation
+never share a transport backpressure dependency, so a stalled observation
+writer can never delay a `Result`, an `AnchorReleased`, or any other control
+frame. The parent's observation receiver only decodes `Activity` into the
+registry read model; observation EOF is diagnostics loss, never process or
+lifecycle evidence. There is no compatibility decoding for older versions.
 
 ##### Recovery-semantics conformance (Issue #138)
 

@@ -21,7 +21,7 @@
 //!         +-- into_interactive(): bind RuntimeClientHost, then activate
 //!         |       -> LocalConversationRuntime (Runtime Client + endpoint)
 //!         |
-//!         +-- into_subagent_child(): bind RuntimeClientHost, subscribe a
+//!         +-- into_subagent_child_with_route(): bind RuntimeClientHost, subscribe a
 //!         |       bounded parent-observation queue, then activate
 //!         |       -> child ConversationRuntime + optional live inspection endpoint
 //!         |
@@ -126,6 +126,7 @@ use crate::runtime::conversation_runtime::{
     RuntimeConversationConfig,
 };
 use crate::runtime::identity::ConversationId;
+use crate::runtime::interaction::InteractionRoute;
 use crate::runtime::resources::{
     PreparedRuntimeResources, ProjectContextFile, RuntimeResourceLoadError, RuntimeResourceLoader,
     RuntimeResourceSnapshot, load_project_context_files,
@@ -1136,7 +1137,7 @@ impl LocalConversationCore {
     ///
     /// The runtime is left **inactive**: the caller must finish through
     /// [`LocalConversationCore::into_interactive`],
-    /// [`LocalConversationCore::into_subagent_child`], or
+    /// [`LocalConversationCore::into_subagent_child_with_route`], or
     /// [`LocalConversationCore::into_headless`] (or, for low-level
     /// composition callers, activate the runtime explicitly). Prefer the
     /// final composition paths of
@@ -1478,8 +1479,9 @@ impl LocalConversationCore {
     /// - the base tool registry is exactly the Builtin capability set the
     ///   parent's resolution froze, registered through
     ///   [`register_subagent_child_tools`]; nothing is added, substituted,
-    ///   or force-activated, and the `subagent` and `ask_user` intrinsics
-    ///   are structurally unregistrable there;
+    ///   or force-activated; recursive `subagent` is structurally
+    ///   unregistrable, while `ask_user` is materialized only when the frozen
+    ///   definition explicitly selected it;
     /// - the capability plane is **base-only**: no Skill discovery, no
     ///   Python/Node environments, and no MCP servers; it never opens or
     ///   creates Python package storage (Issue #81), so a broken Python
@@ -1498,7 +1500,7 @@ impl LocalConversationCore {
     ///   physical root remains disposable execution/artifact state.
     ///
     /// The caller (the child driver) still owns activation: the returned
-    /// core is inert until `into_subagent_child` or `into_headless`.
+    /// core is inert until `into_subagent_child_with_route` or `into_headless`.
     ///
     /// # Errors
     ///
@@ -1838,16 +1840,12 @@ impl LocalConversationCore {
         Ok(LocalConversationRuntime { core: self, host })
     }
 
-    /// Finishes composition for a live subagent child.
-    ///
-    /// The child needs both halves of the existing runtime boundary: the
-    /// Runtime Client host owns the actual live projection, while the parent
-    /// subagent activity projector consumes a separate bounded fan-out queue.
-    /// Both are installed before the one activation cut, so neither consumer
-    /// can miss the first live observation. The returned queue is not a
-    /// transcript and is never durable.
-    pub(crate) fn into_subagent_child(
+    /// Finishes composition for a child with a reliable route to the parent
+    /// registry. The route is installed before activation and carries only
+    /// the child's already-authoritative interaction facts.
+    pub(crate) fn into_subagent_child_with_route(
         self,
+        route: Arc<dyn InteractionRoute>,
     ) -> Result<
         (
             LocalConversationRuntime,
@@ -1856,6 +1854,7 @@ impl LocalConversationCore {
         LocalRuntimeError,
     > {
         let runtime = self.into_bound_with_control(None)?;
+        runtime.runtime().install_interaction_route(route);
         let observations = runtime
             .runtime()
             .subscribe_observations()

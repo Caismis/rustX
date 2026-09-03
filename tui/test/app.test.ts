@@ -447,7 +447,7 @@ describe("RustxTuiApp lifecycle", () => {
     const session = fakeSession(async () => {}, state);
     const api = session as unknown as {
       respondInteraction: (
-        interactionId: string,
+        interaction: { conversation_id: string; interaction_id: string },
         response: unknown,
       ) => Promise<void>;
     };
@@ -455,8 +455,11 @@ describe("RustxTuiApp lifecycle", () => {
     const responseObserved = new Promise<{ id: string; response: unknown }>((resolve) => {
       response = resolve;
     });
-    api.respondInteraction = async (interactionId, typedResponse) => {
-      response({ id: interactionId, response: typedResponse });
+    api.respondInteraction = async (interaction, typedResponse) => {
+      response({
+        id: `${interaction.conversation_id}::${interaction.interaction_id}`,
+        response: typedResponse,
+      });
     };
 
     const app = new RustxTuiApp({
@@ -473,7 +476,7 @@ describe("RustxTuiApp lifecycle", () => {
     process.stdin.emit("data", "\r");
 
     assert.deepEqual(await responseObserved, {
-      id: questionnaire.id,
+      id: `${questionnaire.interaction.conversation_id}::${questionnaire.interaction.interaction_id}`,
       response: {
         type: "questionnaire",
         response: {
@@ -499,13 +502,20 @@ describe("RustxTuiApp lifecycle", () => {
     };
     const session = fakeSession(async () => {}, state);
     const api = session as unknown as {
-      respondInteraction: (interactionId: string, response: unknown) => Promise<void>;
+      respondInteraction: (
+        interaction: { conversation_id: string; interaction_id: string },
+        response: unknown,
+      ) => Promise<void>;
     };
     let decline!: (value: { id: string; response: unknown }) => void;
     const declineObserved = new Promise<{ id: string; response: unknown }>((resolve) => {
       decline = resolve;
     });
-    api.respondInteraction = async (id, response) => decline({ id, response });
+    api.respondInteraction = async (interaction, response) =>
+      decline({
+        id: `${interaction.conversation_id}::${interaction.interaction_id}`,
+        response,
+      });
 
     const app = new RustxTuiApp({
       session,
@@ -516,7 +526,7 @@ describe("RustxTuiApp lifecycle", () => {
 
     process.stdin.emit("data", "\u001b");
     assert.deepEqual(await declineObserved, {
-      id: "attempt-1-interaction-question-1",
+      id: "conv-test::attempt-1-interaction-question-1",
       response: {
         type: "questionnaire",
         response: { type: "declined" },

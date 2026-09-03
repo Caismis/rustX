@@ -143,8 +143,8 @@ use crate::runtime::conversation_runtime::{
     CancelAttemptError, ConversationRuntime, InboundAdmissionError, ManualCompactionError,
     ModelUpdateError, RuntimeBootstrapError, RuntimeResourceReloadError,
 };
-use crate::runtime::identity::{ConversationId, InteractionId, ToolExecutionId};
-use crate::runtime::interaction::{InteractionError, InteractionResponse};
+use crate::runtime::identity::{ConversationId, ToolExecutionId};
+use crate::runtime::interaction::{InteractionRef, InteractionResponse, RoutedInteractionError};
 use crate::runtime::observation::PendingObservations;
 use crate::runtime::request_history::{RequestHistory, RequestHistoryError};
 
@@ -787,28 +787,29 @@ impl ClientInner {
     ///
     /// Returns a typed Runtime Client error when the interaction is stale,
     /// already settled, or the response fails bounded validation.
-    pub(crate) fn respond_interaction(
+    pub(crate) async fn respond_interaction(
         &self,
-        interaction_id: &InteractionId,
+        interaction: &InteractionRef,
         response: InteractionResponse,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_writable_runtime()?;
         self.runtime
             .as_ref()
             .expect("a writable Runtime Client host has a runtime")
-            .respond_interaction(interaction_id, response)
+            .respond_interaction(interaction, response)
+            .await
             .map(|()| RuntimeClientResult::InteractionResponseAccepted {
-                interaction_id: interaction_id.clone(),
+                interaction: interaction.clone(),
             })
             .map_err(|error| match error {
-                InteractionError::NotPending { interaction_id } => {
-                    RuntimeClientError::InteractionNotPending { interaction_id }
+                RoutedInteractionError::NotPending { interaction } => {
+                    RuntimeClientError::InteractionNotPending { interaction }
                 }
-                InteractionError::InvalidResponse { message } => {
+                RoutedInteractionError::InvalidResponse { message } => {
                     RuntimeClientError::InteractionInvalidResponse { message }
                 }
-                InteractionError::AuditFailed { interaction_id } => {
-                    RuntimeClientError::InteractionAuditFailed { interaction_id }
+                RoutedInteractionError::AuditFailed { interaction } => {
+                    RuntimeClientError::InteractionAuditFailed { interaction }
                 }
             })
     }
@@ -1827,12 +1828,12 @@ impl RuntimeClientHost {
     /// Returns [`RuntimeClientError::InteractionNotPending`] for a stale or
     /// settled identity, or [`RuntimeClientError::InteractionInvalidResponse`]
     /// for a response that fails bounded validation.
-    pub fn respond_interaction(
+    pub async fn respond_interaction(
         &self,
-        interaction_id: &InteractionId,
+        interaction: &InteractionRef,
         response: InteractionResponse,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.inner.respond_interaction(interaction_id, response)
+        self.inner.respond_interaction(interaction, response).await
     }
 
     /// Reads the authoritative snapshot and its cursor, linearized

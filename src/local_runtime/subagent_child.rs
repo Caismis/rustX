@@ -79,11 +79,13 @@
 use std::sync::Arc;
 
 use chrono::Utc;
+use futures_util::future::BoxFuture;
 
 use crate::events::types::RuntimeEvent;
 use crate::message::content::TextBlock;
 use crate::message::types::{MessageBlock, UserContentBlock, UserSource};
 use crate::runtime::cancellation::CancellationSignal;
+use crate::runtime::interaction::{InteractionRoute, InteractionRouteEvent};
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::subagent::activity::SubagentObservationProjector;
 use crate::runtime::subagent::ipc::{
@@ -98,6 +100,52 @@ use crate::runtime::subagent::{
 use super::composition::{ChildPreparation, LocalConversationCore, LocalRuntimeDependencies};
 use super::dispatcher::{ChildControlDispatcher, ChildControlEvent, ChildControlHandle};
 use super::live_inspection::{LiveConversationInspectionLease, LiveConversationInspectionServer};
+
+/// The child-side adapter from the conversation-owned coordinator to the
+/// parent's reliable control lane. It carries only route events; the parent
+/// registry never receives the child's waiter, cancellation authority, or
+/// settlement capability.
+pub(crate) struct ChildInteractionRoute {
+    handle: ChildControlHandle,
+}
+
+impl ChildInteractionRoute {
+    pub(crate) fn new(handle: ChildControlHandle) -> Self {
+        Self { handle }
+    }
+
+    fn frame(event: InteractionRouteEvent) -> ChildFrame {
+        match event {
+            InteractionRouteEvent::Requested(request) => ChildFrame::InteractionRequested(request),
+            InteractionRouteEvent::Settled {
+                interaction,
+                outcome,
+            } => ChildFrame::InteractionSettled {
+                interaction,
+                outcome,
+            },
+        }
+    }
+}
+
+impl InteractionRoute for ChildInteractionRoute {
+    fn publish(&self, event: InteractionRouteEvent) -> BoxFuture<'static, Result<(), ()>> {
+        let handle = self.handle.clone();
+        Box::pin(async move {
+            handle
+                .send_reliable(Self::frame(event))
+                .await
+                .map_err(|_| ())
+        })
+    }
+
+    #[cfg(test)]
+    fn try_publish(&self, event: InteractionRouteEvent) -> Result<(), ()> {
+        self.handle
+            .try_send_reliable(Self::frame(event))
+            .map_err(|_| ())
+    }
+}
 
 /// The process entry point of the internal subagent-child mode.
 ///
@@ -233,7 +281,7 @@ async fn run_child(
     // projection instead of being reconstructed from SQLite or tunneled as a
     // transcript through the parent observation lane.
     let (interactive, observations) = core
-        .into_subagent_child()
+        .into_subagent_child_with_route(Arc::new(ChildInteractionRoute::new(handle.clone())))
         .map_err(|error| ChildExit::Startup(error.to_string()))?;
     let runtime = interactive.runtime().clone();
     let host = interactive.host().clone();
@@ -333,6 +381,7 @@ async fn run_child(
 /// carryover semantics. The in-crate conformance suites drive this exact
 /// function over a socket pair with a scripted model behind the same
 /// runtime composition, so no child behavior is reimplemented in tests.
+#[allow(clippy::too_many_lines)] // one bounded child control/delegation loop
 pub(crate) async fn serve_child_delegation(
     dispatcher: &mut ChildControlDispatcher,
     handle: &ChildControlHandle,
@@ -342,19 +391,42 @@ pub(crate) async fn serve_child_delegation(
     workflow_output: Option<Arc<crate::runtime::workflow::WorkflowOutputLatch>>,
 ) -> Result<(), ChildExit> {
     // The start gate: no semantic work before the delegation arrives.
-    let delegate = match dispatcher.next_event().await {
-        Some(ChildControlEvent::Delegate(delegate)) => delegate,
-        Some(ChildControlEvent::Cancel { .. }) | None => {
-            // Cancelled (or orphaned) before any work began: drain and
-            // exit. The parent settles the cancelled/interrupted terminal
-            // itself from the physical outcome.
-            let _ = runtime.shutdown().await;
-            return Ok(());
-        }
-        Some(ChildControlEvent::ProtocolViolation(message)) => {
-            return Err(ChildExit::Protocol(message));
+    // Provider updates may already be queued because the root attachment can
+    // detach while the child is waiting; apply them without treating them as
+    // a delegation or an interaction settlement.
+    let delegate = loop {
+        match dispatcher.next_event().await {
+            Some(ChildControlEvent::Delegate(delegate)) => break delegate,
+            Some(ChildControlEvent::InteractionProviderAvailable { available }) => {
+                runtime.set_interaction_provider_available(available);
+            }
+            Some(ChildControlEvent::InteractionRespond {
+                response_id,
+                interaction,
+                response,
+            }) => {
+                send_interaction_response_result(
+                    handle,
+                    &runtime,
+                    response_id,
+                    interaction,
+                    response,
+                )
+                .await?;
+            }
+            Some(ChildControlEvent::Cancel { .. }) | None => {
+                // Cancelled (or orphaned) before any work began: drain and
+                // exit. The parent settles the cancelled/interrupted terminal
+                // itself from the physical outcome.
+                let _ = runtime.shutdown().await;
+                return Ok(());
+            }
+            Some(ChildControlEvent::ProtocolViolation(message)) => {
+                return Err(ChildExit::Protocol(message));
+            }
         }
     };
+    runtime.set_interaction_provider_available(delegate.interaction_provider_available);
 
     // The delegated task enters through the child's ordinary durable
     // inbound path. IPC transports the envelope; it never appends.
@@ -485,6 +557,13 @@ async fn compose_cancellably(
                         "a delegation arrived before the child answered Ready".to_owned(),
                     ));
                 }
+                Some(ChildControlEvent::InteractionProviderAvailable { .. }) => {}
+                Some(ChildControlEvent::InteractionRespond { .. }) => {
+                    return Err(ChildExit::Protocol(
+                        "an interaction response arrived before the child answered Ready"
+                            .to_owned(),
+                    ));
+                }
                 Some(ChildControlEvent::ProtocolViolation(message)) => {
                     return Err(ChildExit::Protocol(message));
                 }
@@ -540,6 +619,30 @@ async fn report_and_drain(
         .map_err(|error| ChildExit::Protocol(error.to_string()))?;
     let _ = runtime.shutdown().await;
     Ok(())
+}
+
+/// Applies one root-routed response at the child coordinator and returns the
+/// coordinator's result over the same reliable control lane. The response is
+/// never converted into a parent interaction or a child-parent transcript
+/// message.
+async fn send_interaction_response_result(
+    handle: &ChildControlHandle,
+    runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
+    response_id: u64,
+    interaction: crate::runtime::interaction::InteractionRef,
+    response: crate::runtime::interaction::InteractionResponse,
+) -> Result<(), ChildExit> {
+    let result = runtime.respond_interaction(&interaction, response).await;
+    handle
+        .send_reliable(ChildFrame::InteractionResponseResult(
+            crate::runtime::subagent::ipc::InteractionResponseResultFrame {
+                response_id,
+                interaction,
+                result,
+            },
+        ))
+        .await
+        .map_err(|error| ChildExit::Protocol(error.to_string()))
 }
 
 /// The canonical terminal of the child's one attempt.
@@ -639,6 +742,23 @@ where
                         return Err(ChildExit::Protocol(
                             "a second delegation arrived during the attempt".to_owned(),
                         ));
+                    }
+                    Some(ChildControlEvent::InteractionProviderAvailable { available }) => {
+                        runtime.set_interaction_provider_available(available);
+                    }
+                    Some(ChildControlEvent::InteractionRespond {
+                        response_id,
+                        interaction,
+                        response,
+                    }) => {
+                        send_interaction_response_result(
+                            handle,
+                            runtime,
+                            response_id,
+                            interaction,
+                            response,
+                        )
+                        .await?;
                     }
                     Some(ChildControlEvent::ProtocolViolation(message)) => {
                         return Err(ChildExit::Protocol(message));

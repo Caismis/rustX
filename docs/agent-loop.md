@@ -891,6 +891,15 @@ loop checks cancellation again at the existing start frontier. A `Deny` is a
 normal structural Tool Plane result with `ToolExecutionStatus::Denied`, one
 canonical result slot, no `ToolExecutionStarted`, and no executor future.
 
+For a supervised child, the root Runtime Client is only the human-facing
+surface. The child coordinator publishes its own request over the reliable
+child control lane; the root projects it with an InteractionRef and
+Subagent source metadata, then forwards the human response back to that same
+child coordinator. The parent Agent Loop and model never see the question,
+approval, answer, or child ToolResult, and the route never creates a parent
+interaction or changes primary canonical history. A root attachment provides
+the route but does not select the child's ask_user capability.
+
 For a parallel batch rustX resolves every policy/interaction decision in
 canonical call order before any executor starts. This is intentionally a
 strong batch boundary: response timing can neither reorder result slots nor

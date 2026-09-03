@@ -320,6 +320,54 @@ fn resolved_child_spec(agent: &str) -> ResolvedSubagentSpec {
     }
 }
 
+/// Builds the one explicit child capability used by the routed questionnaire
+/// conformance cases. The route itself never changes this registry: the
+/// definition must select `ask_user` before the child can materialize it.
+fn child_ask_user_tools() -> ToolRegistry {
+    let policy = rustx::tools::types::ToolInvocationPolicy::default();
+    let definition = crate::tools::native::subagent_child_definition("ask_user", policy)
+        .expect("ask_user is a child-plane capability");
+    let mut tools = ToolRegistry::new();
+    rustx::tools::native::register_subagent_child_tools(&mut tools, &[definition])
+        .expect("explicit ask_user selection materializes");
+    tools
+}
+
+/// Builds the one explicitly selected child tool used by the approval route
+/// conformance cases. The tool is otherwise eligible, but its frozen
+/// definition requires a human decision at the child coordinator boundary.
+fn child_approval_tools() -> (
+    ToolRegistry,
+    tokio::sync::watch::Receiver<Vec<rustx::tools::types::ToolInvocation>>,
+    tokio::sync::watch::Receiver<bool>,
+) {
+    let definition = rustx::tools::types::ToolDefinition {
+        id: rustx::runtime::identity::ToolId::new("tool-approved"),
+        name: "approved_tool".to_owned(),
+        description: "a child tool that requires approval".to_owned(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {"target": {"type": "string"}},
+            "required": ["target"],
+            "additionalProperties": false
+        }),
+        execution_policy: rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+        concurrency_policy: rustx::tools::types::ToolConcurrencyPolicy::Sequential,
+        approval_policy: rustx::tools::types::ToolApprovalPolicy::Always,
+        replay_policy: rustx::tools::types::ToolReplayPolicy::Never,
+        origin: rustx::tools::types::ToolOrigin::Builtin,
+    };
+    let tool = FakeTool::new(
+        definition,
+        support::fake::success_result("child approval tool ran"),
+    );
+    let calls = tool.calls();
+    let started = tool.started();
+    let mut tools = ToolRegistry::new();
+    tool.register(&mut tools);
+    (tools, calls, started)
+}
+
 /// The parent side: a real `SubagentRegistry` over an in-memory durable
 /// authority, with the Issue #60 staged-child test seam for the process.
 struct ParentPlane {
@@ -620,6 +668,9 @@ async fn launch_wired_child_full(
             observation_child_end,
         );
         let handle = dispatcher.handle();
+        child_runtime.install_interaction_route(Arc::new(
+            crate::local_runtime::subagent_child::ChildInteractionRoute::new(handle.clone()),
+        ));
         let result = tokio::select! {
             result = crate::local_runtime::subagent_child::serve_child_delegation(
                 &mut dispatcher,
@@ -729,6 +780,79 @@ async fn await_snapshot(
         panic!("{description}: the snapshot projection did not arrive within liveness guard")
     })
     .expect("child record")
+}
+
+/// Waits for the root Runtime Client subscription to deliver a matching live
+/// routed interaction. Other lifecycle/activity events are deliberately
+/// consumed first; UI order never selects the owner.
+async fn await_root_interaction(
+    subscription: &rustx::runtime_client::EventSubscription,
+    predicate: impl Fn(&rustx::runtime::RoutedInteraction) -> bool,
+    description: &str,
+) -> rustx::runtime::RoutedInteraction {
+    tokio::time::timeout(LIVENESS, async {
+        loop {
+            match subscription.next().await {
+                rustx::runtime_client::EventDelivery::Event(event) => {
+                    if let rustx::runtime_client::RuntimeClientEvent::InteractionPending {
+                        interaction,
+                    } = event.event
+                        && predicate(&interaction)
+                    {
+                        return interaction;
+                    }
+                }
+                rustx::runtime_client::EventDelivery::ResyncRequired { .. } => {
+                    panic!("{description}: root subscription requires an unexpected resync")
+                }
+                rustx::runtime_client::EventDelivery::Closed
+                | rustx::runtime_client::EventDelivery::Exhausted => {
+                    panic!("{description}: root interaction subscription closed")
+                }
+                rustx::runtime_client::EventDelivery::Pending => {
+                    unreachable!("EventSubscription::next never returns Pending")
+                }
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{description}: routed interaction did not arrive"))
+}
+
+/// Waits for the reliable projection-removal fact for one child interaction.
+/// The removal is presentation-only: no terminal child outcome is invented.
+async fn await_root_interaction_removed(
+    subscription: &rustx::runtime_client::EventSubscription,
+    target: &rustx::runtime::InteractionRef,
+    description: &str,
+) {
+    tokio::time::timeout(LIVENESS, async {
+        loop {
+            match subscription.next().await {
+                rustx::runtime_client::EventDelivery::Event(event) => {
+                    if let rustx::runtime_client::RuntimeClientEvent::InteractionRemoved {
+                        interaction,
+                    } = event.event
+                        && &interaction == target
+                    {
+                        return;
+                    }
+                }
+                rustx::runtime_client::EventDelivery::ResyncRequired { .. } => {
+                    panic!("{description}: root subscription requires an unexpected resync")
+                }
+                rustx::runtime_client::EventDelivery::Closed
+                | rustx::runtime_client::EventDelivery::Exhausted => {
+                    panic!("{description}: root interaction subscription closed")
+                }
+                rustx::runtime_client::EventDelivery::Pending => {
+                    unreachable!("EventSubscription::next never returns Pending")
+                }
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{description}: interaction removal did not arrive"));
 }
 
 fn is_request_started(event: &RuntimeEvent) -> bool {
@@ -1889,6 +2013,1140 @@ fn tool_call_request(call: &support::fake::ScriptedCall) -> Vec<FakeStep> {
         usage: None,
     }));
     steps
+}
+
+fn ask_user_arguments(question: &str) -> serde_json::Value {
+    serde_json::json!({
+        "questions": [{
+            "question": question,
+            "header": "Target",
+            "options": [
+                {"label": "staging", "description": "Use the safe staging environment."},
+                {"label": "production", "description": "Use the live environment."}
+            ]
+        }]
+    })
+}
+
+/// A child-owned Questionnaire is projected through the root Runtime Client
+/// and answered by its full routed identity. The parent has no interaction
+/// waiter, model prompt, or canonical history entry for the child question,
+/// answer, or `ToolResult`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn child_questionnaire_routes_through_root_without_parent_mediation() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let (parent, host) =
+        parent_runtime_host_plane(&dir, "conv-184-questionnaire", Vec::new()).await;
+    let (attachment, initialized) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .expect("root Runtime Client attaches");
+    let cursor = match initialized {
+        rustx::runtime_client::RuntimeClientResult::Initialized { cursor, .. } => cursor,
+        other => panic!("root attach result: {other:?}"),
+    };
+    let subscription = attachment
+        .subscribe_events(cursor)
+        .expect("root event subscription");
+    let question = "Which deployment target should the child use?";
+    let child = child_fixture(
+        &dir,
+        &ConversationId::new("conv-184-questionnaire-subagent-1"),
+        vec![
+            tool_call_request(&support::fake::ScriptedCall {
+                id: "call-ask-user",
+                tool_id: "tool-ask-user",
+                name: "ask_user",
+                arguments: ask_user_arguments(question),
+            }),
+            answer_script("CHILD-ASK-USER-CONTINUED"),
+        ],
+        child_ask_user_tools(),
+        Vec::new(),
+    )
+    .await;
+    assert!(
+        child
+            .runtime
+            .capability()
+            .current_snapshot()
+            .tool_registry()
+            .names()
+            .contains(&"ask_user"),
+        "the explicit child capability is active"
+    );
+    assert!(
+        *parent
+            .plane
+            .registry
+            .interaction_provider_receiver()
+            .borrow(),
+        "the attached root client enables the child provider"
+    );
+    let wired = launch_wired_child(&parent.plane, &child, "choose a deployment target").await;
+
+    let routed = await_root_interaction(
+        &subscription,
+        |interaction| {
+            matches!(
+                &interaction.request.kind,
+                rustx::runtime::InteractionKind::Questionnaire { .. }
+            )
+        },
+        "the child questionnaire",
+    )
+    .await;
+    assert!(matches!(
+        &routed.source,
+        rustx::runtime::InteractionSource::Subagent {
+            subagent_id,
+            child_conversation_id,
+            ..
+        } if *subagent_id == wired.accepted.subagent_id
+            && *child_conversation_id == ConversationId::new("conv-184-questionnaire-subagent-1")
+    ));
+    assert_eq!(routed.interaction, routed.request.interaction_ref());
+
+    let response = rustx::runtime::InteractionResponse::Questionnaire {
+        response: rustx::runtime::QuestionnaireResponse::Submitted(
+            rustx::runtime::QuestionnaireSubmission {
+                answers: vec![rustx::runtime::QuestionnaireAnswerEntry {
+                    question_index: 0,
+                    answer: rustx::runtime::QuestionnaireAnswer::SingleOption(
+                        rustx::runtime::SingleOptionAnswer {
+                            label: "staging".to_owned(),
+                        },
+                    ),
+                }],
+            },
+        ),
+    };
+    let response_result = attachment
+        .handle_request_async(
+            rustx::runtime_client::RuntimeClientRequest::InteractionRespond {
+                id: rustx::runtime_client::RequestId::new(184),
+                interaction: routed.interaction.clone(),
+                response,
+            },
+        )
+        .await;
+    assert!(matches!(
+        response_result.result,
+        Some(rustx::runtime_client::RuntimeClientResult::InteractionResponseAccepted {
+            interaction
+        }) if interaction == routed.interaction
+    ));
+
+    await_journal_fact(
+        &child.store,
+        1,
+        |event| {
+            matches!(
+                event,
+                RuntimeEvent::InteractionSettled {
+                    settlement: rustx::events::interaction::InteractionSettlement::QuestionnaireSubmitted { .. },
+                    ..
+                }
+            )
+        },
+        "the child questionnaire settlement",
+    )
+    .await;
+    let settled = parent
+        .plane
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .expect("child settles");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    await_serve(wired.serve).await;
+
+    let child_wire = serde_json::to_string(&child_canonical_messages(&child)).expect("child JSON");
+    assert!(
+        child_wire.contains(question),
+        "the question stays in child history"
+    );
+    assert!(
+        child_wire.contains("staging"),
+        "the answer stays in child history"
+    );
+    let child_requests = child.model.requests();
+    assert!(
+        child_requests.len() >= 2,
+        "the child model receives a post-tool turn"
+    );
+    assert!(
+        serde_json::to_string(&child_requests[1])
+            .expect("child follow-up request JSON")
+            .contains("staging"),
+        "the child model observes its own ask_user ToolResult"
+    );
+
+    let parent_wire = serde_json::to_string(&journal(&parent.plane.store)).expect("parent JSON");
+    assert!(!parent_wire.contains(question));
+    assert!(!parent_wire.contains("staging"));
+    assert!(
+        parent
+            .plane
+            .store
+            .select_pending_batch()
+            .expect("parent pending batch")
+            .is_none(),
+        "the parent does not receive a child questionnaire result"
+    );
+    let (root_snapshot, _) = host.snapshot().expect("root projection");
+    assert!(root_snapshot.pending_interactions.is_empty());
+
+    attachment.detach();
+    child.runtime.shutdown().await.expect("child drains");
+    parent.runtime.shutdown().await.expect("parent drains");
+}
+
+/// A child approval remains owned by the child coordinator while the root
+/// Runtime Client carries the human response. The exact prepared invocation
+/// is resumed only after the child's durable Approved settlement.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn child_approval_allow_routes_to_child_and_runs_exact_invocation() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let (parent, host) =
+        parent_runtime_host_plane(&dir, "conv-184-approval-allow", Vec::new()).await;
+    let (attachment, initialized) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .expect("root Runtime Client attaches");
+    let cursor = match initialized {
+        rustx::runtime_client::RuntimeClientResult::Initialized { cursor, .. } => cursor,
+        other => panic!("root attach result: {other:?}"),
+    };
+    let subscription = attachment
+        .subscribe_events(cursor)
+        .expect("root event subscription");
+    let (tools, mut calls, _started) = child_approval_tools();
+    let invocation_arguments = serde_json::json!({"target": "staging"});
+    let child_conversation = ConversationId::new("conv-184-approval-allow-subagent-1");
+    let child = child_fixture(
+        &dir,
+        &child_conversation,
+        vec![
+            tool_call_request(&support::fake::ScriptedCall {
+                id: "call-approval-allow",
+                tool_id: "tool-approved",
+                name: "approved_tool",
+                arguments: invocation_arguments.clone(),
+            }),
+            answer_script("CHILD-APPROVAL-ALLOW-CONTINUED"),
+        ],
+        tools,
+        Vec::new(),
+    )
+    .await;
+    let wired = launch_wired_child(&parent.plane, &child, "run the approved child tool").await;
+
+    let routed = await_root_interaction(
+        &subscription,
+        |interaction| {
+            matches!(
+                &interaction.request.kind,
+                rustx::runtime::InteractionKind::Approval { .. }
+            )
+        },
+        "the child approval",
+    )
+    .await;
+    match &routed.request.kind {
+        rustx::runtime::InteractionKind::Approval {
+            call_id,
+            tool_id,
+            tool_name,
+            arguments,
+            ..
+        } => {
+            assert_eq!(call_id, &ToolCallId::new("call-approval-allow"));
+            assert_eq!(
+                tool_id,
+                &rustx::runtime::identity::ToolId::new("tool-approved")
+            );
+            assert_eq!(tool_name, "approved_tool");
+            assert_eq!(arguments, &invocation_arguments);
+        }
+        other @ rustx::runtime::InteractionKind::Questionnaire { .. } => {
+            panic!("unexpected routed interaction: {other:?}")
+        }
+    }
+    assert!(matches!(
+        &routed.source,
+        rustx::runtime::InteractionSource::Subagent {
+            subagent_id,
+            child_conversation_id,
+            ..
+        } if *subagent_id == wired.accepted.subagent_id
+            && *child_conversation_id == child_conversation
+    ));
+
+    let response_result = attachment
+        .handle_request_async(
+            rustx::runtime_client::RuntimeClientRequest::InteractionRespond {
+                id: rustx::runtime_client::RequestId::new(1841),
+                interaction: routed.interaction.clone(),
+                response: rustx::runtime::InteractionResponse::Approval {
+                    decision: rustx::runtime::ApprovalDecision::Allow,
+                },
+            },
+        )
+        .await;
+    assert!(matches!(
+        response_result.result,
+        Some(rustx::runtime_client::RuntimeClientResult::InteractionResponseAccepted {
+            interaction
+        }) if interaction == routed.interaction
+    ));
+
+    let child_events = await_journal_fact(
+        &child.store,
+        1,
+        |event| {
+            matches!(
+                event,
+                RuntimeEvent::ToolExecutionStarted {
+                    tool_call_id,
+                    tool_id,
+                } if *tool_call_id == ToolCallId::new("call-approval-allow")
+                    && *tool_id == rustx::runtime::identity::ToolId::new("tool-approved")
+            )
+        },
+        "the approved child invocation start",
+    )
+    .await;
+    let calls = calls
+        .wait_for(|calls| calls.len() == 1)
+        .await
+        .expect("approval tool call observation");
+    assert_eq!(
+        calls[0],
+        rustx::tools::types::ToolInvocation {
+            call_id: ToolCallId::new("call-approval-allow"),
+            tool_id: rustx::runtime::identity::ToolId::new("tool-approved"),
+            tool_name: "approved_tool".to_owned(),
+            mode: rustx::tools::types::ToolInvocationMode::Foreground,
+            arguments: invocation_arguments,
+        }
+    );
+    let settled_index = child_events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                RuntimeEvent::InteractionSettled {
+                    settlement: rustx::events::interaction::InteractionSettlement::Approved,
+                    ..
+                }
+            )
+        })
+        .expect("Approved settlement");
+    let started_index = child_events
+        .iter()
+        .position(|event| matches!(event, RuntimeEvent::ToolExecutionStarted { .. }))
+        .expect("ToolExecutionStarted");
+    assert!(
+        settled_index < started_index,
+        "the child commits Approved before starting the exact invocation"
+    );
+    assert_eq!(
+        count_events(&child_events, |event| matches!(
+            event,
+            RuntimeEvent::ToolExecutionStarted { .. }
+        )),
+        1
+    );
+
+    let settled = parent
+        .plane
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .expect("child settles");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    await_serve(wired.serve).await;
+    assert!(
+        parent.model.requests().is_empty(),
+        "the parent model is not involved in child approval"
+    );
+    assert_eq!(
+        count_events(&journal(&parent.plane.store), |event| matches!(
+            event,
+            RuntimeEvent::InteractionRequested { .. }
+        )),
+        0,
+        "the child approval is not a parent interaction audit"
+    );
+    attachment.detach();
+    child.runtime.shutdown().await.expect("child drains");
+    parent.runtime.shutdown().await.expect("parent drains");
+}
+
+/// A routed Deny response settles the child interaction but never admits the
+/// executor. The child can continue its own scripted model turn after the
+/// policy-denied `ToolResult`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn child_approval_deny_routes_to_child_and_never_starts_executor() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let (parent, host) =
+        parent_runtime_host_plane(&dir, "conv-184-approval-deny", Vec::new()).await;
+    let (attachment, initialized) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .expect("root Runtime Client attaches");
+    let cursor = match initialized {
+        rustx::runtime_client::RuntimeClientResult::Initialized { cursor, .. } => cursor,
+        other => panic!("root attach result: {other:?}"),
+    };
+    let subscription = attachment
+        .subscribe_events(cursor)
+        .expect("root event subscription");
+    let (tools, calls, started) = child_approval_tools();
+    let child_conversation = ConversationId::new("conv-184-approval-deny-subagent-1");
+    let child = child_fixture(
+        &dir,
+        &child_conversation,
+        vec![
+            tool_call_request(&support::fake::ScriptedCall {
+                id: "call-approval-deny",
+                tool_id: "tool-approved",
+                name: "approved_tool",
+                arguments: serde_json::json!({"target": "production"}),
+            }),
+            answer_script("CHILD-APPROVAL-DENY-CONTINUED"),
+        ],
+        tools,
+        Vec::new(),
+    )
+    .await;
+    let wired = launch_wired_child(&parent.plane, &child, "deny the child tool").await;
+    let routed = await_root_interaction(
+        &subscription,
+        |interaction| {
+            matches!(
+                &interaction.request.kind,
+                rustx::runtime::InteractionKind::Approval { .. }
+            )
+        },
+        "the child denial approval",
+    )
+    .await;
+
+    let response_result = attachment
+        .handle_request_async(
+            rustx::runtime_client::RuntimeClientRequest::InteractionRespond {
+                id: rustx::runtime_client::RequestId::new(1842),
+                interaction: routed.interaction.clone(),
+                response: rustx::runtime::InteractionResponse::Approval {
+                    decision: rustx::runtime::ApprovalDecision::Deny {
+                        reason: "human denied this child invocation".to_owned(),
+                    },
+                },
+            },
+        )
+        .await;
+    assert!(matches!(
+        response_result.result,
+        Some(rustx::runtime_client::RuntimeClientResult::InteractionResponseAccepted {
+            interaction
+        }) if interaction == routed.interaction
+    ));
+
+    let child_events = await_journal_fact(
+        &child.store,
+        1,
+        |event| {
+            matches!(
+                event,
+                RuntimeEvent::InteractionSettled {
+                    settlement: rustx::events::interaction::InteractionSettlement::Denied { .. },
+                    ..
+                }
+            )
+        },
+        "the denied child approval settlement",
+    )
+    .await;
+    let settled = parent
+        .plane
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .expect("child settles after denial");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    assert!(!*started.borrow(), "denial never enters the child executor");
+    assert!(
+        calls.borrow().is_empty(),
+        "denial produces no executor call"
+    );
+    assert!(
+        child_events
+            .iter()
+            .all(|event| !matches!(event, RuntimeEvent::ToolExecutionStarted { .. })),
+        "the denied child has no ToolExecutionStarted event"
+    );
+    await_serve(wired.serve).await;
+    attachment.detach();
+    child.runtime.shutdown().await.expect("child drains");
+    parent.runtime.shutdown().await.expect("parent drains");
+}
+
+/// Detaching the root control attachment after publication does not settle a
+/// child-owned interaction. A fresh attachment reconstructs the presentation
+/// from the live child registry and can answer the same full routed address.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn routed_interaction_survives_root_detach_and_reconnect() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let (parent, host) = parent_runtime_host_plane(&dir, "conv-184-reconnect", Vec::new()).await;
+    let (first, initialized) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .expect("first root Runtime Client attaches");
+    let cursor = match initialized {
+        rustx::runtime_client::RuntimeClientResult::Initialized { cursor, .. } => cursor,
+        other => panic!("first attach result: {other:?}"),
+    };
+    let subscription = first
+        .subscribe_events(cursor)
+        .expect("first root event subscription");
+    let child_conversation = ConversationId::new("conv-184-reconnect-subagent-1");
+    let child = child_fixture(
+        &dir,
+        &child_conversation,
+        vec![
+            tool_call_request(&support::fake::ScriptedCall {
+                id: "call-reconnect-question",
+                tool_id: "tool-ask-user",
+                name: "ask_user",
+                arguments: ask_user_arguments("Which environment after reconnect?"),
+            }),
+            answer_script("CHILD-RECONNECT-CONTINUED"),
+        ],
+        child_ask_user_tools(),
+        Vec::new(),
+    )
+    .await;
+    let wired = launch_wired_child(&parent.plane, &child, "reconnect the human surface").await;
+    let routed = await_root_interaction(
+        &subscription,
+        |interaction| {
+            matches!(
+                &interaction.request.kind,
+                rustx::runtime::InteractionKind::Questionnaire { .. }
+            )
+        },
+        "the reconnect questionnaire",
+    )
+    .await;
+
+    first.detach();
+    assert!(
+        parent
+            .plane
+            .registry
+            .pending_interaction_projection()
+            .iter()
+            .any(|pending| pending.interaction == routed.interaction),
+        "detach leaves the originating child coordinator's live request pending"
+    );
+    assert!(
+        journal(&child.store)
+            .iter()
+            .all(|event| !matches!(event, RuntimeEvent::InteractionSettled { .. })),
+        "detach does not synthesize a child settlement"
+    );
+
+    let (second, initialized) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .expect("reattach root Runtime Client");
+    let rustx::runtime_client::RuntimeClientResult::Initialized { snapshot, .. } = initialized
+    else {
+        panic!("reattach did not initialize");
+    };
+    assert!(
+        snapshot
+            .pending_interactions
+            .iter()
+            .any(|pending| pending.interaction == routed.interaction),
+        "reattach reconstructs the pending presentation from live runtime state"
+    );
+
+    let response_result = second
+        .handle_request_async(
+            rustx::runtime_client::RuntimeClientRequest::InteractionRespond {
+                id: rustx::runtime_client::RequestId::new(1843),
+                interaction: routed.interaction.clone(),
+                response: rustx::runtime::InteractionResponse::Questionnaire {
+                    response: rustx::runtime::QuestionnaireResponse::Submitted(
+                        rustx::runtime::QuestionnaireSubmission {
+                            answers: vec![rustx::runtime::QuestionnaireAnswerEntry {
+                                question_index: 0,
+                                answer: rustx::runtime::QuestionnaireAnswer::SingleOption(
+                                    rustx::runtime::SingleOptionAnswer {
+                                        label: "staging".to_owned(),
+                                    },
+                                ),
+                            }],
+                        },
+                    ),
+                },
+            },
+        )
+        .await;
+    assert!(matches!(
+        response_result.result,
+        Some(rustx::runtime_client::RuntimeClientResult::InteractionResponseAccepted {
+            interaction
+        }) if interaction == routed.interaction
+    ));
+    await_journal_fact(
+        &child.store,
+        1,
+        |event| matches!(event, RuntimeEvent::InteractionSettled { .. }),
+        "the reconnected child settlement",
+    )
+    .await;
+    let settled = parent
+        .plane
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .expect("child settles after reconnect");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    await_serve(wired.serve).await;
+    second.detach();
+    child.runtime.shutdown().await.expect("child drains");
+    parent.runtime.shutdown().await.expect("parent drains");
+}
+
+/// Approval and Questionnaire requests from different live children share
+/// one root surface. Responses are deliberately sent in reverse arrival
+/// order and each child must observe only its own response.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let (parent, host) = parent_runtime_host_plane(&dir, "conv-184-mixed", Vec::new()).await;
+    let (attachment, initialized) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .expect("root Runtime Client attaches");
+    let cursor = match initialized {
+        rustx::runtime_client::RuntimeClientResult::Initialized { cursor, .. } => cursor,
+        other => panic!("root attach result: {other:?}"),
+    };
+    let subscription = attachment
+        .subscribe_events(cursor)
+        .expect("root event subscription");
+
+    let child_one_conversation = ConversationId::new("conv-184-mixed-subagent-1");
+    let child_one = child_fixture(
+        &dir,
+        &child_one_conversation,
+        vec![
+            tool_call_request(&support::fake::ScriptedCall {
+                id: "call-mixed-question",
+                tool_id: "tool-ask-user",
+                name: "ask_user",
+                arguments: ask_user_arguments("HITL_PROMPT_ONLY_184"),
+            }),
+            answer_script("MIXED-QUESTION-ANSWER-OBSERVED-BY-CHILD-ONE"),
+        ],
+        child_ask_user_tools(),
+        Vec::new(),
+    )
+    .await;
+    let child_two_conversation = ConversationId::new("conv-184-mixed-subagent-2");
+    let (child_two_tools, _child_two_calls, _child_two_started) = child_approval_tools();
+    let child_two = child_fixture_at(
+        &dir,
+        &child_two_conversation,
+        vec![
+            tool_call_request(&support::fake::ScriptedCall {
+                id: "call-mixed-approval",
+                tool_id: "tool-approved",
+                name: "approved_tool",
+                arguments: serde_json::json!({"target": "MIXED-APPROVAL-ARGUMENT"}),
+            }),
+            answer_script("MIXED-APPROVAL-ANSWER-OBSERVED-BY-CHILD-TWO"),
+        ],
+        child_two_tools,
+        Vec::new(),
+        dir.path().join("child-artifacts-mixed-two"),
+    )
+    .await;
+    let first = launch_wired_child(&parent.plane, &child_one, "mixed questionnaire").await;
+    let second = launch_wired_child(&parent.plane, &child_two, "mixed approval").await;
+
+    let routed_interactions = tokio::time::timeout(LIVENESS, async {
+        let mut interactions = Vec::new();
+        while interactions.len() < 2 {
+            match subscription.next().await {
+                rustx::runtime_client::EventDelivery::Event(event) => {
+                    if let rustx::runtime_client::RuntimeClientEvent::InteractionPending {
+                        interaction,
+                    } = event.event
+                        && matches!(
+                            &interaction.source,
+                            rustx::runtime::InteractionSource::Subagent { subagent_id, .. }
+                                if *subagent_id == first.accepted.subagent_id
+                                    || *subagent_id == second.accepted.subagent_id
+                        )
+                    {
+                        interactions.push(interaction);
+                    }
+                }
+                rustx::runtime_client::EventDelivery::ResyncRequired { .. } => {
+                    panic!("mixed interactions require an unexpected resync")
+                }
+                rustx::runtime_client::EventDelivery::Closed
+                | rustx::runtime_client::EventDelivery::Exhausted => {
+                    panic!("mixed interaction subscription closed")
+                }
+                rustx::runtime_client::EventDelivery::Pending => {
+                    unreachable!("EventSubscription::next never returns Pending")
+                }
+            }
+        }
+        interactions
+    })
+    .await
+    .expect("mixed interactions arrive");
+    assert_eq!(routed_interactions.len(), 2);
+    let questionnaire = routed_interactions
+        .iter()
+        .find(|interaction| {
+            matches!(
+                interaction.request.kind,
+                rustx::runtime::InteractionKind::Questionnaire { .. }
+            )
+        })
+        .cloned()
+        .expect("one questionnaire");
+    let approval = routed_interactions
+        .iter()
+        .find(|interaction| {
+            matches!(
+                interaction.request.kind,
+                rustx::runtime::InteractionKind::Approval { .. }
+            )
+        })
+        .cloned()
+        .expect("one approval");
+    assert!(matches!(
+        questionnaire.request.kind,
+        rustx::runtime::InteractionKind::Questionnaire { .. }
+    ));
+    assert!(matches!(
+        approval.request.kind,
+        rustx::runtime::InteractionKind::Approval { .. }
+    ));
+    assert_ne!(questionnaire.interaction, approval.interaction);
+
+    // Reverse the observed order: the root surface never uses focus, array
+    // position, or a bare local InteractionId to choose the owner.
+    let approval_result = attachment
+        .handle_request_async(
+            rustx::runtime_client::RuntimeClientRequest::InteractionRespond {
+                id: rustx::runtime_client::RequestId::new(1844),
+                interaction: approval.interaction.clone(),
+                response: rustx::runtime::InteractionResponse::Approval {
+                    decision: rustx::runtime::ApprovalDecision::Allow,
+                },
+            },
+        )
+        .await;
+    assert!(matches!(
+        approval_result.result,
+        Some(rustx::runtime_client::RuntimeClientResult::InteractionResponseAccepted {
+            interaction
+        }) if interaction == approval.interaction
+    ));
+    let questionnaire_result = attachment
+        .handle_request_async(
+            rustx::runtime_client::RuntimeClientRequest::InteractionRespond {
+                id: rustx::runtime_client::RequestId::new(1845),
+                interaction: questionnaire.interaction.clone(),
+                response: rustx::runtime::InteractionResponse::Questionnaire {
+                    response: rustx::runtime::QuestionnaireResponse::Submitted(
+                        rustx::runtime::QuestionnaireSubmission {
+                            answers: vec![rustx::runtime::QuestionnaireAnswerEntry {
+                                question_index: 0,
+                                answer: rustx::runtime::QuestionnaireAnswer::SingleOption(
+                                    rustx::runtime::SingleOptionAnswer {
+                                        label: "staging".to_owned(),
+                                    },
+                                ),
+                            }],
+                        },
+                    ),
+                },
+            },
+        )
+        .await;
+    assert!(matches!(
+        questionnaire_result.result,
+        Some(rustx::runtime_client::RuntimeClientResult::InteractionResponseAccepted {
+            interaction
+        }) if interaction == questionnaire.interaction
+    ));
+
+    await_journal_fact(
+        &child_one.store,
+        1,
+        |event| {
+            matches!(
+                event,
+                RuntimeEvent::InteractionSettled {
+                    settlement: rustx::events::interaction::InteractionSettlement::QuestionnaireSubmitted { .. },
+                    ..
+                }
+            )
+        },
+        "the first child's questionnaire settlement",
+    )
+    .await;
+    await_journal_fact(
+        &child_two.store,
+        1,
+        |event| {
+            matches!(
+                event,
+                RuntimeEvent::ToolExecutionStarted {
+                    tool_call_id,
+                    ..
+                } if *tool_call_id == ToolCallId::new("call-mixed-approval")
+            )
+        },
+        "the second child's approved invocation",
+    )
+    .await;
+    let first_settled = parent
+        .plane
+        .registry
+        .wait_until_settled(&first.accepted.subagent_id)
+        .await
+        .expect("first child settles");
+    let second_settled = parent
+        .plane
+        .registry
+        .wait_until_settled(&second.accepted.subagent_id)
+        .await
+        .expect("second child settles");
+    assert_eq!(first_settled.state, SubagentState::Succeeded);
+    assert_eq!(second_settled.state, SubagentState::Succeeded);
+    await_serve(first.serve).await;
+    await_serve(second.serve).await;
+
+    let first_requests = child_one.model.requests();
+    assert!(
+        serde_json::to_string(&first_requests)
+            .expect("first child requests")
+            .contains("staging"),
+        "the questionnaire answer reaches only child one"
+    );
+    let second_requests = child_two.model.requests();
+    assert!(
+        serde_json::to_string(&second_requests)
+            .expect("second child requests")
+            .contains("MIXED-APPROVAL-ARGUMENT"),
+        "the approval facts stay with child two"
+    );
+    let parent_wire = serde_json::to_string(&journal(&parent.plane.store)).expect("parent JSON");
+    assert!(!parent_wire.contains("HITL_PROMPT_ONLY_184"));
+    assert!(!parent_wire.contains("MIXED-APPROVAL-ARGUMENT"));
+    let parent_requests = serde_json::to_string(&parent.model.requests()).expect("parent requests");
+    assert!(
+        !parent_requests.contains("HITL_PROMPT_ONLY_184")
+            && !parent_requests.contains("MIXED-APPROVAL-ARGUMENT")
+            && !parent_requests.contains("approved_tool")
+            && !parent_requests.contains("staging"),
+        "the parent may receive an ordinary child terminal answer, but never child HITL facts"
+    );
+    let (snapshot, _) = host.snapshot().expect("root snapshot");
+    assert!(snapshot.pending_interactions.is_empty());
+
+    attachment.detach();
+    child_one
+        .runtime
+        .shutdown()
+        .await
+        .expect("first child drains");
+    child_two
+        .runtime
+        .shutdown()
+        .await
+        .expect("second child drains");
+    parent.runtime.shutdown().await.expect("parent drains");
+}
+
+/// Physical child loss removes only that child's actionable routed
+/// interactions. The root surface remains available, another child's prompt
+/// survives, and a delayed response to the dead child's full address fails
+/// closed without a synthetic settlement.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn child_death_removes_only_its_routed_interactions() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let (parent, host) = parent_runtime_host_plane(&dir, "conv-184-child-death", Vec::new()).await;
+    let (attachment, initialized) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .expect("root Runtime Client attaches");
+    let cursor = match initialized {
+        rustx::runtime_client::RuntimeClientResult::Initialized { cursor, .. } => cursor,
+        other => panic!("root attach result: {other:?}"),
+    };
+    let subscription = attachment
+        .subscribe_events(cursor)
+        .expect("root event subscription");
+
+    let first_conversation = ConversationId::new("conv-184-child-death-subagent-1");
+    let first = child_fixture_at(
+        &dir,
+        &first_conversation,
+        vec![
+            tool_call_request(&support::fake::ScriptedCall {
+                id: "call-dead-child-question",
+                tool_id: "tool-ask-user",
+                name: "ask_user",
+                arguments: ask_user_arguments("DEAD-CHILD-QUESTION"),
+            }),
+            answer_script("NEVER-REACHED-DEAD-CHILD"),
+        ],
+        child_ask_user_tools(),
+        Vec::new(),
+        dir.path().join("child-artifacts-dead"),
+    )
+    .await;
+    let second_conversation = ConversationId::new("conv-184-child-death-subagent-2");
+    let second = child_fixture_at(
+        &dir,
+        &second_conversation,
+        vec![
+            tool_call_request(&support::fake::ScriptedCall {
+                id: "call-surviving-child-question",
+                tool_id: "tool-ask-user",
+                name: "ask_user",
+                arguments: ask_user_arguments("SURVIVING-CHILD-QUESTION"),
+            }),
+            answer_script("SURVIVING-CHILD-CONTINUED"),
+        ],
+        child_ask_user_tools(),
+        Vec::new(),
+        dir.path().join("child-artifacts-survivor"),
+    )
+    .await;
+    let first_wired =
+        launch_wired_child_with_shell(&parent.plane, &first, "dead child", "exec sleep 60").await;
+    let second_wired = launch_wired_child(&parent.plane, &second, "surviving child").await;
+    let routed_interactions = tokio::time::timeout(LIVENESS, async {
+        let mut interactions = Vec::new();
+        while interactions.len() < 2 {
+            match subscription.next().await {
+                rustx::runtime_client::EventDelivery::Event(event) => {
+                    if let rustx::runtime_client::RuntimeClientEvent::InteractionPending {
+                        interaction,
+                    } = event.event
+                        && matches!(
+                            &interaction.source,
+                            rustx::runtime::InteractionSource::Subagent { subagent_id, .. }
+                                if *subagent_id == first_wired.accepted.subagent_id
+                                    || *subagent_id == second_wired.accepted.subagent_id
+                        )
+                    {
+                        interactions.push(interaction);
+                    }
+                }
+                rustx::runtime_client::EventDelivery::ResyncRequired { .. } => {
+                    panic!("child-death interactions require an unexpected resync")
+                }
+                rustx::runtime_client::EventDelivery::Closed
+                | rustx::runtime_client::EventDelivery::Exhausted => {
+                    panic!("child-death interaction subscription closed")
+                }
+                rustx::runtime_client::EventDelivery::Pending => {
+                    unreachable!("EventSubscription::next never returns Pending")
+                }
+            }
+        }
+        interactions
+    })
+    .await
+    .expect("both child interactions arrive");
+    let dead_interaction = routed_interactions
+        .iter()
+        .find(|interaction| {
+            matches!(
+                &interaction.source,
+                rustx::runtime::InteractionSource::Subagent { subagent_id, .. }
+                    if *subagent_id == first_wired.accepted.subagent_id
+            )
+        })
+        .cloned()
+        .expect("dead child interaction");
+    let surviving_interaction = routed_interactions
+        .iter()
+        .find(|interaction| {
+            matches!(
+                &interaction.source,
+                rustx::runtime::InteractionSource::Subagent { subagent_id, .. }
+                    if *subagent_id == second_wired.accepted.subagent_id
+            )
+        })
+        .cloned()
+        .expect("surviving child interaction");
+
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(i32::try_from(first_wired.pid).expect("pid fits")),
+        nix::sys::signal::Signal::SIGKILL,
+    )
+    .expect("SIGKILL the dead child process");
+    first_wired
+        .stop_serve
+        .send(())
+        .expect("stop the dead child control loop");
+    tokio::time::timeout(LIVENESS, first_wired.serve)
+        .await
+        .expect("dead child control loop shutdown")
+        .expect("dead child control task")
+        .expect("dead child control loop result");
+
+    await_root_interaction_removed(
+        &subscription,
+        &dead_interaction.interaction,
+        "the dead child interaction removal",
+    )
+    .await;
+    let dead_snapshot = parent
+        .plane
+        .registry
+        .wait_until_settled(&first_wired.accepted.subagent_id)
+        .await
+        .expect("dead child settles");
+    assert_eq!(dead_snapshot.state, SubagentState::Interrupted);
+    let (root_snapshot, _) = host.snapshot().expect("root snapshot after child death");
+    assert!(
+        root_snapshot
+            .pending_interactions
+            .iter()
+            .all(|pending| pending.interaction != dead_interaction.interaction)
+    );
+    assert!(
+        root_snapshot
+            .pending_interactions
+            .iter()
+            .any(|pending| pending.interaction == surviving_interaction.interaction),
+        "another child's actionable prompt survives"
+    );
+
+    let stale_response = attachment
+        .handle_request_async(
+            rustx::runtime_client::RuntimeClientRequest::InteractionRespond {
+                id: rustx::runtime_client::RequestId::new(1846),
+                interaction: dead_interaction.interaction.clone(),
+                response: rustx::runtime::InteractionResponse::Questionnaire {
+                    response: rustx::runtime::QuestionnaireResponse::Declined,
+                },
+            },
+        )
+        .await;
+    assert!(matches!(
+        stale_response.error,
+        Some(rustx::runtime_client::RuntimeClientError::InteractionNotPending {
+            interaction
+        }) if interaction == dead_interaction.interaction
+    ));
+
+    let surviving_response = attachment
+        .handle_request_async(
+            rustx::runtime_client::RuntimeClientRequest::InteractionRespond {
+                id: rustx::runtime_client::RequestId::new(1847),
+                interaction: surviving_interaction.interaction.clone(),
+                response: rustx::runtime::InteractionResponse::Questionnaire {
+                    response: rustx::runtime::QuestionnaireResponse::Submitted(
+                        rustx::runtime::QuestionnaireSubmission {
+                            answers: vec![rustx::runtime::QuestionnaireAnswerEntry {
+                                question_index: 0,
+                                answer: rustx::runtime::QuestionnaireAnswer::SingleOption(
+                                    rustx::runtime::SingleOptionAnswer {
+                                        label: "staging".to_owned(),
+                                    },
+                                ),
+                            }],
+                        },
+                    ),
+                },
+            },
+        )
+        .await;
+    assert!(matches!(
+        surviving_response.result,
+        Some(rustx::runtime_client::RuntimeClientResult::InteractionResponseAccepted {
+            interaction
+        }) if interaction == surviving_interaction.interaction
+    ));
+    let surviving_snapshot = parent
+        .plane
+        .registry
+        .wait_until_settled(&second_wired.accepted.subagent_id)
+        .await
+        .expect("surviving child settles");
+    assert_eq!(surviving_snapshot.state, SubagentState::Succeeded);
+    await_serve(second_wired.serve).await;
+
+    attachment.detach();
+    first
+        .runtime
+        .shutdown()
+        .await
+        .expect("dead child fixture drains");
+    second
+        .runtime
+        .shutdown()
+        .await
+        .expect("surviving child drains");
+    parent.runtime.shutdown().await.expect("parent drains");
+}
+
+/// A root Runtime Client is also the provider gate for child interactions.
+/// Without an attached capable root surface, the child `ask_user` executor
+/// fails closed before publication; the route is not inferred from a live
+/// parent process or child control socket.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn child_questionnaire_fails_closed_without_root_provider() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let parent = standalone_parent_plane(&dir, "conv-184-no-provider");
+    let child = child_fixture(
+        &dir,
+        &ConversationId::new("conv-184-no-provider-child"),
+        vec![
+            tool_call_request(&support::fake::ScriptedCall {
+                id: "call-ask-user-unavailable",
+                tool_id: "tool-ask-user",
+                name: "ask_user",
+                arguments: ask_user_arguments("This must never reach a human surface."),
+            }),
+            answer_script("CHILD-FAIL-CLOSED-CONTINUES"),
+        ],
+        child_ask_user_tools(),
+        Vec::new(),
+    )
+    .await;
+    let wired = launch_wired_child(&parent, &child, "no provider").await;
+    let settled = parent
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .expect("child settles");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    await_serve(wired.serve).await;
+    assert!(
+        journal(&child.store)
+            .iter()
+            .all(|event| !matches!(event, RuntimeEvent::InteractionRequested { .. })),
+        "unavailable publication fails closed without creating an actionable prompt"
+    );
+    assert!(
+        parent.registry.pending_interaction_projection().is_empty(),
+        "no root projection exists without a capable provider"
+    );
+    child.runtime.shutdown().await.expect("child drains");
 }
 
 /// The durable event-kind sequence of one store. Event payloads carry

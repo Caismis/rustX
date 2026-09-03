@@ -67,10 +67,10 @@
 //! Event Journal reads and current Surface bootstrap remain `ConversationStore`
 //! responsibilities.
 //!
-//! Live native interactions follow the same fold. A pending Approval is
-//! snapshot state and a terminal interaction observation removes it; neither
-//! becomes canonical conversation history. The projection never answers an
-//! interaction or infers an outcome from attachment loss.
+//! Live native interactions follow the same fold. A pending Approval or
+//! Questionnaire is snapshot state and a terminal interaction observation
+//! removes it; neither becomes canonical conversation history. The projection
+//! never answers an interaction or infers an outcome from attachment loss.
 //!
 //! # `RuntimeEvent` mapping policy
 //!
@@ -562,34 +562,29 @@ impl RuntimeClientProjection {
                         .collect(),
                 }]
             }
-            ConversationObservation::InteractionPending {
-                request,
-                audit,
-                transcript_cursor,
-            } => {
-                upsert_interaction(&mut self.snapshot.pending_interactions, request.clone());
-                let audit_view = super::snapshot::interaction_requested_view(audit)
-                    .expect("runtime interaction requested audit is valid");
-                vec![
-                    RuntimeClientEvent::InteractionPending {
-                        interaction: request,
-                    },
-                    RuntimeClientEvent::InteractionAuditRequested {
+            ConversationObservation::InteractionPending { interaction, audit } => {
+                upsert_interaction(&mut self.snapshot.pending_interactions, interaction.clone());
+                let mut events = vec![RuntimeClientEvent::InteractionPending { interaction }];
+                if let Some((audit, transcript_cursor)) = audit {
+                    let audit_view = super::snapshot::interaction_requested_view(audit)
+                        .expect("runtime interaction requested audit is valid");
+                    events.push(RuntimeClientEvent::InteractionAuditRequested {
                         audit: Box::new(audit_view),
                         transcript_cursor: transcript_cursor.into(),
-                    },
-                ]
+                    });
+                }
+                events
             }
             ConversationObservation::InteractionSettled {
-                interaction_id,
+                interaction,
                 outcome,
                 audit,
             } => {
                 self.snapshot
                     .pending_interactions
-                    .retain(|request| request.id != interaction_id);
+                    .retain(|pending| pending.interaction != interaction);
                 let mut events = vec![RuntimeClientEvent::InteractionSettled {
-                    interaction_id,
+                    interaction,
                     outcome,
                 }];
                 if let Some(audit) = audit {
@@ -602,6 +597,12 @@ impl RuntimeClientProjection {
                     });
                 }
                 events
+            }
+            ConversationObservation::InteractionRemoved { interaction } => {
+                self.snapshot
+                    .pending_interactions
+                    .retain(|pending| pending.interaction != interaction);
+                vec![RuntimeClientEvent::InteractionRemoved { interaction }]
             }
             ConversationObservation::Background(snapshot) => {
                 let view = background_view(&snapshot);
@@ -639,14 +640,40 @@ impl RuntimeClientProjection {
                     progress,
                 }]
             }
-            ConversationObservation::SubagentLifecycle(snapshot)
-            | ConversationObservation::SubagentActivity(snapshot) => {
+            ConversationObservation::SubagentLifecycle(snapshot) => {
                 // Both subagent delivery classes fold identically: the
                 // whole-view upsert is unconditional last-write-wins, and
                 // the queue's lane rules (a lifecycle push evicts queued
                 // activity of the same subagent) already guarantee no fold
                 // ever observes an activity snapshot older than the
                 // lifecycle snapshot it already folded.
+                let view = subagent_view(&snapshot);
+                upsert_subagent(&mut self.snapshot.subagents, view.clone());
+                let mut events = vec![RuntimeClientEvent::SubagentUpdated {
+                    subagent: Box::new(view),
+                }];
+                if snapshot.state.is_terminal() {
+                    let removed: Vec<_> = self
+                        .snapshot
+                        .pending_interactions
+                        .iter()
+                        .filter(|pending| {
+                            pending.interaction.conversation_id == snapshot.child_conversation_id
+                        })
+                        .map(|pending| pending.interaction.clone())
+                        .collect();
+                    self.snapshot.pending_interactions.retain(|pending| {
+                        pending.interaction.conversation_id != snapshot.child_conversation_id
+                    });
+                    events.extend(
+                        removed.into_iter().map(|interaction| {
+                            RuntimeClientEvent::InteractionRemoved { interaction }
+                        }),
+                    );
+                }
+                events
+            }
+            ConversationObservation::SubagentActivity(snapshot) => {
                 let view = subagent_view(&snapshot);
                 upsert_subagent(&mut self.snapshot.subagents, view.clone());
                 vec![RuntimeClientEvent::SubagentUpdated {
@@ -1847,17 +1874,17 @@ fn upsert_subagent(
 /// Inserts or replaces one live native interaction projection, preserving
 /// deterministic coordinator identity order.
 fn upsert_interaction(
-    interactions: &mut Vec<crate::runtime::interaction::InteractionRequest>,
-    request: crate::runtime::interaction::InteractionRequest,
+    interactions: &mut Vec<crate::runtime::interaction::RoutedInteraction>,
+    request: crate::runtime::interaction::RoutedInteraction,
 ) {
     if let Some(existing) = interactions
         .iter_mut()
-        .find(|existing| existing.id == request.id)
+        .find(|existing| existing.interaction == request.interaction)
     {
         *existing = request;
     } else {
         interactions.push(request);
-        interactions.sort_by(|left, right| left.id.cmp(&right.id));
+        interactions.sort_by(|left, right| left.interaction.cmp(&right.interaction));
     }
 }
 
@@ -1966,8 +1993,8 @@ mod tests {
     };
     use crate::runtime::inbound::{ConversationInboundMailbox, InitialTurnTrigger};
     use crate::runtime::interaction::{
-        ApprovalDecision, InteractionKind, InteractionOutcome, InteractionRequest,
-        InteractionResponse,
+        ApprovalDecision, InteractionKind, InteractionOutcome, InteractionRef, InteractionRequest,
+        InteractionResponse, InteractionSource, RoutedInteraction,
     };
     use crate::runtime::observation::ConversationObservation;
     use crate::runtime::types::{CancellationReason, TokenMeasurement, TokenMeasurementSource};
@@ -3826,18 +3853,34 @@ mod tests {
             },
         );
         projection.apply(ConversationObservation::InteractionPending {
-            request: request.clone(),
-            audit: requested_audit,
-            transcript_cursor: crate::durable::TranscriptCursor::new(1),
+            interaction: RoutedInteraction {
+                interaction: InteractionRef::new(
+                    request.conversation_id.clone(),
+                    request.id.clone(),
+                ),
+                source: InteractionSource::Primary,
+                request: request.clone(),
+            },
+            audit: Some((requested_audit, crate::durable::TranscriptCursor::new(1))),
         });
         let (snapshot, cursor) = projection.snapshot().expect("snapshot");
-        assert_eq!(snapshot.pending_interactions, vec![request.clone()]);
+        assert_eq!(
+            snapshot.pending_interactions,
+            vec![RoutedInteraction {
+                interaction: InteractionRef::new(
+                    request.conversation_id.clone(),
+                    request.id.clone(),
+                ),
+                source: InteractionSource::Primary,
+                request: request.clone(),
+            }]
+        );
         assert_eq!(cursor, RuntimeClientCursor::new(2));
         let events = collect(&mut projection, RuntimeClientCursor::new(0));
         assert!(matches!(
             events.first().map(|event| &event.event),
             Some(RuntimeClientEvent::InteractionPending { interaction })
-                if interaction == &request
+                if interaction.request == request
         ));
 
         let outcome = InteractionOutcome::Responded {
@@ -3854,7 +3897,7 @@ mod tests {
             },
         );
         projection.apply(ConversationObservation::InteractionSettled {
-            interaction_id: request.id.clone(),
+            interaction: InteractionRef::new(request.conversation_id.clone(), request.id.clone()),
             outcome: outcome.clone(),
             audit: Some((settled_audit, crate::durable::TranscriptCursor::new(2))),
         });
@@ -3865,9 +3908,11 @@ mod tests {
         assert!(matches!(
             events.first().map(|event| &event.event),
             Some(RuntimeClientEvent::InteractionSettled {
-                interaction_id,
+                interaction,
                 outcome: event_outcome,
-            }) if interaction_id == &request.id && event_outcome == &outcome
+            }) if interaction
+                == &InteractionRef::new(request.conversation_id.clone(), request.id.clone())
+                && event_outcome == &outcome
         ));
 
         // The projection never turns a live prompt into a historical audit;
@@ -3880,6 +3925,91 @@ mod tests {
                 .messages
                 .is_empty()
         );
+    }
+
+    /// The root projection is a set of independently addressed routed
+    /// interactions. Primary and child prompts can coexist, and removing or
+    /// settling one pair never selects or changes another pair.
+    #[test]
+    fn routed_interactions_keep_multiple_sources_and_removals_independent() {
+        let mut projection = projection();
+        let approval = |conversation: &str, id: &str| InteractionRequest {
+            id: InteractionId::new(id),
+            conversation_id: ConversationId::new(conversation),
+            attempt_id: attempt(),
+            turn: 1,
+            kind: InteractionKind::Approval {
+                call_id: ToolCallId::new(format!("{id}-call")),
+                tool_id: ToolId::new("tool-alpha"),
+                tool_name: "alpha".to_owned(),
+                origin: crate::tools::types::ToolOrigin::Builtin,
+                mode: crate::tools::types::ToolInvocationMode::Foreground,
+                arguments: serde_json::json!({"id": id}),
+                reason: "independent prompt".to_owned(),
+            },
+        };
+        let primary = RoutedInteraction::primary(approval("conv-primary", "primary-a"));
+        let child_a_request = approval("conv-child-a", "child-a");
+        let child_a = RoutedInteraction::subagent(
+            crate::runtime::identity::SubagentId::new("conv-primary-subagent-1"),
+            child_a_request.conversation_id.clone(),
+            crate::runtime::subagent::catalog::SubagentName::parse("explore").expect("agent name"),
+            child_a_request,
+        );
+        let other_child_request = approval("conv-child-b", "child-b");
+        let child_b = RoutedInteraction::subagent(
+            crate::runtime::identity::SubagentId::new("conv-primary-subagent-2"),
+            other_child_request.conversation_id.clone(),
+            crate::runtime::subagent::catalog::SubagentName::parse("explore").expect("agent name"),
+            other_child_request,
+        );
+
+        for interaction in [primary.clone(), child_a.clone(), child_b.clone()] {
+            projection.apply(ConversationObservation::InteractionPending {
+                interaction,
+                audit: None,
+            });
+        }
+        let (snapshot, _) = projection.snapshot().expect("snapshot");
+        assert_eq!(snapshot.pending_interactions.len(), 3);
+        assert_eq!(
+            snapshot
+                .pending_interactions
+                .iter()
+                .map(|interaction| interaction.interaction.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                child_a.interaction.clone(),
+                child_b.interaction.clone(),
+                primary.interaction.clone(),
+            ]
+        );
+
+        projection.apply(ConversationObservation::InteractionRemoved {
+            interaction: child_a.interaction.clone(),
+        });
+        let (snapshot, _) = projection.snapshot().expect("snapshot after child removal");
+        assert_eq!(
+            snapshot
+                .pending_interactions
+                .iter()
+                .map(|interaction| interaction.interaction.clone())
+                .collect::<Vec<_>>(),
+            vec![child_b.interaction.clone(), primary.interaction.clone()]
+        );
+
+        projection.apply(ConversationObservation::InteractionSettled {
+            interaction: child_b.interaction.clone(),
+            outcome: InteractionOutcome::Responded {
+                response: InteractionResponse::Approval {
+                    decision: ApprovalDecision::Allow,
+                },
+            },
+            audit: None,
+        });
+        let (snapshot, _) = projection.snapshot().expect("snapshot after settlement");
+        assert_eq!(snapshot.pending_interactions, vec![primary]);
+        assert!(snapshot.messages.is_empty());
     }
 
     /// The snapshot and its cursor linearize: the returned cursor is the

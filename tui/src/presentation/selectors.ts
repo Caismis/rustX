@@ -28,7 +28,7 @@
 import type {
   BackgroundLifecycle,
   CapabilitySourceView,
-  InteractionRequest,
+  RoutedInteraction,
   ModelInvocationView,
   SessionModelConfig,
   RuntimeClientBackgroundExecution,
@@ -120,30 +120,37 @@ export function activeSubagents(
  * runtime interactions are pending.
  *
  * Runtime publication order is not a user-facing focus contract, so the TUI
- * deliberately selects the lexicographically smallest live InteractionId.
+ * deliberately selects the lexicographically smallest routed identity pair.
  * Approval remains command-driven; questionnaire responses are whole typed
  * submissions from the questionnaire overlay.
  */
 export function focusedQuestionnaire(
   state: PresentationState | undefined,
-): InteractionRequest | undefined {
+): RoutedInteraction | undefined {
   return state?.pendingInteractions
-    .filter((interaction) => interaction.kind.type === "questionnaire")
+    .filter((interaction) => interaction.request.kind.type === "questionnaire")
     .slice()
-    .sort((left, right) => {
-      if (left.id < right.id) return -1;
-      if (left.id > right.id) return 1;
-      return 0;
-    })[0];
+    .sort(compareRoutedInteractions)[0];
 }
 
 /** The focused pending interaction for generic status/card rendering. */
 export function focusedInteraction(
   state: PresentationState | undefined,
-): InteractionRequest | undefined {
+): RoutedInteraction | undefined {
   return state?.pendingInteractions
     .slice()
-    .sort((left, right) => left.id.localeCompare(right.id))[0];
+    .sort(compareRoutedInteractions)[0];
+}
+
+function compareRoutedInteractions(
+  left: RoutedInteraction,
+  right: RoutedInteraction,
+): number {
+  return left.interaction.conversation_id.localeCompare(
+    right.interaction.conversation_id,
+  ) || left.interaction.interaction_id.localeCompare(
+    right.interaction.interaction_id,
+  );
 }
 
 /** Whether a background lifecycle state is terminal, per the runtime. */
