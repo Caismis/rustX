@@ -36,9 +36,10 @@ export interface RuntimePaths {
 /** Startup controls forwarded verbatim to the Rust owner. */
 export interface RuntimeStartupOptions {
   /**
-   * Attach read-only to this known conversation's durable Runtime Client
-   * projection. This is a generic conversation identity target, not a
-   * subagent transcript request; Rust resolves it to the conversation store.
+   * Attach read-only to this known conversation's Runtime Client projection.
+   * Rust resolves the identity to a running child's live endpoint when
+   * available and otherwise to the durable conversation authorities. This is
+   * a generic conversation identity target, not a subagent transcript request.
    */
   inspectConversation?: string | undefined;
   /**

@@ -668,6 +668,7 @@ enum RunningChildInspection {
     None,
     KeepAttached,
     AttachThenDetach,
+    AfterSettlement,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -850,6 +851,7 @@ async fn running_child_inspection_is_execution_independent() {
                 );
                 Some(inspector)
             }
+            RunningChildInspection::AfterSettlement => None,
         };
         assert_eq!(
             server.attempt_count(),
@@ -1019,6 +1021,77 @@ async fn running_child_inspection_is_execution_independent() {
             parent_attempt_completed,
         };
 
+        let parent_was_shutdown = if matches!(mode, RunningChildInspection::AfterSettlement) {
+            // Shutting down the parent is the existing runtime-owned
+            // quiescence boundary: it waits for the settled child process and
+            // its disposable endpoint to be gone. Opening the identity after
+            // that boundary proves durable fallback rather than a terminal
+            // live projection, without polling filesystem state.
+            let response = parent
+                .request(|id| RuntimeClientRequest::Shutdown {
+                    id: rustx::runtime_client::RequestId::new(id),
+                })
+                .await;
+            assert!(
+                matches!(
+                    response.result,
+                    Some(RuntimeClientResult::ShutdownCompleted)
+                ),
+                "parent shutdown completes before durable inspection: {response:?}"
+            );
+            let mut inspector = Process::inspect(
+                root.path(),
+                &models,
+                SESSION_JSON,
+                "subagent-secret",
+                child_conversation_id.as_str(),
+            );
+            let response = inspector
+                .request(|id| RuntimeClientRequest::Initialize {
+                    id: rustx::runtime_client::RequestId::new(id),
+                    protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
+                })
+                .await;
+            let Some(RuntimeClientResult::Initialized {
+                conversation_id,
+                snapshot,
+                ..
+            }) = response.result
+            else {
+                panic!("post-settlement inspection initializes: {response:?}");
+            };
+            assert_eq!(conversation_id, child_conversation_id);
+            assert!(matches!(
+                snapshot.attempt.as_ref().map(|attempt| &attempt.phase),
+                Some(rustx::runtime_client::snapshot::RuntimeClientAttemptPhase::Settled { .. })
+            ));
+            assert!(
+                snapshot.messages.iter().any(|message| matches!(
+                    message,
+                    rustx::message::types::MessageBlock::Assistant(assistant)
+                        if assistant.content.iter().any(|block| matches!(
+                            block,
+                            rustx::message::types::AssistantContentBlock::Text(text)
+                                if text.text.contains("CHILD-ANSWER")
+                        ))
+                )),
+                "post-settlement inspection reads the durable child conversation"
+            );
+            assert_eq!(
+                server.attempt_count(),
+                fingerprint.provider_attempts,
+                "post-settlement durable inspection makes no provider request"
+            );
+            let (status, stderr) = inspector.close_and_wait().await;
+            assert!(
+                status.success(),
+                "post-settlement inspection closes cleanly: {status} stderr={stderr}"
+            );
+            true
+        } else {
+            false
+        };
+
         if let Some(inspector) = inspector {
             let (status, stderr) = inspector.close_and_wait().await;
             assert!(
@@ -1026,18 +1099,20 @@ async fn running_child_inspection_is_execution_independent() {
                 "attached inspection closes cleanly after settlement: {status} stderr={stderr}"
             );
         }
-        let response = parent
-            .request(|id| RuntimeClientRequest::Shutdown {
-                id: rustx::runtime_client::RequestId::new(id),
-            })
-            .await;
-        assert!(
-            matches!(
-                response.result,
-                Some(RuntimeClientResult::ShutdownCompleted)
-            ),
-            "parent shutdown succeeds: {response:?}"
-        );
+        if !parent_was_shutdown {
+            let response = parent
+                .request(|id| RuntimeClientRequest::Shutdown {
+                    id: rustx::runtime_client::RequestId::new(id),
+                })
+                .await;
+            assert!(
+                matches!(
+                    response.result,
+                    Some(RuntimeClientResult::ShutdownCompleted)
+                ),
+                "parent shutdown succeeds: {response:?}"
+            );
+        }
         let (status, stderr) = parent.close_and_wait().await;
         assert!(
             status.success(),
@@ -1049,9 +1124,11 @@ async fn running_child_inspection_is_execution_independent() {
     let without_inspector = Box::pin(run(RunningChildInspection::None)).await;
     let inspector_attached = Box::pin(run(RunningChildInspection::KeepAttached)).await;
     let attach_then_detach = Box::pin(run(RunningChildInspection::AttachThenDetach)).await;
+    let durable_after_settlement = Box::pin(run(RunningChildInspection::AfterSettlement)).await;
 
     assert_eq!(without_inspector, inspector_attached);
     assert_eq!(without_inspector, attach_then_detach);
+    assert_eq!(without_inspector, durable_after_settlement);
     assert_eq!(without_inspector.provider_attempts, 4);
     assert_eq!(
         without_inspector.request_kinds,

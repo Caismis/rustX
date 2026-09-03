@@ -218,22 +218,23 @@
 //!
 //! The coordinator publishes every semantically meaningful transition as a
 //! runtime-owned [`ConversationObservation`](crate::runtime::observation::ConversationObservation)
-//! into the shared leaf
-//! [`PendingObservations`](crate::runtime::observation::PendingObservations)
-//! queue. The Runtime Client projection folds that queue under its own
-//! synchronization boundary, translating the semantic observations into
-//! its snapshot/cursor read model (see `RuntimeClientProjection`), so
-//! snapshot/cursor reads remain linearizable. The runtime keeps no second
-//! fold of that vocabulary. A conversation with zero Runtime Client
-//! attachments runs the exact same admission/execution path; the
-//! observation queue simply has no consumer.
+//! into the runtime-owned observation fan-out. The Runtime Client projection
+//! owns the primary [`PendingObservations`](crate::runtime::observation::PendingObservations)
+//! queue and folds it under its own synchronization boundary, translating the
+//! semantic observations into its snapshot/cursor read model (see
+//! `RuntimeClientProjection`), so snapshot/cursor reads remain linearizable.
+//! Existing bounded local observation surfaces may receive a separate
+//! disposable fan-out queue; that is not a second Runtime Client or history
+//! authority. A conversation with zero Runtime Client attachments runs the
+//! exact same admission/execution path; only the installed host's primary
+//! queue is absent when no host exists.
 //!
 //! # The bootstrap cut
 //!
 //! [`ConversationRuntime::install_observation_bridge`] is the one runtime
 //! handshake a Runtime Client adapter uses at construction. It runs
 //! entirely under the one coordinator lock, refuses an already-activated
-//! runtime under that same lock, installs the observation queue and every
+//! runtime under that same lock, installs the observation fan-out and every
 //! subsystem observation seam, and captures the bootstrap seed:
 //!
 //! ```text
@@ -324,7 +325,9 @@ use crate::runtime::interaction::{
     InteractionRequest,
 };
 use crate::runtime::monotonic::{MonotonicClock, SystemMonotonicClock};
-use crate::runtime::observation::{ConversationObservation, PendingObservations};
+use crate::runtime::observation::{
+    ConversationObservation, ObservationFanout, PendingObservations,
+};
 use crate::runtime::request_history::RequestHistory;
 use crate::runtime::resources::{RuntimeResourceLoader, RuntimeResourceSnapshot};
 use crate::runtime::transcript_history::TranscriptHistory;
@@ -1181,10 +1184,11 @@ pub(crate) struct RuntimeInner {
     drain: std::sync::OnceLock<Arc<DrainCompletion>>,
     /// Guards creation of the one drain task.
     drain_started: AtomicBool,
-    /// The observation queue shared with the Runtime Client projection;
-    /// set exactly once when a projection consumer installs itself through
+    /// The observation fan-out shared with the Runtime Client projection and
+    /// any bounded local observation consumers; set exactly once when a
+    /// projection consumer installs itself through
     /// [`RuntimeInner::install_observation_bridge`].
-    pending: std::sync::OnceLock<Arc<PendingObservations>>,
+    pending: std::sync::OnceLock<Arc<ObservationFanout>>,
     /// Settlement signal: fired once per attempt settlement handoff, so
     /// headless drivers await the authoritative state transfer
     /// deterministically instead of by polling.
@@ -1232,7 +1236,7 @@ impl Drop for ResourceReloadGateGuard {
 }
 
 /// Releasing the last semantic owner of a conversation runtime closes its
-/// observation queue (if one was installed) and its admission wake gate.
+/// observation fan-out (if one was installed) and its admission wake gate.
 /// The admission worker's terminal condition is the closed wake gate.
 impl Drop for RuntimeInner {
     fn drop(&mut self) {
@@ -1669,8 +1673,8 @@ impl RuntimeInner {
         });
     }
 
-    /// Publishes one semantic observation into the shared leaf queue,
-    /// when a projection consumer exists and the queue is open.
+    /// Publishes one semantic observation into the shared observation
+    /// fan-out, when a projection consumer exists and the fan-out is open.
     ///
     /// This is a leaf publication: the runtime keeps no second fold of the
     /// observation vocabulary. Because the queue is installed while the
@@ -1678,9 +1682,10 @@ impl RuntimeInner {
     /// [`RuntimeInner::install_observation_bridge`]) and an inactive
     /// runtime publishes nothing, an installed consumer observes every
     /// observation this runtime ever emits.
+    #[allow(clippy::needless_pass_by_value)] // observer callers construct owned observations
     fn observe(&self, observation: ConversationObservation) {
         if let Some(pending) = self.pending.get() {
-            pending.push(observation);
+            pending.push(&observation);
         }
     }
 
@@ -1888,7 +1893,11 @@ impl RuntimeInner {
         // No fallible subsystem has been mutated after the pending read. The
         // pre-check above and the coordinator lock make this set infallible;
         // keep the explicit branch as a defensive invariant assertion.
-        if self.pending.set(queue).is_err() {
+        if self
+            .pending
+            .set(Arc::new(ObservationFanout::new(queue)))
+            .is_err()
+        {
             return Err(RuntimeBootstrapError::BridgeAlreadyInstalled {
                 conversation_id: self.conversation_id.clone(),
             });
@@ -1913,6 +1922,34 @@ impl RuntimeInner {
             capability_availability,
             resources,
         })
+    }
+
+    /// Adds one bounded local consumer to the already-installed observation
+    /// stream before activation.
+    ///
+    /// This is intentionally not another Runtime Client bootstrap path. The
+    /// Runtime Client host owns the primary queue and its coherent seed; the
+    /// returned queue is for an existing local observation surface that needs
+    /// the same post-bootstrap semantic stream. Requiring the runtime to be
+    /// inactive makes the subscription linearize before the activation cut,
+    /// so it cannot miss a live observation and does not need a second seed.
+    fn subscribe_observations(
+        &self,
+    ) -> Result<Arc<PendingObservations>, RuntimeObservationSubscriptionError> {
+        let _state = self.lock_state();
+        if self.lifecycle.is_activated() {
+            return Err(
+                RuntimeObservationSubscriptionError::RuntimeAlreadyActivated {
+                    conversation_id: self.conversation_id.clone(),
+                },
+            );
+        }
+        let Some(fanout) = self.pending.get() else {
+            return Err(RuntimeObservationSubscriptionError::BridgeNotInstalled {
+                conversation_id: self.conversation_id.clone(),
+            });
+        };
+        Ok(fanout.subscribe())
     }
 
     /// Spawns the admission worker: admits the next attempt whenever the
@@ -3333,6 +3370,19 @@ impl ConversationRuntime {
         self.inner.install_observation_bridge(queue)
     }
 
+    /// Adds a bounded local consumer to the Runtime Client observation
+    /// stream before this runtime is activated.
+    ///
+    /// The Runtime Client host remains the primary projection owner. This
+    /// seam exists so an existing local observation surface can consume the
+    /// same runtime-owned observations without turning the parent into a
+    /// transcript authority or stealing the host's queue.
+    pub(crate) fn subscribe_observations(
+        &self,
+    ) -> Result<Arc<PendingObservations>, RuntimeObservationSubscriptionError> {
+        self.inner.subscribe_observations()
+    }
+
     /// Test-only: the observation bridge installed through
     /// [`ConversationRuntime::install_observation_bridge`], when one is.
     ///
@@ -3340,7 +3390,7 @@ impl ConversationRuntime {
     /// this handle to own the fold schedule deterministically.
     #[cfg(test)]
     pub(crate) fn installed_observation_bridge(&self) -> Option<Arc<PendingObservations>> {
-        self.inner.pending.get().cloned()
+        self.inner.pending.get().map(|fanout| fanout.primary())
     }
 
     /// Claims the one-time Runtime Client binding of the tool runtime and of
@@ -4433,6 +4483,40 @@ impl ConversationRuntime {
         self.inner.store.load_canonical().ok()
     }
 }
+
+/// The failure of a bounded local observation subscription.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RuntimeObservationSubscriptionError {
+    /// No Runtime Client host (or other primary consumer) installed the
+    /// observation bridge yet.
+    BridgeNotInstalled {
+        /// The conversation whose observation stream was requested.
+        conversation_id: ConversationId,
+    },
+    /// The runtime crossed its activation cut before the subscription was
+    /// admitted, so adding it would create a gap in the live stream.
+    RuntimeAlreadyActivated {
+        /// The conversation whose observation stream was requested.
+        conversation_id: ConversationId,
+    },
+}
+
+impl core::fmt::Display for RuntimeObservationSubscriptionError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::BridgeNotInstalled { conversation_id } => write!(
+                f,
+                "the conversation runtime of {conversation_id} has no observation bridge"
+            ),
+            Self::RuntimeAlreadyActivated { conversation_id } => write!(
+                f,
+                "the conversation runtime of {conversation_id} is already activated; local observation subscriptions bind before activation"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RuntimeObservationSubscriptionError {}
 
 /// The one runtime observation-bridge failure.
 #[derive(Debug, Clone, PartialEq, Eq)]

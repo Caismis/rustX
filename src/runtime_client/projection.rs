@@ -608,14 +608,36 @@ impl RuntimeClientProjection {
                 upsert_background(&mut self.snapshot.background, view.clone());
                 vec![RuntimeClientEvent::BackgroundExecutionUpdated { execution: view }]
             }
-            ConversationObservation::ToolProgress { .. } => {
-                // Live-only, latest-value (Issue #178): a not-yet-durable
-                // foreground tool progress report folds to NO client events.
-                // The client already receives the durable progress facts at
-                // batch settlement through the `Event` lane; the runtime
-                // client protocol has no live-progress surface (no version
-                // bump), so there is nothing to project.
-                Vec::new()
+            ConversationObservation::ToolProgress {
+                attempt_id,
+                tool_call_id,
+                tool_id,
+                progress,
+            } => {
+                // Live-only, latest-value (Issue #178): the report is folded
+                // directly into the running foreground slot owned by this
+                // projection. It is never written to the Event Journal. A
+                // read-only attachment therefore sees the same disposable
+                // state as the child runtime's ordinary Runtime Client
+                // projection, while durable bootstrap still reconstructs
+                // only committed progress facts.
+                if let Some(attempt) = &mut self.snapshot.attempt
+                    && attempt.attempt_id == attempt_id
+                    && let Some(slot) = foreground_slot_mut(&mut attempt.foreground, &tool_call_id)
+                    && let ForegroundToolState::Running { arguments, .. } = &slot.state
+                {
+                    slot.state = ForegroundToolState::Running {
+                        arguments: arguments.clone(),
+                        progress: Some(progress.clone()),
+                    };
+                }
+                vec![RuntimeClientEvent::ToolExecutionProgress {
+                    attempt_id,
+                    tool_call_id,
+                    tool_id,
+                    execution_id: None,
+                    progress,
+                }]
             }
             ConversationObservation::SubagentLifecycle(snapshot)
             | ConversationObservation::SubagentActivity(snapshot) => {

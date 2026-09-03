@@ -1,12 +1,14 @@
-//! The Runtime Client attachment: the at-most-one active client session of
-//! the protocol.
+//! The Runtime Client attachment: one active client session of the protocol.
 //!
-//! An attachment is the semantic session of one client. The protocol admits
-//! exactly one active attachment per runtime instance:
+//! An attachment is the semantic session of one client. A host admits one
+//! control-capable attachment and any number of explicitly read-only
+//! observation attachments:
 //!
 //! - the first attachment succeeds;
-//! - a second simultaneous attachment fails deterministically
+//! - a second simultaneous control attachment fails deterministically
 //!   (`attachment_in_use`) and never evicts the first;
+//! - read-only observation attachments do not compete with the control
+//!   attachment or with one another;
 //! - explicit detach (or drop) releases attachment ownership;
 //! - reconnecting always receives a new attachment identity;
 //! - request ids are scoped to one attachment and never carry across;
@@ -40,6 +42,8 @@ pub struct RuntimeAttachment {
     attachment_id: AttachmentId,
     /// The shared Runtime Client host state.
     inner: Arc<ClientInner>,
+    /// Whether this attachment can only observe the projection.
+    read_only: bool,
     /// Whether this handle already detached explicitly.
     detached: AtomicBool,
     /// The active event subscription (created by the subscribe path),
@@ -49,10 +53,15 @@ pub struct RuntimeAttachment {
 
 impl RuntimeAttachment {
     /// Creates the attachment handle over the shared host state.
-    pub(crate) fn new(attachment_id: AttachmentId, inner: Arc<ClientInner>) -> Self {
+    pub(crate) fn new(
+        attachment_id: AttachmentId,
+        inner: Arc<ClientInner>,
+        read_only: bool,
+    ) -> Self {
         Self {
             attachment_id,
             inner,
+            read_only,
             detached: AtomicBool::new(false),
             subscription: Mutex::new(None),
         }
@@ -73,10 +82,19 @@ impl RuntimeAttachment {
     /// The `initialize` method is the one semantic operation this handle
     /// cannot serve: admission happened when the attachment was created,
     /// and re-initializing is an `invalid_request`.
+    #[allow(clippy::too_many_lines)] // request dispatch remains one semantic boundary
     pub fn handle_request(&self, request: RuntimeClientRequest) -> RuntimeClientResponse {
         let id = request.id();
         if self.detached.load(Ordering::SeqCst) {
             return Self::error_response(id, RuntimeClientError::NotAttached);
+        }
+        if self.read_only && request.is_mutating() {
+            return Self::error_response(
+                id,
+                RuntimeClientError::InvalidState {
+                    message: "conversation inspection is read-only".to_owned(),
+                },
+            );
         }
         if request.requires_async() {
             return Self::error_response(
@@ -185,6 +203,14 @@ impl RuntimeAttachment {
         let id = request.id();
         if self.detached.load(Ordering::SeqCst) {
             return Self::error_response(id, RuntimeClientError::NotAttached);
+        }
+        if self.read_only && request.is_mutating() {
+            return Self::error_response(
+                id,
+                RuntimeClientError::InvalidState {
+                    message: "conversation inspection is read-only".to_owned(),
+                },
+            );
         }
         if !matches!(request, RuntimeClientRequest::Shutdown { .. }) {
             if matches!(request, RuntimeClientRequest::CompactContext { .. }) {

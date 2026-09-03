@@ -32,8 +32,9 @@
 //! has no `--resume` flag of its own.
 //!
 //! `--inspect-conversation` is a read-only generic conversation attachment.
-//! It opens the durable conversation identified by the supplied identity and
-//! does not compose a Session, model catalog, or execution runtime.
+//! It resolves the supplied identity to a running child's live Runtime Client
+//! projection when available, otherwise to its durable authorities. It does
+//! not compose a Session, model catalog, or execution runtime.
 //!
 //! `--name` is orthogonal to all of that: it names the Session the launch
 //! bound, exactly as `/name` would once inside it. A name is display

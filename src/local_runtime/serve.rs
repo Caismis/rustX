@@ -91,7 +91,7 @@ pub async fn serve(arguments: impl IntoIterator<Item = String>) -> ProcessOutcom
     // partially initialized protocol server.
     let runtime = match &paths.startup_session {
         StartupSession::InspectConversation { conversation_id } => {
-            match LocalConversationInspection::compose(&paths, conversation_id) {
+            match LocalConversationInspection::compose(&paths, conversation_id).await {
                 Ok(runtime) => ServingRuntime::Inspection(runtime),
                 Err(error) => return ProcessOutcome::StartupFailed(error.to_string()),
             }
@@ -102,11 +102,11 @@ pub async fn serve(arguments: impl IntoIterator<Item = String>) -> ProcessOutcom
             Err(error) => return ProcessOutcome::StartupFailed(error.to_string()),
         },
     };
-    let endpoint = match &runtime {
-        ServingRuntime::Session(runtime) => runtime.endpoint(),
-        ServingRuntime::Inspection(runtime) => runtime.endpoint(),
+    let served = match runtime {
+        ServingRuntime::Session(runtime) => serve_stdio_jsonl(runtime.endpoint()).await,
+        ServingRuntime::Inspection(runtime) => runtime.serve().await,
     };
-    match serve_stdio_jsonl(endpoint).await {
+    match served {
         Ok(end) => ProcessOutcome::TransportClosed(end),
         Err(error) => ProcessOutcome::TransportFailed(error.to_string()),
     }

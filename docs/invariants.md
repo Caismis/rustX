@@ -662,14 +662,16 @@ later admitted attempt only. A cold reopen may load current resources for
 future attempts, but it can neither reinterpret nor authorize execution from a
 historical interaction.
 
-The one active Runtime Client attachment is the 0.1 interaction provider. If
-none is present when an `Ask` is published, the coordinator returns
-`Unavailable` and approval fails closed as `Denied`; if `ask_user` cannot find
-the same provider, it returns an explicit failed ToolResult. No interaction
-path hangs or fabricates an answer. Detach/EOF/TUI exit never fabricates
-Allow, Deny, or cancellation for an already-published request. A later
-attachment may answer still-live state, which it reconstructs from the
-authoritative snapshot and cursor projection.
+The one control-capable Runtime Client attachment is the 0.1 interaction
+provider; read-only inspection attachments never provide interaction
+authority. If no control provider is present when an `Ask` is published, the
+coordinator returns `Unavailable` and approval fails closed as `Denied`; if
+`ask_user` cannot find the same provider, it returns an explicit failed
+ToolResult. No interaction path hangs or fabricates an answer.
+Detach/EOF/TUI exit never fabricates Allow, Deny, or cancellation for an
+already-published request. A later control attachment may answer still-live
+state, which it reconstructs from the authoritative snapshot and cursor
+projection.
 
 ### Questionnaire and `ask_user`
 
@@ -864,14 +866,19 @@ The TUI renders these as diagnostics from projection state and owns no
 activity truth: the lifecycle `state` remains the only authority on whether
 a child is alive, settling, or settled.
 
-### Durable child conversation inspection (Issue #179)
+### Child conversation inspection (Issue #179)
 
 The child's own conversation is the durable authority for its transcript and
 execution history; the parent only references that conversation by
 `child_conversation_id`.
 
+Known conversation inspection resolves that identity to the best available
+normal Runtime Client read path: the child's live Runtime Client projection
+while its runtime endpoint exists, or the same conversation's durable
+authorities after that endpoint is gone.
+
 - **Identity is singular.** `child_conversation_id` is the only identity used
-  to resolve a child's durable conversation. There are no transcript,
+  to resolve a child's live or durable conversation. There are no transcript,
   inspection, task-history, or TUI-only child-history ids.
 - **Canonical messages stay in the child.** Child messages are committed
   exactly once to the child Message Ledger. A Runtime Client inspector reads
@@ -881,34 +888,41 @@ execution history; the parent only references that conversation by
   one unchanged path.
 - **Execution history stays in the child.** The child Event Journal and
   durable Request Snapshots remain the authorities for execution facts and
-  model-request history. Durable inspection folds those facts into the normal
-  Runtime Client read model without copying them into the parent Event
-  Journal, creating a live cursor event, or exposing a subagent-specific
-  history payload.
+  model-request history. A running inspector attaches to the child's actual
+  Runtime Client projection, including disposable model/tool/interaction
+  state that may precede durable settlement. Offline inspection folds the
+  durable facts into the normal Runtime Client read model without copying
+  them into the parent Event Journal, creating a live cursor event, or
+  exposing a subagent-specific history payload.
 - **Terminal state remains durable.** Child settlement removes only the
   physical execution incarnation. The stable child store under the launch
   runtime root remains available
   for later inspection after success, failure, cancellation, interruption,
   or loss of the live process, to the extent the child state was durably
   committed.
-- **Inspection is read-side only.** `RuntimeClientHost::new_durable` owns no
-  execution runtime, mailbox, provider, registry, or lifecycle control. Its
-  attachment linearizes at durable bootstrap; `snapshot_get` rebuilds the
-  read model from the same authorities for resync. Detach only releases the
-  inspection client. It cannot change child progress, cancellation,
-  settlement, provider/tool counts, journal ordering, terminal publication,
-  or parent delivery.
+- **Inspection is read-side only.** The live child endpoint admits a
+  read-only Runtime Client attachment beside the one control owner; it cannot
+  submit inbound, cancel, answer interactions, mutate models/Session state,
+  execute tools, settle lifecycle, or shut down the child. The
+  `RuntimeClientHost::new_durable` fallback owns no execution runtime,
+  mailbox, provider, registry, or lifecycle control. Live attach linearizes
+  at the successful local endpoint connection; durable attach linearizes at
+  its bootstrap reads. Detach only releases the inspection client. It cannot
+  change child progress, cancellation, settlement, provider/tool counts,
+  journal ordering, terminal publication, or parent delivery.
 - **Navigation is presentation state.** Parent/child frames, selection, and
   the current-conversation label exist only in the TUI app. `Ctrl+Up`/`Ctrl+Down`
   selects a row, `Enter` attaches the exact child identity, and `Esc` returns
   to the existing parent attachment. Navigation writes no Ledger or Event
   Journal fact and makes no model request.
 - **Observation remains independent.** The #178/#181 parent surface is
-  identity + lifecycle + bounded live observation. Live observation is
-  disposable and is not reconstructed into history. The durable child
-  conversation is the full transcript and execution-history authority.
-  User inspection is not parent-model context transfer: opening a child does
-  not enlarge the parent transcript or the next parent provider request.
+  identity + lifecycle + bounded live observation. That observation plane is
+  disposable and is not reconstructed into history. The durable fallback does
+  not replace or reconstruct it; running-child inspection reads the live
+  conversation projection directly. The durable child conversation is the
+  full transcript and execution-history authority. User inspection is not
+  parent-model context transfer: opening a child does not enlarge the parent
+  transcript or the next parent provider request.
 
 ### ApprovalMode control plane
 
@@ -3879,18 +3893,19 @@ The frozen invariants:
   `CapabilityCoordinator`, and provider/model path as an interactive
   runtime. Headless composition is the same coordinator — never a fake
   client host and never a second execution implementation.
-- **Production composition is two-layer: one shared semantic assembly,
-  two final paths.** `LocalConversationCore` (in
+- **Production composition is layered: one shared semantic assembly, three
+  final paths.** `LocalConversationCore` (in
   `src/local_runtime/composition.rs`) is the single assembly of the model
   catalog/session/tool/capability/context pieces and constructs the
   `ConversationRuntime` **inactive**. The interactive path
   (`LocalConversationRuntime::compose`) binds the Runtime Client host over
-  the inert core and then activates; the headless path
-  (`HeadlessConversationRuntime::compose`) activates the same core with no
-  Runtime Client host ever constructed. Both paths return already-active
-  handles, both activate through the one
-  `ConversationRuntime::activate` boundary, and neither duplicates the
-  semantic assembly.
+  the inert core and then activates; the subagent-child path binds the same
+  host, adds a bounded parent-observation subscriber, and activates; the
+  headless path (`HeadlessConversationRuntime::compose`) activates the same
+  core with no Runtime Client host ever constructed. All three production
+  paths return already-active handles, all activate through the one
+  `ConversationRuntime::activate` boundary, and none duplicates the semantic
+  assembly.
 - **The semantic runtime does not depend on Runtime Client vocabulary.**
   The conversation runtime publishes a runtime-owned semantic
   observation contract (`ConversationObservation` in
@@ -4351,8 +4366,10 @@ semantic normalization boundary. The frozen invariants:
 - **The semantic layer owns protocol negotiation and attachment
   admission; transports are framing only.** `initialize` is dispatched by
   `RuntimeClientEndpoint` and is by itself sufficient to establish the
-  active attachment. No transport implements version negotiation,
-  single-active-attachment admission, `AttachmentId` creation, or
+  attachment. A normal endpoint establishes the one control attachment;
+  an inspection endpoint establishes a read-only attachment. No transport
+  implements version negotiation, control/read-only attachment admission,
+  `AttachmentId` creation, or
   attachment replacement/rejection semantics, and none requires an
   out-of-band semantic attach operation.
 - **One `ConversationToolRuntime` identity is bound to at most one
@@ -4436,9 +4453,11 @@ semantic normalization boundary. The frozen invariants:
   no derived message mirror of its own, and deterministic regressions
   verify the projection mirror against the authoritative ledger rather
   than coordinating two histories.
-- **One active attachment.** The Runtime Client protocol admits at most one attachment
-  per runtime instance; a second attach fails deterministically without
-  evicting the first; reconnect receives a fresh attachment identity;
+- **One control attachment plus read-only subscribers.** The Runtime Client
+  protocol admits at most one control attachment per live runtime instance;
+  a second control attach fails deterministically without evicting the first.
+  Explicitly read-only inspection attachments may coexist with the control
+  owner and with one another. Reconnect receives a fresh attachment identity;
   request ids are attachment-scoped; cursor/replay state belongs to the
   runtime observation stream and survives detach.
 - **Current-attempt coordination is one coordinator boundary.** The

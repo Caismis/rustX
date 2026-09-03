@@ -1367,7 +1367,7 @@ export class RustxTuiApp {
     };
   }
 
-  /** Whether the current attachment is a read-only durable inspection. */
+  /** Whether the current attachment is a read-only conversation inspection. */
   #isInspection(): boolean {
     return this.#readOnly || this.#navigationStack.length > 0;
   }

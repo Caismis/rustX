@@ -3454,10 +3454,12 @@ conversation_runtime.rs       ConversationRuntime: the conversation
                               observations
 runtime/observation.rs        the runtime-owned semantic observation
                               contract (Issue #61): ConversationObservation
-                              (semantic source types only) and the leaf
-                              PendingObservations queue. The runtime keeps
-                              no second fold of this vocabulary: the
-                              Runtime Client projection is the one fold
+                              (semantic source types only), the primary
+                              PendingObservations queue, and a bounded
+                              pre-activation fan-out for existing local
+                              observers. The runtime keeps no second durable
+                              or Runtime Client fold: the Runtime Client
+                              projection is the one full client fold
 runtime/request_history.rs    append-only in-memory owner of frozen
                               settled RequestSnapshots and reconstruction
                               lookup (owned by ConversationRuntime);
@@ -3481,7 +3483,8 @@ runtime_client/host.rs         RuntimeClientHost: the projection + control
                                reads, event subscriptions, protocol
                                adaptation; it owns no canonical
                                conversation/session/admission state
-runtime_client/attachment.rs   RuntimeAttachment: at-most-one attachment,
+runtime_client/attachment.rs   RuntimeAttachment: one control attachment
+                               plus read-only inspection attachments,
                                RAII/explicit detach, request dispatch,
                                event subscription delivery
 runtime_client/endpoint.rs     RuntimeClientEndpoint: the transport-neutral
@@ -3502,9 +3505,13 @@ ConversationRuntime semantic facts
 ConversationObservation (runtime-owned vocabulary)
         |
         v
-shared leaf observation queue (PendingObservations)
+runtime observation fan-out
         |
-        v
+        +--> primary PendingObservations
+        |       -> RuntimeClientProjection
+        +--> bounded local observation subscribers
+                (existing bounded activity surfaces only)
+
 RuntimeClientProjection (translation, fold, cursor, replay, subscribers)
         |
         v
@@ -3524,8 +3531,8 @@ Runtime Client is a projection/control/attachment adapter over it.
 
 - **The semantic endpoint owns `initialize`.** `RuntimeClientEndpoint` is
   the boundary a transport wraps. It starts unattached and accepts every
-  Runtime Client request; `initialize` performs version negotiation, single-attachment
-  admission, `AttachmentId` allocation, and the linearized initial
+  Runtime Client request; `initialize` performs version negotiation,
+  control/read-only attachment admission, `AttachmentId` allocation, and the linearized initial
   snapshot, storing the resulting attachment. Non-`initialize` requests
   before that are `not_attached`; a successful `detach` (or dropping the
   endpoint) returns it to the unattached state. `RuntimeClientHost::attach`
@@ -3564,8 +3571,9 @@ Runtime Client is a projection/control/attachment adapter over it.
   `Allow` or `Deny` decision and never replacement tool arguments. A stale,
   duplicate, pre-crash, or post-quiescent response is the typed
   `interaction_not_pending` error and has no semantic effect.
-- **Attachment availability is bounded and non-semantic.** The one active
-  attachment represents the 0.1 interaction provider. If none is present at
+- **Attachment availability is bounded and non-semantic.** The one control
+  attachment represents the 0.1 interaction provider; read-only inspection
+  attachments never do. If no control attachment is present at
   publication, approval fails closed as `Unavailable`; detaching later only
   closes admission for future requests. It does not answer or cancel a live
   interaction, and a reattached client repairs from the runtime snapshot and
@@ -3626,18 +3634,35 @@ Runtime Client **attachments** stay fully dynamic after activation —
 attach, detach mid-attempt, reattach — because attachment lifetime and
 host-binding lifetime are different axes.
 
-#### Durable conversation attachment and inspection (Issue #179)
+#### Conversation attachment and inspection (Issue #179)
 
 Runtime Client attachment is a generic conversation-identity capability, not
-a subagent transcript API. `RuntimeClientHost::new_durable` accepts the
-`ConversationStore` already identified by a known `ConversationId` and builds
-the ordinary Runtime Client projection from that conversation's durable
-Surface, Message Ledger, Request Snapshots, transcript ordering spine, and
-Event Journal. The local runtime resolves `--inspect-conversation <id>` to
-the stable child store path; the wire protocol still uses the normal
-`initialize`, `snapshot_get`, `transcript_page_get`, and subscription shapes.
-There is no transcript identifier, inspection identifier, child-specific
-payload, or protocol compatibility mode.
+a subagent transcript API. One known identity resolves to the best available
+normal Runtime Client read path:
+
+```text
+child_conversation_id
+        |
+        +-- child runtime owns its live endpoint
+        |       -> read-only attachment to the child's actual projection
+        |
+        +-- no live endpoint
+                -> RuntimeClientHost::new_durable over the stable store
+```
+
+`child_conversation_id` resolves to the child's live Runtime Client read
+projection while the runtime exists and falls back to the same conversation's
+durable authorities after the live runtime is gone. The local runtime first
+probes the identity-derived child-owned Unix socket. A successful connection
+is process-routing state only; the child remains the owner of the semantic
+Runtime Client endpoint and projection. If the probe cannot connect, the
+local runtime opens the stable child store and `RuntimeClientHost::new_durable`
+builds the ordinary projection from that conversation's durable Surface,
+Message Ledger, Request Snapshots, transcript ordering spine, and Event
+Journal. The wire protocol remains the normal `initialize`, `snapshot_get`,
+`transcript_page_get`, and subscription shapes. There is no transcript
+identifier, inspection identifier, child-specific payload, or protocol
+compatibility mode.
 
 The child's own conversation is the durable authority for its transcript and
 execution history. A child spawn keeps its stable `conversation.sqlite` under
@@ -3649,15 +3674,39 @@ its runtime process is gone. The parent subagent surface keeps identity,
 lifecycle, terminal metadata, and bounded live observation; it never stores
 the child's canonical messages or execution facts.
 
-The read-only host has no `ConversationRuntime`, mailbox, subagent registry,
+The live child endpoint admits an explicitly read-only Runtime Client
+attachment to the same projection the child owns. It can observe assistant
+output, current model/attempt state, foreground tool execution and progress,
+interactions, compaction, and terminal transitions, including state that has
+not yet reached durable settlement. It cannot submit inbound, cancel, answer
+interactions, execute tools, mutate models or Session state, settle lifecycle,
+or shut down the child. The host's one control attachment remains separate
+from read-only subscribers; a child inspector never takes execution or
+interaction ownership.
+
+The durable host has no `ConversationRuntime`, mailbox, subagent registry,
 provider adapter, or lifecycle handle. Its attachment linearizes at the
 durable bootstrap reads used to construct the projection. Durable Event
 Journal facts are folded into that read model without allocating a live
 Runtime Client cursor or publishing an event. `snapshot_get` and a fresh
 attachment rebuild from the durable authorities, so a skipped projection or
 reconnect repairs from authoritative state rather than client-owned history.
-Detaching is only subscriber/client lifecycle: it cannot cancel, settle,
-retry, execute tools, change Event Journal ordering, or affect the parent.
+The durable fallback does not replace or reconstruct #181's disposable live
+observation state; running-child inspection reads the live conversation
+projection directly. Detaching is only subscriber/client lifecycle: it cannot
+cancel, settle, retry, execute tools, change Event Journal ordering, or affect
+the parent.
+
+Live inspection resolution linearizes at a successful local socket connection.
+At T0, that connection selects the child's live read projection. If the child
+begins terminal settlement at T1, the attachment remains valid through the
+terminal transition. At T2, when the child runtime/process closes the
+endpoint, the inspector transport closes cleanly; the terminal durable
+settlement is the authority used for reopening. At T3, or on any later open,
+the same `child_conversation_id` probes again and resolves the durable store.
+If the socket is unavailable at T0, durable bootstrap is selected
+immediately. Thus a stale socket never becomes a permanent dependency, and a
+removed physical incarnation does not change the conversation identity.
 
 The TUI keeps parent/child frames, the selected row, and the current
 conversation label as presentation state only. `Ctrl+Up`/`Ctrl+Down` selects
@@ -3845,7 +3894,8 @@ transcript or execution-history authority.
 
   RuntimeInner ──► authoritative subsystems (tool runtime, mailbox,
                    capability coordinator)
-  RuntimeInner ──► shared leaf observation queue (PendingObservations)
+  RuntimeInner ──► observation fan-out ──► primary PendingObservations
+                                   └──────► bounded local subscribers
   RuntimeInner ──► current ModelTimeoutPolicy + shared MonotonicClock
 
   attempt/manual admission ──► frozen policy/clock copies
@@ -3855,7 +3905,7 @@ transcript or execution-history authority.
   RuntimeClientHost ──► Arc<ClientInner>
   ClientInner ──► Arc<ConversationRuntime> (control + bootstrap reads)
              ──► projection state
-             ──► Arc<PendingObservations>
+             ──► primary Arc<PendingObservations>
 
   authoritative subsystem ──► Arc<RuntimeObserver>
   RuntimeObserver ─────────► Weak<RuntimeInner>
@@ -3883,9 +3933,9 @@ transcript or execution-history authority.
 
   `RuntimeInner` is therefore destroyed when its last semantic owner is
   released, not at process exit. `RuntimeInner::drop` closes the wake gate
-  (the admission worker's terminal condition) and the observation queue;
-  `ClientInner::drop` closes the same queue (the projection worker's
-  terminal condition); both closes are idempotent. Teardown takes no lock,
+  (the admission worker's terminal condition) and the observation fan-out;
+  `ClientInner::drop` closes only the primary queue (the projection worker's
+  terminal condition); all closes are idempotent. Teardown takes no lock,
   joins nothing, and publishes nothing. A running attempt task is a
   deliberate *bounded* strong owner — an admitted attempt must reach
   settlement, and the task releases the runtime when it does. Attachment
@@ -3893,13 +3943,13 @@ transcript or execution-history authority.
 - **Lock order.** The graph is acyclic by construction:
 
   ```text
-  CoordinatorState ──► ConversationInboundMailbox ──► PendingObservations
-  CoordinatorState ──► PendingObservations
-  ClientState ──────► PendingObservations
-  ConversationBackgroundRegistry ───► PendingObservations
-  SubagentRegistry ────────────────► PendingObservations (observer only)
-  CapabilityCoordinator ───────────► PendingObservations
-  AgentExecution (attempt task, holds no lock) ──► PendingObservations
+  CoordinatorState ──► ConversationInboundMailbox ──► ObservationFanout
+  CoordinatorState ──► ObservationFanout
+  ClientState ──────► primary PendingObservations
+  ConversationBackgroundRegistry ───► ObservationFanout
+  SubagentRegistry ────────────────► ObservationFanout (observer only)
+  CapabilityCoordinator ───────────► ObservationFanout
+  AgentExecution (attempt task, holds no lock) ──► ObservationFanout
 
   bootstrap (one section, coordinator lock held throughout):
     CoordinatorState ──► ConversationBackgroundRegistry
@@ -3909,13 +3959,16 @@ transcript or execution-history authority.
   mailbox wake / WakeGate ─────────► (leaf Notify only)
   ```
 
-  `PendingObservations` is the single leaf (one mutex plus a `Notify`; it
-  calls nothing). Every authoritative subsystem fires its observer *while
-  holding its own lock*, and every such observer does exactly one thing:
-  append an immutable observation to that leaf. No subsystem ever
-  acquires `CoordinatorState` or `ClientState`. Since Issue #61's
-  revision there is no runtime semantic record in the graph at all — the
-  runtime performs no fold, so there is no second intermediate lock.
+  `ObservationFanout` is the runtime-owned leaf: one primary
+  `PendingObservations` queue plus weak, bounded subscriber queues. Every
+  authoritative subsystem fires its observer *while holding its own lock*,
+  and every such observer does exactly one thing: append an immutable
+  observation to the fan-out. The primary queue is the Runtime Client's one
+  fold; local subscribers are disposable observation surfaces, never a second
+  history or Runtime Client fold. No subsystem ever acquires
+  `CoordinatorState` or `ClientState`. Since Issue #61's revision there is no
+  runtime semantic record in the graph at all — the runtime performs no fold,
+  so there is no second intermediate lock.
 
   The subagent terminal-durability sink is a separate rule: the registry
   copies the sink while its mutex is held, releases that mutex, and only then
@@ -4000,14 +4053,16 @@ transcript or execution-history authority.
   subscribe, and subscription polls) then fails with
   `projection_exhausted`. A read never hands back a model that silently
   stopped folding authoritative transitions.
-- **Attachment lifecycle.** The Runtime Client protocol admits at most one active
-  attachment: the first attach succeeds, a second fails with
-  `attachment_in_use` and never evicts the first, detach (explicit or
-  RAII drop) releases ownership, reconnects receive a fresh attachment
-  identity, and request ids are attachment-scoped. Detach changes only
-  attachment state: it never cancels the attempt, never cancels
-  conversation-owned background work, never drains the mailbox, and
-  never mutates canonical history or capability state.
+- **Attachment lifecycle.** A live Runtime Client host admits one control
+  attachment and any number of explicitly read-only observation attachments.
+  A second control attach fails with `attachment_in_use` and never evicts the
+  first; read-only inspection attaches to the same projection without
+  acquiring control authority. Detach (explicit or RAII drop) releases only
+  that attachment, reconnects receive a fresh attachment identity, and
+  request ids are attachment-scoped. Detach changes only attachment state:
+  it never cancels the attempt, never cancels conversation-owned background
+  work, never drains the mailbox, and never mutates canonical history or
+  capability state.
 - **Current-attempt coordination.** The conversation runtime owns the
   current-attempt slot and the exact `AgentCancellation` the attempt task
   runs against; `cancel_current_attempt` requests cancellation through the
@@ -4937,10 +4992,13 @@ The same live seam exists inside any conversation for foreground tool
 progress: while a call still executes, each reported observation fires
 `AgentExecutionObserver::observe_tool_progress` and reaches runtime
 observers as `ConversationObservation::ToolProgress` — disposable,
-latest-value per tool call, never durable, and folded to no events at the
-Runtime Client boundary. The durable `ToolExecutionProgress` facts still
-commit at batch settlement (see the agent loop's ToolResultObserver
-section); the live observation is never execution evidence.
+latest-value per tool call and never durable. The live Runtime Client
+projection folds it into the running foreground slot and publishes the
+existing `ToolExecutionProgress` projection event, so a live attachment sees
+progress before settlement. The projection event and live snapshot state
+disappear with the live runtime; durable `ToolExecutionProgress` facts still
+commit only at batch settlement (see the agent loop's ToolResultObserver
+section), and the live observation is never execution evidence.
 
 `SubagentExecutionProfile` is the safe read-model counterpart of the frozen
 model authority: derived exactly once from the `ResolvedSubagentSpec` the

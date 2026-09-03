@@ -21,7 +21,8 @@
 //!
 //! The host owns:
 //!
-//! - the one-active-attachment policy;
+//! - one control attachment plus any number of explicitly read-only
+//!   observation attachments;
 //! - the Runtime Client projection (snapshot read model, cursor allocation,
 //!   bounded replay, subscribers) and its linearization boundary;
 //! - protocol adaptation: request dispatch, `model_set`/`shutdown`/
@@ -50,16 +51,18 @@
 //! The conversation runtime publishes every semantically meaningful
 //! transition as a runtime-owned
 //! [`ConversationObservation`](crate::runtime::observation::ConversationObservation)
-//! into the shared leaf
+//! into the runtime-owned observation fan-out, whose primary queue is the
 //! [`PendingObservations`](crate::runtime::observation::PendingObservations)
-//! queue, which the runtime installs through its bootstrap handshake at
-//! host construction (see
+//! queue used by this projection. The runtime installs that fan-out through
+//! its bootstrap handshake at host construction (see
 //! `ConversationRuntime::install_observation_bridge`). The handshake runs
 //! over an inert, not-yet-activated runtime and captures the bootstrap
 //! snapshot and every subsystem observation seam at one global cut, so
 //! the projection's initial seed and the live observation stream cover
 //! the runtime's history with no gap and no duplication — and the seed
-//! itself publishes nothing and allocates no cursor.
+//! itself publishes nothing and allocates no cursor. Existing bounded local
+//! observers may receive a separate fan-out queue without becoming a second
+//! projection or history authority.
 //!
 //! Every host lock acquisition drains that queue first, so queued
 //! observations fold in enqueue order, ahead of whatever the acquiring
@@ -75,11 +78,11 @@
 //! # The lock-order graph
 //!
 //! ```text
-//!   ClientState ─────────────► PendingObservations (leaf)
+//!   ClientState ─────────────► PendingObservations (fan-out leaf)
 //!       ▲
 //!       │  (never; see below)
-//!   coordinator ─────────────► PendingObservations
-//!   mailbox / background / capability ─► PendingObservations
+//!   coordinator ─────────────► observation fan-out ─► PendingObservations
+//!   mailbox / background / capability ─► observation fan-out
 //! ```
 //!
 //! No authoritative subsystem ever acquires `ClientState`. The mailbox, the
@@ -87,7 +90,7 @@
 //! task all fire their observers while their own boundary is held, so
 //! [`ClientObserver`] is never used: the conversation runtime's own
 //! observers (see `crate::runtime::conversation_runtime::RuntimeObserver`)
-//! append to the leaf queue instead.
+//! append to the runtime-owned fan-out instead.
 //! There is therefore no `subsystem -> ClientState` edge to pair with any
 //! `ClientState -> mailbox` call on the host surface, and subscriber
 //! notification can never block authoritative runtime state.
@@ -98,7 +101,7 @@
 //! every direction: the host holds an `Arc<ConversationRuntime>` (control +
 //! seed reads), while the runtime holds only a `Weak` reference through its
 //! installed observation seams. Releasing the last host handle closes the
-//! shared observation queue (the projection worker's terminal condition);
+//! primary observation queue (the projection worker's terminal condition);
 //! releasing the last runtime handle closes the queue and the admission
 //! wake gate. A detached or absent Runtime Client never stops the
 //! conversation: admission, execution, settlement, and canonical state all
@@ -111,6 +114,7 @@
 //! attempt, conversation-owned background executions, mailbox contents,
 //! canonical conversation state, and capability state are untouched.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -255,8 +259,13 @@ pub(crate) struct ClientState {
     /// The Runtime Client projection: snapshot read model, cursor,
     /// bounded replay, subscribers.
     projection: RuntimeClientProjection,
-    /// The at-most-one active attachment of the Runtime Client protocol.
-    attachment: Option<AttachmentState>,
+    /// The one control-capable Runtime Client attachment. Read-only
+    /// inspection attachments are kept separately so observation subscribers
+    /// do not compete with execution/control ownership.
+    control_attachment: Option<AttachmentState>,
+    /// Read-only Runtime Client inspection attachments. They share the one
+    /// projection and replay ring, but never acquire control authority.
+    read_only_attachments: BTreeMap<AttachmentId, AttachmentState>,
     /// The next attachment identity sequence.
     next_attachment_seq: u64,
 }
@@ -399,7 +408,10 @@ impl ClientInner {
         // just as a fresh attachment would. The caller's next
         // `subscribe_events` request installs a cursor against this rebuilt
         // projection.
-        if let Some(attachment) = state.attachment.as_mut() {
+        if let Some(attachment) = state.control_attachment.as_mut() {
+            attachment.subscriber_id = None;
+        }
+        for attachment in state.read_only_attachments.values_mut() {
             attachment.subscriber_id = None;
         }
         Ok(())
@@ -462,16 +474,18 @@ impl ClientInner {
     /// Admits one attachment: the internal primitive behind the
     /// `initialize` protocol method.
     ///
-    /// The Runtime Client protocol allows at most one active attachment; a second
-    /// simultaneous attach fails deterministically and never evicts the
-    /// first. The returned snapshot and cursor are linearized with the
-    /// admission under the one projection synchronization boundary.
+    /// The Runtime Client host allows one control attachment. A second
+    /// simultaneous control attach fails deterministically and never evicts
+    /// the first; explicitly read-only inspection attachments use a separate
+    /// subscriber set and may coexist with it. The returned snapshot and
+    /// cursor are linearized with admission under the one projection
+    /// synchronization boundary.
     ///
     /// # Errors
     ///
     /// Returns [`RuntimeClientError::UnsupportedProtocolVersion`] for an
-    /// unsupported version, [`RuntimeClientError::AttachmentInUse`] when an
-    /// attachment is active, and
+    /// unsupported version, [`RuntimeClientError::AttachmentInUse`] when the
+    /// control attachment is active, and
     /// [`RuntimeClientError::ProjectionExhausted`] once the observation
     /// stream is over.
     pub(crate) fn attach(
@@ -479,6 +493,28 @@ impl ClientInner {
         protocol_version: u16,
     ) -> Result<(super::attachment::RuntimeAttachment, RuntimeClientResult), RuntimeClientError>
     {
+        self.attach_with_mode(protocol_version, false)
+    }
+
+    /// Admits one explicitly read-only attachment. Read-only attachments may
+    /// coexist with the one control attachment and with one another; they
+    /// consume only projection subscription state and never change provider
+    /// admission or runtime lifecycle state.
+    pub(crate) fn attach_read_only(
+        self: &Arc<Self>,
+        protocol_version: u16,
+    ) -> Result<(super::attachment::RuntimeAttachment, RuntimeClientResult), RuntimeClientError>
+    {
+        self.attach_with_mode(protocol_version, true)
+    }
+
+    fn attach_with_mode(
+        self: &Arc<Self>,
+        protocol_version: u16,
+        read_only_attachment: bool,
+    ) -> Result<(super::attachment::RuntimeAttachment, RuntimeClientResult), RuntimeClientError>
+    {
+        let read_only_attachment = self.read_only || read_only_attachment;
         self.ensure_session_runtime_live()?;
         if protocol_version != RUNTIME_CLIENT_PROTOCOL_VERSION {
             return Err(RuntimeClientError::UnsupportedProtocolVersion {
@@ -488,7 +524,7 @@ impl ClientInner {
         }
         self.ensure_worker();
         let mut state = self.lock_state();
-        if let Some(existing) = &state.attachment {
+        if !read_only_attachment && let Some(existing) = &state.control_attachment {
             return Err(RuntimeClientError::AttachmentInUse {
                 existing_attachment_id: existing.attachment_id.clone(),
             });
@@ -501,20 +537,30 @@ impl ClientInner {
         let (snapshot, cursor) = state.projection.snapshot()?;
         state.next_attachment_seq = state.next_attachment_seq.saturating_add(1);
         let attachment_id = AttachmentId::new(format!("attachment-{}", state.next_attachment_seq));
-        state.attachment = Some(AttachmentState {
+        let attachment_state = AttachmentState {
             attachment_id: attachment_id.clone(),
             subscriber_id: None,
-        });
+        };
+        if read_only_attachment {
+            state
+                .read_only_attachments
+                .insert(attachment_id.clone(), attachment_state);
+        } else {
+            state.control_attachment = Some(attachment_state);
+        }
         // Keep provider admission under the same host-state lock as the
         // attachment identity. A concurrent detach therefore cannot remove
         // the attachment and then be overwritten by this attach's provider
         // update after the lock is released.
-        if let Some(runtime) = self.runtime.as_ref() {
+        if !read_only_attachment && let Some(runtime) = self.runtime.as_ref() {
             runtime.set_interaction_provider_available(true);
         }
         drop(state);
-        let attachment =
-            super::attachment::RuntimeAttachment::new(attachment_id.clone(), self.clone());
+        let attachment = super::attachment::RuntimeAttachment::new(
+            attachment_id.clone(),
+            self.clone(),
+            self.read_only || read_only_attachment,
+        );
         Ok((
             attachment,
             RuntimeClientResult::Initialized {
@@ -537,24 +583,30 @@ impl ClientInner {
     /// previous operation panicked while holding the lock.
     pub(crate) fn detach(&self, attachment_id: &AttachmentId) {
         let mut state = self.lock_state();
-        if state
-            .attachment
+        let control = state
+            .control_attachment
             .as_ref()
-            .is_some_and(|attachment| attachment.attachment_id == *attachment_id)
-        {
-            let attachment = state
-                .attachment
+            .is_some_and(|attachment| attachment.attachment_id == *attachment_id);
+        let attachment = if control {
+            state
+                .control_attachment
                 .take()
-                .expect("the attachment identity was just checked");
-            if let Some(subscriber_id) = attachment.subscriber_id {
-                state.projection.remove_subscriber(subscriber_id);
-            }
-            // Detach is non-semantic: it only closes the provider admission
-            // gate for future interactions. It does not settle any request
-            // already published by the coordinator.
-            if let Some(runtime) = self.runtime.as_ref() {
-                runtime.set_interaction_provider_available(false);
-            }
+                .expect("the control attachment identity was just checked")
+        } else {
+            let Some(attachment) = state.read_only_attachments.remove(attachment_id) else {
+                return;
+            };
+            attachment
+        };
+        if let Some(subscriber_id) = attachment.subscriber_id {
+            state.projection.remove_subscriber(subscriber_id);
+        }
+        // Detach is non-semantic: it only closes the provider admission
+        // gate for future interactions. It does not settle any request
+        // already published by the coordinator. Read-only detaches never
+        // touch that gate.
+        if control && let Some(runtime) = self.runtime.as_ref() {
+            runtime.set_interaction_provider_available(false);
         }
     }
 
@@ -855,21 +907,45 @@ impl ClientInner {
         self.ensure_session_runtime_live()?;
         self.ensure_worker();
         let mut state = self.lock_state();
-        let previous_subscriber = match &state.attachment {
-            Some(attachment) if attachment.attachment_id == *attachment_id => {
-                attachment.subscriber_id
-            }
-            _ => return Err(RuntimeClientError::NotAttached),
+        let previous_subscriber = if state
+            .control_attachment
+            .as_ref()
+            .is_some_and(|attachment| attachment.attachment_id == *attachment_id)
+        {
+            state
+                .control_attachment
+                .as_ref()
+                .expect("the control attachment identity was just checked")
+                .subscriber_id
+        } else {
+            state
+                .read_only_attachments
+                .get(attachment_id)
+                .map_or(Err(RuntimeClientError::NotAttached), |attachment| {
+                    Ok(attachment.subscriber_id)
+                })?
         };
         if let Some(subscriber_id) = previous_subscriber {
             state.projection.remove_subscriber(subscriber_id);
         }
         let (subscriber_id, notify) = state.projection.subscribe(after_cursor)?;
-        state
-            .attachment
-            .as_mut()
-            .expect("the attachment identity was just checked")
-            .subscriber_id = Some(subscriber_id);
+        if state
+            .control_attachment
+            .as_ref()
+            .is_some_and(|attachment| attachment.attachment_id == *attachment_id)
+        {
+            state
+                .control_attachment
+                .as_mut()
+                .expect("the control attachment identity was just checked")
+                .subscriber_id = Some(subscriber_id);
+        } else {
+            state
+                .read_only_attachments
+                .get_mut(attachment_id)
+                .expect("the read-only attachment identity was just checked")
+                .subscriber_id = Some(subscriber_id);
+        }
         drop(state);
         Ok((
             EventSubscription {
@@ -1498,7 +1574,8 @@ impl RuntimeClientHost {
             session_control: None,
             state: Mutex::new(ClientState {
                 projection,
-                attachment: None,
+                control_attachment: None,
+                read_only_attachments: BTreeMap::new(),
                 next_attachment_seq: 0,
             }),
             pending,
@@ -1602,7 +1679,8 @@ impl RuntimeClientHost {
             session_control,
             state: Mutex::new(ClientState {
                 projection,
-                attachment: None,
+                control_attachment: None,
+                read_only_attachments: BTreeMap::new(),
                 next_attachment_seq: 0,
             }),
             pending,
@@ -1651,7 +1729,11 @@ impl RuntimeClientHost {
     /// itself.
     #[must_use]
     pub fn endpoint(&self) -> super::endpoint::RuntimeClientEndpoint {
-        super::endpoint::RuntimeClientEndpoint::new(self.clone())
+        if self.inner.read_only {
+            super::endpoint::RuntimeClientEndpoint::new_read_only(self.clone())
+        } else {
+            super::endpoint::RuntimeClientEndpoint::new(self.clone())
+        }
     }
 
     /// Admits one attachment: the internal primitive behind the
@@ -1660,8 +1742,8 @@ impl RuntimeClientHost {
     /// # Errors
     ///
     /// Returns [`RuntimeClientError::UnsupportedProtocolVersion`] for an
-    /// unsupported version, [`RuntimeClientError::AttachmentInUse`] when an
-    /// attachment is active, and
+    /// unsupported version, [`RuntimeClientError::AttachmentInUse`] when the
+    /// control attachment is active, and
     /// [`RuntimeClientError::ProjectionExhausted`] once the observation
     /// stream is over.
     pub fn attach(
@@ -1670,6 +1752,19 @@ impl RuntimeClientHost {
     ) -> Result<(super::attachment::RuntimeAttachment, RuntimeClientResult), RuntimeClientError>
     {
         self.inner.attach(protocol_version)
+    }
+
+    /// Admits one explicitly read-only attachment to the live projection.
+    ///
+    /// The attachment can read the same projection as the Runtime Client
+    /// control owner, including disposable live state, but every semantic
+    /// mutation is rejected before it reaches the conversation runtime.
+    pub(crate) fn attach_read_only(
+        &self,
+        protocol_version: u16,
+    ) -> Result<(super::attachment::RuntimeAttachment, RuntimeClientResult), RuntimeClientError>
+    {
+        self.inner.attach_read_only(protocol_version)
     }
 
     /// Releases one attachment. Idempotent. Detach is never cancellation
@@ -3187,6 +3282,55 @@ mod tests {
         });
         assert_eq!(response.id.get(), 1, "request ids are attachment-scoped");
         assert!(response.error.is_none());
+    }
+
+    /// Read-only inspection attachments share the live projection without
+    /// competing with the one control owner or changing provider admission.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn read_only_attachments_coexist_with_the_control_attachment() {
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+        let (control, _) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .expect("control attachment");
+        let (inspection_one, _) = fixture
+            .host
+            .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .expect("first read-only attachment");
+        let (inspection_two, _) = fixture
+            .host
+            .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .expect("second read-only attachment");
+        assert_ne!(
+            inspection_one.attachment_id(),
+            inspection_two.attachment_id()
+        );
+
+        let rejection = inspection_one.handle_request(RuntimeClientRequest::CancelCurrentAttempt {
+            id: crate::runtime_client::RequestId::new(1),
+        });
+        assert!(matches!(
+            rejection.error,
+            Some(RuntimeClientError::InvalidState { message })
+                if message == "conversation inspection is read-only"
+        ));
+        assert!(
+            inspection_two
+                .handle_request(RuntimeClientRequest::SnapshotGet {
+                    id: crate::runtime_client::RequestId::new(2),
+                })
+                .error
+                .is_none()
+        );
+        assert!(
+            control
+                .handle_request(RuntimeClientRequest::SnapshotGet {
+                    id: crate::runtime_client::RequestId::new(3),
+                })
+                .error
+                .is_none(),
+            "read-only attachments do not displace control ownership"
+        );
     }
 
     /// Dropping the attachment releases it (RAII detach semantics).

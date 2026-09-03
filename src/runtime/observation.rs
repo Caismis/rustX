@@ -71,15 +71,17 @@
 //! conversation runtime or the Runtime Client adapter is destroyed; closing
 //! is the worker's terminal condition.
 //!
-//! # There is exactly one fold
+//! # There is one Runtime Client fold
 //!
-//! The runtime does **not** fold this vocabulary into a second read model.
-//! A Runtime Client host binds before the conversation runtime is
-//! activated (Issue #61), and an inactive runtime publishes no observation
-//! at all, so the observation queue — when a consumer exists — carries
-//! every observation the runtime ever emits. The client projection is
-//! therefore the one and only fold of this stream, and no runtime-side
-//! mirror of the client attempt view exists.
+//! The runtime does **not** fold this vocabulary into a second durable or
+//! Runtime Client read model. A Runtime Client host binds before the
+//! conversation runtime is activated (Issue #61), and an inactive runtime
+//! publishes no observation at all, so the host's primary observation queue
+//! carries every observation the runtime ever emits. A bounded local observer
+//! may subscribe to the same runtime-owned stream for an existing observation
+//! surface (for example the parent's disposable subagent activity projection),
+//! but it never becomes a history authority and never replaces the Runtime
+//! Client projection.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -371,6 +373,98 @@ pub(crate) struct PendingObservations {
     /// either completed before the park or observes it.
     #[cfg(test)]
     parked: AtomicBool,
+}
+
+/// The runtime-owned fan-out for one observation stream.
+///
+/// The Runtime Client projection is always the primary consumer. A runtime
+/// may additionally register a bounded, disposable observation consumer before
+/// activation when an existing local observation surface needs the same
+/// semantic stream. Each consumer receives its own [`PendingObservations`]
+/// queue, so one consumer can never drain, park, or close another consumer's
+/// projection input. This is an in-process observation seam, not a transcript
+/// channel and not a second durable authority.
+pub(crate) struct ObservationFanout {
+    /// The primary queue owned by the Runtime Client projection.
+    primary: Arc<PendingObservations>,
+    /// Serializes publication and close so every consumer sees the same
+    /// observation order and no subscriber is closed halfway through a
+    /// publication.
+    dispatch: Mutex<()>,
+    /// Weak subscriber queues. The caller owns the returned queue; a dropped
+    /// subscriber is removed on the next publication.
+    subscribers: Mutex<Vec<std::sync::Weak<PendingObservations>>>,
+}
+
+impl ObservationFanout {
+    /// Creates a fan-out with the Runtime Client queue as its primary sink.
+    pub(crate) fn new(primary: Arc<PendingObservations>) -> Self {
+        Self {
+            primary,
+            dispatch: Mutex::new(()),
+            subscribers: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Returns the primary Runtime Client queue.
+    #[must_use]
+    #[cfg(test)]
+    pub(crate) fn primary(&self) -> Arc<PendingObservations> {
+        Arc::clone(&self.primary)
+    }
+
+    /// Adds one pre-activation observation consumer.
+    ///
+    /// The caller must ensure the runtime is still inactive. That lifecycle
+    /// check belongs to `ConversationRuntime`, which owns the activation
+    /// linearization; this leaf only owns queue fan-out.
+    pub(crate) fn subscribe(&self) -> Arc<PendingObservations> {
+        let queue = Arc::new(PendingObservations::new());
+        self.subscribers
+            .lock()
+            .expect("observation fan-out lock poisoned")
+            .push(Arc::downgrade(&queue));
+        queue
+    }
+
+    /// Publishes one observation to every currently live consumer.
+    pub(crate) fn push(&self, observation: &ConversationObservation) {
+        let _dispatch = self
+            .dispatch
+            .lock()
+            .expect("observation fan-out dispatch lock poisoned");
+        self.primary.push(observation.clone());
+        let mut subscribers = self
+            .subscribers
+            .lock()
+            .expect("observation fan-out lock poisoned");
+        subscribers.retain(|subscriber| {
+            let Some(queue) = subscriber.upgrade() else {
+                return false;
+            };
+            queue.push(observation.clone());
+            !queue.is_closed()
+        });
+    }
+
+    /// Closes the primary queue and every currently live subscriber.
+    pub(crate) fn close(&self) {
+        let _dispatch = self
+            .dispatch
+            .lock()
+            .expect("observation fan-out dispatch lock poisoned");
+        self.primary.close();
+        let subscribers = self
+            .subscribers
+            .lock()
+            .expect("observation fan-out lock poisoned")
+            .iter()
+            .filter_map(std::sync::Weak::upgrade)
+            .collect::<Vec<_>>();
+        for subscriber in subscribers {
+            subscriber.close();
+        }
+    }
 }
 
 /// The delivery lanes behind the one queue lock.

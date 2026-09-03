@@ -168,9 +168,16 @@ The child's own conversation is the durable authority for its full transcript
 and execution history. The inspector reads the normal child Message Ledger,
 transcript ordering, Request Snapshots, and Event Journal projection; it does
 not receive or accumulate a subagent transcript payload. Live observation is
-disposable, and navigation state is presentation-only. Inspecting a child is
-not parent-model context transfer: it does not modify the parent transcript or
-the next parent model request.
+disposable, and navigation state is presentation-only. For a running child,
+the same `child_conversation_id` first attaches read-only to the child's live
+Runtime Client projection, so current model/attempt state and foreground tool
+progress are visible before durable settlement. Once the live child endpoint
+is gone, reopening the identity uses the durable conversation authorities;
+the durable fallback does not reconstruct the disposable #181 observation
+plane. If a child exits while an inspection is attached, that local view
+closes cleanly and reopening the same identity shows the durable terminal
+state. Inspecting a child is not parent-model context transfer: it does not
+modify the parent transcript or the next parent model request.
 
 ## Owners
 

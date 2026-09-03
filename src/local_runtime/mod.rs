@@ -31,6 +31,7 @@ pub mod cli;
 pub mod composition;
 pub mod config;
 pub(crate) mod dispatcher;
+pub(crate) mod live_inspection;
 #[cfg(all(test, unix))]
 mod preparation_e2e;
 pub mod serve;

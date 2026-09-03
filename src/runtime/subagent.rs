@@ -102,6 +102,22 @@ pub(crate) fn child_conversation_store_path(
         .join("conversation.sqlite")
 }
 
+/// Returns the local live Runtime Client inspection endpoint of one child
+/// conversation. The endpoint lives beside, but is not part of, the durable
+/// conversation store: it is disposable process routing state and disappears
+/// with the child runtime. A stale socket is harmless because an inspector
+/// probes it and falls back to the stable store.
+#[must_use]
+pub(crate) fn child_conversation_inspection_socket_path(
+    parent_runtime_root: &Path,
+    conversation_id: &ConversationId,
+) -> PathBuf {
+    parent_runtime_root
+        .join("subagents")
+        .join(conversation_id.as_str())
+        .join("runtime-client.sock")
+}
+
 /// Child conversation identities are used as one filesystem component by the
 /// local launcher. Reject separators and traversal components before turning a
 /// client-supplied identity into a path.

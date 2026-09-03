@@ -22,8 +22,9 @@
  * - `--resume` opens the `/resume` selector over the continued Session as
  *   soon as the client attaches, so a Session can be chosen instead of named.
  * - `--inspect-conversation <id>` opens the ordinary Runtime Client projection
- *   for that durable conversation without composing a Session or execution
- *   owner.
+ *   for that conversation, attaching to a running child's live projection or
+ *   falling back to durable authorities without composing a Session or
+ *   execution owner.
  *
  * `--name` is not one of those requests. It names the Session the launch
  * bound, whichever one that is, and it is forwarded to Rust like every other

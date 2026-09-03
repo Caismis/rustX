@@ -21,25 +21,31 @@
 //!         +-- into_interactive(): bind RuntimeClientHost, then activate
 //!         |       -> LocalConversationRuntime (Runtime Client + endpoint)
 //!         |
+//!         +-- into_subagent_child(): bind RuntimeClientHost, subscribe a
+//!         |       bounded parent-observation queue, then activate
+//!         |       -> child ConversationRuntime + live inspection endpoint
+//!         |
 //!         +-- into_headless(): activate with no Runtime Client host
-//!                 -> HeadlessConversationRuntime (Issue #60 subagents)
+//!                 -> HeadlessConversationRuntime
 //! ```
 //!
 //! The semantic composition — the model catalog/session/tool/capability/
 //! context assembly — exists exactly once in
-//! [`LocalConversationCore::compose`]. The interactive and headless
-//! production runtimes are the two final paths over that same core:
+//! [`LocalConversationCore::compose`]. The interactive, subagent-child, and
+//! headless production runtimes are the final paths over that same core:
 //!
 //! ```text
 //! compose semantic inactive core
 //!     |
 //!     +-- interactive: bind RuntimeClientHost, activate, return
+//!     +-- subagent child: bind RuntimeClientHost, add a bounded parent
+//!     |                   observation subscriber, activate, return
 //!     +-- headless:    activate, return
 //! ```
 //!
-//! Activation is the one explicit lifecycle boundary in both paths
-//! (`ConversationRuntime::activate`), and in both paths the returned
-//! handles are already active.
+//! Activation is the one explicit lifecycle boundary in all three paths
+//! (`ConversationRuntime::activate`), and each production path returns an
+//! already-active handle.
 //!
 //! The governing invariant:
 //!
@@ -126,8 +132,8 @@ use crate::runtime::resources::{
 };
 use crate::runtime::subagent::{
     ResolvedSubagentTool, SubagentCatalog, SubagentDefinition, SubagentProjectInstructionPolicy,
-    SubagentResolver, SubagentWorkspaceManager, child_conversation_store_path,
-    is_safe_child_conversation_component,
+    SubagentResolver, SubagentWorkspaceManager, child_conversation_inspection_socket_path,
+    child_conversation_store_path, is_safe_child_conversation_component,
 };
 use crate::runtime::workflow::{
     MAX_WORKFLOW_BYTES, WorkflowCatalog, WorkflowDefinition, WorkflowOutputLatch, WorkflowProgram,
@@ -1104,11 +1110,11 @@ fn validate_workflow_tool_name_collisions(
 /// capability/context pieces. It owns exactly the semantic owners of the
 /// process — one `ConversationToolRuntime`, one `CapabilityCoordinator`,
 /// and one `ConversationRuntime` — and nothing protocol-shaped. The
-/// conversation runtime is constructed **inactive**; the two final paths
-/// over this core are [`LocalConversationRuntime::compose`] (interactive,
-/// binds a Runtime Client host before activating) and
-/// [`HeadlessConversationRuntime::compose`] (headless, activates without
-/// any Runtime Client host).
+/// conversation runtime is constructed **inactive**; the final paths over
+/// this core are the interactive runtime (which binds a Runtime Client
+/// host), the subagent-child runtime (which binds that host and adds a
+/// bounded parent-observation subscriber), and the headless runtime (which
+/// activates without any Runtime Client host).
 pub struct LocalConversationCore {
     runtime: ConversationRuntime,
     tool_runtime: ConversationToolRuntime,
@@ -1128,10 +1134,11 @@ impl LocalConversationCore {
     /// Composes the shared semantic runtime from explicit startup paths.
     ///
     /// The runtime is left **inactive**: the caller must finish through
-    /// [`LocalConversationCore::into_interactive`] or
+    /// [`LocalConversationCore::into_interactive`],
+    /// [`LocalConversationCore::into_subagent_child`], or
     /// [`LocalConversationCore::into_headless`] (or, for low-level
     /// composition callers, activate the runtime explicitly). Prefer the
-    /// two final composition paths of
+    /// final composition paths of
     /// [`LocalConversationRuntime`]/[`HeadlessConversationRuntime`], which
     /// return already-active handles.
     ///
@@ -1490,7 +1497,7 @@ impl LocalConversationCore {
     ///   physical root remains disposable execution/artifact state.
     ///
     /// The caller (the child driver) still owns activation: the returned
-    /// core is inert until `into_headless`.
+    /// core is inert until `into_subagent_child` or `into_headless`.
     ///
     /// # Errors
     ///
@@ -1830,6 +1837,34 @@ impl LocalConversationCore {
         Ok(LocalConversationRuntime { core: self, host })
     }
 
+    /// Finishes composition for a live subagent child.
+    ///
+    /// The child needs both halves of the existing runtime boundary: the
+    /// Runtime Client host owns the actual live projection, while the parent
+    /// subagent activity projector consumes a separate bounded fan-out queue.
+    /// Both are installed before the one activation cut, so neither consumer
+    /// can miss the first live observation. The returned queue is not a
+    /// transcript and is never durable.
+    pub(crate) fn into_subagent_child(
+        self,
+    ) -> Result<
+        (
+            LocalConversationRuntime,
+            Arc<crate::runtime::observation::PendingObservations>,
+        ),
+        LocalRuntimeError,
+    > {
+        let runtime = self.into_bound_with_control(None)?;
+        let observations = runtime
+            .runtime()
+            .subscribe_observations()
+            .map_err(|error| LocalRuntimeError::Observation {
+                detail: error.to_string(),
+            })?;
+        runtime.activate();
+        Ok((runtime, observations))
+    }
+
     /// Finishes the composition as a **headless** runtime: the runtime
     /// activates with no Runtime Client host at all (Issue #60 subagents,
     /// every zero-client deployment). The semantic composition is exactly
@@ -2111,25 +2146,45 @@ impl LocalConversationRuntime {
     }
 }
 
-/// A read-only Runtime Client attachment to one known durable conversation.
+/// The current read authority of one known conversation inspection.
+enum ConversationInspectionAuthority {
+    /// The child process's actual live Runtime Client read projection.
+    Live(tokio::net::UnixStream),
+    /// The stable child conversation authorities after the live process is
+    /// unavailable.
+    Durable(RuntimeClientHost),
+}
+
+/// A read-only Runtime Client attachment to one known conversation.
 ///
-/// This path deliberately bypasses Session composition and the live
-/// `ConversationRuntime`: an inspector needs the child conversation's own
-/// Message Ledger/Event Journal, not a second lifecycle or execution owner.
+/// Resolution first probes the identity-derived live endpoint. Only when the
+/// child process no longer owns that endpoint does this type bootstrap the
+/// ordinary Runtime Client projection from the child's durable authorities.
+/// The caller and TUI use one conversation identity in both modes.
 pub struct LocalConversationInspection {
-    host: RuntimeClientHost,
+    conversation_id: ConversationId,
+    authority: ConversationInspectionAuthority,
 }
 
 impl std::fmt::Debug for LocalConversationInspection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LocalConversationInspection")
-            .field("conversation_id", self.host.conversation_id())
+            .field("conversation_id", &self.conversation_id)
+            .field(
+                "authority",
+                &match &self.authority {
+                    ConversationInspectionAuthority::Live(_) => "live",
+                    ConversationInspectionAuthority::Durable(_) => "durable",
+                },
+            )
             .finish()
     }
 }
 
 impl LocalConversationInspection {
-    /// Opens the durable child conversation identified by `conversation_id`.
+    /// Resolves `conversation_id` to the child's live Runtime Client read
+    /// projection when its process is still running, otherwise to the stable
+    /// durable child conversation.
     ///
     /// The identity is resolved to the local runtime's stable child-store
     /// layout only at this Rust-owned composition boundary. The TUI and wire
@@ -2138,9 +2193,10 @@ impl LocalConversationInspection {
     /// # Errors
     ///
     /// Returns [`LocalRuntimeError::ConversationNotFound`] when the identity
-    /// has no durable child store, or [`LocalRuntimeError::DurableConversation`]
-    /// when that store cannot be opened.
-    pub fn compose(
+    /// has no durable child store and no live endpoint, or
+    /// [`LocalRuntimeError::DurableConversation`] when that store cannot be
+    /// opened.
+    pub async fn compose(
         paths: &LocalRuntimePaths,
         conversation_id: &ConversationId,
     ) -> Result<Self, LocalRuntimeError> {
@@ -2148,6 +2204,15 @@ impl LocalConversationInspection {
             return Err(LocalRuntimeError::ConversationNotFound {
                 conversation_id: conversation_id.clone(),
                 path: child_conversation_store_path(&paths.runtime_root, conversation_id),
+            });
+        }
+        let socket_path =
+            child_conversation_inspection_socket_path(&paths.runtime_root, conversation_id);
+        if let Ok(stream) = crate::local_runtime::live_inspection::connect_live(&socket_path).await
+        {
+            return Ok(Self {
+                conversation_id: conversation_id.clone(),
+                authority: ConversationInspectionAuthority::Live(stream),
             });
         }
         let database_path = child_conversation_store_path(&paths.runtime_root, conversation_id);
@@ -2166,14 +2231,79 @@ impl LocalConversationInspection {
             )?,
         );
         Ok(Self {
-            host: RuntimeClientHost::new_durable(store, None)?,
+            conversation_id: conversation_id.clone(),
+            authority: ConversationInspectionAuthority::Durable(RuntimeClientHost::new_durable(
+                store, None,
+            )?),
         })
     }
 
-    /// The transport-neutral Runtime Client endpoint for this inspection.
-    #[must_use]
-    pub fn endpoint(&self) -> RuntimeClientEndpoint {
-        RuntimeClientEndpoint::new(self.host.clone())
+    /// The in-process Runtime Client endpoint for a durable inspection.
+    ///
+    /// A live inspection is already connected to the child-owned endpoint and
+    /// must be served through the local byte proxy; it has no local semantic
+    /// endpoint in this process.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LocalRuntimeError::Observation`] when this inspection was
+    /// resolved to a live child process.
+    pub fn endpoint(&self) -> Result<RuntimeClientEndpoint, LocalRuntimeError> {
+        match &self.authority {
+            ConversationInspectionAuthority::Live(_) => Err(LocalRuntimeError::Observation {
+                detail: "a live inspection is served by its child-owned endpoint".to_owned(),
+            }),
+            ConversationInspectionAuthority::Durable(host) => Ok(host.endpoint()),
+        }
+    }
+
+    /// Serves this resolved inspection over the current process's stdio.
+    pub(crate) async fn serve(
+        self,
+    ) -> Result<
+        crate::runtime_client::transport::stdio::StdioSessionEnd,
+        crate::runtime_client::transport::stdio::StdioTransportError,
+    > {
+        match self.authority {
+            ConversationInspectionAuthority::Live(stream) => {
+                crate::local_runtime::live_inspection::serve_live_stdio(stream).await
+            }
+            ConversationInspectionAuthority::Durable(host) => {
+                crate::runtime_client::transport::stdio::serve_stdio_jsonl(host.endpoint()).await
+            }
+        }
+    }
+
+    /// Serves this resolved inspection over arbitrary async byte streams.
+    /// The live and durable authorities use the same Runtime Client JSONL
+    /// session semantics; only the byte-stream ownership differs.
+    #[cfg(test)]
+    pub(crate) async fn serve_with_io<R, W>(
+        self,
+        reader: R,
+        writer: W,
+    ) -> Result<
+        crate::runtime_client::transport::stdio::StdioSessionEnd,
+        crate::runtime_client::transport::stdio::StdioTransportError,
+    >
+    where
+        R: tokio::io::AsyncRead + Unpin,
+        W: tokio::io::AsyncWrite + Unpin,
+    {
+        match self.authority {
+            ConversationInspectionAuthority::Live(stream) => {
+                crate::local_runtime::live_inspection::serve_live_with_io(stream, reader, writer)
+                    .await
+            }
+            ConversationInspectionAuthority::Durable(host) => {
+                crate::runtime_client::transport::stdio::serve_stdio_jsonl_with_io(
+                    host.endpoint(),
+                    reader,
+                    writer,
+                )
+                .await
+            }
+        }
     }
 }
 
@@ -2324,6 +2454,12 @@ pub enum LocalRuntimeError {
     Runtime(ConversationRuntimeError),
     /// The Runtime Client host could not be constructed.
     Host(HostConstructionError),
+    /// A local observation consumer could not be attached to the live
+    /// Runtime Client observation stream before activation.
+    Observation {
+        /// The bounded composition diagnostic.
+        detail: String,
+    },
     /// The native SessionCatalog/Graph could not be loaded or published.
     SessionCatalog(SessionError),
     /// The native Session supervisor could not install or drain a lineage.
@@ -2355,6 +2491,9 @@ impl std::fmt::Display for LocalRuntimeError {
             Self::Capability { detail } => write!(f, "capability plane: {detail}"),
             Self::Runtime(error) => write!(f, "conversation runtime: {error}"),
             Self::Host(error) => write!(f, "runtime client host: {error}"),
+            Self::Observation { detail } => {
+                write!(f, "runtime observation subscription: {detail}")
+            }
             Self::SessionCatalog(error) => write!(f, "session catalog: {error}"),
             Self::SessionSupervisor(error) => write!(f, "session supervisor: {error}"),
         }
@@ -3344,8 +3483,8 @@ mod conversation_inspection_tests {
     use crate::runtime::identity::{ConversationId, MessageId};
     use crate::runtime_client::types::{RuntimeClientRequest, RuntimeClientResult};
 
-    #[test]
-    fn resolves_the_known_child_identity_to_the_ordinary_attachment() {
+    #[tokio::test]
+    async fn resolves_the_known_child_identity_to_the_ordinary_attachment() {
         let root = tempfile::tempdir().expect("runtime root");
         let workspace = root.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
@@ -3386,9 +3525,11 @@ mod conversation_inspection_tests {
             runtime_root: root.path().join("runtime"),
         };
         let inspection = LocalConversationInspection::compose(&paths, &conversation_id)
+            .await
             .expect("identity resolves to the durable child store");
         let response = inspection
             .endpoint()
+            .expect("durable inspection exposes a local endpoint")
             .handle_request(RuntimeClientRequest::Initialize {
                 id: crate::runtime_client::RequestId::new(1),
                 protocol_version: crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,

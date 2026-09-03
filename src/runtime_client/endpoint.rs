@@ -28,8 +28,9 @@
 //!
 //! - protocol version negotiation — `initialize` performs it here and
 //!   returns [`RuntimeClientError::UnsupportedProtocolVersion`];
-//! - single-active-attachment admission — the host admits at most one, and
-//!   a second `initialize` returns
+//! - attachment admission — a normal endpoint admits the one control
+//!   attachment, while an inspection endpoint admits a read-only attachment;
+//!   a second control `initialize` returns
 //!   [`RuntimeClientError::AttachmentInUse`] without evicting the first;
 //! - [`AttachmentId`](super::types::AttachmentId) creation — the runtime
 //!   allocates the identity and returns it in the `initialized` result;
@@ -72,6 +73,10 @@ use super::types::{RequestId, RuntimeClientError, RuntimeClientRequest, RuntimeC
 pub struct RuntimeClientEndpoint {
     /// The runtime this endpoint speaks for.
     host: RuntimeClientHost,
+    /// Whether this endpoint is a read-only observation attachment. The
+    /// host still owns the projection; this flag only selects attachment
+    /// admission and fences control requests at the attachment boundary.
+    read_only: bool,
     /// The admitted attachment, once `initialize` succeeded.
     attachment: Mutex<Option<Arc<RuntimeAttachment>>>,
 }
@@ -88,8 +93,21 @@ impl RuntimeClientEndpoint {
     /// Creates an unattached endpoint over one runtime.
     #[must_use]
     pub fn new(host: RuntimeClientHost) -> Self {
+        Self::new_with_mode(host, false)
+    }
+
+    /// Creates an endpoint whose attachment can only observe the host's
+    /// projection. It may coexist with the host's control attachment and with
+    /// other read-only endpoints.
+    #[must_use]
+    pub(crate) fn new_read_only(host: RuntimeClientHost) -> Self {
+        Self::new_with_mode(host, true)
+    }
+
+    fn new_with_mode(host: RuntimeClientHost, read_only: bool) -> Self {
         Self {
             host,
+            read_only,
             attachment: Mutex::new(None),
         }
     }
@@ -126,7 +144,12 @@ impl RuntimeClientEndpoint {
                 // Version negotiation, admission, identity allocation, and
                 // the linearized initial snapshot are all the host's, not
                 // the transport's.
-                match self.host.attach(protocol_version) {
+                let attached = if self.read_only {
+                    self.host.attach_read_only(protocol_version)
+                } else {
+                    self.host.attach(protocol_version)
+                };
+                match attached {
                     Ok((attachment, result)) => {
                         *slot = Some(Arc::new(attachment));
                         ok(id, result)
