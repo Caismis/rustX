@@ -279,9 +279,6 @@ pub enum InteractionOutcome {
         /// The first-winner cancellation cause from the owning attempt.
         reason: CancellationReason,
     },
-    /// No interaction-capable Runtime Client was attached at publication.
-    /// Approval maps this outcome to a fail-closed denial.
-    Unavailable,
 }
 
 /// An interaction-operation failure that is not itself a human decision.
@@ -295,6 +292,11 @@ pub(crate) enum InteractionFailure {
     /// Publication was refused before an `InteractionRequested` fact could
     /// commit because no capable human provider was admitted.
     Unavailable,
+    /// The request was rejected before the publication frontier for an
+    /// internal reason: the subject facts failed bounded validation or the
+    /// per-attempt interaction ordinal space was exhausted. This is never
+    /// human provider absence.
+    Invalid,
     /// The coordinator could not commit the requested fact or its lifecycle
     /// admission after the root publication frontier was crossed.
     PublicationFailed,
@@ -347,6 +349,7 @@ impl core::fmt::Display for InteractionFailure {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Unavailable => f.write_str("no capable human interaction provider was admitted"),
+            Self::Invalid => f.write_str("the interaction request was rejected before publication"),
             Self::PublicationFailed => {
                 f.write_str("the interaction request could not be durably published")
             }
@@ -501,33 +504,30 @@ pub(crate) fn interaction_settled_event_id(interaction_id: &InteractionId) -> Ev
 
 /// Projects one terminal outcome onto its bounded durable settlement.
 ///
-/// [`InteractionOutcome::Unavailable`] has no settlement: it is refused before
-/// the requested fact commits, so there is never an audit record for a prompt
-/// no user saw.
-fn audit_settlement(outcome: &InteractionOutcome) -> Option<InteractionSettlement> {
+/// Every outcome that reaches settlement has a committed requested fact
+/// behind it, so every settlement is recorded: there is never an audit gap
+/// for a prompt a user could have seen.
+fn audit_settlement(outcome: &InteractionOutcome) -> InteractionSettlement {
     match outcome {
         InteractionOutcome::Responded { response } => match response {
-            InteractionResponse::Approval { decision } => Some(match decision {
+            InteractionResponse::Approval { decision } => match decision {
                 ApprovalDecision::Allow => InteractionSettlement::Approved,
                 ApprovalDecision::Deny { reason } => InteractionSettlement::Denied {
                     reason: reason.clone(),
                 },
-            }),
+            },
             InteractionResponse::Questionnaire { response } => match response {
                 QuestionnaireResponse::Submitted(submission) => {
-                    Some(InteractionSettlement::QuestionnaireSubmitted {
+                    InteractionSettlement::QuestionnaireSubmitted {
                         submission: submission.clone(),
-                    })
+                    }
                 }
-                QuestionnaireResponse::Declined => {
-                    Some(InteractionSettlement::QuestionnaireDeclined)
-                }
+                QuestionnaireResponse::Declined => InteractionSettlement::QuestionnaireDeclined,
             },
         },
         InteractionOutcome::Cancelled { reason } => {
-            Some(InteractionSettlement::Cancelled { reason: *reason })
+            InteractionSettlement::Cancelled { reason: *reason }
         }
-        InteractionOutcome::Unavailable => None,
     }
 }
 
@@ -1103,7 +1103,7 @@ impl QuestionnaireRequester {
     ) -> Result<InteractionOutcome, InteractionFailure> {
         facts.turn = self.turn;
         if facts.validate().is_err() {
-            return Err(InteractionFailure::Unavailable);
+            return Err(InteractionFailure::Invalid);
         }
         let result = self
             .coordinator
@@ -1304,9 +1304,11 @@ impl InteractionCoordinator {
     ) -> Result<InteractionTicket, InteractionFailure> {
         // Reject malformed facts before asking the root authority for a
         // permit. A permit is the publication frontier, so no post-permit
-        // validation path may report provider-level `Unavailable`.
+        // validation path may report provider-level `Unavailable`; a
+        // pre-permit validation rejection is an internal failure, never
+        // provider absence.
         if validate_interaction_subject(&subject).is_err() {
-            return Err(InteractionFailure::Unavailable);
+            return Err(InteractionFailure::Invalid);
         }
         let route = self
             .route
@@ -1364,7 +1366,7 @@ impl InteractionCoordinator {
         cancellation: &ExecutionCancellation,
     ) -> Result<InteractionTicket, InteractionFailure> {
         if validate_interaction_subject(&subject).is_err() {
-            return Err(InteractionFailure::Unavailable);
+            return Err(InteractionFailure::Invalid);
         }
         let route = self
             .route
@@ -1420,13 +1422,7 @@ impl InteractionCoordinator {
                         subject.clone(),
                         Utc::now(),
                     ))
-                    .map_err(|_| {
-                        if publication_admitted {
-                            InteractionFailure::PublicationFailed
-                        } else {
-                            InteractionFailure::Unavailable
-                        }
-                    })?;
+                    .map_err(|_| InteractionFailure::PublicationFailed)?;
                 let previous = state.pending.insert(
                     id.clone(),
                     PendingInteraction {
@@ -1453,7 +1449,11 @@ impl InteractionCoordinator {
                 })
             })
             .map_err(|_| {
-                if publication_admitted {
+                // The lifecycle refused the commit boundary. That is provider
+                // absence only when no capable provider is attached; an
+                // admitted provider makes this an internal publication
+                // failure (for example publication attempted after drain).
+                if publication_admitted || self.provider_available() {
                     InteractionFailure::PublicationFailed
                 } else {
                     InteractionFailure::Unavailable
@@ -1571,8 +1571,9 @@ impl InteractionCoordinator {
 
     /// Test-only convenience wrapper for the historical local coordinator
     /// contract. Production request paths use [`Self::wait_result`] so a
-    /// post-frontier control failure cannot be collapsed into
-    /// an internal interaction failure, never a human outcome.
+    /// post-frontier control failure cannot be collapsed into a human outcome.
+    /// Tests using this wrapper expect a terminal outcome; an interaction
+    /// failure is a test bug and panics here.
     #[cfg(test)]
     async fn wait(
         &self,
@@ -1581,7 +1582,7 @@ impl InteractionCoordinator {
     ) -> InteractionOutcome {
         self.wait_result(ticket, cancellation)
             .await
-            .unwrap_or(InteractionOutcome::Unavailable)
+            .expect("the published interaction settles with an outcome")
     }
 
     /// Accepts one typed client response.  A missing entry is the complete
@@ -1618,6 +1619,7 @@ impl InteractionCoordinator {
                 },
                 InteractionFailure::ControlLost
                 | InteractionFailure::Unavailable
+                | InteractionFailure::Invalid
                 | InteractionFailure::PublicationFailed => InteractionError::ControlLost {
                     interaction_id: interaction_id.clone(),
                 },
@@ -1657,6 +1659,7 @@ impl InteractionCoordinator {
                 },
                 InteractionFailure::ControlLost
                 | InteractionFailure::Unavailable
+                | InteractionFailure::Invalid
                 | InteractionFailure::PublicationFailed => InteractionError::ControlLost {
                     interaction_id: interaction_id.clone(),
                 },
@@ -1704,6 +1707,7 @@ impl InteractionCoordinator {
                 },
                 InteractionFailure::ControlLost
                 | InteractionFailure::Unavailable
+                | InteractionFailure::Invalid
                 | InteractionFailure::PublicationFailed => InteractionError::ControlLost {
                     interaction_id: interaction_id.clone(),
                 },
@@ -1777,8 +1781,9 @@ impl InteractionCoordinator {
         // Zero is an internal exhausted sentinel. It means the maximum
         // representable ordinal was already issued; refusing the next
         // publication is what preserves non-reuse even at integer overflow.
+        // This is an internal limit, never human provider absence.
         if *next == 0 {
-            return Err(InteractionFailure::Unavailable);
+            return Err(InteractionFailure::Invalid);
         }
         let ordinal = *next;
         *next = ordinal.checked_add(1).unwrap_or(0);
@@ -1801,6 +1806,7 @@ impl InteractionCoordinator {
                 },
                 InteractionFailure::ControlLost
                 | InteractionFailure::Unavailable
+                | InteractionFailure::Invalid
                 | InteractionFailure::PublicationFailed => InteractionError::ControlLost {
                     interaction_id: interaction_id.clone(),
                 },
@@ -1867,16 +1873,15 @@ impl InteractionCoordinator {
         // support. The interaction stays durably open, which is the honest
         // record: a prompt existed and its settlement never committed. The
         // waiter receives an internal audit failure, never a product-level
-        // `Unavailable` outcome.
-        let settled_audit = audit_settlement(&outcome).and_then(|settlement| {
-            self.audit
-                .commit_interaction_settled(settled_envelope(
-                    &pending.request,
-                    settlement,
-                    Utc::now(),
-                ))
-                .ok()
-        });
+        // provider-absence result.
+        let settled_audit = self
+            .audit
+            .commit_interaction_settled(settled_envelope(
+                &pending.request,
+                audit_settlement(&outcome),
+                Utc::now(),
+            ))
+            .ok();
         let settled = settled_audit.is_some();
         let observer = self
             .observer
@@ -2196,10 +2201,8 @@ mod tests {
         coordinator: &InteractionCoordinator,
         attempt: &str,
         call: &str,
-    ) -> Result<InteractionTicket, InteractionOutcome> {
-        coordinator
-            .publish_approval(AttemptId::new(attempt), facts(call))
-            .map_err(|_| InteractionOutcome::Unavailable)
+    ) -> Result<InteractionTicket, InteractionFailure> {
+        coordinator.publish_approval(AttemptId::new(attempt), facts(call))
     }
 
     fn questionnaire_specification() -> QuestionnaireSpecification {
@@ -2272,16 +2275,14 @@ mod tests {
     fn publish_questionnaire(
         coordinator: &InteractionCoordinator,
         attempt: &str,
-    ) -> Result<InteractionTicket, InteractionOutcome> {
+    ) -> Result<InteractionTicket, InteractionFailure> {
         let cancellation =
             AgentCancellation::new(CancellationReason::UserRequested).execution_cancellation();
-        coordinator
-            .publish_questionnaire_with_cancellation(
-                AttemptId::new(attempt),
-                questionnaire_facts(),
-                &cancellation,
-            )
-            .map_err(|_| InteractionOutcome::Unavailable)
+        coordinator.publish_questionnaire_with_cancellation(
+            AttemptId::new(attempt),
+            questionnaire_facts(),
+            &cancellation,
+        )
     }
 
     #[derive(Default)]
@@ -2562,7 +2563,7 @@ mod tests {
         assert_eq!(first.id, InteractionId::for_attempt(&attempt_id, u64::MAX));
         assert!(matches!(
             coordinator.publish_approval(attempt_id.clone(), facts("c2")),
-            Err(InteractionFailure::Unavailable)
+            Err(InteractionFailure::Invalid)
         ));
         assert_eq!(coordinator.pending_count(), 1);
     }
@@ -3508,7 +3509,10 @@ mod tests {
 
         let after_drain =
             coordinator.publish_approval(AttemptId::new("conversation-attempt-1"), facts("c2"));
-        assert!(matches!(after_drain, Err(InteractionFailure::Unavailable)));
+        assert!(matches!(
+            after_drain,
+            Err(InteractionFailure::PublicationFailed)
+        ));
         assert_eq!(coordinator.pending_count(), 0);
     }
 
@@ -3657,10 +3661,10 @@ mod tests {
     /// The coordinator refuses exactly the payloads the durable authority
     /// refuses, because both call [`validate_interaction_subject`].
     ///
-    /// The publication fails closed as `Unavailable` before any commit is
-    /// attempted, so an out-of-contract payload never reaches a user and never
-    /// reaches the Journal. There is one set of limits, not a coordinator set
-    /// and a store set that can drift apart.
+    /// The publication fails closed as an internal `Invalid` rejection before
+    /// any commit is attempted, so an out-of-contract payload never reaches a
+    /// user and never reaches the Journal. There is one set of limits, not a
+    /// coordinator set and a store set that can drift apart.
     #[test]
     fn the_coordinator_refuses_every_subject_the_durable_authority_refuses() {
         let (coordinator, audit) = audited_coordinator();
@@ -3671,7 +3675,7 @@ mod tests {
         oversized_reason.reason = "r".repeat(MAX_APPROVAL_REQUEST_REASON_CHARS + 1);
         assert!(matches!(
             coordinator.publish_approval(attempt.clone(), oversized_reason),
-            Err(InteractionFailure::Unavailable)
+            Err(InteractionFailure::Invalid)
         ));
 
         let cancellation =
@@ -3702,7 +3706,7 @@ mod tests {
                     facts,
                     &cancellation
                 ),
-                Err(InteractionFailure::Unavailable)
+                Err(InteractionFailure::Invalid)
             ));
         }
 

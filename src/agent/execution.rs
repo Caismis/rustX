@@ -4142,7 +4142,7 @@ impl<'a> AgentExecution<'a> {
                     // The interaction terminal winner owns the rendezvous,
                     // but it never grants execution authority. Apply the
                     // same post-await cancellation precedence before the
-                    // Responded/Deny/Unavailable value is consumed.
+                    // Responded/Denied value is consumed.
                     if self.cancellation.is_cancelled() {
                         PreToolResolution::Cancelled(self.cancellation.reason())
                     } else {
@@ -4164,10 +4164,6 @@ impl<'a> AgentExecution<'a> {
                             Ok(InteractionOutcome::Cancelled { reason }) => {
                                 PreToolResolution::Cancelled(reason)
                             }
-                            Ok(InteractionOutcome::Unavailable) => PreToolResolution::Denied(
-                                "interaction provider unavailable; approval failed closed"
-                                    .to_owned(),
-                            ),
                             Err(failure) if failure.is_unavailable() => PreToolResolution::Denied(
                                 "interaction provider unavailable; approval failed closed"
                                     .to_owned(),

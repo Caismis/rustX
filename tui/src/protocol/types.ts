@@ -418,8 +418,7 @@ export type RoutedInteraction = {
 
 export type InteractionOutcome =
   | { type: "responded"; response: InteractionResponse }
-  | { type: "cancelled"; reason: CancellationReason }
-  | { type: "unavailable" };
+  | { type: "cancelled"; reason: CancellationReason };
 
 /** The bounded by-value subject retained by the durable interaction audit. */
 export type InteractionSubject =

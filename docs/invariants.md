@@ -592,7 +592,11 @@ product result. After the permit is returned, the coordinator commits its own
 `InteractionRequested` fact. A failed reliable Requested route is then control
 loss, never `Unavailable`: the child does not receive a synthetic human result
 or continue normally, and the open requested fact remains historical evidence
-for the interrupted execution. The same rule applies to a Settled route: the
+for the interrupted execution. `Unavailable` means exactly one thing: no
+capable human provider was admitted before the publication frontier. Malformed
+subject facts and per-attempt ordinal exhaustion are internal `Invalid`
+rejections, never provider absence, and no settlement outcome encodes
+unavailability. The same rule applies to a Settled route: the
 coordinator selects and audits the terminal outcome, but a failed reliable
 delivery is propagated as control loss instead of being swallowed while the
 waiter wakes a healthy Agent Loop. `InteractionSettled(Approved)` is necessary
@@ -684,7 +688,7 @@ Two ordering rules hold:
   releases the complete questionnaire to a user-facing client, in the same
   critical section that admits
   the pending entry. A failed commit publishes no prompt and fails closed as
-  `Unavailable`, exactly like a missing provider, so no audit record exists
+  an internal publication failure, so no audit record exists
   for a question no user saw.
 - **Approval settles before execution authority.**
   `InteractionSettled(Approved)` is durable before `ToolExecutionStarted`,

@@ -279,7 +279,7 @@ impl TestInteractionRendezvous for ScriptedInteractionRendezvous {
         Box::pin(async move {
             let outcome = tokio::select! {
                 biased;
-                response = receiver => response.unwrap_or(InteractionOutcome::Unavailable),
+                response = receiver => response.expect("scripted response channel stays open"),
                 () = cancellation.cancelled() => InteractionOutcome::Cancelled {
                     reason: cancellation.reason(),
                 },

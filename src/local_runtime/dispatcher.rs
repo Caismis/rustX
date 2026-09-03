@@ -1532,7 +1532,9 @@ mod tests {
         handle
             .send_reliable(ChildFrame::InteractionSettled {
                 interaction: questionnaire_ref.clone(),
-                outcome: InteractionOutcome::Unavailable,
+                outcome: InteractionOutcome::Cancelled {
+                    reason: CancellationReason::UserRequested,
+                },
             })
             .await
             .expect("questionnaire settlement is reliable");
@@ -1568,7 +1570,9 @@ mod tests {
                 .expect("questionnaire settlement"),
             Some(ChildFrame::InteractionSettled {
                 interaction: questionnaire_ref,
-                outcome: InteractionOutcome::Unavailable,
+                outcome: InteractionOutcome::Cancelled {
+                    reason: CancellationReason::UserRequested,
+                },
             }),
         );
         assert!(

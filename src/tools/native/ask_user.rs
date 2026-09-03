@@ -178,9 +178,6 @@ impl ToolExecutor for AskUserExecutor {
                     failed_result("ask_user received a mismatched interaction response")
                 }
                 Ok(InteractionOutcome::Cancelled { reason }) => cancelled_result(reason),
-                Ok(InteractionOutcome::Unavailable) => {
-                    failed_result("ask_user interaction provider unavailable")
-                }
                 Err(failure) if failure.is_unavailable() => {
                     failed_result("ask_user interaction provider unavailable")
                 }

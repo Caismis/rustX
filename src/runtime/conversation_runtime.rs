@@ -10134,7 +10134,9 @@ mod tests {
             .await;
         assert_eq!(
             late_interaction,
-            Err(crate::runtime::interaction::InteractionFailure::Unavailable)
+            Err(crate::runtime::interaction::InteractionFailure::PublicationFailed),
+            "a provider is attached, so the post-drain refusal is an internal \
+             publication failure, never provider absence"
         );
 
         settle_gate.release();
