@@ -120,9 +120,7 @@ pub(crate) fn child_conversation_inspection_socket_path(
 ) -> PathBuf {
     let digest = Sha256::digest(conversation_id.as_str().as_bytes());
     let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&digest[..16]);
-    parent_runtime_root
-        .join("subagents")
-        .join(format!("rustx-live-{token}.sock"))
+    parent_runtime_root.join(format!(".{token}"))
 }
 
 /// Child conversation identities are used as one filesystem component by the
