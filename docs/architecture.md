@@ -3653,10 +3653,12 @@ child_conversation_id
 `child_conversation_id` resolves to the child's live Runtime Client read
 projection while the runtime exists and falls back to the same conversation's
 durable authorities after the live runtime is gone. The local runtime first
-probes the identity-derived child-owned Unix socket. A successful connection
-is process-routing state only; the child remains the owner of the semantic
-Runtime Client endpoint and projection. If the probe cannot connect, the
-local runtime opens the stable child store and `RuntimeClientHost::new_durable`
+probes the identity-derived child-owned Unix socket (whose short
+collision-resistant filename keeps the local endpoint within platform socket
+pathname limits). A successful connection is process-routing state only; the
+child remains the owner of the semantic Runtime Client endpoint and projection.
+If the probe cannot connect, the local runtime opens the stable child store and
+`RuntimeClientHost::new_durable`
 builds the ordinary projection from that conversation's durable Surface,
 Message Ledger, Request Snapshots, transcript ordering spine, and Event
 Journal. The wire protocol remains the normal `initialize`, `snapshot_get`,

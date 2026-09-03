@@ -83,6 +83,9 @@ pub(crate) mod process;
 
 use std::path::{Path, PathBuf};
 
+use base64::Engine as _;
+use sha2::{Digest, Sha256};
+
 /// Returns the durable database path of one child conversation.
 ///
 /// The semantic child directory is stable for the lifetime of the durable
@@ -104,18 +107,22 @@ pub(crate) fn child_conversation_store_path(
 
 /// Returns the local live Runtime Client inspection endpoint of one child
 /// conversation. The endpoint lives beside, but is not part of, the durable
-/// conversation store: it is disposable process routing state and disappears
-/// with the child runtime. A stale socket is harmless because an inspector
-/// probes it and falls back to the stable store.
+/// conversation stores: it is disposable process routing state and disappears
+/// with the child runtime. The filename is a deterministic short token rather
+/// than the full conversation identity so the Unix socket stays within
+/// platform pathname limits even when the stable store's identity component
+/// is long. A stale socket is harmless because an inspector probes it and
+/// falls back to the stable store.
 #[must_use]
 pub(crate) fn child_conversation_inspection_socket_path(
     parent_runtime_root: &Path,
     conversation_id: &ConversationId,
 ) -> PathBuf {
+    let digest = Sha256::digest(conversation_id.as_str().as_bytes());
+    let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&digest[..16]);
     parent_runtime_root
         .join("subagents")
-        .join(conversation_id.as_str())
-        .join("runtime-client.sock")
+        .join(format!("rustx-live-{token}.sock"))
 }
 
 /// Child conversation identities are used as one filesystem component by the

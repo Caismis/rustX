@@ -26,7 +26,7 @@ pub(crate) struct LiveConversationInspectionServer {
 }
 
 impl LiveConversationInspectionServer {
-    /// Binds the child-owned endpoint at the identity-derived semantic path.
+    /// Binds the child-owned endpoint at the identity-derived local path.
     ///
     /// A path left by a process that died without cleanup is stale by
     /// construction: a child conversation identity cannot have two live
