@@ -118,6 +118,16 @@ function rendered(overlay: HumanInteractionOverlay, width = 100): string {
   return plainText(overlay.render(width).join("\n"));
 }
 
+/**
+ * One rendered page as a continuous character sequence. Wrap boundaries are
+ * presentation, not content: a marker may legitimately straddle two wrapped
+ * rows of the same page, so reachability is checked against the flattened
+ * page, never against a single row.
+ */
+function flattened(text: string): string {
+  return text.replaceAll("\n", "");
+}
+
 describe("human-input surface", () => {
   it("represents every pending interaction independently in one queue", () => {
     const interactions = [
@@ -556,5 +566,170 @@ describe("human-input surface", () => {
         decision: { type: "deny", reason: "denied by the user" },
       },
     ]);
+  });
+
+  it("makes every character of a very long single-line argument reachable", () => {
+    const base = approvalInteraction();
+    if (base.request.kind.type !== "approval") throw new Error("fixture");
+    const tail = "-END-OF-AUTHORITATIVE-PAYLOAD";
+    const approval: RoutedInteraction = {
+      ...base,
+      request: {
+        ...base.request,
+        kind: {
+          ...base.request.kind,
+          arguments: { payload: `BEGIN-${"x".repeat(2_000)}${tail}` },
+        },
+      },
+    };
+    const width = 40;
+    const { overlay, recorded } = surface({ interactions: [approval] });
+    // Collapsed stays bounded and never exposes the tail.
+    const collapsed = rendered(overlay, width);
+    assert.ok(collapsed.includes("more"), "collapsed detail is bounded");
+    assert.ok(!collapsed.includes(tail), "collapsed detail hides the tail");
+    // Expanding is disclosure only.
+    overlay.handleInput(CTRL_E);
+    assert.deepEqual(recorded.expansions, [approval.interaction]);
+    assert.equal(recorded.decisions.length, 0, "expanding settles nothing");
+    sync(
+      overlay,
+      [approval],
+      approval.interaction,
+      withExpandedInteractions(defaultPreferences(), [approval.interaction]),
+    );
+    // The beginning shows immediately; the tail starts past the viewport.
+    const initial = rendered(overlay, width);
+    assert.ok(initial.includes("BEGIN-"), "the head shows first");
+    assert.ok(!flattened(initial).includes(tail), "the tail starts past the viewport");
+    // No rendered row overflows the terminal width.
+    for (const line of overlay.render(width)) {
+      assert.ok(plainText(line).length <= width, "no horizontal overflow");
+    }
+    // Paging the wrapped rows eventually reaches the final character.
+    let paged = initial;
+    for (let page = 0; page < 8 && !flattened(paged).includes(tail); page += 1) {
+      overlay.handleInput(PAGE_DOWN);
+      paged = rendered(overlay, width);
+    }
+    assert.ok(flattened(paged).includes(tail), "the authoritative tail is reachable");
+    assert.ok(paged.includes("Deny") && paged.includes("Allow once"), "choices stay pinned");
+    assert.equal(recorded.decisions.length, 0, "paging settles nothing");
+    // After inspection, an explicit decision still emits exactly one response.
+    overlay.handleInput(DOWN);
+    overlay.handleInput(ENTER);
+    assert.deepEqual(recorded.decisions, [
+      { interaction: approval.interaction, decision: { type: "allow" } },
+    ]);
+  });
+
+  it("makes every character of a very long reason line reachable", () => {
+    const base = approvalInteraction();
+    if (base.request.kind.type !== "approval") throw new Error("fixture");
+    const marker = "REASON-END-MARKER";
+    const approval: RoutedInteraction = {
+      ...base,
+      request: {
+        ...base.request,
+        kind: {
+          ...base.request.kind,
+          reason: `REASON-START ${"the runtime requires your review ".repeat(60)}${marker}`,
+        },
+      },
+    };
+    const width = 40;
+    const { overlay, recorded } = surface({
+      interactions: [approval],
+      preferences: withExpandedInteractions(defaultPreferences(), [
+        approval.interaction,
+      ]),
+    });
+    const initial = rendered(overlay, width);
+    assert.ok(initial.includes("REASON-START"), "the reason head shows first");
+    assert.ok(!flattened(initial).includes(marker), "the reason tail starts past the viewport");
+    let paged = initial;
+    for (let page = 0; page < 8 && !flattened(paged).includes(marker); page += 1) {
+      overlay.handleInput(PAGE_DOWN);
+      paged = rendered(overlay, width);
+    }
+    assert.ok(flattened(paged).includes(marker), "the reason tail is reachable");
+    assert.equal(recorded.decisions.length, 0, "paging settles nothing");
+  });
+
+  it("loses no content when the viewport width changes", () => {
+    const base = approvalInteraction();
+    if (base.request.kind.type !== "approval") throw new Error("fixture");
+    const tail = "-END-OF-AUTHORITATIVE-PAYLOAD";
+    const approval: RoutedInteraction = {
+      ...base,
+      request: {
+        ...base.request,
+        kind: {
+          ...base.request.kind,
+          arguments: { payload: `BEGIN-${"x".repeat(1_000)}${tail}` },
+        },
+      },
+    };
+    const preferences = withExpandedInteractions(defaultPreferences(), [
+      approval.interaction,
+    ]);
+    const totalRows = (width: number): number => {
+      const { overlay } = surface({ interactions: [approval], preferences });
+      const text = rendered(overlay, width);
+      const paged = /of (\d+)/.exec(text);
+      const complete = /detail: complete, (\d+) rows/.exec(text);
+      const match = paged ?? complete;
+      assert.ok(match !== null, "the position line reports the scroll domain");
+      return Number(match[1]);
+    };
+    const narrow = totalRows(30);
+    const wide = totalRows(90);
+    assert.ok(narrow > wide, "a narrower width wraps into more rows");
+    // The same tail is reachable at both widths, deterministically.
+    for (const width of [30, 90]) {
+      const { overlay } = surface({ interactions: [approval], preferences });
+      let paged = rendered(overlay, width);
+      for (let page = 0; page < 16 && !flattened(paged).includes(tail); page += 1) {
+        overlay.handleInput(PAGE_DOWN);
+        paged = rendered(overlay, width);
+      }
+      assert.ok(flattened(paged).includes(tail), `the tail is reachable at width ${width}`);
+    }
+  });
+
+  it("keeps disclosure and paging presentation-only", () => {
+    const base = approvalInteraction();
+    if (base.request.kind.type !== "approval") throw new Error("fixture");
+    const approval: RoutedInteraction = {
+      ...base,
+      request: {
+        ...base.request,
+        kind: {
+          ...base.request.kind,
+          arguments: { payload: `BEGIN-${"x".repeat(1_000)}-END` },
+        },
+      },
+    };
+    const { overlay, recorded } = surface({ interactions: [approval] });
+    overlay.handleInput(CTRL_E);
+    sync(
+      overlay,
+      [approval],
+      approval.interaction,
+      withExpandedInteractions(defaultPreferences(), [approval.interaction]),
+    );
+    rendered(overlay, 40);
+    overlay.handleInput(PAGE_DOWN);
+    overlay.handleInput(PAGE_UP);
+    overlay.handleInput(CTRL_E);
+    assert.deepEqual(recorded.expansions, [
+      approval.interaction,
+      approval.interaction,
+    ]);
+    assert.equal(recorded.decisions.length, 0, "no approval response");
+    assert.equal(recorded.submissions.length, 0, "no questionnaire submission");
+    assert.equal(recorded.declines.length, 0, "no questionnaire decline");
+    assert.equal(recorded.dismissals.length, 0, "no dismissal");
+    assert.equal(recorded.interrupts, 0, "no interruption");
   });
 });

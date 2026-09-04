@@ -45,7 +45,12 @@
  * overlay can submit against an interaction the runtime no longer owns.
  */
 
-import { Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import {
+  Key,
+  matchesKey,
+  truncateToWidth,
+  wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 
 import type {
   ApprovalDecision,
@@ -457,9 +462,11 @@ export class HumanInteractionOverlay implements PopupContent {
    * expanded detail can never push Deny/Allow off the surface.
    *
    * Collapsed, the detail is bounded by the shared preview budget. Expanded,
-   * the *complete* runtime-prepared reason and arguments are reachable: the
-   * detail region is a window over every formatted line, moved with
-   * PgUp/PgDn — presentation-only scrolling that answers nothing.
+   * the *complete* runtime-prepared reason and arguments are reachable: each
+   * authoritative line is wrapped to the viewport width into visual rows, and
+   * the detail region is a window over that complete row sequence, moved with
+   * PgUp/PgDn — presentation-only navigation that answers nothing and drops
+   * no character.
    */
   #renderApproval(
     routed: RoutedInteraction,
@@ -497,8 +504,8 @@ export class HumanInteractionOverlay implements PopupContent {
           `${this.#approvalChoice === 0 ? role.accent("›") : " "} ${role.strong("Deny")}`,
           `${this.#approvalChoice === 1 ? role.accent("›") : " "} ${role.strong("Allow once")}`,
         ];
-    // Expanded detail is the complete formatted invocation — never a larger
-    // but still permanently truncated prefix.
+    // Expanded detail is the complete invocation — never a larger but still
+    // permanently truncated prefix.
     const middle = [
       ...preview(toLines(kind.reason), context, "reason line"),
       ...preview(formatJson(kind.arguments), context, "argument line").map(
@@ -514,19 +521,32 @@ export class HumanInteractionOverlay implements PopupContent {
       }
       return [...headBase, ...visible, ...foot];
     }
+    // The expanded detail is complete in both dimensions: every authoritative
+    // line is first wrapped to the actual viewport width into visual rows —
+    // on the plain text, before any styling is applied per row, so no SGR
+    // sequence is ever sliced and no wide character is split — and only then
+    // is the vertical window taken. PgUp/PgDn therefore reaches every
+    // character of the reason and the arguments, however long a single line
+    // is; the width decides how many rows exist, never what content exists.
+    const detailRows = [
+      ...toLines(kind.reason).flatMap((line) => wrapTextWithAnsi(line, width)),
+      ...formatJson(kind.arguments)
+        .flatMap((line) => wrapTextWithAnsi(line, width))
+        .map((line) => role.meta(line)),
+    ];
     // The position line is always present in expanded mode, so the geometry
     // is stable whether or not the detail currently overflows.
     const room = Math.max(0, height - headBase.length - 1 - foot.length);
-    const maxOffset = Math.max(0, middle.length - room);
+    const maxOffset = Math.max(0, detailRows.length - room);
     const offset = Math.min(Math.max(0, this.#approvalScroll.get(key) ?? 0), maxOffset);
     this.#approvalScroll.set(key, offset);
-    this.#detailViewport = { key, room, total: middle.length };
-    const visible = middle.slice(offset, offset + room);
-    const end = Math.min(middle.length, offset + visible.length);
-    const position = middle.length <= room
-      ? role.meta(`detail: complete, ${middle.length} lines`)
+    this.#detailViewport = { key, room, total: detailRows.length };
+    const visible = detailRows.slice(offset, offset + room);
+    const end = Math.min(detailRows.length, offset + visible.length);
+    const position = detailRows.length <= room
+      ? role.meta(`detail: complete, ${detailRows.length} rows`)
       : role.meta(
-          `detail lines ${middle.length === 0 ? 0 : offset + 1}–${end} of ${middle.length} · PgUp/PgDn scroll`,
+          `detail rows ${detailRows.length === 0 ? 0 : offset + 1}–${end} of ${detailRows.length} · PgUp/PgDn scroll`,
         );
     return [...headBase, position, ...visible, ...foot];
   }
