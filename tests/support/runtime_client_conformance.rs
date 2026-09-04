@@ -1564,7 +1564,7 @@ pub async fn agent_status_is_runtime_owned(factory: &dyn DriverFactory) {
     let mut driver = connect(&fixture, factory);
     let (initial, cursor) = initialize(&mut *driver, 1).await;
     assert!(
-        initial.status.is_none(),
+        initial.statuses.is_empty(),
         "no status exists before the first turn"
     );
     subscribe(&mut *driver, 2, cursor).await;
@@ -1607,9 +1607,18 @@ pub async fn agent_status_is_runtime_owned(factory: &dyn DriverFactory) {
     );
     assert!(!status.rendered.is_empty());
 
-    // The snapshot carries the same composed observation.
+    // The composition carries its own transcript anchor: the durable
+    // position of the inbound turn it followed. Placement is a runtime fact,
+    // published once, not something a client derives from arrival order.
+    assert!(
+        status.transcript_anchor.is_some(),
+        "a composition that followed a durable inbound turn carries its anchor"
+    );
+
+    // The snapshot carries the same composed observation, in the same
+    // bounded window a subscriber folded.
     let (snapshot, _) = snapshot_of(&mut *driver, 4).await;
-    assert_eq!(snapshot.status.as_ref(), Some(status));
+    assert_eq!(snapshot.statuses.as_slice(), std::slice::from_ref(status));
     assert!(snapshot.messages.iter().any(|message| {
         matches!(
             message,

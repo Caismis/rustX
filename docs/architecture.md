@@ -3435,14 +3435,20 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
-The current Runtime Client protocol is version 13. It introduces the Issue
-#187 subagent workspace representation that separates logical child project
-authority from physical Git worktree ownership: the subagent workspace
-projection carries `logical_workspace` plus a tagged `isolation` (`shared`
-or `git_worktree` with the source repository root, repository-relative
-workspace, physical worktree root, base commit, branch, and parent dirty
-fact), and a retained handoff exposes `logical_workspace` and
-`physical_worktree_root`. Version 12 added routed
+The current Runtime Client protocol is version 14. It adds the Agent Status
+contextual annotation projection (Issue #194): the snapshot's latest-only
+`status` is replaced by the bounded composition window `statuses`, and each
+`AgentStatusView` carries the `transcript_anchor` its composition followed.
+Placement is therefore a runtime-published fact — the composed status
+identity, the eligible opportunities, and the durable transcript position —
+while how a client draws a status at that place stays presentation. Version 13
+introduced the Issue #187 subagent workspace representation that separates
+logical child project authority from physical Git worktree ownership: the
+subagent workspace projection carries `logical_workspace` plus a tagged
+`isolation` (`shared` or `git_worktree` with the source repository root,
+repository-relative workspace, physical worktree root, base commit, branch,
+and parent dirty fact), and a retained handoff exposes `logical_workspace`
+and `physical_worktree_root`. Version 12 added routed
 interaction projection for the root human surface. Version 11 added the
 subagent live-activity projection; version 10 added subagent workspace facts
 and preserved-worktree handoff metadata; and version 9 added `interrupted` to the
@@ -4224,6 +4230,19 @@ transcript or execution-history authority.
   fail preparation. The optional `opportunities.post_tool_batch` field carries
   only the batch-level eligibility fact; it is omitted unless that production
   opportunity actually existed.
+- **Agent Status placement: a runtime fact, bounded and historical.** The
+  snapshot projects a bounded window of compositions (`statuses`, oldest
+  first), not a latest value: a composed status is a historical fact of the
+  conversation, so a later attempt neither retracts nor relocates it. Each
+  view carries the two facts that place it — the eligible opportunities and
+  `transcript_anchor`, the newest durable transcript position that existed
+  when the runtime composed it. The Agent Status Context message is
+  request-scoped model history with no transcript cursor of its own, which is
+  exactly why the anchor is published rather than left to a client to infer
+  from arrival order or screen adjacency. Identity is `status_message_id`, so
+  re-observing one composition is idempotent. Placement is runtime-owned;
+  presentation — where a client draws a status and how subordinate it looks —
+  is not, and no layout instruction crosses this boundary.
 - **Protocol envelope.** A transport-neutral JSON-RPC-style envelope:
   `request(id, method + typed params)`, `response(id, result | error)`,
   and `event(cursor + typed payload)` with no request ids on

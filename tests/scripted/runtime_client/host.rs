@@ -825,6 +825,47 @@ async fn agent_status_shares_one_composition() {
         "PostToolBatch has no production wire field before it has a producer"
     );
     let (snapshot, _) = host.snapshot().expect("snapshot");
+    // Placement is published, never inferred: the composition carries the
+    // durable transcript position of the inbound turn it followed, and the
+    // Agent Status Context message itself is still absent from the durable
+    // transcript because it is request-scoped model history.
+    let target_message_id = status_view
+        .opportunities
+        .fresh_inbound
+        .as_ref()
+        .expect("FreshInbound is populated by the current producer")
+        .target_message_id
+        .clone();
+    let target_cursor = snapshot
+        .transcript
+        .entries
+        .iter()
+        .find_map(|entry| match &entry.item {
+            rustx::runtime_client::RuntimeClientTranscriptItem::Message { message } => {
+                (rustx::conversation::message_id_of(message) == target_message_id)
+                    .then_some(entry.cursor)
+            }
+            _ => None,
+        })
+        .expect("the referenced inbound turn is a durable transcript item");
+    assert_eq!(
+        status_view.transcript_anchor,
+        Some(target_cursor),
+        "the composition anchors to the durable position of the turn it followed"
+    );
+    assert_eq!(
+        status_wire["transcript_anchor"],
+        serde_json::json!(target_cursor)
+    );
+    assert!(
+        !snapshot.transcript.entries.iter().any(|entry| matches!(
+            &entry.item,
+            rustx::runtime_client::RuntimeClientTranscriptItem::Message { message }
+                if rustx::conversation::message_id_of(message)
+                    == status_view.status_message_id
+        )),
+        "the canonical Agent Status Context message stays out of the durable transcript"
+    );
     let committed_status = snapshot
         .messages
         .iter()
@@ -864,8 +905,18 @@ async fn agent_status_shares_one_composition() {
         Some(rustx::runtime_client::RuntimeClientStatusSection::Temporal { .. })
     ));
     assert_eq!(
-        snapshot.status.expect("status view").rendered,
+        snapshot
+            .statuses
+            .last()
+            .expect("status view")
+            .rendered
+            .clone(),
         model_rendered
+    );
+    assert_eq!(
+        snapshot.statuses.as_slice(),
+        std::slice::from_ref(status_view),
+        "the snapshot window and the live event describe one composition"
     );
 }
 
@@ -925,7 +976,7 @@ async fn disabled_time_and_background_with_no_actionable_todos_emit_no_status() 
         )
     }));
     let (snapshot, _) = host.snapshot().expect("snapshot");
-    assert!(snapshot.status.is_none());
+    assert!(snapshot.statuses.is_empty());
 }
 
 /// Agent Status is composed **exactly once** per model request that
@@ -1051,7 +1102,12 @@ async fn agent_status_is_composed_exactly_once_per_request() {
     // Reading the projection is not a composition either.
     let (snapshot, _) = host.snapshot().expect("snapshot");
     assert_eq!(
-        snapshot.status.expect("status view").rendered,
+        snapshot
+            .statuses
+            .last()
+            .expect("status view")
+            .rendered
+            .clone(),
         with_status.last().expect("status").1.as_str()
     );
     assert_eq!(seam.capture_count(AgentStatusModuleId::Time), captures);

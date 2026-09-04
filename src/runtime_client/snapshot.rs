@@ -9,7 +9,7 @@
 //! - the in-flight output and foreground tool views carry enough state to
 //!   repair every client-visible streaming effect;
 //! - background executions mirror the authoritative conversation registry;
-//! - the Agent Status view derives from the exact composed status;
+//! - the Agent Status window derives from the exact composed statuses;
 //! - inbound diagnostics mirror the authoritative mailbox;
 //! - the capability view mirrors the active capability snapshot.
 //!
@@ -116,9 +116,23 @@ pub struct RuntimeClientSnapshot {
     /// records retained by the authoritative registry (Issue #60).
     #[serde(default)]
     pub subagents: Vec<RuntimeClientSubagent>,
-    /// The latest composed Agent Status observation, when one exists.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<AgentStatusView>,
+    /// The bounded newest window of composed Agent Status observations, in
+    /// runtime composition order (oldest first).
+    ///
+    /// This is a **list, not a latest value**: a composed status is a
+    /// historical fact of the conversation, and a later attempt neither
+    /// retracts nor relocates an earlier one. A client that wants "the
+    /// latest" takes the last element; it never needs a second field that
+    /// could disagree with this order.
+    ///
+    /// The window is bounded by [`AGENT_STATUS_WINDOW`]. The canonical Agent
+    /// Status Context message is request-scoped model history and never
+    /// enters the durable transcript, so unlike a transcript page this
+    /// window cannot be paged backwards: a composition older than the window
+    /// is simply no longer projected. Like `attempt` and `context`, it
+    /// describes the live runtime and starts empty on a fresh runtime.
+    #[serde(default)]
+    pub statuses: Vec<AgentStatusView>,
     /// Runtime-owned context-compaction diagnostics. The values describe
     /// committed `RuntimeEvent::CompactionCompleted` facts by identity;
     /// they are never a second Conversation Surface authority and never
@@ -812,12 +826,26 @@ pub struct RuntimeClientSubagent {
     pub workspace: RuntimeClientSubagentWorkspace,
 }
 
+/// The bounded number of composed Agent Status observations one snapshot
+/// projects.
+///
+/// Agent Status is composed at most once per logical primary step, so this
+/// window covers far more history than any client renders at once while
+/// keeping the snapshot's size independent of conversation length.
+pub const AGENT_STATUS_WINDOW: usize = 64;
+
 /// The structured Agent Status view of one composition.
 ///
 /// Derived from the exact composed status the model path consumed: the
 /// structured sections and the canonical rendered representation originate
 /// from the same composition, so a client never parses the rendered text
 /// to recover structure and never triggers a second composition.
+///
+/// The view also carries the two runtime facts that place the composition in
+/// conversation order — the eligible opportunities and
+/// [`transcript_anchor`](Self::transcript_anchor). Placement is a runtime
+/// fact because only the runtime knows it; how a client draws a status at
+/// that place is presentation and stays entirely outside this type.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentStatusView {
@@ -825,14 +853,35 @@ pub struct AgentStatusView {
     pub attempt_id: AttemptId,
     /// The turn number of the request preparation.
     pub turn: u32,
-    /// The canonical Agent Status User message described by this view.
+    /// The canonical Agent Status User message described by this view. It is
+    /// the stable identity of the composition: observing the same
+    /// `status_message_id` twice describes one composition, never two.
     pub status_message_id: MessageId,
     /// The delivery opportunities that made this generation eligible.
     pub opportunities: AgentStatusOpportunityView,
+    /// The newest durable transcript position that existed when the runtime
+    /// composed this status.
+    ///
+    /// The Agent Status Context message is request-scoped model history: it
+    /// carries no transcript cursor of its own and never becomes a transcript
+    /// item. This is the composition's linearization point *in transcript
+    /// order* — the frontier the composition followed — which is what lets a
+    /// client place a status deterministically without inferring anything
+    /// from arrival timing or screen adjacency.
+    ///
+    /// `None` only when the conversation had no durable transcript item at
+    /// all when the status was composed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_anchor: Option<RuntimeClientTranscriptCursor>,
     /// The ordered structured sections.
     pub sections: Vec<RuntimeClientStatusSection>,
     /// The canonical rendered representation, derived from the same
     /// composition as the sections.
+    ///
+    /// It exists for diagnostics and for proving that a client and the model
+    /// saw one composition. It is **not** a presentation source: a client
+    /// renders [`sections`](Self::sections) and never parses this text back
+    /// into structure.
     pub rendered: String,
 }
 

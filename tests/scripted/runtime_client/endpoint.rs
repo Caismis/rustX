@@ -217,6 +217,17 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
     assert_eq!(response["error"]["requested"], 10);
     assert_eq!(adapter.endpoint.attachment_id(), None);
 
+    // v12 is the pre-#194 contract whose snapshot carried a latest-only
+    // `status` and whose Agent Status view had no published placement. It is
+    // refused outright rather than served a shape a v12 client would
+    // silently misread.
+    let response = adapter.exchange(r#"{"method":"initialize","id":13,"protocol_version":12}"#);
+    assert_eq!(response["id"], 13);
+    assert_eq!(response["error"]["type"], "unsupported_protocol_version");
+    assert_eq!(response["error"]["supported"], 13);
+    assert_eq!(response["error"]["requested"], 12);
+    assert_eq!(adapter.endpoint.attachment_id(), None);
+
     // v6 is the obsolete profile-shaped subagent projection (Issue #144).
     // It is refused outright rather than served a renamed payload a v6
     // client would silently misread.

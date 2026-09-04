@@ -95,12 +95,13 @@ use tokio::sync::Notify;
 
 use super::event::{RuntimeClientAttemptFailure, RuntimeClientEvent, RuntimeClientOutcome};
 use super::snapshot::{
-    AgentStatusOpportunityView, AgentStatusView, CapabilityView, ForegroundToolExecution,
-    ForegroundToolState, FreshInboundStatusOpportunityView, InFlightAssistantMessage,
-    InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView,
+    AGENT_STATUS_WINDOW, AgentStatusOpportunityView, AgentStatusView, CapabilityView,
+    ForegroundToolExecution, ForegroundToolState, FreshInboundStatusOpportunityView,
+    InFlightAssistantMessage, InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView,
     PostToolBatchStatusOpportunityView, RuntimeClientAttempt, RuntimeClientAttemptPhase,
     RuntimeClientBackgroundExecution, RuntimeClientCompactionView, RuntimeClientContextView,
     RuntimeClientSnapshot, RuntimeClientStatusSection, RuntimeClientTodoStatusTask,
+    RuntimeClientTranscriptCursor,
 };
 use super::types::{RuntimeClientCursor, RuntimeClientError, RuntimeClientProtocolEvent};
 use crate::agent::observer::AgentStatusObservation;
@@ -203,6 +204,15 @@ pub(crate) struct RuntimeClientProjection {
     replay: VecDeque<(RuntimeClientCursor, RuntimeClientEvent)>,
     /// The explicit bounded retention limit.
     replay_limit: usize,
+    /// The newest durable transcript position this projection has observed.
+    ///
+    /// Every durable transcript item — a committed or durably accepted
+    /// message, a publication audit, an interaction audit — arrives here with
+    /// the cursor `transcript_order` allocated for it. The frontier is the
+    /// maximum of those, so it never moves backwards when an *older*
+    /// transcript page is read. It exists to give one composed Agent Status
+    /// its linearization point in transcript order; nothing else reads it.
+    transcript_frontier: Option<RuntimeClientTranscriptCursor>,
     /// The registered subscribers in registration order.
     subscribers: Vec<Subscriber>,
     /// The next opaque subscriber registration identity.
@@ -242,7 +252,7 @@ impl RuntimeClientProjection {
                 pending_interactions: Vec::new(),
                 background: Vec::new(),
                 subagents: Vec::new(),
-                status: None,
+                statuses: Vec::new(),
                 context: RuntimeClientContextView::default(),
                 capabilities: initial_capabilities,
                 resources: super::snapshot::RuntimeClientResourcesView::default(),
@@ -251,6 +261,7 @@ impl RuntimeClientProjection {
             },
             replay: VecDeque::new(),
             replay_limit,
+            transcript_frontier: None,
             subscribers: Vec::new(),
             next_subscriber_id: 1,
             #[cfg(test)]
@@ -295,6 +306,16 @@ impl RuntimeClientProjection {
     ) {
         self.snapshot.transcript = super::snapshot::transcript_page_view(seed.transcript.clone())
             .expect("runtime bootstrap transcript is valid");
+        let newest = self
+            .snapshot
+            .transcript
+            .entries
+            .iter()
+            .map(|entry| entry.cursor)
+            .max();
+        if let Some(cursor) = newest {
+            self.observe_transcript_cursor(cursor);
+        }
         self.snapshot.shutting_down = seed.shutting_down;
         self.snapshot.effective_approval_mode = seed.approval_mode.effective;
         self.snapshot.pending_approval_mode = (seed.approval_mode.effective
@@ -315,7 +336,7 @@ impl RuntimeClientProjection {
         self.snapshot.resources = resources_view(&seed.resources);
         self.snapshot.todos = seed.todos.clone();
         // An inactive runtime has never admitted an attempt, composed an
-        // Agent Status, or compacted, so `attempt`, `status`, and
+        // Agent Status, or compacted, so `attempt`, `statuses`, and
         // `context` keep their empty initial values by construction.
     }
 
@@ -479,10 +500,14 @@ impl RuntimeClientProjection {
                     self.snapshot.todos = todos;
                 }
                 self.snapshot.messages.push(block.clone());
+                let transcript_cursor = transcript_cursor.map(RuntimeClientTranscriptCursor::from);
+                if let Some(cursor) = transcript_cursor {
+                    self.observe_transcript_cursor(cursor);
+                }
                 events.push(RuntimeClientEvent::MessageCommitted {
                     attempt_id,
                     message: block,
-                    transcript_cursor: transcript_cursor.map(Into::into),
+                    transcript_cursor,
                 });
                 events
             }
@@ -523,15 +548,24 @@ impl RuntimeClientProjection {
                 {
                     attempt.in_flight = None;
                 }
+                let transcript_cursor = RuntimeClientTranscriptCursor::from(transcript_cursor);
+                self.observe_transcript_cursor(transcript_cursor);
                 vec![RuntimeClientEvent::AssistantPublicationSettled {
                     attempt_id,
                     audit,
-                    transcript_cursor: transcript_cursor.into(),
+                    transcript_cursor,
                 }]
             }
+            // A composed status joins the bounded window in composition
+            // order. It replaces nothing: an earlier composition is a
+            // historical fact of this conversation and stays exactly where
+            // the runtime put it. Its transcript anchor is frozen here, at
+            // the composition's own linearization point, so the placement a
+            // client reconstructs from a snapshot is the placement it would
+            // have folded from the live event.
             ConversationObservation::Status(observation) => {
-                let view = status_view(&observation);
-                self.snapshot.status = Some(view.clone());
+                let view = status_view(&observation, self.transcript_frontier);
+                push_status(&mut self.snapshot.statuses, view.clone());
                 vec![RuntimeClientEvent::AgentStatusComposed {
                     attempt_id: observation.attempt_id.clone(),
                     turn: observation.turn,
@@ -540,10 +574,16 @@ impl RuntimeClientProjection {
             }
             ConversationObservation::InboundEnqueued(item) => {
                 self.snapshot.inbound.pending.push(inbound_item_view(&item));
+                let transcript_cursor = item
+                    .transcript_cursor()
+                    .map(RuntimeClientTranscriptCursor::from);
+                if let Some(cursor) = transcript_cursor {
+                    self.observe_transcript_cursor(cursor);
+                }
                 vec![RuntimeClientEvent::InboundEnqueued {
                     sequence: item.sequence(),
                     message: item.message().clone(),
-                    transcript_cursor: item.transcript_cursor().map(Into::into),
+                    transcript_cursor,
                 }]
             }
             ConversationObservation::InboundDrained(batch) => {
@@ -568,9 +608,11 @@ impl RuntimeClientProjection {
                 if let Some((audit, transcript_cursor)) = audit {
                     let audit_view = super::snapshot::interaction_requested_view(audit)
                         .expect("runtime interaction requested audit is valid");
+                    let transcript_cursor = RuntimeClientTranscriptCursor::from(transcript_cursor);
+                    self.observe_transcript_cursor(transcript_cursor);
                     events.push(RuntimeClientEvent::InteractionAuditRequested {
                         audit: Box::new(audit_view),
-                        transcript_cursor: transcript_cursor.into(),
+                        transcript_cursor,
                     });
                 }
                 events
@@ -591,9 +633,11 @@ impl RuntimeClientProjection {
                     let (audit, transcript_cursor) = audit;
                     let audit_view = super::snapshot::interaction_settled_view(audit)
                         .expect("runtime interaction settled audit is valid");
+                    let transcript_cursor = RuntimeClientTranscriptCursor::from(transcript_cursor);
+                    self.observe_transcript_cursor(transcript_cursor);
                     events.push(RuntimeClientEvent::InteractionAuditSettled {
                         audit: Box::new(audit_view),
-                        transcript_cursor: transcript_cursor.into(),
+                        transcript_cursor,
                     });
                 }
                 events
@@ -941,7 +985,11 @@ impl RuntimeClientProjection {
                     foreground: Vec::new(),
                     model: model.clone(),
                 });
-                self.snapshot.status = None;
+                // The Agent Status window is deliberately untouched: a status
+                // composed by an earlier attempt is a historical fact of this
+                // conversation, not attempt-scoped live state, so a new
+                // attempt neither retracts nor relocates it.
+                //
                 // The published event carries the same frozen model the
                 // attempt read model carries, so an incremental subscriber
                 // and a snapshot reader agree without inference.
@@ -1444,7 +1492,23 @@ impl RuntimeClientProjection {
         &mut self,
         page: super::snapshot::RuntimeClientTranscriptPage,
     ) {
+        if let Some(cursor) = page.entries.iter().map(|entry| entry.cursor).max() {
+            self.observe_transcript_cursor(cursor);
+        }
         self.snapshot.transcript = page;
+    }
+
+    /// Records one observed durable transcript position.
+    ///
+    /// The frontier only ever advances: reading an older page is a paging
+    /// operation, not a rewind of conversation order.
+    fn observe_transcript_cursor(&mut self, cursor: RuntimeClientTranscriptCursor) {
+        if self
+            .transcript_frontier
+            .is_none_or(|frontier| cursor > frontier)
+        {
+            self.transcript_frontier = Some(cursor);
+        }
     }
 
     /// The oldest cursor a subscription can still serve: one before the
@@ -1905,7 +1969,10 @@ fn upsert_interaction(
 /// Builds the structured external status view from the exact composed
 /// status observation; the rendered representation derives from the same
 /// composition through the one canonical renderer.
-pub(crate) fn status_view(observation: &AgentStatusObservation) -> AgentStatusView {
+pub(crate) fn status_view(
+    observation: &AgentStatusObservation,
+    transcript_anchor: Option<RuntimeClientTranscriptCursor>,
+) -> AgentStatusView {
     let sections = observation
         .status
         .sections
@@ -1959,8 +2026,29 @@ pub(crate) fn status_view(observation: &AgentStatusObservation) -> AgentStatusVi
             fresh_inbound,
             post_tool_batch,
         },
+        transcript_anchor,
         rendered: render_agent_status(&observation.status),
         sections,
+    }
+}
+
+/// Appends one composed status to the bounded projection window.
+///
+/// Identity is the composed status message: re-observing the same
+/// composition is idempotent rather than a second historical fact. The
+/// window drops its oldest entries instead of growing with the
+/// conversation.
+fn push_status(statuses: &mut Vec<AgentStatusView>, view: AgentStatusView) {
+    if statuses
+        .iter()
+        .any(|existing| existing.status_message_id == view.status_message_id)
+    {
+        return;
+    }
+    statuses.push(view);
+    let overflow = statuses.len().saturating_sub(AGENT_STATUS_WINDOW);
+    if overflow > 0 {
+        statuses.drain(0..overflow);
     }
 }
 
@@ -2014,8 +2102,8 @@ mod tests {
     use crate::runtime::types::{CancellationReason, TokenMeasurement, TokenMeasurementSource};
     use crate::runtime_client::event::{RuntimeClientEvent, RuntimeClientOutcome};
     use crate::runtime_client::snapshot::{
-        AgentStatusOpportunityView, ForegroundToolState, InFlightBlock, RuntimeClientAttemptPhase,
-        RuntimeClientStatusSection, RuntimeClientTranscriptCursor,
+        AGENT_STATUS_WINDOW, AgentStatusOpportunityView, ForegroundToolState, InFlightBlock,
+        RuntimeClientAttemptPhase, RuntimeClientStatusSection, RuntimeClientTranscriptCursor,
     };
     use crate::runtime_client::types::RuntimeClientCursor;
     use crate::scripted_suites::support::context::{
@@ -2114,6 +2202,192 @@ mod tests {
         }
     }
 
+    /// One composed status observation for the placement suites.
+    fn status_observation(
+        status_message_id: &str,
+        turn: u32,
+        opportunities: AgentStatusOpportunitySet,
+    ) -> AgentStatusObservation {
+        AgentStatusObservation {
+            attempt_id: attempt(),
+            turn,
+            status_message_id: MessageId::new(status_message_id),
+            opportunities,
+            status: AgentStatus {
+                generated_at: chrono::DateTime::from_timestamp(0, 0).expect("timestamp"),
+                sections: Vec::new(),
+            },
+        }
+    }
+
+    /// Commits one visible canonical message at a durable transcript
+    /// position, which is what advances the transcript frontier.
+    fn commit_at(projection: &mut RuntimeClientProjection, id: &str, cursor: u64) {
+        projection.apply(ConversationObservation::Committed {
+            attempt_id: Some(attempt()),
+            block: MessageBlock::User(UserMessageBlock {
+                id: MessageId::new(id),
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "hello".to_owned(),
+                })],
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+            }),
+            transcript_cursor: Some(crate::durable::TranscriptCursor::new(cursor)),
+        });
+    }
+
+    /// A composed status freezes the transcript frontier it followed, so the
+    /// runtime — not a client reading arrival order — owns placement.
+    #[test]
+    fn agent_status_freezes_the_transcript_frontier_it_followed() {
+        let mut projection = projection();
+        apply_event(
+            &mut projection,
+            RuntimeEvent::AttemptStarted {
+                attempt_id: attempt(),
+            },
+        );
+        commit_at(&mut projection, "user-1", 7);
+        projection.apply(ConversationObservation::Status(status_observation(
+            "status-1",
+            1,
+            AgentStatusOpportunitySet {
+                fresh_inbound: Some(FreshInboundStatusOpportunity {
+                    target_message_id: MessageId::new("user-1"),
+                }),
+                post_tool_batch: None,
+            },
+        )));
+
+        let (snapshot, _) = projection.snapshot().expect("snapshot");
+        assert_eq!(snapshot.statuses.len(), 1);
+        assert_eq!(
+            snapshot.statuses[0].transcript_anchor,
+            Some(RuntimeClientTranscriptCursor::new(7))
+        );
+
+        // A later commit does not move an already-composed status.
+        commit_at(&mut projection, "user-2", 9);
+        let (snapshot, _) = projection.snapshot().expect("snapshot");
+        assert_eq!(
+            snapshot.statuses[0].transcript_anchor,
+            Some(RuntimeClientTranscriptCursor::new(7))
+        );
+    }
+
+    /// A composition with no `FreshInbound` still gets a deterministic
+    /// anchor: the settled frontier it followed.
+    #[test]
+    fn post_tool_batch_status_anchors_to_the_settled_frontier() {
+        let mut projection = projection();
+        apply_event(
+            &mut projection,
+            RuntimeEvent::AttemptStarted {
+                attempt_id: attempt(),
+            },
+        );
+        commit_at(&mut projection, "user-1", 3);
+        commit_at(&mut projection, "tool-result", 5);
+        projection.apply(ConversationObservation::Status(status_observation(
+            "status-post-batch",
+            2,
+            AgentStatusOpportunitySet {
+                fresh_inbound: None,
+                post_tool_batch: Some(PostToolBatchStatusOpportunity),
+            },
+        )));
+
+        let (snapshot, _) = projection.snapshot().expect("snapshot");
+        let status = snapshot.statuses.last().expect("composed status");
+        assert!(status.opportunities.fresh_inbound.is_none());
+        assert_eq!(
+            status.transcript_anchor,
+            Some(RuntimeClientTranscriptCursor::new(5)),
+            "the anchor is the settled tool-batch frontier, not the inbound turn"
+        );
+    }
+
+    /// A new attempt is not a retraction: an earlier composition stays in the
+    /// window, at its own anchor, and a later one is added beside it.
+    #[test]
+    fn a_later_attempt_neither_removes_nor_relocates_an_earlier_status() {
+        let mut projection = projection();
+        commit_at(&mut projection, "user-1", 1);
+        projection.apply(ConversationObservation::Status(status_observation(
+            "status-1",
+            1,
+            AgentStatusOpportunitySet {
+                fresh_inbound: Some(FreshInboundStatusOpportunity {
+                    target_message_id: MessageId::new("user-1"),
+                }),
+                post_tool_batch: None,
+            },
+        )));
+        apply_event(
+            &mut projection,
+            RuntimeEvent::AttemptStarted {
+                attempt_id: attempt(),
+            },
+        );
+        commit_at(&mut projection, "user-2", 4);
+        projection.apply(ConversationObservation::Status(status_observation(
+            "status-2",
+            1,
+            AgentStatusOpportunitySet {
+                fresh_inbound: Some(FreshInboundStatusOpportunity {
+                    target_message_id: MessageId::new("user-2"),
+                }),
+                post_tool_batch: None,
+            },
+        )));
+
+        let (snapshot, _) = projection.snapshot().expect("snapshot");
+        assert_eq!(
+            snapshot
+                .statuses
+                .iter()
+                .map(|status| status.status_message_id.as_str().to_owned())
+                .collect::<Vec<_>>(),
+            vec!["status-1".to_owned(), "status-2".to_owned()]
+        );
+        assert_eq!(
+            snapshot.statuses[0].transcript_anchor,
+            Some(RuntimeClientTranscriptCursor::new(1))
+        );
+        assert_eq!(
+            snapshot.statuses[1].transcript_anchor,
+            Some(RuntimeClientTranscriptCursor::new(4))
+        );
+    }
+
+    /// Identity is the composed status message: observing one composition
+    /// twice describes one historical fact, and the window stays bounded.
+    #[test]
+    fn the_agent_status_window_is_identity_keyed_and_bounded() {
+        let mut projection = projection();
+        let observation = status_observation("status-1", 1, AgentStatusOpportunitySet::default());
+        projection.apply(ConversationObservation::Status(observation.clone()));
+        projection.apply(ConversationObservation::Status(observation));
+        let (snapshot, _) = projection.snapshot().expect("snapshot");
+        assert_eq!(snapshot.statuses.len(), 1);
+
+        for index in 0..AGENT_STATUS_WINDOW + 5 {
+            projection.apply(ConversationObservation::Status(status_observation(
+                &format!("status-fill-{index}"),
+                1,
+                AgentStatusOpportunitySet::default(),
+            )));
+        }
+        let (snapshot, _) = projection.snapshot().expect("snapshot");
+        assert_eq!(snapshot.statuses.len(), AGENT_STATUS_WINDOW);
+        assert_eq!(
+            snapshot.statuses.last().expect("newest").status_message_id,
+            MessageId::new(format!("status-fill-{}", AGENT_STATUS_WINDOW + 4))
+        );
+    }
+
     #[test]
     fn agent_status_opportunity_view_allows_absent_fresh_inbound() {
         let observation = AgentStatusObservation {
@@ -2127,7 +2401,7 @@ mod tests {
             },
         };
 
-        let view = super::status_view(&observation);
+        let view = super::status_view(&observation, None);
         assert!(view.opportunities.fresh_inbound.is_none());
 
         let encoded = serde_json::to_value(&view.opportunities).expect("serialize opportunity");
@@ -2156,7 +2430,7 @@ mod tests {
             },
         };
 
-        let view = super::status_view(&observation);
+        let view = super::status_view(&observation, None);
         assert_eq!(view.status_message_id, status_message_id);
         assert_eq!(
             view.opportunities

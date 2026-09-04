@@ -3543,6 +3543,22 @@ message role, history shape, or timestamps:
   adapters never inject it. Equal rendered bytes at different admitted steps
   remain distinct facts with distinct MessageIds. If no module contributes,
   there is no empty wrapper/message and no structured status observation.
+- Every composed Agent Status has exactly one deterministic presentation
+  anchor, and once observable in conversation history its placement never
+  changes or disappears because a later attempt starts. Placement is published
+  by the runtime, never inferred by a client: the composition carries its
+  eligible opportunities and `transcript_anchor`, the newest durable
+  transcript position that existed when it was composed. A composition with a
+  `FreshInbound` opportunity is anchored to that opportunity's
+  `target_message_id`; one without is anchored to `transcript_anchor`. A
+  composition eligible through both is anchored by the message identity alone,
+  so it can never be presented twice. The Runtime Client snapshot carries a
+  bounded window of compositions in composition order rather than a latest
+  value, identified by `status_message_id`: a new attempt clears none of them,
+  a replayed observation adds none, and snapshot repair and incremental
+  folding reconstruct the same set and the same placement. Clients never parse
+  the model-facing rendered body to recover section structure, and no layout
+  instruction crosses the projection boundary.
 - Time, Background, and Todo are compile-time-owned modules represented by a
   closed rustX engine in semantic source order `Time -> Background -> Todo`.
   There is no provider registration API, dynamic plugin boundary, provider
