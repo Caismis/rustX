@@ -24,7 +24,10 @@ import {
   latestAgentStatus,
 } from "../src/presentation/selectors.ts";
 import type { PresentationState } from "../src/presentation/state.ts";
-import type { RuntimeClientEvent } from "../src/protocol/types.ts";
+import type {
+  AgentStatusView,
+  RuntimeClientEvent,
+} from "../src/protocol/types.ts";
 import {
   agentStatusFacets,
   agentStatusSummary,
@@ -400,6 +403,182 @@ describe("Agent Status projection convergence", () => {
     const state = stateOf({ messages, statuses: [first, second] });
     assert.equal(latestAgentStatus(state), second);
     assert.equal(latestAgentStatus(stateOf({ messages })), undefined);
+  });
+});
+
+describe("Agent Status bounded-window convergence", () => {
+  /**
+   * The runtime's side of the bounded window, played back exactly.
+   *
+   * This helper is the *only* thing in the client tree that knows a
+   * retention bound, and it is standing in for the Runtime Client
+   * projection: it admits by identity, trims to its own bound, and publishes
+   * the eviction that trimming caused. The client under test is given only
+   * the events. `AGENT_STATUS_WINDOW` is deliberately not mirrored anywhere
+   * in `src/`, so the bound below is arbitrary — the point is that whatever
+   * the runtime's policy is, the client reproduces it without knowing it.
+   */
+  function runtimeWindow(bound: number, count: number) {
+    const events: RuntimeClientEvent[] = [];
+    const authoritative: AgentStatusView[] = [];
+    for (let index = 0; index < count; index += 1) {
+      const status = agentStatus({
+        status_message_id: `status-${index}`,
+        turn: index + 1,
+        opportunities: {
+          post_tool_batch: { transcript_anchor: transcriptCursor(index + 1) },
+        },
+        sections: [todoSection({ active_count: index + 1 })],
+      });
+      let evicted: string | undefined;
+      if (
+        !authoritative.some(
+          (existing) => existing.status_message_id === status.status_message_id,
+        )
+      ) {
+        authoritative.push(status);
+        if (authoritative.length > bound) {
+          evicted = authoritative.shift()?.status_message_id;
+        }
+      }
+      events.push({
+        type: "agent_status_composed",
+        attempt_id: "a1",
+        turn: index + 1,
+        status,
+        ...(evicted === undefined ? {} : { evicted_status_message_id: evicted }),
+      });
+    }
+    return { events, authoritative };
+  }
+
+  /** A transcript long enough that every composition's anchor is loaded. */
+  function messagesFor(count: number) {
+    return Array.from({ length: count }, (_, index) =>
+      userMessage(`m${index + 1}`, `turn ${index + 1}`),
+    );
+  }
+
+  for (const bound of [64, 3]) {
+    const overshoot = 6;
+    const count = bound + overshoot;
+
+    it(`converges past a runtime window of ${bound} (${count} compositions)`, () => {
+      const messages = messagesFor(count);
+      const { events, authoritative } = runtimeWindow(bound, count);
+
+      // 1. the live fold: one continuously subscribed client, every event.
+      const folded = fold(stateOf({ messages }), events);
+      // 2. the snapshot repair: the authoritative window at the same cut.
+      const repaired = stateOf({ messages, statuses: authoritative });
+
+      assert.equal(
+        folded.statuses.length,
+        bound,
+        "the client tracks the runtime's own retention, without knowing it",
+      );
+      assert.deepEqual(
+        folded.statuses.map((status) => status.status_message_id),
+        authoritative.map((status) => status.status_message_id),
+        "retained identities and their order are identical",
+      );
+      assert.deepEqual(
+        folded.statuses.map(agentStatusAnchor),
+        authoritative.map(agentStatusAnchor),
+        "placement is identical",
+      );
+      assert.deepEqual(
+        transcriptText(folded),
+        transcriptText(repaired),
+        "the rendered transcript is identical",
+      );
+      assert.deepEqual(
+        latestAgentStatus(folded),
+        latestAgentStatus(repaired),
+        "the newest composition agrees",
+      );
+      // The compositions the runtime dropped are gone from both paths, so a
+      // repair cannot silently remove an annotation a live client still drew.
+      for (let index = 0; index < overshoot; index += 1) {
+        const dropped = `status-${index}`;
+        assert.ok(
+          !folded.statuses.some(
+            (status) => status.status_message_id === dropped,
+          ),
+          `${dropped} left the window on the live path too`,
+        );
+      }
+    });
+
+    it(`replays a composition without evicting another (window ${bound})`, () => {
+      const messages = messagesFor(count);
+      const { events, authoritative } = runtimeWindow(bound, count);
+      const settled = fold(stateOf({ messages }), events);
+
+      // The runtime ignores a repeated composition, so the transition it
+      // publishes admits nothing and evicts nothing. A client that applied a
+      // retention rule of its own would drop its oldest entry here.
+      const replayed = fold(settled, [
+        events[events.length - 1]!,
+        events[events.length - 2]!,
+      ]);
+
+      assert.deepEqual(
+        replayed.statuses.map((status) => status.status_message_id),
+        authoritative.map((status) => status.status_message_id),
+        "a replay moves no window",
+      );
+      assert.deepEqual(
+        transcriptText(replayed),
+        transcriptText(stateOf({ messages, statuses: authoritative })),
+        "and changes nothing on screen",
+      );
+    });
+  }
+
+  it("applies the eviction the runtime published, not one it inferred", () => {
+    const messages = messagesFor(3);
+    const first = agentStatus({
+      status_message_id: "status-1",
+      opportunities: {
+        post_tool_batch: { transcript_anchor: transcriptCursor(1) },
+      },
+      sections: [todoSection({ active_count: 1 })],
+    });
+    const second = agentStatus({
+      status_message_id: "status-2",
+      turn: 2,
+      opportunities: {
+        post_tool_batch: { transcript_anchor: transcriptCursor(2) },
+      },
+      sections: [todoSection({ active_count: 2 })],
+    });
+
+    const state = fold(stateOf({ messages }), [
+      { type: "agent_status_composed", attempt_id: "a1", turn: 1, status: first },
+      {
+        type: "agent_status_composed",
+        attempt_id: "a1",
+        turn: 2,
+        status: second,
+        evicted_status_message_id: "status-1",
+      },
+    ]);
+
+    assert.deepEqual(
+      state.statuses.map((status) => status.status_message_id),
+      ["status-2"],
+      "the named composition left the window, and only that one",
+    );
+    assert.deepEqual(annotationIndexes(transcriptText(state)), [
+      // Only the surviving composition is still drawn.
+      transcriptText(state).findIndex((line) => line.startsWith("◇ status")),
+    ]);
+    assert.equal(
+      annotationIndexes(transcriptText(state)).length,
+      1,
+      "an evicted composition is no longer annotated",
+    );
   });
 });
 

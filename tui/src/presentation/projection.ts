@@ -29,6 +29,7 @@
 import type {
   AgentStatusView,
   AttemptModelView,
+  MessageId,
   RoutedInteraction,
   RuntimeClientCursor,
   RuntimeClientProtocolEvent,
@@ -537,11 +538,15 @@ export function reduce(
     }
 
     case "agent_status_composed":
-      // Identity is the composed status message, so a replayed observation of
-      // one composition stays one presentation item. Appending — rather than
-      // replacing — is what makes the incremental fold agree with the
-      // snapshot window it would be repaired from.
-      next.statuses = appendStatus(state.statuses, event.status);
+      // The event is one complete transition of the runtime's bounded window,
+      // and it is folded mechanically. Identity is the composed status
+      // message, so a replayed observation of one composition stays one
+      // presentation item — and, carrying no eviction, removes nothing.
+      next.statuses = foldStatusWindow(
+        state.statuses,
+        event.status,
+        event.evicted_status_message_id,
+      );
       return next;
 
     case "inbound_enqueued":
@@ -740,18 +745,39 @@ function deduplicateTranscript(transcript: TranscriptEntry[]): TranscriptEntry[]
  * The runtime bounds its own window, so this never trims: trimming here would
  * make the incremental fold disagree with the snapshot for no reason.
  */
-function appendStatus(
+/**
+ * Applies one runtime status-window transition.
+ *
+ * Retention is owned by the runtime projection and nowhere else. This client
+ * does not know the window bound, does not count entries, and does not decide
+ * what to drop: it removes exactly the composition the runtime says its own
+ * admission evicted, then applies the identity-keyed admission. Folding every
+ * transition from a snapshot at cursor `C` therefore rebuilds precisely the
+ * window the runtime holds at `C`, past the bound as well as below it.
+ *
+ * A second retention rule here would be a second policy, and the two would
+ * diverge the moment the bound was crossed — a live fold keeping a
+ * composition a later snapshot repair would silently drop.
+ */
+function foldStatusWindow(
   statuses: AgentStatusView[],
   status: AgentStatusView,
+  evictedStatusMessageId: MessageId | undefined,
 ): AgentStatusView[] {
+  const retained =
+    evictedStatusMessageId === undefined
+      ? statuses
+      : statuses.filter(
+          (existing) => existing.status_message_id !== evictedStatusMessageId,
+        );
   if (
-    statuses.some(
+    retained.some(
       (existing) => existing.status_message_id === status.status_message_id,
     )
   ) {
-    return statuses;
+    return retained;
   }
-  return [...statuses, status];
+  return [...retained, status];
 }
 
 /** Keeps one entry per composition identity, in the runtime's own order. */

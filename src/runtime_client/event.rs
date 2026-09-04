@@ -330,6 +330,16 @@ pub enum RuntimeClientEvent {
     ///
     /// The carried view derives from the exact composed status used by the
     /// model path; a client never causes a second composition.
+    ///
+    /// The event describes **one complete transition of the bounded status
+    /// window**, not just the new composition: the admission and, when the
+    /// window was full, the eviction that admission caused. A client folds
+    /// both mechanically. It never applies a retention rule of its own,
+    /// because the bound
+    /// ([`AGENT_STATUS_WINDOW`](super::AGENT_STATUS_WINDOW)) is projection
+    /// policy and is not part of this contract — which is exactly what makes
+    /// folding every event through cursor `C` and replacing state from the
+    /// authoritative snapshot at cursor `C` produce the same window.
     AgentStatusComposed {
         /// The attempt that composed the status.
         attempt_id: AttemptId,
@@ -338,6 +348,17 @@ pub enum RuntimeClientEvent {
         /// The structured status view (sections plus the canonical derived
         /// rendering).
         status: AgentStatusView,
+        /// The composition this admission pushed out of the bounded window,
+        /// when the window was already full.
+        ///
+        /// `None` when nothing left the window — including for a replayed
+        /// observation of a composition the window already holds, which
+        /// admits nothing and therefore evicts nothing. A client removes
+        /// exactly this identity before applying the identity-keyed
+        /// admission, so replay stays idempotent and can never displace an
+        /// unrelated composition.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        evicted_status_message_id: Option<MessageId>,
     },
 
     /// An inbound message was enqueued into the conversation mailbox.

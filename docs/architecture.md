@@ -3438,18 +3438,20 @@ events. The existing `src/protocol` boundary remains the compiled
 The current Runtime Client protocol is version 14. It adds the Agent Status
 contextual annotation projection (Issue #194): the snapshot's latest-only
 `status` is replaced by the bounded composition window `statuses`, each status
-opportunity carries the durable identity it was established against. Placement
-is therefore a runtime-published fact — the composed status identity, the
-eligible opportunities, and the durable position each of them froze — while
-how a client draws a status at that place stays presentation. Version 13
-introduced the Issue #187 subagent workspace representation that separates
-logical child project authority from physical Git worktree ownership: the
-subagent workspace projection carries `logical_workspace` plus a tagged
-`isolation` (`shared` or `git_worktree` with the source repository root,
-repository-relative workspace, physical worktree root, base commit, branch,
-and parent dirty fact), and a retained handoff exposes `logical_workspace`
-and `physical_worktree_root`. Version 12 added routed interaction projection
-for the root human surface. Version 11
+opportunity carries the durable identity it was established against, and
+`agent_status_composed` carries one complete window transition — the admitted
+composition plus the eviction that admission caused — rather than only the new
+composition. Placement is therefore a runtime-published fact — the composed
+status identity, the eligible opportunities, and the durable position each of
+them froze — while how a client draws a status at that place stays
+presentation. Version 13 introduced the Issue #187 subagent workspace
+representation that separates logical child project authority from physical
+Git worktree ownership: the subagent workspace projection carries
+`logical_workspace` plus a tagged `isolation` (`shared` or `git_worktree` with
+the source repository root, repository-relative workspace, physical worktree
+root, base commit, branch, and parent dirty fact), and a retained handoff
+exposes `logical_workspace` and `physical_worktree_root`. Version 12 added
+routed interaction projection for the root human surface. Version 11
 added the
 subagent live-activity projection; version 10 added subagent workspace facts
 and preserved-worktree handoff metadata; and version 9 added `interrupted` to the
@@ -4260,6 +4262,19 @@ transcript or execution-history authority.
   that sampled the frontier when it folded the status observation would place
   a `PostToolBatch` status after an unrelated inbound turn that merely
   happened to be accepted first.
+
+  **Retention has exactly one owner.** The window bound
+  (`AGENT_STATUS_WINDOW`) is Runtime Client projection policy and is not part
+  of the wire contract. `agent_status_composed` therefore describes the whole
+  transition: the admitted composition and, when the window was full, the
+  `evicted_status_message_id` that admission pushed out. A client removes that
+  identity and applies the identity-keyed admission — nothing more. This is
+  what makes folding every event through cursor `C` and replacing state from
+  the authoritative snapshot at `C` produce the same window past the bound as
+  well as below it; two retention owners would be two policies, and a client
+  that trimmed on its own would keep compositions a later snapshot repair
+  silently dropped. A replayed observation admits nothing and so evicts
+  nothing, which keeps replay idempotent in a full window.
 - **Protocol envelope.** A transport-neutral JSON-RPC-style envelope:
   `request(id, method + typed params)`, `response(id, result | error)`,
   and `event(cursor + typed payload)` with no request ids on

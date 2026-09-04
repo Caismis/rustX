@@ -3567,9 +3567,17 @@ message role, history shape, or timestamps:
   would place the status after an unrelated inbound turn.
 - The Runtime Client snapshot carries a bounded window of compositions in
   composition order rather than a latest value, identified by
-  `status_message_id`: a new attempt clears none of them, a replayed
-  observation adds none, and snapshot repair and incremental folding
-  reconstruct the same set and the same placement.
+  `status_message_id`: a new attempt clears none of them and a replayed
+  observation adds none. The retention bound is Runtime Client projection
+  policy and is not part of the wire contract; `agent_status_composed`
+  publishes the whole window transition — the admitted composition and the
+  `evicted_status_message_id` that admission caused, if any — and a client
+  folds exactly that and applies no retention rule of its own. Folding every
+  live event through cursor `C` and replacing state from the authoritative
+  snapshot at cursor `C` therefore reconstruct the same window, the same
+  order, and the same placement, past the bound as well as below it. A
+  replayed observation admits nothing and evicts nothing, so replay stays
+  idempotent in a full window.
 - Time, Background, and Todo are compile-time-owned modules represented by a
   closed rustX engine in semantic source order `Time -> Background -> Todo`.
   There is no provider registration API, dynamic plugin boundary, provider

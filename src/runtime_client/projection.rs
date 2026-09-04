@@ -110,7 +110,7 @@ use crate::events::types::{AttemptFailure, RuntimeEvent};
 use crate::message::types::{AssistantContentBlock, ContentBlockIndex, MessageBlock};
 use crate::model::session::{AttemptModelView, SessionModelView};
 use crate::publication::{PublicationFrame, PublicationPayload};
-use crate::runtime::identity::{AttemptId, ConversationId, ToolCallId};
+use crate::runtime::identity::{AttemptId, ConversationId, MessageId, ToolCallId};
 use crate::runtime::inbound::InboundItem;
 use crate::runtime::observation::ConversationObservation;
 use crate::runtime::types::ApprovalMode;
@@ -544,13 +544,21 @@ impl RuntimeClientProjection {
             // durable activity may have advanced since the composition was
             // determined.
             //
+            // Retention is owned here and published as part of the
+            // transition. The event carries the exact eviction this
+            // admission caused, so an incremental fold reproduces this
+            // window instead of applying a second retention policy of its
+            // own — which is what makes a live fold and a snapshot repair at
+            // the same cursor agree past the window bound.
             ConversationObservation::Status(observation) => {
                 let view = status_view(&observation);
-                push_status(&mut self.snapshot.statuses, view.clone());
+                let evicted_status_message_id =
+                    admit_status(&mut self.snapshot.statuses, view.clone());
                 vec![RuntimeClientEvent::AgentStatusComposed {
                     attempt_id: observation.attempt_id.clone(),
                     turn: observation.turn,
                     status: view,
+                    evicted_status_message_id,
                 }]
             }
             ConversationObservation::InboundEnqueued(item) => {
@@ -1996,24 +2004,31 @@ pub(crate) fn status_view(observation: &AgentStatusObservation) -> AgentStatusVi
     }
 }
 
-/// Appends one composed status to the bounded projection window.
+/// Admits one composed status into the bounded projection window and returns
+/// the composition that admission pushed out, when the window was full.
 ///
 /// Identity is the composed status message: re-observing the same
-/// composition is idempotent rather than a second historical fact. The
-/// window drops its oldest entries instead of growing with the
-/// conversation.
-fn push_status(statuses: &mut Vec<AgentStatusView>, view: AgentStatusView) {
+/// composition is idempotent rather than a second historical fact, and an
+/// admission that does nothing evicts nothing.
+///
+/// This is the **only** retention decision in the system. The returned
+/// eviction is published with the composition as one transition, so a client
+/// folding incrementally reproduces this window without ever knowing
+/// [`AGENT_STATUS_WINDOW`]. Because the window is only ever grown by one
+/// before it is trimmed, one admission can retire at most one composition,
+/// and the transition is fully described by a single optional identity.
+fn admit_status(statuses: &mut Vec<AgentStatusView>, view: AgentStatusView) -> Option<MessageId> {
     if statuses
         .iter()
         .any(|existing| existing.status_message_id == view.status_message_id)
     {
-        return;
+        return None;
     }
     statuses.push(view);
-    let overflow = statuses.len().saturating_sub(AGENT_STATUS_WINDOW);
-    if overflow > 0 {
-        statuses.drain(0..overflow);
+    if statuses.len() > AGENT_STATUS_WINDOW {
+        return Some(statuses.remove(0).status_message_id);
     }
+    None
 }
 
 fn todo_status_task_view(
@@ -2389,13 +2404,21 @@ mod tests {
     }
 
     /// Identity is the composed status message: observing one composition
-    /// twice describes one historical fact, and the window stays bounded.
+    /// twice describes one historical fact, evicts nothing, and the window
+    /// stays bounded.
     #[test]
     fn the_agent_status_window_is_identity_keyed_and_bounded() {
         let mut projection = projection();
+        let mut client = LiveStatusClient::attach(&mut projection);
         let observation = post_tool_batch_status("status-1", 1, 1);
         projection.apply(ConversationObservation::Status(observation.clone()));
         projection.apply(ConversationObservation::Status(observation));
+        client.drain(&mut projection);
+        assert_eq!(
+            client.evictions,
+            vec![None, None],
+            "neither the first admission nor its replay evicts anything"
+        );
         let (snapshot, _) = projection.snapshot().expect("snapshot");
         assert_eq!(snapshot.statuses.len(), 1);
 
@@ -2411,6 +2434,175 @@ mod tests {
         assert_eq!(
             snapshot.statuses.last().expect("newest").status_message_id,
             MessageId::new(format!("status-fill-{}", AGENT_STATUS_WINDOW + 4))
+        );
+    }
+
+    /// A continuously subscribed client that folds status-window
+    /// transitions exactly as the TUI reducer does.
+    ///
+    /// It is deliberately dumb: it removes the identity the runtime says its
+    /// own admission evicted, then appends by identity. It does not know
+    /// `AGENT_STATUS_WINDOW`, does not count entries, and makes no retention
+    /// decision of its own.
+    struct LiveStatusClient {
+        subscriber: u64,
+        statuses: Vec<AgentStatusView>,
+        evictions: Vec<Option<MessageId>>,
+    }
+
+    impl LiveStatusClient {
+        fn attach(projection: &mut RuntimeClientProjection) -> Self {
+            let (subscriber, _notify) = projection
+                .subscribe(RuntimeClientCursor::new(0))
+                .expect("serviceable cursor");
+            Self {
+                subscriber,
+                statuses: Vec::new(),
+                evictions: Vec::new(),
+            }
+        }
+
+        /// Drains everything published so far and folds it.
+        fn drain(&mut self, projection: &mut RuntimeClientProjection) {
+            loop {
+                match projection.poll_subscriber(self.subscriber) {
+                    SubscriberPoll::Event(event) => {
+                        let RuntimeClientEvent::AgentStatusComposed {
+                            status,
+                            evicted_status_message_id,
+                            ..
+                        } = event.event
+                        else {
+                            continue;
+                        };
+                        self.evictions.push(evicted_status_message_id.clone());
+                        if let Some(evicted) = evicted_status_message_id {
+                            self.statuses
+                                .retain(|existing| existing.status_message_id != evicted);
+                        }
+                        if !self
+                            .statuses
+                            .iter()
+                            .any(|existing| existing.status_message_id == status.status_message_id)
+                        {
+                            self.statuses.push(status);
+                        }
+                    }
+                    SubscriberPoll::Pending => return,
+                    other => panic!("the status client lost its subscription: {other:?}"),
+                }
+            }
+        }
+    }
+
+    /// **The bounded-window convergence invariant.**
+    ///
+    /// Folding every live event through cursor `C` and replacing state from
+    /// the authoritative snapshot at cursor `C` must reconstruct the same
+    /// semantic presentation state — past the retention bound as well as
+    /// below it.
+    ///
+    /// The client here is deliberately dumb: it applies the eviction each
+    /// event carries and appends by identity. It does not know
+    /// `AGENT_STATUS_WINDOW`, does not count, and makes no retention
+    /// decision, which is the entire point — with two retention owners this
+    /// fold and the snapshot would diverge from the 65th distinct
+    /// composition onwards.
+    #[test]
+    fn the_status_window_converges_between_live_fold_and_snapshot_repair() {
+        let mut projection = projection();
+        let mut live = LiveStatusClient::attach(&mut projection);
+        let overshoot = 7;
+
+        for index in 0..AGENT_STATUS_WINDOW + overshoot {
+            let cursor = u64::try_from(index).expect("test index fits a cursor") + 1;
+            projection.apply(ConversationObservation::Status(post_tool_batch_status(
+                &format!("status-{index}"),
+                1,
+                cursor,
+            )));
+            live.drain(&mut projection);
+        }
+        let client = live.statuses;
+
+        let (snapshot, _) = projection.snapshot().expect("snapshot");
+        assert_eq!(
+            snapshot.statuses.len(),
+            AGENT_STATUS_WINDOW,
+            "the runtime window stays bounded"
+        );
+        assert_eq!(
+            client, snapshot.statuses,
+            "the live fold reconstructs the authoritative window exactly"
+        );
+        assert_eq!(
+            client
+                .iter()
+                .map(|status| status.status_message_id.as_str().to_owned())
+                .collect::<Vec<_>>(),
+            (overshoot..AGENT_STATUS_WINDOW + overshoot)
+                .map(|index| format!("status-{index}"))
+                .collect::<Vec<_>>(),
+            "retention and order are the runtime's, applied verbatim"
+        );
+        assert_eq!(
+            client.last().map(|status| status.status_message_id.clone()),
+            snapshot
+                .statuses
+                .last()
+                .map(|status| status.status_message_id.clone()),
+            "the newest composition agrees on both paths"
+        );
+        for (folded, authoritative) in client.iter().zip(&snapshot.statuses) {
+            assert_eq!(
+                published_anchor(folded),
+                published_anchor(authoritative),
+                "placement survives the fold unchanged"
+            );
+        }
+    }
+
+    /// Replay combined with eviction: re-observing a composition the window
+    /// already holds must not displace another one.
+    ///
+    /// This is the failure a client-side retention rule invites — a second
+    /// "append then trim" would drop the oldest entry on every replay, while
+    /// the runtime's own window would not move at all.
+    #[test]
+    fn replaying_a_composition_evicts_nothing_from_a_full_window() {
+        let mut projection = projection();
+        let mut live = LiveStatusClient::attach(&mut projection);
+        let mut observations = Vec::new();
+
+        for index in 0..AGENT_STATUS_WINDOW + 3 {
+            let cursor = u64::try_from(index).expect("test index fits a cursor") + 1;
+            let observation = post_tool_batch_status(&format!("status-{index}"), 1, cursor);
+            observations.push(observation.clone());
+            projection.apply(ConversationObservation::Status(observation));
+            live.drain(&mut projection);
+        }
+        let (before, _) = projection.snapshot().expect("snapshot");
+        let evictions_before = live.evictions.len();
+
+        // Replay the newest composition and one that is still retained.
+        for observation in [
+            observations.last().expect("newest").clone(),
+            observations[AGENT_STATUS_WINDOW].clone(),
+        ] {
+            projection.apply(ConversationObservation::Status(observation));
+            live.drain(&mut projection);
+        }
+        assert_eq!(
+            live.evictions[evictions_before..],
+            [None, None],
+            "a replay is not an admission and evicts nothing"
+        );
+
+        let (after, _) = projection.snapshot().expect("snapshot");
+        assert_eq!(after.statuses, before.statuses, "replay moves no window");
+        assert_eq!(
+            live.statuses, after.statuses,
+            "the client fold agrees after replay"
         );
     }
 

@@ -125,12 +125,22 @@ pub struct RuntimeClientSnapshot {
     /// latest" takes the last element; it never needs a second field that
     /// could disagree with this order.
     ///
-    /// The window is bounded by [`AGENT_STATUS_WINDOW`]. The canonical Agent
-    /// Status Context message is request-scoped model history and never
-    /// enters the durable transcript, so unlike a transcript page this
-    /// window cannot be paged backwards: a composition older than the window
-    /// is simply no longer projected. Like `attempt` and `context`, it
-    /// describes the live runtime and starts empty on a fresh runtime.
+    /// The window is bounded by [`AGENT_STATUS_WINDOW`], and that bound is
+    /// owned **here, in the projection, and nowhere else**. A client folding
+    /// [`RuntimeClientEvent::AgentStatusComposed`](super::RuntimeClientEvent)
+    /// incrementally never applies a retention rule of its own: each event
+    /// carries the eviction this exact projection transition performed, so
+    /// the fold reproduces the window rather than re-deciding it. Two
+    /// retention owners would be two policies, and after the bound was
+    /// crossed a snapshot repair would silently drop compositions a
+    /// continuously subscribed client still believed in.
+    ///
+    /// The canonical Agent Status Context message is request-scoped model
+    /// history and never enters the durable transcript, so unlike a
+    /// transcript page this window cannot be paged backwards: a composition
+    /// older than the window is simply no longer projected. Like `attempt`
+    /// and `context`, it describes the live runtime and starts empty on a
+    /// fresh runtime.
     #[serde(default)]
     pub statuses: Vec<AgentStatusView>,
     /// Runtime-owned context-compaction diagnostics. The values describe
@@ -832,6 +842,14 @@ pub struct RuntimeClientSubagent {
 /// Agent Status is composed at most once per logical primary step, so this
 /// window covers far more history than any client renders at once while
 /// keeping the snapshot's size independent of conversation length.
+///
+/// This constant is the single authoritative retention policy. It is
+/// deliberately not part of the wire contract and deliberately not mirrored
+/// by any client: a client learns that a composition left the window only
+/// from the eviction its own
+/// [`RuntimeClientEvent::AgentStatusComposed`](super::RuntimeClientEvent)
+/// fold carries. Changing this value therefore changes one behaviour in one
+/// place, and no already-connected client can disagree with the change.
 pub const AGENT_STATUS_WINDOW: usize = 64;
 
 /// The structured Agent Status view of one composition.

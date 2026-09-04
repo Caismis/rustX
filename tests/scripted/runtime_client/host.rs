@@ -757,13 +757,25 @@ async fn agent_status_shares_one_composition() {
         1,
         "AgentStatusEmitted remains an internal fact; one composition is the only client status event"
     );
-    let status_view = events
+    let (status_view, evicted_status_message_id) = events
         .iter()
         .find_map(|event| match &event.event {
-            RuntimeClientEvent::AgentStatusComposed { status, .. } => Some(status),
+            RuntimeClientEvent::AgentStatusComposed {
+                status,
+                evicted_status_message_id,
+                ..
+            } => Some((status, evicted_status_message_id)),
             _ => None,
         })
         .expect("status event");
+    // The event is one window transition. This is the first composition of a
+    // fresh runtime, so it fills no window and evicts nothing — and the
+    // absent eviction is absent on the wire too, never a null a client has to
+    // interpret.
+    assert!(
+        evicted_status_message_id.is_none(),
+        "the first composition of a conversation evicts nothing"
+    );
     let requests = model_handle.requests();
     assert_eq!(requests.len(), 1);
     let model_rendered = requests[0]
@@ -794,6 +806,18 @@ async fn agent_status_shares_one_composition() {
         status_view.sections.first(),
         Some(rustx::runtime_client::RuntimeClientStatusSection::Temporal { .. })
     ));
+    let composed_wire = serde_json::to_value(
+        events
+            .iter()
+            .find(|event| matches!(event.event, RuntimeClientEvent::AgentStatusComposed { .. }))
+            .map(|event| &event.event)
+            .expect("status event"),
+    )
+    .expect("the composition event serializes");
+    assert!(
+        composed_wire.get("evicted_status_message_id").is_none(),
+        "an admission that evicted nothing carries no eviction field"
+    );
     let status_wire = serde_json::to_value(status_view).expect("status view serializes");
     assert!(
         status_wire.get("target_message_id").is_none(),

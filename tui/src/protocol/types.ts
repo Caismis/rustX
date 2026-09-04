@@ -26,10 +26,12 @@
 /**
  * Version 14 adds the Agent Status contextual annotation projection: the
  * snapshot carries the bounded composition window `statuses` instead of a
- * latest-only `status`, and each status opportunity carries the durable
- * identity it was established against. It retains version 13's Issue #187
- * subagent workspace representation, which separates logical child project
- * authority (`logical_workspace`) from physical Git worktree ownership
+ * latest-only `status`, each status opportunity carries the durable identity
+ * it was established against, and `agent_status_composed` carries the window
+ * transition — admission plus eviction — rather than only the new
+ * composition. It retains version 13's Issue #187 subagent workspace
+ * representation, which separates logical child project authority
+ * (`logical_workspace`) from physical Git worktree ownership
  * (`isolation.git_worktree` facts and the handoff's
  * `physical_worktree_root`); version 12's routed live interactions;
  * version 11's subagent activity projection; and version 9's closed
@@ -1396,10 +1398,28 @@ export type RuntimeClientEvent =
       transcript_cursor?: RuntimeClientTranscriptCursor;
     }
   | {
+      /**
+       * One complete transition of the runtime's bounded status window: the
+       * admitted composition and, when the window was full, the composition
+       * that admission pushed out.
+       *
+       * The retention bound itself is runtime policy and is deliberately not
+       * on the wire. A client folds the transition it is given; it never
+       * decides retention, which is what makes an incremental fold and a
+       * snapshot repair at the same cursor agree past the bound.
+       */
       type: "agent_status_composed";
       attempt_id: AttemptId;
       turn: number;
       status: AgentStatusView;
+      /**
+       * The composition evicted by this admission, when one was.
+       *
+       * Absent when nothing left the window — including for a replayed
+       * observation of a composition already held, which admits nothing and
+       * so evicts nothing.
+       */
+      evicted_status_message_id?: MessageId;
     }
   | {
       type: "inbound_enqueued";
