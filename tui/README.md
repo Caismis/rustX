@@ -403,12 +403,24 @@ inbound message, and the activity section keeps every pending interaction
 visible while the surface is open or dismissed. The TUI never settles,
 suppresses, or auto-answers an interaction locally.
 
+Dismissing the surface with `Esc` on an Approval is scoped to that exact
+interaction and to the queue as it stood at dismissal: the dismissed
+interaction stays pending and unanswered, and the surface stays closed for it
+until `Ctrl+G`. The dismissal never hides a *distinct* new arrival — when a
+different interaction becomes pending, the dismissal is superseded, the new
+arrival takes the focus, and the surface reopens on its own. The move emits
+no response.
+
 An Approval panel shows the runtime's prepared invocation — tool, origin,
 mode, call identity, reason, and the validated arguments, bounded by default
 and expandable with `Ctrl+E` or `/expand interaction` — and offers exactly two
 decisions: `Deny` and `Allow once`. `Deny` is preselected, so a generic Enter
 on a freshly opened surface can never grant execution authority; Allow
-requires explicit navigation first. `Esc` on an Approval dismisses the
+requires explicit navigation first. Expanded, the detail region shows the
+*complete* formatted invocation: every reason and argument line is reachable
+by scrolling the region with `PageUp`/`PageDown` (presentation-only; the
+Deny/Allow controls stay pinned below the detail, and scrolling settles
+nothing). `Esc` on an Approval dismisses the
 surface without answering (the interaction stays pending; `Ctrl+G` reopens).
 The surface displays the prepared invocation; it never reconstructs one from
 display text.

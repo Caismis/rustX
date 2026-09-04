@@ -59,6 +59,7 @@ import {
 } from "../commands/dispatcher.ts";
 import { sessionLabel } from "../presentation/selectors.ts";
 import {
+  findPendingInteraction,
   reconcileInteractionFocus,
   sameInteractionRef,
 } from "../presentation/interaction-focus.ts";
@@ -109,6 +110,7 @@ import { renderTodoPanel } from "./components/todos.ts";
 import {
   type PresentationPreferences,
   defaultPreferences,
+  interactionKey,
   withAllCollapsed,
   withExpandedBackgroundExecutions,
   withExpandedInteractions,
@@ -223,10 +225,18 @@ export class RustxTuiApp {
   #interactionFocus: InteractionRef | undefined;
   /**
    * The interaction the user dismissed the human-input surface on (approval
-   * Esc). Presentation-only: the interaction stays pending, and the surface
-   * reopens when the focus moves on or the user presses Ctrl+G.
+   * Esc), plus the pending queue exactly as it stood at dismissal.
+   *
+   * Presentation-only: the dismissed interaction stays pending and
+   * unanswered, and the surface reopens on Ctrl+G. The dismissal is scoped
+   * to that exact interaction and that exact queue: the moment a *distinct*
+   * interaction arrives, the dismissal is superseded — a previously
+   * dismissed approval must never silently hide newly required human input.
+   * Settlement or removal of the dismissed interaction retires the marker.
    */
-  #hitlDismissed: InteractionRef | undefined;
+  #hitlDismissed:
+    | { interaction: InteractionRef; known: ReadonlySet<string> }
+    | undefined;
   #quitting = false;
   #exitCode = 0;
   #finished = false;
@@ -1593,6 +1603,29 @@ export class RustxTuiApp {
    * the exact `InteractionRef` it was collected for.
    */
   #syncHitlOverlay(state: PresentationState): void {
+    // A dismissal is scoped to the exact dismissed interaction and to the
+    // queue as it stood then. A distinct arrival supersedes the dismissal:
+    // the newly required human input takes the focus (the surface was
+    // dismissed, so no in-progress panel is interrupted) and the surface
+    // reopens, while the dismissed interaction stays pending and unanswered.
+    // The move itself is presentation-only — it emits no response.
+    const dismissed = this.#hitlDismissed;
+    if (dismissed !== undefined) {
+      if (
+        findPendingInteraction(state.pendingInteractions, dismissed.interaction) ===
+        undefined
+      ) {
+        this.#hitlDismissed = undefined;
+      } else {
+        const arrival = state.pendingInteractions.find(
+          (entry) => !dismissed.known.has(interactionKey(entry.interaction)),
+        );
+        if (arrival !== undefined) {
+          this.#hitlDismissed = undefined;
+          this.#interactionFocus = arrival.interaction;
+        }
+      }
+    }
     const focused = this.#interactionFocus;
     // A read-only inspection is never an answer surface: it may show that a
     // child waits for human input, but the controls live only at the root.
@@ -1608,7 +1641,7 @@ export class RustxTuiApp {
     }
     if (
       this.#hitlDismissed !== undefined &&
-      sameInteractionRef(this.#hitlDismissed, focused)
+      sameInteractionRef(this.#hitlDismissed.interaction, focused)
     ) {
       return;
     }
@@ -1630,7 +1663,16 @@ export class RustxTuiApp {
           response: { type: "declined" },
         }),
       onDismiss: (interaction) => {
-        this.#hitlDismissed = interaction;
+        // Scope the dismissal to this exact interaction and to the queue as
+        // it stands now, so a later distinct arrival supersedes it.
+        this.#hitlDismissed = {
+          interaction,
+          known: new Set(
+            (this.#session.state?.pendingInteractions ?? []).map((entry) =>
+              interactionKey(entry.interaction),
+            ),
+          ),
+        };
         if (this.#hitlOverlay === overlay) this.#closeOverlay();
       },
       onInterrupt: () => void this.#onInterrupt(),

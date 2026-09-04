@@ -806,6 +806,85 @@ describe("RustxTuiApp lifecycle", () => {
     await running;
   });
 
+  it("a distinct new arrival supersedes an approval dismissal", async () => {
+    const approval = approvalInteraction("attempt-1-interaction-approval-a");
+    const question = questionnaireInteraction("attempt-1-interaction-question-b");
+    const state = {
+      ...emptyPresentationState(sessionModel("alpha/model-a")),
+      attempt: { ...attemptView(), phase: { type: "running" as const } },
+      pendingInteractions: [approval],
+    };
+    const session = fakeSession(async () => {}, state) as RuntimeClientAttachment & {
+      publishState(nextState: unknown): void;
+    };
+    const responses: Array<{ id: string; response: unknown }> = [];
+    (session as unknown as {
+      respondInteraction: (
+        interaction: { conversation_id: string; interaction_id: string },
+        response: unknown,
+      ) => Promise<void>;
+    }).respondInteraction = async (interaction, response) => {
+      responses.push({
+        id: `${interaction.conversation_id}::${interaction.interaction_id}`,
+        response,
+      });
+    };
+
+    const app = new RustxTuiApp({
+      session,
+      connection: fakeConnection(),
+      child: fakeChild([]),
+    });
+    const running = app.run();
+    await waitForApplicationContinuation();
+
+    // Esc dismisses the approval surface: A stays pending and unanswered.
+    process.stdin.emit("data", "\u001b");
+    await waitForPiEscapeDisambiguation();
+    await waitForApplicationContinuation();
+    assert.equal(responses.length, 0);
+    // The dismissal holds while the queue is unchanged: Enter answers nothing.
+    process.stdin.emit("data", "\r");
+    await waitForApplicationContinuation();
+    assert.equal(responses.length, 0);
+
+    // A distinct questionnaire arrives. The dismissal of A is scoped to A and
+    // cannot hide B: the surface reopens focused on the new arrival, and the
+    // focus move itself emits no response.
+    session.publishState({ ...state, pendingInteractions: [approval, question] });
+    await waitForApplicationContinuation();
+    assert.equal(responses.length, 0, "superseding a dismissal settles nothing");
+
+    // The focused panel is the newly arrived questionnaire: Esc is its typed
+    // decline, proving B became presented rather than suppressed behind A.
+    process.stdin.emit("data", "\u001b");
+    await waitForPiEscapeDisambiguation();
+    await waitForApplicationContinuation();
+    assert.deepEqual(responses, [
+      {
+        id: "conv-test::attempt-1-interaction-question-b",
+        response: { type: "questionnaire", response: { type: "declined" } },
+      },
+    ]);
+
+    // A was never answered and is still pending: once the runtime settles B,
+    // focus falls back to A, which remains answerable.
+    session.publishState({ ...state, pendingInteractions: [approval] });
+    await waitForApplicationContinuation();
+    process.stdin.emit("data", "\r");
+    await waitForApplicationContinuation();
+    assert.deepEqual(responses[1], {
+      id: "conv-test::attempt-1-interaction-approval-a",
+      response: {
+        type: "approval",
+        decision: { type: "deny", reason: "denied by the user" },
+      },
+    });
+
+    await app.quit();
+    await running;
+  });
+
   it("a resync replaces the stale surface and never answers the old interaction", async () => {
     const questionnaire = questionnaireInteraction("attempt-1-interaction-question-stale");
     const approval = approvalInteraction("attempt-1-interaction-approval-9");

@@ -28,15 +28,28 @@
 
 import type { InteractionRef, RoutedInteraction } from "../protocol/types.ts";
 
-/** Total order over routed identities: conversation first, then interaction. */
+/**
+ * Total order over routed identities: conversation first, then interaction.
+ *
+ * This order is *presentation only*: it exists so the queue, the focus
+ * reconciliation, and the reconnect rebuild are deterministic on every host.
+ * It is a plain UTF-16 code-unit comparison, deliberately locale-independent —
+ * an opaque runtime identity must order identically under any ambient locale,
+ * so locale collation is never consulted here.
+ */
 export function compareInteractionRefs(
   left: InteractionRef,
   right: InteractionRef,
 ): number {
   return (
-    left.conversation_id.localeCompare(right.conversation_id) ||
-    left.interaction_id.localeCompare(right.interaction_id)
+    compareCodeUnits(left.conversation_id, right.conversation_id) ||
+    compareCodeUnits(left.interaction_id, right.interaction_id)
   );
+}
+
+/** Locale-independent lexical order over opaque identifier strings. */
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 /** The display spelling of one routed identity. */
@@ -44,12 +57,21 @@ export function interactionRefLabel(interaction: InteractionRef): string {
   return `${interaction.conversation_id}::${interaction.interaction_id}`;
 }
 
-/** Whether two routed identities name the same runtime interaction. */
+/**
+ * Whether two routed identities name the same runtime interaction.
+ *
+ * Semantic identity is exact field equality over the opaque pair — never a
+ * collation result. Ordering ({@link compareInteractionRefs}) is a separate,
+ * presentation-only concept and plays no part in equality.
+ */
 export function sameInteractionRef(
   left: InteractionRef,
   right: InteractionRef,
 ): boolean {
-  return compareInteractionRefs(left, right) === 0;
+  return (
+    left.conversation_id === right.conversation_id &&
+    left.interaction_id === right.interaction_id
+  );
 }
 
 /** Finds one pending interaction by its exact routed identity. */
