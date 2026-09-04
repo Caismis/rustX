@@ -17,9 +17,12 @@
 //! create worktree at explicit C
 //! ```
 //!
-//! The parent path is never consulted again to choose the child's base.  A
-//! dirty parent is therefore allowed by default without copying any of its
-//! bytes, and a later parent commit cannot move an already acquired child.
+//! The parent path is never consulted again to choose the child's base.  The
+//! isolated-worktree default policy requires the ordinary source workspace to
+//! be clean before a child is created (Issue #188); only an explicit
+//! `require_clean_parent = false` permits a dirty parent, and that permissive
+//! path still never copies any parent dirty bytes into the child. A later
+//! parent commit cannot move an already acquired child.
 //!
 //! Terminal changed-state is deliberately two-dimensional:
 //! `dirty = ordinary tracked/index/untracked-non-ignored Git status`, while
@@ -52,6 +55,11 @@ pub enum SubagentWorkspacePolicy {
     /// An isolated Git worktree based on one committed source snapshot.
     GitWorktree {
         /// Reject acquisition when the parent has uncommitted changes.
+        ///
+        /// The configuration boundary normalizes this field: enabled
+        /// isolation is strict (`true`) by default (Issue #188). `false` is
+        /// the explicit opt-out that runs from the captured committed `HEAD`
+        /// while excluding dirty parent bytes.
         require_clean_parent: bool,
     },
 }
@@ -352,7 +360,7 @@ impl std::error::Error for WorkspaceSettlementError {}
 pub enum WorkspaceAcquireError {
     /// The invoking attempt's cancellation won before acquisition completed.
     Cancelled,
-    /// The parent is dirty and strict clean-parent policy rejected it.
+    /// The parent is dirty and the strict clean-parent policy rejected it.
     DirtyParent {
         /// The exact committed `HEAD` captured before the dirty observation.
         base_commit: String,
@@ -388,9 +396,14 @@ impl core::fmt::Display for WorkspaceAcquireError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Cancelled => formatter.write_str("workspace acquisition was cancelled"),
-            Self::DirtyParent { base_commit } => write!(
+            Self::DirtyParent { .. } => write!(
                 formatter,
-                "the parent workspace is dirty; strict clean-parent policy rejected base {base_commit}"
+                "the parent workspace has uncommitted changes, so the isolated \
+                 subagent was not started: local changes are never silently \
+                 dropped. Commit or clean the parent workspace, or explicitly \
+                 configure \"requireCleanParent\": false in this subagent's \
+                 definition to run from the committed HEAD snapshot while \
+                 intentionally ignoring local changes"
             ),
             Self::Git { operation, detail } => {
                 write!(formatter, "Git {operation} failed: {detail}")
@@ -1591,6 +1604,17 @@ mod tests {
         commit(path, "ignore build output");
     }
 
+    /// The resolved policy of an ordinary isolated definition under the
+    /// Issue #188 default: strict clean-parent. Tests of unrelated
+    /// acquisition/settlement semantics construct this policy so they keep
+    /// exercising the current default rather than freezing the obsolete
+    /// permissive default.
+    fn default_isolated() -> SubagentWorkspacePolicy {
+        SubagentWorkspacePolicy::GitWorktree {
+            require_clean_parent: true,
+        }
+    }
+
     #[cfg(unix)]
     fn shell_quote(path: &std::path::Path) -> String {
         format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
@@ -1650,14 +1674,22 @@ mod tests {
         );
     }
 
+    /// Issue #188: with an explicit permissive policy
+    /// (`require_clean_parent = false`), a dirty parent is still allowed, but
+    /// the child receives exactly the committed snapshot — tracked parent
+    /// edits and untracked parent files are never copied.
     #[tokio::test]
-    async fn dirty_parent_is_not_copied_into_default_worktree() {
+    async fn dirty_parent_is_not_copied_into_an_explicitly_permissive_worktree() {
         let dir = repository();
+        let base = head(dir.path());
         std::fs::write(dir.path().join("tracked.txt"), "parent dirty\n").expect("dirty file");
         std::fs::write(dir.path().join("untracked.txt"), "parent only\n").expect("untracked");
         let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
+                // The explicit opt-out: the child runs from the captured
+                // committed HEAD while intentionally ignoring parent-local
+                // dirty bytes (Issue #188).
                 SubagentWorkspacePolicy::GitWorktree {
                     require_clean_parent: false,
                 },
@@ -1666,12 +1698,11 @@ mod tests {
             )
             .await
             .expect("worktree");
-        assert!(
-            lease
-                .snapshot()
-                .git_worktree()
-                .expect("Git worktree facts")
-                .parent_had_uncommitted_changes
+        let facts = lease.snapshot().git_worktree().expect("Git worktree facts");
+        assert!(facts.parent_had_uncommitted_changes);
+        assert_eq!(
+            facts.base_commit, base,
+            "the child base is the exact committed HEAD captured before acquisition"
         );
         assert_eq!(
             std::fs::read_to_string(lease.logical_workspace().join("tracked.txt"))
@@ -1698,9 +1729,7 @@ mod tests {
         let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: false,
-                },
+                default_isolated(),
                 &SubagentId::new("conversation-clean-subagent-1"),
                 &CancellationSignal::new(),
             )
@@ -1721,13 +1750,7 @@ mod tests {
         let runtime = tempfile::tempdir().expect("runtime root");
         let subagent_id = SubagentId::new("conversation-root-scope-subagent-1");
         let lease = SubagentWorkspaceManager::new(repository.path(), runtime.path())
-            .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: false,
-                },
-                &subagent_id,
-                &CancellationSignal::new(),
-            )
+            .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
             .await
             .expect("worktree");
         let physical = runtime
@@ -1756,13 +1779,7 @@ mod tests {
         let subagent_id = SubagentId::new("conversation-subdir-scope-subagent-1");
         let lease =
             SubagentWorkspaceManager::new(repository.path().join("backend"), runtime.path())
-                .acquire(
-                    SubagentWorkspacePolicy::GitWorktree {
-                        require_clean_parent: false,
-                    },
-                    &subagent_id,
-                    &CancellationSignal::new(),
-                )
+                .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
                 .await
                 .expect("worktree");
         let physical = runtime
@@ -1795,13 +1812,7 @@ mod tests {
         let runtime = tempfile::tempdir().expect("runtime root");
         let subagent_id = SubagentId::new("conversation-nested-scope-subagent-1");
         let lease = SubagentWorkspaceManager::new(repository.path().join(relative), runtime.path())
-            .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: false,
-                },
-                &subagent_id,
-                &CancellationSignal::new(),
-            )
+            .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
             .await
             .expect("worktree");
         let physical = runtime
@@ -1819,6 +1830,11 @@ mod tests {
         );
     }
 
+    /// The fixture is intentionally dirty: the logical scope exists only as
+    /// an untracked directory, so reaching the committed-scope validation
+    /// requires the explicit permissive opt-out (`require_clean_parent =
+    /// false`). The test then proves the committed checkout's missing scope
+    /// fails closed without widening or leaking the worktree.
     #[tokio::test]
     async fn absent_committed_scope_fails_without_widening_or_leaking_the_worktree() {
         let repository = repository();
@@ -1876,13 +1892,7 @@ mod tests {
         let runtime = tempfile::tempdir().expect("runtime root");
         let subagent_id = SubagentId::new("conversation-scoped-handoff-subagent-1");
         let lease = SubagentWorkspaceManager::new(repository.path().join(relative), runtime.path())
-            .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: false,
-                },
-                &subagent_id,
-                &CancellationSignal::new(),
-            )
+            .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
             .await
             .expect("worktree");
         let physical = lease
@@ -1977,13 +1987,7 @@ mod tests {
 
         let manager = SubagentWorkspaceManager::new(dir.path(), &runtime_root);
         let lease = manager
-            .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: false,
-                },
-                &subagent_id,
-                &CancellationSignal::new(),
-            )
+            .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
             .await
             .expect("worktree");
 
@@ -2006,9 +2010,7 @@ mod tests {
         let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: false,
-                },
+                default_isolated(),
                 &SubagentId::new("conversation-ignored-only-subagent-1"),
                 &CancellationSignal::new(),
             )
@@ -2038,9 +2040,7 @@ mod tests {
         let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: false,
-                },
+                default_isolated(),
                 &SubagentId::new("conversation-snapshot-subagent-1"),
                 &CancellationSignal::new(),
             )
@@ -2079,9 +2079,7 @@ mod tests {
         let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: false,
-                },
+                default_isolated(),
                 &SubagentId::new("conversation-dirty-child-subagent-1"),
                 &CancellationSignal::new(),
             )
@@ -2118,9 +2116,7 @@ mod tests {
         let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: false,
-                },
+                default_isolated(),
                 &SubagentId::new("conversation-committed-child-subagent-1"),
                 &CancellationSignal::new(),
             )
@@ -2153,9 +2149,7 @@ mod tests {
         let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: false,
-                },
+                default_isolated(),
                 &SubagentId::new("conversation-committed-ignored-subagent-1"),
                 &CancellationSignal::new(),
             )
@@ -2195,9 +2189,7 @@ mod tests {
         let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: false,
-                },
+                default_isolated(),
                 &SubagentId::new("conversation-source-ignored-subagent-1"),
                 &CancellationSignal::new(),
             )
@@ -2230,9 +2222,7 @@ mod tests {
         let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: false,
-                },
+                default_isolated(),
                 &SubagentId::new("conversation-recovered-ignored-subagent-1"),
                 &CancellationSignal::new(),
             )
@@ -2261,9 +2251,7 @@ mod tests {
         let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: false,
-                },
+                default_isolated(),
                 &SubagentId::new("conversation-committed-dirty-subagent-1"),
                 &CancellationSignal::new(),
             )
@@ -2299,9 +2287,7 @@ mod tests {
         let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: false,
-                },
+                default_isolated(),
                 &SubagentId::new("conversation-staged-dirty-subagent-1"),
                 &CancellationSignal::new(),
             )
@@ -2332,13 +2318,7 @@ mod tests {
         let task_subagent = subagent.clone();
         let task = tokio::spawn(async move {
             task_manager
-                .acquire(
-                    SubagentWorkspacePolicy::GitWorktree {
-                        require_clean_parent: false,
-                    },
-                    &task_subagent,
-                    &task_cancellation,
-                )
+                .acquire(default_isolated(), &task_subagent, &task_cancellation)
                 .await
         });
         hook.wait_until_created().await;
@@ -2365,25 +2345,14 @@ mod tests {
     #[tokio::test]
     async fn concurrent_children_have_distinct_deterministic_paths_and_refs() {
         let dir = repository();
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let runtime = tempfile::tempdir().expect("runtime root");
+        let manager = SubagentWorkspaceManager::new(dir.path(), runtime.path());
         let first_id = SubagentId::new("conversation-concurrent-subagent-1");
         let second_id = SubagentId::new("conversation-concurrent-subagent-2");
         let cancellation = CancellationSignal::new();
         let (first, second) = tokio::join!(
-            manager.acquire(
-                SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: false,
-                },
-                &first_id,
-                &cancellation,
-            ),
-            manager.acquire(
-                SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: false,
-                },
-                &second_id,
-                &cancellation,
-            )
+            manager.acquire(default_isolated(), &first_id, &cancellation,),
+            manager.acquire(default_isolated(), &second_id, &cancellation,)
         );
         let first = first.expect("first worktree");
         let second = second.expect("second worktree");
@@ -2409,27 +2378,16 @@ mod tests {
     #[tokio::test]
     async fn same_identity_collision_cannot_settle_another_lease() {
         let dir = repository();
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let runtime = tempfile::tempdir().expect("runtime root");
+        let manager = SubagentWorkspaceManager::new(dir.path(), runtime.path());
         let subagent = SubagentId::new("conversation-same-identity-subagent-1");
         let first = manager
-            .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: false,
-                },
-                &subagent,
-                &CancellationSignal::new(),
-            )
+            .acquire(default_isolated(), &subagent, &CancellationSignal::new())
             .await
             .expect("first worktree");
         let path = first.logical_workspace().to_path_buf();
         let second = manager
-            .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: false,
-                },
-                &subagent,
-                &CancellationSignal::new(),
-            )
+            .acquire(default_isolated(), &subagent, &CancellationSignal::new())
             .await
             .expect_err("same deterministic identity must collide");
         assert!(matches!(
@@ -2450,24 +2408,13 @@ mod tests {
     #[tokio::test]
     async fn concurrent_same_identity_acquisition_has_one_atomic_owner() {
         let dir = repository();
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let runtime = tempfile::tempdir().expect("runtime root");
+        let manager = SubagentWorkspaceManager::new(dir.path(), runtime.path());
         let subagent = SubagentId::new("conversation-concurrent-same-identity-subagent-1");
         let cancellation = CancellationSignal::new();
         let (left, right) = tokio::join!(
-            manager.acquire(
-                SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: false,
-                },
-                &subagent,
-                &cancellation,
-            ),
-            manager.acquire(
-                SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: false,
-                },
-                &subagent,
-                &cancellation,
-            )
+            manager.acquire(default_isolated(), &subagent, &cancellation,),
+            manager.acquire(default_isolated(), &subagent, &cancellation,)
         );
         let (lease, error) = match (left, right) {
             (Ok(lease), Err(error)) | (Err(error), Ok(lease)) => (lease, error),
@@ -2488,25 +2435,186 @@ mod tests {
         );
     }
 
+    /// Issue #188: the default strict policy rejects a tracked unstaged
+    /// parent modification before any child worktree is created, and the
+    /// typed rejection retains the exact committed `HEAD` captured before the
+    /// dirty observation.
     #[tokio::test]
-    async fn strict_parent_policy_rejects_before_worktree_creation() {
+    async fn tracked_unstaged_parent_change_is_rejected_before_worktree_creation() {
         let dir = repository();
+        let base = head(dir.path());
         std::fs::write(dir.path().join("tracked.txt"), "dirty\n").expect("dirty file");
         let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let error = manager
             .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: true,
-                },
+                default_isolated(),
                 &SubagentId::new("conversation-a-subagent-1"),
                 &CancellationSignal::new(),
             )
             .await
             .expect_err("dirty parent");
-        assert!(matches!(
-            error,
-            super::WorkspaceAcquireError::DirtyParent { .. }
-        ));
+        match error {
+            super::WorkspaceAcquireError::DirtyParent {
+                base_commit: captured,
+            } => assert_eq!(
+                captured, base,
+                "the rejection retains the exact pre-acquisition committed HEAD"
+            ),
+            other => panic!("unexpected acquisition error: {other:?}"),
+        }
         assert!(!dir.path().join("artifacts/worktrees").exists());
+    }
+
+    /// Issue #188: a staged/index parent change also rejects under the
+    /// default strict policy, before any worktree path or ref is created.
+    #[tokio::test]
+    async fn staged_parent_change_is_rejected_before_worktree_creation() {
+        let dir = repository();
+        let base = head(dir.path());
+        std::fs::write(dir.path().join("tracked.txt"), "staged dirty\n").expect("dirty file");
+        git(dir.path(), &["add", "tracked.txt"]);
+        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let error = manager
+            .acquire(
+                default_isolated(),
+                &SubagentId::new("conversation-a-subagent-1"),
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect_err("staged parent change");
+        match error {
+            super::WorkspaceAcquireError::DirtyParent {
+                base_commit: captured,
+            } => assert_eq!(
+                captured, base,
+                "the rejection retains the exact pre-acquisition committed HEAD"
+            ),
+            other => panic!("unexpected acquisition error: {other:?}"),
+        }
+        assert!(!dir.path().join("artifacts/worktrees").exists());
+    }
+
+    /// Issue #188: an untracked non-ignored parent file also rejects under
+    /// the default strict policy, before any worktree path or ref is created.
+    #[tokio::test]
+    async fn untracked_parent_file_is_rejected_before_worktree_creation() {
+        let dir = repository();
+        let base = head(dir.path());
+        std::fs::write(dir.path().join("parent-only.txt"), "untracked\n").expect("untracked file");
+        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let error = manager
+            .acquire(
+                default_isolated(),
+                &SubagentId::new("conversation-a-subagent-1"),
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect_err("untracked parent file");
+        match error {
+            super::WorkspaceAcquireError::DirtyParent {
+                base_commit: captured,
+            } => assert_eq!(
+                captured, base,
+                "the rejection retains the exact pre-acquisition committed HEAD"
+            ),
+            other => panic!("unexpected acquisition error: {other:?}"),
+        }
+        assert!(!dir.path().join("artifacts/worktrees").exists());
+    }
+
+    /// Issue #188: ignored-only parent artifacts (build/cache output) never
+    /// make the ordinary source workspace dirty, so the default strict
+    /// policy acquires from the clean committed snapshot.
+    #[tokio::test]
+    async fn ignored_only_parent_artifacts_are_allowed_by_the_default_policy() {
+        let dir = repository();
+        ignore_target(dir.path());
+        let base = head(dir.path());
+        std::fs::create_dir_all(dir.path().join("target/debug")).expect("target");
+        std::fs::write(dir.path().join("target/debug/generated"), "cache\n").expect("cache");
+        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let lease = manager
+            .acquire(
+                default_isolated(),
+                &SubagentId::new("conversation-ignored-only-parent-subagent-1"),
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect("ignored-only parent artifacts must not reject");
+        let facts = lease.snapshot().git_worktree().expect("Git worktree facts");
+        assert_eq!(
+            facts.base_commit, base,
+            "the child is based on the exact committed HEAD"
+        );
+        assert!(
+            !facts.parent_had_uncommitted_changes,
+            "ignored-only artifacts are not uncommitted source changes"
+        );
+        assert_eq!(
+            lease.settle_after_child().await.cleanup,
+            WorkspaceCleanup::Removed
+        );
+    }
+
+    /// Issue #188: with an explicit `require_clean_parent = false`, a dirty
+    /// parent (tracked unstaged, staged, and untracked changes) still
+    /// acquires, the child base is exactly the committed HEAD captured
+    /// before acquisition, and none of the parent's dirty bytes reach the
+    /// child. A later parent commit does not redefine the already selected
+    /// child base.
+    #[tokio::test]
+    async fn permissive_dirty_parent_bases_the_child_on_the_captured_commit() {
+        let dir = repository();
+        let base = head(dir.path());
+        std::fs::write(dir.path().join("tracked.txt"), "unstaged parent\n").expect("unstaged");
+        std::fs::write(dir.path().join("staged.txt"), "staged parent\n").expect("staged");
+        git(dir.path(), &["add", "staged.txt"]);
+        std::fs::write(dir.path().join("parent-only.txt"), "untracked\n").expect("untracked");
+        let runtime = tempfile::tempdir().expect("runtime root");
+        let manager = SubagentWorkspaceManager::new(dir.path(), runtime.path());
+        let lease = manager
+            .acquire(
+                // Explicit opt-out: run from committed HEAD while ignoring
+                // parent-local dirty bytes (Issue #188).
+                SubagentWorkspacePolicy::GitWorktree {
+                    require_clean_parent: false,
+                },
+                &SubagentId::new("conversation-permissive-snapshot-subagent-1"),
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect("permissive dirty parent acquisition");
+        let facts = lease.snapshot().git_worktree().expect("Git worktree facts");
+        assert_eq!(facts.base_commit, base);
+        assert!(facts.parent_had_uncommitted_changes);
+        assert_eq!(
+            head(lease.logical_workspace()),
+            base,
+            "the child worktree is created at the captured pre-acquisition HEAD"
+        );
+        // No dirty parent byte is copied: tracked content is the committed
+        // byte, staged content is absent, and untracked files are absent.
+        assert_eq!(
+            std::fs::read_to_string(lease.logical_workspace().join("tracked.txt"))
+                .expect("child tracked file"),
+            "committed\n"
+        );
+        assert!(!lease.logical_workspace().join("staged.txt").exists());
+        assert!(!lease.logical_workspace().join("parent-only.txt").exists());
+        // A later parent commit must not redefine the already selected base.
+        commit(dir.path(), "parent commits after acquisition");
+        let moved_parent_head = head(dir.path());
+        assert_ne!(moved_parent_head, base);
+        assert_eq!(head(lease.logical_workspace()), base);
+        assert_eq!(
+            head(lease.logical_workspace()),
+            lease
+                .snapshot()
+                .git_worktree()
+                .expect("Git worktree facts")
+                .base_commit
+        );
+        let settlement = lease.settle_after_child().await;
+        assert_eq!(settlement.cleanup, WorkspaceCleanup::Removed);
     }
 }
