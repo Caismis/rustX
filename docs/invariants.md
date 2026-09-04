@@ -1904,10 +1904,16 @@ second authority:
   Skills/resources, MCP definitions, or Builtin definitions. The child performs no ancestor project-instruction
   discovery, Skill discovery, Python-package discovery, or arbitrary
   configuration rediscovery from the worktree.
-- **The default dirty-parent path is intentionally isolated.** A dirty parent
-  is allowed when `require_clean_parent` is false; the child sees the
-  committed tree at `C` only. `require_clean_parent = true` rejects the start
-  before durable ownership and before worktree creation.
+- **Isolated execution is strict by default (Issue #188).** An enabled
+  worktree resolves an omitted `requireCleanParent` to `true` at the
+  configuration/domain boundary. A dirty ordinary source workspace — tracked
+  unstaged, staged/index, or untracked non-ignored changes — rejects the
+  start before durable ownership and before worktree creation; the typed
+  rejection retains the exact committed `HEAD` captured before the dirty
+  observation. Ignored-only build/cache artifacts never make the source
+  workspace dirty. `requireCleanParent = false` is the only explicit opt-out:
+  the child then sees the committed tree at `C` only, while parent-local
+  dirty bytes are intentionally excluded and never copied.
 - **Runtime worktree identity is deterministic and bounded.** For semantic
   `SubagentId = S`, the manager hashes
   `rustx-subagent-worktree-v1\n<length(S)>\nS` with SHA-256 and uses the

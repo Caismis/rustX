@@ -5209,10 +5209,17 @@ definitions, model, and tool definitions. It never rediscovers those from
 the worktree or from a worktree ancestor.
 
 The source snapshot is one committed `HEAD = C`; parent dirty bytes, the
-index, untracked files, stashes, and patches are never copied. Dirty parents
-are allowed by default and the immutable workspace snapshot records that
-fact. `require_clean_parent: true` rejects before durable ownership. Parent
-movement after acquisition cannot change the child's base.
+index, untracked files, stashes, and patches are never copied. Isolated
+execution is strict by default (Issue #188): an enabled worktree resolves
+an omitted `requireCleanParent` to `true`, so a dirty ordinary source
+workspace (tracked unstaged, staged/index, or untracked non-ignored
+changes) rejects acquisition before any child worktree is created, and the
+immutable workspace snapshot records whether the parent was dirty. Only an
+explicit `require_clean_parent: false` permits a dirty parent while the
+child still receives exactly the committed snapshot, intentionally
+excluding parent-local dirty bytes. Ignored-only artifacts never make the
+source workspace dirty. Parent movement after acquisition cannot change the
+child's base.
 
 Terminal workspace settlement is ordered after the direct child is reaped
 and every retained Issue #145 nested-process anchor is physically contained
