@@ -71,11 +71,13 @@ use super::workspace::WorkspaceSnapshot;
 /// (fd 1), so observation backpressure can never occupy the reliable
 /// control transport. Version 10 adds bidirectional routed interaction
 /// control frames and root-provider availability state; version 11 adds the
-/// root publication-admission handshake. HITL traffic remains on fd 0 and
-/// never uses the disposable activity lane.
+/// root publication-admission handshake. Version 12 separates the child's
+/// logical project workspace from the physical Git worktree root owned by
+/// the parent. HITL traffic remains on fd 0 and never uses the disposable
+/// activity lane.
 /// There is no compatibility decoding: a peer that does not speak exactly
 /// this version exits before composing anything.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 11;
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 12;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -161,9 +163,10 @@ pub(crate) struct SubagentChildSpec {
     pub agent_status: AgentStatusConfig,
     /// The session context policy of the child.
     pub context: SessionContextPolicy,
-    /// The authoritative project workspace path and runtime-owned snapshot
-    /// facts selected by the parent. In worktree mode this also carries the
-    /// exact committed base and runtime-created ref.
+    /// The authoritative logical project workspace and runtime-owned
+    /// isolation facts selected by the parent. In worktree mode the nested
+    /// facts separately carry the physical checkout root, repository-relative
+    /// scope, exact committed base, and runtime-created ref.
     pub workspace_snapshot: WorkspaceSnapshot,
     /// The exact spawn-incarnation-private mutable runtime root (artifacts,
     /// diagnostics, Skills, and private Python state). It is never the stable

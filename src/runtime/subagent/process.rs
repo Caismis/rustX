@@ -541,6 +541,16 @@ pub(crate) async fn spawn_staged(
         )
         .await);
     }
+    if let Err(detail) = spec.workspace_snapshot.validate() {
+        return Err(discard_unstaged_resources(
+            runtime_root,
+            workspace,
+            SpawnError::WorkspaceSetup {
+                detail: format!("child spec carries an invalid workspace snapshot: {detail}"),
+            },
+        )
+        .await);
+    }
     // The containment prerequisite is established BEFORE the child exists.
     // A subagent child may create nested supervised process units during
     // its own preparation, and the parent can only contain an orphaned unit
@@ -557,7 +567,7 @@ pub(crate) async fn spawn_staged(
         )
         .await);
     }
-    let spawned = match spawn_process(plan, runtime_root.path(), workspace.workspace()) {
+    let spawned = match spawn_process(plan, runtime_root.path(), workspace.logical_workspace()) {
         Ok(spawned) => spawned,
         Err(error) => {
             return Err(discard_unstaged_resources(runtime_root, workspace, error).await);
@@ -2119,8 +2129,16 @@ mod tests {
             )
             .await
             .expect("staged worktree");
-        let workspace = lease.workspace().to_path_buf();
-        let branch = lease.snapshot().branch.clone().expect("runtime branch");
+        let workspace = lease
+            .physical_worktree_root()
+            .expect("physical worktree")
+            .to_path_buf();
+        let branch = lease
+            .snapshot()
+            .git_worktree()
+            .expect("Git worktree facts")
+            .branch
+            .clone();
         std::fs::write(workspace.join("staged-work.txt"), "retain me\n")
             .expect("staged project work");
 
@@ -2270,7 +2288,10 @@ mod tests {
             )
             .await
             .expect("worktree lease");
-        let workspace_path = lease.workspace().to_path_buf();
+        let workspace_path = lease
+            .physical_worktree_root()
+            .expect("physical worktree")
+            .to_path_buf();
         let child_runtime = repository.path().join("child-runtime");
         std::fs::create_dir_all(&child_runtime).expect("child runtime");
         let mut retained = RetainedProcessUnits::default();
@@ -2378,7 +2399,7 @@ mod tests {
                     &spec,
                     runtime_root,
                     crate::runtime::subagent::SubagentWorkspaceManager::new(
-                        &spec.workspace_snapshot.workspace,
+                        &spec.workspace_snapshot.logical_workspace,
                         dir.path().join("workspace-artifacts"),
                     )
                     .acquire(

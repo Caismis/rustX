@@ -79,6 +79,26 @@ const SESSION_JSON: &str = r#"{
   }
 }"#;
 
+const ISOLATED_SUBDIRECTORY_SESSION_JSON: &str = r#"{
+  "agentId": "agent-parent",
+  "model": {"model": "fixture/subagent-model"},
+  "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
+  "defaultTools": ["read", "subagent"],
+  "subagents": {
+    "maxConcurrent": 4,
+    "definitions": {
+      "explore": {
+        "description": "Read the preserved logical project scope.",
+        "instructionsFile": ".agents/subagents/explore/instructions.md",
+        "tools": {"builtin": ["read"]},
+        "worktree": {"enabled": true}
+      }
+    },
+    "main": ["explore"],
+    "workflow": []
+  }
+}"#;
+
 /// The `explore` agent's instruction document, written into the workspace so
 /// the parent generation can freeze it.
 const EXPLORE_INSTRUCTIONS: &str = "You are a read-only exploration subagent of the rustX \
@@ -98,6 +118,19 @@ impl Process {
     /// Spawns the binary with explicit startup arguments.
     fn spawn(root: &std::path::Path, models: &str, session: &str, key: &str) -> Self {
         Self::launch(root, models, session, key, false, None, false)
+    }
+
+    /// Spawns the parent over an explicit logical workspace. This is used by
+    /// the isolated-subdirectory boundary regression, where the repository
+    /// root and project authority intentionally differ.
+    fn spawn_at_workspace(
+        root: &std::path::Path,
+        workspace: &std::path::Path,
+        models: &str,
+        session: &str,
+        key: &str,
+    ) -> Self {
+        Self::launch_at_workspace(root, workspace, models, session, key, false, None, false)
     }
 
     /// Spawns a parent whose real child process receives the deterministic
@@ -150,6 +183,29 @@ impl Process {
         fail_live_inspection: bool,
     ) -> Self {
         let workspace = root.join("workspace");
+        Self::launch_at_workspace(
+            root,
+            &workspace,
+            models,
+            session,
+            key,
+            continue_active,
+            inspect_conversation,
+            fail_live_inspection,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn launch_at_workspace(
+        root: &std::path::Path,
+        workspace: &std::path::Path,
+        models: &str,
+        session: &str,
+        key: &str,
+        continue_active: bool,
+        inspect_conversation: Option<&str>,
+        fail_live_inspection: bool,
+    ) -> Self {
         std::fs::create_dir_all(workspace.join(".agents/subagents/explore")).expect("workspace");
         std::fs::write(
             workspace
@@ -167,7 +223,7 @@ impl Process {
             .arg("--config")
             .arg(root.join("rustx.jsonc"))
             .arg("--workspace")
-            .arg(&workspace)
+            .arg(workspace)
             .arg("--runtime-root")
             .arg(root.join("private"))
             .env_clear()
@@ -280,6 +336,27 @@ fn route(body: &str) -> crate::common::FixtureReply {
     }
 }
 
+/// Routes the Issue #187 real-child proof. The child can reach the final
+/// answer only after its real `read` tool resolves `scope-marker.txt` against
+/// the repository-subdirectory authority carried over IPC and composed into
+/// its `ConversationToolRuntime`.
+fn isolated_subdirectory_route(body: &str) -> crate::common::FixtureReply {
+    let is_parent = body.contains("please delegate isolated scope");
+    let has_tool_history =
+        body.contains("\\\"role\\\":\\\"tool\\\"") || body.contains("\"role\":\"tool\"");
+    if is_parent && !has_tool_history {
+        crate::common::sse_fixture("openai_chat", "issue187_subagent_tool_call.sse")
+    } else if is_parent {
+        crate::common::sse_fixture("openai_chat", "plain_text.sse")
+    } else if body.contains("ISSUE187_BACKEND_MARKER") {
+        crate::common::sse_fixture("openai_chat", "issue187_child_scoped_answer.sse")
+    } else if body.contains("read the scoped marker from scope-marker.txt") {
+        crate::common::sse_fixture("openai_chat", "issue187_child_read_tool_call.sse")
+    } else {
+        crate::common::sse_fixture("openai_chat", "plain_text.sse")
+    }
+}
+
 /// The hard-parent-death fixture gates the child's provider response. The
 /// parent receives its delegation tool call normally; only the real child
 /// request is held, which makes the child nonterminal while the parent is
@@ -382,6 +459,177 @@ fn has_runtime_interrupted_notice(message: &rustx::message::types::MessageBlock)
                     _ => false,
                 })
     )
+}
+
+fn git(cwd: &std::path::Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "rustX tests")
+        .env("GIT_AUTHOR_EMAIL", "rustx-tests@example.invalid")
+        .env("GIT_COMMITTER_NAME", "rustX tests")
+        .env("GIT_COMMITTER_EMAIL", "rustx-tests@example.invalid")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .expect("run Git");
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Issue #187: the parent workspace is a repository subdirectory. A real
+/// child process receives the nested workspace snapshot over IPC, composes
+/// its tool runtime at `<physical-worktree-root>/backend`, and successfully
+/// reads a path that does not exist at the physical root. Terminal cleanup
+/// removes the physical worktree while the immutable logical scope remains
+/// unchanged in the Runtime Client projection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)]
+async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary() {
+    let server = crate::common::FixtureServer::start_with_body(|_attempt, _head, body| {
+        isolated_subdirectory_route(body)
+    })
+    .await;
+    let root = tempfile::tempdir().expect("temp root");
+    let repository = root.path().join("repository");
+    let logical_parent = repository.join("backend");
+    std::fs::create_dir_all(logical_parent.join(".agents/subagents/explore"))
+        .expect("logical workspace");
+    std::fs::write(
+        logical_parent.join(".agents/subagents/explore/instructions.md"),
+        EXPLORE_INSTRUCTIONS,
+    )
+    .expect("instructions");
+    std::fs::write(
+        logical_parent.join("scope-marker.txt"),
+        "ISSUE187_BACKEND_MARKER\n",
+    )
+    .expect("marker");
+    git(&repository, &["init"]);
+    git(&repository, &["add", "--all"]);
+    git(
+        &repository,
+        &["commit", "-m", "isolated subdirectory fixture"],
+    );
+
+    let models = models_json(&server.url("/v1"));
+    let mut process = Process::spawn_at_workspace(
+        root.path(),
+        &logical_parent,
+        &models,
+        ISOLATED_SUBDIRECTORY_SESSION_JSON,
+        "subagent-secret",
+    );
+    let response = process
+        .request(|id| RuntimeClientRequest::Initialize {
+            id: rustx::runtime_client::RequestId::new(id),
+            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
+        })
+        .await;
+    assert!(
+        matches!(
+            response.result,
+            Some(RuntimeClientResult::Initialized { .. })
+        ),
+        "initialize must succeed: {response:?}"
+    );
+    let response = process
+        .request(|id| RuntimeClientRequest::SubmitInbound {
+            id: rustx::runtime_client::RequestId::new(id),
+            content: vec![rustx::message::types::UserContentBlock::Text(
+                rustx::message::content::TextBlock {
+                    text: "please delegate isolated scope".to_owned(),
+                },
+            )],
+        })
+        .await;
+    assert!(
+        matches!(
+            response.result,
+            Some(RuntimeClientResult::InboundAccepted { .. })
+        ),
+        "submit_inbound must be accepted: {response:?}"
+    );
+
+    let mut final_subagent = None;
+    for _ in 0..4_000 {
+        let response = process
+            .request(|id| RuntimeClientRequest::SnapshotGet {
+                id: rustx::runtime_client::RequestId::new(id),
+            })
+            .await;
+        let Some(RuntimeClientResult::Snapshot { snapshot, .. }) = response.result else {
+            panic!("snapshot_get must succeed: {response:?}");
+        };
+        let answered = snapshot.messages.iter().any(|message| match message {
+            rustx::message::types::MessageBlock::User(user) => user.content.iter().any(|block| {
+                matches!(
+                    block,
+                    rustx::message::types::UserContentBlock::Text(text)
+                        if text.text.contains("CHILD-SCOPE-OK")
+                )
+            }),
+            _ => false,
+        });
+        if let Some(subagent) = snapshot
+            .subagents
+            .into_iter()
+            .find(|subagent| subagent.state == rustx::runtime::subagent::SubagentState::Succeeded)
+            && answered
+        {
+            final_subagent = Some(subagent);
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    let subagent = final_subagent.expect("the scoped real child must succeed");
+    let rustx::runtime_client::RuntimeClientWorkspaceIsolation::GitWorktree {
+        source_repository_root,
+        repository_relative_workspace,
+        physical_worktree_root,
+        ..
+    } = &subagent.workspace.isolation
+    else {
+        panic!("the child must report isolated worktree facts");
+    };
+    assert_eq!(
+        source_repository_root,
+        &repository.canonicalize().expect("canonical repository")
+    );
+    assert_eq!(
+        repository_relative_workspace,
+        std::path::Path::new("backend")
+    );
+    assert_eq!(
+        subagent.workspace.logical_workspace,
+        physical_worktree_root.join("backend")
+    );
+    assert!(subagent.workspace.handoff.is_none());
+    assert!(
+        !physical_worktree_root.exists(),
+        "clean terminal settlement removes the physical worktree root"
+    );
+    assert!(server.request_bodies().iter().any(|body| {
+        body.contains("ISSUE187_BACKEND_MARKER")
+            && body.contains("read the scoped marker from scope-marker.txt")
+            && !body.contains("please delegate isolated scope")
+    }));
+
+    let response = process
+        .request(|id| RuntimeClientRequest::Shutdown {
+            id: rustx::runtime_client::RequestId::new(id),
+        })
+        .await;
+    assert!(matches!(
+        response.result,
+        Some(RuntimeClientResult::ShutdownCompleted)
+    ));
+    let (status, stderr) = process.close_and_wait().await;
+    assert!(status.success(), "clean shutdown: {stderr}");
 }
 
 /// The complete subagent lifecycle through the real binary: the parent's

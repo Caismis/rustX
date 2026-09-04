@@ -1130,7 +1130,7 @@ pub struct RuntimeClientProtocolEvent {
 // Re-exported for use by the public protocol docs.
 pub use super::snapshot::{
     RuntimeClientBackgroundExecution, RuntimeClientSubagent, RuntimeClientSubagentWorkspace,
-    RuntimeClientWorkspaceHandoff,
+    RuntimeClientWorkspaceHandoff, RuntimeClientWorkspaceIsolation,
 };
 
 #[cfg(test)]
@@ -1187,11 +1187,8 @@ mod tests {
                 .expect("timestamp")
                 .with_timezone(&Utc),
             workspace: super::RuntimeClientSubagentWorkspace {
-                workspace: std::path::PathBuf::from("<shared-workspace>"),
-                isolated: false,
-                base_commit: None,
-                branch: None,
-                parent_had_uncommitted_changes: false,
+                logical_workspace: std::path::PathBuf::from("<shared-workspace>"),
+                isolation: super::RuntimeClientWorkspaceIsolation::Shared,
                 handoff: None,
             },
         };

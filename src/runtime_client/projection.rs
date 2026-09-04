@@ -1839,14 +1839,28 @@ pub(crate) fn subagent_view(
         execution_profile: snapshot.profile.clone(),
         started_at: snapshot.started_at,
         workspace: super::snapshot::RuntimeClientSubagentWorkspace {
-            workspace: snapshot.workspace.workspace.clone(),
-            isolated: snapshot.workspace.isolated,
-            base_commit: snapshot.workspace.base_commit.clone(),
-            branch: snapshot.workspace.branch.clone(),
-            parent_had_uncommitted_changes: snapshot.workspace.parent_had_uncommitted_changes,
+            logical_workspace: snapshot.workspace.logical_workspace.clone(),
+            isolation: match &snapshot.workspace.isolation {
+                crate::runtime::subagent::WorkspaceIsolation::Shared => {
+                    super::snapshot::RuntimeClientWorkspaceIsolation::Shared
+                }
+                crate::runtime::subagent::WorkspaceIsolation::GitWorktree(worktree) => {
+                    super::snapshot::RuntimeClientWorkspaceIsolation::GitWorktree {
+                        source_repository_root: worktree.source_repository_root.clone(),
+                        repository_relative_workspace: worktree
+                            .repository_relative_workspace
+                            .clone(),
+                        physical_worktree_root: worktree.physical_worktree_root.clone(),
+                        base_commit: worktree.base_commit.clone(),
+                        branch: worktree.branch.clone(),
+                        parent_had_uncommitted_changes: worktree.parent_had_uncommitted_changes,
+                    }
+                }
+            },
             handoff: snapshot.handoff.as_ref().map(|handoff| {
                 super::snapshot::RuntimeClientWorkspaceHandoff {
-                    workspace: handoff.workspace.clone(),
+                    logical_workspace: handoff.logical_workspace.clone(),
+                    physical_worktree_root: handoff.physical_worktree_root.clone(),
                     branch: handoff.branch.clone(),
                     base_commit: handoff.base_commit.clone(),
                     head_commit: handoff.head_commit.clone(),

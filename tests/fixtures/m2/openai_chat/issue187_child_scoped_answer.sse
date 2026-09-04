@@ -1,0 +1,5 @@
+data: {"id":"chatcmpl-issue187-child-answer","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant","content":"CHILD-SCOPE-OK: ISSUE187_BACKEND_MARKER"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-issue187-child-answer","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
