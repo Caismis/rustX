@@ -701,6 +701,17 @@ impl RuntimeClientProjection {
                 }
                 events
             }
+            ConversationObservation::SubagentWorkspace(snapshot) => {
+                // A retained-workspace disposal is a reliable resource
+                // projection update. It must not repeat the terminal
+                // lifecycle branch or remove pending child interactions as a
+                // second logical terminal transition.
+                let view = subagent_view(&snapshot);
+                upsert_subagent(&mut self.snapshot.subagents, view.clone());
+                vec![RuntimeClientEvent::SubagentUpdated {
+                    subagent: Box::new(view),
+                }]
+            }
             ConversationObservation::SubagentActivity(snapshot) => {
                 let view = subagent_view(&snapshot);
                 upsert_subagent(&mut self.snapshot.subagents, view.clone());
@@ -1148,7 +1159,8 @@ impl RuntimeClientProjection {
             | RuntimeEvent::BackgroundTerminalPublished { .. }
             | RuntimeEvent::SubagentOwnershipCommitted { .. }
             | RuntimeEvent::SubagentTerminalPublished { .. }
-            | RuntimeEvent::SubagentTerminalSettled { .. } => Vec::new(),
+            | RuntimeEvent::SubagentTerminalSettled { .. }
+            | RuntimeEvent::SubagentWorkspaceDisposed { .. } => Vec::new(),
             // The interaction requested/settled facts are durable audit
             // evidence (Issue #109). The client already learns the live
             // pending/settled transitions from the coordinator's own

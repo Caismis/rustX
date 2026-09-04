@@ -265,7 +265,12 @@ pub enum RuntimeClientSessionRequest {
 /// deterministically and reconstruct the same window and placement from a
 /// snapshot that it folded from live events, without ever owning retention or
 /// inferring a position. There is no compatibility decoding of version 13.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 14;
+///
+/// Version 15 carries the explicit Runtime Client retained-workspace disposal
+/// operation and its typed outcomes/errors. The existing workspace isolation
+/// projection remains the source-repository identity authority; there is no
+/// compatibility decoding of version 14.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 15;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -606,6 +611,15 @@ pub enum RuntimeClientRequest {
         /// The subagent identity.
         subagent_id: crate::runtime::identity::SubagentId,
     },
+    /// Dispose the exact retained workspace owned by one terminal subagent.
+    /// The request names only the authoritative subagent identity; it never
+    /// carries a filesystem path or Git ref.
+    SubagentWorkspaceDispose {
+        /// Attachment-scoped request id.
+        id: RequestId,
+        /// The terminal subagent whose retained resource is being disposed.
+        subagent_id: crate::runtime::identity::SubagentId,
+    },
     /// Release the attachment.
     Detach {
         /// Attachment-scoped request id.
@@ -654,6 +668,7 @@ impl RuntimeClientRequest {
             | Self::BackgroundCancel { id, .. }
             | Self::SubagentStatus { id, .. }
             | Self::SubagentCancel { id, .. }
+            | Self::SubagentWorkspaceDispose { id, .. }
             | Self::Detach { id, .. }
             | Self::Shutdown { id, .. } => *id,
         }
@@ -690,6 +705,7 @@ impl RuntimeClientRequest {
             Self::BackgroundCancel { .. } => "background_cancel",
             Self::SubagentStatus { .. } => "subagent_status",
             Self::SubagentCancel { .. } => "subagent_cancel",
+            Self::SubagentWorkspaceDispose { .. } => "subagent_workspace_dispose",
             Self::Detach { .. } => "detach",
             Self::Shutdown { .. } => "shutdown",
         }
@@ -721,6 +737,7 @@ impl RuntimeClientRequest {
             Self::CompactContext { .. }
                 | Self::ReloadResources { .. }
                 | Self::InteractionRespond { .. }
+                | Self::SubagentWorkspaceDispose { .. }
                 | Self::Shutdown { .. }
         ) || self.is_session_request()
     }
@@ -747,6 +764,7 @@ impl RuntimeClientRequest {
                 | Self::SessionTreeBranch { .. }
                 | Self::BackgroundCancel { .. }
                 | Self::SubagentCancel { .. }
+                | Self::SubagentWorkspaceDispose { .. }
                 | Self::Shutdown { .. }
         )
     }
@@ -826,6 +844,20 @@ pub struct RuntimeClientResponse {
     /// The typed protocol error, when the request failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<RuntimeClientError>,
+}
+
+/// The public result of disposing a retained subagent workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeClientSubagentWorkspaceDisposalOutcome {
+    /// The retained physical worktree and its exact runtime branch were
+    /// removed by this request.
+    Disposed,
+    /// The same child resource was disposed by an earlier request. No
+    /// physical deletion is attempted for this result.
+    AlreadyDisposed,
+    /// The child has no retained isolated resource to dispose.
+    NoRetainedWorkspace,
 }
 
 /// The typed success payloads of the Runtime Client protocol.
@@ -1005,6 +1037,14 @@ pub enum RuntimeClientResult {
         /// The registry snapshot after processing the request.
         subagent: RuntimeClientSubagent,
     },
+    /// `subagent_workspace_dispose` completed its resource transition or its
+    /// deterministic idempotent/no-resource outcome.
+    SubagentWorkspaceDisposed {
+        /// The authoritative terminal subagent projection after the request.
+        subagent: RuntimeClientSubagent,
+        /// The physical-resource result, independent of logical lifecycle.
+        outcome: RuntimeClientSubagentWorkspaceDisposalOutcome,
+    },
     /// `detach` succeeded.
     Detached,
     /// `shutdown` succeeded: the conversation runtime reached quiescence.
@@ -1085,6 +1125,15 @@ pub enum RuntimeClientError {
     UnknownSubagent {
         /// The referenced subagent identity.
         subagent_id: crate::runtime::identity::SubagentId,
+    },
+    /// The Runtime Client requested disposal, but the recorded handoff and
+    /// current Git registration did not prove one exact runtime-owned
+    /// resource. The operation failed closed before destructive mutation.
+    SubagentWorkspaceOwnershipMismatch {
+        /// The retained child whose resource could not be proven.
+        subagent_id: crate::runtime::identity::SubagentId,
+        /// The bounded proof diagnostic.
+        message: String,
     },
     /// The requested cursor is not serviceable by the bounded projection
     /// replay buffer; the client must take a fresh snapshot from the runtime
@@ -1178,7 +1227,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 14);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 15);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
