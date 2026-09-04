@@ -2212,6 +2212,20 @@ async fn child_questionnaire_routes_through_root_without_parent_mediation() {
         "the child model observes its own ask_user ToolResult"
     );
 
+    // The child's terminal publication is linearized before the settled
+    // snapshot: `wait_until_settled` proves the result draft was durably
+    // accepted into the parent inbox. The parent Agent Loop's adoption of
+    // that inbox is a separate asynchronous step, so the no-pending-batch
+    // assertion below must first observe the adoption fact — the canonical
+    // linearization point after which the pending rows are gone.
+    await_journal_fact(
+        &parent.plane.store,
+        1,
+        |event| matches!(event, RuntimeEvent::InboundTurnAdopted { .. }),
+        "the parent adopts the child terminal notice",
+    )
+    .await;
+
     let parent_wire = serde_json::to_string(&journal(&parent.plane.store)).expect("parent JSON");
     assert!(!parent_wire.contains(question));
     assert!(!parent_wire.contains("staging"));
