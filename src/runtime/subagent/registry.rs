@@ -2987,6 +2987,22 @@ mod tests {
             .await
             .expect_err("strict dirty parent must reject preparation");
         assert!(matches!(error, SubagentStartError::Workspace { .. }));
+        // Issue #188: the model-facing projection is the concise actionable
+        // contract — it names the actionable condition, explains why the
+        // isolated child was not started, and points at the explicit opt-out
+        // without leaking low-level Git command details.
+        let message = error.to_string();
+        assert!(
+            message.contains("could not prepare the child workspace")
+                && message.contains("uncommitted changes")
+                && message.contains("requireCleanParent")
+                && message.contains("committed HEAD"),
+            "unexpected model-facing dirty-parent projection: {message}"
+        );
+        assert!(
+            !message.contains("porcelain") && !message.contains("rev-parse"),
+            "the model-facing error must not expose Git command details: {message}"
+        );
         assert!(plane.registry.all_snapshots().is_empty());
         assert!(!events(&plane).iter().any(|event| matches!(
             event,
@@ -3227,7 +3243,7 @@ mod tests {
         let mut spec = start_spec("write a source change");
         spec.resolved.workspace_policy =
             crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
-                require_clean_parent: false,
+                require_clean_parent: true,
             };
         let accepted = start(&plane, &spec).await;
         let workspace = plane
@@ -3281,7 +3297,7 @@ mod tests {
         let mut spec = start_spec("write a source change");
         spec.resolved.workspace_policy =
             crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
-                require_clean_parent: false,
+                require_clean_parent: true,
             };
         let accepted = start(&plane, &spec).await;
 
@@ -3960,7 +3976,7 @@ mod tests {
         let mut spec = start_spec("inspect");
         spec.resolved.workspace_policy =
             crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
-                require_clean_parent: false,
+                require_clean_parent: true,
             };
         let accepted = start(&plane, &spec).await;
         plane.store.arm_fail_accept_times(3);

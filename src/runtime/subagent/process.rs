@@ -2122,7 +2122,7 @@ mod tests {
         let lease = manager
             .acquire(
                 SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: false,
+                    require_clean_parent: true,
                 },
                 &SubagentId::new("conversation-staged-worktree-subagent-1"),
                 &CancellationSignal::new(),
@@ -2281,7 +2281,7 @@ mod tests {
         let lease = manager
             .acquire(
                 SubagentWorkspacePolicy::GitWorktree {
-                    require_clean_parent: false,
+                    require_clean_parent: true,
                 },
                 &SubagentId::new("conv-workspace-unresolved-anchor"),
                 &CancellationSignal::new(),
