@@ -841,11 +841,13 @@ pub const AGENT_STATUS_WINDOW: usize = 64;
 /// from the same composition, so a client never parses the rendered text
 /// to recover structure and never triggers a second composition.
 ///
-/// The view also carries the two runtime facts that place the composition in
-/// conversation order — the eligible opportunities and
-/// [`transcript_anchor`](Self::transcript_anchor). Placement is a runtime
-/// fact because only the runtime knows it; how a client draws a status at
-/// that place is presentation and stays entirely outside this type.
+/// The view also carries the runtime facts that place the composition in
+/// conversation order: the eligible
+/// [`opportunities`](Self::opportunities), each with the durable identity it
+/// was established against. Placement is a runtime fact because only the
+/// runtime knows it, and it is frozen where it is determined rather than
+/// reconstructed downstream; how a client draws a status at that place is
+/// presentation and stays entirely outside this type.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentStatusView {
@@ -857,22 +859,18 @@ pub struct AgentStatusView {
     /// the stable identity of the composition: observing the same
     /// `status_message_id` twice describes one composition, never two.
     pub status_message_id: MessageId,
-    /// The delivery opportunities that made this generation eligible.
-    pub opportunities: AgentStatusOpportunityView,
-    /// The newest durable transcript position that existed when the runtime
-    /// composed this status.
+    /// The delivery opportunities that made this generation eligible, each
+    /// carrying its own placement fact.
     ///
     /// The Agent Status Context message is request-scoped model history: it
     /// carries no transcript cursor of its own and never becomes a transcript
-    /// item. This is the composition's linearization point *in transcript
-    /// order* — the frontier the composition followed — which is what lets a
-    /// client place a status deterministically without inferring anything
-    /// from arrival timing or screen adjacency.
-    ///
-    /// `None` only when the conversation had no durable transcript item at
-    /// all when the status was composed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub transcript_anchor: Option<RuntimeClientTranscriptCursor>,
+    /// item, so placement has to be published or it cannot be known. Each
+    /// opportunity publishes the identity it was established against —
+    /// `FreshInbound` the exact inbound message, `PostToolBatch` the durable
+    /// position of its settled tool batch — and both were frozen by the
+    /// semantic owner at that establishment, not sampled when this
+    /// observation was folded.
+    pub opportunities: AgentStatusOpportunityView,
     /// The ordered structured sections.
     pub sections: Vec<RuntimeClientStatusSection>,
     /// The canonical rendered representation, derived from the same
@@ -965,11 +963,33 @@ pub struct FreshInboundStatusOpportunityView {
     pub target_message_id: MessageId,
 }
 
-/// Minimal external representation of the batch-level `PostToolBatch`
-/// opportunity. The marker has no durable or scheduling metadata.
+/// The external view of one `PostToolBatch` status opportunity.
+///
+/// The opportunity itself remains a marker with no durable or scheduling
+/// metadata. What it carries here is the one ordering fact that places a
+/// composition made from it: the durable transcript position of the canonical
+/// `ToolResult` batch that established it, frozen by the Agent Loop at that
+/// batch's commit.
+///
+/// The freeze point matters and is the whole reason this is a published fact
+/// rather than something a client or the projection reconstructs. A status is
+/// composed at the primary-step preparation that consumes this opportunity,
+/// but it is not observed until the durable model-turn-start commit lands,
+/// and inbound acceptance is an independent durable boundary that may commit
+/// in between. Anything that read "the newest durable position" at fold time
+/// would place the status after an unrelated inbound turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-pub struct PostToolBatchStatusOpportunityView {}
+pub struct PostToolBatchStatusOpportunityView {
+    /// The durable position of the settled `ToolResult` batch this
+    /// opportunity belongs to.
+    ///
+    /// `None` only when that batch committed no visible transcript item, in
+    /// which case the composition carries no transcript-position placement
+    /// and a client draws no annotation for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_anchor: Option<RuntimeClientTranscriptCursor>,
+}
 
 /// The deterministic capability projection.
 ///

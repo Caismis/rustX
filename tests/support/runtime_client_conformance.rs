@@ -1607,12 +1607,21 @@ pub async fn agent_status_is_runtime_owned(factory: &dyn DriverFactory) {
     );
     assert!(!status.rendered.is_empty());
 
-    // The composition carries its own transcript anchor: the durable
-    // position of the inbound turn it followed. Placement is a runtime fact,
-    // published once, not something a client derives from arrival order.
+    // Placement is a runtime fact, published once with the opportunity that
+    // established it, not something a client derives from arrival order. This
+    // composition is `FreshInbound`, so it is placed by the exact inbound
+    // message identity and carries no transcript position of its own.
     assert!(
-        status.transcript_anchor.is_some(),
-        "a composition that followed a durable inbound turn carries its anchor"
+        status
+            .opportunities
+            .fresh_inbound
+            .as_ref()
+            .is_some_and(|fresh| !fresh.target_message_id.as_str().is_empty()),
+        "a FreshInbound composition publishes the message identity that places it"
+    );
+    assert!(
+        status.opportunities.post_tool_batch.is_none(),
+        "no settled tool batch made this composition eligible"
     );
 
     // The snapshot carries the same composed observation, in the same

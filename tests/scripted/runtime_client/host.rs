@@ -825,10 +825,12 @@ async fn agent_status_shares_one_composition() {
         "PostToolBatch has no production wire field before it has a producer"
     );
     let (snapshot, _) = host.snapshot().expect("snapshot");
-    // Placement is published, never inferred: the composition carries the
-    // durable transcript position of the inbound turn it followed, and the
-    // Agent Status Context message itself is still absent from the durable
-    // transcript because it is request-scoped model history.
+    // Placement is published, never inferred. This composition is
+    // `FreshInbound`, so it is placed by the exact inbound message identity —
+    // the stronger fact — and that message is a real durable transcript item
+    // a client can find. The Agent Status Context message itself is still
+    // absent from the durable transcript because it is request-scoped model
+    // history.
     let target_message_id = status_view
         .opportunities
         .fresh_inbound
@@ -836,26 +838,17 @@ async fn agent_status_shares_one_composition() {
         .expect("FreshInbound is populated by the current producer")
         .target_message_id
         .clone();
-    let target_cursor = snapshot
-        .transcript
-        .entries
-        .iter()
-        .find_map(|entry| match &entry.item {
-            rustx::runtime_client::RuntimeClientTranscriptItem::Message { message } => {
-                (rustx::conversation::message_id_of(message) == target_message_id)
-                    .then_some(entry.cursor)
-            }
-            _ => None,
-        })
-        .expect("the referenced inbound turn is a durable transcript item");
-    assert_eq!(
-        status_view.transcript_anchor,
-        Some(target_cursor),
-        "the composition anchors to the durable position of the turn it followed"
-    );
-    assert_eq!(
-        status_wire["transcript_anchor"],
-        serde_json::json!(target_cursor)
+    assert!(
+        snapshot
+            .transcript
+            .entries
+            .iter()
+            .any(|entry| match &entry.item {
+                rustx::runtime_client::RuntimeClientTranscriptItem::Message { message } =>
+                    rustx::conversation::message_id_of(message) == target_message_id,
+                _ => false,
+            }),
+        "the referenced inbound turn is a durable transcript item"
     );
     assert!(
         !snapshot.transcript.entries.iter().any(|entry| matches!(

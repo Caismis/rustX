@@ -164,9 +164,15 @@ function compareRoutedInteractions(
 // transcript draws instead is placed from runtime facts alone:
 //
 // ```text
-// FreshInbound present   the referenced inbound message   opportunities.fresh_inbound
-// otherwise              the durable position it followed transcript_anchor
+// FreshInbound present   the referenced inbound message
+//                          opportunities.fresh_inbound.target_message_id
+// otherwise              the settled tool batch it followed
+//                          opportunities.post_tool_batch.transcript_anchor
 // ```
+//
+// Both identities are frozen by the runtime at the point the opportunity was
+// established, so neither can be moved afterwards by unrelated durable
+// activity. Nothing here reconstructs a position.
 //
 // Exactly one of those applies to any one composition, which is what makes
 // "every composed Agent Status has exactly one presentation anchor" a
@@ -182,7 +188,7 @@ export type AgentStatusAnchor =
       messageId: MessageId;
     }
   | {
-      /** A standalone update after the settled frontier it followed. */
+      /** A standalone update after the settled tool batch it followed. */
       kind: "transcript_position";
       cursor: RuntimeClientTranscriptCursor;
     }
@@ -204,8 +210,9 @@ export function agentStatusAnchor(status: AgentStatusView): AgentStatusAnchor {
   if (fresh !== undefined) {
     return { kind: "inbound_message", messageId: fresh.target_message_id };
   }
-  if (status.transcript_anchor !== undefined) {
-    return { kind: "transcript_position", cursor: status.transcript_anchor };
+  const batch = status.opportunities.post_tool_batch;
+  if (batch?.transcript_anchor !== undefined) {
+    return { kind: "transcript_position", cursor: batch.transcript_anchor };
   }
   return { kind: "unplaced" };
 }

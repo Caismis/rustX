@@ -204,15 +204,6 @@ pub(crate) struct RuntimeClientProjection {
     replay: VecDeque<(RuntimeClientCursor, RuntimeClientEvent)>,
     /// The explicit bounded retention limit.
     replay_limit: usize,
-    /// The newest durable transcript position this projection has observed.
-    ///
-    /// Every durable transcript item — a committed or durably accepted
-    /// message, a publication audit, an interaction audit — arrives here with
-    /// the cursor `transcript_order` allocated for it. The frontier is the
-    /// maximum of those, so it never moves backwards when an *older*
-    /// transcript page is read. It exists to give one composed Agent Status
-    /// its linearization point in transcript order; nothing else reads it.
-    transcript_frontier: Option<RuntimeClientTranscriptCursor>,
     /// The registered subscribers in registration order.
     subscribers: Vec<Subscriber>,
     /// The next opaque subscriber registration identity.
@@ -261,7 +252,6 @@ impl RuntimeClientProjection {
             },
             replay: VecDeque::new(),
             replay_limit,
-            transcript_frontier: None,
             subscribers: Vec::new(),
             next_subscriber_id: 1,
             #[cfg(test)]
@@ -306,16 +296,6 @@ impl RuntimeClientProjection {
     ) {
         self.snapshot.transcript = super::snapshot::transcript_page_view(seed.transcript.clone())
             .expect("runtime bootstrap transcript is valid");
-        let newest = self
-            .snapshot
-            .transcript
-            .entries
-            .iter()
-            .map(|entry| entry.cursor)
-            .max();
-        if let Some(cursor) = newest {
-            self.observe_transcript_cursor(cursor);
-        }
         self.snapshot.shutting_down = seed.shutting_down;
         self.snapshot.effective_approval_mode = seed.approval_mode.effective;
         self.snapshot.pending_approval_mode = (seed.approval_mode.effective
@@ -501,9 +481,6 @@ impl RuntimeClientProjection {
                 }
                 self.snapshot.messages.push(block.clone());
                 let transcript_cursor = transcript_cursor.map(RuntimeClientTranscriptCursor::from);
-                if let Some(cursor) = transcript_cursor {
-                    self.observe_transcript_cursor(cursor);
-                }
                 events.push(RuntimeClientEvent::MessageCommitted {
                     attempt_id,
                     message: block,
@@ -549,7 +526,6 @@ impl RuntimeClientProjection {
                     attempt.in_flight = None;
                 }
                 let transcript_cursor = RuntimeClientTranscriptCursor::from(transcript_cursor);
-                self.observe_transcript_cursor(transcript_cursor);
                 vec![RuntimeClientEvent::AssistantPublicationSettled {
                     attempt_id,
                     audit,
@@ -559,12 +535,17 @@ impl RuntimeClientProjection {
             // A composed status joins the bounded window in composition
             // order. It replaces nothing: an earlier composition is a
             // historical fact of this conversation and stays exactly where
-            // the runtime put it. Its transcript anchor is frozen here, at
-            // the composition's own linearization point, so the placement a
-            // client reconstructs from a snapshot is the placement it would
-            // have folded from the live event.
+            // the runtime put it.
+            //
+            // Placement is projected, never reconstructed: the observation
+            // already carries the durable identity its opportunity froze, so
+            // nothing here consults the conversation's current transcript
+            // position. Doing that would sample a frontier that unrelated
+            // durable activity may have advanced since the composition was
+            // determined.
+            //
             ConversationObservation::Status(observation) => {
-                let view = status_view(&observation, self.transcript_frontier);
+                let view = status_view(&observation);
                 push_status(&mut self.snapshot.statuses, view.clone());
                 vec![RuntimeClientEvent::AgentStatusComposed {
                     attempt_id: observation.attempt_id.clone(),
@@ -577,9 +558,6 @@ impl RuntimeClientProjection {
                 let transcript_cursor = item
                     .transcript_cursor()
                     .map(RuntimeClientTranscriptCursor::from);
-                if let Some(cursor) = transcript_cursor {
-                    self.observe_transcript_cursor(cursor);
-                }
                 vec![RuntimeClientEvent::InboundEnqueued {
                     sequence: item.sequence(),
                     message: item.message().clone(),
@@ -609,7 +587,6 @@ impl RuntimeClientProjection {
                     let audit_view = super::snapshot::interaction_requested_view(audit)
                         .expect("runtime interaction requested audit is valid");
                     let transcript_cursor = RuntimeClientTranscriptCursor::from(transcript_cursor);
-                    self.observe_transcript_cursor(transcript_cursor);
                     events.push(RuntimeClientEvent::InteractionAuditRequested {
                         audit: Box::new(audit_view),
                         transcript_cursor,
@@ -634,7 +611,6 @@ impl RuntimeClientProjection {
                     let audit_view = super::snapshot::interaction_settled_view(audit)
                         .expect("runtime interaction settled audit is valid");
                     let transcript_cursor = RuntimeClientTranscriptCursor::from(transcript_cursor);
-                    self.observe_transcript_cursor(transcript_cursor);
                     events.push(RuntimeClientEvent::InteractionAuditSettled {
                         audit: Box::new(audit_view),
                         transcript_cursor,
@@ -1492,23 +1468,7 @@ impl RuntimeClientProjection {
         &mut self,
         page: super::snapshot::RuntimeClientTranscriptPage,
     ) {
-        if let Some(cursor) = page.entries.iter().map(|entry| entry.cursor).max() {
-            self.observe_transcript_cursor(cursor);
-        }
         self.snapshot.transcript = page;
-    }
-
-    /// Records one observed durable transcript position.
-    ///
-    /// The frontier only ever advances: reading an older page is a paging
-    /// operation, not a rewind of conversation order.
-    fn observe_transcript_cursor(&mut self, cursor: RuntimeClientTranscriptCursor) {
-        if self
-            .transcript_frontier
-            .is_none_or(|frontier| cursor > frontier)
-        {
-            self.transcript_frontier = Some(cursor);
-        }
     }
 
     /// The oldest cursor a subscription can still serve: one before the
@@ -1969,10 +1929,7 @@ fn upsert_interaction(
 /// Builds the structured external status view from the exact composed
 /// status observation; the rendered representation derives from the same
 /// composition through the one canonical renderer.
-pub(crate) fn status_view(
-    observation: &AgentStatusObservation,
-    transcript_anchor: Option<RuntimeClientTranscriptCursor>,
-) -> AgentStatusView {
+pub(crate) fn status_view(observation: &AgentStatusObservation) -> AgentStatusView {
     let sections = observation
         .status
         .sections
@@ -2014,10 +1971,18 @@ pub(crate) fn status_view(
         .map(|fresh| FreshInboundStatusOpportunityView {
             target_message_id: fresh.target_message_id.clone(),
         });
-    let post_tool_batch = observation
-        .opportunities
-        .post_tool_batch
-        .map(|_| PostToolBatchStatusOpportunityView::default());
+    // The placement fact of a `PostToolBatch` composition is carried by the
+    // observation, frozen by the Agent Loop at the tool batch's own commit.
+    // It is copied, never derived.
+    let post_tool_batch =
+        observation
+            .opportunities
+            .post_tool_batch
+            .map(|_| PostToolBatchStatusOpportunityView {
+                transcript_anchor: observation
+                    .post_tool_batch_anchor
+                    .map(RuntimeClientTranscriptCursor::from),
+            });
     AgentStatusView {
         attempt_id: observation.attempt_id.clone(),
         turn: observation.turn,
@@ -2026,7 +1991,6 @@ pub(crate) fn status_view(
             fresh_inbound,
             post_tool_batch,
         },
-        transcript_anchor,
         rendered: render_agent_status(&observation.status),
         sections,
     }
@@ -2102,8 +2066,9 @@ mod tests {
     use crate::runtime::types::{CancellationReason, TokenMeasurement, TokenMeasurementSource};
     use crate::runtime_client::event::{RuntimeClientEvent, RuntimeClientOutcome};
     use crate::runtime_client::snapshot::{
-        AGENT_STATUS_WINDOW, AgentStatusOpportunityView, ForegroundToolState, InFlightBlock,
-        RuntimeClientAttemptPhase, RuntimeClientStatusSection, RuntimeClientTranscriptCursor,
+        AGENT_STATUS_WINDOW, AgentStatusOpportunityView, AgentStatusView, ForegroundToolState,
+        InFlightBlock, RuntimeClientAttemptPhase, RuntimeClientStatusSection,
+        RuntimeClientTranscriptCursor,
     };
     use crate::runtime_client::types::RuntimeClientCursor;
     use crate::scripted_suites::support::context::{
@@ -2203,16 +2168,22 @@ mod tests {
     }
 
     /// One composed status observation for the placement suites.
+    ///
+    /// `post_tool_batch_anchor` is the placement fact the Agent Loop froze at
+    /// the tool batch commit; it is supplied by the caller exactly as the
+    /// loop supplies it, never derived from projection state.
     fn status_observation(
         status_message_id: &str,
         turn: u32,
         opportunities: AgentStatusOpportunitySet,
+        post_tool_batch_anchor: Option<crate::durable::TranscriptCursor>,
     ) -> AgentStatusObservation {
         AgentStatusObservation {
             attempt_id: attempt(),
             turn,
             status_message_id: MessageId::new(status_message_id),
             opportunities,
+            post_tool_batch_anchor,
             status: AgentStatus {
                 generated_at: chrono::DateTime::from_timestamp(0, 0).expect("timestamp"),
                 sections: Vec::new(),
@@ -2220,8 +2191,53 @@ mod tests {
         }
     }
 
+    /// One `FreshInbound`-only composition: placed by the exact inbound
+    /// message identity, which needs no transcript position.
+    fn fresh_inbound_status(
+        status_message_id: &str,
+        turn: u32,
+        target: &str,
+    ) -> AgentStatusObservation {
+        status_observation(
+            status_message_id,
+            turn,
+            AgentStatusOpportunitySet {
+                fresh_inbound: Some(FreshInboundStatusOpportunity {
+                    target_message_id: MessageId::new(target),
+                }),
+                post_tool_batch: None,
+            },
+            None,
+        )
+    }
+
+    /// One `PostToolBatch`-only composition, carrying the durable position
+    /// its settled tool batch froze.
+    fn post_tool_batch_status(
+        status_message_id: &str,
+        turn: u32,
+        batch_cursor: u64,
+    ) -> AgentStatusObservation {
+        status_observation(
+            status_message_id,
+            turn,
+            AgentStatusOpportunitySet {
+                fresh_inbound: None,
+                post_tool_batch: Some(PostToolBatchStatusOpportunity),
+            },
+            Some(crate::durable::TranscriptCursor::new(batch_cursor)),
+        )
+    }
+
+    /// The transcript-position placement one composition publishes, if any.
+    fn published_anchor(view: &AgentStatusView) -> Option<RuntimeClientTranscriptCursor> {
+        view.opportunities
+            .post_tool_batch
+            .and_then(|batch| batch.transcript_anchor)
+    }
+
     /// Commits one visible canonical message at a durable transcript
-    /// position, which is what advances the transcript frontier.
+    /// position.
     fn commit_at(projection: &mut RuntimeClientProjection, id: &str, cursor: u64) {
         projection.apply(ConversationObservation::Committed {
             attempt_id: Some(attempt()),
@@ -2238,10 +2254,12 @@ mod tests {
         });
     }
 
-    /// A composed status freezes the transcript frontier it followed, so the
-    /// runtime — not a client reading arrival order — owns placement.
+    /// A `FreshInbound` composition is placed by the exact inbound message
+    /// identity its opportunity carries, and publishes no transcript
+    /// position: a message identity is the stronger fact, and nothing later
+    /// can move it.
     #[test]
-    fn agent_status_freezes_the_transcript_frontier_it_followed() {
+    fn fresh_inbound_status_is_placed_by_message_identity() {
         let mut projection = projection();
         apply_event(
             &mut projection,
@@ -2250,37 +2268,52 @@ mod tests {
             },
         );
         commit_at(&mut projection, "user-1", 7);
-        projection.apply(ConversationObservation::Status(status_observation(
-            "status-1",
-            1,
-            AgentStatusOpportunitySet {
-                fresh_inbound: Some(FreshInboundStatusOpportunity {
-                    target_message_id: MessageId::new("user-1"),
-                }),
-                post_tool_batch: None,
-            },
+        projection.apply(ConversationObservation::Status(fresh_inbound_status(
+            "status-1", 1, "user-1",
         )));
 
         let (snapshot, _) = projection.snapshot().expect("snapshot");
         assert_eq!(snapshot.statuses.len(), 1);
         assert_eq!(
-            snapshot.statuses[0].transcript_anchor,
-            Some(RuntimeClientTranscriptCursor::new(7))
+            snapshot.statuses[0]
+                .opportunities
+                .fresh_inbound
+                .as_ref()
+                .expect("FreshInbound view")
+                .target_message_id,
+            MessageId::new("user-1")
+        );
+        assert_eq!(
+            published_anchor(&snapshot.statuses[0]),
+            None,
+            "a FreshInbound composition needs no transcript position"
         );
 
-        // A later commit does not move an already-composed status.
+        // A later commit changes nothing about an already-composed status.
         commit_at(&mut projection, "user-2", 9);
         let (snapshot, _) = projection.snapshot().expect("snapshot");
         assert_eq!(
-            snapshot.statuses[0].transcript_anchor,
-            Some(RuntimeClientTranscriptCursor::new(7))
+            snapshot.statuses[0]
+                .opportunities
+                .fresh_inbound
+                .as_ref()
+                .expect("FreshInbound view")
+                .target_message_id,
+            MessageId::new("user-1")
         );
     }
 
-    /// A composition with no `FreshInbound` still gets a deterministic
-    /// anchor: the settled frontier it followed.
+    /// A `PostToolBatch` composition publishes exactly the placement the
+    /// Agent Loop froze at its tool batch commit — **not** whatever durable
+    /// position the conversation happens to have reached when the projection
+    /// folds the observation.
+    ///
+    /// This is the invariant that a fold-time frontier violated. Inbound
+    /// acceptance is an independent durable boundary and may legally commit
+    /// between the composition and its observation; the interleaving below is
+    /// exactly that case, folded in the order it can really occur.
     #[test]
-    fn post_tool_batch_status_anchors_to_the_settled_frontier() {
+    fn post_tool_batch_status_keeps_the_anchor_its_batch_froze() {
         let mut projection = projection();
         apply_event(
             &mut projection,
@@ -2290,40 +2323,35 @@ mod tests {
         );
         commit_at(&mut projection, "user-1", 3);
         commit_at(&mut projection, "tool-result", 5);
-        projection.apply(ConversationObservation::Status(status_observation(
+
+        // Unrelated durable transcript activity lands before the status
+        // observation reaches the projection.
+        commit_at(&mut projection, "unrelated-inbound", 6);
+
+        projection.apply(ConversationObservation::Status(post_tool_batch_status(
             "status-post-batch",
             2,
-            AgentStatusOpportunitySet {
-                fresh_inbound: None,
-                post_tool_batch: Some(PostToolBatchStatusOpportunity),
-            },
+            5,
         )));
 
         let (snapshot, _) = projection.snapshot().expect("snapshot");
         let status = snapshot.statuses.last().expect("composed status");
         assert!(status.opportunities.fresh_inbound.is_none());
         assert_eq!(
-            status.transcript_anchor,
+            published_anchor(status),
             Some(RuntimeClientTranscriptCursor::new(5)),
-            "the anchor is the settled tool-batch frontier, not the inbound turn"
+            "the anchor is the tool batch's own frozen position, not the newest durable one"
         );
     }
 
     /// A new attempt is not a retraction: an earlier composition stays in the
-    /// window, at its own anchor, and a later one is added beside it.
+    /// window, at its own placement, and a later one is added beside it.
     #[test]
     fn a_later_attempt_neither_removes_nor_relocates_an_earlier_status() {
         let mut projection = projection();
         commit_at(&mut projection, "user-1", 1);
-        projection.apply(ConversationObservation::Status(status_observation(
-            "status-1",
-            1,
-            AgentStatusOpportunitySet {
-                fresh_inbound: Some(FreshInboundStatusOpportunity {
-                    target_message_id: MessageId::new("user-1"),
-                }),
-                post_tool_batch: None,
-            },
+        projection.apply(ConversationObservation::Status(fresh_inbound_status(
+            "status-1", 1, "user-1",
         )));
         apply_event(
             &mut projection,
@@ -2331,16 +2359,9 @@ mod tests {
                 attempt_id: attempt(),
             },
         );
-        commit_at(&mut projection, "user-2", 4);
-        projection.apply(ConversationObservation::Status(status_observation(
-            "status-2",
-            1,
-            AgentStatusOpportunitySet {
-                fresh_inbound: Some(FreshInboundStatusOpportunity {
-                    target_message_id: MessageId::new("user-2"),
-                }),
-                post_tool_batch: None,
-            },
+        commit_at(&mut projection, "tool-result", 4);
+        projection.apply(ConversationObservation::Status(post_tool_batch_status(
+            "status-2", 1, 4,
         )));
 
         let (snapshot, _) = projection.snapshot().expect("snapshot");
@@ -2353,11 +2374,16 @@ mod tests {
             vec!["status-1".to_owned(), "status-2".to_owned()]
         );
         assert_eq!(
-            snapshot.statuses[0].transcript_anchor,
-            Some(RuntimeClientTranscriptCursor::new(1))
+            snapshot.statuses[0]
+                .opportunities
+                .fresh_inbound
+                .as_ref()
+                .expect("FreshInbound view")
+                .target_message_id,
+            MessageId::new("user-1")
         );
         assert_eq!(
-            snapshot.statuses[1].transcript_anchor,
+            published_anchor(&snapshot.statuses[1]),
             Some(RuntimeClientTranscriptCursor::new(4))
         );
     }
@@ -2367,17 +2393,17 @@ mod tests {
     #[test]
     fn the_agent_status_window_is_identity_keyed_and_bounded() {
         let mut projection = projection();
-        let observation = status_observation("status-1", 1, AgentStatusOpportunitySet::default());
+        let observation = post_tool_batch_status("status-1", 1, 1);
         projection.apply(ConversationObservation::Status(observation.clone()));
         projection.apply(ConversationObservation::Status(observation));
         let (snapshot, _) = projection.snapshot().expect("snapshot");
         assert_eq!(snapshot.statuses.len(), 1);
 
         for index in 0..AGENT_STATUS_WINDOW + 5 {
-            projection.apply(ConversationObservation::Status(status_observation(
+            projection.apply(ConversationObservation::Status(post_tool_batch_status(
                 &format!("status-fill-{index}"),
                 1,
-                AgentStatusOpportunitySet::default(),
+                u64::try_from(index).expect("test index fits a cursor") + 2,
             )));
         }
         let (snapshot, _) = projection.snapshot().expect("snapshot");
@@ -2388,6 +2414,445 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // The PostToolBatch anchor race.
+    //
+    // The Agent Loop's status linearization is:
+    //
+    // ```text
+    // canonical ToolResult batch commits          <- placement determined here
+    //   -> pending PostToolBatch opportunity
+    //   -> next primary-step preparation
+    //   -> Agent Status composed
+    //   -> durable model-turn-start commit
+    //   -> observe_status                          <- placement observed here
+    // ```
+    //
+    // Inbound acceptance is an independent durable boundary and may commit
+    // anywhere in that window. The test below parks the loop at
+    // `observe_status`, durably accepts an unrelated inbound message while it
+    // is parked, folds that acceptance into the Runtime Client projection, and
+    // only then releases the status. Anything that derived placement at the
+    // fold would produce the inbound's cursor; the frozen fact does not.
+    // -----------------------------------------------------------------------
+
+    /// An observer that folds every execution fact into a Runtime Client
+    /// projection, but parks the first `PostToolBatch` status observation
+    /// before it reaches the projection.
+    ///
+    /// The park is a real rendezvous: `observe_status` is a synchronous
+    /// Agent Loop callback, so blocking in it blocks the loop itself. The
+    /// controlling task therefore provably runs *between* the composition and
+    /// its publication — not merely at some convenient moment.
+    struct StatusParkObserver {
+        projection: Arc<Mutex<RuntimeClientProjection>>,
+        /// Every observed canonical commit with a durable position.
+        commits: Mutex<Vec<(MessageId, crate::durable::TranscriptCursor)>>,
+        /// Set when the loop is parked inside `observe_status`.
+        parked: tokio::sync::watch::Sender<bool>,
+        release: Mutex<std::sync::mpsc::Receiver<()>>,
+        released: Mutex<bool>,
+    }
+
+    impl StatusParkObserver {
+        fn install(
+            projection: Arc<Mutex<RuntimeClientProjection>>,
+        ) -> (
+            Arc<Self>,
+            tokio::sync::watch::Receiver<bool>,
+            std::sync::mpsc::Sender<()>,
+        ) {
+            let (parked, parked_rx) = tokio::sync::watch::channel(false);
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            (
+                Arc::new(Self {
+                    projection,
+                    commits: Mutex::new(Vec::new()),
+                    parked,
+                    release: Mutex::new(release_rx),
+                    released: Mutex::new(false),
+                }),
+                parked_rx,
+                release_tx,
+            )
+        }
+
+        fn apply(&self, observation: ConversationObservation) {
+            self.projection
+                .lock()
+                .expect("projection lock")
+                .apply(observation);
+        }
+
+        /// The durable position of the last committed tool message: the
+        /// canonical `ToolResult` batch's own transcript frontier.
+        fn tool_batch_cursor(&self) -> crate::durable::TranscriptCursor {
+            *self
+                .commits
+                .lock()
+                .expect("commit lock")
+                .iter()
+                .filter(|(id, _)| id.as_str().contains("-tool-"))
+                .map(|(_, cursor)| cursor)
+                .max()
+                .expect("the attempt committed a canonical ToolResult batch")
+        }
+    }
+
+    impl AgentExecutionObserver for StatusParkObserver {
+        fn observe_event(&self, attempt_id: &AttemptId, event: &RuntimeEvent) {
+            self.apply(ConversationObservation::Event {
+                attempt_id: attempt_id.clone(),
+                event: event.clone(),
+            });
+        }
+
+        fn observe_committed(
+            &self,
+            attempt_id: &AttemptId,
+            block: &MessageBlock,
+            transcript_cursor: Option<crate::durable::TranscriptCursor>,
+        ) {
+            if let Some(cursor) = transcript_cursor {
+                self.commits
+                    .lock()
+                    .expect("commit lock")
+                    .push((crate::conversation::message_id_of(block), cursor));
+            }
+            self.apply(ConversationObservation::Committed {
+                attempt_id: Some(attempt_id.clone()),
+                block: block.clone(),
+                transcript_cursor,
+            });
+        }
+
+        fn observe_status(&self, observation: &AgentStatusObservation) {
+            let park = observation.opportunities.post_tool_batch.is_some()
+                && observation.opportunities.fresh_inbound.is_none()
+                && !*self.released.lock().expect("release flag lock");
+            if park {
+                self.parked.send_replace(true);
+                // Blocks the Agent Loop here, before the Runtime Client can
+                // fold anything about this composition.
+                let _ = self.release.lock().expect("release lock").recv();
+                *self.released.lock().expect("release flag lock") = true;
+            }
+            self.apply(ConversationObservation::Status(observation.clone()));
+        }
+
+        fn observe_publication_opened(
+            &self,
+            attempt_id: &AttemptId,
+            start: &crate::publication::PublicationStreamStart,
+        ) {
+            self.apply(ConversationObservation::PublicationOpened {
+                attempt_id: attempt_id.clone(),
+                start: start.clone(),
+            });
+        }
+
+        fn observe_publication(
+            &self,
+            attempt_id: &AttemptId,
+            frame: &crate::publication::PublicationFrame,
+        ) {
+            self.apply(ConversationObservation::Publication {
+                attempt_id: attempt_id.clone(),
+                frame: frame.clone(),
+            });
+        }
+
+        fn observe_publication_settled(
+            &self,
+            attempt_id: &AttemptId,
+            audit: &crate::publication::PublicationAudit,
+            transcript_cursor: crate::durable::TranscriptCursor,
+        ) {
+            self.apply(ConversationObservation::PublicationSettled {
+                attempt_id: attempt_id.clone(),
+                audit: Box::new(audit.clone()),
+                transcript_cursor,
+            });
+        }
+    }
+
+    /// The controlling half of the anchor race.
+    ///
+    /// Everything here runs strictly inside the park: the Agent Loop is
+    /// blocked in `observe_status`, between the composition and its
+    /// publication, for the whole body of this function. Returns the tool
+    /// batch's own durable position and the later position the unrelated
+    /// inbound was accepted at.
+    async fn drive_anchor_race(
+        observer: Arc<StatusParkObserver>,
+        projection: Arc<Mutex<RuntimeClientProjection>>,
+        mailbox: ConversationInboundMailbox,
+        mut parked: tokio::sync::watch::Receiver<bool>,
+        release: std::sync::mpsc::Sender<()>,
+    ) -> (
+        crate::durable::TranscriptCursor,
+        crate::durable::TranscriptCursor,
+    ) {
+        parked
+            .wait_for(|reached| *reached)
+            .await
+            .expect("the status park stays open");
+        let batch_cursor = observer.tool_batch_cursor();
+
+        // An independent durable boundary: a new inbound message is accepted,
+        // and the durable transcript advances past the batch.
+        mailbox
+            .enqueue(UserMessageBlock {
+                id: MessageId::new("unrelated-inbound"),
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "and another thing".to_owned(),
+                })],
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: Some(chrono::Utc::now()),
+            })
+            .expect("durable inbound acceptance");
+        let batch = mailbox
+            .select_pending_batch()
+            .expect("select pending")
+            .expect("the accepted inbound is pending");
+        let item = batch
+            .items()
+            .iter()
+            .find(|item| item.message().id == MessageId::new("unrelated-inbound"))
+            .expect("the accepted inbound is in the pending batch")
+            .clone();
+        let inbound_cursor = item
+            .transcript_cursor()
+            .expect("a visible inbound message is a durable transcript item");
+        assert!(
+            inbound_cursor > batch_cursor,
+            "the unrelated inbound is durably later than the tool batch"
+        );
+
+        // Fold the acceptance into the Runtime Client *before* the status.
+        projection
+            .lock()
+            .expect("projection lock")
+            .apply(ConversationObservation::InboundEnqueued(item));
+        let (mid_flight, _) = projection
+            .lock()
+            .expect("projection lock")
+            .snapshot()
+            .expect("snapshot");
+        assert!(
+            mid_flight.statuses.is_empty(),
+            "the parked composition has not been published yet"
+        );
+        assert_eq!(
+            mid_flight
+                .inbound
+                .pending
+                .last()
+                .expect("the unrelated inbound is folded")
+                .message
+                .id,
+            MessageId::new("unrelated-inbound"),
+            "the projection has already folded the later durable position"
+        );
+
+        release.send(()).expect("release the parked status");
+        (batch_cursor, inbound_cursor)
+    }
+
+    /// **The `PostToolBatch` placement invariant.**
+    ///
+    /// A `PostToolBatch` Agent Status is anchored to the durable transcript
+    /// frontier of the tool batch that caused the composition. Later
+    /// unrelated durable transcript activity cannot move that anchor.
+    ///
+    /// The interleaving is forced, not hoped for:
+    ///
+    /// ```text
+    /// 1. canonical ToolResult batch commits at cursor N
+    /// 2. the PostToolBatch opportunity freezes N
+    /// 3. the loop PARKS in observe_status, before the projection sees it
+    /// 4. an unrelated inbound is durably accepted at cursor N+1
+    /// 5. its InboundEnqueued observation is folded
+    /// 6. the park is RELEASED and the status is folded
+    /// 7. the published anchor is still N
+    /// ```
+    ///
+    /// Step 5 is asserted before step 6 runs, so the projection provably held
+    /// the later position when it folded the composition. There are no
+    /// sleeps and no timing assumptions anywhere: every ordering above is a
+    /// rendezvous.
+    /// The scripted provider of the anchor race: one turn that calls `todo`,
+    /// then plain answers.
+    ///
+    /// The tool is `todo` on purpose. The Todo module is the one status module
+    /// eligible for a `PostToolBatch` opportunity, so this batch both settles
+    /// a canonical `ToolResult` batch and makes the next primary step compose
+    /// a `PostToolBatch`-only status.
+    fn anchor_race_model() -> Arc<FakeModel> {
+        let call = crate::tools::types::ToolCall {
+            id: ToolCallId::new("call-anchor-1"),
+            tool_id: ToolId::new(crate::tools::todo::TODO_TOOL_ID),
+            name: "todo".to_owned(),
+            arguments: serde_json::json!({ "action": "create", "subject": "Anchor the status" }),
+        };
+        let arguments_json =
+            serde_json::to_string(&call.arguments).expect("serialize todo arguments");
+        let stop_turn = || {
+            vec![
+                FakeStep::Emit(ModelEvent::Started),
+                FakeStep::Emit(ModelEvent::TextDelta {
+                    block_index: ContentBlockIndex::new(0),
+                    text: "done".to_owned(),
+                }),
+                FakeStep::Emit(ModelEvent::Completed {
+                    finish_reason: ModelFinishReason::Stop,
+                    usage: None,
+                }),
+            ]
+        };
+        Arc::new(FakeModel::new(vec![
+            vec![
+                FakeStep::Emit(ModelEvent::Started),
+                FakeStep::Emit(ModelEvent::ToolCallStarted {
+                    block_index: ContentBlockIndex::new(0),
+                    call: crate::tools::types::ToolCallStart {
+                        id: call.id.clone(),
+                        tool_id: call.tool_id.clone(),
+                        name: call.name.clone(),
+                    },
+                }),
+                FakeStep::Emit(ModelEvent::ToolCallArgumentsDelta {
+                    block_index: ContentBlockIndex::new(0),
+                    call_id: call.id.clone(),
+                    arguments_delta: arguments_json,
+                }),
+                FakeStep::Emit(ModelEvent::ToolCallCompleted {
+                    block_index: ContentBlockIndex::new(0),
+                    call,
+                }),
+                FakeStep::Emit(ModelEvent::Completed {
+                    finish_reason: ModelFinishReason::ToolCalls,
+                    usage: None,
+                }),
+            ],
+            stop_turn(),
+            stop_turn(),
+        ]))
+    }
+
+    /// A context runtime with a real Agent Status engine and no compaction
+    /// pressure, so the only status decision under test is placement.
+    fn anchor_race_context_runtime() -> ContextRuntime {
+        ContextRuntime::with_scripted_summarizer(
+            ContextEngine::new(
+                crate::context::ContextConfig {
+                    context_window_tokens: 200_000,
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 0,
+                },
+                Arc::new(ScriptedEstimator::new(1, 0, 0)),
+            )
+            .expect("valid test context engine"),
+            Arc::new(FakeContextSummarizer::new(Vec::new())),
+            AgentStatusEngine::default(),
+            CompactionBudgets::new(1, 1, 1_000_000),
+        )
+    }
+
+    /// The attempt request of the anchor race: a pure continuation, so the
+    /// only status opportunity this attempt can produce is `PostToolBatch`.
+    fn anchor_race_request(
+        conversation_id: ConversationId,
+        model: Arc<FakeModel>,
+    ) -> AgentExecutionRequest {
+        let adapter: Arc<dyn ModelAdapter> = model;
+        AgentExecutionRequest {
+            agent_id: AgentId::new("agent-a"),
+            conversation_id,
+            attempt_id: AttemptId::new("attempt-anchor"),
+            conversation: ConversationState::from_messages(vec![MessageBlock::User(
+                UserMessageBlock {
+                    id: MessageId::new("user-1"),
+                    content: vec![UserContentBlock::Text(TextBlock {
+                        text: "track the work".to_owned(),
+                    })],
+                    source: UserSource::Human,
+                    kind: InboundKind::Message,
+                    timestamp: None,
+                },
+            )])
+            .expect("bootstrap conversation"),
+            initial_turn_trigger: InitialTurnTrigger::Continuation,
+            model: crate::scripted_suites::support::attempt_model_with_window(
+                adapter,
+                "status-anchor",
+                200_000,
+                64,
+            ),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+    async fn a_later_inbound_cannot_relocate_a_prepared_post_tool_batch_status() {
+        let fixture = crate::scripted_suites::common::native_fixture();
+        let capability = crate::scripted_suites::common::capability_lease(
+            fixture.registry.clone(),
+            &fixture.runtime,
+        )
+        .await;
+        let request = anchor_race_request(
+            fixture.runtime.conversation_id().clone(),
+            anchor_race_model(),
+        );
+        let projection = Arc::new(Mutex::new(projection()));
+        let (observer, parked, release) = StatusParkObserver::install(projection.clone());
+
+        let controller = tokio::spawn(drive_anchor_race(
+            observer.clone(),
+            projection.clone(),
+            fixture.mailbox.clone(),
+            parked,
+            release,
+        ));
+
+        let cancellation = crate::agent::AgentCancellation::new(CancellationReason::UserRequested);
+        let mut execution = AgentExecution::new(
+            request,
+            capability.into_lease(),
+            &cancellation,
+            crate::scripted_suites::support::default_execution_policy(),
+            anchor_race_context_runtime(),
+            &fixture.runtime,
+            crate::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime");
+        execution.observe(observer.as_ref());
+        let _result = execution.run().await;
+        let (batch_cursor, inbound_cursor) = controller.await.expect("controller task");
+
+        let (snapshot, _) = projection
+            .lock()
+            .expect("projection lock")
+            .snapshot()
+            .expect("snapshot");
+        let status = snapshot
+            .statuses
+            .iter()
+            .find(|status| status.opportunities.post_tool_batch.is_some())
+            .expect("the attempt composed a PostToolBatch status");
+        assert_eq!(
+            published_anchor(status),
+            Some(RuntimeClientTranscriptCursor::from(batch_cursor)),
+            "the status keeps the position its own tool batch froze"
+        );
+        assert_ne!(
+            published_anchor(status),
+            Some(RuntimeClientTranscriptCursor::from(inbound_cursor)),
+            "an unrelated inbound accepted before the fold cannot relocate the status"
+        );
+    }
+
     #[test]
     fn agent_status_opportunity_view_allows_absent_fresh_inbound() {
         let observation = AgentStatusObservation {
@@ -2395,13 +2860,14 @@ mod tests {
             turn: 1,
             status_message_id: MessageId::new("status-1"),
             opportunities: AgentStatusOpportunitySet::default(),
+            post_tool_batch_anchor: None,
             status: AgentStatus {
                 generated_at: chrono::DateTime::from_timestamp(0, 0).expect("timestamp"),
                 sections: Vec::new(),
             },
         };
 
-        let view = super::status_view(&observation, None);
+        let view = super::status_view(&observation);
         assert!(view.opportunities.fresh_inbound.is_none());
 
         let encoded = serde_json::to_value(&view.opportunities).expect("serialize opportunity");
@@ -2424,13 +2890,14 @@ mod tests {
                 }),
                 post_tool_batch: Some(PostToolBatchStatusOpportunity),
             },
+            post_tool_batch_anchor: Some(crate::durable::TranscriptCursor::new(6)),
             status: AgentStatus {
                 generated_at: chrono::DateTime::from_timestamp(0, 0).expect("timestamp"),
                 sections: Vec::new(),
             },
         };
 
-        let view = super::status_view(&observation, None);
+        let view = super::status_view(&observation);
         assert_eq!(view.status_message_id, status_message_id);
         assert_eq!(
             view.opportunities
@@ -2441,11 +2908,19 @@ mod tests {
                 .clone(),
             MessageId::new("fresh-inbound")
         );
-        assert!(view.opportunities.post_tool_batch.is_some());
+        assert_eq!(
+            published_anchor(&view),
+            Some(RuntimeClientTranscriptCursor::new(6)),
+            "the PostToolBatch half carries the placement its batch froze"
+        );
         let encoded = serde_json::to_value(&view).expect("serialize combined status view");
         assert_eq!(
             encoded["opportunities"]["post_tool_batch"],
-            serde_json::json!({})
+            serde_json::json!({ "transcript_anchor": 6 })
+        );
+        assert!(
+            encoded.get("transcript_anchor").is_none(),
+            "placement lives on the opportunity that froze it, never on the view itself"
         );
         assert_eq!(
             encoded["status_message_id"],

@@ -92,6 +92,7 @@ use crate::conversation::{ConversationError, ConversationState, PreparedCanonica
 use crate::durable::{
     AgentStatusEmissionLookup, AgentStatusEmissionRecord, ConversationStore,
     ConversationStoreError, ModelTurnStartCommit, ModelTurnStartCommitDisposition,
+    TranscriptCursor,
 };
 use crate::events::types::{
     AttemptFailure, AttemptOutcome, EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope,
@@ -393,9 +394,10 @@ pub struct AgentExecution<'a> {
     /// at most one Agent Status generation.
     pending_fresh_inbound: Option<FreshInboundTurn>,
     /// The attempt-local marker installed after one complete canonical
-    /// `ToolResult` batch settles. It is consumed by the next primary-step
-    /// preparation and is never persisted or reconstructed.
-    pending_post_tool_batch: Option<PostToolBatchStatusOpportunity>,
+    /// `ToolResult` batch settles, together with the durable transcript
+    /// position that batch committed at. It is consumed by the next
+    /// primary-step preparation and is never persisted or reconstructed.
+    pending_post_tool_batch: Option<PendingPostToolBatch>,
     context_runtime: ContextRuntime,
     /// The attempt-scoped subagent resolution view, frozen at admission
     /// together with the attempt's model snapshot and capability lease.
@@ -674,8 +676,38 @@ struct PreparedModelTurn {
 /// flight.
 struct AgentStatusGeneration {
     opportunities: AgentStatusOpportunitySet,
+    /// The placement fact frozen with the `PostToolBatch` opportunity this
+    /// generation consumed, carried unchanged into the observation.
+    post_tool_batch_anchor: Option<TranscriptCursor>,
     status: crate::context::status::AgentStatus,
     emissions: Vec<AgentStatusEmission>,
+}
+
+/// The attempt-local `PostToolBatch` status opportunity together with the
+/// durable transcript position frozen when it was established.
+///
+/// The eligibility marker and its placement fact are one value because one
+/// event establishes both — the canonical `ToolResult` batch commit — and
+/// they must never be able to drift apart. [`PostToolBatchStatusOpportunity`]
+/// stays the pure eligibility marker the status modules see; the cursor
+/// beside it is an ordering fact, not a presentation instruction, and no
+/// layer below the Runtime Client interprets it.
+///
+/// Freezing here rather than at observation time is the whole point. A
+/// composed status is semantically determined at the primary-step
+/// preparation that consumed this opportunity, but it is not *observed*
+/// until the durable model-turn-start commit has landed. Inbound acceptance
+/// is an independent durable boundary and may legally commit in that window;
+/// a placement derived afterwards from "the newest durable position" would
+/// follow that unrelated inbound turn instead of the tool batch that caused
+/// the composition.
+struct PendingPostToolBatch {
+    /// The eligibility marker consumed by the next primary-step preparation.
+    opportunity: PostToolBatchStatusOpportunity,
+    /// The durable position of the canonical `ToolResult` batch that
+    /// established the marker; `None` when that batch committed no visible
+    /// transcript item.
+    transcript_anchor: Option<TranscriptCursor>,
 }
 
 fn agent_status_message_id(context: &[MessageBlock]) -> Option<MessageId> {
@@ -2242,10 +2274,18 @@ impl<'a> AgentExecution<'a> {
     /// (`MalformedHistory`). Module failures are isolated by the engine.
     fn compose_status(&mut self) -> Result<Option<AgentStatusGeneration>, ContextError> {
         let fresh = self.pending_fresh_inbound.clone();
-        let post_tool_batch = self.pending_post_tool_batch.take();
-        if fresh.is_none() && post_tool_batch.is_none() {
+        let pending_post_tool_batch = self.pending_post_tool_batch.take();
+        if fresh.is_none() && pending_post_tool_batch.is_none() {
             return Ok(None);
         }
+        // The placement fact travels with the opportunity that carries it and
+        // is never recomputed here: this method runs after the batch commit
+        // that froze it, and unrelated durable activity may already have
+        // advanced the conversation past that point.
+        let post_tool_batch_anchor = pending_post_tool_batch
+            .as_ref()
+            .and_then(|pending| pending.transcript_anchor);
+        let post_tool_batch = pending_post_tool_batch.map(|pending| pending.opportunity);
         let frozen = self.conversation.freeze_active_surface().map_err(|error| {
             ContextError::new(ContextErrorKind::MalformedHistory, error.to_string())
         })?;
@@ -2286,6 +2326,7 @@ impl<'a> AgentExecution<'a> {
             )
             .map(|prepared| AgentStatusGeneration {
                 opportunities,
+                post_tool_batch_anchor,
                 status: prepared.status,
                 emissions: prepared.emissions,
             }))
@@ -2525,6 +2566,10 @@ impl<'a> AgentExecution<'a> {
                     turn: self.turn,
                     status_message_id,
                     opportunities: generation.opportunities,
+                    // Carried, never derived: the loop froze this when the
+                    // opportunity was established, several durable boundaries
+                    // ago.
+                    post_tool_batch_anchor: generation.post_tool_batch_anchor,
                     status: generation.status,
                 })
             }
@@ -4016,7 +4061,7 @@ impl<'a> AgentExecution<'a> {
             blocks.push(block);
             result_slots.push((batch_position, slot, result));
         }
-        self.commit_tool_result_batch(&blocks)?;
+        let batch_anchor = self.commit_tool_result_batch(&blocks)?;
         // The batch is durable, so the snapshots its `todo` results carry
         // are durable: this is the one point where the conversation's list
         // may move, and it moves to exactly what these committed blocks
@@ -4033,7 +4078,16 @@ impl<'a> AgentExecution<'a> {
         // The complete canonical ToolResult batch, not an individual tool
         // completion, establishes one attempt-local PostToolBatch
         // opportunity for the next primary step that already exists.
-        self.pending_post_tool_batch = Some(PostToolBatchStatusOpportunity);
+        //
+        // The batch's own durable position is frozen with the marker, here,
+        // at the commit that allocated it. That is the linearization point at
+        // which "after this tool batch" becomes a determined fact; a status
+        // composed from this opportunity keeps it no matter what else the
+        // conversation durably accepts before the composition is observed.
+        self.pending_post_tool_batch = Some(PendingPostToolBatch {
+            opportunity: PostToolBatchStatusOpportunity,
+            transcript_anchor: batch_anchor,
+        });
         // FND-06 can kill a real process in the narrow window after the
         // canonical batch commit and before the next primary-step
         // preparation. The marker is deliberately process-local; this hook
@@ -4683,10 +4737,18 @@ impl<'a> AgentExecution<'a> {
     /// each member in memory. A durable failure of any member appends and
     /// installs none of them, so a partial tool-result group can never become
     /// canonical — the prior review's tool-batch atomicity requirement.
+    ///
+    /// Returns the durable transcript position the batch settled at: the
+    /// highest cursor the atomic append allocated, or `None` when the batch
+    /// committed no visible transcript item. That position is the batch's
+    /// own, read from its receipts under the commit that allocated them, and
+    /// it is the placement fact of any `PostToolBatch` status opportunity
+    /// this batch establishes — produced here rather than sampled later from
+    /// a moving frontier.
     fn commit_tool_result_batch(
         &mut self,
         blocks: &[MessageBlock],
-    ) -> Result<(), CanonicalCommitError> {
+    ) -> Result<Option<TranscriptCursor>, CanonicalCommitError> {
         let mut prepared = Vec::with_capacity(blocks.len());
         for block in blocks {
             prepared.push(self.conversation.prepare_commit(block)?);
@@ -4711,8 +4773,14 @@ impl<'a> AgentExecution<'a> {
             .store
             .append_canonical_batch_with_events(blocks, &envelopes)
             .map_err(CanonicalCommitError::Durable)?;
+        let mut batch_anchor: Option<TranscriptCursor> = None;
         for ((prepared, block), receipt) in prepared.into_iter().zip(blocks).zip(receipts) {
             self.conversation.install_prepared(prepared);
+            if let Some(cursor) = receipt.transcript_cursor
+                && batch_anchor.is_none_or(|anchor| cursor > anchor)
+            {
+                batch_anchor = Some(cursor);
+            }
             if let Some(observer) = self.observer {
                 observer.observe_committed(
                     &self.request.attempt_id,
@@ -4724,7 +4792,7 @@ impl<'a> AgentExecution<'a> {
         for event in persisted_events {
             self.record_persisted_event(event);
         }
-        Ok(())
+        Ok(batch_anchor)
     }
 
     /// Opens the publication stream of one model request.

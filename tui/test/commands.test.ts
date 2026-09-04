@@ -903,7 +903,6 @@ describe("CommandDispatcher", () => {
             status_message_id: "status-1",
             turn: 2,
             opportunities: { fresh_inbound: { target_message_id: "m1" } },
-            transcript_anchor: transcriptCursor(1),
             sections: [
               temporalSection("2026-08-14T15:42:00Z"),
               todoSection({ active_count: 3, blocked_count: 1 }),

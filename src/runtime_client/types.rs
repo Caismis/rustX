@@ -256,12 +256,12 @@ pub enum RuntimeClientSessionRequest {
 ///
 /// Version 14 carries Issue #194's Agent Status contextual annotation
 /// projection. The snapshot's latest-only `status` is replaced by the bounded
-/// composition window `statuses`, and `AgentStatusView` gains
-/// `transcript_anchor`: the durable transcript position one composition
-/// followed. Together they let a client place every composed status
-/// deterministically and reconstruct the same placement from a snapshot that
-/// it folded from live events. There is no compatibility decoding of
-/// version 13.
+/// composition window `statuses`, and each status opportunity carries the
+/// durable identity it was established against: `FreshInbound` the inbound
+/// message, `PostToolBatch` its settled tool batch's `transcript_anchor`.
+/// Together they let a client place every composed status deterministically
+/// and reconstruct the same placement from a snapshot that it folded from
+/// live events. There is no compatibility decoding of version 13.
 pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 14;
 
 /// The external cursor of the Runtime Client observation stream.

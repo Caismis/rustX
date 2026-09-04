@@ -900,7 +900,6 @@ describe("presentation projection", () => {
     const status = agentStatus({
       status_message_id: "status-1",
       opportunities: { fresh_inbound: { target_message_id: "m1" } },
-      transcript_anchor: transcriptCursor(1),
       sections: [temporalSection("2026-08-14T00:00:00Z")],
       rendered: "## Status\ncurrent time: 2026-08-14",
     });
@@ -918,7 +917,9 @@ describe("presentation projection", () => {
   it("folds an Agent Status opportunity set without FreshInbound", () => {
     const status = agentStatus({
       status_message_id: "status-1",
-      transcript_anchor: transcriptCursor(4),
+      opportunities: {
+        post_tool_batch: { transcript_anchor: transcriptCursor(4) },
+      },
     });
     const state = fold(initial(), [
       { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
@@ -937,9 +938,8 @@ describe("presentation projection", () => {
       status_message_id: "status-combined",
       opportunities: {
         fresh_inbound: { target_message_id: "m1" },
-        post_tool_batch: {},
+        post_tool_batch: { transcript_anchor: transcriptCursor(6) },
       },
-      transcript_anchor: transcriptCursor(6),
     });
     const state = fold(initial(), [
       { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
@@ -960,8 +960,7 @@ describe("presentation projection", () => {
     const status = agentStatus({
       status_message_id: "status-todo",
       turn: 2,
-      opportunities: { post_tool_batch: {} },
-      transcript_anchor: transcriptCursor(2),
+      opportunities: { post_tool_batch: { transcript_anchor: transcriptCursor(2) } },
       sections: [
         todoSection({
           current: {
@@ -991,13 +990,11 @@ describe("presentation projection", () => {
     const first = agentStatus({
       status_message_id: "status-1",
       opportunities: { fresh_inbound: { target_message_id: "m1" } },
-      transcript_anchor: transcriptCursor(1),
     });
     const second = agentStatus({
       status_message_id: "status-2",
       attempt_id: "a2",
       opportunities: { fresh_inbound: { target_message_id: "m2" } },
-      transcript_anchor: transcriptCursor(3),
     });
     const state = fold(initial(), [
       { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
@@ -1024,7 +1021,6 @@ describe("presentation projection", () => {
     const status = agentStatus({
       status_message_id: "status-1",
       opportunities: { fresh_inbound: { target_message_id: "m1" } },
-      transcript_anchor: transcriptCursor(1),
     });
     const state = fold(initial(), [
       { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
@@ -1039,11 +1035,9 @@ describe("presentation projection", () => {
     const first = agentStatus({
       status_message_id: "status-1",
       opportunities: { fresh_inbound: { target_message_id: "m1" } },
-      transcript_anchor: transcriptCursor(1),
     });
     const second = agentStatus({
       status_message_id: "status-2",
-      transcript_anchor: transcriptCursor(2),
     });
     const folded = fold(initial(), [
       { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },

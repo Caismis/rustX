@@ -3546,19 +3546,30 @@ message role, history shape, or timestamps:
 - Every composed Agent Status has exactly one deterministic presentation
   anchor, and once observable in conversation history its placement never
   changes or disappears because a later attempt starts. Placement is published
-  by the runtime, never inferred by a client: the composition carries its
-  eligible opportunities and `transcript_anchor`, the newest durable
-  transcript position that existed when it was composed. A composition with a
-  `FreshInbound` opportunity is anchored to that opportunity's
-  `target_message_id`; one without is anchored to `transcript_anchor`. A
-  composition eligible through both is anchored by the message identity alone,
-  so it can never be presented twice. The Runtime Client snapshot carries a
-  bounded window of compositions in composition order rather than a latest
-  value, identified by `status_message_id`: a new attempt clears none of them,
-  a replayed observation adds none, and snapshot repair and incremental
-  folding reconstruct the same set and the same placement. Clients never parse
-  the model-facing rendered body to recover section structure, and no layout
-  instruction crosses the projection boundary.
+  by the runtime, never inferred by a client: each eligible opportunity
+  carries the durable identity it was established against. A composition with
+  a `FreshInbound` opportunity is anchored to that opportunity's
+  `target_message_id`; one without is anchored to the `PostToolBatch`
+  opportunity's `transcript_anchor`. A composition eligible through both is
+  anchored by the message identity alone, so it can never be presented twice.
+  Clients never parse the model-facing rendered body to recover section
+  structure, and no layout instruction crosses the projection boundary.
+- A `PostToolBatch` Agent Status is anchored to the durable transcript
+  frontier of the canonical `ToolResult` batch that caused the composition,
+  and later unrelated durable transcript activity cannot move that anchor. The
+  anchor is frozen by the semantic owner — the Agent Loop, at the batch commit
+  that establishes the opportunity — and travels with the opportunity through
+  composition into the observation. The Runtime Client projects that already
+  determined fact; it never reconstructs placement by reading whatever the
+  global transcript frontier happens to be when it folds the status
+  observation. Inbound acceptance is an independent durable boundary and may
+  commit between the composition and its observation, so a fold-time frontier
+  would place the status after an unrelated inbound turn.
+- The Runtime Client snapshot carries a bounded window of compositions in
+  composition order rather than a latest value, identified by
+  `status_message_id`: a new attempt clears none of them, a replayed
+  observation adds none, and snapshot repair and incremental folding
+  reconstruct the same set and the same placement.
 - Time, Background, and Todo are compile-time-owned modules represented by a
   closed rustX engine in semantic source order `Time -> Background -> Todo`.
   There is no provider registration API, dynamic plugin boundary, provider

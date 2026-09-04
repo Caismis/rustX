@@ -83,7 +83,6 @@ describe("Agent Status placement", () => {
         agentStatus({
           status_message_id: "status-1",
           opportunities: { fresh_inbound: { target_message_id: "m1" } },
-          transcript_anchor: transcriptCursor(1),
           sections: [temporalSection("2026-08-14T15:42:00Z"), todoSection({ active_count: 3 })],
         }),
       ],
@@ -105,7 +104,6 @@ describe("Agent Status placement", () => {
         agentStatus({
           status_message_id: "status-1",
           opportunities: { fresh_inbound: { target_message_id: "m1" } },
-          transcript_anchor: transcriptCursor(1),
         }),
       ],
     });
@@ -139,9 +137,7 @@ describe("Agent Status placement", () => {
         agentStatus({
           status_message_id: "status-batch",
           turn: 2,
-          opportunities: { post_tool_batch: {} },
-          // The settled tool-result frontier, published by the runtime.
-          transcript_anchor: transcriptCursor(3),
+          opportunities: { post_tool_batch: { transcript_anchor: transcriptCursor(3) } },
           sections: [todoSection({ active_count: 2 }), backgroundSection([
             backgroundExecution("exec-1", "running"),
           ])],
@@ -161,14 +157,54 @@ describe("Agent Status placement", () => {
     assert.match(lines[annotation + 1] ?? "", /The boundary behaves as follows/);
   });
 
+  it("keeps a PostToolBatch status above an unrelated inbound accepted after it", () => {
+    // The runtime published the tool batch's own position (cursor 3). The
+    // conversation then durably accepted an unrelated inbound turn at cursor
+    // 4 before the composition was even observed. Placement follows the
+    // published fact, so the annotation stays with the tool batch that
+    // caused it.
+    const state = stateOf({
+      messages: [
+        userMessage("m1", "go"),
+        assistantBlocks("m2", [
+          { type: "text", text: "I will inspect the implementation." },
+          toolCallBlock("call-1", "tool-read", "read", { path: "src/foo.rs" }),
+        ]),
+        toolMessage("m3", "call-1", "tool-read"),
+        userMessage("m4", "and another thing"),
+      ],
+      statuses: [
+        agentStatus({
+          status_message_id: "status-batch",
+          turn: 2,
+          opportunities: {
+            post_tool_batch: { transcript_anchor: transcriptCursor(3) },
+          },
+          sections: [todoSection({ active_count: 2 })],
+        }),
+      ],
+    });
+
+    const lines = transcriptText(state);
+    const annotation = annotationIndexes(lines)[0];
+    assert.ok(annotation !== undefined, "the composition is drawn once");
+    const unrelated = lines.findIndex((line) =>
+      line.includes("and another thing"),
+    );
+    assert.ok(unrelated >= 0, "the unrelated inbound turn is on screen");
+    assert.ok(
+      annotation < unrelated,
+      "the annotation belongs to the tool batch, not to the later inbound turn",
+    );
+  });
+
   it("renders a doubly-eligible composition once, at the FreshInbound anchor", () => {
     const status = agentStatus({
       status_message_id: "status-both",
       opportunities: {
         fresh_inbound: { target_message_id: "m1" },
-        post_tool_batch: {},
+        post_tool_batch: { transcript_anchor: transcriptCursor(3) },
       },
-      transcript_anchor: transcriptCursor(3),
       sections: [todoSection({ active_count: 1 })],
     });
     const state = stateOf({
@@ -196,7 +232,6 @@ describe("Agent Status placement", () => {
     const first = agentStatus({
       status_message_id: "status-1",
       opportunities: { fresh_inbound: { target_message_id: "m1" } },
-      transcript_anchor: transcriptCursor(1),
       sections: [todoSection({ active_count: 1 })],
     });
     const base = stateOf({
@@ -220,14 +255,12 @@ describe("Agent Status placement", () => {
     const first = agentStatus({
       status_message_id: "status-1",
       opportunities: { fresh_inbound: { target_message_id: "m1" } },
-      transcript_anchor: transcriptCursor(1),
       sections: [todoSection({ active_count: 1 })],
     });
     const second = agentStatus({
       status_message_id: "status-2",
       attempt_id: "a2",
       opportunities: { fresh_inbound: { target_message_id: "m2" } },
-      transcript_anchor: transcriptCursor(2),
       sections: [todoSection({ active_count: 4 })],
     });
     const state = fold(
@@ -255,7 +288,6 @@ describe("Agent Status placement", () => {
         agentStatus({
           status_message_id: "status-old",
           opportunities: { fresh_inbound: { target_message_id: "m1" } },
-          transcript_anchor: transcriptCursor(1),
           sections: [todoSection({ active_count: 1 })],
         }),
       ],
@@ -268,7 +300,6 @@ describe("Agent Status placement", () => {
     const status = agentStatus({
       status_message_id: "status-1",
       opportunities: { fresh_inbound: { target_message_id: "m1" } },
-      transcript_anchor: transcriptCursor(1),
       sections: [todoSection({ active_count: 1 })],
     });
     const state = fold(stateOf({ messages: [userMessage("m1", "hi")] }), [
@@ -302,7 +333,6 @@ describe("Agent Status placement", () => {
         agentStatus({
           status_message_id: "status-1",
           opportunities: { fresh_inbound: { target_message_id: "m1" } },
-          transcript_anchor: transcriptCursor(1),
           sections: [temporalSection("2026-08-14T15:42:00Z")],
         }),
       ],
@@ -327,14 +357,12 @@ describe("Agent Status projection convergence", () => {
   const first = agentStatus({
     status_message_id: "status-1",
     opportunities: { fresh_inbound: { target_message_id: "m1" } },
-    transcript_anchor: transcriptCursor(1),
     sections: [temporalSection("2026-08-14T15:42:00Z"), todoSection({ active_count: 2 })],
   });
   const second = agentStatus({
     status_message_id: "status-2",
     turn: 2,
-    opportunities: { post_tool_batch: {} },
-    transcript_anchor: transcriptCursor(2),
+    opportunities: { post_tool_batch: { transcript_anchor: transcriptCursor(2) } },
     sections: [backgroundSection([backgroundExecution("exec-1", "running")])],
   });
   const messages = [userMessage("m1", "hello"), assistantMessage("m2", "answer")];
@@ -448,7 +476,6 @@ describe("typed Agent Status sections", () => {
     const status = agentStatus({
       status_message_id: "status-long",
       opportunities: { fresh_inbound: { target_message_id: "m1" } },
-      transcript_anchor: transcriptCursor(1),
       sections: [
         todoSection({
           current: {

@@ -26,11 +26,11 @@
 /**
  * Version 14 adds the Agent Status contextual annotation projection: the
  * snapshot carries the bounded composition window `statuses` instead of a
- * latest-only `status`, and each `AgentStatusView` carries the
- * `transcript_anchor` its composition followed. It retains version 13's
- * Issue #187 subagent workspace representation, which separates logical child
- * project authority (`logical_workspace`) from physical Git worktree
- * ownership (`isolation.git_worktree` facts and the handoff's
+ * latest-only `status`, and each status opportunity carries the durable
+ * identity it was established against. It retains version 13's Issue #187
+ * subagent workspace representation, which separates logical child project
+ * authority (`logical_workspace`) from physical Git worktree ownership
+ * (`isolation.git_worktree` facts and the handoff's
  * `physical_worktree_root`); version 12's routed live interactions;
  * version 11's subagent activity projection; and version 9's closed
  * `interrupted` lifecycle vocabulary. Older schemas are not decoded.
@@ -943,7 +943,15 @@ export interface AgentStatusOpportunityView {
   post_tool_batch?: PostToolBatchStatusOpportunityView;
 }
 
-export interface PostToolBatchStatusOpportunityView {}
+export interface PostToolBatchStatusOpportunityView {
+  /**
+   * The durable position of the settled `ToolResult` batch this opportunity
+   * belongs to, frozen by the runtime at that batch's commit.
+   *
+   * Absent only when that batch committed no visible transcript item.
+   */
+  transcript_anchor?: RuntimeClientTranscriptCursor;
+}
 
 /**
  * One composed Agent Status, with the runtime facts that place it.
@@ -951,10 +959,12 @@ export interface PostToolBatchStatusOpportunityView {}
  * Placement is runtime-owned because only the runtime knows it: the canonical
  * Agent Status Context message is request-scoped model history with no
  * durable transcript cursor of its own, so a client could otherwise only
- * guess from arrival order or screen adjacency. `opportunities` says what
- * made the composition eligible and `transcript_anchor` says which durable
- * transcript position it followed; how a client draws a status at that place
- * is presentation and is decided nowhere near this file.
+ * guess from arrival order or screen adjacency. Each opportunity in
+ * `opportunities` carries the durable identity it was established against —
+ * `FreshInbound` the exact inbound message, `PostToolBatch` the position of
+ * its settled tool batch — and the runtime froze both where they were
+ * determined. How a client draws a status at that place is presentation and
+ * is decided nowhere near this file.
  */
 export interface AgentStatusView {
   attempt_id: AttemptId;
@@ -965,12 +975,6 @@ export interface AgentStatusView {
    */
   status_message_id: MessageId;
   opportunities: AgentStatusOpportunityView;
-  /**
-   * The newest durable transcript position that existed when the runtime
-   * composed this status. Absent only when the conversation had no durable
-   * transcript item at all.
-   */
-  transcript_anchor?: RuntimeClientTranscriptCursor;
   sections: RuntimeClientStatusSection[];
   /**
    * The canonical rendering, derived from the same composition as sections.

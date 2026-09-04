@@ -220,9 +220,11 @@ export function snapshot(
 /**
  * One composed Agent Status, with the runtime facts that place it.
  *
- * The two placements are distinguished by opportunity, exactly as the runtime
- * distinguishes them: pass `target` for a `FreshInbound` composition, and
- * only `anchor` for a `PostToolBatch`-only one.
+ * Placement lives on the opportunity, exactly as the runtime publishes it:
+ * `opportunities.fresh_inbound.target_message_id` for a `FreshInbound`
+ * composition, `opportunities.post_tool_batch.transcript_anchor` for a
+ * `PostToolBatch` one. A composition with neither is unplaced and draws
+ * nothing.
  */
 export function agentStatus(
   overrides: Partial<AgentStatusView> & { status_message_id: string },
