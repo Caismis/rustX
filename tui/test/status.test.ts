@@ -394,6 +394,28 @@ describe("footer", () => {
     assert.match(rendered, /human input 1/);
   });
 
+  it("names the effective approval mode and a pending desired mode truthfully", () => {
+    assert.match(
+      footer(stateOf({ effective_approval_mode: "policy" }), "connected"),
+      /approval POLICY/,
+    );
+    assert.match(
+      footer(stateOf({ effective_approval_mode: "full_access" }), "connected"),
+      /approval FULL ACCESS/,
+    );
+    // A desired mode applies to the next attempt; the running attempt keeps
+    // the effective one, and the footer must not imply otherwise.
+    const mixed = footer(
+      stateOf({
+        effective_approval_mode: "policy",
+        pending_approval_mode: "full_access",
+      }),
+      "connected",
+    );
+    assert.match(mixed, /approval POLICY/);
+    assert.match(mixed, /next attempt FULL ACCESS/);
+  });
+
   it("reports drain and a closed transport without implying cancellation", () => {
     const rendered = footer(stateOf({ shutting_down: true }), "closed: input_eof");
     assert.match(rendered, /draining/);
