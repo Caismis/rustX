@@ -5142,7 +5142,7 @@ recovered child projects the initial absent observation (revision 0,
 `awaiting_activity`), because activity is not execution history and is never
 recovery input.
 
-#### Deterministic, scope-preserving subagent workspaces (Issues #146 and #187)
+#### Deterministic, scope-preserving subagent workspaces (Issues #146, #187, and #189)
 
 Named definitions carry one bounded project-workspace policy:
 `SharedWorkspace` (the default) or `GitWorktree { require_clean_parent }`.
@@ -5163,10 +5163,17 @@ resolve/freeze named-agent resources
   → capture parent HEAD = C
   → observe parent tracked/index/untracked status
   → enforce require_clean_parent
+  → resolve <logical-workspace>/.worktreeinclude
+  → open a stable handle to the authoritative logical workspace
+  → acquire every selected regular file with handle-relative no-symlink traversal
+  → validate the complete selection and its Git ignored/untracked state
+  → freeze all selected bytes from the retained file handles
   → git -c core.hooksPath=/dev/null worktree add -b <runtime-ref> <physical-root> C
   → verify child HEAD = C
   → derive child logical workspace = <physical-root>/<repository-relative-workspace>
   → require that logical workspace to exist in the committed checkout
+  → materialize only the frozen overlay bytes under the child logical workspace
+  → byte-verify every overlay destination
   → complete child preparation and Ready handshake
   → commit SubagentOwnershipCommitted
 ```
@@ -5181,6 +5188,42 @@ settlement, the worktree remains available rather than being force-removed.
 Checkout hooks are suppressed for the allocation command so repository hook
 side effects cannot change the selected committed snapshot before child
 ownership begins.
+
+`.worktreeinclude` is a bounded acquisition-local overlay contract, not a
+filesystem synchronization provider. The manager resolves exactly
+`<parent-logical-workspace>/.worktreeinclude`; it never searches repository
+ancestors or fallback locations. After trimming surrounding whitespace, each
+nonblank line is either a full-line `#` comment or one exact path relative to
+that logical workspace. There are no globs, negations, escapes, directory
+entries, or recursive selection in v1. Absolute paths, `..`, `.`, missing
+files, non-files, any symlink component, duplicate normalized/canonical
+destinations, tracked paths, and paths Git does not classify as ignored all
+fail acquisition. The fixed bounds are 64 selected files, 8 MiB of total
+frozen content, and a 64 KiB UTF-8 regular-file manifest.
+
+The manager acquires every selected source beneath a stable handle to the
+authoritative logical workspace. Intermediate components and the final file
+are opened without following symlinks, and the retained regular file handles
+remain the only source objects read during freezing. Thus path validation and
+source-object acquisition are one ownership operation, while Git eligibility
+still completes for the whole selection before any selected contents are
+read. The resulting private `FrozenOverlayFile` values hold only
+logical/repository-relative paths and bytes. They are never serialized,
+journaled, logged, added to `WorkspaceSnapshot`, or exposed as handoff
+metadata. Materialization happens only after the exact-commit Git worktree
+exists, uses a stable child logical-workspace handle with `create_new` and
+no-symlink traversal, rejects destination symlinks/collisions, and verifies
+each destination from the created file object. No parent pathname is reopened
+after the freeze phase, so later edits cannot affect the child.
+
+Any failure or cancellation after worktree creation is still ordinary staged
+workspace failure: the same uncommitted `WorkspaceLease` remains manager-owned
+and `settle_staged` removes the worktree when ordinary Git state proves it
+disposable, otherwise preserving the existing conservative ownership facts.
+Ignored overlays and their child mutations are absent from ordinary Git
+status, so overlay-only state leaves `changed = false` and cannot create a
+source handoff. Tracked edits and `HEAD != C` retain their existing source
+change semantics.
 
 The runtime ref and path are deterministic and bounded. For semantic
 `SubagentId = S`, rustX hashes the versioned, length-framed preimage

@@ -1859,7 +1859,7 @@ second authority:
   worktree facts. HITL traffic is never a control acknowledgement and never
   uses the disposable observation lane.
 
-## Issues #146 and #187: deterministic, scope-preserving worktree isolation
+## Issues #146, #187, and #189: deterministic, scope-preserving worktree isolation
 
 - **Workspace policy is bounded definition state.** A named definition
   resolves to either `SharedWorkspace` or
@@ -1914,6 +1914,42 @@ second authority:
   workspace dirty. `requireCleanParent = false` is the only explicit opt-out:
   the child then sees the committed tree at `C` only, while parent-local
   dirty bytes are intentionally excluded and never copied.
+- **Local overlays are explicit, bounded, and manager-owned (Issue #189).**
+  The manager resolves only `<parent-logical-workspace>/.worktreeinclude`.
+  Each trimmed nonblank, non-comment line names one exact path relative to
+  that logical workspace; v1 has no glob, negation, escape, directory, or
+  recursion syntax. Every selected path must be an existing regular
+  non-symlink file with no symlink ancestor, must be untracked in both the
+  index and captured commit, and must be classified as ignored by Git.
+  Absolute, parent/current traversal, duplicate normalized or canonical
+  destinations, missing files, and any boundary escape reject acquisition.
+  The fixed limits are 64 files, 8 MiB total frozen bytes, and a 64 KiB UTF-8
+  regular-file manifest.
+- **Overlay bytes freeze before physical creation and ownership commit.** The
+  manager opens the authoritative parent logical workspace as a stable
+  directory handle, acquires every selected source through component-by-
+  component no-symlink traversal, and retains the regular file handles while
+  it validates the complete selection. It then freezes bytes only from those
+  retained handles, creates the Git worktree at `C`, materializes only those
+  frozen bytes beneath a stable child logical-workspace handle, and
+  byte-verifies every destination from its created file object. It never
+  reopens a parent overlay pathname to obtain frozen bytes. Frozen contents
+  cross no journal, snapshot, IPC, log, diagnostic, or handoff boundary. The
+  child ownership linearization point remains `SubagentOwnershipCommitted`,
+  after worktree, overlay, process, and Ready staging have all completed.
+- **Overlay staging uses the existing lease settlement.** Cancellation or
+  failure before physical creation leaves no worktree. After creation and
+  before ownership commit, the same staged `WorkspaceLease` remains the sole
+  owner and settles through the existing conservative path: provably clean
+  state is removed, while unproven or source-changed state is preserved and
+  reported. There is no overlay-specific cleanup owner.
+- **Overlays cannot widen authority or become source state.** Manifest
+  location and entries are both rooted at the authoritative logical
+  workspace, and materialization uses the corresponding child logical path,
+  never the physical checkout root as broader authority. Ordinary Git status
+  still defines dirtiness and ignores overlay bytes; overlay-only presence or
+  mutation keeps `changed = false`, while tracked changes and `HEAD != C`
+  retain the existing handoff behavior.
 - **The dirty-parent rejection is a typed fact, not a message.** The workspace
   manager owns Git inspection and reports
   `WorkspaceAcquireError::DirtyParent { base_commit }`; its own diagnostic is

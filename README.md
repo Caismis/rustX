@@ -137,6 +137,35 @@ See the [architecture](docs/architecture.md) and
 [invariants](docs/invariants.md) documents for the exact native-tool
 contracts.
 
+### Isolated subagent local overlays
+
+An isolated Git-worktree subagent may receive explicitly selected local files
+through `<workspace>/.worktreeinclude`. The manifest is resolved only at the
+authoritative logical workspace root, and each nonblank line is one exact path
+relative to that workspace. Leading and trailing whitespace is ignored, and a
+line whose first non-whitespace character is `#` is a comment. Version 1 does
+not support globs, negation, escaping, directory recursion, absolute paths, or
+`..` traversal.
+
+Every selected path must exist as an individual regular file, remain inside
+the logical workspace, contain no symlink component, be untracked, and be
+classified as ignored by Git. The manager acquires each source beneath a
+stable logical-workspace handle with no-symlink traversal and retains the
+validated file handle through freezing; no later pathname reopen supplies
+overlay bytes. Duplicate normalized/canonical destinations are rejected. A
+manifest may select at most 64 files and 8 MiB of content in total; the
+manifest itself is limited to 64 KiB. Missing or ineligible files fail
+isolated acquisition instead of being skipped.
+
+The workspace manager freezes all selected bytes from those retained handles
+before creating the child worktree, then materializes and byte-verifies them
+through the child logical-workspace authority before child ownership can
+commit. Later parent edits therefore cannot change the acquired overlay.
+These files are local execution inputs, not source synchronization: they do
+not copy dirty tracked or arbitrary untracked state, and overlay-only edits in
+the child remain ignored by ordinary Git settlement and do not create a
+source-worktree handoff.
+
 ## Native Sessions
 
 Sessions are runtime-owned. The reference TUI currently exposes `/new`,

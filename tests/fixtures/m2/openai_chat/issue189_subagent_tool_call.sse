@@ -1,0 +1,7 @@
+data: {"id":"chatcmpl-issue189-parent","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_issue189_subagent","type":"function","function":{"name":"subagent","arguments":""}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-issue189-parent","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"agent\":\"explore\",\"task\":\"read the local overlay from local/runtime.env\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-issue189-parent","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]

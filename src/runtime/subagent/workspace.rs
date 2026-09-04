@@ -14,7 +14,10 @@
 //! ```text
 //! capture HEAD = C
 //! capture parent status
+//! acquire selected sources beneath a stable logical-workspace handle
+//! validate the complete selection and freeze bytes from retained handles
 //! create worktree at explicit C
+//! materialize and verify the frozen overlay
 //! ```
 //!
 //! The parent path is never consulted again to choose the child's base.  The
@@ -30,16 +33,55 @@
 //! artifacts alone are disposable execution output and do not force a
 //! handoff.
 
+use std::collections::BTreeSet;
 use std::ffi::OsString;
+use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+use nix::fcntl::{OFlag, open, openat};
+#[cfg(unix)]
+use nix::sys::stat::{Mode, mkdirat};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(unix)]
+use std::io::{Seek, SeekFrom, Write};
 use std::process::Stdio;
 use tokio::process::Command;
 
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::SubagentId;
+
+/// The only manifest name recognized by isolated workspace acquisition.
+const WORKTREE_INCLUDE_MANIFEST: &str = ".worktreeinclude";
+/// A deliberately small v1 selection bound. Entries select files, never
+/// directories or recursive trees.
+const MAX_OVERLAY_FILES: usize = 64;
+/// The total runtime-owned frozen content bound across every selected file.
+const MAX_OVERLAY_BYTES: usize = 8 * 1024 * 1024;
+/// Prevent an input manifest from becoming an unbounded pre-parse read.
+const MAX_OVERLAY_MANIFEST_BYTES: u64 = 64 * 1024;
+
+/// Acquisition-internal immutable bytes selected from the parent logical
+/// workspace. This value never crosses the child/durable protocol boundary.
+#[derive(Debug)]
+struct FrozenOverlayFile {
+    relative_path: PathBuf,
+    repository_relative_path: PathBuf,
+    bytes: Vec<u8>,
+}
+
+/// One selected path after every path/Git eligibility check and secure source
+/// acquisition, but before selected file content is read.
+#[derive(Debug)]
+struct ValidatedOverlayFile {
+    relative: PathBuf,
+    repository_relative: PathBuf,
+    /// The exact regular file object acquired beneath the stable workspace
+    /// directory handle. Freezing consumes this handle; it never reopens the
+    /// source pathname.
+    source: std::fs::File,
+}
 
 /// The bounded workspace policy resolved from a named subagent definition.
 ///
@@ -365,6 +407,72 @@ pub enum WorkspaceAcquireError {
         /// The exact committed `HEAD` captured before the dirty observation.
         base_commit: String,
     },
+    /// The logical-workspace manifest could not be read or parsed safely.
+    OverlayManifest {
+        /// A bounded diagnostic that never contains selected file bytes.
+        detail: String,
+    },
+    /// One manifest entry is not an ordinary logical-workspace-relative path.
+    OverlayUnsafePath {
+        /// The one-based manifest line, when rejection occurs during parse.
+        line: Option<usize>,
+        /// The rejected textual entry.
+        path: String,
+    },
+    /// Two entries resolve to the same canonical overlay destination.
+    OverlayDuplicate {
+        /// The duplicated logical-workspace-relative path.
+        path: PathBuf,
+    },
+    /// An explicitly selected overlay file does not exist.
+    OverlayMissing {
+        /// The missing logical-workspace-relative path.
+        path: PathBuf,
+    },
+    /// A selected path is tracked in the current index or captured commit.
+    OverlayTracked {
+        /// The tracked logical-workspace-relative path.
+        path: PathBuf,
+    },
+    /// Git does not classify a selected path as ignored.
+    OverlayNotIgnored {
+        /// The non-ignored logical-workspace-relative path.
+        path: PathBuf,
+    },
+    /// A selected file or one of its parent components is a symlink.
+    OverlaySymlink {
+        /// The affected logical-workspace-relative path.
+        path: PathBuf,
+    },
+    /// A selected path exists but is not an individual regular file.
+    OverlayNotFile {
+        /// The affected logical-workspace-relative path.
+        path: PathBuf,
+    },
+    /// The manifest selects more files than the fixed v1 bound.
+    OverlayFileLimit {
+        /// The fixed maximum accepted file count.
+        limit: usize,
+    },
+    /// The selected content exceeds the fixed total frozen-byte bound.
+    OverlayByteLimit {
+        /// The fixed maximum accepted total bytes.
+        limit: usize,
+    },
+    /// A validated source file could not be frozen.
+    OverlayFreeze {
+        /// The logical-workspace-relative path; never file contents.
+        path: PathBuf,
+        /// The bounded filesystem diagnostic.
+        detail: String,
+    },
+    /// Frozen bytes could not be materialized and verified in the child.
+    OverlayMaterialization {
+        /// The logical-workspace-relative path; never file contents.
+        path: PathBuf,
+        /// The bounded filesystem diagnostic.
+        detail: String,
+    },
     /// Git is unavailable or returned a failure for a local operation.
     Git {
         /// The bounded operation name.
@@ -399,6 +507,71 @@ impl core::fmt::Display for WorkspaceAcquireError {
             Self::DirtyParent { .. } => formatter.write_str(
                 "the parent workspace has uncommitted changes and the clean-parent \
                  policy rejected isolated workspace acquisition",
+            ),
+            Self::OverlayManifest { detail } => {
+                write!(
+                    formatter,
+                    "the .worktreeinclude manifest is invalid: {detail}"
+                )
+            }
+            Self::OverlayUnsafePath {
+                line: Some(line),
+                path,
+            } => write!(
+                formatter,
+                ".worktreeinclude line {line} is not a safe logical-workspace-relative file path: {path:?}"
+            ),
+            Self::OverlayUnsafePath { line: None, path } => write!(
+                formatter,
+                ".worktreeinclude path escaped the canonical logical workspace: {path:?}"
+            ),
+            Self::OverlayDuplicate { path } => write!(
+                formatter,
+                ".worktreeinclude selects the same overlay destination more than once: {}",
+                path.display()
+            ),
+            Self::OverlayMissing { path } => write!(
+                formatter,
+                ".worktreeinclude selected a missing file: {}",
+                path.display()
+            ),
+            Self::OverlayTracked { path } => write!(
+                formatter,
+                ".worktreeinclude selected a tracked file; only Git-ignored local files are eligible: {}",
+                path.display()
+            ),
+            Self::OverlayNotIgnored { path } => write!(
+                formatter,
+                ".worktreeinclude selected a file that Git does not classify as ignored: {}",
+                path.display()
+            ),
+            Self::OverlaySymlink { path } => write!(
+                formatter,
+                ".worktreeinclude selected a symlink or a path below one: {}",
+                path.display()
+            ),
+            Self::OverlayNotFile { path } => write!(
+                formatter,
+                ".worktreeinclude entries must select individual regular files: {}",
+                path.display()
+            ),
+            Self::OverlayFileLimit { limit } => write!(
+                formatter,
+                ".worktreeinclude selects more than the fixed limit of {limit} files"
+            ),
+            Self::OverlayByteLimit { limit } => write!(
+                formatter,
+                ".worktreeinclude selected content exceeds the fixed total limit of {limit} bytes"
+            ),
+            Self::OverlayFreeze { path, detail } => write!(
+                formatter,
+                "could not freeze .worktreeinclude file {}: {detail}",
+                path.display()
+            ),
+            Self::OverlayMaterialization { path, detail } => write!(
+                formatter,
+                "could not materialize and verify .worktreeinclude file {}: {detail}",
+                path.display()
             ),
             Self::Git { operation, detail } => {
                 write!(formatter, "Git {operation} failed: {detail}")
@@ -437,6 +610,14 @@ pub struct SubagentWorkspaceManager {
     #[cfg(test)]
     acquisition_hook: Option<std::sync::Arc<WorkspaceAcquireHook>>,
     #[cfg(test)]
+    overlay_source_hook: Option<std::sync::Arc<WorkspaceOverlaySourceHook>>,
+    #[cfg(test)]
+    overlay_validation_hook: Option<std::sync::Arc<WorkspaceOverlayValidationHook>>,
+    #[cfg(test)]
+    overlay_materialization_hook: Option<std::sync::Arc<WorkspaceOverlayMaterializationHook>>,
+    #[cfg(test)]
+    overlay_freeze_hook: Option<std::sync::Arc<WorkspaceOverlayFreezeHook>>,
+    #[cfg(test)]
     settlement_hook: Option<std::sync::Arc<WorkspaceSettlementHook>>,
 }
 
@@ -451,15 +632,58 @@ impl SubagentWorkspaceManager {
             #[cfg(test)]
             acquisition_hook: None,
             #[cfg(test)]
+            overlay_source_hook: None,
+            #[cfg(test)]
+            overlay_validation_hook: None,
+            #[cfg(test)]
+            overlay_materialization_hook: None,
+            #[cfg(test)]
+            overlay_freeze_hook: None,
+            #[cfg(test)]
             settlement_hook: None,
         }
     }
 
-    /// Installs a test-only barrier after Git has created the worktree and
-    /// before acquisition performs cancellation/verification settlement.
+    /// Installs a test-only barrier after worktree and overlay verification,
+    /// immediately before the prepared lease can leave acquisition.
     #[cfg(test)]
     pub(crate) fn install_acquisition_hook(&mut self, hook: std::sync::Arc<WorkspaceAcquireHook>) {
         self.acquisition_hook = Some(hook);
+    }
+
+    /// Installs a test-only barrier immediately before selected source files
+    /// are securely acquired beneath the stable logical-workspace handle.
+    #[cfg(test)]
+    fn install_overlay_source_hook(&mut self, hook: std::sync::Arc<WorkspaceOverlaySourceHook>) {
+        self.overlay_source_hook = Some(hook);
+    }
+
+    /// Installs a test-only barrier after all selected source handles and Git
+    /// eligibility facts are ready, immediately before byte freezing.
+    #[cfg(test)]
+    fn install_overlay_validation_hook(
+        &mut self,
+        hook: std::sync::Arc<WorkspaceOverlayValidationHook>,
+    ) {
+        self.overlay_validation_hook = Some(hook);
+    }
+
+    /// Installs a test-only barrier after the first frozen overlay file has
+    /// been materialized and before the remaining files are attempted.
+    #[cfg(test)]
+    fn install_overlay_materialization_hook(
+        &mut self,
+        hook: std::sync::Arc<WorkspaceOverlayMaterializationHook>,
+    ) {
+        self.overlay_materialization_hook = Some(hook);
+    }
+
+    /// Installs a test-only barrier after overlay bytes are frozen and before
+    /// the physical worktree exists. It proves later parent edits cannot
+    /// influence materialization without introducing production timing.
+    #[cfg(test)]
+    fn install_overlay_freeze_hook(&mut self, hook: std::sync::Arc<WorkspaceOverlayFreezeHook>) {
+        self.overlay_freeze_hook = Some(hook);
     }
 
     /// Installs a one-shot test seam immediately before final workspace Git
@@ -478,10 +702,12 @@ impl SubagentWorkspaceManager {
     ///
     /// For a Git worktree, the operations are deliberately ordered as
     /// repository resolution, exact `HEAD` capture, parent status observation,
-    /// strict-policy enforcement, and only then worktree creation at the
-    /// captured commit.  A cancellation during an in-flight Git command kills
-    /// that command and settles any partially created worktree without force
-    /// deleting dirty state.
+    /// strict-policy enforcement, stable-handle overlay source
+    /// acquisition/validation/freezing, worktree creation at the captured
+    /// commit, and frozen-overlay materialization and verification. A
+    /// cancellation during an in-flight Git command kills that command and
+    /// settles any partially created worktree without force deleting dirty
+    /// state.
     ///
     /// # Errors
     ///
@@ -574,6 +800,30 @@ impl SubagentWorkspaceManager {
         if cancellation.is_cancelled() {
             return Err(WorkspaceAcquireError::Cancelled);
         }
+        let overlay_workspace = open_stable_directory(&canonical_parent_logical_workspace).map_err(
+            |error| WorkspaceAcquireError::OverlayManifest {
+                detail: format!(
+                    "cannot open the authoritative logical workspace for overlay acquisition: {error}"
+                ),
+            },
+        )?;
+        let overlay_selection = self
+            .resolve_overlay_selection(
+                &overlay_workspace,
+                &source_repository_root,
+                &repository_relative_workspace,
+                &base_commit,
+                cancellation,
+            )
+            .await?;
+        let frozen_overlay = freeze_overlay(overlay_selection, cancellation)?;
+        #[cfg(test)]
+        if let Some(hook) = &self.overlay_freeze_hook {
+            hook.pause_after_freeze().await;
+        }
+        if cancellation.is_cancelled() {
+            return Err(WorkspaceAcquireError::Cancelled);
+        }
 
         let token = deterministic_worktree_name(subagent_id);
         let branch = format!("rustx/subagent/{token}");
@@ -595,6 +845,20 @@ impl SubagentWorkspaceManager {
             operation: "prepare worktree allocation root".to_owned(),
             detail: error.to_string(),
         })?;
+        let stable_runtime_worktrees = if frozen_overlay.is_empty() {
+            None
+        } else {
+            Some(
+                open_stable_runtime_worktrees(&self.runtime_root).map_err(|error| {
+                    WorkspaceAcquireError::OverlayMaterialization {
+                        path: PathBuf::new(),
+                        detail: format!(
+                            "cannot open the runtime worktree root as a stable destination: {error}"
+                        ),
+                    }
+                })?,
+            )
+        };
 
         let child_logical_workspace = physical_worktree_root.join(&repository_relative_workspace);
         let snapshot = WorkspaceSnapshot::worktree(
@@ -647,10 +911,6 @@ impl SubagentWorkspaceManager {
         if matches!(&add, Ok(output) if output.status.success()) {
             lease.branch_created = true;
             lease.created = registered;
-        }
-        #[cfg(test)]
-        if let Some(hook) = &self.acquisition_hook {
-            hook.pause_after_creation().await;
         }
         let output = match add {
             Ok(output) if output.status.success() => output,
@@ -721,6 +981,22 @@ impl SubagentWorkspaceManager {
                 )
                 .await);
         }
+        if !frozen_overlay.is_empty() {
+            let stable_runtime_worktrees = stable_runtime_worktrees
+                .as_ref()
+                .expect("non-empty frozen overlay has a stable runtime root");
+            if let Err(error) = self
+                .materialize_frozen_overlay(
+                    &lease.snapshot,
+                    stable_runtime_worktrees,
+                    &frozen_overlay,
+                    cancellation,
+                )
+                .await
+            {
+                return Err(self.settle_acquisition_failure(lease, error).await);
+            }
+        }
         if let Err(detail) = lease.snapshot.validate() {
             return Err(self
                 .settle_acquisition_failure(
@@ -729,7 +1005,256 @@ impl SubagentWorkspaceManager {
                 )
                 .await);
         }
+        #[cfg(test)]
+        if let Some(hook) = &self.acquisition_hook {
+            hook.pause_before_acquisition_return().await;
+        }
+        if cancellation.is_cancelled() {
+            return Err(self
+                .settle_acquisition_failure(lease, WorkspaceAcquireError::Cancelled)
+                .await);
+        }
         Ok(lease)
+    }
+
+    /// Resolves the one logical-workspace manifest, securely acquires every
+    /// selected source object, and validates the complete selection before any
+    /// selected file content is read.
+    async fn resolve_overlay_selection(
+        &self,
+        parent_logical_workspace: &std::fs::File,
+        source_repository_root: &Path,
+        repository_relative_workspace: &Path,
+        base_commit: &str,
+        cancellation: &CancellationSignal,
+    ) -> Result<Vec<ValidatedOverlayFile>, WorkspaceAcquireError> {
+        let selected = read_overlay_manifest(parent_logical_workspace)?;
+        // Acquire every source object before any Git eligibility check. This
+        // keeps path validation and object acquisition in one handle-relative
+        // operation while still deferring all content reads until the whole
+        // selection is eligible.
+        #[cfg(test)]
+        if let Some(hook) = &self.overlay_source_hook {
+            hook.pause_before_source_acquisition().await;
+        }
+
+        let mut validated = Vec::with_capacity(selected.len());
+        #[cfg(unix)]
+        let mut source_objects = BTreeSet::new();
+        for relative_path in selected {
+            if cancellation.is_cancelled() {
+                return Err(WorkspaceAcquireError::Cancelled);
+            }
+            let repository_relative_path = repository_relative_workspace.join(&relative_path);
+            let source = open_overlay_source(parent_logical_workspace, &relative_path)
+                .map_err(|error| overlay_source_open_error(&relative_path, &error))?;
+            let metadata =
+                source
+                    .metadata()
+                    .map_err(|error| WorkspaceAcquireError::OverlayFreeze {
+                        path: relative_path.clone(),
+                        detail: error.to_string(),
+                    })?;
+            if !metadata.is_file() {
+                return Err(WorkspaceAcquireError::OverlayNotFile {
+                    path: relative_path,
+                });
+            }
+            #[cfg(unix)]
+            if !source_objects.insert(overlay_source_identity(&metadata)) {
+                return Err(WorkspaceAcquireError::OverlayDuplicate {
+                    path: relative_path,
+                });
+            }
+            validated.push(ValidatedOverlayFile {
+                relative: relative_path,
+                repository_relative: repository_relative_path,
+                source,
+            });
+        }
+
+        for file in &validated {
+            if cancellation.is_cancelled() {
+                return Err(WorkspaceAcquireError::Cancelled);
+            }
+            if self
+                .overlay_path_is_tracked(
+                    source_repository_root,
+                    base_commit,
+                    &file.repository_relative,
+                    cancellation,
+                )
+                .await?
+            {
+                return Err(WorkspaceAcquireError::OverlayTracked {
+                    path: file.relative.clone(),
+                });
+            }
+            if !self
+                .overlay_path_is_ignored(
+                    source_repository_root,
+                    &file.repository_relative,
+                    cancellation,
+                )
+                .await?
+            {
+                return Err(WorkspaceAcquireError::OverlayNotIgnored {
+                    path: file.relative.clone(),
+                });
+            }
+        }
+        #[cfg(test)]
+        if let Some(hook) = &self.overlay_validation_hook {
+            hook.pause_after_source_validation().await;
+        }
+        Ok(validated)
+    }
+
+    /// A path is tracked if either the current index or the exact captured
+    /// commit contains it. Checking both keeps the explicit tracked-file
+    /// rejection correct under the permissive dirty-parent policy too.
+    async fn overlay_path_is_tracked(
+        &self,
+        source_repository_root: &Path,
+        base_commit: &str,
+        repository_relative_path: &Path,
+        cancellation: &CancellationSignal,
+    ) -> Result<bool, WorkspaceAcquireError> {
+        let index = self
+            .git_raw(
+                source_repository_root,
+                vec![
+                    "--literal-pathspecs".into(),
+                    "ls-files".into(),
+                    "-z".into(),
+                    "--".into(),
+                    repository_relative_path.as_os_str().to_owned(),
+                ],
+                Some(cancellation),
+            )
+            .await?;
+        if !index.status.success() {
+            return Err(WorkspaceAcquireError::Git {
+                operation: "inspect overlay index eligibility".to_owned(),
+                detail: git_failure_detail(&index),
+            });
+        }
+        if !index.stdout.is_empty() {
+            return Ok(true);
+        }
+        let committed = self
+            .git_raw(
+                source_repository_root,
+                vec![
+                    "--literal-pathspecs".into(),
+                    "ls-tree".into(),
+                    "-r".into(),
+                    "--name-only".into(),
+                    "-z".into(),
+                    base_commit.into(),
+                    "--".into(),
+                    repository_relative_path.as_os_str().to_owned(),
+                ],
+                Some(cancellation),
+            )
+            .await?;
+        if !committed.status.success() {
+            return Err(WorkspaceAcquireError::Git {
+                operation: "inspect captured overlay source eligibility".to_owned(),
+                detail: git_failure_detail(&committed),
+            });
+        }
+        Ok(!committed.stdout.is_empty())
+    }
+
+    async fn overlay_path_is_ignored(
+        &self,
+        repository_root: &Path,
+        repository_relative_path: &Path,
+        cancellation: &CancellationSignal,
+    ) -> Result<bool, WorkspaceAcquireError> {
+        let output = self
+            .git_raw(
+                repository_root,
+                vec![
+                    "check-ignore".into(),
+                    "--quiet".into(),
+                    "--no-index".into(),
+                    "--".into(),
+                    repository_relative_path.as_os_str().to_owned(),
+                ],
+                Some(cancellation),
+            )
+            .await?;
+        match output.status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => Err(WorkspaceAcquireError::Git {
+                operation: "inspect overlay ignore eligibility".to_owned(),
+                detail: git_failure_detail(&output),
+            }),
+        }
+    }
+
+    /// Revalidates ignored eligibility in the exact checkout, materializes
+    /// only frozen bytes through a stable child-workspace handle, and verifies
+    /// each destination from the file object that was created.
+    async fn materialize_frozen_overlay(
+        &self,
+        snapshot: &WorkspaceSnapshot,
+        stable_runtime_worktrees: &std::fs::File,
+        frozen: &[FrozenOverlayFile],
+        cancellation: &CancellationSignal,
+    ) -> Result<(), WorkspaceAcquireError> {
+        let worktree = snapshot
+            .git_worktree()
+            .expect("isolated acquisition has Git worktree facts");
+        let physical_worktree_root = worktree.physical_worktree_root.as_path();
+        let destination_root = open_stable_child_logical_workspace(
+            stable_runtime_worktrees,
+            &worktree.physical_worktree_root,
+            &worktree.repository_relative_workspace,
+        )
+        .map_err(|error| WorkspaceAcquireError::OverlayMaterialization {
+            path: PathBuf::new(),
+            detail: format!(
+                "cannot open the child logical workspace as a stable destination: {error}"
+            ),
+        })?;
+        for file in frozen {
+            if !self
+                .overlay_path_is_ignored(
+                    physical_worktree_root,
+                    &file.repository_relative_path,
+                    cancellation,
+                )
+                .await?
+            {
+                return Err(WorkspaceAcquireError::OverlayNotIgnored {
+                    path: file.relative_path.clone(),
+                });
+            }
+            validate_overlay_destination(&destination_root, &file.relative_path)?;
+        }
+        #[cfg(test)]
+        let mut first_materialization = true;
+        for file in frozen {
+            if cancellation.is_cancelled() {
+                return Err(WorkspaceAcquireError::Cancelled);
+            }
+            materialize_overlay_file(&destination_root, &file.relative_path, &file.bytes).map_err(
+                |error| WorkspaceAcquireError::OverlayMaterialization {
+                    path: file.relative_path.clone(),
+                    detail: error.to_string(),
+                },
+            )?;
+            #[cfg(test)]
+            if first_materialization && let Some(hook) = &self.overlay_materialization_hook {
+                first_materialization = false;
+                hook.pause_after_first_materialization().await;
+            }
+        }
+        Ok(())
     }
 
     async fn settle_acquisition_failure(
@@ -1367,6 +1892,567 @@ fn path_is_occupied(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok()
 }
 
+/// Reads the securely acquired source objects into the immutable, bounded
+/// acquisition representation. The final byte bound is enforced against the
+/// bytes actually read from each retained file handle, not only its metadata.
+fn freeze_overlay(
+    validated: Vec<ValidatedOverlayFile>,
+    cancellation: &CancellationSignal,
+) -> Result<Vec<FrozenOverlayFile>, WorkspaceAcquireError> {
+    let mut total_bytes = 0_usize;
+    let mut frozen = Vec::with_capacity(validated.len());
+    for file in validated {
+        if cancellation.is_cancelled() {
+            return Err(WorkspaceAcquireError::Cancelled);
+        }
+        let metadata =
+            file.source
+                .metadata()
+                .map_err(|error| WorkspaceAcquireError::OverlayFreeze {
+                    path: file.relative.clone(),
+                    detail: error.to_string(),
+                })?;
+        if !metadata.is_file() {
+            return Err(WorkspaceAcquireError::OverlayNotFile {
+                path: file.relative,
+            });
+        }
+        let metadata_bytes = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
+        if total_bytes
+            .checked_add(metadata_bytes)
+            .is_none_or(|bytes| bytes > MAX_OVERLAY_BYTES)
+        {
+            return Err(WorkspaceAcquireError::OverlayByteLimit {
+                limit: MAX_OVERLAY_BYTES,
+            });
+        }
+        let remaining = MAX_OVERLAY_BYTES - total_bytes;
+        let read_limit = u64::try_from(remaining.saturating_add(1)).unwrap_or(u64::MAX);
+        let mut bytes = Vec::with_capacity(metadata_bytes.min(remaining));
+        std::io::Read::read_to_end(&mut file.source.take(read_limit), &mut bytes).map_err(
+            |error| WorkspaceAcquireError::OverlayFreeze {
+                path: file.relative.clone(),
+                detail: error.to_string(),
+            },
+        )?;
+        total_bytes = total_bytes.checked_add(bytes.len()).ok_or(
+            WorkspaceAcquireError::OverlayByteLimit {
+                limit: MAX_OVERLAY_BYTES,
+            },
+        )?;
+        if total_bytes > MAX_OVERLAY_BYTES {
+            return Err(WorkspaceAcquireError::OverlayByteLimit {
+                limit: MAX_OVERLAY_BYTES,
+            });
+        }
+        frozen.push(FrozenOverlayFile {
+            relative_path: file.relative,
+            repository_relative_path: file.repository_relative,
+            bytes,
+        });
+    }
+    Ok(frozen)
+}
+
+/// Opens a directory from the filesystem root, retaining every directory
+/// handle in the traversal. The resulting handle is the authority for all
+/// later overlay source and destination operations.
+fn open_stable_directory(path: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        if !path.is_absolute() {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "stable directory paths must be absolute",
+            ));
+        }
+        let mut current = std::fs::File::from(
+            open(
+                Path::new("/"),
+                OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(std::io::Error::from)?,
+        );
+        for component in path.components() {
+            match component {
+                std::path::Component::RootDir | std::path::Component::CurDir => {}
+                std::path::Component::Normal(name) => {
+                    current = open_directory_at(&current, name)?;
+                }
+                std::path::Component::ParentDir | std::path::Component::Prefix(_) => {
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        "stable directory paths must not contain parent or prefix components",
+                    ));
+                }
+            }
+        }
+        Ok(current)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::File::open(path)
+    }
+}
+
+/// Opens the runtime-private worktree allocation directory through a stable
+/// handle. The runtime root is an application-owned path, so its canonical
+/// spelling is resolved once here to accommodate platform aliases such as
+/// macOS `/var`; the child worktree itself is still traversed without
+/// symlinks from this retained handle.
+fn open_stable_runtime_worktrees(runtime_root: &Path) -> std::io::Result<std::fs::File> {
+    let canonical_runtime_root = std::fs::canonicalize(runtime_root)?;
+    let runtime = open_stable_directory(&canonical_runtime_root)?;
+    #[cfg(unix)]
+    {
+        open_directory_at(&runtime, std::ffi::OsStr::new("worktrees"))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = runtime;
+        std::fs::File::open(canonical_runtime_root.join("worktrees"))
+    }
+}
+
+/// Opens the child logical workspace by walking from the retained runtime
+/// allocation handle. This avoids re-resolving a possibly aliased physical
+/// pathname and keeps every destination component under the exact child
+/// worktree directory Git registered.
+fn open_stable_child_logical_workspace(
+    stable_runtime_worktrees: &std::fs::File,
+    physical_worktree_root: &Path,
+    repository_relative_workspace: &Path,
+) -> std::io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        let token = physical_worktree_root.file_name().ok_or_else(|| {
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "the physical worktree path has no final component",
+            )
+        })?;
+        let worktree = open_directory_at(stable_runtime_worktrees, token)?;
+        open_directory_relative(&worktree, repository_relative_workspace)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (
+            stable_runtime_worktrees,
+            physical_worktree_root,
+            repository_relative_workspace,
+        );
+        Err(std::io::Error::new(
+            ErrorKind::Unsupported,
+            "secure overlay destinations are only available on Unix",
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn open_directory_relative(
+    root: &std::fs::File,
+    relative_path: &Path,
+) -> std::io::Result<std::fs::File> {
+    let mut current = root.try_clone()?;
+    for component in relative_path.components() {
+        let std::path::Component::Normal(name) = component else {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "relative directory path contains an unsafe component",
+            ));
+        };
+        current = open_directory_at(&current, name)?;
+    }
+    Ok(current)
+}
+
+/// Opens one selected source by traversing every component relative to the
+/// stable logical-workspace handle. Every intermediate directory and the
+/// final file reject symlinks; the returned file is the source object later
+/// consumed by [`freeze_overlay`].
+fn open_overlay_source(
+    workspace: &std::fs::File,
+    relative_path: &Path,
+) -> std::io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        let mut components = relative_path.components();
+        let Some(first) = components.next() else {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "overlay source path has no file component",
+            ));
+        };
+        let mut current = workspace.try_clone()?;
+        let mut final_component = first;
+        for component in components {
+            let std::path::Component::Normal(name) = final_component else {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "overlay source path contains a non-normal component",
+                ));
+            };
+            current = open_directory_at(&current, name)?;
+            final_component = component;
+        }
+        let std::path::Component::Normal(name) = final_component else {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "overlay source path contains a non-normal component",
+            ));
+        };
+        let fd = openat(
+            &current,
+            name,
+            OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC | OFlag::O_NONBLOCK,
+            Mode::empty(),
+        )
+        .map_err(std::io::Error::from)?;
+        Ok(std::fs::File::from(fd))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (workspace, relative_path);
+        Err(std::io::Error::new(
+            ErrorKind::Unsupported,
+            "secure overlay source acquisition is only available on Unix",
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn open_directory_at(
+    directory: &std::fs::File,
+    name: &std::ffi::OsStr,
+) -> std::io::Result<std::fs::File> {
+    let fd = openat(
+        directory,
+        name,
+        // `O_NOFOLLOW` rejects a symlink on the component itself. Open
+        // without `O_DIRECTORY` so platforms that report a symlink plus
+        // `O_DIRECTORY` as `ENOTDIR` preserve the distinct symlink error;
+        // `O_NONBLOCK` prevents an unexpected FIFO from blocking before the
+        // descriptor metadata is checked below.
+        OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC | OFlag::O_NONBLOCK,
+        Mode::empty(),
+    )
+    .map_err(std::io::Error::from)?;
+    let opened = std::fs::File::from(fd);
+    if !opened.metadata()?.is_dir() {
+        return Err(std::io::Error::new(
+            ErrorKind::NotADirectory,
+            "opened component is not a directory",
+        ));
+    }
+    Ok(opened)
+}
+
+fn overlay_source_open_error(path: &Path, error: &std::io::Error) -> WorkspaceAcquireError {
+    if error.kind() == ErrorKind::NotFound {
+        WorkspaceAcquireError::OverlayMissing {
+            path: path.to_path_buf(),
+        }
+    } else if is_symlink_error(error) {
+        WorkspaceAcquireError::OverlaySymlink {
+            path: path.to_path_buf(),
+        }
+    } else if error.kind() == ErrorKind::NotADirectory {
+        WorkspaceAcquireError::OverlayNotFile {
+            path: path.to_path_buf(),
+        }
+    } else {
+        WorkspaceAcquireError::OverlayFreeze {
+            path: path.to_path_buf(),
+            detail: error.to_string(),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn is_symlink_error(error: &std::io::Error) -> bool {
+    error.raw_os_error() == Some(libc::ELOOP)
+}
+
+#[cfg(not(unix))]
+fn is_symlink_error(_error: &std::io::Error) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn overlay_source_identity(metadata: &std::fs::Metadata) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt;
+
+    (metadata.dev(), metadata.ino())
+}
+
+/// Reads and parses `<logical-workspace>/.worktreeinclude`. A missing
+/// manifest is the one no-overlay representation. Each nonblank,
+/// non-comment line is one exact file path; surrounding whitespace is not
+/// part of the path, `#` starts a comment only as the first trimmed byte, and
+/// there is no glob, negation, escaping, or directory syntax in v1.
+fn read_overlay_manifest(
+    parent_logical_workspace: &std::fs::File,
+) -> Result<Vec<PathBuf>, WorkspaceAcquireError> {
+    let source = match open_overlay_source(
+        parent_logical_workspace,
+        Path::new(WORKTREE_INCLUDE_MANIFEST),
+    ) {
+        Ok(source) => source,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if is_symlink_error(&error) => {
+            return Err(WorkspaceAcquireError::OverlayManifest {
+                detail: "the manifest must not be a symlink".to_owned(),
+            });
+        }
+        Err(error) => {
+            return Err(WorkspaceAcquireError::OverlayManifest {
+                detail: error.to_string(),
+            });
+        }
+    };
+    let metadata = source
+        .metadata()
+        .map_err(|error| WorkspaceAcquireError::OverlayManifest {
+            detail: error.to_string(),
+        })?;
+    if !metadata.is_file() {
+        return Err(WorkspaceAcquireError::OverlayManifest {
+            detail: "the manifest is not a regular file".to_owned(),
+        });
+    }
+    if metadata.len() > MAX_OVERLAY_MANIFEST_BYTES {
+        return Err(WorkspaceAcquireError::OverlayManifest {
+            detail: format!(
+                "the manifest exceeds the fixed limit of {MAX_OVERLAY_MANIFEST_BYTES} bytes"
+            ),
+        });
+    }
+    let mut bytes = Vec::with_capacity(
+        usize::try_from(metadata.len())
+            .unwrap_or(usize::MAX)
+            .min(usize::try_from(MAX_OVERLAY_MANIFEST_BYTES).unwrap_or(usize::MAX)),
+    );
+    std::io::Read::read_to_end(&mut source.take(MAX_OVERLAY_MANIFEST_BYTES + 1), &mut bytes)
+        .map_err(|error| WorkspaceAcquireError::OverlayManifest {
+            detail: error.to_string(),
+        })?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_OVERLAY_MANIFEST_BYTES {
+        return Err(WorkspaceAcquireError::OverlayManifest {
+            detail: format!(
+                "the manifest exceeds the fixed limit of {MAX_OVERLAY_MANIFEST_BYTES} bytes"
+            ),
+        });
+    }
+    let contents =
+        std::str::from_utf8(&bytes).map_err(|error| WorkspaceAcquireError::OverlayManifest {
+            detail: format!("the manifest is not UTF-8: {error}"),
+        })?;
+    parse_overlay_manifest(contents)
+}
+
+fn parse_overlay_manifest(contents: &str) -> Result<Vec<PathBuf>, WorkspaceAcquireError> {
+    let mut selected = Vec::new();
+    let mut destinations = BTreeSet::new();
+    for (index, line) in contents.lines().enumerate() {
+        let entry = line.trim();
+        if entry.is_empty() || entry.starts_with('#') {
+            continue;
+        }
+        let input = Path::new(entry);
+        if entry.as_bytes().contains(&0)
+            || input.is_absolute()
+            || !is_safe_repository_relative(input)
+        {
+            return Err(WorkspaceAcquireError::OverlayUnsafePath {
+                line: Some(index + 1),
+                path: entry.to_owned(),
+            });
+        }
+        let normalized = input.components().collect::<PathBuf>();
+        if !destinations.insert(normalized.clone()) {
+            return Err(WorkspaceAcquireError::OverlayDuplicate { path: normalized });
+        }
+        selected.push(normalized);
+        if selected.len() > MAX_OVERLAY_FILES {
+            return Err(WorkspaceAcquireError::OverlayFileLimit {
+                limit: MAX_OVERLAY_FILES,
+            });
+        }
+    }
+    Ok(selected)
+}
+
+/// Checks the committed checkout through the stable child directory handle
+/// before any overlay destination is created. This is an early rejection
+/// optimization only; the subsequent `create_new` open remains authoritative.
+fn validate_overlay_destination(
+    child_logical_workspace: &std::fs::File,
+    relative_path: &Path,
+) -> Result<(), WorkspaceAcquireError> {
+    #[cfg(unix)]
+    {
+        let Some(file_name) = relative_path.file_name() else {
+            return Err(WorkspaceAcquireError::OverlayMaterialization {
+                path: relative_path.to_path_buf(),
+                detail: "the destination has no file component".to_owned(),
+            });
+        };
+        let mut current = child_logical_workspace.try_clone().map_err(|error| {
+            WorkspaceAcquireError::OverlayMaterialization {
+                path: relative_path.to_path_buf(),
+                detail: error.to_string(),
+            }
+        })?;
+        if let Some(parent) = relative_path.parent() {
+            for component in parent.components() {
+                let std::path::Component::Normal(name) = component else {
+                    return Err(WorkspaceAcquireError::OverlayMaterialization {
+                        path: relative_path.to_path_buf(),
+                        detail: "the destination has an unsafe path component".to_owned(),
+                    });
+                };
+                match open_directory_at(&current, name) {
+                    Ok(next) => current = next,
+                    Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+                    Err(error) if is_symlink_error(&error) => {
+                        return Err(WorkspaceAcquireError::OverlayMaterialization {
+                            path: relative_path.to_path_buf(),
+                            detail: "the destination contains a symlink".to_owned(),
+                        });
+                    }
+                    Err(error) => {
+                        return Err(WorkspaceAcquireError::OverlayMaterialization {
+                            path: relative_path.to_path_buf(),
+                            detail: error.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+        match openat(
+            &current,
+            file_name,
+            OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC | OFlag::O_NONBLOCK,
+            Mode::empty(),
+        ) {
+            Ok(_) => Err(WorkspaceAcquireError::OverlayMaterialization {
+                path: relative_path.to_path_buf(),
+                detail: "the destination already exists".to_owned(),
+            }),
+            Err(error) => {
+                let error = std::io::Error::from(error);
+                if error.kind() == ErrorKind::NotFound {
+                    Ok(())
+                } else if is_symlink_error(&error) {
+                    Err(WorkspaceAcquireError::OverlayMaterialization {
+                        path: relative_path.to_path_buf(),
+                        detail: "the destination contains a symlink".to_owned(),
+                    })
+                } else {
+                    Err(WorkspaceAcquireError::OverlayMaterialization {
+                        path: relative_path.to_path_buf(),
+                        detail: error.to_string(),
+                    })
+                }
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child_logical_workspace;
+        Err(WorkspaceAcquireError::OverlayMaterialization {
+            path: relative_path.to_path_buf(),
+            detail: "secure overlay destinations are only available on Unix".to_owned(),
+        })
+    }
+}
+
+#[cfg(unix)]
+fn open_overlay_destination_parent(
+    child_logical_workspace: &std::fs::File,
+    relative_path: &Path,
+) -> std::io::Result<std::fs::File> {
+    let mut current = child_logical_workspace.try_clone()?;
+    let Some(parent) = relative_path.parent() else {
+        return Ok(current);
+    };
+    for component in parent.components() {
+        let std::path::Component::Normal(name) = component else {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "the destination has an unsafe path component",
+            ));
+        };
+        match open_directory_at(&current, name) {
+            Ok(next) => current = next,
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                match mkdirat(&current, name, Mode::from_bits_truncate(0o777)) {
+                    Ok(()) => {}
+                    Err(error) if is_exists_error(&std::io::Error::from(error)) => {}
+                    Err(error) => return Err(std::io::Error::from(error)),
+                }
+                current = open_directory_at(&current, name)?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(current)
+}
+
+#[cfg(unix)]
+fn materialize_overlay_file(
+    child_logical_workspace: &std::fs::File,
+    relative_path: &Path,
+    bytes: &[u8],
+) -> std::io::Result<()> {
+    let Some(file_name) = relative_path.file_name() else {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "the destination has no file component",
+        ));
+    };
+    let parent = open_overlay_destination_parent(child_logical_workspace, relative_path)?;
+    let fd = openat(
+        &parent,
+        file_name,
+        OFlag::O_RDWR | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+        Mode::from_bits_truncate(0o666),
+    )
+    .map_err(std::io::Error::from)?;
+    let mut output = std::fs::File::from(fd);
+    output.write_all(bytes)?;
+    output.flush()?;
+    output.seek(SeekFrom::Start(0))?;
+    let mut observed = Vec::with_capacity(bytes.len());
+    let read_limit = u64::try_from(bytes.len().saturating_add(1)).unwrap_or(u64::MAX);
+    output.take(read_limit).read_to_end(&mut observed)?;
+    if observed != bytes {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            "destination bytes do not match the frozen source",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn materialize_overlay_file(
+    _child_logical_workspace: &std::fs::File,
+    _relative_path: &Path,
+    _bytes: &[u8],
+) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        ErrorKind::Unsupported,
+        "secure overlay destinations are only available on Unix",
+    ))
+}
+
+#[cfg(unix)]
+fn is_exists_error(error: &std::io::Error) -> bool {
+    error.raw_os_error() == Some(libc::EEXIST)
+}
+
 /// A repository-relative logical workspace is either the empty root path or
 /// a sequence of ordinary components. Absolute roots, platform prefixes, and
 /// parent traversal would make `physical_worktree_root.join(relative)` an
@@ -1462,6 +2548,96 @@ fn paths_refer_to_same_worktree(actual: Option<&Path>, expected: Option<&Path>) 
 
 #[cfg(test)]
 #[derive(Debug)]
+struct WorkspaceOverlaySourceHook {
+    before_acquisition: tokio::sync::Barrier,
+    release: tokio::sync::Barrier,
+}
+
+#[cfg(test)]
+impl WorkspaceOverlaySourceHook {
+    fn new() -> Self {
+        Self {
+            before_acquisition: tokio::sync::Barrier::new(2),
+            release: tokio::sync::Barrier::new(2),
+        }
+    }
+
+    async fn pause_before_source_acquisition(&self) {
+        self.before_acquisition.wait().await;
+        self.release.wait().await;
+    }
+
+    async fn wait_until_ready_to_acquire(&self) {
+        self.before_acquisition.wait().await;
+    }
+
+    async fn release(&self) {
+        self.release.wait().await;
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct WorkspaceOverlayValidationHook {
+    after_validation: tokio::sync::Barrier,
+    release: tokio::sync::Barrier,
+}
+
+#[cfg(test)]
+impl WorkspaceOverlayValidationHook {
+    fn new() -> Self {
+        Self {
+            after_validation: tokio::sync::Barrier::new(2),
+            release: tokio::sync::Barrier::new(2),
+        }
+    }
+
+    async fn pause_after_source_validation(&self) {
+        self.after_validation.wait().await;
+        self.release.wait().await;
+    }
+
+    async fn wait_until_validated(&self) {
+        self.after_validation.wait().await;
+    }
+
+    async fn release(&self) {
+        self.release.wait().await;
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct WorkspaceOverlayMaterializationHook {
+    after_first: tokio::sync::Barrier,
+    release: tokio::sync::Barrier,
+}
+
+#[cfg(test)]
+impl WorkspaceOverlayMaterializationHook {
+    fn new() -> Self {
+        Self {
+            after_first: tokio::sync::Barrier::new(2),
+            release: tokio::sync::Barrier::new(2),
+        }
+    }
+
+    async fn pause_after_first_materialization(&self) {
+        self.after_first.wait().await;
+        self.release.wait().await;
+    }
+
+    async fn wait_until_after_first(&self) {
+        self.after_first.wait().await;
+    }
+
+    async fn release(&self) {
+        self.release.wait().await;
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug)]
 pub(crate) struct WorkspaceAcquireHook {
     after_creation: tokio::sync::Barrier,
     release: tokio::sync::Barrier,
@@ -1476,13 +2652,43 @@ impl WorkspaceAcquireHook {
         }
     }
 
-    async fn pause_after_creation(&self) {
+    async fn pause_before_acquisition_return(&self) {
         self.after_creation.wait().await;
         self.release.wait().await;
     }
 
-    async fn wait_until_created(&self) {
+    async fn wait_until_ready_to_return(&self) {
         self.after_creation.wait().await;
+    }
+
+    async fn release(&self) {
+        self.release.wait().await;
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct WorkspaceOverlayFreezeHook {
+    after_freeze: tokio::sync::Barrier,
+    release: tokio::sync::Barrier,
+}
+
+#[cfg(test)]
+impl WorkspaceOverlayFreezeHook {
+    fn new() -> Self {
+        Self {
+            after_freeze: tokio::sync::Barrier::new(2),
+            release: tokio::sync::Barrier::new(2),
+        }
+    }
+
+    async fn pause_after_freeze(&self) {
+        self.after_freeze.wait().await;
+        self.release.wait().await;
+    }
+
+    async fn wait_until_frozen(&self) {
+        self.after_freeze.wait().await;
     }
 
     async fn release(&self) {
@@ -1537,8 +2743,11 @@ impl WorkspaceSettlementHook {
 #[cfg(test)]
 mod tests {
     use super::{
-        SubagentWorkspaceManager, SubagentWorkspacePolicy, WorkspaceAcquireHook, WorkspaceCleanup,
-        WorkspaceIsolation, WorkspaceSnapshot, deterministic_worktree_name,
+        MAX_OVERLAY_BYTES, MAX_OVERLAY_FILES, SubagentWorkspaceManager, SubagentWorkspacePolicy,
+        WorkspaceAcquireHook, WorkspaceCleanup, WorkspaceIsolation, WorkspaceOverlayFreezeHook,
+        WorkspaceOverlayMaterializationHook, WorkspaceOverlaySourceHook,
+        WorkspaceOverlayValidationHook, WorkspaceSnapshot, deterministic_worktree_name,
+        parse_overlay_manifest,
     };
     use crate::runtime::cancellation::CancellationSignal;
     use crate::runtime::identity::SubagentId;
@@ -1597,6 +2806,37 @@ mod tests {
     fn ignore_target(path: &std::path::Path) {
         std::fs::write(path.join(".gitignore"), "/target/\n").expect("ignore file");
         commit(path, "ignore build output");
+    }
+
+    fn declare_overlay(
+        repository: &std::path::Path,
+        workspace_relative: &std::path::Path,
+        entries: &[String],
+    ) -> std::path::PathBuf {
+        let workspace = repository.join(workspace_relative);
+        std::fs::create_dir_all(&workspace).expect("overlay logical workspace");
+        let manifest = entries.join("\n") + "\n";
+        std::fs::write(workspace.join(super::WORKTREE_INCLUDE_MANIFEST), manifest)
+            .expect("overlay manifest");
+        let ignored = entries
+            .iter()
+            .map(|entry| {
+                let repository_relative = workspace_relative.join(entry);
+                format!("/{}", repository_relative.display())
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        std::fs::write(repository.join(".gitignore"), ignored).expect("ignore overlay files");
+        commit(repository, "declare local worktree overlay");
+        workspace
+    }
+
+    fn write_overlay_file(workspace: &std::path::Path, relative: &str, bytes: &[u8]) {
+        let path = workspace.join(relative);
+        std::fs::create_dir_all(path.parent().expect("overlay file parent"))
+            .expect("overlay parent");
+        std::fs::write(path, bytes).expect("overlay file");
     }
 
     /// The resolved policy of an ordinary isolated definition under the
@@ -1737,6 +2977,467 @@ mod tests {
         let settlement = lease.settle_after_child().await;
         assert_eq!(settlement.cleanup, WorkspaceCleanup::Removed);
         assert!(settlement.handoff.is_none());
+    }
+
+    #[test]
+    fn overlay_manifest_has_one_small_deterministic_line_format() {
+        let parsed = parse_overlay_manifest(
+            "\n  # full-line comment after trimming\n.env\n config/local.json \n\n",
+        )
+        .expect("manifest");
+        assert_eq!(
+            parsed,
+            vec![
+                std::path::PathBuf::from(".env"),
+                std::path::PathBuf::from("config/local.json")
+            ]
+        );
+
+        let duplicate = parse_overlay_manifest("config//local.json\nconfig/local.json\n")
+            .expect_err("normalized duplicate");
+        assert!(matches!(
+            duplicate,
+            super::WorkspaceAcquireError::OverlayDuplicate { .. }
+        ));
+    }
+
+    #[test]
+    fn overlay_file_count_accepts_the_limit_and_rejects_one_more() {
+        let accepted = (0..MAX_OVERLAY_FILES)
+            .map(|index| format!("local/file-{index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            parse_overlay_manifest(&accepted)
+                .expect("the fixed boundary is accepted")
+                .len(),
+            MAX_OVERLAY_FILES
+        );
+        let rejected = format!("{accepted}\nlocal/one-past-the-limit");
+        assert!(matches!(
+            parse_overlay_manifest(&rejected).expect_err("one past the fixed file limit"),
+            super::WorkspaceAcquireError::OverlayFileLimit { limit }
+                if limit == MAX_OVERLAY_FILES
+        ));
+    }
+
+    #[tokio::test]
+    async fn selected_ignored_file_is_materialized_with_exact_frozen_bytes() {
+        let repository = repository();
+        let workspace = declare_overlay(
+            repository.path(),
+            std::path::Path::new(""),
+            &["local/runtime.env".to_owned()],
+        );
+        let expected = b"TOKEN=local-only\n\0binary-tail";
+        write_overlay_file(&workspace, "local/runtime.env", expected);
+        let runtime = tempfile::tempdir().expect("runtime root");
+        let lease = SubagentWorkspaceManager::new(&workspace, runtime.path())
+            .acquire(
+                default_isolated(),
+                &SubagentId::new("conversation-basic-overlay-subagent-1"),
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect("worktree with overlay");
+
+        assert_eq!(
+            std::fs::read(lease.logical_workspace().join("local/runtime.env"))
+                .expect("materialized overlay"),
+            expected
+        );
+        assert_eq!(
+            lease.settle_after_child().await.cleanup,
+            WorkspaceCleanup::Removed
+        );
+    }
+
+    #[tokio::test]
+    async fn parent_edit_after_overlay_freeze_cannot_change_child_bytes() {
+        let repository = repository();
+        let workspace = declare_overlay(
+            repository.path(),
+            std::path::Path::new(""),
+            &[".env".to_owned()],
+        );
+        write_overlay_file(&workspace, ".env", b"FROZEN=before\n");
+        let runtime = tempfile::tempdir().expect("runtime root");
+        let mut manager = SubagentWorkspaceManager::new(&workspace, runtime.path());
+        let hook = std::sync::Arc::new(WorkspaceOverlayFreezeHook::new());
+        manager.install_overlay_freeze_hook(hook.clone());
+        let cancellation = CancellationSignal::new();
+        let task_manager = manager.clone();
+        let task_cancellation = cancellation.clone();
+        let task = tokio::spawn(async move {
+            task_manager
+                .acquire(
+                    default_isolated(),
+                    &SubagentId::new("conversation-frozen-overlay-subagent-1"),
+                    &task_cancellation,
+                )
+                .await
+        });
+
+        hook.wait_until_frozen().await;
+        write_overlay_file(&workspace, ".env", b"FROZEN=after\n");
+        hook.release().await;
+        let lease = task.await.expect("acquisition task").expect("worktree");
+        assert_eq!(
+            std::fs::read(lease.logical_workspace().join(".env")).expect("child overlay"),
+            b"FROZEN=before\n"
+        );
+        assert_eq!(
+            std::fs::read(workspace.join(".env")).expect("parent overlay"),
+            b"FROZEN=after\n"
+        );
+        assert_eq!(
+            lease.settle_after_child().await.cleanup,
+            WorkspaceCleanup::Removed
+        );
+    }
+
+    #[tokio::test]
+    async fn tracked_overlay_selection_is_rejected_explicitly() {
+        let repository = repository();
+        std::fs::write(
+            repository.path().join(super::WORKTREE_INCLUDE_MANIFEST),
+            "tracked.txt\n",
+        )
+        .expect("manifest");
+        commit(repository.path(), "select tracked file");
+        let runtime = tempfile::tempdir().expect("runtime root");
+        let error = SubagentWorkspaceManager::new(repository.path(), runtime.path())
+            .acquire(
+                default_isolated(),
+                &SubagentId::new("conversation-tracked-overlay-subagent-1"),
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect_err("tracked overlay selection");
+        assert!(matches!(
+            error,
+            super::WorkspaceAcquireError::OverlayTracked { ref path }
+                if path == std::path::Path::new("tracked.txt")
+        ));
+        assert!(!runtime.path().join("worktrees").exists());
+    }
+
+    #[tokio::test]
+    async fn non_ignored_overlay_selection_is_rejected_by_git_semantics() {
+        let repository = repository();
+        std::fs::write(
+            repository.path().join(super::WORKTREE_INCLUDE_MANIFEST),
+            "local.env\n",
+        )
+        .expect("manifest");
+        commit(repository.path(), "select non-ignored local file");
+        std::fs::write(repository.path().join("local.env"), "LOCAL=value\n")
+            .expect("non-ignored local file");
+        let runtime = tempfile::tempdir().expect("runtime root");
+        let error = SubagentWorkspaceManager::new(repository.path(), runtime.path())
+            .acquire(
+                SubagentWorkspacePolicy::GitWorktree {
+                    require_clean_parent: false,
+                },
+                &SubagentId::new("conversation-non-ignored-overlay-subagent-1"),
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect_err("non-ignored overlay selection");
+        assert!(matches!(
+            error,
+            super::WorkspaceAcquireError::OverlayNotIgnored { ref path }
+                if path == std::path::Path::new("local.env")
+        ));
+        assert!(!runtime.path().join("worktrees").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn overlay_symlink_and_symlink_ancestor_are_rejected() {
+        use std::os::unix::fs::symlink;
+
+        for (identity, entry, create) in [
+            ("leaf", "local.env", "leaf"),
+            ("ancestor", "linked/local.env", "ancestor"),
+        ] {
+            let repository = repository();
+            let workspace = declare_overlay(
+                repository.path(),
+                std::path::Path::new(""),
+                &[entry.to_owned()],
+            );
+            let outside = tempfile::tempdir().expect("outside");
+            std::fs::write(outside.path().join("local.env"), "outside\n").expect("outside file");
+            if create == "leaf" {
+                symlink(outside.path().join("local.env"), workspace.join(entry))
+                    .expect("leaf symlink");
+            } else {
+                symlink(outside.path(), workspace.join("linked")).expect("ancestor symlink");
+            }
+            let runtime = tempfile::tempdir().expect("runtime root");
+            let error = SubagentWorkspaceManager::new(&workspace, runtime.path())
+                .acquire(
+                    SubagentWorkspacePolicy::GitWorktree {
+                        require_clean_parent: false,
+                    },
+                    &SubagentId::new(format!(
+                        "conversation-{identity}-symlink-overlay-subagent-1"
+                    )),
+                    &CancellationSignal::new(),
+                )
+                .await
+                .expect_err("symlink overlay selection");
+            assert!(
+                matches!(&error, super::WorkspaceAcquireError::OverlaySymlink { .. }),
+                "unexpected symlink error: {error:?}"
+            );
+            assert!(!runtime.path().join("worktrees").exists());
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ancestor_replacement_during_source_acquisition_fails_closed() {
+        use std::os::unix::fs::symlink;
+
+        let repository = repository();
+        let workspace = declare_overlay(
+            repository.path(),
+            std::path::Path::new(""),
+            &["local/runtime.env".to_owned()],
+        );
+        write_overlay_file(&workspace, "local/runtime.env", b"INSIDE\n");
+        let outside = tempfile::tempdir().expect("outside");
+        std::fs::write(outside.path().join("runtime.env"), b"OUTSIDE\n").expect("outside overlay");
+
+        let runtime = tempfile::tempdir().expect("runtime root");
+        let mut manager = SubagentWorkspaceManager::new(&workspace, runtime.path());
+        let hook = std::sync::Arc::new(WorkspaceOverlaySourceHook::new());
+        manager.install_overlay_source_hook(hook.clone());
+        let subagent = SubagentId::new("conversation-overlay-ancestor-race-subagent-1");
+        let task_manager = manager.clone();
+        let task = tokio::spawn(async move {
+            task_manager
+                .acquire(default_isolated(), &subagent, &CancellationSignal::new())
+                .await
+        });
+
+        // The source workspace handle is already stable, but no selected
+        // descendant has been opened yet. Replacing the ancestor here proves
+        // that the first secure descent rejects the symlink rather than
+        // opening a pathname outside the logical workspace.
+        hook.wait_until_ready_to_acquire().await;
+        let original_local = workspace.join("local");
+        std::fs::rename(&original_local, workspace.join("local-original"))
+            .expect("move original local directory");
+        symlink(outside.path(), &original_local).expect("replace local with symlink");
+        hook.release().await;
+
+        let error = task
+            .await
+            .expect("acquisition task")
+            .expect_err("ancestor replacement must fail source acquisition");
+        assert!(
+            matches!(&error, super::WorkspaceAcquireError::OverlaySymlink { .. }),
+            "unexpected race error: {error:?}"
+        );
+
+        let path = runtime
+            .path()
+            .join("worktrees")
+            .join(deterministic_worktree_name(&SubagentId::new(
+                "conversation-overlay-ancestor-race-subagent-1",
+            )));
+        let branch = format!(
+            "rustx/subagent/{}",
+            deterministic_worktree_name(&SubagentId::new(
+                "conversation-overlay-ancestor-race-subagent-1",
+            ))
+        );
+        assert!(!path.exists(), "outside bytes were never materialized");
+        assert!(!runtime.path().join("worktrees").exists());
+        assert!(!ref_exists(repository.path(), &branch));
+        assert_eq!(
+            std::fs::read(outside.path().join("runtime.env")).expect("outside file"),
+            b"OUTSIDE\n",
+            "the outside source was never frozen or modified"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ancestor_replacement_after_acquisition_reads_only_the_retained_file() {
+        use std::os::unix::fs::symlink;
+
+        let repository = repository();
+        let workspace = declare_overlay(
+            repository.path(),
+            std::path::Path::new(""),
+            &["local/runtime.env".to_owned()],
+        );
+        write_overlay_file(&workspace, "local/runtime.env", b"INSIDE\n");
+        let outside = tempfile::tempdir().expect("outside");
+        std::fs::write(outside.path().join("runtime.env"), b"OUTSIDE\n").expect("outside overlay");
+
+        let runtime = tempfile::tempdir().expect("runtime root");
+        let mut manager = SubagentWorkspaceManager::new(&workspace, runtime.path());
+        let hook = std::sync::Arc::new(WorkspaceOverlayValidationHook::new());
+        manager.install_overlay_validation_hook(hook.clone());
+        let subagent = SubagentId::new("conversation-overlay-retained-file-subagent-1");
+        let task_manager = manager.clone();
+        let task_subagent = subagent.clone();
+        let task = tokio::spawn(async move {
+            task_manager
+                .acquire(
+                    default_isolated(),
+                    &task_subagent,
+                    &CancellationSignal::new(),
+                )
+                .await
+        });
+
+        // All source handles and Git eligibility facts are ready. Replacing
+        // the pathname now is exactly where the old implementation reopened
+        // the canonical path and could freeze OUTSIDE instead of INSIDE.
+        hook.wait_until_validated().await;
+        let original_local = workspace.join("local");
+        std::fs::rename(&original_local, workspace.join("local-original"))
+            .expect("move original local directory");
+        symlink(outside.path(), &original_local).expect("replace local with symlink");
+        hook.release().await;
+
+        let lease = task
+            .await
+            .expect("acquisition task")
+            .expect("retained source handle keeps acquisition safe");
+        assert_eq!(
+            std::fs::read(lease.logical_workspace().join("local/runtime.env"))
+                .expect("materialized overlay"),
+            b"INSIDE\n",
+            "the retained source object, not the replaced pathname, was frozen"
+        );
+        assert_eq!(
+            std::fs::read(outside.path().join("runtime.env")).expect("outside file"),
+            b"OUTSIDE\n"
+        );
+        assert_eq!(
+            lease.settle_after_child().await.cleanup,
+            WorkspaceCleanup::Removed
+        );
+    }
+
+    #[test]
+    fn overlay_traversal_and_absolute_paths_are_rejected() {
+        for manifest in [
+            "../outside.env\n",
+            "/absolute.env\n",
+            "a/../../outside.env\n",
+        ] {
+            assert!(matches!(
+                parse_overlay_manifest(manifest).expect_err("unsafe overlay path"),
+                super::WorkspaceAcquireError::OverlayUnsafePath { .. }
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_selected_overlay_file_rejects_acquisition() {
+        let repository = repository();
+        let workspace = declare_overlay(
+            repository.path(),
+            std::path::Path::new(""),
+            &["missing.env".to_owned()],
+        );
+        let runtime = tempfile::tempdir().expect("runtime root");
+        let error = SubagentWorkspaceManager::new(&workspace, runtime.path())
+            .acquire(
+                default_isolated(),
+                &SubagentId::new("conversation-missing-overlay-subagent-1"),
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect_err("missing overlay selection");
+        assert!(matches!(
+            error,
+            super::WorkspaceAcquireError::OverlayMissing { ref path }
+                if path == std::path::Path::new("missing.env")
+        ));
+        assert!(!runtime.path().join("worktrees").exists());
+    }
+
+    #[tokio::test]
+    async fn overlay_total_bytes_accepts_the_limit_and_rejects_one_more() {
+        let accepted_repository = repository();
+        let accepted_workspace = declare_overlay(
+            accepted_repository.path(),
+            std::path::Path::new(""),
+            &["first.bin".to_owned(), "second.bin".to_owned()],
+        );
+        write_overlay_file(
+            &accepted_workspace,
+            "first.bin",
+            &vec![b'a'; MAX_OVERLAY_BYTES / 2],
+        );
+        write_overlay_file(
+            &accepted_workspace,
+            "second.bin",
+            &vec![b'b'; MAX_OVERLAY_BYTES - (MAX_OVERLAY_BYTES / 2)],
+        );
+        let accepted_runtime = tempfile::tempdir().expect("runtime root");
+        let accepted = SubagentWorkspaceManager::new(&accepted_workspace, accepted_runtime.path())
+            .acquire(
+                default_isolated(),
+                &SubagentId::new("conversation-byte-boundary-overlay-subagent-1"),
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect("exact byte boundary");
+        assert_eq!(
+            std::fs::metadata(accepted.logical_workspace().join("first.bin"))
+                .expect("first overlay")
+                .len()
+                + std::fs::metadata(accepted.logical_workspace().join("second.bin"))
+                    .expect("second overlay")
+                    .len(),
+            u64::try_from(MAX_OVERLAY_BYTES).expect("limit fits u64")
+        );
+        assert_eq!(
+            accepted.settle_after_child().await.cleanup,
+            WorkspaceCleanup::Removed
+        );
+
+        let rejected_repository = repository();
+        let rejected_workspace = declare_overlay(
+            rejected_repository.path(),
+            std::path::Path::new(""),
+            &["first.bin".to_owned(), "second.bin".to_owned()],
+        );
+        write_overlay_file(
+            &rejected_workspace,
+            "first.bin",
+            &vec![0; MAX_OVERLAY_BYTES / 2],
+        );
+        write_overlay_file(
+            &rejected_workspace,
+            "second.bin",
+            &vec![0; MAX_OVERLAY_BYTES - (MAX_OVERLAY_BYTES / 2) + 1],
+        );
+        let rejected_runtime = tempfile::tempdir().expect("runtime root");
+        let error = SubagentWorkspaceManager::new(&rejected_workspace, rejected_runtime.path())
+            .acquire(
+                default_isolated(),
+                &SubagentId::new("conversation-over-byte-limit-overlay-subagent-1"),
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect_err("one byte over the fixed total limit");
+        assert!(matches!(
+            error,
+            super::WorkspaceAcquireError::OverlayByteLimit { limit }
+                if limit == MAX_OVERLAY_BYTES
+        ));
+        assert!(!rejected_runtime.path().join("worktrees").exists());
     }
 
     #[tokio::test]
@@ -2030,6 +3731,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn overlay_only_mutation_is_source_clean_and_disposable() {
+        let repository = repository();
+        let workspace = declare_overlay(
+            repository.path(),
+            std::path::Path::new(""),
+            &[".env".to_owned()],
+        );
+        write_overlay_file(&workspace, ".env", b"VALUE=frozen\n");
+        let runtime = tempfile::tempdir().expect("runtime root");
+        let lease = SubagentWorkspaceManager::new(&workspace, runtime.path())
+            .acquire(
+                default_isolated(),
+                &SubagentId::new("conversation-overlay-only-settlement-subagent-1"),
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect("worktree with overlay");
+        let path = lease.logical_workspace().to_path_buf();
+        std::fs::write(path.join(".env"), "VALUE=child-mutated\n").expect("mutate overlay");
+
+        let settlement = lease.settle_after_child().await;
+
+        assert_eq!(settlement.cleanup, WorkspaceCleanup::Removed);
+        assert!(settlement.handoff.is_none());
+        assert!(!path.exists(), "overlay-only state does not force handoff");
+    }
+
+    #[tokio::test]
+    async fn tracked_child_commit_with_overlay_still_produces_source_handoff() {
+        let repository = repository();
+        let workspace = declare_overlay(
+            repository.path(),
+            std::path::Path::new(""),
+            &[".env".to_owned()],
+        );
+        write_overlay_file(&workspace, ".env", b"VALUE=local\n");
+        let runtime = tempfile::tempdir().expect("runtime root");
+        let lease = SubagentWorkspaceManager::new(&workspace, runtime.path())
+            .acquire(
+                default_isolated(),
+                &SubagentId::new("conversation-overlay-source-change-subagent-1"),
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect("worktree with overlay");
+        let base = lease
+            .snapshot()
+            .git_worktree()
+            .expect("Git worktree facts")
+            .base_commit
+            .clone();
+        std::fs::write(
+            lease.logical_workspace().join("tracked.txt"),
+            "child source commit\n",
+        )
+        .expect("tracked child edit");
+        commit(
+            lease.logical_workspace(),
+            "child source commit with overlay",
+        );
+
+        let settlement = lease.settle_after_child().await;
+        let handoff = settlement.handoff.expect("source handoff");
+        assert_eq!(settlement.cleanup, WorkspaceCleanup::Preserved);
+        assert!(
+            !handoff.dirty,
+            "the overlay is not ordinary source dirtiness"
+        );
+        assert_ne!(handoff.head_commit, base);
+    }
+
+    #[tokio::test]
     async fn parent_movement_after_acquisition_cannot_change_the_child_base() {
         let dir = repository();
         let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
@@ -2300,10 +4073,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancellation_after_worktree_creation_settles_the_staged_lease() {
+    async fn cancellation_after_overlay_staging_settles_the_staged_lease() {
         let dir = repository_with_workspace(std::path::Path::new("backend"));
+        let workspace = declare_overlay(
+            dir.path(),
+            std::path::Path::new("backend"),
+            &["local/runtime.env".to_owned()],
+        );
+        write_overlay_file(&workspace, "local/runtime.env", b"STAGED=overlay\n");
         let runtime_root = dir.path().join("artifacts");
-        let mut manager = SubagentWorkspaceManager::new(dir.path().join("backend"), &runtime_root);
+        let mut manager = SubagentWorkspaceManager::new(&workspace, &runtime_root);
         let hook = std::sync::Arc::new(WorkspaceAcquireHook::new());
         manager.install_acquisition_hook(hook.clone());
         let cancellation = CancellationSignal::new();
@@ -2316,13 +4095,18 @@ mod tests {
                 .acquire(default_isolated(), &task_subagent, &task_cancellation)
                 .await
         });
-        hook.wait_until_created().await;
+        hook.wait_until_ready_to_return().await;
         let path = runtime_root
             .join("worktrees")
             .join(deterministic_worktree_name(&subagent));
         let branch = format!("rustx/subagent/{}", deterministic_worktree_name(&subagent));
         assert!(path.exists(), "the barrier is after Git worktree creation");
         assert!(path.join("backend").exists(), "the logical scope exists");
+        assert_eq!(
+            std::fs::read(path.join("backend/local/runtime.env"))
+                .expect("the barrier is after overlay materialization"),
+            b"STAGED=overlay\n"
+        );
         cancellation.cancel();
         hook.release().await;
         let error = task
@@ -2334,6 +4118,77 @@ mod tests {
         assert!(
             !ref_exists(dir.path(), &branch),
             "the staged ref is removed"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancellation_during_partial_overlay_materialization_settles_everything() {
+        let dir = repository_with_workspace(std::path::Path::new("backend"));
+        let workspace = declare_overlay(
+            dir.path(),
+            std::path::Path::new("backend"),
+            &["first.env".to_owned(), "second.env".to_owned()],
+        );
+        write_overlay_file(&workspace, "first.env", b"FIRST=overlay\n");
+        write_overlay_file(&workspace, "second.env", b"SECOND=overlay\n");
+
+        let runtime_root = dir.path().join("artifacts");
+        let mut manager = SubagentWorkspaceManager::new(&workspace, &runtime_root);
+        let hook = std::sync::Arc::new(WorkspaceOverlayMaterializationHook::new());
+        manager.install_overlay_materialization_hook(hook.clone());
+        let cancellation = CancellationSignal::new();
+        let subagent = SubagentId::new("conversation-partial-overlay-cancel-subagent-1");
+        let task_manager = manager.clone();
+        let task_cancellation = cancellation.clone();
+        let task_subagent = subagent.clone();
+        let task = tokio::spawn(async move {
+            task_manager
+                .acquire(default_isolated(), &task_subagent, &task_cancellation)
+                .await
+        });
+
+        hook.wait_until_after_first().await;
+        let path = runtime_root
+            .join("worktrees")
+            .join(deterministic_worktree_name(&subagent));
+        let logical = path.join("backend");
+        let branch = format!("rustx/subagent/{}", deterministic_worktree_name(&subagent));
+        assert!(path.exists(), "the staged physical worktree exists");
+        assert!(
+            logical.join("first.env").is_file(),
+            "the first overlay is materialized"
+        );
+        assert_eq!(
+            std::fs::read(logical.join("first.env")).expect("first overlay"),
+            b"FIRST=overlay\n"
+        );
+        assert!(
+            !logical.join("second.env").exists(),
+            "the second overlay has not yet been materialized"
+        );
+        assert!(!task.is_finished(), "ownership has not committed yet");
+
+        cancellation.cancel();
+        hook.release().await;
+        let error = task
+            .await
+            .expect("acquisition task")
+            .expect_err("partial materialization cancellation");
+        assert!(matches!(error, super::WorkspaceAcquireError::Cancelled));
+        assert!(!path.exists(), "the staged worktree is safely removed");
+        assert!(!logical.join("first.env").exists());
+        assert!(!logical.join("second.env").exists());
+        assert!(
+            !ref_exists(dir.path(), &branch),
+            "the runtime branch is removed"
+        );
+        assert_eq!(
+            std::fs::read(workspace.join("first.env")).expect("parent first overlay"),
+            b"FIRST=overlay\n"
+        );
+        assert_eq!(
+            std::fs::read(workspace.join("second.env")).expect("parent second overlay"),
+            b"SECOND=overlay\n"
         );
     }
 
