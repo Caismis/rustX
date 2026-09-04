@@ -12,6 +12,7 @@ import { describe, it } from "node:test";
 import { RuntimeClientConnection } from "../src/runtime/connection.ts";
 import { RuntimeClientAttachment, isResyncRequired } from "../src/runtime/attachment.ts";
 import { RuntimeRequestError } from "../src/runtime/connection.ts";
+import { RUNTIME_CLIENT_PROTOCOL_VERSION } from "../src/protocol/types.ts";
 import {
   assistantMessage,
   attemptModel,
@@ -69,7 +70,7 @@ describe("RuntimeClientAttachment", () => {
     assert.equal(initialize?.method, "initialize");
     assert.equal(
       initialize?.method === "initialize" ? initialize.protocol_version : null,
-      12,
+      RUNTIME_CLIENT_PROTOCOL_VERSION,
     );
     assert.equal(subscribe?.method, "subscribe_events");
     assert.equal(

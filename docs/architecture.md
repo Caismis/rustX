@@ -3435,7 +3435,14 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
-The current Runtime Client protocol is version 12. It adds routed
+The current Runtime Client protocol is version 13. It introduces the Issue
+#187 subagent workspace representation that separates logical child project
+authority from physical Git worktree ownership: the subagent workspace
+projection carries `logical_workspace` plus a tagged `isolation` (`shared`
+or `git_worktree` with the source repository root, repository-relative
+workspace, physical worktree root, base commit, branch, and parent dirty
+fact), and a retained handoff exposes `logical_workspace` and
+`physical_worktree_root`. Version 12 added routed
 interaction projection for the root human surface. Version 11 added the
 subagent live-activity projection; version 10 added subagent workspace facts
 and preserved-worktree handoff metadata; and version 9 added `interrupted` to the

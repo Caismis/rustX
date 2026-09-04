@@ -4464,6 +4464,14 @@ semantic normalization boundary. The frozen invariants:
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
   explicit at attachment admission; the current protocol is the sole
   supported version, and every superseded version is rejected explicitly.
+- **Runtime Client protocol v13 introduces the Issue #187 subagent
+  workspace representation.** The workspace projection separates logical
+  child project authority (`logical_workspace`) from physical Git worktree
+  ownership: `isolation` is a closed `shared`/`git_worktree` tagged
+  projection carrying the source repository root, repository-relative
+  workspace, physical worktree root, base commit, branch, and parent dirty
+  fact, and a retained handoff carries `logical_workspace` and
+  `physical_worktree_root` alongside its branch/base/head/dirty facts.
 - **Runtime Client protocol v12 adds the routed interaction projection.** The
   root-facing pending-interaction set carries Approval and Questionnaire
   requests from the primary conversation and live supervised children. Each
