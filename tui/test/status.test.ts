@@ -394,6 +394,28 @@ describe("footer", () => {
     assert.match(rendered, /human input 1/);
   });
 
+  it("names the effective approval mode and a pending desired mode truthfully", () => {
+    assert.match(
+      footer(stateOf({ effective_approval_mode: "policy" }), "connected"),
+      /approval POLICY/,
+    );
+    assert.match(
+      footer(stateOf({ effective_approval_mode: "full_access" }), "connected"),
+      /approval FULL ACCESS/,
+    );
+    // A desired mode applies to the next attempt; the running attempt keeps
+    // the effective one, and the footer must not imply otherwise.
+    const mixed = footer(
+      stateOf({
+        effective_approval_mode: "policy",
+        pending_approval_mode: "full_access",
+      }),
+      "connected",
+    );
+    assert.match(mixed, /approval POLICY/);
+    assert.match(mixed, /next attempt FULL ACCESS/);
+  });
+
   it("reports drain and a closed transport without implying cancellation", () => {
     const rendered = footer(stateOf({ shutting_down: true }), "closed: input_eof");
     assert.match(rendered, /draining/);
@@ -530,35 +552,31 @@ describe("activity area", () => {
     assert.match(rendered, /step 2/);
   });
 
-  it("shows runtime-owned approval facts and the typed response command", () => {
+  it("shows runtime-owned approval facts and the human-input surface hint", () => {
+    const state = stateOf({ pending_interactions: [approvalInteraction()] });
     const rendered = plainText(
-      renderInteractionSection(
-        stateOf({ pending_interactions: [approvalInteraction()] }),
-        prefs(),
-      ),
+      renderInteractionSection(state, prefs(), state.pendingInteractions[0]!.interaction),
     );
-    assert.match(rendered, /Approval required · 1 pending/);
+    assert.match(rendered, /Human input required · 1 pending/);
     assert.match(rendered, /bash/);
     assert.match(rendered, /attempt-1-interaction-1/);
     assert.match(rendered, /native policy requires approval/);
     assert.match(rendered, /printf original/);
-    assert.match(
-      rendered,
-      /\/approve <conversation-id>::<interaction-id> <allow\|deny> \[reason\]/,
-    );
+    assert.match(rendered, /Ctrl\+G opens the human-input surface/);
+    assert.ok(!rendered.includes("/approve"), "the command path is gone");
   });
 
-  it("marks the deterministic focused questionnaire for the overlay", () => {
+  it("marks the focused interaction the human-input surface is showing", () => {
     const later = questionnaireInteraction("attempt-1-interaction-z");
     const focused = questionnaireInteraction("attempt-1-interaction-a");
     const rendered = plainText(
       renderInteractionSection(
         stateOf({ pending_interactions: [later, focused] }),
         prefs(),
+        focused.interaction,
       ),
     );
     assert.match(rendered, /Focused interaction: conv-test::attempt-1-interaction-a/);
-    assert.match(rendered, /questionnaire overlay opens automatically/);
   });
 
   it("surfaces an execution whose stream was dropped", () => {
@@ -791,9 +809,6 @@ describe("client collapse is finite and reversible", () => {
   it("tells the reader how to see the rest", () => {
     const collapsed = interaction({ reason: HUGE }, false);
     assert.match(collapsed, /\/expand interaction <conversation-id>::<interaction-id>/);
-    assert.match(
-      collapsed,
-      /\/approve <conversation-id>::<interaction-id> <allow\|deny> \[reason\]/,
-    );
+    assert.match(collapsed, /Ctrl\+G opens the human-input surface/);
   });
 });

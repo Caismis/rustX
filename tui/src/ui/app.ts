@@ -57,7 +57,12 @@ import {
   type ExpandTarget,
   type PreferenceChange,
 } from "../commands/dispatcher.ts";
-import { focusedInteraction, focusedQuestionnaire, sessionLabel } from "../presentation/selectors.ts";
+import { sessionLabel } from "../presentation/selectors.ts";
+import {
+  findPendingInteraction,
+  reconcileInteractionFocus,
+  sameInteractionRef,
+} from "../presentation/interaction-focus.ts";
 import { correlateTools } from "../presentation/tools.ts";
 import { selectTodos } from "../presentation/todos.ts";
 import type { PresentationState } from "../presentation/state.ts";
@@ -105,6 +110,7 @@ import { renderTodoPanel } from "./components/todos.ts";
 import {
   type PresentationPreferences,
   defaultPreferences,
+  interactionKey,
   withAllCollapsed,
   withExpandedBackgroundExecutions,
   withExpandedInteractions,
@@ -116,8 +122,8 @@ import {
 } from "./preferences.ts";
 import { background, editorTheme, markdownTheme, style } from "./theme.ts";
 import type { TranscriptBlock } from "./components/transcript.ts";
-import { QuestionnaireOverlay } from "./components/questionnaire.ts";
-import type { QuestionnaireResponse } from "../protocol/types.ts";
+import { HumanInteractionOverlay } from "./components/hitl.ts";
+import type { InteractionResponse } from "../protocol/types.ts";
 
 export interface RustxTuiAppOptions {
   session: RuntimeClientAttachment;
@@ -210,7 +216,27 @@ export class RustxTuiApp {
 
   #preferences: PresentationPreferences = defaultPreferences();
   #overlay: OverlayHandle | undefined;
-  #questionnaireOverlay: QuestionnaireOverlay | undefined;
+  #hitlOverlay: HumanInteractionOverlay | undefined;
+  /**
+   * Presentation-only focus over `pendingInteractions`, reconciled against
+   * the authoritative projection on every render. Never a semantic fact: it
+   * picks which interaction the human-input surface shows, nothing else.
+   */
+  #interactionFocus: InteractionRef | undefined;
+  /**
+   * The interaction the user dismissed the human-input surface on (approval
+   * Esc), plus the pending queue exactly as it stood at dismissal.
+   *
+   * Presentation-only: the dismissed interaction stays pending and
+   * unanswered, and the surface reopens on Ctrl+G. The dismissal is scoped
+   * to that exact interaction and that exact queue: the moment a *distinct*
+   * interaction arrives, the dismissal is superseded — a previously
+   * dismissed approval must never silently hide newly required human input.
+   * Settlement or removal of the dismissed interaction retires the marker.
+   */
+  #hitlDismissed:
+    | { interaction: InteractionRef; known: ReadonlySet<string> }
+    | undefined;
   #quitting = false;
   #exitCode = 0;
   #finished = false;
@@ -444,6 +470,19 @@ export class RustxTuiApp {
             });
           return { consume: true };
         }
+        // Ctrl+G reopens the human-input surface after an approval Esc
+        // dismissed it. Presentation-only: it settles nothing and never
+        // targets a read-only inspection.
+        if (matchesKey(data, "ctrl+g")) {
+          if (!this.#isInspection() && this.#hitlOverlay === undefined) {
+            this.#hitlDismissed = undefined;
+            const state = this.#session.state;
+            if (state !== undefined && state.pendingInteractions.length > 0) {
+              this.#renderState(state);
+            }
+          }
+          return { consume: true };
+        }
         // Ctrl+C is a cancellation *intent*, routed through the protocol like
         // any other; it never kills the runtime behind the runtime's back.
         if (matchesKey(data, "ctrl+c")) {
@@ -453,12 +492,11 @@ export class RustxTuiApp {
         if (matchesKey(data, "escape")) {
           const state = this.#session.state;
           const attempt = state?.attempt;
-          const questionnaireFocused = this.#questionnaireOverlay !== undefined;
-          const acted = questionnaireFocused || this.#overlay !== undefined || (
+          const acted = this.#overlay !== undefined || (
             this.#subagentListFocused ||
             this.#navigationStack.length > 0 ||
             !this.#restarting &&
-            (focusedInteraction(state) !== undefined ||
+            ((state?.pendingInteractions.length ?? 0) > 0 ||
               (attempt !== undefined && attempt.phase.type !== "settled"))
           );
           void this.#onEscape();
@@ -683,11 +721,11 @@ export class RustxTuiApp {
 
   async #onEscape(): Promise<void> {
     this.#acknowledgeTransient();
-    if (this.#questionnaireOverlay !== undefined) {
-      const interaction = focusedQuestionnaire(this.#session.state)?.interaction;
-      if (interaction !== undefined) {
-        this.#declineQuestionnaire(interaction, this.#questionnaireOverlay);
-      }
+    if (this.#hitlOverlay !== undefined) {
+      // Escape behavior is defined per interaction kind by the surface
+      // itself: a questionnaire gets its explicit typed decline; an approval
+      // is dismissed without any answer. The app never answers here.
+      this.#hitlOverlay.escape();
       return;
     }
     if (this.#overlay !== undefined) {
@@ -709,7 +747,7 @@ export class RustxTuiApp {
     if (this.#restarting) return;
     const state = this.#session.state;
     const attempt = state?.attempt;
-    if (focusedInteraction(state) !== undefined ||
+    if ((state?.pendingInteractions.length ?? 0) > 0 ||
       (attempt !== undefined && attempt.phase.type !== "settled")) {
       const lease = this.#presentationLease();
       try {
@@ -737,7 +775,7 @@ export class RustxTuiApp {
     }
     if (this.#restarting) return;
     const state = this.#session.state;
-    if (focusedInteraction(state) !== undefined ||
+    if ((state?.pendingInteractions.length ?? 0) > 0 ||
       (state?.attempt !== undefined && state.attempt.phase.type !== "settled")) {
       const lease = this.#presentationLease();
       try {
@@ -1099,7 +1137,7 @@ export class RustxTuiApp {
     if (handle === undefined) return;
     handle.hide();
     this.#overlay = undefined;
-    this.#questionnaireOverlay = undefined;
+    this.#hitlOverlay = undefined;
     this.#tui.setFocus(this.#editor);
     this.#tui.requestRender();
   }
@@ -1432,6 +1470,11 @@ export class RustxTuiApp {
 
   #resetLocalSurfaces(): void {
     this.#closeOverlay();
+    // An authoritative replacement re-derives presentation focus from the
+    // new projection: no stale overlay or dismissed marker may submit
+    // against, or hide, an interaction the runtime owns now.
+    this.#interactionFocus = undefined;
+    this.#hitlDismissed = undefined;
     this.#transient.clear();
     if (this.#started) {
       this.#tui.requestRender();
@@ -1450,6 +1493,14 @@ export class RustxTuiApp {
       this.#selectedSubagentId = undefined;
       this.#subagentListFocused = false;
     }
+    // Reconcile the presentation-only interaction focus with the
+    // authoritative pending set before anything renders it: settling the
+    // focused interaction advances focus deterministically, and an empty
+    // queue drops it.
+    this.#interactionFocus = reconcileInteractionFocus(
+      state.pendingInteractions,
+      this.#interactionFocus,
+    );
     // Correlated once per render and shared: the transcript and the activity
     // area must agree on which calls have a transcript anchor.
     const correlation = correlateTools(state);
@@ -1501,7 +1552,7 @@ export class RustxTuiApp {
         new Date(),
         this.#subagentListFocused ? this.#selectedSubagentId : undefined,
       ),
-      renderInteractionSection(state, this.#preferences),
+      renderInteractionSection(state, this.#preferences, this.#interactionFocus),
     ]) {
       if (section.length > 0) {
         this.#activity.addChild(new Text(section, 1, 0));
@@ -1536,71 +1587,136 @@ export class RustxTuiApp {
         this.#conversationContext(),
       ),
     );
-    this.#syncQuestionnaireOverlay(state);
+    this.#syncHitlOverlay(state);
     this.#tui.requestRender();
   }
 
-  /** Presents the focused pending questionnaire from authoritative state. */
-  #syncQuestionnaireOverlay(state: PresentationState): void {
-    const interaction = focusedQuestionnaire(state);
-    if (interaction === undefined) {
-      if (this.#questionnaireOverlay !== undefined) this.#closeOverlay();
+  /**
+   * Presents the unified human-input surface from authoritative state.
+   *
+   * One surface serves every pending routed interaction — approvals and
+   * questionnaires, primary and subagent. It opens when the projection holds
+   * a focused interaction the user has not dismissed, updates in place while
+   * the projection evolves, and disappears when the interaction set empties
+   * or the surface is dismissed. The runtime remains the only owner: closing
+   * or dismissing this surface settles nothing, and a response always names
+   * the exact `InteractionRef` it was collected for.
+   */
+  #syncHitlOverlay(state: PresentationState): void {
+    // A dismissal is scoped to the exact dismissed interaction and to the
+    // queue as it stood then. A distinct arrival supersedes the dismissal:
+    // the newly required human input takes the focus (the surface was
+    // dismissed, so no in-progress panel is interrupted) and the surface
+    // reopens, while the dismissed interaction stays pending and unanswered.
+    // The move itself is presentation-only — it emits no response.
+    const dismissed = this.#hitlDismissed;
+    if (dismissed !== undefined) {
+      if (
+        findPendingInteraction(state.pendingInteractions, dismissed.interaction) ===
+        undefined
+      ) {
+        this.#hitlDismissed = undefined;
+      } else {
+        const arrival = state.pendingInteractions.find(
+          (entry) => !dismissed.known.has(interactionKey(entry.interaction)),
+        );
+        if (arrival !== undefined) {
+          this.#hitlDismissed = undefined;
+          this.#interactionFocus = arrival.interaction;
+        }
+      }
+    }
+    const focused = this.#interactionFocus;
+    // A read-only inspection is never an answer surface: it may show that a
+    // child waits for human input, but the controls live only at the root.
+    if (this.#isInspection() || focused === undefined) {
+      if (this.#hitlOverlay !== undefined) this.#closeOverlay();
+      return;
+    }
+    const existing = this.#hitlOverlay;
+    if (existing !== undefined) {
+      existing.update(state.pendingInteractions, focused, this.#preferences);
+      this.#tui.requestRender();
       return;
     }
     if (
-      this.#questionnaireOverlay !== undefined &&
-      this.#questionnaireOverlay.interactionId === interactionLabel(interaction.interaction)
+      this.#hitlDismissed !== undefined &&
+      sameInteractionRef(this.#hitlDismissed.interaction, focused)
     ) {
       return;
     }
-
-    this.#closeOverlay();
     const lease = this.#presentationLease();
-    if (interaction.request.kind.type !== "questionnaire") return;
-    const questionnaire = interaction.request.kind.questionnaire;
-    const interactionRef = interaction.interaction;
-    const overlay = new QuestionnaireOverlay({
-      interactionId: interactionLabel(interactionRef),
-      questionnaire,
-      onSubmit: (response) => this.#submitQuestionnaire(interactionRef, response, overlay, lease),
-      onDecline: () => this.#declineQuestionnaire(interactionRef, overlay, lease),
+    const overlay = new HumanInteractionOverlay({
+      onDecision: (interaction, decision) =>
+        this.#respondToInteraction(lease, overlay, interaction, {
+          type: "approval",
+          decision,
+        }),
+      onQuestionnaireSubmit: (interaction, response) =>
+        this.#respondToInteraction(lease, overlay, interaction, {
+          type: "questionnaire",
+          response,
+        }),
+      onQuestionnaireDecline: (interaction) =>
+        this.#respondToInteraction(lease, overlay, interaction, {
+          type: "questionnaire",
+          response: { type: "declined" },
+        }),
+      onDismiss: (interaction) => {
+        // Scope the dismissal to this exact interaction and to the queue as
+        // it stands now, so a later distinct arrival supersedes it.
+        this.#hitlDismissed = {
+          interaction,
+          known: new Set(
+            (this.#session.state?.pendingInteractions ?? []).map((entry) =>
+              interactionKey(entry.interaction),
+            ),
+          ),
+        };
+        if (this.#hitlOverlay === overlay) this.#closeOverlay();
+      },
       onInterrupt: () => void this.#onInterrupt(),
+      onNavigate: (interaction) => {
+        // Navigation is presentation-only: it moves the focus and redraws.
+        this.#interactionFocus = interaction;
+        const current = this.#session.state;
+        if (current !== undefined) this.#renderState(current);
+      },
+      onToggleExpand: (interaction) => {
+        // Disclosure only: the same preference domain `/expand interaction`
+        // uses, never a second approval gate.
+        this.#applyPreference({ type: "expand_interaction", interaction });
+      },
       onChange: () => this.#tui.requestRender(),
     });
+    overlay.update(state.pendingInteractions, focused, this.#preferences);
     this.#showPopup(overlay, { width: "94%", minWidth: 44, heightPercent: 90 });
-    this.#questionnaireOverlay = overlay;
+    this.#hitlOverlay = overlay;
   }
 
-  #submitQuestionnaire(
-    interaction: InteractionRef,
-    response: QuestionnaireResponse,
-    overlay: QuestionnaireOverlay,
+  /**
+   * The one typed response path for every interaction kind.
+   *
+   * Approval decisions and questionnaire responses both go through
+   * `interaction_respond` with the exact routed identity the surface
+   * collected them for. A rejection re-enables the panel that sent it —
+   * routed by that same identity — so a failed response never double-sends
+   * and never disturbs an unrelated pending interaction.
+   */
+  #respondToInteraction(
     lease: PresentationLease,
-  ): void {
-    void lease.session
-      .respondInteraction(interaction, { type: "questionnaire", response })
-      .catch((error: unknown) => {
-        if (!this.#isCurrentPresentationLease(lease)) return;
-        overlay.submissionFailed();
-        this.#showTransient("error", `questionnaire response failed: ${compactDiagnostic(error)}`);
-      });
-  }
-
-  #declineQuestionnaire(
+    overlay: HumanInteractionOverlay,
     interaction: InteractionRef,
-    overlay: QuestionnaireOverlay,
-    lease: PresentationLease = this.#presentationLease(),
+    response: InteractionResponse,
   ): void {
-    overlay.beginSubmitting();
     void lease.session
-      .respondInteraction(interaction, {
-        type: "questionnaire",
-        response: { type: "declined" },
-      })
+      .respondInteraction(interaction, response)
       .catch((error: unknown) => {
         if (!this.#isCurrentPresentationLease(lease)) return;
-        overlay.submissionFailed();
-        this.#showTransient("error", `questionnaire decline failed: ${compactDiagnostic(error)}`);
+        if (this.#hitlOverlay === overlay) {
+          overlay.submissionFailed(interaction);
+        }
+        this.#showTransient("error", `interaction response failed: ${compactDiagnostic(error)}`);
       });
   }
 
@@ -1684,10 +1800,6 @@ function errorMessage(error: unknown): string {
 
 function compactDiagnostic(error: unknown): string {
   return errorMessage(error).replace(/\s*\r?\n\s*/g, " · ").trim();
-}
-
-function interactionLabel(interaction: InteractionRef): string {
-  return `${interaction.conversation_id}::${interaction.interaction_id}`;
 }
 
 function nextTick(): Promise<void> {

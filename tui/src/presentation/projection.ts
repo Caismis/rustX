@@ -44,6 +44,7 @@ import {
   validateTranscriptCursorContract,
 } from "../protocol/types.ts";
 import { parseSnapshot, publishedTodos } from "./todos.ts";
+import { compareInteractionRefs } from "./interaction-focus.ts";
 import type {
   AttemptPresentation,
   PresentationState,
@@ -1048,9 +1049,5 @@ function compareInteractions(
   left: RoutedInteraction,
   right: RoutedInteraction,
 ): number {
-  return left.interaction.conversation_id.localeCompare(
-    right.interaction.conversation_id,
-  ) || left.interaction.interaction_id.localeCompare(
-    right.interaction.interaction_id,
-  );
+  return compareInteractionRefs(left.interaction, right.interaction);
 }

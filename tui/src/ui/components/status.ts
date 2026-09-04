@@ -254,12 +254,15 @@ export function footerSegments(
 
   segments.push({ text: role.meta(contextLabel(state)), priority: 1 });
 
+  // The effective mode governs the running attempt; a pending mode is the
+  // desired mode the runtime reconciles onto the *next* attempt. Both are
+  // named truthfully: changing the desired mode never mutates a running one.
   const approvalLabel =
-    state.effectiveApprovalMode === "full_access" ? "FULL ACCESS" : "policy";
+    state.effectiveApprovalMode === "full_access" ? "FULL ACCESS" : "POLICY";
   const approvalPending =
     state.pendingApprovalMode === undefined
       ? ""
-      : ` → ${state.pendingApprovalMode === "full_access" ? "FULL ACCESS" : "policy"}`;
+      : ` · next attempt ${state.pendingApprovalMode === "full_access" ? "FULL ACCESS" : "POLICY"}`;
   segments.push({
     text: role.pending(`approval ${approvalLabel}${approvalPending}`),
     priority: 0,

@@ -43,11 +43,9 @@ import { renderAgentStatusDetail } from "../ui/components/agent-status.ts";
 import { renderTodoInspection } from "../ui/components/todos.ts";
 import { COMMANDS, parseCommandLine } from "./registry.ts";
 import type {
-  ApprovalDecision,
   ApprovalMode,
   CatalogModelView,
   InteractionRef,
-  InteractionResponse,
   SessionNodeView,
   SessionSummaryView,
   SessionUserMessageBoundaryView,
@@ -238,8 +236,6 @@ export class CommandDispatcher {
           return expandPreference(argument);
         case "/cancel":
           return await this.#cancel(session, argument);
-        case "/approve":
-          return await this.#approve(session, argument);
         case "/approval":
           return await this.#approvalMode(session, argument);
         case "/quit":
@@ -561,42 +557,6 @@ export class CommandDispatcher {
     );
   }
 
-  async #approve(
-    session: RuntimeClientAttachment,
-    argument: string,
-  ): Promise<CommandOutcome> {
-    const parts = argument.split(/\s+/).filter((part) => part.length > 0);
-    if (parts.length < 2) {
-      return transient("error", "usage: /approve <conversation-id>::<interaction-id> <allow|deny> [reason]");
-    }
-    const interaction = parseInteractionRef(parts[0]!);
-    if (interaction === undefined) {
-      return transient("error", "usage: /approve <conversation-id>::<interaction-id> <allow|deny> [reason]");
-    }
-    const decision = parts[1]!;
-    const reasonParts = parts.slice(2);
-    let approval: ApprovalDecision;
-    if (decision === "allow") {
-      if (reasonParts.length > 0) {
-        return transient("error", "allow does not accept a replacement argument or reason");
-      }
-      approval = { type: "allow" };
-    } else if (decision === "deny") {
-      approval = {
-        type: "deny",
-        reason: reasonParts.join(" ") || "denied by Runtime Client",
-      };
-    } else {
-      return transient("error", "usage: /approve <conversation-id>::<interaction-id> <allow|deny> [reason]");
-    }
-    const response: InteractionResponse = { type: "approval", decision: approval };
-    await session.respondInteraction(interaction, response);
-    return transient(
-      "info",
-      `response accepted for interaction ${interaction.conversation_id}::${interaction.interaction_id}`,
-    );
-  }
-
   async #approvalMode(
     session: RuntimeClientAttachment,
     argument: string,
@@ -610,13 +570,15 @@ export class CommandDispatcher {
       return transient("error", "usage: /approval <policy|full_access>");
     }
     const result = await session.approvalModeSet(mode);
+    const label = (value: ApprovalMode) =>
+      value === "full_access" ? "FULL ACCESS" : "POLICY";
     if (result.pendingApprovalMode !== undefined) {
       return transient(
         "info",
-        `ApprovalMode request accepted: effective ${result.effectiveApprovalMode}, pending ${result.pendingApprovalMode}`,
+        `ApprovalMode request accepted: effective ${label(result.effectiveApprovalMode)} · next attempt ${label(result.pendingApprovalMode)}`,
       );
     }
-    return transient("info", `ApprovalMode is now ${result.effectiveApprovalMode}`);
+    return transient("info", `ApprovalMode is now ${label(result.effectiveApprovalMode)}`);
   }
 }
 
@@ -759,7 +721,7 @@ export function renderHelp(): string {
     "### Commands",
     ...rows,
     "",
-    "Questionnaire overlays submit a routed response; approvals use /approve with the full conversation-id::interaction-id. Plain text is always submitted as an inbound message.",
+    "Pending approvals and questionnaires are answered in the human-input surface, which opens automatically while an interaction is pending (Ctrl+G reopens it after a dismissal). Plain text is always submitted as an inbound message, never as an answer.",
   ].join("\n");
 }
 

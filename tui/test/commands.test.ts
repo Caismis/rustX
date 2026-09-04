@@ -20,7 +20,6 @@ import { ArgumentError, parseArguments, replacementArguments } from "../src/cli.
 import {
   agentStatus,
   attemptModel,
-  approvalInteraction,
   catalogModel,
   capabilities,
   questionnaireInteraction,
@@ -42,10 +41,6 @@ const NO_DIAGNOSTICS = () => ({
   pendingRequests: 0,
   resyncCount: 0,
 });
-
-function interactionLabel(interaction: { conversation_id: string; interaction_id: string }): string {
-  return `${interaction.conversation_id}::${interaction.interaction_id}`;
-}
 
 function deferred<T>(): {
   promise: Promise<T>;
@@ -110,11 +105,18 @@ describe("command registry", () => {
         "/reasoning",
         "/expand",
         "/cancel",
-        "/approve",
         "/approval",
         "/quit",
       ],
     );
+  });
+
+  it("no longer declares /approve: the human-input surface owns answers", () => {
+    // Issue #185 removed the command-driven approval path. Approvals are
+    // answered in the unified human-input surface through the same typed
+    // `interaction_respond` operation, never through a command.
+    const names = COMMANDS.map((command) => command.name);
+    assert.ok(!names.includes("/approve"));
   });
 
   it("declares no shell, file, or Skill-execution escape", () => {
@@ -229,7 +231,7 @@ describe("CommandDispatcher", () => {
     assert.deepEqual(await responding, { kind: "none" });
   });
 
-  it("keeps questionnaire answers out of shell parsing while /approve remains explicit", async () => {
+  it("keeps questionnaire answers out of shell parsing", async () => {
     const openQuestion = questionnaireInteraction("attempt-1-interaction-question-open");
     const { peer, dispatcher } = await harness(
       snapshot({
@@ -250,27 +252,6 @@ describe("CommandDispatcher", () => {
       inbound_sequence: 1,
     });
     assert.deepEqual(await responding, { kind: "none" });
-
-    const approval = approvalInteraction("attempt-1-interaction-approval-1");
-    const second = await harness(snapshot({ pending_interactions: [approval] }));
-    const approving = second.dispatcher.submit(
-      `/approve ${interactionLabel(approval.interaction)} deny because it is unsafe`,
-    );
-    await second.peer.awaitRequests(3);
-    assert.deepEqual(
-      second.peer.requests[2]?.method === "interaction_respond"
-        ? second.peer.requests[2].response
-        : null,
-      {
-        type: "approval",
-        decision: { type: "deny", reason: "because it is unsafe" },
-      },
-    );
-    second.peer.respond(3, {
-      type: "interaction_response_accepted",
-      interaction: approval.interaction,
-    });
-    assert.equal((await approving).kind, "transient");
   });
 
   it("does not route ordinary text to any pending questionnaire", async () => {
@@ -319,7 +300,7 @@ describe("CommandDispatcher", () => {
     for (const command of COMMANDS) {
       assert.ok(outcome.body.includes(command.name), command.name);
     }
-    assert.match(outcome.body, /routed response/);
+    assert.match(outcome.body, /human-input surface/);
   });
 
   it("renders /model show from the runtime-owned session state", async () => {
@@ -1116,46 +1097,18 @@ describe("CommandDispatcher", () => {
     }
   });
 
-  it("sends /approve through Runtime Client without local outcome state", async () => {
+  it("removed /approve: a stale spelling is an unknown command off the wire", async () => {
     const { peer, dispatcher } = await harness();
-    const responding = dispatcher.submit(
-      "/approve conv-test::attempt-1-interaction-1 deny human said no",
+    const outcome = await dispatcher.submit(
+      "/approve conv-test::attempt-1-interaction-1 allow",
     );
-    await peer.awaitRequests(3);
-
-    const request = peer.requests[2];
-    assert.equal(request?.method, "interaction_respond");
-    assert.deepEqual(
-      request?.method === "interaction_respond"
-        ? {
-            interaction: request.interaction,
-            response: request.response,
-          }
-        : null,
-      {
-        interaction: {
-          conversation_id: "conv-test",
-          interaction_id: "attempt-1-interaction-1",
-        },
-        response: {
-          type: "approval",
-          decision: { type: "deny", reason: "human said no" },
-        },
-      },
-    );
-
-    peer.respond(3, {
-      type: "interaction_response_accepted",
-      interaction: {
-        conversation_id: "conv-test",
-        interaction_id: "attempt-1-interaction-1",
-      },
-    });
-    const outcome = await responding;
     assert.equal(outcome.kind, "transient");
     if (outcome.kind === "transient") {
-      assert.match(outcome.text, /response accepted/);
+      assert.equal(outcome.level, "error");
+      assert.match(outcome.text, /unknown command/);
     }
+    // Only the attach handshake happened; no interaction_respond was sent.
+    assert.equal(peer.requests.length, 2);
   });
 
   it("requests ApprovalMode through the runtime and reports pending reconciliation", async () => {
@@ -1177,7 +1130,7 @@ describe("CommandDispatcher", () => {
     const outcome = await changing;
     assert.equal(outcome.kind, "transient");
     if (outcome.kind === "transient") {
-      assert.match(outcome.text, /pending full_access/);
+      assert.match(outcome.text, /next attempt FULL ACCESS/);
     }
   });
 
