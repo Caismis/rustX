@@ -37,6 +37,7 @@
  */
 
 import type {
+  InteractionRef,
   RoutedInteraction,
   RuntimeClientBackgroundExecution,
   RuntimeClientSubagent,
@@ -44,12 +45,11 @@ import type {
 } from "../../protocol/types.ts";
 import { SUBAGENT_TERMINAL_STATES } from "../../protocol/types.ts";
 import type { PresentationState } from "../../presentation/state.ts";
+import { interactionRefLabel } from "../../presentation/interaction-focus.ts";
 import type { ToolCorrelation } from "../../presentation/tools.ts";
 import {
   activeBackground,
   activeSubagents,
-  focusedInteraction,
-  focusedQuestionnaire,
   isBackgroundTerminal,
   originLabel,
 } from "../../presentation/selectors.ts";
@@ -306,52 +306,45 @@ function formatElapsed(now: Date, since: string): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
-/** The live runtime-owned approval cards, rendered without local outcome state. */
+/**
+ * The live runtime-owned pending interactions, rendered without local outcome
+ * state.
+ *
+ * Every pending routed interaction — approvals and questionnaires, from the
+ * primary conversation and from supervised subagents — is independently
+ * represented here for as long as the runtime keeps it pending. The section
+ * answers nothing: the unified human-input surface (opened automatically, or
+ * with Ctrl+G after a dismissal) collects the typed responses, and this list
+ * is the always-visible record that work is waiting.
+ *
+ * `focused` is the app's presentation-only focus, passed in so the marker
+ * here always names the same interaction the surface is showing.
+ */
 export function renderInteractionSection(
   state: PresentationState,
   preferences: PresentationPreferences,
+  focused?: InteractionRef,
 ): string {
   if (state.pendingInteractions.length === 0) {
     return "";
   }
-  const approvals = state.pendingInteractions.filter(
-    (interaction) => interaction.request.kind.type === "approval",
-  ).length;
-  const questions = state.pendingInteractions.length - approvals;
-  const header =
-    questions === 0
-      ? `Approval required · ${approvals} pending`
-      : approvals === 0
-        ? `Answer required · ${questions} pending`
-        : `Human input required · ${state.pendingInteractions.length} pending`;
-  const commands: string[] = [];
-  if (approvals > 0) {
-    commands.push("/approve <conversation-id>::<interaction-id> <allow|deny> [reason]");
-  }
-  if (questions > 0) {
-    commands.push("questionnaire overlay opens automatically");
-  }
-  // The questionnaire overlay and the activity marker must name the same
-  // pending request. Approvals have no implicit editor focus, so they are
-  // highlighted only when no questionnaire is waiting.
-  const focused = focusedQuestionnaire(state) ??
-    (questions === 0 ? focusedInteraction(state) : undefined);
+  const focusedKey =
+    focused === undefined ? undefined : interactionKey(focused);
   return [
-    role.pending(header),
+    role.pending(`Human input required · ${state.pendingInteractions.length} pending`),
     ...(focused === undefined
       ? []
-      : [role.accent(`Focused interaction: ${formatInteraction(focused)}`)]),
+      : [role.accent(`Focused interaction: ${interactionRefLabel(focused)}`)]),
     ...state.pendingInteractions.map((interaction) =>
       renderInteraction(
         interaction,
         preferences,
-        focused !== undefined &&
-          interactionKey(interaction.interaction) === interactionKey(focused.interaction),
+        focusedKey !== undefined &&
+          interactionKey(interaction.interaction) === focusedKey,
       ),
     ),
-    ...commands.map((command) => role.meta(command)),
     role.meta(
-      "/expand interaction <conversation-id>::<interaction-id> to see the full request",
+      "Ctrl+G opens the human-input surface · /expand interaction <conversation-id>::<interaction-id> reveals full detail",
     ),
   ].join("\n");
 }

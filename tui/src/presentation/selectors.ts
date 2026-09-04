@@ -29,7 +29,7 @@ import type {
   AgentStatusView,
   BackgroundLifecycle,
   CapabilitySourceView,
-  RoutedInteraction,
+  InteractionSource,
   ModelInvocationView,
   SessionModelConfig,
   RuntimeClientBackgroundExecution,
@@ -119,41 +119,15 @@ export function activeSubagents(
 }
 
 /**
- * The deterministic questionnaire that the app should focus when several
- * runtime interactions are pending.
+ * The short human label for one interaction's source.
  *
- * Runtime publication order is not a user-facing focus contract, so the TUI
- * deliberately selects the lexicographically smallest routed identity pair.
- * Approval remains command-driven; questionnaire responses are whole typed
- * submissions from the questionnaire overlay.
+ * Primary/subagent origin is presentation metadata only: it labels rows and
+ * headers ("Question from reviewer"), it never grants authority, and it never
+ * selects a response path — every response routes by the exact
+ * `InteractionRef` regardless of where the interaction originated.
  */
-export function focusedQuestionnaire(
-  state: PresentationState | undefined,
-): RoutedInteraction | undefined {
-  return state?.pendingInteractions
-    .filter((interaction) => interaction.request.kind.type === "questionnaire")
-    .slice()
-    .sort(compareRoutedInteractions)[0];
-}
-
-/** The focused pending interaction for generic status/card rendering. */
-export function focusedInteraction(
-  state: PresentationState | undefined,
-): RoutedInteraction | undefined {
-  return state?.pendingInteractions
-    .slice()
-    .sort(compareRoutedInteractions)[0];
-}
-
-function compareRoutedInteractions(
-  left: RoutedInteraction,
-  right: RoutedInteraction,
-): number {
-  return left.interaction.conversation_id.localeCompare(
-    right.interaction.conversation_id,
-  ) || left.interaction.interaction_id.localeCompare(
-    right.interaction.interaction_id,
-  );
+export function interactionSourceName(source: InteractionSource): string {
+  return source.type === "primary" ? "main" : source.agent_name;
 }
 
 // ---------------------------------------------------------------------------

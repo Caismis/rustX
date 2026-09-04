@@ -108,11 +108,6 @@ export const COMMANDS: readonly CommandSpec[] = [
     argumentHint: "[execution-id]",
   },
   {
-    name: "/approve",
-    description: "Answer one runtime-owned approval interaction.",
-    argumentHint: "<conversation-id>::<interaction-id> <allow|deny> [reason]",
-  },
-  {
     name: "/approval",
     description: "Request the runtime ApprovalMode.",
     argumentHint: "<policy|full_access>",

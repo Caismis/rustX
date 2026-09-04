@@ -102,6 +102,48 @@ export function questionnaireInteraction(
   };
 }
 
+/**
+ * Re-sources an interaction to a supervised subagent (Issue #184 routed
+ * projection): the routed identity moves to the child conversation and the
+ * source metadata names the agent. Presentation metadata only.
+ */
+function fromSubagent(
+  routed: RoutedInteraction,
+  agent = "reviewer",
+  childConversationId = "conv-child-1",
+): RoutedInteraction {
+  return {
+    ...routed,
+    interaction: {
+      conversation_id: childConversationId,
+      interaction_id: routed.interaction.interaction_id,
+    },
+    source: {
+      type: "subagent",
+      subagent_id: "conv-1-subagent-1",
+      child_conversation_id: childConversationId,
+      agent_name: agent,
+    },
+    request: { ...routed.request, conversation_id: childConversationId },
+  };
+}
+
+/** An Approval routed from a supervised subagent. */
+export function childApprovalInteraction(
+  id = "attempt-1-interaction-approval-1",
+  agent = "reviewer",
+): RoutedInteraction {
+  return fromSubagent(approvalInteraction(id), agent);
+}
+
+/** A Questionnaire routed from a supervised subagent. */
+export function childQuestionnaireInteraction(
+  id = "attempt-1-interaction-question-1",
+  agent = "reviewer",
+): RoutedInteraction {
+  return fromSubagent(questionnaireInteraction(id), agent);
+}
+
 export function invocation(
   model: string,
   overrides: Partial<ModelInvocationView> = {},

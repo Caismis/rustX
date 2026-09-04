@@ -225,7 +225,7 @@ The command-to-surface classification is:
 | `/new`, `/clone` | control with transient/replacement feedback |
 | `/name` | inspection of the active Session's name, as transient feedback |
 | `/name <text>`, `/model <provider/model>` | control with transient result |
-| `/cancel`, `/compact`, `/approve`, `/approval` | control with transient acceptance/validation result |
+| `/cancel`, `/compact`, `/approval` | control with transient acceptance/validation result |
 | `/reasoning`, `/expand` | preference |
 | `/quit` | quit |
 | invalid, unknown, or empty-result command feedback | transient |
@@ -313,8 +313,6 @@ does not implement a parallel Session system.
   a background execution by id.
 - `/compact` — ask the runtime to compact the canonical context while idle;
   progress and completion remain authoritative Runtime Client facts.
-- `/approve <conversation-id>::<interaction-id> <allow|deny> [reason]` — answer one runtime-owned
-  Approval interaction.
 - `/approval <policy|full_access>` — request the runtime ApprovalMode.
 - `/debug` — show bounded presentation and protocol diagnostics.
 - `/reasoning [on|off]` — change the display preference for model reasoning;
@@ -336,9 +334,9 @@ holds; `/status` prints the
 runtime's own Agent Status rendering; `/compact` invokes one
 `compact_context` operation and waits for its durable terminal result;
 `/debug` shows bounded diagnostics and
-never a credential; `/approve` sends a finite typed response to one
-runtime-owned Approval interaction, the questionnaire overlay sends one typed
-whole-questionnaire response, and `/approval` requests a runtime control-plane
+never a credential; the human-input surface sends one finite typed response
+per explicit action to one runtime-owned interaction, routed by its exact
+`InteractionRef`, and `/approval` requests a runtime control-plane
 mode change. The TUI never
 edits displayed Tool arguments, suppresses pending prompts, auto-answers them,
 or keeps a local outcome.
@@ -350,13 +348,18 @@ nothing but the screen. They send no request, and they are also bound to keys:
 | Key | Effect |
 | --- | --- |
 | `ctrl+l` | open the same model selector as `/model` |
-| `escape` | the focused overlay closes first; otherwise request runtime cancellation while an attempt or interaction is unsettled |
+| `ctrl+g` | reopen the human-input surface while interactions are pending |
+| `escape` | the focused overlay acts first; otherwise request runtime cancellation while an attempt or interaction is unsettled |
 | `ctrl+c` | request runtime cancellation while an attempt or interaction is active, or quit when idle |
 | `ctrl+o` | expand or collapse the most recent tool card |
 | `ctrl+t` | show or hide model reasoning |
 
-Escape precedence is an app-level ownership rule: a focused inspection or
-picker receives Escape first and closes, restoring editor focus. With no such
+Escape precedence is an app-level ownership rule: a focused overlay receives
+Escape first. On the human-input surface Escape is defined per interaction
+kind — an open questionnaire gets its explicit typed decline, while an
+approval only dismisses the surface (presentation-only; the interaction stays
+pending and Ctrl+G reopens it) — and any other focused inspection or picker
+closes, restoring editor focus. With no such
 overlay, an unsettled attempt or pending interaction makes Escape a runtime
 cancellation request; it never becomes an ordinary editor submission. The
 same rule applies to Ctrl+C while an interaction is focused. Authoritative
@@ -379,23 +382,39 @@ reducer sorts and replaces those facts like every other projection value;
 reconnect/resync discards local assumptions and rebuilds the list from the
 snapshot. The renderer shows the immutable tool identity, mode, reason, and
 validated arguments for Approval, and the bounded questionnaire facts, option
-descriptions, previews, review tab, and client-owned custom row. `/approve`
-sends only an Approval response; the questionnaire overlay sends one typed
-whole-questionnaire response. Neither invokes a Tool, mutates
+descriptions, previews, review tab, and client-owned custom row. Every
+response — an Approval decision or one typed whole-questionnaire submission —
+is sent through the same `interaction_respond` path with the exact routed
+`InteractionRef` it was collected for. Neither kind invokes a Tool, mutates
 arguments, infers an outcome from detach/EOF, or callbacks into the Agent
 Loop.
 
-When questionnaires are pending, the TUI focuses the questionnaire with the
-smallest `InteractionId`. This selection is derived from the authoritative
-projection, so it is stable across reconnect and resync. Plain editor input
-always remains an ordinary inbound message. The focused questionnaire overlay
-alone collects authored option selections or bounded custom text and sends one
-typed whole-questionnaire submission; Approval remains explicitly
-command-driven through `/approve`, and `/cancel` addresses attempt
-cancellation. The TUI never settles, suppresses, or auto-answers an
-interaction locally.
+All live pending interactions — any mix of Approvals and Questionnaires, from
+the primary conversation and from supervised subagents — are presented by one
+human-input surface. It opens automatically while an interaction is pending,
+lists every pending interaction with its source (`[main]` or the subagent's
+name, e.g. `Question from reviewer`), and focuses exactly one at a time.
+Focus starts at the smallest routed identity, never jumps when new
+interactions arrive, advances deterministically when the focused interaction
+settles, and moves with `Ctrl+Up`/`Ctrl+Down` — navigation settles nothing.
+The focus is derived from the authoritative projection, so it is stable
+across reconnect and resync. Plain editor input always remains an ordinary
+inbound message, and the activity section keeps every pending interaction
+visible while the surface is open or dismissed. The TUI never settles,
+suppresses, or auto-answers an interaction locally.
 
-The focused questionnaire is a real Pi-TUI overlay. It reconstructs from
+An Approval panel shows the runtime's prepared invocation — tool, origin,
+mode, call identity, reason, and the validated arguments, bounded by default
+and expandable with `Ctrl+E` or `/expand interaction` — and offers exactly two
+decisions: `Deny` and `Allow once`. `Deny` is preselected, so a generic Enter
+on a freshly opened surface can never grant execution authority; Allow
+requires explicit navigation first. `Esc` on an Approval dismisses the
+surface without answering (the interaction stays pending; `Ctrl+G` reopens).
+The surface displays the prepared invocation; it never reconstructs one from
+display text.
+
+The focused questionnaire keeps its established surface inside the same
+overlay. It reconstructs from
 `snapshot.pending_interactions` after attachment/resync, shows one tab per
 question plus a review/submit tab, renders option descriptions and Markdown
 previews, and uses a side-by-side preview when the terminal is wide enough or
@@ -406,8 +425,8 @@ Unicode-scalar draft bound. Partial submission is valid; unanswered questions
 remain visible in review. `Esc` explicitly declines only the focused
 questionnaire and `Ctrl+C` keeps its existing meaning of cancelling the owning
 attempt. A local draft is never converted into a response by detach, EOF, or
-attachment replacement; a settled interaction closes the overlay and restores
-editor focus.
+attachment replacement; a settled interaction closes its panel and advances
+focus to the next pending interaction.
 
 Custom-answer editing delegates raw input to Pi-TUI 0.82.1's native `Input`,
 so bracketed paste, multi-character batches, Kitty printable input,
@@ -418,9 +437,11 @@ Review/Submit remain reachable, and long Markdown previews can be inspected
 with PageUp/PageDown without allowing preview content to displace the option
 list.
 
-The footer displays authoritative `approval policy` or `approval FULL ACCESS`
-and shows a pending arrow when the runtime has accepted a busy-time mode
-request. Full Access is not a local prompt suppression switch: it changes
+The footer displays the authoritative effective mode as `approval POLICY` or
+`approval FULL ACCESS`, and appends `· next attempt …` when the runtime has
+accepted a busy-time mode request that reconciles onto the next attempt —
+changing the desired mode never mutates a running attempt. Full Access is not
+a local prompt suppression switch: it changes
 only effective approval for eligible Tool calls. It cannot activate disabled
 Tools, restore excluded Tools, bypass execution/concurrency restrictions, or
 answer a pending interaction. `/tools` displays each Tool's independent
@@ -660,8 +681,9 @@ the complete reason and the complete validated arguments, rendered from the
 interaction the client already holds — no runtime request, no re-execution, no
 read.
 
-This is disclosure, not a second approval gate. Nothing requires the card to
-be opened before `/approve`, and expanding cannot edit what is being approved:
+This is disclosure, not a second approval gate. Nothing requires the detail
+to be expanded before answering, and expanding cannot edit what is being
+approved:
 the arguments are drawn exactly as the runtime validated them, and the runtime
 resumes the operation it already holds.
 

@@ -164,7 +164,7 @@ describe("snapshot reconstruction", () => {
 
     // Activity
     assert.match(screen, /Background · 1 active of 1 known/);
-    assert.match(screen, /Approval required · 1 pending/);
+    assert.match(screen, /Human input required · 1 pending/);
 
     // Working status: the pending approval for this attempt outranks the
     // running execution, because it is what the runtime is actually waiting on.

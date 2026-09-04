@@ -21,6 +21,9 @@ import type { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
 import type { SessionSummaryView } from "../src/protocol/types.ts";
 import {
   attemptView,
+  approvalInteraction,
+  childApprovalInteraction,
+  childQuestionnaireInteraction,
   questionnaireInteraction,
   catalogModel,
   sessionModel,
@@ -608,6 +611,303 @@ describe("RustxTuiApp lifecycle", () => {
     process.stdin.emit("data", "\u0003");
     await cancellationObserved;
     assert.equal(cancelled, 1);
+
+    await app.quit();
+    await running;
+  });
+
+  it("opens the unified surface for a primary approval, preselected on Deny", async () => {
+    const approval = approvalInteraction();
+    const state = {
+      ...emptyPresentationState(sessionModel("alpha/model-a")),
+      attempt: { ...attemptView(), phase: { type: "running" as const } },
+      pendingInteractions: [approval],
+    };
+    const session = fakeSession(async () => {}, state);
+    const responses: Array<{ id: string; response: unknown }> = [];
+    (session as unknown as {
+      respondInteraction: (
+        interaction: { conversation_id: string; interaction_id: string },
+        response: unknown,
+      ) => Promise<void>;
+    }).respondInteraction = async (interaction, response) => {
+      responses.push({
+        id: `${interaction.conversation_id}::${interaction.interaction_id}`,
+        response,
+      });
+    };
+
+    const app = new RustxTuiApp({
+      session,
+      connection: fakeConnection(),
+      child: fakeChild([]),
+    });
+    const running = app.run();
+    await waitForApplicationContinuation();
+
+    // A bare Enter on the freshly opened surface answers Deny, never Allow.
+    process.stdin.emit("data", "\r");
+    await waitForApplicationContinuation();
+    assert.deepEqual(responses, [
+      {
+        id: "conv-test::attempt-1-interaction-1",
+        response: {
+          type: "approval",
+          decision: { type: "deny", reason: "denied by the user" },
+        },
+      },
+    ]);
+
+    await app.quit();
+    await running;
+  });
+
+  it("allows once only after explicit navigation to the affirmative choice", async () => {
+    const approval = approvalInteraction();
+    const state = {
+      ...emptyPresentationState(sessionModel("alpha/model-a")),
+      attempt: { ...attemptView(), phase: { type: "running" as const } },
+      pendingInteractions: [approval],
+    };
+    const session = fakeSession(async () => {}, state);
+    const responses: unknown[] = [];
+    (session as unknown as {
+      respondInteraction: (interaction: unknown, response: unknown) => Promise<void>;
+    }).respondInteraction = async (_interaction, response) => {
+      responses.push(response);
+    };
+
+    const app = new RustxTuiApp({
+      session,
+      connection: fakeConnection(),
+      child: fakeChild([]),
+    });
+    const running = app.run();
+    await waitForApplicationContinuation();
+
+    process.stdin.emit("data", "\u001b[B");
+    await waitForApplicationContinuation();
+    assert.equal(responses.length, 0, "navigation settles nothing");
+    process.stdin.emit("data", "\r");
+    await waitForApplicationContinuation();
+    assert.deepEqual(responses, [
+      { type: "approval", decision: { type: "allow" } },
+    ]);
+
+    await app.quit();
+    await running;
+  });
+
+  it("serves child and primary interactions through one surface by exact ref", async () => {
+    const childQuestion = childQuestionnaireInteraction("child-b-interaction-1");
+    const approval = approvalInteraction("attempt-1-interaction-approval-a");
+    const state = {
+      ...emptyPresentationState(sessionModel("alpha/model-a")),
+      attempt: { ...attemptView(), phase: { type: "running" as const } },
+      pendingInteractions: [approval, childQuestion],
+    };
+    const session = fakeSession(async () => {}, state) as RuntimeClientAttachment & {
+      publishState(nextState: unknown): void;
+    };
+    const responses: Array<{ id: string; response: unknown }> = [];
+    (session as unknown as {
+      respondInteraction: (
+        interaction: { conversation_id: string; interaction_id: string },
+        response: unknown,
+      ) => Promise<void>;
+    }).respondInteraction = async (interaction, response) => {
+      responses.push({
+        id: `${interaction.conversation_id}::${interaction.interaction_id}`,
+        response,
+      });
+    };
+
+    const app = new RustxTuiApp({
+      session,
+      connection: fakeConnection(),
+      child: fakeChild([]),
+    });
+    const running = app.run();
+    await waitForApplicationContinuation();
+
+    // Deterministic focus: conv-child-1 sorts before conv-test, so the child
+    // questionnaire is focused first. Esc is its explicit typed decline.
+    process.stdin.emit("data", "\u001b");
+    await waitForPiEscapeDisambiguation();
+    await waitForApplicationContinuation();
+    assert.deepEqual(responses, [
+      {
+        id: "conv-child-1::child-b-interaction-1",
+        response: { type: "questionnaire", response: { type: "declined" } },
+      },
+    ]);
+
+    // The runtime settles the declined questionnaire; focus advances to the
+    // surviving primary approval, which a bare Enter denies.
+    session.publishState({ ...state, pendingInteractions: [approval] });
+    await waitForApplicationContinuation();
+    process.stdin.emit("data", "\r");
+    await waitForApplicationContinuation();
+    assert.deepEqual(responses[1], {
+      id: "conv-test::attempt-1-interaction-approval-a",
+      response: {
+        type: "approval",
+        decision: { type: "deny", reason: "denied by the user" },
+      },
+    });
+
+    await app.quit();
+    await running;
+  });
+
+  it("dismisses an approval with Esc without answering, and Ctrl+G reopens", async () => {
+    const approval = approvalInteraction();
+    const state = {
+      ...emptyPresentationState(sessionModel("alpha/model-a")),
+      attempt: { ...attemptView(), phase: { type: "running" as const } },
+      pendingInteractions: [approval],
+    };
+    const session = fakeSession(async () => {}, state);
+    const responses: unknown[] = [];
+    (session as unknown as {
+      respondInteraction: (interaction: unknown, response: unknown) => Promise<void>;
+    }).respondInteraction = async (_interaction, response) => {
+      responses.push(response);
+    };
+
+    const app = new RustxTuiApp({
+      session,
+      connection: fakeConnection(),
+      child: fakeChild([]),
+    });
+    const running = app.run();
+    await waitForApplicationContinuation();
+
+    // Esc dismisses the surface; nothing is answered, and ordinary editor
+    // submission stays ordinary (an empty editor submits nothing at all).
+    process.stdin.emit("data", "\u001b");
+    await waitForPiEscapeDisambiguation();
+    await waitForApplicationContinuation();
+    assert.equal(responses.length, 0);
+    process.stdin.emit("data", "\r");
+    await waitForApplicationContinuation();
+    assert.equal(responses.length, 0, "editor Enter never answers an approval");
+
+    // Ctrl+G reopens the surface; the same Enter now answers Deny.
+    process.stdin.emit("data", "\u0007");
+    await waitForApplicationContinuation();
+    process.stdin.emit("data", "\r");
+    await waitForApplicationContinuation();
+    assert.deepEqual(responses, [
+      { type: "approval", decision: { type: "deny", reason: "denied by the user" } },
+    ]);
+
+    await app.quit();
+    await running;
+  });
+
+  it("a resync replaces the stale surface and never answers the old interaction", async () => {
+    const questionnaire = questionnaireInteraction("attempt-1-interaction-question-stale");
+    const approval = approvalInteraction("attempt-1-interaction-approval-9");
+    const state = {
+      ...emptyPresentationState(sessionModel("alpha/model-a")),
+      attempt: { ...attemptView(), phase: { type: "running" as const } },
+      pendingInteractions: [questionnaire],
+    };
+    const session = fakeSession(async () => {}, state) as RuntimeClientAttachment & {
+      publishState(nextState: unknown): void;
+      publishSnapshot(): void;
+    };
+    const responses: Array<{ id: string; response: unknown }> = [];
+    (session as unknown as {
+      respondInteraction: (
+        interaction: { conversation_id: string; interaction_id: string },
+        response: unknown,
+      ) => Promise<void>;
+    }).respondInteraction = async (interaction, response) => {
+      responses.push({
+        id: `${interaction.conversation_id}::${interaction.interaction_id}`,
+        response,
+      });
+    };
+
+    const app = new RustxTuiApp({
+      session,
+      connection: fakeConnection(),
+      child: fakeChild([]),
+    });
+    const running = app.run();
+    await waitForApplicationContinuation();
+
+    // The authoritative resync replaces the projection: the questionnaire is
+    // gone, an approval is pending instead. The stale surface is closed, so
+    // the following Enter can only target the new authoritative interaction.
+    session.publishSnapshot();
+    session.publishState({ ...state, pendingInteractions: [approval] });
+    await waitForApplicationContinuation();
+    process.stdin.emit("data", "\r");
+    await waitForApplicationContinuation();
+    assert.deepEqual(responses, [
+      {
+        id: "conv-test::attempt-1-interaction-approval-9",
+        response: {
+          type: "approval",
+          decision: { type: "deny", reason: "denied by the user" },
+        },
+      },
+    ]);
+
+    await app.quit();
+    await running;
+  });
+
+  it("child death removes only its own interaction from the surface", async () => {
+    const childApproval = childApprovalInteraction("child-a-interaction-1", "implement");
+    const approval = approvalInteraction("attempt-1-interaction-approval-a");
+    const state = {
+      ...emptyPresentationState(sessionModel("alpha/model-a")),
+      attempt: { ...attemptView(), phase: { type: "running" as const } },
+      pendingInteractions: [childApproval, approval],
+    };
+    const session = fakeSession(async () => {}, state) as RuntimeClientAttachment & {
+      publishState(nextState: unknown): void;
+    };
+    const responses: Array<{ id: string; response: unknown }> = [];
+    (session as unknown as {
+      respondInteraction: (
+        interaction: { conversation_id: string; interaction_id: string },
+        response: unknown,
+      ) => Promise<void>;
+    }).respondInteraction = async (interaction, response) => {
+      responses.push({
+        id: `${interaction.conversation_id}::${interaction.interaction_id}`,
+        response,
+      });
+    };
+
+    const app = new RustxTuiApp({
+      session,
+      connection: fakeConnection(),
+      child: fakeChild([]),
+    });
+    const running = app.run();
+    await waitForApplicationContinuation();
+
+    // The child died: the runtime removes its interaction only. The primary
+    // approval survives, takes the focus, and remains answerable.
+    session.publishState({ ...state, pendingInteractions: [approval] });
+    await waitForApplicationContinuation();
+    process.stdin.emit("data", "\r");
+    await waitForApplicationContinuation();
+    assert.deepEqual(responses, [
+      {
+        id: "conv-test::attempt-1-interaction-approval-a",
+        response: {
+          type: "approval",
+          decision: { type: "deny", reason: "denied by the user" },
+        },
+      },
+    ]);
 
     await app.quit();
     await running;

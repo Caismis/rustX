@@ -28,6 +28,11 @@ const POPUP_FOOTER =
 export interface QuestionnaireOverlayOptions {
   interactionId: string;
   questionnaire: QuestionnaireSpecification;
+  /**
+   * The routed source label ("Question from reviewer"), when the interaction
+   * did not originate in the conversation this client is attached to.
+   */
+  sourceLabel?: string;
   onSubmit: (response: QuestionnaireResponse) => void;
   onDecline: () => void;
   onInterrupt: () => void;
@@ -51,6 +56,7 @@ type RenderedBody = {
 export class QuestionnaireOverlay implements PopupContent {
   readonly interactionId: string;
   readonly questionnaire: QuestionnaireSpecification;
+  readonly #sourceLabel: string | undefined;
   readonly #onSubmit: (response: QuestionnaireResponse) => void;
   readonly #onDecline: () => void;
   readonly #onInterrupt: () => void;
@@ -69,6 +75,7 @@ export class QuestionnaireOverlay implements PopupContent {
   constructor(options: QuestionnaireOverlayOptions) {
     this.interactionId = options.interactionId;
     this.questionnaire = options.questionnaire;
+    this.#sourceLabel = options.sourceLabel;
     this.#onSubmit = options.onSubmit;
     this.#onDecline = options.onDecline;
     this.#onInterrupt = options.onInterrupt;
@@ -111,6 +118,18 @@ export class QuestionnaireOverlay implements PopupContent {
     this.#changed();
   }
 
+  /**
+   * The explicit Esc decline: a typed `declined` response, exactly once.
+   *
+   * Declining settles this questionnaire; it never cancels the attempt and
+   * never touches any other pending interaction.
+   */
+  decline(): void {
+    if (this.#submitting) return;
+    this.beginSubmitting();
+    this.#onDecline();
+  }
+
   handleInput(data: string): void {
     if (this.#submitting) return;
     if (matchesKey(data, Key.ctrl("c"))) {
@@ -118,8 +137,7 @@ export class QuestionnaireOverlay implements PopupContent {
       return;
     }
     if (matchesKey(data, Key.escape)) {
-      this.beginSubmitting();
-      this.#onDecline();
+      this.decline();
       return;
     }
     if (matchesKey(data, Key.shift("tab"))) {
@@ -194,6 +212,9 @@ export class QuestionnaireOverlay implements PopupContent {
     const safeWidth = Math.max(1, Math.floor(width));
     const header = [
       fitLine(role.meta(`interaction ${this.interactionId}`), safeWidth),
+      ...(this.#sourceLabel === undefined
+        ? []
+        : [fitLine(role.meta(this.#sourceLabel), safeWidth)]),
       ...this.#renderTabs(safeWidth),
     ];
     const available = Math.max(1, this.#bodyHeight - header.length);
