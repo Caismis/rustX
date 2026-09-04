@@ -136,6 +136,13 @@
   // Project-owned Subagent definitions live under workspace/.agents/subagents.
   // Parent composition resolves and freezes their instruction sources before
   // execution; a child cannot rediscover this config or walk project ancestors.
+  //
+  // Optional per-definition Git isolation ("worktree"): an omitted block
+  // keeps the shared workspace. "worktree": {"enabled": true} runs the child
+  // from a committed Git snapshot of the parent HEAD and requires the parent
+  // source workspace to be clean (uncommitted changes reject the child). Set
+  // "requireCleanParent": false only to intentionally run from committed HEAD
+  // while ignoring parent-local uncommitted changes — they are never copied.
   "subagents": {
     "maxConcurrent": 4,
     "definitions": {

@@ -81,6 +81,34 @@ pub(crate) fn accepted_result(accepted: SubagentAccepted) -> ToolExecutionResult
     success_json(result)
 }
 
+/// The model-facing projection of a failed subagent start.
+///
+/// This is the boundary at which an internal runtime failure becomes
+/// model-visible tool output, so it — and not the workspace/Git layer — owns
+/// the public configuration spelling and the actionable remediation. The
+/// workspace manager reports the typed execution fact
+/// (`WorkspaceAcquireError::DirtyParent`), the registry preserves its
+/// semantic identity ([`SubagentStartError::WorkspaceDirtyParent`]), and this
+/// function renders what the model can actually act on.
+///
+/// Every other start failure keeps its own bounded runtime diagnostic: this
+/// is one named translation, not a general error-presentation framework.
+fn start_failure_result(error: &SubagentStartError) -> ToolExecutionResult {
+    match error {
+        // Issue #188. The opt-out is described exactly: it runs the child
+        // from the committed HEAD snapshot and ignores the parent's local
+        // dirty bytes. No stash, commit, copy, or patch is implied, and no
+        // Git command detail is exposed.
+        SubagentStartError::WorkspaceDirtyParent { .. } => failed_result(
+            "the isolated subagent was not started because the parent workspace has \
+             uncommitted changes. Commit or clean those changes, or explicitly set \
+             \"requireCleanParent\": false for this subagent to run from the committed \
+             HEAD snapshot while intentionally ignoring the local changes.",
+        ),
+        other => failed_result(other.to_string()),
+    }
+}
+
 /// The canonical model-facing name of the intrinsic.
 pub const SUBAGENT_TOOL_NAME: &str = "subagent";
 
@@ -234,7 +262,7 @@ impl ToolExecutor for SubagentExecutor {
                         managed_output: None,
                     };
                 }
-                Err(error) => return failed_result(error.to_string()),
+                Err(error) => return start_failure_result(&error),
             };
             match self.subagents.commit(prepared, &child_cancellation).await {
                 Ok(SubagentStartOutcome::Accepted(accepted)) => accepted_result(accepted),
@@ -257,7 +285,7 @@ impl ToolExecutor for SubagentExecutor {
                 Err(SubagentStartError::ConversationInactive) => {
                     failed_result("the conversation is shutting down")
                 }
-                Err(error) => failed_result(error.to_string()),
+                Err(error) => start_failure_result(&error),
             }
         })
     }
@@ -265,7 +293,7 @@ impl ToolExecutor for SubagentExecutor {
 
 #[cfg(test)]
 mod tests {
-    use super::{SubagentInput, definition};
+    use super::{SUBAGENT_TOOL_NAME, SubagentExecutor, SubagentInput, ToolInvocation, definition};
     use crate::runtime::subagent::SubagentWorkspacePolicy;
     use crate::runtime::subagent::catalog::{
         SubagentCatalog, SubagentDefinition, SubagentName, SubagentProjectInstructionPolicy,
@@ -402,6 +430,298 @@ mod tests {
                 "{field} must not be a per-call argument"
             );
         }
+    }
+
+    /// The real collaborators the `subagent` intrinsic needs to reach
+    /// workspace acquisition against a genuinely dirty Git parent.
+    ///
+    /// Everything the execution context borrows lives here so the context
+    /// itself can be built inside the test that drives the tool.
+    #[cfg(unix)]
+    struct DirtyParentPlane {
+        _dir: tempfile::TempDir,
+        conversation_id: crate::runtime::identity::ConversationId,
+        subagents: crate::runtime::subagent::SubagentRegistry,
+        subagent_context: crate::runtime::subagent::AttemptSubagentContext,
+        workspace: crate::tools::workspace::Workspace,
+        artifacts: crate::tools::artifacts::ArtifactStore,
+        tool_output: crate::tools::managed_output::ManagedToolOutput,
+        environment: crate::tools::environment::ToolEnvironment,
+        runtime_root: std::path::PathBuf,
+    }
+
+    #[cfg(unix)]
+    const DIRTY_PARENT_MODELS: &str = r#"{
+      "providers": {
+        "local": {
+          "baseUrl": "http://127.0.0.1:9/v1",
+          "apiKey": "test-only-secret",
+          "models": [{
+            "id": "model",
+            "protocol": "openai_chat_completions",
+            "contextWindow": 128000,
+            "maxOutputTokens": 512,
+            "capabilities": {
+              "inputModalities": ["text"],
+              "outputModalities": ["text"],
+              "toolCalls": true,
+              "reasoning": false
+            },
+            "compat": {"chatReasoningReplay": "omit"}
+          }]
+        }
+      }
+    }"#;
+
+    #[cfg(unix)]
+    fn git(cwd: &std::path::Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(cwd)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "rustX tests")
+            .env("GIT_AUTHOR_EMAIL", "rustx-tests@example.invalid")
+            .env("GIT_COMMITTER_NAME", "rustX tests")
+            .env("GIT_COMMITTER_EMAIL", "rustx-tests@example.invalid")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .expect("git");
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// Builds a conversation whose only admitted agent asks for an isolated
+    /// worktree under the Issue #188 default (strict clean parent), over a
+    /// parent repository made dirty by an ordinary tracked modification.
+    #[cfg(unix)]
+    #[allow(clippy::too_many_lines)] // one cohesive real-collaborator fixture
+    fn dirty_parent_plane() -> DirtyParentPlane {
+        use std::collections::BTreeSet;
+        use std::sync::Arc;
+
+        use crate::capabilities::CapabilitySnapshot;
+        use crate::context::SessionContextPolicy;
+        use crate::model::catalog::{MapCredentialEnvironment, ModelCatalog, ModelRef};
+        use crate::model::invocation::ModelBindingRegistry;
+        use crate::model::session::SessionModelConfig;
+        use crate::runtime::identity::{AgentId, CapabilityRevision, ConversationId};
+        use crate::runtime::inbound::ConversationInboundMailbox;
+        use crate::runtime::subagent::{
+            AttemptSubagentContext, SubagentRegistry, SubagentRegistryConfig, SubagentSpawnPlan,
+            SubagentWorkspaceManager,
+        };
+        use crate::runtime::types::{ApprovalMode, SystemClock};
+        use crate::skills::SkillSnapshot;
+        use crate::tools::environment::ToolEnvironment;
+        use crate::tools::mcp::McpRuntimeLeaseAuthority;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let workspace_root = dir.path().join("workspace");
+        let runtime_root = dir.path().join("runtime");
+        std::fs::create_dir_all(&workspace_root).expect("workspace");
+        std::fs::create_dir_all(&runtime_root).expect("runtime root");
+
+        git(&workspace_root, &["init"]);
+        std::fs::write(workspace_root.join("tracked.txt"), "committed\n").expect("tracked file");
+        git(&workspace_root, &["add", "tracked.txt"]);
+        git(&workspace_root, &["commit", "-m", "initial"]);
+        std::fs::write(workspace_root.join("tracked.txt"), "dirty parent\n").expect("dirty file");
+
+        let conversation_id = ConversationId::new("conv-dirty-parent");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(conversation_id.clone())
+                .expect("in-memory store"),
+        );
+        let subagents = SubagentRegistry::new(SubagentRegistryConfig {
+            conversation_id: conversation_id.clone(),
+            agent_id: AgentId::new("agent-parent"),
+            mailbox: ConversationInboundMailbox::over_store(store),
+            clock: Arc::new(SystemClock),
+            spawn: SubagentSpawnPlan {
+                program: std::path::PathBuf::from("/nonexistent/rustx"),
+                runtime_root: runtime_root.clone(),
+                model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+                agent_status: crate::context::AgentStatusConfig::default(),
+                context: SessionContextPolicy {
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 0,
+                    summary_output_cap: None,
+                },
+            },
+            workspace: SubagentWorkspaceManager::new(&workspace_root, &runtime_root),
+            max_active: 4,
+        });
+
+        let isolated = SubagentName::parse("isolated").expect("name");
+        let model = ModelRef::parse("local/model").expect("model");
+        let definition = SubagentDefinition::new(
+            isolated.clone(),
+            "Isolated worktree agent.".to_owned(),
+            "instructions".to_owned(),
+            workspace_root.join("isolated.md"),
+            Some(model.clone()),
+            Vec::new(),
+            Vec::new(),
+            SubagentProjectInstructionPolicy {
+                inherit: false,
+                files: Vec::new(),
+            },
+            SubagentWorkspacePolicy::GitWorktree {
+                require_clean_parent: true,
+            },
+        )
+        .expect("definition");
+
+        let models = ModelBindingRegistry::new(
+            ModelCatalog::from_jsonc_slice(DIRTY_PARENT_MODELS.as_bytes())
+                .expect("model catalog")
+                .resolve(&MapCredentialEnvironment::default())
+                .expect("model resolution"),
+        )
+        .expect("model bindings");
+        let capabilities = Arc::new(CapabilitySnapshot::new(
+            conversation_id.clone(),
+            workspace_root.clone(),
+            CapabilityRevision::new(1),
+            Arc::new(crate::tools::executor::ToolRegistry::new()),
+            Arc::new(crate::capabilities::AvailableToolCatalog::default()),
+            Arc::new(SkillSnapshot::new(Vec::new())),
+            None,
+            None,
+            ToolEnvironment::new(),
+            Arc::new(McpRuntimeLeaseAuthority::empty()),
+            Arc::new(std::collections::BTreeMap::new()),
+        ));
+        let resources = Arc::new(
+            crate::runtime::RuntimeResourceSnapshot::new(
+                crate::runtime::identity::RuntimeResourceRevision::new(1),
+                Vec::new(),
+                None,
+                crate::context::ContextAssembly::new(),
+                capabilities,
+            )
+            .with_subagent_catalog(SubagentCatalog::new([definition]).expect("catalog"))
+            .with_subagent_admissions(BTreeSet::from([isolated]), BTreeSet::new()),
+        );
+
+        DirtyParentPlane {
+            subagent_context: AttemptSubagentContext::new(
+                resources,
+                SessionModelConfig::of(model),
+                models,
+                ApprovalMode::Policy,
+            ),
+            workspace: crate::tools::workspace::Workspace::new(&workspace_root).expect("workspace"),
+            artifacts: crate::tools::artifacts::ArtifactStore::new(
+                conversation_id.clone(),
+                dir.path().join("artifacts"),
+            )
+            .expect("artifact store"),
+            tool_output: crate::tools::managed_output::ManagedToolOutput::new(
+                conversation_id.clone(),
+                dir.path().join("tool-output"),
+            )
+            .expect("managed tool output"),
+            environment: ToolEnvironment::new(),
+            conversation_id,
+            subagents,
+            runtime_root,
+            _dir: dir,
+        }
+    }
+
+    /// Issue #188 — the model-facing regression.
+    ///
+    /// This drives the real `subagent` intrinsic against a real registry and
+    /// a real dirty Git parent, so the assertion is made on the actual
+    /// `ToolExecutionResult` the model would see, not on any lower layer's
+    /// `Display`. The chain under test is:
+    ///
+    /// ```text
+    /// WorkspaceAcquireError::DirtyParent            (typed execution fact)
+    ///   -> SubagentStartError::WorkspaceDirtyParent (typed identity kept)
+    ///   -> ToolExecutionResult                      (actionable remediation)
+    /// ```
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_dirty_parent_renders_actionable_guidance_at_the_model_facing_boundary() {
+        use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolExecutor};
+
+        struct NoProgress;
+        impl ProgressReporter for NoProgress {
+            fn report(&self, _progress: crate::tools::types::ToolProgress) {}
+        }
+
+        let plane = dirty_parent_plane();
+        let progress = NoProgress;
+        let context = ToolExecutionContext::new(
+            &plane.conversation_id,
+            None,
+            crate::runtime::cancellation::ExecutionCancellation::detached(
+                crate::runtime::cancellation::CancellationSignal::new(),
+                crate::runtime::types::CancellationReason::UserRequested,
+            ),
+            &plane.workspace,
+            &progress,
+            &plane.artifacts,
+            &plane.tool_output,
+            &plane.environment,
+        )
+        .with_subagent_context(plane.subagent_context.clone());
+
+        let executor = SubagentExecutor {
+            subagents: plane.subagents.clone(),
+        };
+        let result = executor
+            .execute(
+                ToolInvocation {
+                    call_id: crate::runtime::identity::ToolCallId::new("call-1"),
+                    tool_id: crate::runtime::identity::ToolId::new("tool-subagent"),
+                    tool_name: SUBAGENT_TOOL_NAME.to_owned(),
+                    mode: crate::tools::types::ToolInvocationMode::Foreground,
+                    arguments: serde_json::json!({
+                        "agent": "isolated",
+                        "task": "inspect the isolated workspace",
+                    }),
+                },
+                context,
+            )
+            .await;
+
+        let ToolExecutionStatus::Failed { error } = &result.status else {
+            panic!("the dirty parent must fail the call: {:?}", result.status);
+        };
+        // The actionable contract the model receives.
+        for required in [
+            "isolated subagent was not started",
+            "uncommitted changes",
+            "Commit or clean",
+            "requireCleanParent",
+            "committed HEAD",
+            "ignoring the local changes",
+        ] {
+            assert!(
+                error.contains(required),
+                "the model-facing result must state {required:?}: {error}"
+            );
+        }
+        // And nothing the model cannot act on: no Git plumbing, no raw
+        // command output, and no implication that the runtime will move the
+        // parent's changes for it.
+        for leaked in ["rev-parse", "porcelain", "git ", "stash", "auto-commit"] {
+            assert!(
+                !error.contains(leaked),
+                "the model-facing result must not expose {leaked:?}: {error}"
+            );
+        }
+        assert!(
+            !plane.runtime_root.join("worktrees").exists(),
+            "the rejection happens before any physical worktree is created"
+        );
     }
 
     #[test]

@@ -2773,6 +2773,11 @@ mod subagent_child_tests {
     /// project-instruction authority. The unrelated AGENTS.md is deliberately
     /// above the worktree-shaped path; the child still consumes only the
     /// parent-frozen chain carried in its typed specification.
+    ///
+    /// The isolated policy here is an explicit synthetic fixture (no
+    /// acquisition runs): it models a permissive capture whose parent was
+    /// dirty (`parent_had_uncommitted_changes: true`), matching the
+    /// Issue #188 explicit opt-out rather than the strict default.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_worktree_child_never_discovers_ancestor_project_instructions() {
         let dir = lab();

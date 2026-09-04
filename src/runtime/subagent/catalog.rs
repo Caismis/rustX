@@ -1009,8 +1009,9 @@ mod tests {
             Vec::new(),
             Vec::new(),
             policy(),
+            // The default isolated definition (Issue #188) is strict.
             SubagentWorkspacePolicy::GitWorktree {
-                require_clean_parent: false,
+                require_clean_parent: true,
             },
         )
         .expect("definition");
