@@ -1,0 +1,5 @@
+data: {"id":"chatcmpl-issue189-child-answer","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant","content":"CHILD-SCOPE-OVERLAY-OK: ISSUE189_FROZEN_OVERLAY"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-issue189-child-answer","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]

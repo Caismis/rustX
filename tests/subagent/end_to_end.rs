@@ -336,8 +336,8 @@ fn route(body: &str) -> crate::common::FixtureReply {
     }
 }
 
-/// Routes the Issue #187 real-child proof. The child can reach the final
-/// answer only after its real `read` tool resolves `scope-marker.txt` against
+/// Routes the Issues #187/#189 real-child proof. The child can reach the final
+/// answer only after its real `read` tool resolves an ignored overlay against
 /// the repository-subdirectory authority carried over IPC and composed into
 /// its `ConversationToolRuntime`.
 fn isolated_subdirectory_route(body: &str) -> crate::common::FixtureReply {
@@ -345,13 +345,13 @@ fn isolated_subdirectory_route(body: &str) -> crate::common::FixtureReply {
     let has_tool_history =
         body.contains("\\\"role\\\":\\\"tool\\\"") || body.contains("\"role\":\"tool\"");
     if is_parent && !has_tool_history {
-        crate::common::sse_fixture("openai_chat", "issue187_subagent_tool_call.sse")
+        crate::common::sse_fixture("openai_chat", "issue189_subagent_tool_call.sse")
     } else if is_parent {
         crate::common::sse_fixture("openai_chat", "plain_text.sse")
-    } else if body.contains("ISSUE187_BACKEND_MARKER") {
-        crate::common::sse_fixture("openai_chat", "issue187_child_scoped_answer.sse")
-    } else if body.contains("read the scoped marker from scope-marker.txt") {
-        crate::common::sse_fixture("openai_chat", "issue187_child_read_tool_call.sse")
+    } else if body.contains("ISSUE189_FROZEN_OVERLAY") {
+        crate::common::sse_fixture("openai_chat", "issue189_child_scoped_answer.sse")
+    } else if body.contains("read the local overlay from local/runtime.env") {
+        crate::common::sse_fixture("openai_chat", "issue189_child_read_tool_call.sse")
     } else {
         crate::common::sse_fixture("openai_chat", "plain_text.sse")
     }
@@ -481,12 +481,12 @@ fn git(cwd: &std::path::Path, args: &[&str]) {
     );
 }
 
-/// Issue #187: the parent workspace is a repository subdirectory. A real
-/// child process receives the nested workspace snapshot over IPC, composes
-/// its tool runtime at `<physical-worktree-root>/backend`, and successfully
-/// reads a path that does not exist at the physical root. Terminal cleanup
-/// removes the physical worktree while the immutable logical scope remains
-/// unchanged in the Runtime Client projection.
+/// Issues #187/#189: the parent workspace is a repository subdirectory. A
+/// real child process receives the nested workspace snapshot over IPC,
+/// composes its tool runtime at `<physical-worktree-root>/backend`, and reads
+/// an ignored file selected relative to that exact logical scope. Terminal
+/// cleanup proves the overlay is not source state while the immutable logical
+/// scope remains unchanged in the Runtime Client projection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary() {
@@ -509,12 +509,28 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
         "ISSUE187_BACKEND_MARKER\n",
     )
     .expect("marker");
+    std::fs::write(
+        logical_parent.join(".worktreeinclude"),
+        "local/runtime.env\n",
+    )
+    .expect("overlay manifest");
+    std::fs::write(
+        repository.join(".gitignore"),
+        "/backend/local/runtime.env\n",
+    )
+    .expect("overlay ignore rule");
     git(&repository, &["init"]);
     git(&repository, &["add", "--all"]);
     git(
         &repository,
         &["commit", "-m", "isolated subdirectory fixture"],
     );
+    std::fs::create_dir_all(logical_parent.join("local")).expect("overlay parent");
+    std::fs::write(
+        logical_parent.join("local/runtime.env"),
+        "ISSUE189_FROZEN_OVERLAY\n",
+    )
+    .expect("ignored overlay");
 
     let models = models_json(&server.url("/v1"));
     let mut process = Process::spawn_at_workspace(
@@ -570,7 +586,7 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
                 matches!(
                     block,
                     rustx::message::types::UserContentBlock::Text(text)
-                        if text.text.contains("CHILD-SCOPE-OK")
+                        if text.text.contains("CHILD-SCOPE-OVERLAY-OK")
                 )
             }),
             _ => false,
@@ -653,8 +669,8 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
         "clean terminal settlement removes the physical worktree root"
     );
     assert!(server.request_bodies().iter().any(|body| {
-        body.contains("ISSUE187_BACKEND_MARKER")
-            && body.contains("read the scoped marker from scope-marker.txt")
+        body.contains("ISSUE189_FROZEN_OVERLAY")
+            && body.contains("read the local overlay from local/runtime.env")
             && !body.contains("please delegate isolated scope")
     }));
 
