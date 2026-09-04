@@ -23,8 +23,8 @@ import {
 } from "./support/fixtures.ts";
 
 describe("subagent identity", () => {
-  it("negotiates v14, which carries both the Issue #187 workspace authority representation and the Agent Status placement projection", () => {
-    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 14);
+  it("negotiates v15, which carries workspace disposal and the Agent Status projection", () => {
+    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 15);
   });
 
   it("carries agent and definition_digest from the snapshot", () => {

@@ -24,7 +24,9 @@
  */
 
 /**
- * Version 14 adds the Agent Status contextual annotation projection: the
+ * Version 15 adds the explicit retained-workspace disposal request/result and
+ * the ownership-mismatch error. Version 14 adds the Agent Status contextual
+ * annotation projection: the
  * snapshot carries the bounded composition window `statuses` instead of a
  * latest-only `status`, each status opportunity carries the durable identity
  * it was established against, and `agent_status_composed` carries the window
@@ -37,7 +39,7 @@
  * version 11's subagent activity projection; and version 9's closed
  * `interrupted` lifecycle vocabulary. Older schemas are not decoded.
  */
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 14;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 15;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -1607,6 +1609,11 @@ export type RuntimeClientRequest =
       id: RequestId;
       subagent_id: SubagentId;
     }
+  | {
+      method: "subagent_workspace_dispose";
+      id: RequestId;
+      subagent_id: SubagentId;
+    }
   | { method: "detach"; id: RequestId }
   | { method: "shutdown"; id: RequestId };
 
@@ -1647,6 +1654,10 @@ export type RuntimeClientRequestBody =
   | Omit<Extract<RuntimeClientRequest, { method: "background_cancel" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "subagent_status" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "subagent_cancel" }>, "id">
+  | Omit<
+      Extract<RuntimeClientRequest, { method: "subagent_workspace_dispose" }>,
+      "id"
+    >
   | Omit<Extract<RuntimeClientRequest, { method: "detach" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "shutdown" }>, "id">;
 
@@ -1733,8 +1744,19 @@ export type RuntimeClientResult =
       type: "subagent_cancel_accepted";
       subagent: RuntimeClientSubagent;
     }
+  | {
+      type: "subagent_workspace_disposed";
+      subagent: RuntimeClientSubagent;
+      outcome: RuntimeClientSubagentWorkspaceDisposalOutcome;
+    }
   | { type: "detached" }
   | { type: "shutdown_completed" };
+
+/** The post-terminal physical-resource result, separate from subagent state. */
+export type RuntimeClientSubagentWorkspaceDisposalOutcome =
+  | "disposed"
+  | "already_disposed"
+  | "no_retained_workspace";
 
 export type RuntimeClientError =
   | { type: "unsupported_protocol_version"; supported: number; requested: number }
@@ -1750,6 +1772,11 @@ export type RuntimeClientError =
   | { type: "approval_mode_durability_failed"; message: string }
   | { type: "unknown_background_execution"; execution_id: ToolExecutionId }
   | { type: "unknown_subagent"; subagent_id: SubagentId }
+  | {
+      type: "subagent_workspace_ownership_mismatch";
+      subagent_id: SubagentId;
+      message: string;
+    }
   | {
       type: "resync_required";
       after_cursor: RuntimeClientCursor;
@@ -1900,6 +1927,10 @@ export function describeProtocolError(error: RuntimeClientError): string {
       return `ApprovalMode change failed durability: ${error.message}`;
     case "unknown_background_execution":
       return `unknown background execution ${error.execution_id}`;
+    case "unknown_subagent":
+      return `unknown subagent ${error.subagent_id}`;
+    case "subagent_workspace_ownership_mismatch":
+      return `retained workspace ownership could not be proven for subagent ${error.subagent_id}: ${error.message}`;
     case "resync_required":
       return `the stream after cursor ${error.after_cursor} is no longer serviceable (earliest ${error.earliest_serviceable})`;
     case "runtime_shutdown":

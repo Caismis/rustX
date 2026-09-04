@@ -1,5 +1,5 @@
 /**
- * Cross-language Runtime Client workspace wire-contract regression (v14).
+ * Cross-language Runtime Client workspace wire-contract regression (v15).
  *
  * The fixtures under `tests/fixtures/runtime-client/` are the shared
  * contract between the Rust projection and this TypeScript mirror: a Rust
@@ -9,8 +9,8 @@
  * Rust projection drifted back to the pre-#187 flat `workspace`/`isolated`
  * schema, or this mirror did, one side fails — the typecheck pins the
  * declaration, the deep equality pins the runtime bytes. The Issue #187
- * workspace authority shape is carried into v14 unchanged; renumbering the
- * protocol for Issue #194 must not drop a field from it.
+ * workspace authority shape is carried into v15 unchanged while the
+ * Runtime Client gains the explicit disposal operation.
  */
 
 import assert from "node:assert/strict";
@@ -28,13 +28,13 @@ function fixture(name: string): unknown {
   );
 }
 
-describe("Runtime Client v14 workspace wire contract", () => {
+describe("Runtime Client v15 workspace wire contract", () => {
   it("shared isolation matches the Rust fixture", () => {
     const expected: RuntimeClientSubagentWorkspace = {
       logical_workspace: "/repo",
       isolation: { type: "shared" },
     };
-    assert.deepEqual(fixture("workspace-shared-v14.json"), expected);
+    assert.deepEqual(fixture("workspace-shared-v15.json"), expected);
   });
 
   it("isolated subdirectory with retained handoff matches the Rust fixture", () => {
@@ -58,6 +58,6 @@ describe("Runtime Client v14 workspace wire contract", () => {
         dirty: false,
       },
     };
-    assert.deepEqual(fixture("workspace-git-worktree-v14.json"), expected);
+    assert.deepEqual(fixture("workspace-git-worktree-v15.json"), expected);
   });
 });

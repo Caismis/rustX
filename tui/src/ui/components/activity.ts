@@ -208,9 +208,14 @@ export function renderSubagentSection(
     return "";
   }
   const active = activeSubagents(state);
+  const retained = state.subagents.filter(
+    (subagent) => subagent.workspace.handoff !== undefined,
+  ).length;
+  const actions = ["Ctrl+↑↓ select", "Enter inspect"];
+  if (retained > 0) actions.push("D dispose retained");
   return [
     role.strong(
-      `Subagents · ${active.length} active of ${state.subagents.length} known · Ctrl+↑↓ select · Enter inspect`,
+      `Subagents · ${active.length} active of ${state.subagents.length} known · ${actions.join(" · ")}`,
     ),
     ...state.subagents.map((subagent) => renderSubagent(
       subagent,
