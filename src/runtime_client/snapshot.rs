@@ -708,32 +708,46 @@ pub struct RuntimeClientBackgroundExecution {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeClientSubagentWorkspace {
-    /// The authoritative project workspace path. In handoff state this is
-    /// the preserved path the user can inspect.
-    pub workspace: std::path::PathBuf,
-    /// Whether the child ran in a runtime-created Git worktree.
-    pub isolated: bool,
-    /// The exact committed source snapshot selected before ownership, when
-    /// isolation was enabled.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base_commit: Option<String>,
-    /// The runtime-created branch/ref, when isolation was enabled.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub branch: Option<String>,
-    /// Whether the parent had uncommitted changes at selection time. Those
-    /// bytes were intentionally not copied into the child.
-    pub parent_had_uncommitted_changes: bool,
+    /// The authoritative logical project workspace used by the child.
+    pub logical_workspace: std::path::PathBuf,
+    /// The closed shared/isolated execution facts.
+    pub isolation: RuntimeClientWorkspaceIsolation,
     /// Retained child work-product facts, if the worktree was handed off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff: Option<RuntimeClientWorkspaceHandoff>,
+}
+
+/// The external read-model projection of a child workspace's isolation mode.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RuntimeClientWorkspaceIsolation {
+    /// No runtime-owned physical checkout exists.
+    Shared,
+    /// A physical Git worktree backs the preserved logical project scope.
+    GitWorktree {
+        /// The canonical source repository root.
+        source_repository_root: std::path::PathBuf,
+        /// The logical project scope relative to the source repository root.
+        repository_relative_workspace: std::path::PathBuf,
+        /// The runtime-owned physical worktree root.
+        physical_worktree_root: std::path::PathBuf,
+        /// The exact committed source snapshot selected before ownership.
+        base_commit: String,
+        /// The runtime-created branch/ref.
+        branch: String,
+        /// Whether the parent had uncommitted changes at selection time.
+        parent_had_uncommitted_changes: bool,
+    },
 }
 
 /// The Git facts needed to recover a preserved child worktree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeClientWorkspaceHandoff {
-    /// The preserved worktree path.
-    pub workspace: std::path::PathBuf,
+    /// The child's preserved logical project scope.
+    pub logical_workspace: std::path::PathBuf,
+    /// The preserved physical Git worktree root.
+    pub physical_worktree_root: std::path::PathBuf,
     /// The runtime-created branch/ref.
     pub branch: String,
     /// The selected source commit.

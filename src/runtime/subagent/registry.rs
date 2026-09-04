@@ -3235,7 +3235,7 @@ mod tests {
             .snapshot(&accepted.subagent_id)
             .expect("running snapshot")
             .workspace
-            .workspace;
+            .logical_workspace;
         std::fs::write(workspace.join("child-work.txt"), "retain me\n").expect("child work");
 
         child
@@ -3253,8 +3253,11 @@ mod tests {
         assert_eq!(handoff.base_commit, handoff.head_commit);
         let view = crate::runtime_client::projection::subagent_view(&settled);
         assert_eq!(
-            view.workspace.handoff.as_ref().map(|item| &item.workspace),
-            Some(&handoff.workspace)
+            view.workspace
+                .handoff
+                .as_ref()
+                .map(|item| &item.physical_worktree_root),
+            Some(&handoff.physical_worktree_root)
         );
         assert!(events(&plane).iter().any(|event| matches!(
             event,

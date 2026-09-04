@@ -1256,11 +1256,8 @@ fn the_runtime_client_projection_carries_the_named_identity() {
         execution_profile: None,
         started_at: snapshot.started_at,
         workspace: rustx::runtime_client::snapshot::RuntimeClientSubagentWorkspace {
-            workspace: snapshot.workspace.workspace.clone(),
-            isolated: snapshot.workspace.isolated,
-            base_commit: snapshot.workspace.base_commit.clone(),
-            branch: snapshot.workspace.branch.clone(),
-            parent_had_uncommitted_changes: snapshot.workspace.parent_had_uncommitted_changes,
+            logical_workspace: snapshot.workspace.logical_workspace.clone(),
+            isolation: rustx::runtime_client::snapshot::RuntimeClientWorkspaceIsolation::Shared,
             handoff: None,
         },
     };

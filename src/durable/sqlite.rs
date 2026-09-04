@@ -177,9 +177,14 @@ use super::inbox::{
 /// runtime must not open a store after those facts have been appended, so it
 /// is rejected rather than interpreted through a compatibility path.
 ///
-/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13/v14/v15/v16/v17/v18 database must
-/// fail at store open; there is no migration or compatibility path.
-pub const SQLITE_SCHEMA_VERSION: i64 = 19;
+/// Version 20 replaces Issue #146's conflated subagent workspace path with
+/// Issue #187's explicit logical-child scope and physical-worktree ownership
+/// facts. A v19 journal can contain the obsolete shape, so it is rejected
+/// rather than decoded with an invented repository-relative authority.
+///
+/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13/v14/v15/v16/v17/v18/v19 database
+/// must fail at store open; there is no migration or compatibility path.
+pub const SQLITE_SCHEMA_VERSION: i64 = 20;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -6699,12 +6704,7 @@ fn validate_event_reference(
                 )));
             }
             if let Some(handoff) = workspace_handoff
-                && (handoff.validate().is_err()
-                    || !workspace.isolated
-                    || handoff.workspace != workspace.workspace
-                    || handoff.branch.as_str() != workspace.branch.as_deref().unwrap_or_default()
-                    || handoff.base_commit.as_str()
-                        != workspace.base_commit.as_deref().unwrap_or_default())
+                && !workspace.matches_handoff(handoff)
             {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "subagent terminal handoff does not match the owned workspace snapshot for {subagent_id}"
@@ -6738,12 +6738,7 @@ fn validate_event_reference(
                 )));
             }
             if let Some(handoff) = workspace_handoff
-                && (handoff.validate().is_err()
-                    || !workspace.isolated
-                    || handoff.workspace != workspace.workspace
-                    || handoff.branch.as_str() != workspace.branch.as_deref().unwrap_or_default()
-                    || handoff.base_commit.as_str()
-                        != workspace.base_commit.as_deref().unwrap_or_default())
+                && !workspace.matches_handoff(handoff)
             {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "Workflow subagent terminal handoff does not match the owned workspace snapshot for {subagent_id}"
@@ -9340,6 +9335,48 @@ mod tests {
     }
 
     #[test]
+    fn subagent_ownership_rejects_a_widened_isolated_workspace_snapshot() {
+        let store = store();
+        let conversation_id = store.conversation_id().clone();
+        let subagent_id =
+            crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
+        let physical = std::path::PathBuf::from("/tmp/rustx-worktree-1");
+        let workspace = crate::runtime::subagent::WorkspaceSnapshot {
+            logical_workspace: physical.clone(),
+            isolation: crate::runtime::subagent::WorkspaceIsolation::GitWorktree(
+                crate::runtime::subagent::GitWorktreeSnapshot {
+                    source_repository_root: std::path::PathBuf::from("/tmp/repository"),
+                    repository_relative_workspace: std::path::PathBuf::from("backend"),
+                    physical_worktree_root: physical,
+                    base_commit: "c1".to_owned(),
+                    branch: "rustx/subagent/abc".to_owned(),
+                    parent_had_uncommitted_changes: false,
+                },
+            ),
+        };
+        let error = store
+            .append_event(envelope(
+                &conversation_id,
+                crate::runtime::subagent::subagent_ownership_event_id(&subagent_id).as_ref(),
+                None,
+                RuntimeEvent::SubagentOwnershipCommitted {
+                    subagent_id: subagent_id.clone(),
+                    child_agent_id: AgentId::new(format!("agent-{subagent_id}")),
+                    child_conversation_id: crate::runtime::identity::ConversationId::new(
+                        subagent_id.as_str(),
+                    ),
+                    tool_call_id: crate::runtime::identity::ToolCallId::new("call-sub"),
+                    agent: "worker".to_owned(),
+                    definition_digest: "sha256:definition".to_owned(),
+                    ownership: crate::events::types::SubagentOwnershipKind::Normal,
+                    workspace,
+                },
+            ))
+            .expect_err("durable ownership must reject authority widening");
+        assert!(matches!(error, ConversationStoreError::InvalidReference(_)));
+    }
+
+    #[test]
     fn subagent_terminal_persists_a_workspace_handoff_with_the_terminal_fact() {
         let store = store();
         let conversation_id = store.conversation_id().clone();
@@ -9347,17 +9384,23 @@ mod tests {
             crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
         let child_agent_id = AgentId::new(format!("agent-{subagent_id}"));
         let workspace = crate::runtime::subagent::WorkspaceSnapshot {
-            workspace: std::path::PathBuf::from("/tmp/rustx-worktree-1"),
-            isolated: true,
-            repository: Some(std::path::PathBuf::from("/tmp/rustx-repository")),
-            base_commit: Some("c1".to_owned()),
-            branch: Some("rustx/subagent/abc".to_owned()),
-            parent_had_uncommitted_changes: true,
+            logical_workspace: std::path::PathBuf::from("/tmp/rustx-worktree-1/backend"),
+            isolation: crate::runtime::subagent::WorkspaceIsolation::GitWorktree(
+                crate::runtime::subagent::GitWorktreeSnapshot {
+                    source_repository_root: std::path::PathBuf::from("/tmp/rustx-repository"),
+                    repository_relative_workspace: std::path::PathBuf::from("backend"),
+                    physical_worktree_root: std::path::PathBuf::from("/tmp/rustx-worktree-1"),
+                    base_commit: "c1".to_owned(),
+                    branch: "rustx/subagent/abc".to_owned(),
+                    parent_had_uncommitted_changes: true,
+                },
+            ),
         };
         let handoff = crate::runtime::subagent::WorkspaceHandoff {
-            workspace: workspace.workspace.clone(),
-            branch: workspace.branch.clone().expect("branch"),
-            base_commit: workspace.base_commit.clone().expect("base"),
+            logical_workspace: workspace.logical_workspace.clone(),
+            physical_worktree_root: std::path::PathBuf::from("/tmp/rustx-worktree-1"),
+            branch: "rustx/subagent/abc".to_owned(),
+            base_commit: "c1".to_owned(),
             head_commit: "c2".to_owned(),
             dirty: false,
         };
@@ -9405,6 +9448,23 @@ mod tests {
             timestamp: Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
             correlation: Some(format!("subagent-terminal:{subagent_id}")),
         };
+        let mut widened_handoff = handoff.clone();
+        widened_handoff.logical_workspace = widened_handoff.physical_worktree_root.clone();
+        let mut malformed_event = event.clone();
+        let RuntimeEvent::SubagentTerminalPublished {
+            workspace_handoff, ..
+        } = &mut malformed_event.event
+        else {
+            panic!("terminal event");
+        };
+        *workspace_handoff = Some(widened_handoff);
+        let malformed = store
+            .accept_inbound_with_event(draft.clone(), malformed_event)
+            .expect_err("a handoff cannot widen the owned logical workspace");
+        assert!(matches!(
+            malformed,
+            ConversationStoreError::InvalidReference(_)
+        ));
         store
             .accept_inbound_with_event(draft, event)
             .expect("terminal handoff");

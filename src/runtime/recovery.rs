@@ -2374,17 +2374,23 @@ mod tests {
         let subagent_id = SubagentId::for_conversation(&conversation(), 1);
         let child_agent_id = crate::runtime::identity::AgentId::new("agent-child");
         let workspace = WorkspaceSnapshot {
-            workspace: std::path::PathBuf::from("/tmp/rustx-worktree-1"),
-            isolated: true,
-            repository: Some(std::path::PathBuf::from("/tmp/repository")),
-            base_commit: Some("c1".to_owned()),
-            branch: Some("rustx/subagent/abc".to_owned()),
-            parent_had_uncommitted_changes: true,
+            logical_workspace: std::path::PathBuf::from("/tmp/rustx-worktree-1/backend"),
+            isolation: crate::runtime::subagent::WorkspaceIsolation::GitWorktree(
+                crate::runtime::subagent::GitWorktreeSnapshot {
+                    source_repository_root: std::path::PathBuf::from("/tmp/repository"),
+                    repository_relative_workspace: std::path::PathBuf::from("backend"),
+                    physical_worktree_root: std::path::PathBuf::from("/tmp/rustx-worktree-1"),
+                    base_commit: "c1".to_owned(),
+                    branch: "rustx/subagent/abc".to_owned(),
+                    parent_had_uncommitted_changes: true,
+                },
+            ),
         };
         let handoff = WorkspaceHandoff {
-            workspace: workspace.workspace.clone(),
-            branch: workspace.branch.clone().expect("branch"),
-            base_commit: workspace.base_commit.clone().expect("base"),
+            logical_workspace: workspace.logical_workspace.clone(),
+            physical_worktree_root: std::path::PathBuf::from("/tmp/rustx-worktree-1"),
+            branch: "rustx/subagent/abc".to_owned(),
+            base_commit: "c1".to_owned(),
             head_commit: "c2".to_owned(),
             dirty: false,
         };

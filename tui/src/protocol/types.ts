@@ -24,13 +24,15 @@
  */
 
 /**
- * Version 12 adds routed live interactions across the primary conversation
- * and supervised children, including `InteractionRef` addressing and source
- * metadata. It retains the version 11 subagent activity projection, version
- * 10 bounded workspace facts, and version 9's closed `interrupted` lifecycle
- * vocabulary. Older schemas are not decoded.
+ * Version 13 introduces the Issue #187 subagent workspace representation
+ * that separates logical child project authority (`logical_workspace`) from
+ * physical Git worktree ownership (`isolation.git_worktree` facts and the
+ * handoff's `physical_worktree_root`). It retains the version 12 routed live
+ * interaction projection, the version 11 subagent activity projection, and
+ * version 9's closed `interrupted` lifecycle vocabulary. Older schemas are
+ * not decoded.
  */
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 12;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 13;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -749,20 +751,48 @@ export interface RuntimeClientBackgroundExecution {
 
 /** User-recoverable project workspace facts for one subagent. */
 export interface RuntimeClientSubagentWorkspace {
-  /** The authoritative project workspace path for this child. */
-  workspace: string;
-  isolated: boolean;
-  base_commit?: string;
-  branch?: string;
-  parent_had_uncommitted_changes: boolean;
+  /** The authoritative logical project workspace used by the child. */
+  logical_workspace: string;
+  /** The closed shared/isolated execution facts. */
+  isolation: RuntimeClientWorkspaceIsolation;
+  /** Retained child work-product facts, if the worktree was handed off. */
   handoff?: RuntimeClientWorkspaceHandoff;
 }
 
-/** Git facts for a preserved child worktree. */
+/** The external read-model projection of a child workspace's isolation mode. */
+export type RuntimeClientWorkspaceIsolation =
+  | {
+      /** No runtime-owned physical checkout exists. */
+      type: "shared";
+    }
+  | {
+      /** A physical Git worktree backs the preserved logical project scope. */
+      type: "git_worktree";
+      /** The canonical source repository root. */
+      source_repository_root: string;
+      /** The logical project scope relative to the source repository root. */
+      repository_relative_workspace: string;
+      /** The runtime-owned physical worktree root. */
+      physical_worktree_root: string;
+      /** The exact committed source snapshot selected before ownership. */
+      base_commit: string;
+      /** The runtime-created branch/ref. */
+      branch: string;
+      /** Whether the parent had uncommitted changes at selection time. */
+      parent_had_uncommitted_changes: boolean;
+    };
+
+/** The Git facts needed to recover a preserved child worktree. */
 export interface RuntimeClientWorkspaceHandoff {
-  workspace: string;
+  /** The child's preserved logical project scope. */
+  logical_workspace: string;
+  /** The preserved physical Git worktree root. */
+  physical_worktree_root: string;
+  /** The runtime-created branch/ref. */
   branch: string;
+  /** The selected source commit. */
   base_commit: string;
+  /** The final child `HEAD`. */
   head_commit: string;
   /** Whether ordinary tracked/index/untracked-non-ignored child state is dirty. */
   dirty: boolean;

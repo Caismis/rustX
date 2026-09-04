@@ -177,8 +177,8 @@ pub use resolver::{
     SubagentResolutionError, SubagentResolver,
 };
 pub use workspace::{
-    SubagentWorkspaceManager, SubagentWorkspacePolicy, WorkspaceCleanup, WorkspaceHandoff,
-    WorkspaceLease, WorkspaceSettlement, WorkspaceSnapshot,
+    GitWorktreeSnapshot, SubagentWorkspaceManager, SubagentWorkspacePolicy, WorkspaceCleanup,
+    WorkspaceHandoff, WorkspaceIsolation, WorkspaceLease, WorkspaceSettlement, WorkspaceSnapshot,
 };
 
 use std::sync::Arc;

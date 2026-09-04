@@ -19,6 +19,7 @@ use rustx::runtime_client::RuntimeClientHost;
 use rustx::runtime_client::{
     RuntimeClientCursor, RuntimeClientError, RuntimeClientEvent, RuntimeClientProtocolEvent,
     RuntimeClientRequest, RuntimeClientResponse, RuntimeClientResult,
+    RuntimeClientSubagentWorkspace, RuntimeClientWorkspaceHandoff, RuntimeClientWorkspaceIsolation,
 };
 
 fn request_id(value: u64) -> rustx::runtime_client::RequestId {
@@ -99,7 +100,7 @@ fn protocol_envelopes_round_trip_deterministically() {
 fn protocol_errors_round_trip_with_stable_categories() {
     let cases = [
         RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 12,
+            supported: 13,
             requested: 4,
         },
         RuntimeClientError::AttachmentInUse {
@@ -356,19 +357,19 @@ async fn attachment_request_correlation_and_version_negotiation() {
 
     // Incompatible version negotiation fails explicitly, in both
     // directions and including every superseded wire contract.
-    let incompatible = host.attach(13);
+    let incompatible = host.attach(14);
     assert!(matches!(
         incompatible,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 12,
-            requested: 13,
+            supported: 13,
+            requested: 14,
         })
     ));
     let old_protocol = host.attach(7);
     assert!(matches!(
         old_protocol,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 12,
+            supported: 13,
             requested: 7,
         })
     ));
@@ -378,15 +379,27 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         profile_shaped,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 12,
+            supported: 13,
             requested: 6,
+        })
+    ));
+    // v12 carried the pre-#187 workspace wire shape (flat `workspace`,
+    // `isolated`, handoff `workspace`). Issue #187 replaced it with the
+    // logical/physical workspace projection under v13, so a v12 client is
+    // rejected explicitly rather than decoded into the new shape.
+    let pre_workspace_boundary = host.attach(12);
+    assert!(matches!(
+        pre_workspace_boundary,
+        Err(RuntimeClientError::UnsupportedProtocolVersion {
+            supported: 13,
+            requested: 12,
         })
     ));
 
     // The initialize method cannot re-initialize an admitted attachment.
     let reinit = attachment.handle_request(RuntimeClientRequest::Initialize {
         id: request_id(9),
-        protocol_version: 12,
+        protocol_version: 13,
     });
     assert!(matches!(
         reinit.error,
@@ -480,4 +493,62 @@ async fn attachment_raii_drop_detaches() {
     let (_, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach after drop");
+}
+
+/// The v13 subagent workspace projection serializes exactly as the shared
+/// `tests/fixtures/runtime-client/*.json` fixtures the TUI protocol mirror
+/// is validated against. This is the cross-language regression for the
+/// Issue #187 wire shape: if either side drifts back to the pre-#187 flat
+/// `workspace`/`isolated` schema, one of the two fixture assertions fails.
+#[test]
+fn v13_workspace_wire_shape_matches_the_shared_fixtures() {
+    let shared = RuntimeClientSubagentWorkspace {
+        logical_workspace: std::path::PathBuf::from("/repo"),
+        isolation: RuntimeClientWorkspaceIsolation::Shared,
+        handoff: None,
+    };
+    let isolated_subdirectory = RuntimeClientSubagentWorkspace {
+        logical_workspace: std::path::PathBuf::from("/runtime-root/worktrees/subagent-1/backend"),
+        isolation: RuntimeClientWorkspaceIsolation::GitWorktree {
+            source_repository_root: std::path::PathBuf::from("/repo"),
+            repository_relative_workspace: std::path::PathBuf::from("backend"),
+            physical_worktree_root: std::path::PathBuf::from("/runtime-root/worktrees/subagent-1"),
+            base_commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            branch: "rustx/subagent-1".to_owned(),
+            parent_had_uncommitted_changes: true,
+        },
+        handoff: Some(RuntimeClientWorkspaceHandoff {
+            logical_workspace: std::path::PathBuf::from(
+                "/runtime-root/worktrees/subagent-1/backend",
+            ),
+            physical_worktree_root: std::path::PathBuf::from("/runtime-root/worktrees/subagent-1"),
+            branch: "rustx/subagent-1".to_owned(),
+            base_commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            head_commit: "89abcdef012345670123456789abcdef01234567".to_owned(),
+            dirty: false,
+        }),
+    };
+
+    for (fixture, workspace) in [
+        (
+            "tests/fixtures/runtime-client/workspace-shared-v13.json",
+            &shared,
+        ),
+        (
+            "tests/fixtures/runtime-client/workspace-git-worktree-v13.json",
+            &isolated_subdirectory,
+        ),
+    ] {
+        let expected = std::fs::read_to_string(fixture).expect("read fixture");
+        let serialized = serde_json::to_string_pretty(workspace).expect("serialize workspace");
+        assert_eq!(
+            serialized,
+            expected.trim_end(),
+            "{fixture}: the serialized v13 workspace shape drifted from the \
+             fixture the TUI mirror is validated against"
+        );
+        let decoded: RuntimeClientSubagentWorkspace =
+            serde_json::from_str(&expected).expect("deserialize fixture");
+        assert_eq!(&decoded, workspace, "{fixture}: fixture round-trip");
+    }
 }

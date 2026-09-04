@@ -127,7 +127,7 @@ pub use snapshot::{
     RuntimeClientTranscriptCursor, RuntimeClientTranscriptEntry,
     RuntimeClientTranscriptInteractionRequested, RuntimeClientTranscriptInteractionSettled,
     RuntimeClientTranscriptItem, RuntimeClientTranscriptPage, RuntimeClientWorkspaceHandoff,
-    RuntimeDurabilityFailure,
+    RuntimeClientWorkspaceIsolation, RuntimeDurabilityFailure,
 };
 pub use types::{
     AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION, RequestId, RuntimeClientCursor,

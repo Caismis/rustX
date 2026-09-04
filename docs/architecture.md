@@ -30,7 +30,7 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 19. An incompatible database
+The SQLite schema is development schema version 20. An incompatible database
 fails explicitly; there is no migration chain, legacy reader, compatibility
 fallback, dual write, or old storage mode. Version 10 froze the structured
 Questionnaire interaction audit vocabulary introduced by Issue #126. Version
@@ -45,8 +45,10 @@ request-only carryover representation/anchor in Request Snapshots. Version 16
 freezes typed compaction-summary metadata, version 17 freezes named-subagent
 ownership identity, and version 18 freezes subagent workspace snapshots and
 preserved-worktree handoffs. Version 19 freezes the native Workflow execution
-fact vocabulary. Version 18 and every older development schema are rejected
-rather than decoded with missing Workflow facts; the
+fact vocabulary. Version 20 replaces the conflated subagent workspace path
+with explicit logical-child scope and physical-worktree ownership facts.
+Version 19 and every older development schema are rejected rather than decoded
+with missing or invented workspace authority; the
 review-only intermediate schema history is not a supported format.
 File-backed stores
 use WAL, `synchronous=FULL`, foreign-key enforcement, and a busy timeout. A
@@ -3433,7 +3435,14 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
-The current Runtime Client protocol is version 12. It adds routed
+The current Runtime Client protocol is version 13. It introduces the Issue
+#187 subagent workspace representation that separates logical child project
+authority from physical Git worktree ownership: the subagent workspace
+projection carries `logical_workspace` plus a tagged `isolation` (`shared`
+or `git_worktree` with the source repository root, repository-relative
+workspace, physical worktree root, base commit, branch, and parent dirty
+fact), and a retained handoff exposes `logical_workspace` and
+`physical_worktree_root`. Version 12 added routed
 interaction projection for the root human surface. Version 11 added the
 subagent live-activity projection; version 10 added subagent workspace facts
 and preserved-worktree handoff metadata; and version 9 added `interrupted` to the
@@ -5082,7 +5091,7 @@ recovered child projects the initial absent observation (revision 0,
 `awaiting_activity`), because activity is not execution history and is never
 recovery input.
 
-#### Deterministic subagent workspaces (Issue #146)
+#### Deterministic, scope-preserving subagent workspaces (Issues #146 and #187)
 
 Named definitions carry one bounded project-workspace policy:
 `SharedWorkspace` (the default) or `GitWorktree { require_clean_parent }`.
@@ -5098,12 +5107,15 @@ For an isolated child, acquisition is staged in this exact order:
 
 ```text
 resolve/freeze named-agent resources
-  → resolve workspace policy and source repository
+  → resolve canonical source repository root
+  → derive parent logical workspace relative to that root
   → capture parent HEAD = C
   → observe parent tracked/index/untracked status
   → enforce require_clean_parent
-  → git -c core.hooksPath=/dev/null worktree add -b <runtime-ref> <path> C
+  → git -c core.hooksPath=/dev/null worktree add -b <runtime-ref> <physical-root> C
   → verify child HEAD = C
+  → derive child logical workspace = <physical-root>/<repository-relative-workspace>
+  → require that logical workspace to exist in the committed checkout
   → complete child preparation and Ready handshake
   → commit SubagentOwnershipCommitted
 ```
@@ -5128,10 +5140,19 @@ stable execution identity only; it does not depend on task prose, completion
 order, or a mutable global spawn counter. The path/ref occupancy check and
 Git's ref/worktree creation keep concurrent child allocations distinct.
 
-The child receives the acquired workspace as its authoritative project root,
-including process-launch cwd, native file tools, Bash, and workspace-relative
-MCP setup. This authority is deliberately separate from the frozen runtime
-resource authority: the child still consumes the parent-frozen project
+The manager distinguishes five facts: the canonical source repository root,
+the parent logical workspace, its repository-relative logical path, the
+physical isolated worktree root, and the child logical workspace. For a parent
+at `/repo/backend`, the physical checkout may be `/runtime/worktrees/T`, but
+the child receives `/runtime/worktrees/T/backend` as its authoritative project
+root. Only a parent at `/repo` receives the physical worktree root itself.
+Nested paths are preserved in full, and a path absent from committed `C`
+fails acquisition without widening authority.
+
+The logical child workspace is used for process-launch cwd, native file tools,
+Bash, and workspace-relative MCP setup. This authority is deliberately
+separate from both physical worktree ownership and frozen runtime resource
+authority: the child still consumes the parent-frozen project
 instruction chain, Skill/version bindings, MCP
 definitions, model, and tool definitions. It never rediscovers those from
 the worktree or from a worktree ancestor.
@@ -5148,8 +5169,11 @@ or explicitly proven uncontainable. Only then does the manager inspect
 `HEAD` and Git status. A clean worktree whose `HEAD == C` is removed together
 with its exact runtime-created ref. Any dirty state, or any
 `HEAD != C` including a clean child commit, produces a `WorkspaceHandoff`
-containing the path, ref, base/head commits, and dirty fact. Cancellation and
-failure do not roll back filesystem changes; retained work is never force-
+containing both the unchanged logical child workspace and the actual retained
+physical worktree root, plus the ref, base/head commits, and dirty fact. Git
+inspection and cleanup always use the physical root; settlement never replaces
+the logical scope with it. Cancellation and failure do not roll back filesystem
+changes; retained work is never force-
 destroyed, committed, merged, rebased, cherry-picked, stashed, or copied into
 the parent.
 

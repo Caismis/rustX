@@ -282,9 +282,9 @@ async fn run_child(
             "the child workspace snapshot is invalid: {error}"
         )));
     }
-    if spec.resolved.workspace_policy.is_isolated() != spec.workspace_snapshot.isolated {
+    if spec.resolved.workspace_policy.is_isolated() != spec.workspace_snapshot.is_isolated() {
         return Err(ChildExit::Startup(
-            "the child workspace path and immutable workspace snapshot disagree".to_owned(),
+            "the child workspace policy and immutable workspace snapshot disagree".to_owned(),
         ));
     }
     let Some(core) = Box::pin(compose_cancellably(dispatcher, handle, &spec)).await? else {

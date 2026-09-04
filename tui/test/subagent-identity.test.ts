@@ -23,8 +23,8 @@ import {
 } from "./support/fixtures.ts";
 
 describe("subagent identity", () => {
-  it("negotiates v12, which carries routed interactions and live activity", () => {
-    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 12);
+  it("negotiates v13, which carries the Issue #187 workspace authority representation", () => {
+    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 13);
   });
 
   it("carries agent and definition_digest from the snapshot", () => {

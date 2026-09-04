@@ -346,9 +346,8 @@ export function subagent(
     observation: subagentObservation(),
     started_at: "2026-09-02T10:00:00Z",
     workspace: {
-      workspace: "<shared-workspace>",
-      isolated: false,
-      parent_had_uncommitted_changes: false,
+      logical_workspace: "<shared-workspace>",
+      isolation: { type: "shared" },
     },
     ...overrides,
   };

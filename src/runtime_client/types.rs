@@ -242,7 +242,18 @@ pub enum RuntimeClientSessionRequest {
 /// interaction projection: pending interactions are addressed by
 /// `InteractionRef` and include source metadata for primary and live child
 /// conversations. There is no compatibility decoding of version 11.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 12;
+///
+/// Version 13 carries Issue #187's subagent workspace authority
+/// representation: the logical child project workspace is separated from
+/// the physical Git worktree ownership facts. The subagent workspace
+/// projection is now `logical_workspace` plus a tagged `isolation`
+/// (`shared` or `git_worktree` with the source repository root, the
+/// repository-relative workspace, the physical worktree root, the base
+/// commit, the branch, and the parent dirty fact), and a retained handoff
+/// exposes `logical_workspace` and `physical_worktree_root` alongside the
+/// branch/base/head/dirty facts. There is no compatibility decoding of
+/// version 12.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 13;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1130,7 +1141,7 @@ pub struct RuntimeClientProtocolEvent {
 // Re-exported for use by the public protocol docs.
 pub use super::snapshot::{
     RuntimeClientBackgroundExecution, RuntimeClientSubagent, RuntimeClientSubagentWorkspace,
-    RuntimeClientWorkspaceHandoff,
+    RuntimeClientWorkspaceHandoff, RuntimeClientWorkspaceIsolation,
 };
 
 #[cfg(test)]
@@ -1155,7 +1166,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 12);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 13);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1170,9 +1181,9 @@ mod tests {
     /// The Runtime Client subagent projection carries the complete closed
     /// lifecycle vocabulary on the wire, including the unknown-outcome
     /// `Interrupted` terminal state, plus the Issue #178 observation-plane
-    /// fields.
+    /// fields and the Issue #187 logical/physical workspace projection.
     #[test]
-    fn interrupted_subagent_projection_serializes_as_the_v12_wire_state() {
+    fn interrupted_subagent_projection_serializes_as_the_current_wire_state() {
         let subagent = RuntimeClientSubagent {
             subagent_id: crate::runtime::identity::SubagentId::new("subagent-1"),
             child_agent_id: crate::runtime::identity::AgentId::new("agent-child"),
@@ -1187,11 +1198,8 @@ mod tests {
                 .expect("timestamp")
                 .with_timezone(&Utc),
             workspace: super::RuntimeClientSubagentWorkspace {
-                workspace: std::path::PathBuf::from("<shared-workspace>"),
-                isolated: false,
-                base_commit: None,
-                branch: None,
-                parent_had_uncommitted_changes: false,
+                logical_workspace: std::path::PathBuf::from("<shared-workspace>"),
+                isolation: super::RuntimeClientWorkspaceIsolation::Shared,
                 handoff: None,
             },
         };

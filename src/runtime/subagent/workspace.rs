@@ -2,9 +2,11 @@
 //!
 //! This module is the only owner of Git/worktree operations.  The registry
 //! supplies it with a resolved policy and an already allocated subagent
-//! identity; it never constructs Git commands itself.  A [`WorkspaceLease`]
+//! identity; it never constructs Git commands itself. A [`WorkspaceLease`]
 //! is the physical ownership token that moves from preparation to the child
-//! process driver at the same boundary as the process handle.
+//! process driver at the same boundary as the process handle. The lease keeps
+//! the child's logical project authority distinct from the physical worktree
+//! root that the manager owns and settles.
 //!
 //! The important snapshot rule is intentionally visible in the types and in
 //! the command order:
@@ -65,25 +67,50 @@ impl SubagentWorkspacePolicy {
 /// The immutable execution facts selected before child ownership commits.
 ///
 /// This value is runtime-owned execution context, not named-definition state
-/// and not model-authored content.  In shared mode only `workspace` is
-/// meaningful.  In worktree mode every Git field is present and describes the
-/// exact source snapshot and runtime-created ref.
+/// and not model-authored content. `logical_workspace` is always the child's
+/// project authority. Physical Git ownership exists only inside the closed
+/// [`WorkspaceIsolation::GitWorktree`] variant.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkspaceSnapshot {
-    /// The authoritative project workspace path given to the child.
-    pub workspace: PathBuf,
-    /// Whether this child uses a runtime-created Git worktree.
-    pub isolated: bool,
-    /// The canonical source repository top-level path, in worktree mode.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub repository: Option<PathBuf>,
+    /// The authoritative logical project path given to the child.
+    pub logical_workspace: PathBuf,
+    /// The closed physical-isolation facts for this selection.
+    pub isolation: WorkspaceIsolation,
+}
+
+/// The physical isolation mode of an immutable workspace selection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "facts",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum WorkspaceIsolation {
+    /// The child shares the parent's logical project workspace. The runtime
+    /// owns no separate Git checkout.
+    Shared,
+    /// The runtime owns one physical worktree while the child is authorized
+    /// only for the corresponding logical project path inside it.
+    GitWorktree(GitWorktreeSnapshot),
+}
+
+/// Immutable Git ownership and scope facts for one isolated child.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GitWorktreeSnapshot {
+    /// The canonical top-level of the source repository.
+    pub source_repository_root: PathBuf,
+    /// The parent logical workspace relative to the source repository root.
+    /// The empty path denotes the repository root itself.
+    pub repository_relative_workspace: PathBuf,
+    /// The physical runtime-owned root registered by `git worktree add`.
+    pub physical_worktree_root: PathBuf,
     /// The exact committed source `HEAD` selected before acquisition.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub base_commit: Option<String>,
-    /// The runtime-created branch/ref, in worktree mode.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub branch: Option<String>,
+    pub base_commit: String,
+    /// The runtime-created branch/ref.
+    pub branch: String,
     /// Whether the parent had tracked/index/untracked changes at selection.
     pub parent_had_uncommitted_changes: bool,
 }
@@ -95,29 +122,45 @@ impl WorkspaceSnapshot {
     #[must_use]
     pub fn shared(workspace: impl Into<PathBuf>) -> Self {
         Self {
-            workspace: workspace.into(),
-            isolated: false,
-            repository: None,
-            base_commit: None,
-            branch: None,
-            parent_had_uncommitted_changes: false,
+            logical_workspace: workspace.into(),
+            isolation: WorkspaceIsolation::Shared,
         }
     }
 
     fn worktree(
-        workspace: PathBuf,
-        repository: PathBuf,
+        logical_workspace: PathBuf,
+        source_repository_root: PathBuf,
+        repository_relative_workspace: PathBuf,
+        physical_worktree_root: PathBuf,
         base_commit: String,
         branch: String,
         parent_had_uncommitted_changes: bool,
     ) -> Self {
         Self {
-            workspace,
-            isolated: true,
-            repository: Some(repository),
-            base_commit: Some(base_commit),
-            branch: Some(branch),
-            parent_had_uncommitted_changes,
+            logical_workspace,
+            isolation: WorkspaceIsolation::GitWorktree(GitWorktreeSnapshot {
+                source_repository_root,
+                repository_relative_workspace,
+                physical_worktree_root,
+                base_commit,
+                branch,
+                parent_had_uncommitted_changes,
+            }),
+        }
+    }
+
+    /// Whether this child uses a runtime-created Git worktree.
+    #[must_use]
+    pub const fn is_isolated(&self) -> bool {
+        matches!(self.isolation, WorkspaceIsolation::GitWorktree(_))
+    }
+
+    /// The isolated Git facts, when the runtime owns a physical worktree.
+    #[must_use]
+    pub const fn git_worktree(&self) -> Option<&GitWorktreeSnapshot> {
+        match &self.isolation {
+            WorkspaceIsolation::Shared => None,
+            WorkspaceIsolation::GitWorktree(worktree) => Some(worktree),
         }
     }
 
@@ -128,27 +171,60 @@ impl WorkspaceSnapshot {
     /// process also validate it so a malformed event/spec cannot silently
     /// turn an isolated child into an untracked arbitrary path.
     pub(crate) fn validate(&self) -> Result<(), String> {
-        if self.workspace.as_os_str().is_empty() {
-            return Err("workspace snapshot has an empty project path".to_owned());
+        if self.logical_workspace.as_os_str().is_empty() {
+            return Err("workspace snapshot has an empty logical project path".to_owned());
         }
-        if self.isolated {
-            if self
-                .repository
-                .as_ref()
-                .is_none_or(|repository| repository.as_os_str().is_empty())
-            {
-                return Err("isolated workspace snapshot has no repository".to_owned());
+        if let WorkspaceIsolation::GitWorktree(worktree) = &self.isolation {
+            if !worktree.source_repository_root.is_absolute() {
+                return Err(
+                    "isolated workspace snapshot source repository root is not absolute".to_owned(),
+                );
             }
-            if self.base_commit.as_deref().is_none_or(str::is_empty) {
+            if !worktree.physical_worktree_root.is_absolute() {
+                return Err(
+                    "isolated workspace snapshot physical worktree root is not absolute".to_owned(),
+                );
+            }
+            if !self.logical_workspace.is_absolute() {
+                return Err(
+                    "isolated workspace snapshot logical project path is not absolute".to_owned(),
+                );
+            }
+            if worktree.base_commit.is_empty() {
                 return Err("isolated workspace snapshot has no base commit".to_owned());
             }
-            if self.branch.as_deref().is_none_or(str::is_empty) {
+            if worktree.branch.is_empty() {
                 return Err("isolated workspace snapshot has no branch/ref".to_owned());
             }
-        } else if self.repository.is_some() || self.base_commit.is_some() || self.branch.is_some() {
-            return Err("shared workspace snapshot carries isolated Git facts".to_owned());
+            if !is_safe_repository_relative(&worktree.repository_relative_workspace) {
+                return Err(
+                    "isolated workspace snapshot has an invalid repository-relative workspace"
+                        .to_owned(),
+                );
+            }
+            if self.logical_workspace
+                != worktree
+                    .physical_worktree_root
+                    .join(&worktree.repository_relative_workspace)
+            {
+                return Err(
+                    "isolated workspace snapshot logical path does not match its physical worktree root and repository-relative workspace"
+                        .to_owned(),
+                );
+            }
         }
         Ok(())
+    }
+
+    pub(crate) fn matches_handoff(&self, handoff: &WorkspaceHandoff) -> bool {
+        let Some(worktree) = self.git_worktree() else {
+            return false;
+        };
+        handoff.validate().is_ok()
+            && handoff.logical_workspace == self.logical_workspace
+            && handoff.physical_worktree_root == worktree.physical_worktree_root
+            && handoff.branch == worktree.branch
+            && handoff.base_commit == worktree.base_commit
     }
 }
 
@@ -156,8 +232,10 @@ impl WorkspaceSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkspaceHandoff {
-    /// The preserved worktree path.
-    pub workspace: PathBuf,
+    /// The preserved logical project scope used by the child.
+    pub logical_workspace: PathBuf,
+    /// The preserved physical Git worktree root a user/runtime can inspect.
+    pub physical_worktree_root: PathBuf,
     /// The runtime-created branch/ref.
     pub branch: String,
     /// The source commit selected before child ownership.
@@ -177,8 +255,19 @@ impl WorkspaceHandoff {
     /// recovery and durable validation must not trust a decoded event to
     /// provide a usable path/ref or commit identity.
     pub(crate) fn validate(&self) -> Result<(), String> {
-        if self.workspace.as_os_str().is_empty() {
-            return Err("workspace handoff has an empty project path".to_owned());
+        if !self.logical_workspace.is_absolute() {
+            return Err("workspace handoff logical project path is not absolute".to_owned());
+        }
+        if !self.physical_worktree_root.is_absolute() {
+            return Err("workspace handoff physical worktree root is not absolute".to_owned());
+        }
+        if !self
+            .logical_workspace
+            .starts_with(&self.physical_worktree_root)
+        {
+            return Err(
+                "workspace handoff logical path is outside its physical worktree root".to_owned(),
+            );
         }
         if self.branch.is_empty() {
             return Err("workspace handoff has an empty branch/ref".to_owned());
@@ -277,8 +366,8 @@ pub enum WorkspaceAcquireError {
     },
     /// The deterministic path/ref is already occupied.
     Collision {
-        /// The deterministic path.
-        workspace: PathBuf,
+        /// The deterministic physical worktree root.
+        physical_worktree_root: PathBuf,
         /// The deterministic ref.
         branch: String,
     },
@@ -306,10 +395,13 @@ impl core::fmt::Display for WorkspaceAcquireError {
             Self::Git { operation, detail } => {
                 write!(formatter, "Git {operation} failed: {detail}")
             }
-            Self::Collision { workspace, branch } => write!(
+            Self::Collision {
+                physical_worktree_root,
+                branch,
+            } => write!(
                 formatter,
                 "the deterministic child worktree path {} or branch {branch} is already occupied",
-                workspace.display()
+                physical_worktree_root.display()
             ),
             Self::InvalidSnapshot { detail } => {
                 write!(
@@ -332,7 +424,7 @@ impl std::error::Error for WorkspaceAcquireError {}
 /// The one manager of physical named-subagent workspaces.
 #[derive(Debug, Clone)]
 pub struct SubagentWorkspaceManager {
-    parent_workspace: PathBuf,
+    parent_logical_workspace: PathBuf,
     runtime_root: PathBuf,
     #[cfg(test)]
     acquisition_hook: Option<std::sync::Arc<WorkspaceAcquireHook>>,
@@ -346,7 +438,7 @@ impl SubagentWorkspaceManager {
     #[must_use]
     pub fn new(parent_workspace: impl AsRef<Path>, runtime_root: impl AsRef<Path>) -> Self {
         Self {
-            parent_workspace: parent_workspace.as_ref().to_path_buf(),
+            parent_logical_workspace: parent_workspace.as_ref().to_path_buf(),
             runtime_root: runtime_root.as_ref().to_path_buf(),
             #[cfg(test)]
             acquisition_hook: None,
@@ -407,7 +499,7 @@ impl SubagentWorkspaceManager {
         if matches!(policy, SubagentWorkspacePolicy::SharedWorkspace) {
             return Ok(WorkspaceLease {
                 manager: self.clone(),
-                snapshot: WorkspaceSnapshot::shared(self.parent_workspace.clone()),
+                snapshot: WorkspaceSnapshot::shared(self.parent_logical_workspace.clone()),
                 branch_created: false,
                 created: false,
             });
@@ -419,24 +511,50 @@ impl SubagentWorkspaceManager {
             unreachable!("the shared policy returned above")
         };
 
-        let repository = self
+        let source_repository_root = self
             .git_text(
-                &self.parent_workspace,
+                &self.parent_logical_workspace,
                 vec!["rev-parse".into(), "--show-toplevel".into()],
                 Some(cancellation),
             )
             .await?;
-        let repository = PathBuf::from(repository);
+        let source_repository_root =
+            std::fs::canonicalize(source_repository_root).map_err(|error| {
+                WorkspaceAcquireError::InvalidSnapshot {
+                    detail: format!("cannot canonicalize the source repository root: {error}"),
+                }
+            })?;
+        let canonical_parent_logical_workspace =
+            std::fs::canonicalize(&self.parent_logical_workspace).map_err(|error| {
+                WorkspaceAcquireError::InvalidSnapshot {
+                    detail: format!("cannot canonicalize the parent logical workspace: {error}"),
+                }
+            })?;
+        let repository_relative_workspace = canonical_parent_logical_workspace
+            .strip_prefix(&source_repository_root)
+            .map_err(|_| WorkspaceAcquireError::InvalidSnapshot {
+                detail: format!(
+                    "parent logical workspace {} is outside source repository root {}",
+                    canonical_parent_logical_workspace.display(),
+                    source_repository_root.display()
+                ),
+            })?
+            .to_path_buf();
+        if !is_safe_repository_relative(&repository_relative_workspace) {
+            return Err(WorkspaceAcquireError::InvalidSnapshot {
+                detail: "the derived repository-relative logical workspace is invalid".to_owned(),
+            });
+        }
         let base_commit = self
             .git_text(
-                &self.parent_workspace,
+                &self.parent_logical_workspace,
                 vec!["rev-parse".into(), "HEAD".into()],
                 Some(cancellation),
             )
             .await?;
         let parent_status = self
             .git_text(
-                &self.parent_workspace,
+                &self.parent_logical_workspace,
                 ordinary_workspace_status_args(),
                 Some(cancellation),
             )
@@ -451,12 +569,17 @@ impl SubagentWorkspaceManager {
 
         let token = deterministic_worktree_name(subagent_id);
         let branch = format!("rustx/subagent/{token}");
-        let workspace = self.runtime_root.join("worktrees").join(token);
-        if path_is_occupied(&workspace) || self.branch_exists(&branch, cancellation).await? {
-            return Err(WorkspaceAcquireError::Collision { workspace, branch });
+        let physical_worktree_root = self.runtime_root.join("worktrees").join(token);
+        if path_is_occupied(&physical_worktree_root)
+            || self.branch_exists(&branch, cancellation).await?
+        {
+            return Err(WorkspaceAcquireError::Collision {
+                physical_worktree_root,
+                branch,
+            });
         }
         std::fs::create_dir_all(
-            workspace
+            physical_worktree_root
                 .parent()
                 .expect("the deterministic worktree path has a parent"),
         )
@@ -465,9 +588,12 @@ impl SubagentWorkspaceManager {
             detail: error.to_string(),
         })?;
 
+        let child_logical_workspace = physical_worktree_root.join(&repository_relative_workspace);
         let snapshot = WorkspaceSnapshot::worktree(
-            workspace.clone(),
-            repository,
+            child_logical_workspace.clone(),
+            source_repository_root,
+            repository_relative_workspace,
+            physical_worktree_root.clone(),
             base_commit.clone(),
             branch.clone(),
             parent_dirty,
@@ -488,7 +614,7 @@ impl SubagentWorkspaceManager {
         // registration is present.
         let add = self
             .git_raw(
-                &self.parent_workspace,
+                &self.parent_logical_workspace,
                 vec![
                     // Worktree creation performs a checkout, and Git runs
                     // repository checkout hooks for it. Disable hooks for
@@ -500,7 +626,7 @@ impl SubagentWorkspaceManager {
                     "add".into(),
                     "-b".into(),
                     branch.clone().into(),
-                    workspace.clone().into_os_string(),
+                    physical_worktree_root.clone().into_os_string(),
                     base_commit.clone().into(),
                 ],
                 Some(cancellation),
@@ -555,7 +681,7 @@ impl SubagentWorkspaceManager {
         }
         let observed_head = match self
             .git_text(
-                &workspace,
+                &physical_worktree_root,
                 vec!["rev-parse".into(), "HEAD".into()],
                 Some(cancellation),
             )
@@ -571,6 +697,27 @@ impl SubagentWorkspaceManager {
                     WorkspaceAcquireError::InvalidSnapshot {
                         detail: format!("expected {base_commit}, observed {observed_head}"),
                     },
+                )
+                .await);
+        }
+        if !child_logical_workspace.is_dir() {
+            return Err(self
+                .settle_acquisition_failure(
+                    lease,
+                    WorkspaceAcquireError::InvalidSnapshot {
+                        detail: format!(
+                            "the committed checkout does not contain the preserved logical workspace {}",
+                            child_logical_workspace.display()
+                        ),
+                    },
+                )
+                .await);
+        }
+        if let Err(detail) = lease.snapshot.validate() {
+            return Err(self
+                .settle_acquisition_failure(
+                    lease,
+                    WorkspaceAcquireError::InvalidSnapshot { detail },
                 )
                 .await);
         }
@@ -598,7 +745,7 @@ impl SubagentWorkspaceManager {
         let reference = format!("refs/heads/{branch}");
         let output = self
             .git_raw(
-                &self.parent_workspace,
+                &self.parent_logical_workspace,
                 vec![
                     "show-ref".into(),
                     "--verify".into(),
@@ -629,7 +776,7 @@ impl SubagentWorkspaceManager {
     ) -> Result<bool, String> {
         let listing = self
             .git_text(
-                &self.parent_workspace,
+                &self.parent_logical_workspace,
                 vec!["worktree".into(), "list".into(), "--porcelain".into()],
                 None,
             )
@@ -727,36 +874,26 @@ impl SubagentWorkspaceManager {
         if let Err(error) = snapshot.validate() {
             return WorkspaceSettlement::unresolved(snapshot.clone(), error);
         }
-        if !snapshot.isolated {
+        let Some(worktree) = snapshot.git_worktree() else {
             return WorkspaceSettlement::shared(snapshot.clone());
-        }
-        let Some(repository) = snapshot.repository.as_ref() else {
-            return WorkspaceSettlement::unresolved(
-                snapshot.clone(),
-                "isolated workspace snapshot has no repository",
-            );
         };
-        let head = run_git_sync(&snapshot.workspace, &["rev-parse", "HEAD"]);
-        let status = run_git_sync(&snapshot.workspace, &ORDINARY_WORKSPACE_STATUS_ARGS);
+        let head = run_git_sync(&worktree.physical_worktree_root, &["rev-parse", "HEAD"]);
+        let status = run_git_sync(
+            &worktree.physical_worktree_root,
+            &ORDINARY_WORKSPACE_STATUS_ARGS,
+        );
         let (head, status) = match (head, status) {
             (Ok(head), Ok(status)) => (head, status),
             (Err(error), _) | (_, Err(error)) => {
                 return WorkspaceSettlement::unresolved(snapshot.clone(), error);
             }
         };
-        let Some(branch) = snapshot.branch.clone() else {
-            return WorkspaceSettlement::unresolved(
-                snapshot.clone(),
-                "isolated workspace snapshot has no branch/ref",
-            );
-        };
-        let Some(base_commit) = snapshot.base_commit.clone() else {
-            return WorkspaceSettlement::unresolved(
-                snapshot.clone(),
-                "isolated workspace snapshot has no base commit",
-            );
-        };
-        let listing = match run_git_sync(repository, &["worktree", "list", "--porcelain"]) {
+        let branch = worktree.branch.clone();
+        let base_commit = worktree.base_commit.clone();
+        let listing = match run_git_sync(
+            &worktree.source_repository_root,
+            &["worktree", "list", "--porcelain"],
+        ) {
             Ok(listing) => listing,
             Err(error) => return WorkspaceSettlement::unresolved(snapshot.clone(), error),
         };
@@ -765,13 +902,16 @@ impl SubagentWorkspaceManager {
                 snapshot.clone(),
                 format!(
                     "recovered worktree {} is not registered in the owned repository {}",
-                    snapshot.workspace.display(),
-                    repository.display()
+                    worktree.physical_worktree_root.display(),
+                    worktree.source_repository_root.display()
                 ),
             );
         }
         let reference = format!("refs/heads/{branch}");
-        let branch_head = match run_git_sync(repository, &["rev-parse", "--verify", &reference]) {
+        let branch_head = match run_git_sync(
+            &worktree.source_repository_root,
+            &["rev-parse", "--verify", &reference],
+        ) {
             Ok(branch_head) => branch_head,
             Err(error) => return WorkspaceSettlement::unresolved(snapshot.clone(), error),
         };
@@ -783,11 +923,12 @@ impl SubagentWorkspaceManager {
                 ),
             );
         }
-        let (dirty, _) = workspace_change_facts(snapshot.base_commit.as_deref(), &head, &status);
+        let (dirty, _) = workspace_change_facts(Some(&worktree.base_commit), &head, &status);
         WorkspaceSettlement {
             snapshot: snapshot.clone(),
             handoff: Some(WorkspaceHandoff {
-                workspace: snapshot.workspace.clone(),
+                logical_workspace: snapshot.logical_workspace.clone(),
+                physical_worktree_root: worktree.physical_worktree_root.clone(),
                 branch,
                 base_commit,
                 head_commit: head,
@@ -818,10 +959,18 @@ pub struct WorkspaceLease {
 }
 
 impl WorkspaceLease {
-    /// The authoritative child project workspace path.
+    /// The authoritative logical child project workspace path.
     #[must_use]
-    pub fn workspace(&self) -> &Path {
-        &self.snapshot.workspace
+    pub fn logical_workspace(&self) -> &Path {
+        &self.snapshot.logical_workspace
+    }
+
+    /// The runtime-owned physical worktree root, when this lease is isolated.
+    #[must_use]
+    pub fn physical_worktree_root(&self) -> Option<&Path> {
+        self.snapshot
+            .git_worktree()
+            .map(|worktree| worktree.physical_worktree_root.as_path())
     }
 
     /// The immutable selection facts.
@@ -840,8 +989,9 @@ impl WorkspaceLease {
 
     /// Preserves a lease without claiming final Git facts when a retained
     /// nested process anchor could not be proven physically settled. The
-    /// path remains the conservative recovery authority; a later recovery
-    /// inspection can observe the final state once no process may mutate it.
+    /// physical worktree root remains the conservative recovery authority; a
+    /// later recovery inspection can observe the final state once no process
+    /// may mutate it.
     pub(crate) fn preserve_after_unresolved_nested(
         self,
         detail: impl Into<String>,
@@ -869,7 +1019,7 @@ impl WorkspaceLease {
     }
 
     async fn settle(self) -> WorkspaceSettlement {
-        if !self.snapshot.isolated {
+        if !self.snapshot.is_isolated() {
             return WorkspaceSettlement::shared(self.snapshot);
         }
         if !self.created {
@@ -880,10 +1030,16 @@ impl WorkspaceLease {
 
     async fn settle_unregistered(self) -> WorkspaceSettlement {
         let snapshot = self.snapshot;
-        if path_is_occupied(&snapshot.workspace) {
+        let Some(worktree) = snapshot.git_worktree() else {
             return WorkspaceSettlement::unresolved(
                 snapshot,
-                "the deterministic workspace path exists but is not a proven Git worktree owned by this lease",
+                "an unregistered isolated lease has no physical worktree facts",
+            );
+        };
+        if path_is_occupied(&worktree.physical_worktree_root) {
+            return WorkspaceSettlement::unresolved(
+                snapshot,
+                "the deterministic physical worktree root exists but is not a proven Git worktree owned by this lease",
             );
         }
         if self.branch_created
@@ -907,10 +1063,16 @@ impl WorkspaceLease {
         {
             return settlement;
         }
+        let Some(worktree) = snapshot.git_worktree() else {
+            return WorkspaceSettlement::unresolved(
+                snapshot,
+                "a registered isolated lease has no physical worktree facts",
+            );
+        };
         let head = match self
             .manager
             .git_text(
-                &snapshot.workspace,
+                &worktree.physical_worktree_root,
                 vec!["rev-parse".into(), "HEAD".into()],
                 None,
             )
@@ -921,7 +1083,11 @@ impl WorkspaceLease {
         };
         let status = match self
             .manager
-            .git_text(&snapshot.workspace, ordinary_workspace_status_args(), None)
+            .git_text(
+                &worktree.physical_worktree_root,
+                ordinary_workspace_status_args(),
+                None,
+            )
             .await
         {
             Ok(status) => status,
@@ -938,12 +1104,7 @@ impl WorkspaceLease {
                 "the leased path is no longer registered as the runtime-created Git worktree",
             );
         }
-        let Some(branch) = snapshot.branch.clone() else {
-            return WorkspaceSettlement::unresolved(
-                snapshot,
-                "isolated workspace snapshot has no branch/ref",
-            );
-        };
+        let branch = worktree.branch.clone();
         let branch_head = match self.manager.runtime_branch_head(&branch).await {
             Ok(branch_head) => branch_head,
             Err(error) => return WorkspaceSettlement::unresolved(snapshot, error),
@@ -956,12 +1117,12 @@ impl WorkspaceLease {
                 ),
             );
         }
-        let (dirty, changed) =
-            workspace_change_facts(snapshot.base_commit.as_deref(), &head, &status);
+        let (dirty, changed) = workspace_change_facts(Some(&worktree.base_commit), &head, &status);
         let handoff = WorkspaceHandoff {
-            workspace: snapshot.workspace.clone(),
+            logical_workspace: snapshot.logical_workspace.clone(),
+            physical_worktree_root: worktree.physical_worktree_root.clone(),
             branch,
-            base_commit: snapshot.base_commit.clone().unwrap_or_default(),
+            base_commit: worktree.base_commit.clone(),
             head_commit: head.clone(),
             dirty,
         };
@@ -994,7 +1155,7 @@ impl SubagentWorkspaceManager {
     async fn runtime_branch_head(&self, branch: &str) -> Result<String, String> {
         let reference = format!("refs/heads/{branch}");
         self.git_text(
-            &self.parent_workspace,
+            &self.parent_logical_workspace,
             vec!["rev-parse".into(), "--verify".into(), reference.into()],
             None,
         )
@@ -1003,14 +1164,17 @@ impl SubagentWorkspaceManager {
     }
 
     async fn remove_clean_worktree(&self, snapshot: &WorkspaceSnapshot) -> Result<(), String> {
+        let worktree = snapshot
+            .git_worktree()
+            .ok_or_else(|| "shared workspace has no physical worktree to remove".to_owned())?;
         let output = self
             .git_raw(
-                &self.parent_workspace,
+                &self.parent_logical_workspace,
                 vec![
                     "worktree".into(),
                     "remove".into(),
                     "--".into(),
-                    snapshot.workspace.clone().into_os_string(),
+                    worktree.physical_worktree_root.clone().into_os_string(),
                 ],
                 None,
             )
@@ -1030,13 +1194,14 @@ impl SubagentWorkspaceManager {
     /// to a branch where Git would reject `branch -d`, without ever deleting
     /// a ref that acquired child work or was changed by another owner.
     async fn remove_runtime_branch(&self, snapshot: &WorkspaceSnapshot) -> Result<(), String> {
-        let Some(branch) = snapshot.branch.as_deref() else {
+        let Some(worktree) = snapshot.git_worktree() else {
             return Ok(());
         };
+        let branch = &worktree.branch;
         let reference = format!("refs/heads/{branch}");
         let exists = self
             .git_raw(
-                &self.parent_workspace,
+                &self.parent_logical_workspace,
                 vec![
                     "show-ref".into(),
                     "--verify".into(),
@@ -1056,13 +1221,10 @@ impl SubagentWorkspaceManager {
                 git_failure_detail(&exists)
             ));
         }
-        let base_commit = snapshot
-            .base_commit
-            .as_deref()
-            .ok_or_else(|| "isolated workspace snapshot has no base commit".to_owned())?;
+        let base_commit = worktree.base_commit.as_str();
         let current = self
             .git_text(
-                &self.parent_workspace,
+                &self.parent_logical_workspace,
                 vec![
                     "rev-parse".into(),
                     "--verify".into(),
@@ -1084,7 +1246,7 @@ impl SubagentWorkspaceManager {
         // deletion compare-and-delete rather than a blind ref overwrite.
         let deleted = self
             .git_raw(
-                &self.parent_workspace,
+                &self.parent_logical_workspace,
                 vec![
                     "update-ref".into(),
                     "-d".into(),
@@ -1197,6 +1359,16 @@ fn path_is_occupied(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok()
 }
 
+/// A repository-relative logical workspace is either the empty root path or
+/// a sequence of ordinary components. Absolute roots, platform prefixes, and
+/// parent traversal would make `physical_worktree_root.join(relative)` an
+/// authority-widening or escaping operation and are rejected at every decoded
+/// boundary.
+fn is_safe_repository_relative(path: &Path) -> bool {
+    path.components()
+        .all(|component| matches!(component, std::path::Component::Normal(_)))
+}
+
 fn kill_git_process_group(child_id: Option<u32>) {
     #[cfg(unix)]
     if let Some(child_id) = child_id.and_then(|id| i32::try_from(id).ok()) {
@@ -1253,13 +1425,13 @@ fn worktree_listing_entry_matches(
     snapshot: &WorkspaceSnapshot,
     require_base: bool,
 ) -> bool {
-    let expected_branch = snapshot
-        .branch
-        .as_deref()
-        .map(|branch| format!("refs/heads/{branch}"));
-    paths_refer_to_same_worktree(path, Some(snapshot.workspace.as_path()))
-        && branch == expected_branch.as_deref()
-        && (!require_base || head == snapshot.base_commit.as_deref())
+    let Some(worktree) = snapshot.git_worktree() else {
+        return false;
+    };
+    let expected_branch = format!("refs/heads/{}", worktree.branch);
+    paths_refer_to_same_worktree(path, Some(worktree.physical_worktree_root.as_path()))
+        && branch == Some(expected_branch.as_str())
+        && (!require_base || head == Some(worktree.base_commit.as_str()))
 }
 
 /// Git may report a macOS temporary-directory path through its canonical
@@ -1358,7 +1530,7 @@ impl WorkspaceSettlementHook {
 mod tests {
     use super::{
         SubagentWorkspaceManager, SubagentWorkspacePolicy, WorkspaceAcquireHook, WorkspaceCleanup,
-        deterministic_worktree_name,
+        WorkspaceIsolation, WorkspaceSnapshot, deterministic_worktree_name,
     };
     use crate::runtime::cancellation::CancellationSignal;
     use crate::runtime::identity::SubagentId;
@@ -1391,6 +1563,17 @@ mod tests {
         std::fs::write(dir.path().join("tracked.txt"), "committed\n").expect("file");
         git(dir.path(), &["add", "tracked.txt"]);
         git(dir.path(), &["commit", "-m", "initial"]);
+        dir
+    }
+
+    fn repository_with_workspace(relative: &std::path::Path) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("temp dir");
+        git(dir.path(), &["init"]);
+        let workspace = dir.path().join(relative);
+        std::fs::create_dir_all(&workspace).expect("logical workspace");
+        std::fs::write(workspace.join("scoped.txt"), "committed scope\n").expect("file");
+        git(dir.path(), &["add", "--all"]);
+        git(dir.path(), &["commit", "-m", "initial scoped workspace"]);
         dir
     }
 
@@ -1456,8 +1639,8 @@ mod tests {
             )
             .await
             .expect("shared lease");
-        assert_eq!(lease.workspace(), workspace);
-        assert!(!lease.snapshot().isolated);
+        assert_eq!(lease.logical_workspace(), workspace);
+        assert!(!lease.snapshot().is_isolated());
         let settlement = lease.settle_after_child().await;
         assert_eq!(settlement.cleanup, WorkspaceCleanup::Shared);
         assert!(workspace.exists());
@@ -1483,15 +1666,29 @@ mod tests {
             )
             .await
             .expect("worktree");
-        assert!(lease.snapshot().parent_had_uncommitted_changes);
+        assert!(
+            lease
+                .snapshot()
+                .git_worktree()
+                .expect("Git worktree facts")
+                .parent_had_uncommitted_changes
+        );
         assert_eq!(
-            std::fs::read_to_string(lease.workspace().join("tracked.txt")).expect("child file"),
+            std::fs::read_to_string(lease.logical_workspace().join("tracked.txt"))
+                .expect("child file"),
             "committed\n"
         );
-        assert!(!lease.workspace().join("untracked.txt").exists());
+        assert!(!lease.logical_workspace().join("untracked.txt").exists());
         let settlement = lease.settle_after_child().await;
         assert_eq!(settlement.cleanup, WorkspaceCleanup::Removed);
-        assert!(!settlement.snapshot.workspace.exists());
+        assert!(
+            !settlement
+                .snapshot
+                .git_worktree()
+                .expect("Git worktree facts")
+                .physical_worktree_root
+                .exists()
+        );
     }
 
     #[tokio::test]
@@ -1509,18 +1706,245 @@ mod tests {
             )
             .await
             .expect("worktree");
-        assert_eq!(lease.snapshot().base_commit.as_deref(), Some(base.as_str()));
-        assert_eq!(head(lease.workspace()), base);
-        assert!(
-            lease
-                .snapshot()
-                .branch
-                .as_deref()
-                .is_some_and(|branch| { branch.starts_with("rustx/subagent/") })
-        );
+        let worktree = lease.snapshot().git_worktree().expect("Git worktree facts");
+        assert_eq!(worktree.base_commit, base);
+        assert_eq!(head(lease.logical_workspace()), base);
+        assert!(worktree.branch.starts_with("rustx/subagent/"));
         let settlement = lease.settle_after_child().await;
         assert_eq!(settlement.cleanup, WorkspaceCleanup::Removed);
         assert!(settlement.handoff.is_none());
+    }
+
+    #[tokio::test]
+    async fn repository_root_scope_maps_to_the_physical_worktree_root() {
+        let repository = repository();
+        let runtime = tempfile::tempdir().expect("runtime root");
+        let subagent_id = SubagentId::new("conversation-root-scope-subagent-1");
+        let lease = SubagentWorkspaceManager::new(repository.path(), runtime.path())
+            .acquire(
+                SubagentWorkspacePolicy::GitWorktree {
+                    require_clean_parent: false,
+                },
+                &subagent_id,
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect("worktree");
+        let physical = runtime
+            .path()
+            .join("worktrees")
+            .join(deterministic_worktree_name(&subagent_id));
+        let facts = lease.snapshot().git_worktree().expect("Git worktree facts");
+
+        assert_eq!(
+            facts.repository_relative_workspace,
+            std::path::Path::new("")
+        );
+        assert_eq!(facts.physical_worktree_root, physical);
+        assert_eq!(lease.logical_workspace(), physical);
+        assert_eq!(lease.physical_worktree_root(), Some(physical.as_path()));
+        assert_eq!(
+            lease.settle_after_child().await.cleanup,
+            WorkspaceCleanup::Removed
+        );
+    }
+
+    #[tokio::test]
+    async fn repository_subdirectory_scope_is_preserved_in_the_isolated_checkout() {
+        let repository = repository_with_workspace(std::path::Path::new("backend"));
+        let runtime = tempfile::tempdir().expect("runtime root");
+        let subagent_id = SubagentId::new("conversation-subdir-scope-subagent-1");
+        let lease =
+            SubagentWorkspaceManager::new(repository.path().join("backend"), runtime.path())
+                .acquire(
+                    SubagentWorkspacePolicy::GitWorktree {
+                        require_clean_parent: false,
+                    },
+                    &subagent_id,
+                    &CancellationSignal::new(),
+                )
+                .await
+                .expect("worktree");
+        let physical = runtime
+            .path()
+            .join("worktrees")
+            .join(deterministic_worktree_name(&subagent_id));
+        let logical = physical.join("backend");
+        let facts = lease.snapshot().git_worktree().expect("Git worktree facts");
+
+        assert_eq!(
+            facts.repository_relative_workspace,
+            std::path::Path::new("backend")
+        );
+        assert_eq!(facts.physical_worktree_root, physical);
+        assert_eq!(lease.logical_workspace(), logical);
+        assert_eq!(
+            std::fs::read_to_string(logical.join("scoped.txt")).expect("committed scoped file"),
+            "committed scope\n"
+        );
+        assert_eq!(
+            lease.settle_after_child().await.cleanup,
+            WorkspaceCleanup::Removed
+        );
+    }
+
+    #[tokio::test]
+    async fn nested_repository_scope_is_preserved_exactly() {
+        let relative = std::path::Path::new("a/b/c");
+        let repository = repository_with_workspace(relative);
+        let runtime = tempfile::tempdir().expect("runtime root");
+        let subagent_id = SubagentId::new("conversation-nested-scope-subagent-1");
+        let lease = SubagentWorkspaceManager::new(repository.path().join(relative), runtime.path())
+            .acquire(
+                SubagentWorkspacePolicy::GitWorktree {
+                    require_clean_parent: false,
+                },
+                &subagent_id,
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect("worktree");
+        let physical = runtime
+            .path()
+            .join("worktrees")
+            .join(deterministic_worktree_name(&subagent_id));
+        let facts = lease.snapshot().git_worktree().expect("Git worktree facts");
+
+        assert_eq!(facts.repository_relative_workspace, relative);
+        assert_eq!(facts.physical_worktree_root, physical);
+        assert_eq!(lease.logical_workspace(), physical.join(relative));
+        assert_eq!(
+            lease.settle_after_child().await.cleanup,
+            WorkspaceCleanup::Removed
+        );
+    }
+
+    #[tokio::test]
+    async fn absent_committed_scope_fails_without_widening_or_leaking_the_worktree() {
+        let repository = repository();
+        let parent_logical_workspace = repository.path().join("uncommitted-scope");
+        std::fs::create_dir_all(&parent_logical_workspace).expect("uncommitted scope");
+        std::fs::write(
+            parent_logical_workspace.join("only-parent.txt"),
+            "uncommitted\n",
+        )
+        .expect("uncommitted file");
+        let runtime = tempfile::tempdir().expect("runtime root");
+        let subagent_id = SubagentId::new("conversation-absent-scope-subagent-1");
+        let physical = runtime
+            .path()
+            .join("worktrees")
+            .join(deterministic_worktree_name(&subagent_id));
+        let branch = format!(
+            "rustx/subagent/{}",
+            deterministic_worktree_name(&subagent_id)
+        );
+
+        let error = SubagentWorkspaceManager::new(&parent_logical_workspace, runtime.path())
+            .acquire(
+                SubagentWorkspacePolicy::GitWorktree {
+                    require_clean_parent: false,
+                },
+                &subagent_id,
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect_err("the committed checkout does not contain the logical scope");
+
+        assert!(matches!(
+            error,
+            super::WorkspaceAcquireError::InvalidSnapshot { .. }
+        ));
+        assert!(
+            !physical.exists(),
+            "the staged physical worktree is removed"
+        );
+        assert!(
+            !ref_exists(repository.path(), &branch),
+            "the staged ref is removed"
+        );
+        assert!(
+            parent_logical_workspace.exists(),
+            "the parent logical workspace is untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_handoff_preserves_logical_scope_and_identifies_physical_worktree() {
+        let relative = std::path::Path::new("backend/service");
+        let repository = repository_with_workspace(relative);
+        let runtime = tempfile::tempdir().expect("runtime root");
+        let subagent_id = SubagentId::new("conversation-scoped-handoff-subagent-1");
+        let lease = SubagentWorkspaceManager::new(repository.path().join(relative), runtime.path())
+            .acquire(
+                SubagentWorkspacePolicy::GitWorktree {
+                    require_clean_parent: false,
+                },
+                &subagent_id,
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect("worktree");
+        let physical = lease
+            .physical_worktree_root()
+            .expect("physical worktree")
+            .to_path_buf();
+        let logical = physical.join(relative);
+        std::fs::write(logical.join("child-work.txt"), "retain me\n").expect("child work");
+
+        let settlement = lease.settle_after_child().await;
+        let handoff = settlement.handoff.as_ref().expect("retained handoff");
+
+        assert_eq!(settlement.cleanup, WorkspaceCleanup::Preserved);
+        assert_eq!(settlement.snapshot.logical_workspace, logical);
+        assert_eq!(
+            settlement
+                .snapshot
+                .git_worktree()
+                .expect("Git worktree facts")
+                .physical_worktree_root,
+            physical
+        );
+        assert_eq!(handoff.logical_workspace, logical);
+        assert_eq!(handoff.physical_worktree_root, physical);
+        assert!(handoff.dirty);
+        assert!(physical.exists());
+        assert!(logical.join("child-work.txt").exists());
+    }
+
+    #[test]
+    fn isolated_snapshot_validation_rejects_authority_widening_shapes() {
+        let physical = std::path::PathBuf::from("/runtime/worktrees/token");
+        let valid = WorkspaceSnapshot::worktree(
+            physical.join("backend"),
+            std::path::PathBuf::from("/repo"),
+            std::path::PathBuf::from("backend"),
+            physical.clone(),
+            "c1".to_owned(),
+            "rustx/subagent/token".to_owned(),
+            false,
+        );
+        assert!(valid.validate().is_ok());
+        let wire = serde_json::to_value(&valid).expect("serialize isolated snapshot");
+        assert_eq!(wire["logicalWorkspace"], "/runtime/worktrees/token/backend");
+        assert_eq!(wire["isolation"]["type"], "git_worktree");
+        assert_eq!(
+            serde_json::from_value::<WorkspaceSnapshot>(wire)
+                .expect("deserialize isolated snapshot"),
+            valid
+        );
+
+        let mut widened = valid.clone();
+        widened.logical_workspace = physical.clone();
+        assert!(widened.validate().is_err());
+
+        let mut escaping = valid;
+        let WorkspaceIsolation::GitWorktree(worktree) = &mut escaping.isolation else {
+            panic!("isolated facts");
+        };
+        worktree.repository_relative_workspace = std::path::PathBuf::from("../outside");
+        escaping.logical_workspace = physical.join("../outside");
+        assert!(escaping.validate().is_err());
     }
 
     #[cfg(unix)]
@@ -1563,7 +1987,7 @@ mod tests {
             .await
             .expect("worktree");
 
-        assert_eq!(head(lease.workspace()), head(dir.path()));
+        assert_eq!(head(lease.logical_workspace()), head(dir.path()));
         assert!(
             !workspace.join("hook-mutated.txt").exists(),
             "checkout hook must not mutate the exact-snapshot worktree"
@@ -1590,8 +2014,13 @@ mod tests {
             )
             .await
             .expect("worktree");
-        let path = lease.workspace().to_path_buf();
-        let branch = lease.snapshot().branch.clone().expect("branch");
+        let path = lease.logical_workspace().to_path_buf();
+        let branch = lease
+            .snapshot()
+            .git_worktree()
+            .expect("Git worktree facts")
+            .branch
+            .clone();
         std::fs::create_dir_all(path.join("target/debug")).expect("target");
         std::fs::write(path.join("target/debug/generated"), "cache\n").expect("cache");
 
@@ -1617,16 +2046,25 @@ mod tests {
             )
             .await
             .expect("worktree");
-        let base = lease.snapshot().base_commit.clone().expect("base");
+        let base = lease
+            .snapshot()
+            .git_worktree()
+            .expect("Git worktree facts")
+            .base_commit
+            .clone();
         std::fs::write(dir.path().join("tracked.txt"), "parent commit two\n")
             .expect("parent update");
         commit(dir.path(), "parent second commit");
         let parent_head = head(dir.path());
         assert_ne!(parent_head, base);
-        assert_eq!(head(lease.workspace()), base);
+        assert_eq!(head(lease.logical_workspace()), base);
         assert_eq!(
-            head(lease.workspace()),
-            lease.snapshot().base_commit.clone().unwrap()
+            head(lease.logical_workspace()),
+            lease
+                .snapshot()
+                .git_worktree()
+                .expect("Git worktree facts")
+                .base_commit
         );
         let settlement = lease.settle_after_child().await;
         assert_eq!(settlement.cleanup, WorkspaceCleanup::Removed);
@@ -1649,15 +2087,22 @@ mod tests {
             )
             .await
             .expect("worktree");
-        std::fs::write(lease.workspace().join("tracked.txt"), "child work\n")
-            .expect("child tracked change");
-        std::fs::write(lease.workspace().join("new.txt"), "child artifact\n")
-            .expect("child untracked change");
-        let path = lease.workspace().to_path_buf();
+        std::fs::write(
+            lease.logical_workspace().join("tracked.txt"),
+            "child work\n",
+        )
+        .expect("child tracked change");
+        std::fs::write(
+            lease.logical_workspace().join("new.txt"),
+            "child artifact\n",
+        )
+        .expect("child untracked change");
+        let path = lease.logical_workspace().to_path_buf();
         let settlement = lease.settle_after_child().await;
         let handoff = settlement.handoff.expect("dirty handoff");
         assert_eq!(settlement.cleanup, WorkspaceCleanup::Preserved);
-        assert_eq!(handoff.workspace, path);
+        assert_eq!(handoff.logical_workspace, path);
+        assert_eq!(handoff.physical_worktree_root, path);
         assert_eq!(handoff.base_commit, handoff.head_commit);
         assert!(handoff.dirty);
         assert!(path.exists());
@@ -1681,16 +2126,24 @@ mod tests {
             )
             .await
             .expect("worktree");
-        let base = lease.snapshot().base_commit.clone().expect("base");
-        std::fs::write(lease.workspace().join("tracked.txt"), "committed child\n")
-            .expect("child file");
-        commit(lease.workspace(), "child commit");
+        let base = lease
+            .snapshot()
+            .git_worktree()
+            .expect("Git worktree facts")
+            .base_commit
+            .clone();
+        std::fs::write(
+            lease.logical_workspace().join("tracked.txt"),
+            "committed child\n",
+        )
+        .expect("child file");
+        commit(lease.logical_workspace(), "child commit");
         let settlement = lease.settle_after_child().await;
         let handoff = settlement.handoff.expect("committed handoff");
         assert_eq!(settlement.cleanup, WorkspaceCleanup::Preserved);
         assert!(!handoff.dirty);
         assert_ne!(handoff.head_commit, base);
-        assert_eq!(handoff.head_commit, head(&handoff.workspace));
+        assert_eq!(handoff.head_commit, head(&handoff.physical_worktree_root));
     }
 
     #[tokio::test]
@@ -1708,12 +2161,24 @@ mod tests {
             )
             .await
             .expect("worktree");
-        let base = lease.snapshot().base_commit.clone().expect("base");
-        std::fs::write(lease.workspace().join("tracked.txt"), "child commit\n")
-            .expect("child file");
-        commit(lease.workspace(), "child commit");
-        std::fs::create_dir_all(lease.workspace().join("target/debug")).expect("target");
-        std::fs::write(lease.workspace().join("target/debug/generated"), "cache\n").expect("cache");
+        let base = lease
+            .snapshot()
+            .git_worktree()
+            .expect("Git worktree facts")
+            .base_commit
+            .clone();
+        std::fs::write(
+            lease.logical_workspace().join("tracked.txt"),
+            "child commit\n",
+        )
+        .expect("child file");
+        commit(lease.logical_workspace(), "child commit");
+        std::fs::create_dir_all(lease.logical_workspace().join("target/debug")).expect("target");
+        std::fs::write(
+            lease.logical_workspace().join("target/debug/generated"),
+            "cache\n",
+        )
+        .expect("cache");
 
         let settlement = lease.settle_after_child().await;
         let handoff = settlement.handoff.expect("committed handoff");
@@ -1739,12 +2204,16 @@ mod tests {
             .await
             .expect("worktree");
         std::fs::write(
-            lease.workspace().join("new-source.rs"),
+            lease.logical_workspace().join("new-source.rs"),
             "fn generated() {}\n",
         )
         .expect("source");
-        std::fs::create_dir_all(lease.workspace().join("target/debug")).expect("target");
-        std::fs::write(lease.workspace().join("target/debug/generated"), "cache\n").expect("cache");
+        std::fs::create_dir_all(lease.logical_workspace().join("target/debug")).expect("target");
+        std::fs::write(
+            lease.logical_workspace().join("target/debug/generated"),
+            "cache\n",
+        )
+        .expect("cache");
 
         let settlement = lease.settle_after_child().await;
         let handoff = settlement.handoff.expect("source handoff");
@@ -1770,8 +2239,12 @@ mod tests {
             .await
             .expect("worktree");
         let snapshot = lease.snapshot().clone();
-        std::fs::create_dir_all(lease.workspace().join("target/debug")).expect("target");
-        std::fs::write(lease.workspace().join("target/debug/generated"), "cache\n").expect("cache");
+        std::fs::create_dir_all(lease.logical_workspace().join("target/debug")).expect("target");
+        std::fs::write(
+            lease.logical_workspace().join("target/debug/generated"),
+            "cache\n",
+        )
+        .expect("cache");
         drop(lease);
 
         let settlement = SubagentWorkspaceManager::inspect_recovered(&snapshot);
@@ -1796,12 +2269,23 @@ mod tests {
             )
             .await
             .expect("worktree");
-        let base = lease.snapshot().base_commit.clone().expect("base");
-        std::fs::write(lease.workspace().join("tracked.txt"), "child commit\n")
-            .expect("child file");
-        commit(lease.workspace(), "child commit");
-        std::fs::write(lease.workspace().join("uncommitted.txt"), "still active\n")
-            .expect("dirty child file");
+        let base = lease
+            .snapshot()
+            .git_worktree()
+            .expect("Git worktree facts")
+            .base_commit
+            .clone();
+        std::fs::write(
+            lease.logical_workspace().join("tracked.txt"),
+            "child commit\n",
+        )
+        .expect("child file");
+        commit(lease.logical_workspace(), "child commit");
+        std::fs::write(
+            lease.logical_workspace().join("uncommitted.txt"),
+            "still active\n",
+        )
+        .expect("dirty child file");
         let settlement = lease.settle_after_child().await;
         let handoff = settlement.handoff.expect("combined handoff");
         assert_eq!(settlement.cleanup, WorkspaceCleanup::Preserved);
@@ -1823,22 +2307,22 @@ mod tests {
             )
             .await
             .expect("worktree");
-        let path = lease.workspace().to_path_buf();
+        let path = lease.logical_workspace().to_path_buf();
         std::fs::write(path.join("staged.txt"), "unknown staged work\n").expect("staged file");
         let error = lease
             .settle_staged()
             .await
             .expect_err("unexpected staged work must block cleanup");
         assert!(error.settlement.handoff.is_some());
-        assert!(error.settlement.snapshot.workspace.exists());
+        assert!(error.settlement.snapshot.logical_workspace.exists());
         assert!(path.join("staged.txt").exists());
     }
 
     #[tokio::test]
     async fn cancellation_after_worktree_creation_settles_the_staged_lease() {
-        let dir = repository();
+        let dir = repository_with_workspace(std::path::Path::new("backend"));
         let runtime_root = dir.path().join("artifacts");
-        let mut manager = SubagentWorkspaceManager::new(dir.path(), &runtime_root);
+        let mut manager = SubagentWorkspaceManager::new(dir.path().join("backend"), &runtime_root);
         let hook = std::sync::Arc::new(WorkspaceAcquireHook::new());
         manager.install_acquisition_hook(hook.clone());
         let cancellation = CancellationSignal::new();
@@ -1861,7 +2345,9 @@ mod tests {
         let path = runtime_root
             .join("worktrees")
             .join(deterministic_worktree_name(&subagent));
+        let branch = format!("rustx/subagent/{}", deterministic_worktree_name(&subagent));
         assert!(path.exists(), "the barrier is after Git worktree creation");
+        assert!(path.join("backend").exists(), "the logical scope exists");
         cancellation.cancel();
         hook.release().await;
         let error = task
@@ -1869,7 +2355,11 @@ mod tests {
             .expect("acquisition task")
             .expect_err("cancellation");
         assert!(matches!(error, super::WorkspaceAcquireError::Cancelled));
-        assert!(!path.exists(), "clean staged worktree is settled");
+        assert!(!path.exists(), "the staged physical worktree is settled");
+        assert!(
+            !ref_exists(dir.path(), &branch),
+            "the staged ref is removed"
+        );
     }
 
     #[tokio::test]
@@ -1897,8 +2387,19 @@ mod tests {
         );
         let first = first.expect("first worktree");
         let second = second.expect("second worktree");
-        assert_ne!(first.workspace(), second.workspace());
-        assert_ne!(first.snapshot().branch, second.snapshot().branch);
+        assert_ne!(first.logical_workspace(), second.logical_workspace());
+        assert_ne!(
+            first
+                .snapshot()
+                .git_worktree()
+                .expect("first Git worktree")
+                .branch,
+            second
+                .snapshot()
+                .git_worktree()
+                .expect("second Git worktree")
+                .branch
+        );
         let first_settlement = first.settle_after_child().await;
         let second_settlement = second.settle_after_child().await;
         assert_eq!(first_settlement.cleanup, WorkspaceCleanup::Removed);
@@ -1920,7 +2421,7 @@ mod tests {
             )
             .await
             .expect("first worktree");
-        let path = first.workspace().to_path_buf();
+        let path = first.logical_workspace().to_path_buf();
         let second = manager
             .acquire(
                 SubagentWorkspacePolicy::GitWorktree {

@@ -41,7 +41,7 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 19 is the only accepted schema; version 18 and every older
+schema version 20 is the only accepted schema; version 19 and every older
 development schema fail explicitly at open and are not migrated. Version 10
 froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation
@@ -54,8 +54,10 @@ the frozen request-only carryover/anchor fields in Request Snapshots. Version
 16 freezes typed compaction-summary metadata, version 17 freezes named-
 subagent ownership identity, and version 18 freezes subagent workspace
 snapshots and preserved-worktree handoffs. Version 19 freezes the native
-Workflow execution fact vocabulary. Version 18 and every older development
-schema are rejected rather than decoded with missing Workflow facts. The
+Workflow execution fact vocabulary. Version 20 replaces the conflated
+subagent workspace path with explicit logical-child scope and physical-
+worktree ownership facts. Version 19 and every older development schema are
+rejected rather than decoded with missing or invented workspace authority. The
 review-only
 intermediate schema history was never a supported format.
 
@@ -1852,10 +1854,12 @@ second authority:
   reliable fd 0 control stream. Version 11 adds a bidirectional
   publication-admission request/result pair: the parent answers the child's
   exact `InteractionRef` from the root host's synchronized control-attachment
-  frontier before the child commits its requested fact. HITL traffic is never
-  a control acknowledgement and never uses the disposable observation lane.
+  frontier before the child commits its requested fact. Version 12 replaces
+  the conflated workspace path with explicit logical-child and physical-
+  worktree facts. HITL traffic is never a control acknowledgement and never
+  uses the disposable observation lane.
 
-## Issue #146: deterministic worktree isolation and workspace handoff
+## Issues #146 and #187: deterministic, scope-preserving worktree isolation
 
 - **Workspace policy is bounded definition state.** A named definition
   resolves to either `SharedWorkspace` or
@@ -1868,6 +1872,17 @@ second authority:
   inspection, safe removal, and handoff facts. `SubagentRegistry` owns live
   lifecycle/capacity/cancellation/durability and never executes Git. Git is
   not a Tool Plane capability.
+- **Isolation preserves the logical workspace boundary (Issue #187).** The
+  manager starts from the canonical source repository root and the parent
+  logical workspace, derives the complete repository-relative logical path,
+  creates a physical isolated worktree root, and sets the child logical
+  workspace to `physical_worktree_root / repository_relative_workspace`.
+  Only an empty repository-relative path maps the child to the physical root.
+  `WorkspaceSnapshot` encodes the logical authority separately from the
+  closed `GitWorktreeSnapshot` ownership facts, and validation rejects path
+  traversal or any mismatch in that equation. A scope absent from the selected
+  committed checkout fails acquisition; it never falls back to repository
+  root.
 - **An isolated child observes one exact committed snapshot.** Before any
   child ownership commit, the manager captures `HEAD = C`, observes the
   parent's tracked/index/untracked state, enforces the strict-parent option,
@@ -1883,7 +1898,7 @@ second authority:
   before that boundary commits no child and settles every staged resource;
   there is no second workspace commit point and no lease hidden as a path.
 - **Project workspace authority is separate from frozen resource authority.**
-  The acquired path is the child process cwd and the root for native
+  The logical child workspace is the child process cwd and the root for native
   filesystem tools, Bash, and workspace-relative process setup. It does not
   become authority for the already-frozen model, project-instruction chain,
   Skills/resources, MCP definitions, or Builtin definitions. The child performs no ancestor project-instruction
@@ -1915,6 +1930,12 @@ second authority:
   base_commit` independently proves retained committed work. Ignored files
   alone are execution cache and do not make a handoff dirty. A clean
   `HEAD == C` worktree is safely removed; all other proven work is preserved.
+- **Settlement never rewrites logical authority.** Git inspection,
+  registration proof, worktree removal, and branch cleanup always target the
+  physical worktree root. The immutable snapshot continues to record the
+  logical child workspace at terminal state. A `WorkspaceHandoff` carries both
+  that logical scope and the actual retained physical worktree root, and
+  durable validation requires both to match the ownership snapshot.
 - **Semantic success cannot hide physical settlement failure.** A child
   semantic success remains `Succeeded` only when direct-child reaping,
   retained nested-unit containment, workspace inspection/cleanup or handoff,
@@ -4443,6 +4464,14 @@ semantic normalization boundary. The frozen invariants:
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
   explicit at attachment admission; the current protocol is the sole
   supported version, and every superseded version is rejected explicitly.
+- **Runtime Client protocol v13 introduces the Issue #187 subagent
+  workspace representation.** The workspace projection separates logical
+  child project authority (`logical_workspace`) from physical Git worktree
+  ownership: `isolation` is a closed `shared`/`git_worktree` tagged
+  projection carrying the source repository root, repository-relative
+  workspace, physical worktree root, base commit, branch, and parent dirty
+  fact, and a retained handoff carries `logical_workspace` and
+  `physical_worktree_root` alongside its branch/base/head/dirty facts.
 - **Runtime Client protocol v12 adds the routed interaction projection.** The
   root-facing pending-interaction set carries Approval and Questionnaire
   requests from the primary conversation and live supervised children. Each

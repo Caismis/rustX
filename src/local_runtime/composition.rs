@@ -1537,7 +1537,7 @@ impl LocalConversationCore {
             .map_err(CurrentRuntimeConfigError::Environment)
             .map_err(LocalRuntimeError::RuntimeConfig)?;
         let mut runtime_config = crate::tools::runtime::ConversationRuntimeConfig::new(
-            &spec.workspace_snapshot.workspace,
+            &spec.workspace_snapshot.logical_workspace,
             spec.runtime_root.join("artifacts"),
         );
         runtime_config.environment = Some(base_environment.clone());
@@ -2797,12 +2797,17 @@ mod subagent_child_tests {
                 require_clean_parent: false,
             };
         child_spec.workspace_snapshot = crate::runtime::subagent::WorkspaceSnapshot {
-            workspace: worktree,
-            isolated: true,
-            repository: Some(dir.path().to_path_buf()),
-            base_commit: Some("committed-base".to_owned()),
-            branch: Some("rustx/subagent/frozen".to_owned()),
-            parent_had_uncommitted_changes: true,
+            logical_workspace: worktree.clone(),
+            isolation: crate::runtime::subagent::WorkspaceIsolation::GitWorktree(
+                crate::runtime::subagent::GitWorktreeSnapshot {
+                    source_repository_root: dir.path().to_path_buf(),
+                    repository_relative_workspace: std::path::PathBuf::new(),
+                    physical_worktree_root: worktree,
+                    base_commit: "committed-base".to_owned(),
+                    branch: "rustx/subagent/frozen".to_owned(),
+                    parent_had_uncommitted_changes: true,
+                },
+            ),
         };
 
         let core = LocalConversationCore::compose_subagent_child(
