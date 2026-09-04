@@ -190,6 +190,10 @@ struct SubagentRecord {
     terminal: SubagentTerminalMode,
     workspace: WorkspaceSnapshot,
     handoff: Option<WorkspaceHandoff>,
+    /// Whether the retained physical resource was explicitly disposed. This
+    /// is a separate resource lifecycle marker: it never changes the
+    /// absorbing logical subagent terminal state.
+    workspace_disposed: bool,
     lifecycle: SubagentLifecycle,
     cancel_reason: Option<CancellationReason>,
     /// The narrow cancellation handle into the driver task — never an OS
@@ -320,6 +324,65 @@ impl SubagentState {
         !self.is_terminal()
     }
 }
+
+/// The deterministic public outcome of a retained-workspace disposal request.
+///
+/// The outcome is deliberately separate from [`SubagentState`]. Disposing a
+/// physical handoff never adds a logical subagent terminal state.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SubagentWorkspaceDisposal {
+    /// The exact retained worktree and runtime branch were removed.
+    Disposed(SubagentSnapshot),
+    /// The same retained resource was already disposed earlier. No Git
+    /// lookup or deletion is attempted for this idempotent result.
+    AlreadyDisposed(SubagentSnapshot),
+    /// This child has no retained isolated resource: it was shared, or its
+    /// unchanged isolated worktree was removed during ordinary settlement.
+    NoRetainedWorkspace(SubagentSnapshot),
+}
+
+/// A retained-workspace disposal request failed before it could produce a
+/// successful or idempotent resource outcome.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubagentWorkspaceDisposalError {
+    /// The requested child is not in the authoritative registry.
+    UnknownSubagent { subagent_id: SubagentId },
+    /// The child has not reached a durable terminal boundary, or its
+    /// terminal publication was abandoned. Disposal cannot race settlement.
+    NotTerminal { state: SubagentState },
+    /// The durable/runtime facts and current Git state did not prove one
+    /// exact retained resource. No destructive mutation was attempted.
+    OwnershipMismatch { detail: String },
+    /// A durable mailbox or other runtime-owned operation failed. The exact
+    /// physical operation may already have completed; the in-memory record is
+    /// still updated to reflect the physical resource's absence.
+    Backend { detail: String },
+}
+
+impl core::fmt::Display for SubagentWorkspaceDisposalError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::UnknownSubagent { subagent_id } => {
+                write!(formatter, "unknown subagent {subagent_id}")
+            }
+            Self::NotTerminal { state } => write!(
+                formatter,
+                "retained workspace disposal requires a durably terminal subagent, but its state is {state:?}"
+            ),
+            Self::OwnershipMismatch { detail } => {
+                write!(
+                    formatter,
+                    "retained workspace ownership could not be proven: {detail}"
+                )
+            }
+            Self::Backend { detail } => {
+                write!(formatter, "retained workspace disposal failed: {detail}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SubagentWorkspaceDisposalError {}
 
 /// A consistency snapshot of one subagent child.
 ///
@@ -608,6 +671,15 @@ pub trait SubagentObserver: Send + Sync {
     /// the implementation must be cheap and nonblocking.
     fn on_snapshot(&self, snapshot: &SubagentSnapshot);
 
+    /// Called under the registry lock for a retained-workspace resource
+    /// transition. This is reliable but separate from lifecycle snapshots:
+    /// disposal changes physical-resource state only. The default forwards
+    /// to the lifecycle callback for observers that do not distinguish the
+    /// projections.
+    fn on_workspace(&self, snapshot: &SubagentSnapshot) {
+        self.on_snapshot(snapshot);
+    }
+
     /// Called under the registry lock with each new live-activity snapshot
     /// (Issue #178).
     ///
@@ -747,6 +819,11 @@ pub struct SubagentRegistry {
     /// live root host before activation; without it, child publication fails
     /// closed even if a stale provider watch says `true`.
     publication_authority: Arc<Mutex<Option<Arc<dyn InteractionPublicationAuthority>>>>,
+    /// Serializes the logical resource transition with the physical manager
+    /// operation. The manager has its own shared lock for Git calls; this
+    /// outer lock also makes two client requests converge on one public
+    /// disposal result before either can stale-read the handoff.
+    workspace_disposal_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Clone for SubagentRegistry {
@@ -782,6 +859,7 @@ impl SubagentRegistry {
             state_version: tokio::sync::watch::Sender::new(0),
             provider_available: tokio::sync::watch::channel(false).0,
             publication_authority: Arc::new(Mutex::new(None)),
+            workspace_disposal_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -886,12 +964,81 @@ impl SubagentRegistry {
             terminal: SubagentTerminalMode::Normal,
             workspace: recovered.evidence.workspace.clone(),
             handoff: Some(recovered.handoff.clone()),
+            workspace_disposed: false,
             lifecycle,
             cancel_reason: None,
             control: None,
             detail,
             // A recovery-projected record has no live activity and no
             // frozen launch profile in this process.
+            observation: SubagentObservation::default(),
+            profile: None,
+            terminal_workflow_value: None,
+            pending_terminal: None,
+            publication_abandoned: false,
+            notification: NotificationState::Delivered,
+            started_at: recovered.evidence.started_at,
+        };
+        let index = state.records.len();
+        state
+            .index
+            .insert(recovered.evidence.subagent_id.clone(), index);
+        state.records.push(record);
+    }
+
+    /// Restores a terminal read-model record whose retained physical
+    /// resource was explicitly disposed before this process started. The
+    /// disposal marker is resource state only; the recovered lifecycle stays
+    /// at the terminal state carried by the original terminal fact.
+    pub(crate) fn restore_recovered_disposal(
+        &self,
+        recovered: &crate::runtime::recovery::RecoveredSubagentDisposal,
+    ) {
+        let Ok(agent) = SubagentName::parse(&recovered.evidence.agent) else {
+            return;
+        };
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.index.contains_key(&recovered.evidence.subagent_id) {
+            return;
+        }
+        let lifecycle = match recovered.state {
+            SubagentTerminalState::Succeeded => SubagentLifecycle::Succeeded,
+            SubagentTerminalState::Failed => SubagentLifecycle::Failed,
+            SubagentTerminalState::Cancelled => SubagentLifecycle::Cancelled,
+            SubagentTerminalState::Interrupted => SubagentLifecycle::Interrupted,
+        };
+        let detail = match recovered.state {
+            SubagentTerminalState::Succeeded => {
+                "the child completed and its retained workspace was disposed".to_owned()
+            }
+            SubagentTerminalState::Failed => {
+                "the child failed and its retained workspace was disposed".to_owned()
+            }
+            SubagentTerminalState::Cancelled => {
+                "the child was cancelled and its retained workspace was disposed".to_owned()
+            }
+            SubagentTerminalState::Interrupted => {
+                "the child was interrupted and its retained workspace was disposed".to_owned()
+            }
+        };
+        let record = SubagentRecord {
+            subagent_id: recovered.evidence.subagent_id.clone(),
+            child_agent_id: recovered.evidence.child_agent_id.clone(),
+            child_conversation_id: recovered.evidence.child_conversation_id.clone(),
+            tool_call_id: recovered.evidence.tool_call_id.clone(),
+            agent,
+            definition_digest: serde_json::from_value(serde_json::Value::String(
+                recovered.evidence.definition_digest.clone(),
+            ))
+            .expect("durable subagent digest is validated before recovery"),
+            terminal: SubagentTerminalMode::Normal,
+            workspace: recovered.evidence.workspace.clone(),
+            handoff: None,
+            workspace_disposed: true,
+            lifecycle,
+            cancel_reason: None,
+            control: None,
+            detail: Some(detail),
             observation: SubagentObservation::default(),
             profile: None,
             terminal_workflow_value: None,
@@ -1340,6 +1487,7 @@ impl SubagentRegistry {
                         terminal: terminal.clone(),
                         workspace: workspace.clone(),
                         handoff: None,
+                        workspace_disposed: false,
                         lifecycle: SubagentLifecycle::Running,
                         cancel_reason: None,
                         control: None,
@@ -1505,6 +1653,7 @@ impl SubagentRegistry {
             state_version: self.state_version.clone(),
             provider_available: self.provider_available.clone(),
             publication_authority: Arc::clone(&self.publication_authority),
+            workspace_disposal_lock: Arc::clone(&self.workspace_disposal_lock),
         }
     }
 
@@ -1836,6 +1985,115 @@ impl SubagentRegistry {
         for id in ids {
             let _ = self.cancel(&id, reason);
         }
+    }
+
+    /// Disposes one retained child worktree through the workspace owner.
+    ///
+    /// This operation is intentionally outside the logical subagent state
+    /// machine. The registry serializes the request, verifies that the child
+    /// is already durably terminal and still has a retained handoff, then
+    /// delegates all physical proof/Git semantics to the workspace manager.
+    /// Only after the exact physical resource is removed does it commit the
+    /// post-terminal disposal audit fact and clear the handoff from the live
+    /// projection.
+    ///
+    /// The physical removal is the destructive linearization point. If the
+    /// subsequent audit append fails, the record still becomes disposed in
+    /// this process because the physical resource is gone; the error is
+    /// returned so the Runtime Client can report the durable uncertainty.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed unknown-child, non-terminal, ownership-mismatch, or
+    /// backend result without changing the logical lifecycle state.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the serialized registry loses the record between the
+    /// physical operation and its in-memory resource projection update.
+    pub async fn dispose_retained_workspace(
+        &self,
+        subagent_id: &SubagentId,
+    ) -> Result<SubagentWorkspaceDisposal, SubagentWorkspaceDisposalError> {
+        let _request = self.workspace_disposal_lock.lock().await;
+        let (workspace, handoff) = {
+            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let Some(&index) = state.index.get(subagent_id) else {
+                return Err(SubagentWorkspaceDisposalError::UnknownSubagent {
+                    subagent_id: subagent_id.clone(),
+                });
+            };
+            let record = &state.records[index];
+            if record.workspace_disposed {
+                return Ok(SubagentWorkspaceDisposal::AlreadyDisposed(
+                    record.snapshot(),
+                ));
+            }
+            if !record.lifecycle.is_terminal() || record.publication_abandoned {
+                return Err(SubagentWorkspaceDisposalError::NotTerminal {
+                    state: record.snapshot().state,
+                });
+            }
+            let Some(handoff) = record.handoff.clone() else {
+                return Ok(SubagentWorkspaceDisposal::NoRetainedWorkspace(
+                    record.snapshot(),
+                ));
+            };
+            (record.workspace.clone(), handoff)
+        };
+
+        let _settlement = self
+            .config
+            .mailbox
+            .begin_settlement_admission()
+            .map_err(|error| SubagentWorkspaceDisposalError::Backend {
+                detail: error.to_string(),
+            })?;
+        self.config
+            .workspace
+            .dispose_retained_workspace(subagent_id, &workspace, &handoff)
+            .await
+            .map_err(|error| match error {
+                super::workspace::WorkspaceDisposalError::OwnershipMismatch { detail } => {
+                    SubagentWorkspaceDisposalError::OwnershipMismatch { detail }
+                }
+                super::workspace::WorkspaceDisposalError::Git { operation, detail } => {
+                    SubagentWorkspaceDisposalError::Backend {
+                        detail: format!("{operation}: {detail}"),
+                    }
+                }
+            })?;
+
+        let event = super::workspace_disposal_event(
+            &self.config.conversation_id,
+            subagent_id,
+            &handoff,
+            self.config.clock.now(),
+        );
+        let durable = self
+            .config
+            .mailbox
+            .commit_subagent_workspace_disposal(event)
+            .map(|_| ())
+            .map_err(|error| error.to_string());
+
+        let snapshot = {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let index = *state
+                .index
+                .get(subagent_id)
+                .expect("workspace disposal record remains owned by the serialized registry");
+            let record = &mut state.records[index];
+            debug_assert_eq!(record.handoff.as_ref(), Some(&handoff));
+            record.handoff = None;
+            record.workspace_disposed = true;
+            publish_workspace_snapshot(&mut state, &self.state_version, index);
+            state.records[index].snapshot()
+        };
+        if let Err(detail) = durable {
+            return Err(SubagentWorkspaceDisposalError::Backend { detail });
+        }
+        Ok(SubagentWorkspaceDisposal::Disposed(snapshot))
     }
 
     /// Waits until one subagent is settled or abandoned (runtime drain;
@@ -2626,6 +2884,20 @@ fn publish_snapshot(
     version.send_modify(|v| *v += 1);
 }
 
+/// Emits a reliable retained-resource projection without classifying the
+/// update as another logical subagent lifecycle transition.
+fn publish_workspace_snapshot(
+    state: &mut RegistryState,
+    version: &tokio::sync::watch::Sender<u64>,
+    index: usize,
+) {
+    let snapshot = state.records[index].snapshot();
+    if let Some(observer) = &state.observer {
+        observer.on_workspace(&snapshot);
+    }
+    version.send_modify(|v| *v += 1);
+}
+
 /// The disposable sibling of [`publish_snapshot`] for live-activity
 /// updates (Issue #178): emits the record's snapshot through
 /// [`SubagentObserver::on_activity`] — the publication the consumer may
@@ -3296,6 +3568,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // This is the end-to-end lifecycle/resource regression.
     async fn successful_worktree_child_publishes_a_valid_handoff_and_client_projection() {
         let plane = plane(4);
         make_clean_git_workspace(&plane);
@@ -3344,6 +3617,69 @@ mod tests {
                 ..
             } if *subagent_id == accepted.subagent_id && actual == &handoff
         )));
+
+        let disposed = plane
+            .registry
+            .dispose_retained_workspace(&accepted.subagent_id)
+            .await
+            .expect("the retained resource is disposable");
+        let SubagentWorkspaceDisposal::Disposed(after_disposal) = disposed else {
+            panic!("the first disposal must remove the retained resource");
+        };
+        assert_eq!(after_disposal.state, SubagentState::Succeeded);
+        assert!(after_disposal.handoff.is_none());
+
+        std::fs::create_dir_all(&handoff.physical_worktree_root).expect("replacement path");
+        std::fs::write(
+            handoff.physical_worktree_root.join("replacement-sentinel"),
+            "leave this unrelated path alone\n",
+        )
+        .expect("replacement sentinel");
+        let repeated = plane
+            .registry
+            .dispose_retained_workspace(&accepted.subagent_id)
+            .await
+            .expect("repeated disposal is deterministic");
+        let SubagentWorkspaceDisposal::AlreadyDisposed(after_repeat) = repeated else {
+            panic!("the second disposal must be an idempotent outcome");
+        };
+        assert_eq!(after_repeat.state, SubagentState::Succeeded);
+        assert!(after_repeat.handoff.is_none());
+        assert_eq!(
+            std::fs::read_to_string(handoff.physical_worktree_root.join("replacement-sentinel"))
+                .expect("replacement path remains untouched"),
+            "leave this unrelated path alone\n"
+        );
+
+        let journal = events(&plane);
+        assert_eq!(
+            journal
+                .iter()
+                .filter(|event| matches!(
+                    event,
+                    crate::events::types::RuntimeEvent::SubagentTerminalPublished {
+                        subagent_id,
+                        ..
+                    } if *subagent_id == accepted.subagent_id
+                ))
+                .count(),
+            1,
+            "workspace disposal never adds a second logical terminal event"
+        );
+        assert_eq!(
+            journal
+                .iter()
+                .filter(|event| matches!(
+                    event,
+                    crate::events::types::RuntimeEvent::SubagentWorkspaceDisposed {
+                        subagent_id,
+                        ..
+                    } if *subagent_id == accepted.subagent_id
+                ))
+                .count(),
+            1,
+            "repeated disposal does not append another disposal fact"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -4451,6 +4787,7 @@ mod tests {
             terminal: SubagentTerminalMode::Normal,
             workspace: WorkspaceSnapshot::shared(std::path::PathBuf::from("/workspace")),
             handoff: None,
+            workspace_disposed: false,
             lifecycle,
             cancel_reason: None,
             control: None,

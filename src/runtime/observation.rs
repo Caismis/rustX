@@ -205,6 +205,10 @@ pub(crate) enum ConversationObservation {
     /// every identity/lifecycle/terminal transition reaches the consumer
     /// exactly once, in publication order.
     SubagentLifecycle(SubagentSnapshot),
+    /// One reliable retained-workspace resource transition. This is separate
+    /// from the logical lifecycle lane: disposing a handoff updates only the
+    /// resource projection and never creates another terminal transition.
+    SubagentWorkspace(SubagentSnapshot),
     /// One subagent live-activity snapshot (Issue #178). **Disposable**:
     /// latest-value, coalescing, keyed by subagent identity — a push
     /// overwrites the previous unpublished snapshot of the same subagent,
@@ -547,6 +551,12 @@ impl PendingObservations {
                 state
                     .reliable
                     .push_back(ConversationObservation::SubagentLifecycle(snapshot));
+            }
+            ConversationObservation::SubagentWorkspace(snapshot) => {
+                state.latest_activity.remove(&snapshot.subagent_id);
+                state
+                    .reliable
+                    .push_back(ConversationObservation::SubagentWorkspace(snapshot));
             }
             // Reliable; a tool settlement fact retires the call's pending
             // live progress: a settled call leaves no stale live report

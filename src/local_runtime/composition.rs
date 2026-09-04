@@ -2808,7 +2808,7 @@ mod subagent_child_tests {
                     source_repository_root: dir.path().to_path_buf(),
                     repository_relative_workspace: std::path::PathBuf::new(),
                     physical_worktree_root: worktree,
-                    base_commit: "committed-base".to_owned(),
+                    base_commit: "1111111111111111111111111111111111111111".to_owned(),
                     branch: "rustx/subagent/frozen".to_owned(),
                     parent_had_uncommitted_changes: true,
                 },

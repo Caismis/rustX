@@ -507,6 +507,20 @@ pub enum RuntimeEvent {
         workspace_handoff: Option<WorkspaceHandoff>,
     },
 
+    /// A retained subagent workspace was explicitly disposed by the
+    /// Runtime Client/workspace plane after its physical ownership proof
+    /// succeeded. This is a post-terminal resource fact, not another
+    /// subagent lifecycle transition: the terminal event remains the sole
+    /// logical child terminal boundary.
+    SubagentWorkspaceDisposed {
+        /// The subagent identity whose retained resource was disposed.
+        subagent_id: SubagentId,
+        /// The exact retained handoff that the workspace plane proved and
+        /// removed. Durable validation compares it with the ownership and
+        /// terminal facts; it is not authority by itself.
+        workspace_handoff: WorkspaceHandoff,
+    },
+
     /// A native `WorkflowRun` began executing one immutable `WorkflowProgram`.
     /// This is a best-effort observability fact only; the in-memory
     /// `WorkflowRun` remains the execution authority and unfinished runs are

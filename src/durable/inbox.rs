@@ -824,6 +824,26 @@ fn commit_subagent_terminal_through(
     store.commit_subagent_terminal(event)
 }
 
+/// Commits the durable post-terminal retained-workspace disposal fact through
+/// a narrow mailbox capability. The workspace plane has already performed the
+/// physical ownership proof and exact Git deletion before it reaches this
+/// durable audit boundary; the store independently validates that the
+/// handoff belongs to the terminal child fact.
+fn commit_subagent_workspace_disposal_through(
+    store: &(impl ConversationStore + ?Sized),
+    event: RuntimeEventEnvelope,
+) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+    if !matches!(
+        event.event,
+        crate::events::types::RuntimeEvent::SubagentWorkspaceDisposed { .. }
+    ) {
+        return Err(ConversationStoreError::InvalidReference(
+            "the subagent capability commits only a retained-workspace disposal fact".to_owned(),
+        ));
+    }
+    store.commit_subagent_workspace_disposal(event)
+}
+
 /// Commits a successful Workflow Agent's validated value and its native child
 /// terminal lifecycle fact in one durable transaction. The two facts are
 /// deliberately a narrow compound transition: a Workflow child has no
@@ -930,7 +950,7 @@ pub trait ConversationInteractionAudit: Send + Sync + 'static {
 /// interface only; the conversation execution plane receives the full
 /// [`ConversationStore`] separately.
 ///
-/// Six — and only six — Event Journal facts are reachable here, all
+/// Seven — and only seven — Event Journal facts are reachable here, all
 /// because they are inseparable from a detached execution's own durable
 /// ownership:
 ///
@@ -942,6 +962,8 @@ pub trait ConversationInteractionAudit: Send + Sync + 'static {
 /// commit_subagent_terminal     -> SubagentTerminalSettled        (Workflow terminal commit)
 /// commit_workflow_agent_terminal -> SubagentTerminalSettled + WorkflowAgentOutputCommitted
 ///                                  (successful Workflow terminal commit)
+/// commit_subagent_workspace_disposal -> SubagentWorkspaceDisposed
+///                                  (post-terminal resource disposal)
 /// ```
 ///
 /// Each is a typed single-purpose transition, never a generic event append.
@@ -994,6 +1016,15 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
     /// child without creating a parent inbound notification. The payload
     /// must be a [`RuntimeEvent::SubagentTerminalSettled`](crate::events::types::RuntimeEvent::SubagentTerminalSettled).
     fn commit_subagent_terminal(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+
+    /// Commits the post-terminal disposal fact of one retained subagent
+    /// workspace. This is a resource-lifecycle fact, not a subagent terminal
+    /// transition, and the payload must be a
+    /// [`RuntimeEvent::SubagentWorkspaceDisposed`](crate::events::types::RuntimeEvent::SubagentWorkspaceDisposed).
+    fn commit_subagent_workspace_disposal(
         &self,
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
@@ -1476,6 +1507,14 @@ pub trait ConversationStore: Send + Sync + 'static {
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
 
+    /// Commits the post-terminal retained-workspace disposal fact. This is a
+    /// resource fact and never opens or closes the logical subagent
+    /// lifecycle.
+    fn commit_subagent_workspace_disposal(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+
     /// Commits a successful Workflow Agent's structured value and its native
     /// `SubagentTerminalSettled` lifecycle fact in one durable transaction.
     /// This specialized transition is the Workflow terminal boundary: it
@@ -1652,6 +1691,13 @@ impl<T: ConversationStore + ?Sized> ConversationInboundCapability for T {
         commit_subagent_terminal_through(self, event)
     }
 
+    fn commit_subagent_workspace_disposal(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        commit_subagent_workspace_disposal_through(self, event)
+    }
+
     fn commit_workflow_agent_terminal(
         &self,
         terminal: RuntimeEventEnvelope,
@@ -1795,6 +1841,13 @@ impl ConversationInboundCapability for StoreInboundCapability {
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
         commit_subagent_terminal_through(self.store.as_ref(), event)
+    }
+
+    fn commit_subagent_workspace_disposal(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        commit_subagent_workspace_disposal_through(self.store.as_ref(), event)
     }
 
     fn commit_workflow_agent_terminal(

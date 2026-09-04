@@ -388,6 +388,20 @@ pub struct RecoveredSubagentHandoff {
     pub handoff: WorkspaceHandoff,
 }
 
+/// A terminal child whose retained workspace was explicitly disposed before
+/// this recovery. The original handoff remains in the durable audit fact so
+/// recovery can restore the idempotent `AlreadyDisposed` resource state
+/// without reintroducing the physical handoff into the live projection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveredSubagentDisposal {
+    /// The child identity and immutable start facts.
+    pub evidence: SubagentEvidence,
+    /// The durable semantic child terminal state.
+    pub state: SubagentTerminalState,
+    /// The exact handoff that the prior disposal proved and removed.
+    pub handoff: WorkspaceHandoff,
+}
+
 /// The complete durable evidence of one conversation at process startup.
 ///
 /// Every field comes from the durable authority alone. Nothing is derived from
@@ -440,6 +454,8 @@ pub struct RecoveryEvidence {
     /// Terminally published subagents whose durable terminal fact retained a
     /// workspace handoff for the recovered read model.
     settled_subagent_handoffs: Vec<RecoveredSubagentHandoff>,
+    /// Terminal subagents whose retained handoff was explicitly disposed.
+    settled_subagent_disposals: Vec<RecoveredSubagentDisposal>,
     /// The highest conversation-scoped attempt ordinal that entered durable
     /// authority, terminal or not.
     highest_attempt_ordinal: Option<u64>,
@@ -507,6 +523,7 @@ impl RecoveryEvidence {
             unsettled_background: Vec::new(),
             unsettled_subagents: Vec::new(),
             settled_subagent_handoffs: Vec::new(),
+            settled_subagent_disposals: Vec::new(),
             assistant_attempts: BTreeMap::new(),
             active_ids: std::collections::BTreeSet::new(),
             highest_attempt_ordinal: None,
@@ -529,6 +546,8 @@ impl RecoveryEvidence {
         let mut subagents: BTreeMap<SubagentId, SubagentEvidence> = BTreeMap::new();
         let mut settled_subagent_handoffs: BTreeMap<SubagentId, RecoveredSubagentHandoff> =
             BTreeMap::new();
+        let mut settled_subagent_disposals: BTreeMap<SubagentId, RecoveredSubagentDisposal> =
+            BTreeMap::new();
         loop {
             let page = store.read_events(cursor, RECOVERY_PAGE)?;
             if page.events.is_empty() {
@@ -540,6 +559,7 @@ impl RecoveryEvidence {
                     &mut background,
                     &mut subagents,
                     &mut settled_subagent_handoffs,
+                    &mut settled_subagent_disposals,
                 );
             }
             cursor = page.next_sequence;
@@ -550,6 +570,7 @@ impl RecoveryEvidence {
         evidence.unsettled_background = background.into_values().collect();
         evidence.unsettled_subagents = subagents.into_values().collect();
         evidence.settled_subagent_handoffs = settled_subagent_handoffs.into_values().collect();
+        evidence.settled_subagent_disposals = settled_subagent_disposals.into_values().collect();
         Ok(evidence)
     }
 
@@ -561,6 +582,7 @@ impl RecoveryEvidence {
         background: &mut BTreeMap<ToolExecutionId, BackgroundEvidence>,
         subagents: &mut BTreeMap<SubagentId, SubagentEvidence>,
         settled_subagent_handoffs: &mut BTreeMap<SubagentId, RecoveredSubagentHandoff>,
+        settled_subagent_disposals: &mut BTreeMap<SubagentId, RecoveredSubagentDisposal>,
     ) {
         match &envelope.event {
             RuntimeEvent::AttemptStarted { attempt_id } => {
@@ -930,6 +952,33 @@ impl RecoveryEvidence {
                     );
                 }
             }
+            RuntimeEvent::SubagentWorkspaceDisposed {
+                subagent_id,
+                workspace_handoff,
+            } => {
+                if let Some(ordinal) = subagent_id.conversation_ordinal(&self.conversation_id) {
+                    self.highest_subagent_ordinal = self.highest_subagent_ordinal.max(ordinal);
+                }
+                if let Some(terminal) = settled_subagent_handoffs.remove(subagent_id) {
+                    if terminal.handoff == *workspace_handoff {
+                        settled_subagent_disposals.insert(
+                            subagent_id.clone(),
+                            RecoveredSubagentDisposal {
+                                evidence: terminal.evidence,
+                                state: terminal.state,
+                                handoff: workspace_handoff.clone(),
+                            },
+                        );
+                    } else {
+                        // A disposal fact that does not repeat the exact
+                        // terminal handoff is not allowed to replace the
+                        // authoritative retained resource during recovery.
+                        // Keep the original handoff visible so a later
+                        // Runtime Client request can fail closed against it.
+                        settled_subagent_handoffs.insert(subagent_id.clone(), terminal);
+                    }
+                }
+            }
             // Every remaining fact contributes its attempt identity watermark
             // and nothing else.
             //
@@ -1248,6 +1297,9 @@ pub struct RecoveryPlan {
     /// Already-terminal subagents whose durable publication retained a
     /// workspace handoff. These require read-model restoration only.
     settled_subagent_handoffs: Vec<RecoveredSubagentHandoff>,
+    /// Already-terminal subagents whose retained handoff was explicitly
+    /// disposed. These require read-model restoration only.
+    settled_subagent_disposals: Vec<RecoveredSubagentDisposal>,
     /// The missing canonical `ToolResult` siblings, grouped by their owning
     /// Assistant message, in canonical model-call order.
     tool_repairs: Vec<ToolTurnRepair>,
@@ -1380,6 +1432,7 @@ impl RecoveryPlan {
                 })
                 .collect(),
             settled_subagent_handoffs: evidence.settled_subagent_handoffs.clone(),
+            settled_subagent_disposals: evidence.settled_subagent_disposals.clone(),
             tool_repairs,
             resume,
             next_attempt_ordinal: evidence.next_attempt_ordinal(),
@@ -1631,6 +1684,13 @@ impl RecoveryPlan {
         &self.settled_subagent_handoffs
     }
 
+    /// The terminal subagents whose retained workspaces were explicitly
+    /// disposed before reconciliation.
+    #[must_use]
+    pub fn settled_subagent_disposals(&self) -> &[RecoveredSubagentDisposal] {
+        &self.settled_subagent_disposals
+    }
+
     /// The publication streams classified as needing audit terminalization.
     #[must_use]
     pub fn publication_classes(&self) -> &[PublicationRecoveryClass] {
@@ -1708,6 +1768,7 @@ impl RecoveryPlan {
             background: self.background,
             subagents: self.subagents,
             settled_subagent_handoffs: self.settled_subagent_handoffs,
+            settled_subagent_disposals: self.settled_subagent_disposals,
             publications: self.publications,
             resume: self.resume,
             reconciliation: committed,
@@ -2166,6 +2227,7 @@ pub struct RecoveryReport {
     background: Vec<BackgroundRecoveryClass>,
     subagents: Vec<SubagentRecoveryClass>,
     settled_subagent_handoffs: Vec<RecoveredSubagentHandoff>,
+    settled_subagent_disposals: Vec<RecoveredSubagentDisposal>,
     publications: Vec<PublicationRecoveryClass>,
     resume: ResumeDisposition,
     reconciliation: RecoveryReconciliation,
@@ -2198,6 +2260,13 @@ impl RecoveryReport {
     #[must_use]
     pub fn settled_subagent_handoffs(&self) -> &[RecoveredSubagentHandoff] {
         &self.settled_subagent_handoffs
+    }
+
+    /// The terminal subagents whose retained workspaces were explicitly
+    /// disposed before this process started.
+    #[must_use]
+    pub fn settled_subagent_disposals(&self) -> &[RecoveredSubagentDisposal] {
+        &self.settled_subagent_disposals
     }
 
     /// The publication streams classified as needing audit terminalization.
@@ -2340,6 +2409,7 @@ mod tests {
             unsettled_background: Vec::new(),
             unsettled_subagents: Vec::new(),
             settled_subagent_handoffs: Vec::new(),
+            settled_subagent_disposals: Vec::new(),
             assistant_attempts: BTreeMap::new(),
             active_ids: std::collections::BTreeSet::new(),
             highest_attempt_ordinal: None,
@@ -2355,20 +2425,24 @@ mod tests {
         let mut background = BTreeMap::new();
         let mut subagents = BTreeMap::new();
         let mut settled_subagent_handoffs = BTreeMap::new();
+        let mut settled_subagent_disposals = BTreeMap::new();
         for envelope in events {
             evidence.fold(
                 envelope,
                 &mut background,
                 &mut subagents,
                 &mut settled_subagent_handoffs,
+                &mut settled_subagent_disposals,
             );
         }
         evidence.unsettled_background = background.into_values().collect();
         evidence.unsettled_subagents = subagents.into_values().collect();
         evidence.settled_subagent_handoffs = settled_subagent_handoffs.into_values().collect();
+        evidence.settled_subagent_disposals = settled_subagent_disposals.into_values().collect();
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // One recovery fixture covers handoff and disposal facts.
     fn a_durable_terminal_handoff_survives_recovery_classification() {
         let mut evidence = base_evidence();
         let subagent_id = SubagentId::for_conversation(&conversation(), 1);
@@ -2380,7 +2454,7 @@ mod tests {
                     source_repository_root: std::path::PathBuf::from("/tmp/repository"),
                     repository_relative_workspace: std::path::PathBuf::from("backend"),
                     physical_worktree_root: std::path::PathBuf::from("/tmp/rustx-worktree-1"),
-                    base_commit: "c1".to_owned(),
+                    base_commit: "1111111111111111111111111111111111111111".to_owned(),
                     branch: "rustx/subagent/abc".to_owned(),
                     parent_had_uncommitted_changes: true,
                 },
@@ -2390,8 +2464,8 @@ mod tests {
             logical_workspace: workspace.logical_workspace.clone(),
             physical_worktree_root: std::path::PathBuf::from("/tmp/rustx-worktree-1"),
             branch: "rustx/subagent/abc".to_owned(),
-            base_commit: "c1".to_owned(),
-            head_commit: "c2".to_owned(),
+            base_commit: "1111111111111111111111111111111111111111".to_owned(),
+            head_commit: "2222222222222222222222222222222222222222".to_owned(),
             dirty: false,
         };
         let ownership = envelope(
@@ -2418,7 +2492,7 @@ mod tests {
             None,
         );
 
-        fold_all(&mut evidence, &[ownership, terminal]);
+        fold_all(&mut evidence, &[ownership.clone(), terminal.clone()]);
         let plan = RecoveryPlan::classify(&evidence);
         assert!(evidence.unsettled_subagents.is_empty());
         assert_eq!(plan.settled_subagent_handoffs().len(), 1);
@@ -2426,6 +2500,55 @@ mod tests {
         assert_eq!(
             plan.settled_subagent_handoffs()[0].state,
             SubagentTerminalState::Succeeded
+        );
+
+        let disposal = envelope(
+            RuntimeEvent::SubagentWorkspaceDisposed {
+                subagent_id: subagent_id.clone(),
+                workspace_handoff: handoff.clone(),
+            },
+            None,
+        );
+        let mut disposed_evidence = base_evidence();
+        fold_all(
+            &mut disposed_evidence,
+            &[ownership.clone(), terminal.clone(), disposal],
+        );
+        let disposed_plan = RecoveryPlan::classify(&disposed_evidence);
+        assert!(disposed_plan.settled_subagent_handoffs().is_empty());
+        assert_eq!(disposed_plan.settled_subagent_disposals().len(), 1);
+        assert_eq!(
+            disposed_plan.settled_subagent_disposals()[0].handoff,
+            handoff
+        );
+        assert_eq!(
+            disposed_plan.settled_subagent_disposals()[0].state,
+            SubagentTerminalState::Succeeded
+        );
+
+        let mut mismatched_handoff = handoff.clone();
+        mismatched_handoff.head_commit = "3333333333333333333333333333333333333333".to_owned();
+        let mut mismatched_evidence = base_evidence();
+        fold_all(
+            &mut mismatched_evidence,
+            &[
+                ownership,
+                terminal,
+                envelope(
+                    RuntimeEvent::SubagentWorkspaceDisposed {
+                        subagent_id,
+                        workspace_handoff: mismatched_handoff,
+                    },
+                    None,
+                ),
+            ],
+        );
+        let mismatched_plan = RecoveryPlan::classify(&mismatched_evidence);
+        assert!(mismatched_plan.settled_subagent_disposals().is_empty());
+        assert_eq!(
+            mismatched_plan.settled_subagent_handoffs()[0].handoff,
+            handoff,
+            "recovery never lets a mismatched disposal fact replace the retained handoff"
         );
     }
 

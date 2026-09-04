@@ -3435,7 +3435,10 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
-The current Runtime Client protocol is version 14. It adds the Agent Status
+The current Runtime Client protocol is version 15. It adds the explicit
+retained-workspace disposal operation and its typed outcomes/errors. The
+existing workspace isolation projection remains the source-repository identity
+authority for an exact handoff. Version 14 adds the Agent Status
 contextual annotation projection (Issue #194): the snapshot's latest-only
 `status` is replaced by the bounded composition window `statuses`, each status
 opportunity carries the durable identity it was established against, and
@@ -5142,7 +5145,7 @@ recovered child projects the initial absent observation (revision 0,
 `awaiting_activity`), because activity is not execution history and is never
 recovery input.
 
-#### Deterministic, scope-preserving subagent workspaces (Issues #146, #187, and #189)
+#### Deterministic, scope-preserving subagent workspaces (Issues #146, #187, #189, and #190)
 
 Named definitions carry one bounded project-workspace policy:
 `SharedWorkspace` (the default) or `GitWorktree { require_clean_parent }`.
@@ -5299,6 +5302,42 @@ boundary through the existing runtime-authored `Failed` terminal. A
 successfully inspected handoff remains a normal success. Runtime Client and
 TUI expose these recovery facts only; they do not own acquisition, cleanup, or
 integration policy.
+
+An inspected changed worktree is a retained physical resource, not an
+additional subagent lifecycle state. It remains untouched until an explicit
+`subagent_workspace_dispose` Runtime Client request (the TUI's `D` action is a
+confirmed invocation of that request). The request names only the authoritative
+`SubagentId`; the model-facing `execution` intrinsic has no disposal action and
+does not accept a physical path/ref as a deletion target. Existing workspace
+facts remain available only through the established authoritative projection
+where they materially inform the parent model. The durable terminal handoff and
+ownership facts identify the resource by source repository root,
+repository-relative logical scope, logical child workspace, physical worktree
+root, runtime-created branch, and base/head commits. A
+`SubagentWorkspaceDisposed` fact records the later resource transition without
+changing the absorbing `Succeeded`/`Failed`/`Cancelled`/`Interrupted` state.
+
+Before mutation, `SubagentWorkspaceManager` re-proves the whole relationship:
+the recorded source root must still be the current Git repository; the
+recorded physical root must still resolve to that exact worktree; the source
+repository's porcelain registration must contain the exact path, branch, and
+handoff `HEAD`; the physical worktree `HEAD` must match; and the exact runtime
+branch must still point at that handoff `HEAD`. A malformed, tampered, missing,
+rebound, or otherwise inconsistent fact fails closed before any destructive
+command. Once the proof succeeds, only that worktree is removed forcefully and
+only that branch is compare-and-deleted. This explicit operation intentionally
+discards dirty retained source changes; the parent and unrelated worktrees or
+refs are not touched. Concurrent runtime requests serialize at the manager
+boundary, while a Git/ref change observed between proof passes fails closed.
+
+The public result is deterministic: the first successful request returns
+`disposed`, a repeat returns `already_disposed` without consulting or deleting
+whatever later occupies the old path, and a child with no retained isolated
+resource returns `no_retained_workspace`. Recovery restores the terminal
+read-model record with the resource marker already disposed, so this contract
+survives a restart without reopening physical ownership. Unchanged isolated
+worktrees continue to be removed automatically during ordinary terminal
+settlement; shared workspaces have no physical resource to dispose.
 
 `ConversationRuntime::new` validates the registry's typed ownership domain
 before anything is claimed — the same `ConversationId`, the same parent

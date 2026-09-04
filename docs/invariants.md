@@ -4554,6 +4554,18 @@ semantic normalization boundary. The frozen invariants:
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
   explicit at attachment admission; the current protocol is the sole
   supported version, and every superseded version is rejected explicitly.
+- **Runtime Client protocol v15 exposes retained-workspace disposal as a
+  separate resource lifecycle.** The request names only a terminal
+  `SubagentId`; it never carries an arbitrary path or Git ref and is not
+  available through the model-facing `execution` intrinsic. The workspace
+  manager re-proves the durable source repository, physical worktree
+  registration, branch attachment, and handoff `HEAD` before forcefully
+  removing exactly the proven worktree and compare-deleting exactly its
+  runtime-created branch. Any malformed, stale, tampered, missing, rebound,
+  or mismatched fact fails closed. A successful repeat is the stable
+  `already_disposed` result, while a child without a retained isolated
+  resource is `no_retained_workspace`; neither outcome changes the absorbing
+  logical terminal state.
 - **Runtime Client protocol v14 introduces the Issue #194 Agent Status
   contextual annotation projection.** The snapshot's latest-only `status` is
   replaced by the bounded window `statuses`; each status opportunity carries

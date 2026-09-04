@@ -995,6 +995,16 @@ impl ConversationInboundMailbox {
         Ok(self.inbound.commit_subagent_terminal(event)?)
     }
 
+    /// Commits the post-terminal retained-workspace disposal fact. This is a
+    /// resource-lifecycle audit and deliberately does not reopen or advance
+    /// the subagent's logical terminal lifecycle.
+    pub(crate) fn commit_subagent_workspace_disposal(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, MailboxError> {
+        Ok(self.inbound.commit_subagent_workspace_disposal(event)?)
+    }
+
     /// Commits a successful Workflow Agent value together with the native
     /// child terminal fact in one durable transition. This is a direct
     /// Workflow handoff: it creates no parent inbound notification and no

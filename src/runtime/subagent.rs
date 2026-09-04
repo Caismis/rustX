@@ -170,7 +170,7 @@ pub use registry::{
     PreparedSubagent, SubagentAccepted, SubagentDurabilityFailureSink, SubagentListing,
     SubagentObserver, SubagentRegistry, SubagentRegistryConfig, SubagentSnapshot,
     SubagentStartError, SubagentStartOutcome, SubagentStartSpec, SubagentState,
-    SubagentTerminalMode,
+    SubagentTerminalMode, SubagentWorkspaceDisposal, SubagentWorkspaceDisposalError,
 };
 pub use resolver::{
     ResolvedSubagentSkill, ResolvedSubagentSpec, ResolvedSubagentTool, SubagentDomain,
@@ -178,7 +178,8 @@ pub use resolver::{
 };
 pub use workspace::{
     GitWorktreeSnapshot, SubagentWorkspaceManager, SubagentWorkspacePolicy, WorkspaceCleanup,
-    WorkspaceHandoff, WorkspaceIsolation, WorkspaceLease, WorkspaceSettlement, WorkspaceSnapshot,
+    WorkspaceDisposalError, WorkspaceHandoff, WorkspaceIsolation, WorkspaceLease,
+    WorkspaceSettlement, WorkspaceSnapshot,
 };
 
 use std::sync::Arc;
@@ -455,6 +456,38 @@ pub(crate) fn terminal_event_id(subagent_id: &SubagentId) -> EventId {
 /// terminal publication it has no parent message or delivery correlation.
 pub(crate) fn terminal_settlement_event_id(subagent_id: &SubagentId) -> EventId {
     EventId::new(format!("subagent-terminal-settled-event:{subagent_id}"))
+}
+
+/// The deterministic event identity of an explicit retained-workspace
+/// disposal. This fact lives after the logical child terminal event and does
+/// not participate in the `subagent:{id}` lifecycle key.
+pub(crate) fn workspace_disposal_event_id(subagent_id: &SubagentId) -> EventId {
+    EventId::new(format!("subagent-workspace-disposed-event:{subagent_id}"))
+}
+
+/// Builds the post-terminal retained-workspace disposal fact. The physical
+/// workspace manager constructs this only after exact Git ownership proof and
+/// removal; durable validation independently binds the handoff to the child
+/// ownership and terminal facts.
+pub(crate) fn workspace_disposal_event(
+    conversation_id: &ConversationId,
+    subagent_id: &SubagentId,
+    workspace_handoff: &WorkspaceHandoff,
+    timestamp: DateTime<Utc>,
+) -> RuntimeEventEnvelope {
+    RuntimeEventEnvelope {
+        schema_version: EVENT_SCHEMA_VERSION,
+        event_id: workspace_disposal_event_id(subagent_id),
+        sequence: 0,
+        conversation_id: conversation_id.clone(),
+        attempt_id: None,
+        turn_id: None,
+        timestamp,
+        event: RuntimeEvent::SubagentWorkspaceDisposed {
+            subagent_id: subagent_id.clone(),
+            workspace_handoff: workspace_handoff.clone(),
+        },
+    }
 }
 
 /// The deterministic event identity of a committed Workflow Agent value.

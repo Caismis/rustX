@@ -3208,6 +3208,9 @@ impl ConversationRuntime {
             for handoff in &inner.recovery.reconciliation().subagent_handoffs {
                 subagents.restore_recovered_handoff(handoff);
             }
+            for disposal in inner.recovery.settled_subagent_disposals() {
+                subagents.restore_recovered_disposal(disposal);
+            }
         }
         // The runtime is the durability-health owner of its background
         // plane (Issue #63): install the narrow failure seam the
@@ -4473,6 +4476,32 @@ impl ConversationRuntime {
             .and_then(|subagents| subagents.cancel(subagent_id, CancellationReason::UserRequested))
     }
 
+    /// Disposes the exact retained workspace of one terminal subagent through
+    /// the registry/workspace resource lifecycle. The logical subagent state
+    /// remains terminal; this method never synthesizes a `Disposed` state.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed disposal error when the subagent is unknown, non-terminal,
+    /// has no proven retained resource, or the workspace backend cannot prove or
+    /// remove the retained resource.
+    pub async fn subagent_workspace_dispose(
+        &self,
+        subagent_id: &crate::runtime::identity::SubagentId,
+    ) -> Result<
+        crate::runtime::subagent::SubagentWorkspaceDisposal,
+        crate::runtime::subagent::SubagentWorkspaceDisposalError,
+    > {
+        let Some(subagents) = self.inner.subagents.as_ref() else {
+            return Err(
+                crate::runtime::subagent::SubagentWorkspaceDisposalError::UnknownSubagent {
+                    subagent_id: subagent_id.clone(),
+                },
+            );
+        };
+        subagents.dispose_retained_workspace(subagent_id).await
+    }
+
     /// Inspects one background execution through the authoritative
     /// registry.
     #[must_use]
@@ -5189,6 +5218,10 @@ impl BackgroundObserver for RuntimeObserver {
 impl crate::runtime::subagent::SubagentObserver for RuntimeObserver {
     fn on_snapshot(&self, snapshot: &crate::runtime::subagent::SubagentSnapshot) {
         self.push(ConversationObservation::SubagentLifecycle(snapshot.clone()));
+    }
+
+    fn on_workspace(&self, snapshot: &crate::runtime::subagent::SubagentSnapshot) {
+        self.push(ConversationObservation::SubagentWorkspace(snapshot.clone()));
     }
 
     fn on_activity(&self, snapshot: &crate::runtime::subagent::SubagentSnapshot) {

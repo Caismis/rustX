@@ -160,6 +160,29 @@ running?", which is exactly what ownership, recovery, and the Runtime Client
 projection need; it never claims to answer "which exact effective runtime is
 this child?".
 
+### Retained subagent workspaces
+
+An isolated subagent starts from the captured committed source `HEAD`. If the
+child leaves no source change, rustX removes its runtime-created worktree and
+branch during normal terminal settlement. If it changes the worktree — either
+through uncommitted source edits or a child commit — rustX retains the exact
+worktree as a handoff. Retained work is not merged, copied, rebased, stashed,
+or removed automatically.
+
+Disposal is an explicit user/runtime-client operation on the terminal
+subagent, exposed in the TUI as the confirmed `D` action. It discards the
+retained worktree, including uncommitted source changes, and removes only the
+runtime-created branch proven to belong to that worktree. The model-facing
+`execution` intrinsic cannot dispose workspaces, and clients cannot supply an
+arbitrary filesystem path or Git ref.
+
+Before deletion, rustX re-verifies the durable handoff against the current
+source repository identity, physical Git worktree registration, worktree
+`HEAD`, branch attachment, and branch value. Any stale, tampered, missing, or
+rebound relationship fails closed and leaves the files untouched. Repeating a
+successful request returns `already_disposed`; a shared or automatically
+cleaned workspace returns `no_retained_workspace`.
+
 ## Project instruction discovery
 
 ### Workspace-owned Agent resources
