@@ -555,7 +555,7 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
         "submit_inbound must be accepted: {response:?}"
     );
 
-    let mut final_subagent = None;
+    let mut final_snapshot = None;
     for _ in 0..4_000 {
         let response = process
             .request(|id| RuntimeClientRequest::SnapshotGet {
@@ -575,18 +575,57 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
             }),
             _ => false,
         });
-        if let Some(subagent) = snapshot
+        if snapshot
             .subagents
-            .into_iter()
-            .find(|subagent| subagent.state == rustx::runtime::subagent::SubagentState::Succeeded)
+            .iter()
+            .any(|subagent| subagent.state == rustx::runtime::subagent::SubagentState::Succeeded)
             && answered
         {
-            final_subagent = Some(subagent);
+            final_snapshot = Some(snapshot);
             break;
         }
         tokio::task::yield_now().await;
     }
-    let subagent = final_subagent.expect("the scoped real child must succeed");
+    let snapshot = final_snapshot.expect("the scoped real child must succeed");
+    let subagent = snapshot
+        .subagents
+        .iter()
+        .find(|subagent| subagent.state == rustx::runtime::subagent::SubagentState::Succeeded)
+        .expect("the scoped real child must succeed");
+
+    // Protocol v14 is one contract, not two coexisting ones. The same real
+    // stdio/JSONL attachment that just carried the Issue #187 workspace
+    // authority projection also carries the Issue #194 Agent Status window:
+    // `statuses` is a list, and every composition in it publishes the
+    // placement fact it was established with. A regression that renumbered
+    // the protocol while dropping either half would fail here, at the real
+    // transport rather than on a locally constructed DTO.
+    let status = snapshot
+        .statuses
+        .last()
+        .expect("the parent turn composed an Agent Status");
+    assert!(
+        status
+            .opportunities
+            .fresh_inbound
+            .as_ref()
+            .is_some_and(|fresh| !fresh.target_message_id.as_str().is_empty())
+            || status
+                .opportunities
+                .post_tool_batch
+                .as_ref()
+                .is_some_and(|batch| batch.transcript_anchor.is_some()),
+        "a composed status publishes the durable identity that places it: \
+         {:?}",
+        status.opportunities
+    );
+    assert!(
+        !status.status_message_id.as_str().is_empty(),
+        "the composition identity travels with it"
+    );
+    // The retention bound is projection policy and is deliberately absent
+    // from the published API a client compiles against: this target sees the
+    // wire contract only, and it cannot name a window size.
     let rustx::runtime_client::RuntimeClientWorkspaceIsolation::GitWorktree {
         source_repository_root,
         repository_relative_workspace,

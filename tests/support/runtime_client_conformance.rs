@@ -642,6 +642,26 @@ pub async fn unsupported_protocol_version_is_typed(factory: &dyn DriverFactory) 
         }
     );
 
+    // The immediately superseded version is rejected exactly like any other
+    // superseded one. Nothing decodes it, nothing converts it, and the
+    // rejection carries the one supported version rather than a negotiated
+    // range: there is exactly one current Runtime Client protocol shape.
+    let superseded = rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION - 1;
+    let response = driver
+        .request(RuntimeClientRequest::Initialize {
+            id: RequestId::new(9),
+            protocol_version: superseded,
+        })
+        .await;
+    assert_eq!(response.id, RequestId::new(9));
+    assert_eq!(
+        error(response),
+        RuntimeClientError::UnsupportedProtocolVersion {
+            supported: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
+            requested: superseded,
+        }
+    );
+
     // A rejected negotiation admitted nothing, and the supported version
     // still attaches.
     let response = driver

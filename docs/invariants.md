@@ -4499,6 +4499,17 @@ semantic normalization boundary. The frozen invariants:
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
   explicit at attachment admission; the current protocol is the sole
   supported version, and every superseded version is rejected explicitly.
+- **Runtime Client protocol v14 introduces the Issue #194 Agent Status
+  contextual annotation projection.** The snapshot's latest-only `status` is
+  replaced by the bounded window `statuses`; each status opportunity carries
+  the durable identity it was established against (`FreshInbound` the inbound
+  message, `PostToolBatch` its settled tool batch's `transcript_anchor`); and
+  `agent_status_composed` publishes the whole window transition, including the
+  `evicted_status_message_id` that admission caused. The retention bound stays
+  Runtime Client projection policy and never reaches the wire. v14 carries the
+  v13 workspace authority projection unchanged; it does not replace it. There
+  is no v13 -> v14 conversion and no legacy `status` decoding: a v13 client is
+  rejected explicitly at negotiation.
 - **Runtime Client protocol v13 introduces the Issue #187 subagent
   workspace representation.** The workspace projection separates logical
   child project authority (`logical_workspace`) from physical Git worktree

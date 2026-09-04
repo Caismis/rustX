@@ -508,13 +508,15 @@ async fn attachment_raii_drop_detaches() {
         .expect("attach after drop");
 }
 
-/// The v13 subagent workspace projection serializes exactly as the shared
+/// The subagent workspace projection serializes exactly as the shared
 /// `tests/fixtures/runtime-client/*.json` fixtures the TUI protocol mirror
 /// is validated against. This is the cross-language regression for the
-/// Issue #187 wire shape: if either side drifts back to the pre-#187 flat
-/// `workspace`/`isolated` schema, one of the two fixture assertions fails.
+/// Issue #187 wire shape, carried unchanged into v14: if either side drifts
+/// back to the pre-#187 flat `workspace`/`isolated` schema, or the Issue #194
+/// renumbering silently dropped a workspace field, one of the two fixture
+/// assertions fails.
 #[test]
-fn v13_workspace_wire_shape_matches_the_shared_fixtures() {
+fn v14_workspace_wire_shape_matches_the_shared_fixtures() {
     let shared = RuntimeClientSubagentWorkspace {
         logical_workspace: std::path::PathBuf::from("/repo"),
         isolation: RuntimeClientWorkspaceIsolation::Shared,
@@ -544,11 +546,11 @@ fn v13_workspace_wire_shape_matches_the_shared_fixtures() {
 
     for (fixture, workspace) in [
         (
-            "tests/fixtures/runtime-client/workspace-shared-v13.json",
+            "tests/fixtures/runtime-client/workspace-shared-v14.json",
             &shared,
         ),
         (
-            "tests/fixtures/runtime-client/workspace-git-worktree-v13.json",
+            "tests/fixtures/runtime-client/workspace-git-worktree-v14.json",
             &isolated_subdirectory,
         ),
     ] {
@@ -557,7 +559,7 @@ fn v13_workspace_wire_shape_matches_the_shared_fixtures() {
         assert_eq!(
             serialized,
             expected.trim_end(),
-            "{fixture}: the serialized v13 workspace shape drifted from the \
+            "{fixture}: the serialized v14 workspace shape drifted from the \
              fixture the TUI mirror is validated against"
         );
         let decoded: RuntimeClientSubagentWorkspace =
