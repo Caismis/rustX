@@ -26,6 +26,7 @@
  */
 
 import type {
+  AgentStatusView,
   BackgroundLifecycle,
   CapabilitySourceView,
   RoutedInteraction,
@@ -36,6 +37,8 @@ import type {
   RuntimeClientSkill,
   RuntimeClientSubagent,
   RuntimeClientTool,
+  MessageId,
+  RuntimeClientTranscriptCursor,
   SessionSummaryView,
   SessionView,
   ToolOrigin,
@@ -151,6 +154,119 @@ function compareRoutedInteractions(
   ) || left.interaction.interaction_id.localeCompare(
     right.interaction.interaction_id,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Agent Status placement
+//
+// Agent Status is runtime-owned model-visible context. Its canonical Context
+// message stays out of the ordinary transcript, and the annotation the
+// transcript draws instead is placed from runtime facts alone:
+//
+// ```text
+// FreshInbound present   the referenced inbound message   opportunities.fresh_inbound
+// otherwise              the durable position it followed transcript_anchor
+// ```
+//
+// Exactly one of those applies to any one composition, which is what makes
+// "every composed Agent Status has exactly one presentation anchor" a
+// property of the data rather than a rule a renderer has to remember. Nothing
+// below reads a timestamp, an array position, or a neighbouring row.
+// ---------------------------------------------------------------------------
+
+/** Where one composed Agent Status belongs, per the runtime. */
+export type AgentStatusAnchor =
+  | {
+      /** Subordinate metadata of the inbound turn that made it eligible. */
+      kind: "inbound_message";
+      messageId: MessageId;
+    }
+  | {
+      /** A standalone update after the settled frontier it followed. */
+      kind: "transcript_position";
+      cursor: RuntimeClientTranscriptCursor;
+    }
+  | {
+      /** The runtime published no placement fact; nothing is drawn. */
+      kind: "unplaced";
+    };
+
+/**
+ * The one anchor of one composed status.
+ *
+ * `FreshInbound` wins when both opportunities are present: it names an exact
+ * message identity, which is a stronger fact than a position, and choosing it
+ * unconditionally is what keeps a doubly-eligible composition from being
+ * drawn twice.
+ */
+export function agentStatusAnchor(status: AgentStatusView): AgentStatusAnchor {
+  const fresh = status.opportunities.fresh_inbound;
+  if (fresh !== undefined) {
+    return { kind: "inbound_message", messageId: fresh.target_message_id };
+  }
+  if (status.transcript_anchor !== undefined) {
+    return { kind: "transcript_position", cursor: status.transcript_anchor };
+  }
+  return { kind: "unplaced" };
+}
+
+/** Composed statuses grouped by the transcript entry they are drawn after. */
+export interface AgentStatusPlacement {
+  /** Keyed by the referenced inbound message identity. */
+  byMessageId: Map<MessageId, AgentStatusView[]>;
+  /** Keyed by the durable transcript position the composition followed. */
+  byCursor: Map<RuntimeClientTranscriptCursor, AgentStatusView[]>;
+}
+
+/**
+ * Groups every composed status by its single anchor, in composition order.
+ *
+ * A status appears in exactly one bucket, so a renderer that visits each
+ * bucket once draws each composition once. A status whose anchor names a
+ * transcript entry that is not loaded is simply not drawn; paging that entry
+ * in later places it, because placement is a property of the fact and not of
+ * what happened to be on screen.
+ */
+export function agentStatusPlacement(
+  state: PresentationState,
+): AgentStatusPlacement {
+  const byMessageId = new Map<MessageId, AgentStatusView[]>();
+  const byCursor = new Map<RuntimeClientTranscriptCursor, AgentStatusView[]>();
+  for (const status of state.statuses) {
+    const anchor = agentStatusAnchor(status);
+    if (anchor.kind === "inbound_message") {
+      append(byMessageId, anchor.messageId, status);
+    } else if (anchor.kind === "transcript_position") {
+      append(byCursor, anchor.cursor, status);
+    }
+  }
+  return { byMessageId, byCursor };
+}
+
+function append<K>(
+  index: Map<K, AgentStatusView[]>,
+  key: K,
+  status: AgentStatusView,
+): void {
+  const existing = index.get(key);
+  if (existing === undefined) {
+    index.set(key, [status]);
+    return;
+  }
+  existing.push(status);
+}
+
+/**
+ * The newest composed Agent Status, or `undefined` before the first one.
+ *
+ * Derived from the runtime's own composition order rather than kept as a
+ * second field, so it can never disagree with the annotations the transcript
+ * draws.
+ */
+export function latestAgentStatus(
+  state: PresentationState,
+): AgentStatusView | undefined {
+  return state.statuses[state.statuses.length - 1];
 }
 
 /** Whether a background lifecycle state is terminal, per the runtime. */

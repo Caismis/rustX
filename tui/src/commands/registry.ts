@@ -72,7 +72,8 @@ export const COMMANDS: readonly CommandSpec[] = [
   },
   {
     name: "/status",
-    description: "Show the runtime-composed Agent Status and runtime diagnostics.",
+    description:
+      "Show the latest runtime-composed Agent Status in full. Runtime and client diagnostics are in /debug.",
   },
   {
     name: "/compact",
@@ -84,7 +85,8 @@ export const COMMANDS: readonly CommandSpec[] = [
   },
   {
     name: "/debug",
-    description: "Show bounded presentation and protocol diagnostics.",
+    description:
+      "Show bounded presentation, runtime, and protocol diagnostics.",
   },
   {
     name: "/reasoning",

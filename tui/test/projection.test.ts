@@ -18,7 +18,9 @@ import type {
   RuntimeClientEvent,
   RuntimeClientProtocolEvent,
 } from "../src/protocol/types.ts";
+import { agentStatusAnchor } from "../src/presentation/selectors.ts";
 import {
+  agentStatus,
   assistantMessage,
   approvalInteraction,
   attemptModel,
@@ -26,6 +28,8 @@ import {
   backgroundExecution,
   contextUserMessage,
   capabilities,
+  temporalSection,
+  todoSection,
   runtimeInbound,
   sessionModel,
   questionnaireInteraction,
@@ -893,91 +897,73 @@ describe("presentation projection", () => {
   });
 
   it("folds Agent Status without composing one", () => {
-    const status = {
-      attempt_id: "a1",
-      turn: 1,
+    const status = agentStatus({
       status_message_id: "status-1",
       opportunities: { fresh_inbound: { target_message_id: "m1" } },
-      sections: [
-        {
-          type: "temporal" as const,
-          current_time: "2026-08-14T00:00:00Z",
-        },
-      ],
+      transcript_anchor: transcriptCursor(1),
+      sections: [temporalSection("2026-08-14T00:00:00Z")],
       rendered: "## Status\ncurrent time: 2026-08-14",
-    };
+    });
     const state = fold(initial(), [
       { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
-      {
-        type: "agent_status_composed",
-        attempt_id: "a1",
-        turn: 1,
-        status,
-      },
+      { type: "agent_status_composed", attempt_id: "a1", turn: 1, status },
     ]);
 
-    // The rendered form comes from the runtime's own composition.
-    assert.equal(state.status?.rendered, status.rendered);
-    assert.deepEqual(state.status?.sections, status.sections);
+    // The rendered form comes from the runtime's own composition and is
+    // carried, never parsed.
+    assert.deepEqual(state.statuses, [status]);
+    assert.equal(state.statuses[0]?.rendered, status.rendered);
   });
 
   it("folds an Agent Status opportunity set without FreshInbound", () => {
-    const status = {
-      attempt_id: "a1",
-      turn: 1,
+    const status = agentStatus({
       status_message_id: "status-1",
-      opportunities: {},
-      sections: [],
-      rendered: "<system-reminder>\n</system-reminder>",
-    };
+      transcript_anchor: transcriptCursor(4),
+    });
     const state = fold(initial(), [
       { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
-      {
-        type: "agent_status_composed",
-        attempt_id: "a1",
-        turn: 1,
-        status,
-      },
+      { type: "agent_status_composed", attempt_id: "a1", turn: 1, status },
     ]);
 
-    assert.equal(state.status?.opportunities.fresh_inbound, undefined);
+    assert.equal(state.statuses[0]?.opportunities.fresh_inbound, undefined);
+    assert.deepEqual(agentStatusAnchor(status), {
+      kind: "transcript_position",
+      cursor: transcriptCursor(4),
+    });
   });
 
-  it("folds simultaneous FreshInbound and PostToolBatch opportunities", () => {
-    const status = {
-      attempt_id: "a1",
-      turn: 1,
+  it("gives a doubly-eligible composition the FreshInbound anchor only", () => {
+    const status = agentStatus({
       status_message_id: "status-combined",
       opportunities: {
         fresh_inbound: { target_message_id: "m1" },
         post_tool_batch: {},
       },
-      sections: [],
-      rendered: "## Status",
-    };
+      transcript_anchor: transcriptCursor(6),
+    });
     const state = fold(initial(), [
       { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
-      {
-        type: "agent_status_composed",
-        attempt_id: "a1",
-        turn: 1,
-        status,
-      },
+      { type: "agent_status_composed", attempt_id: "a1", turn: 1, status },
     ]);
 
-    assert.deepEqual(state.status?.opportunities, status.opportunities);
-    assert.equal(state.status?.status_message_id, "status-combined");
+    assert.deepEqual(state.statuses[0]?.opportunities, status.opportunities);
+    assert.equal(state.statuses[0]?.status_message_id, "status-combined");
+    // One composition, one anchor: the explicit message identity wins over
+    // the position, so nothing can draw it twice.
+    assert.deepEqual(agentStatusAnchor(status), {
+      kind: "inbound_message",
+      messageId: "m1",
+    });
   });
 
   it("folds the bounded Todo Agent Status section", () => {
-    const status = {
-      attempt_id: "a1",
-      turn: 2,
+    const status = agentStatus({
       status_message_id: "status-todo",
+      turn: 2,
       opportunities: { post_tool_batch: {} },
+      transcript_anchor: transcriptCursor(2),
       sections: [
-        {
-          type: "todo" as const,
+        todoSection({
           current: {
             id: 7,
             subject: "Review the boundary",
@@ -985,28 +971,99 @@ describe("presentation projection", () => {
             status: "in_progress" as const,
             blocked: false,
           },
-          tasks: [],
           active_count: 1,
-          blocked_count: 0,
           completed_count: 3,
           deleted_count: 1,
-          omitted_count: 0,
-        },
+        }),
       ],
       rendered: "## Todo\n- Review the boundary",
-    };
+    });
     const state = fold(initial(), [
       { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
-      {
-        type: "agent_status_composed",
-        attempt_id: "a1",
-        turn: 2,
-        status,
-      },
+      { type: "agent_status_composed", attempt_id: "a1", turn: 2, status },
     ]);
 
-    assert.deepEqual(state.status?.sections, status.sections);
-    assert.deepEqual(state.status?.opportunities, status.opportunities);
+    assert.deepEqual(state.statuses[0]?.sections, status.sections);
+    assert.deepEqual(state.statuses[0]?.opportunities, status.opportunities);
+  });
+
+  it("keeps an earlier Agent Status when a later attempt starts", () => {
+    const first = agentStatus({
+      status_message_id: "status-1",
+      opportunities: { fresh_inbound: { target_message_id: "m1" } },
+      transcript_anchor: transcriptCursor(1),
+    });
+    const second = agentStatus({
+      status_message_id: "status-2",
+      attempt_id: "a2",
+      opportunities: { fresh_inbound: { target_message_id: "m2" } },
+      transcript_anchor: transcriptCursor(3),
+    });
+    const state = fold(initial(), [
+      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "agent_status_composed", attempt_id: "a1", turn: 1, status: first },
+      {
+        type: "attempt_settled",
+        attempt_id: "a1",
+        outcome: { type: "completed", finish_reason: { type: "stop" } },
+      },
+      { type: "attempt_started", attempt_id: "a2", model: attemptModel("alpha/model-a") },
+      { type: "agent_status_composed", attempt_id: "a2", turn: 1, status: second },
+    ]);
+
+    // A composed status is a historical fact of the conversation: a later
+    // attempt neither retracts nor relocates it.
+    assert.deepEqual(state.statuses, [first, second]);
+    assert.deepEqual(agentStatusAnchor(first), {
+      kind: "inbound_message",
+      messageId: "m1",
+    });
+  });
+
+  it("keeps one presentation item when a composition is replayed", () => {
+    const status = agentStatus({
+      status_message_id: "status-1",
+      opportunities: { fresh_inbound: { target_message_id: "m1" } },
+      transcript_anchor: transcriptCursor(1),
+    });
+    const state = fold(initial(), [
+      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "agent_status_composed", attempt_id: "a1", turn: 1, status },
+      { type: "agent_status_composed", attempt_id: "a1", turn: 1, status },
+    ]);
+
+    assert.equal(state.statuses.length, 1);
+  });
+
+  it("rebuilds the Agent Status window from a snapshot alone", () => {
+    const first = agentStatus({
+      status_message_id: "status-1",
+      opportunities: { fresh_inbound: { target_message_id: "m1" } },
+      transcript_anchor: transcriptCursor(1),
+    });
+    const second = agentStatus({
+      status_message_id: "status-2",
+      transcript_anchor: transcriptCursor(2),
+    });
+    const folded = fold(initial(), [
+      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "agent_status_composed", attempt_id: "a1", turn: 1, status: first },
+      { type: "agent_status_composed", attempt_id: "a1", turn: 2, status: second },
+    ]);
+
+    // A repair derives the window from the snapshot only: the state being
+    // replaced contributes nothing, so a fresh client and a live one agree.
+    const repaired = replaceFromSnapshot(
+      snapshot({ statuses: [first, second] }),
+      runtimeCursor(9),
+    );
+    assert.deepEqual(repaired.statuses, folded.statuses);
+
+    const fromPopulated = replaceFromSnapshot(
+      snapshot({ statuses: [second] }),
+      runtimeCursor(10),
+    );
+    assert.deepEqual(fromPopulated.statuses, [second]);
   });
 
   it("folds a capability revision swap", () => {

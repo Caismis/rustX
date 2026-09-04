@@ -29,6 +29,7 @@ import {
   describeConfiguredReasoning,
   describeReasoning,
   inactiveToolsByOrigin,
+  latestAgentStatus,
   originLabel,
   outcomeLabel,
   sessionLabel,
@@ -38,6 +39,7 @@ import {
 } from "../presentation/selectors.ts";
 import { selectTodos } from "../presentation/todos.ts";
 import type { PresentationState } from "../presentation/state.ts";
+import { renderAgentStatusDetail } from "../ui/components/agent-status.ts";
 import { renderTodoInspection } from "../ui/components/todos.ts";
 import { COMMANDS, parseCommandLine } from "./registry.ts";
 import type {
@@ -223,7 +225,7 @@ export class CommandDispatcher {
         case "/todos":
           return inspect("Todos", renderTodoInspection(selectTodos(state)));
         case "/status":
-          return inspect("Runtime status", renderStatus(state));
+          return inspect("Agent Status", renderStatus(state));
         case "/compact":
           return await this.#compact(session, argument);
         case "/reload":
@@ -900,59 +902,41 @@ export function renderSkills(state: PresentationState): string {
 }
 
 /**
- * `/status` — the runtime-composed Agent Status plus runtime diagnostics.
+ * `/status` — the latest runtime-composed Agent Status, as Agent Status.
  *
- * The rendering is the runtime's own; this client never composes an Agent
- * Status and never parses the rendered text to recover structure.
+ * This surface answers one question: *what context is the agent currently
+ * carrying?* It renders the runtime's typed sections through the same facets
+ * the transcript annotation uses, so the compact `◇ status · …` line beside a
+ * turn and the expanded view here can never describe one composition
+ * differently.
+ *
+ * It never parses `AgentStatusView.rendered`. That string is the model-facing
+ * body, kept for diagnostics; recovering section semantics from it would make
+ * this client a second interpreter of a composition it already receives
+ * structurally.
+ *
+ * Generic runtime and client diagnostics — cursors, attempts, capability
+ * revisions, mailbox counters — belong to `/debug`, which is the one
+ * diagnostic surface. The provenance line below is the only runtime metadata
+ * kept here, and it is metadata *about this composition*, separated from it.
  */
 export function renderStatus(state: PresentationState): string {
-  const lines = ["### Runtime"];
-  lines.push(`- conversation: \`${state.conversationId}\``);
-  lines.push(`- capability revision: ${state.capabilities.revision}`);
-  lines.push(
-    `- session model: \`${state.sessionModel.configured.model}\``,
-  );
-  lines.push(...contextDiagnosticsLines(state));
-
-  const attempt = state.attempt;
-  lines.push(
-    attempt === undefined
-      ? "- attempt: none"
-      : `- attempt: \`${attempt.attemptId}\` ${
-          attempt.phase.type === "settled"
-            ? outcomeLabel(attempt.phase.outcome)
-            : attempt.phase.type
-        } (turn ${attempt.turn}, model \`${attempt.model.primary.model}\`)`,
-  );
-
-  const pending = state.inbound.pending ?? [];
-  lines.push(`- inbound pending: ${pending.length}`);
-  if (state.inbound.last_drain !== undefined) {
-    lines.push(
-      `- last drain: watermark ${state.inbound.last_drain.watermark}, ${state.inbound.last_drain.count} item(s)`,
-    );
+  const status = latestAgentStatus(state);
+  if (status === undefined) {
+    return [
+      "### Agent Status",
+      "",
+      "No Agent Status has been composed yet. The runtime composes one when a",
+      "delivery opportunity makes it eligible; `/debug` shows runtime and",
+      "client diagnostics meanwhile.",
+    ].join("\n");
   }
-  const active = activeBackground(state);
-  lines.push(
-    `- background: ${active.length} active of ${state.background.length} known`,
-  );
-  if (state.runtimeShutdown) {
-    lines.push("- runtime is draining; conversation-owned work is settling");
-  }
-
-  if (state.status === undefined) {
-    lines.push("", "No Agent Status has been composed yet.");
-    return lines.join("\n");
-  }
-
-  lines.push(
+  return [
+    "### Agent Status",
+    ...renderAgentStatusDetail(status),
     "",
-    `### Agent Status (attempt \`${state.status.attempt_id}\`, turn ${state.status.turn})`,
-    "```",
-    state.status.rendered,
-    "```",
-  );
-  return lines.join("\n");
+    `Composed by attempt \`${status.attempt_id}\` on turn ${status.turn}. Runtime and client diagnostics are in \`/debug\`.`,
+  ].join("\n");
 }
 
 /** `/debug` — bounded presentation and protocol diagnostics. */
@@ -977,8 +961,14 @@ export function renderDebug(
     `- capability revision: ${state.capabilities.revision}`,
     ...contextDiagnosticsLines(state),
     `- inbound pending: ${(state.inbound.pending ?? []).length}`,
+    ...lastDrainLines(state),
     `- background executions: ${state.background.length} (${activeBackground(state).length} active)`,
     `- transcript entries: ${state.transcript.length}`,
+    `- composed Agent Statuses: ${state.statuses.length}`,
+    ...attemptDiagnosticsLines(state),
+    ...(state.runtimeShutdown
+      ? ["- runtime is draining; conversation-owned work is settling"]
+      : []),
   ];
 
   if (diagnostics.stderrTail.length > 0) {
@@ -993,6 +983,26 @@ export function renderDebug(
     );
   }
   return lines.join("\n");
+}
+
+/** The current/latest attempt, as the runtime published it. */
+function attemptDiagnosticsLines(state: PresentationState): string[] {
+  const attempt = state.attempt;
+  if (attempt === undefined) {
+    return ["- attempt: none"];
+  }
+  const phase =
+    attempt.phase.type === "settled"
+      ? outcomeLabel(attempt.phase.outcome)
+      : attempt.phase.type;
+  return [`- attempt: \`${attempt.attemptId}\` ${phase} (turn ${attempt.turn})`];
+}
+
+function lastDrainLines(state: PresentationState): string[] {
+  const drain = state.inbound.last_drain;
+  return drain === undefined
+    ? []
+    : [`- last drain: watermark ${drain.watermark}, ${drain.count} item(s)`];
 }
 
 function contextDiagnosticsLines(state: PresentationState): string[] {

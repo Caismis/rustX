@@ -10,6 +10,8 @@
 import type {
   AssistantContentBlock,
   AgentStatusGenerationMetadata,
+  AgentStatusView,
+  RuntimeClientStatusSection,
   AttemptModelView,
   CapabilityView,
   CatalogModelView,
@@ -212,6 +214,62 @@ export function snapshot(
     capabilities: capabilities(1),
     model: sessionModel("alpha/model-a"),
     ...overrides,
+  };
+}
+
+/**
+ * One composed Agent Status, with the runtime facts that place it.
+ *
+ * The two placements are distinguished by opportunity, exactly as the runtime
+ * distinguishes them: pass `target` for a `FreshInbound` composition, and
+ * only `anchor` for a `PostToolBatch`-only one.
+ */
+export function agentStatus(
+  overrides: Partial<AgentStatusView> & { status_message_id: string },
+): AgentStatusView {
+  return {
+    attempt_id: "a1",
+    turn: 1,
+    opportunities: {},
+    sections: [],
+    rendered: "<system-reminder>\n</system-reminder>",
+    ...overrides,
+  };
+}
+
+/** The `temporal` section, as the runtime publishes it. */
+export function temporalSection(
+  currentTime = "2026-08-14T15:42:00Z",
+  timezone?: string,
+): RuntimeClientStatusSection {
+  return { type: "temporal", current_time: currentTime, timezone };
+}
+
+/** The `todo` section, with the runtime's own committed counts. */
+export function todoSection(
+  overrides: Partial<Extract<RuntimeClientStatusSection, { type: "todo" }>> = {},
+): RuntimeClientStatusSection {
+  return {
+    type: "todo",
+    tasks: [],
+    active_count: 0,
+    blocked_count: 0,
+    completed_count: 0,
+    deleted_count: 0,
+    omitted_count: 0,
+    ...overrides,
+  };
+}
+
+/** The `background_executions` section, in registry allocation order. */
+export function backgroundSection(
+  executions: RuntimeClientBackgroundExecution[],
+  omittedCount = 0,
+): RuntimeClientStatusSection {
+  return {
+    type: "background_executions",
+    executions,
+    omitted_count: omittedCount,
   };
 }
 

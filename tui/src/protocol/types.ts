@@ -24,15 +24,18 @@
  */
 
 /**
- * Version 13 introduces the Issue #187 subagent workspace representation
- * that separates logical child project authority (`logical_workspace`) from
- * physical Git worktree ownership (`isolation.git_worktree` facts and the
- * handoff's `physical_worktree_root`). It retains the version 12 routed live
- * interaction projection, the version 11 subagent activity projection, and
- * version 9's closed `interrupted` lifecycle vocabulary. Older schemas are
- * not decoded.
+ * Version 14 adds the Agent Status contextual annotation projection: the
+ * snapshot carries the bounded composition window `statuses` instead of a
+ * latest-only `status`, and each `AgentStatusView` carries the
+ * `transcript_anchor` its composition followed. It retains version 13's
+ * Issue #187 subagent workspace representation, which separates logical child
+ * project authority (`logical_workspace`) from physical Git worktree
+ * ownership (`isolation.git_worktree` facts and the handoff's
+ * `physical_worktree_root`); version 12's routed live interactions;
+ * version 11's subagent activity projection; and version 9's closed
+ * `interrupted` lifecycle vocabulary. Older schemas are not decoded.
  */
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 13;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 14;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -942,13 +945,39 @@ export interface AgentStatusOpportunityView {
 
 export interface PostToolBatchStatusOpportunityView {}
 
+/**
+ * One composed Agent Status, with the runtime facts that place it.
+ *
+ * Placement is runtime-owned because only the runtime knows it: the canonical
+ * Agent Status Context message is request-scoped model history with no
+ * durable transcript cursor of its own, so a client could otherwise only
+ * guess from arrival order or screen adjacency. `opportunities` says what
+ * made the composition eligible and `transcript_anchor` says which durable
+ * transcript position it followed; how a client draws a status at that place
+ * is presentation and is decided nowhere near this file.
+ */
 export interface AgentStatusView {
   attempt_id: AttemptId;
   turn: number;
+  /**
+   * The canonical Agent Status Context message. This is the composition's
+   * stable identity: the same value twice describes one composition.
+   */
   status_message_id: MessageId;
   opportunities: AgentStatusOpportunityView;
+  /**
+   * The newest durable transcript position that existed when the runtime
+   * composed this status. Absent only when the conversation had no durable
+   * transcript item at all.
+   */
+  transcript_anchor?: RuntimeClientTranscriptCursor;
   sections: RuntimeClientStatusSection[];
-  /** The canonical rendering, derived from the same composition as sections. */
+  /**
+   * The canonical rendering, derived from the same composition as sections.
+   *
+   * Diagnostics only. Presentation renders `sections`; nothing parses this
+   * text back into structure.
+   */
   rendered: string;
 }
 
@@ -1091,7 +1120,15 @@ export interface RuntimeClientSnapshot {
   pending_interactions: RoutedInteraction[];
   background?: RuntimeClientBackgroundExecution[];
   subagents?: RuntimeClientSubagent[];
-  status?: AgentStatusView;
+  /**
+   * The bounded newest window of composed Agent Statuses, oldest first.
+   *
+   * A list, not a latest value: a composed status is a historical fact of the
+   * conversation, and a later attempt neither retracts nor relocates one.
+   * "Latest" is the last element, so no second field can disagree with this
+   * order.
+   */
+  statuses?: AgentStatusView[];
   context: RuntimeClientContextView;
   capabilities: CapabilityView;
   /** The active runtime resource generation (context files, agent profile). */

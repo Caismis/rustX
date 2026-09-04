@@ -27,6 +27,7 @@
  */
 
 import type {
+  AgentStatusView,
   AttemptModelView,
   RoutedInteraction,
   RuntimeClientCursor,
@@ -62,6 +63,7 @@ export function emptyPresentationState(
     pendingInteractions: [],
     background: [],
     subagents: [],
+    statuses: [],
     context: { compaction_in_progress: false, compaction_count: 0 },
     capabilities: { revision: 0, tools: [], skills: [] },
     resources: { revision: 0, context_files: [], agent_profile: false },
@@ -144,7 +146,11 @@ export function replaceFromSnapshot(
     pendingInteractions: [...snapshot.pending_interactions],
     background: [...(snapshot.background ?? [])],
     subagents: [...(snapshot.subagents ?? [])],
-    status: snapshot.status,
+    // The runtime's bounded composition window, verbatim. Every annotation
+    // the transcript draws is reconstructed from this list and the placement
+    // facts each status carries, so a repair never has to consult — or
+    // carry over — the state it replaces.
+    statuses: dedupeStatuses(snapshot.statuses ?? []),
     context: snapshot.context,
     capabilities: snapshot.capabilities,
     resources: snapshot.resources ?? {
@@ -203,8 +209,13 @@ export function reduce(
     case "attempt_started":
       // The frozen model travels with the event, so the active attempt's
       // model is known without a snapshot round trip and without inference.
+      //
+      // Composed Agent Statuses are deliberately untouched. They are
+      // historical facts of the conversation, not attempt-scoped live state,
+      // and the runtime's own window keeps them across attempts too — so
+      // clearing them here would make this client disagree with the snapshot
+      // it would repair from.
       next.attempt = startAttempt(event.attempt_id, event.model);
-      next.status = undefined;
       return next;
 
     case "attempt_settled":
@@ -526,7 +537,11 @@ export function reduce(
     }
 
     case "agent_status_composed":
-      next.status = event.status;
+      // Identity is the composed status message, so a replayed observation of
+      // one composition stays one presentation item. Appending — rather than
+      // replacing — is what makes the incremental fold agree with the
+      // snapshot window it would be repaired from.
+      next.statuses = appendStatus(state.statuses, event.status);
       return next;
 
     case "inbound_enqueued":
@@ -717,6 +732,40 @@ function deduplicateTranscript(transcript: TranscriptEntry[]): TranscriptEntry[]
     }
   }
   return [...seen.values()];
+}
+
+/**
+ * Appends one composed status, keyed by its canonical status message.
+ *
+ * The runtime bounds its own window, so this never trims: trimming here would
+ * make the incremental fold disagree with the snapshot for no reason.
+ */
+function appendStatus(
+  statuses: AgentStatusView[],
+  status: AgentStatusView,
+): AgentStatusView[] {
+  if (
+    statuses.some(
+      (existing) => existing.status_message_id === status.status_message_id,
+    )
+  ) {
+    return statuses;
+  }
+  return [...statuses, status];
+}
+
+/** Keeps one entry per composition identity, in the runtime's own order. */
+function dedupeStatuses(statuses: AgentStatusView[]): AgentStatusView[] {
+  const seen = new Set<string>();
+  const kept: AgentStatusView[] = [];
+  for (const status of statuses) {
+    if (seen.has(status.status_message_id)) {
+      continue;
+    }
+    seen.add(status.status_message_id);
+    kept.push(status);
+  }
+  return kept;
 }
 
 function startAttempt(
