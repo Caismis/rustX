@@ -9,7 +9,7 @@
 //! - the in-flight output and foreground tool views carry enough state to
 //!   repair every client-visible streaming effect;
 //! - background executions mirror the authoritative conversation registry;
-//! - the Agent Status view derives from the exact composed status;
+//! - the Agent Status window derives from the exact composed statuses;
 //! - inbound diagnostics mirror the authoritative mailbox;
 //! - the capability view mirrors the active capability snapshot.
 //!
@@ -116,9 +116,33 @@ pub struct RuntimeClientSnapshot {
     /// records retained by the authoritative registry (Issue #60).
     #[serde(default)]
     pub subagents: Vec<RuntimeClientSubagent>,
-    /// The latest composed Agent Status observation, when one exists.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<AgentStatusView>,
+    /// The bounded newest window of composed Agent Status observations, in
+    /// runtime composition order (oldest first).
+    ///
+    /// This is a **list, not a latest value**: a composed status is a
+    /// historical fact of the conversation, and a later attempt neither
+    /// retracts nor relocates an earlier one. A client that wants "the
+    /// latest" takes the last element; it never needs a second field that
+    /// could disagree with this order.
+    ///
+    /// The window is bounded by [`AGENT_STATUS_WINDOW`], and that bound is
+    /// owned **here, in the projection, and nowhere else**. A client folding
+    /// [`RuntimeClientEvent::AgentStatusComposed`](super::RuntimeClientEvent)
+    /// incrementally never applies a retention rule of its own: each event
+    /// carries the eviction this exact projection transition performed, so
+    /// the fold reproduces the window rather than re-deciding it. Two
+    /// retention owners would be two policies, and after the bound was
+    /// crossed a snapshot repair would silently drop compositions a
+    /// continuously subscribed client still believed in.
+    ///
+    /// The canonical Agent Status Context message is request-scoped model
+    /// history and never enters the durable transcript, so unlike a
+    /// transcript page this window cannot be paged backwards: a composition
+    /// older than the window is simply no longer projected. Like `attempt`
+    /// and `context`, it describes the live runtime and starts empty on a
+    /// fresh runtime.
+    #[serde(default)]
+    pub statuses: Vec<AgentStatusView>,
     /// Runtime-owned context-compaction diagnostics. The values describe
     /// committed `RuntimeEvent::CompactionCompleted` facts by identity;
     /// they are never a second Conversation Surface authority and never
@@ -812,12 +836,36 @@ pub struct RuntimeClientSubagent {
     pub workspace: RuntimeClientSubagentWorkspace,
 }
 
+/// The bounded number of composed Agent Status observations one snapshot
+/// projects.
+///
+/// Agent Status is composed at most once per logical primary step, so this
+/// window covers far more history than any client renders at once while
+/// keeping the snapshot's size independent of conversation length.
+///
+/// This constant is the single authoritative retention policy. It is
+/// deliberately not part of the wire contract and deliberately not mirrored
+/// by any client: a client learns that a composition left the window only
+/// from the eviction its own
+/// [`RuntimeClientEvent::AgentStatusComposed`](super::RuntimeClientEvent)
+/// fold carries. Changing this value therefore changes one behaviour in one
+/// place, and no already-connected client can disagree with the change.
+pub const AGENT_STATUS_WINDOW: usize = 64;
+
 /// The structured Agent Status view of one composition.
 ///
 /// Derived from the exact composed status the model path consumed: the
 /// structured sections and the canonical rendered representation originate
 /// from the same composition, so a client never parses the rendered text
 /// to recover structure and never triggers a second composition.
+///
+/// The view also carries the runtime facts that place the composition in
+/// conversation order: the eligible
+/// [`opportunities`](Self::opportunities), each with the durable identity it
+/// was established against. Placement is a runtime fact because only the
+/// runtime knows it, and it is frozen where it is determined rather than
+/// reconstructed downstream; how a client draws a status at that place is
+/// presentation and stays entirely outside this type.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentStatusView {
@@ -825,14 +873,31 @@ pub struct AgentStatusView {
     pub attempt_id: AttemptId,
     /// The turn number of the request preparation.
     pub turn: u32,
-    /// The canonical Agent Status User message described by this view.
+    /// The canonical Agent Status User message described by this view. It is
+    /// the stable identity of the composition: observing the same
+    /// `status_message_id` twice describes one composition, never two.
     pub status_message_id: MessageId,
-    /// The delivery opportunities that made this generation eligible.
+    /// The delivery opportunities that made this generation eligible, each
+    /// carrying its own placement fact.
+    ///
+    /// The Agent Status Context message is request-scoped model history: it
+    /// carries no transcript cursor of its own and never becomes a transcript
+    /// item, so placement has to be published or it cannot be known. Each
+    /// opportunity publishes the identity it was established against —
+    /// `FreshInbound` the exact inbound message, `PostToolBatch` the durable
+    /// position of its settled tool batch — and both were frozen by the
+    /// semantic owner at that establishment, not sampled when this
+    /// observation was folded.
     pub opportunities: AgentStatusOpportunityView,
     /// The ordered structured sections.
     pub sections: Vec<RuntimeClientStatusSection>,
     /// The canonical rendered representation, derived from the same
     /// composition as the sections.
+    ///
+    /// It exists for diagnostics and for proving that a client and the model
+    /// saw one composition. It is **not** a presentation source: a client
+    /// renders [`sections`](Self::sections) and never parses this text back
+    /// into structure.
     pub rendered: String,
 }
 
@@ -916,11 +981,33 @@ pub struct FreshInboundStatusOpportunityView {
     pub target_message_id: MessageId,
 }
 
-/// Minimal external representation of the batch-level `PostToolBatch`
-/// opportunity. The marker has no durable or scheduling metadata.
+/// The external view of one `PostToolBatch` status opportunity.
+///
+/// The opportunity itself remains a marker with no durable or scheduling
+/// metadata. What it carries here is the one ordering fact that places a
+/// composition made from it: the durable transcript position of the canonical
+/// `ToolResult` batch that established it, frozen by the Agent Loop at that
+/// batch's commit.
+///
+/// The freeze point matters and is the whole reason this is a published fact
+/// rather than something a client or the projection reconstructs. A status is
+/// composed at the primary-step preparation that consumes this opportunity,
+/// but it is not observed until the durable model-turn-start commit lands,
+/// and inbound acceptance is an independent durable boundary that may commit
+/// in between. Anything that read "the newest durable position" at fold time
+/// would place the status after an unrelated inbound turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-pub struct PostToolBatchStatusOpportunityView {}
+pub struct PostToolBatchStatusOpportunityView {
+    /// The durable position of the settled `ToolResult` batch this
+    /// opportunity belongs to.
+    ///
+    /// `None` only when that batch committed no visible transcript item, in
+    /// which case the composition carries no transcript-position placement
+    /// and a client draws no annotation for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_anchor: Option<RuntimeClientTranscriptCursor>,
+}
 
 /// The deterministic capability projection.
 ///

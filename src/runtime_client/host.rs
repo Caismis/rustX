@@ -5783,7 +5783,12 @@ mod tests {
             Some(crate::runtime_client::snapshot::RuntimeClientStatusSection::Temporal { .. })
         ));
         assert_eq!(
-            snapshot.status.expect("status view").rendered,
+            snapshot
+                .statuses
+                .last()
+                .expect("status view")
+                .rendered
+                .clone(),
             model_rendered
         );
     }
@@ -7777,7 +7782,7 @@ mod tests {
             snapshot.background.is_empty(),
             "no background record exists at bootstrap"
         );
-        assert!(snapshot.attempt.is_none() && snapshot.status.is_none());
+        assert!(snapshot.attempt.is_none() && snapshot.statuses.is_empty());
         assert_eq!(snapshot.context.compaction_count, 0);
 
         // A subscription from the bootstrap cursor observes nothing at all

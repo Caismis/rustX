@@ -253,7 +253,19 @@ pub enum RuntimeClientSessionRequest {
 /// exposes `logical_workspace` and `physical_worktree_root` alongside the
 /// branch/base/head/dirty facts. There is no compatibility decoding of
 /// version 12.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 13;
+///
+/// Version 14 carries Issue #194's Agent Status contextual annotation
+/// projection. The snapshot's latest-only `status` is replaced by the bounded
+/// composition window `statuses`; each status opportunity carries the durable
+/// identity it was established against (`FreshInbound` the inbound message,
+/// `PostToolBatch` its settled tool batch's `transcript_anchor`); and
+/// `AgentStatusComposed` carries one complete window transition — the
+/// admitted composition plus the `evicted_status_message_id` that admission
+/// caused. Together they let a client place every composed status
+/// deterministically and reconstruct the same window and placement from a
+/// snapshot that it folded from live events, without ever owning retention or
+/// inferring a position. There is no compatibility decoding of version 13.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 14;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1166,7 +1178,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 13);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 14);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

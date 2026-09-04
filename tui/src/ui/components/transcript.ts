@@ -18,6 +18,14 @@
  * system          dimmed diagnostic with its authority
  * ```
  *
+ * Agent Status is not in that table on purpose. It is runtime-owned
+ * model-visible context, not a speaker: its canonical `Context(AgentStatus)`
+ * message stays out of the rows above, and what appears instead is a
+ * one-line *annotation* placed from runtime facts — beneath the inbound turn
+ * it was composed for, or standalone after the settled tool batch it
+ * followed. It is deliberately weaker than every row it sits beside and it
+ * never borrows the user band. See `./agent-status.ts`.
+ *
  * A block may name a *background band* — the visual grammar Pi uses, and the
  * one this client now follows. The band is a layout fact, not a text
  * decoration: a block says which band it belongs to and the app shell fills
@@ -49,13 +57,24 @@ import type {
   TranscriptInteractionSettled,
   TranscriptPublicationAudit,
 } from "../../presentation/state.ts";
-import type { RuntimeClientOutcome } from "../../protocol/types.ts";
+import type {
+  AgentStatusView,
+  RuntimeClientOutcome,
+} from "../../protocol/types.ts";
+import {
+  type AgentStatusPlacement,
+  agentStatusPlacement,
+} from "../../presentation/selectors.ts";
 import {
   type ToolCorrelation,
   correlateTools,
   isFoldedToolResult,
   isSplitToolCall,
 } from "../../presentation/tools.ts";
+import {
+  type AgentStatusAnnotationForm,
+  renderAgentStatusAnnotation,
+} from "./agent-status.ts";
 import {
   type PresentationPreferences,
   isToolCallExpanded,
@@ -96,6 +115,8 @@ export type TranscriptBlock =
 export interface TranscriptContext {
   preferences: PresentationPreferences;
   correlation: ToolCorrelation;
+  /** Composed Agent Statuses grouped by the runtime fact that places them. */
+  statuses: AgentStatusPlacement;
 }
 
 /** Builds the render context for one state. */
@@ -103,7 +124,11 @@ export function transcriptContext(
   state: PresentationState,
   preferences: PresentationPreferences,
 ): TranscriptContext {
-  return { preferences, correlation: correlateTools(state) };
+  return {
+    preferences,
+    correlation: correlateTools(state),
+    statuses: agentStatusPlacement(state),
+  };
 }
 
 /** The whole transcript, including durable messages and historical audits. */
@@ -112,13 +137,15 @@ export function renderTranscript(
   preferences: PresentationPreferences,
   correlation?: ToolCorrelation,
 ): TranscriptBlock[] {
-  const context =
-    correlation === undefined
-      ? transcriptContext(state, preferences)
-      : { preferences, correlation };
+  const context: TranscriptContext = {
+    preferences,
+    correlation: correlation ?? correlateTools(state),
+    statuses: agentStatusPlacement(state),
+  };
   const blocks: TranscriptBlock[] = [];
   for (const entry of state.transcript) {
     blocks.push(...renderEntryBlocks(entry, context));
+    blocks.push(...renderStatusAnnotations(entry, context));
   }
   const attemptOutcome = renderAttemptOutcome(state);
   if (attemptOutcome !== undefined) {
@@ -217,6 +244,55 @@ export function renderEntryBlocks(
     case "interaction_settled":
       return renderInteractionSettled(entry);
   }
+}
+
+/**
+ * The Agent Status annotations anchored to one transcript entry.
+ *
+ * Placement comes entirely from the runtime facts each composition carries —
+ * the inbound message it was composed for, or the durable transcript position
+ * it followed. This function looks up those identities; it never scans for a
+ * nearby tool result, compares timestamps, or reads the entry's index.
+ *
+ * A composition sits in exactly one of the two indexes, so visiting every
+ * entry draws every placed composition exactly once. One whose anchor names
+ * an entry outside the loaded transcript is not drawn at all until that page
+ * is loaded, which is the same rule every other durable item follows.
+ */
+function renderStatusAnnotations(
+  entry: TranscriptEntry,
+  context: TranscriptContext,
+): TranscriptBlock[] {
+  if (entry.kind === "streaming") {
+    return [];
+  }
+  const attached =
+    entry.kind === "committed"
+      ? context.statuses.byMessageId.get(entry.messageId) ?? []
+      : [];
+  const standalone = context.statuses.byCursor.get(entry.cursor) ?? [];
+  const blocks: TranscriptBlock[] = [];
+  for (const status of attached) {
+    blocks.push(statusBlock(status, "attached"));
+  }
+  for (const status of standalone) {
+    blocks.push(statusBlock(status, "standalone"));
+  }
+  return blocks;
+}
+
+function statusBlock(
+  status: AgentStatusView,
+  form: AgentStatusAnnotationForm,
+): TranscriptBlock {
+  return {
+    kind: "text",
+    // The composition's own identity. Two annotations can never collide, and
+    // a re-render of the same fact keeps the same key.
+    key: `agent-status:${status.status_message_id}`,
+    text: renderAgentStatusAnnotation(status, form),
+    // Deliberately no band: the user band belongs to what the human said.
+  };
 }
 
 /** Renders noncanonical publication output without creating Tool Plane cards. */

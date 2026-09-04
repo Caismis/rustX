@@ -157,7 +157,18 @@ export interface PresentationState {
   pendingInteractions: RoutedInteraction[];
   background: RuntimeClientBackgroundExecution[];
   subagents: RuntimeClientSubagent[];
-  status?: AgentStatusView;
+  /**
+   * Composed Agent Statuses in runtime composition order, oldest first.
+   *
+   * This mirrors the runtime's bounded composition window exactly — it is
+   * not a client-owned history. A composed status is a historical fact of the
+   * conversation, so nothing here is cleared when a later attempt starts, and
+   * a fresh snapshot rebuilds the same list without consulting the state it
+   * replaces. Where each status is drawn is derived from the runtime facts it
+   * carries (see `agentStatusAnchor` in `./selectors.ts`), never from its
+   * position in this array and never from when it arrived.
+   */
+  statuses: AgentStatusView[];
   context: RuntimeClientContextView;
   capabilities: CapabilityView;
   /** The active runtime resource generation: context files, agent profile. */

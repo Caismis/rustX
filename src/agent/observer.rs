@@ -21,7 +21,11 @@
 //! Agent Status is observed only after the canonical model-turn-start commit:
 //! the observation carries the exact accepted generation and its committed
 //! status-message identity, so a client projection can never observe a
-//! prepared-but-cancelled status or cause a second composition.
+//! prepared-but-cancelled status or cause a second composition. The
+//! observation also carries the placement fact its opportunity froze, because
+//! the linearization point that *determines* where a status belongs is
+//! earlier than the point at which it is observed, and everything in between
+//! — inbound acceptance in particular — is an independent durable boundary.
 //!
 //! This module defines the seam only; it owns no state and no consumer.
 
@@ -48,6 +52,25 @@ pub struct AgentStatusObservation {
     pub status_message_id: crate::runtime::identity::MessageId,
     /// The opportunity set that made this generation eligible.
     pub opportunities: AgentStatusOpportunitySet,
+    /// The durable transcript position frozen when the `PostToolBatch`
+    /// opportunity in [`opportunities`](Self::opportunities) was established:
+    /// the canonical `ToolResult` batch's own position, read once at that
+    /// commit and never re-read afterwards.
+    ///
+    /// This is the placement fact of a `PostToolBatch` composition, and it is
+    /// deliberately frozen by the semantic owner rather than derived later.
+    /// Inbound acceptance is an independent durable boundary that may commit
+    /// between this freeze and `observe_status`; a consumer that instead read
+    /// "the newest durable position" when it folded this observation would
+    /// place the status after an unrelated inbound turn it has nothing to do
+    /// with.
+    ///
+    /// `None` when this composition had no `PostToolBatch` opportunity, or
+    /// when the batch that established one committed no visible transcript
+    /// item. A `FreshInbound` composition is placed by the exact inbound
+    /// message identity its opportunity carries, which is a stronger fact
+    /// than a position, so it needs nothing here.
+    pub post_tool_batch_anchor: Option<TranscriptCursor>,
     /// The one composed structured status.
     pub status: AgentStatus,
 }

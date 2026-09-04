@@ -3543,6 +3543,41 @@ message role, history shape, or timestamps:
   adapters never inject it. Equal rendered bytes at different admitted steps
   remain distinct facts with distinct MessageIds. If no module contributes,
   there is no empty wrapper/message and no structured status observation.
+- Every composed Agent Status has exactly one deterministic presentation
+  anchor, and once observable in conversation history its placement never
+  changes or disappears because a later attempt starts. Placement is published
+  by the runtime, never inferred by a client: each eligible opportunity
+  carries the durable identity it was established against. A composition with
+  a `FreshInbound` opportunity is anchored to that opportunity's
+  `target_message_id`; one without is anchored to the `PostToolBatch`
+  opportunity's `transcript_anchor`. A composition eligible through both is
+  anchored by the message identity alone, so it can never be presented twice.
+  Clients never parse the model-facing rendered body to recover section
+  structure, and no layout instruction crosses the projection boundary.
+- A `PostToolBatch` Agent Status is anchored to the durable transcript
+  frontier of the canonical `ToolResult` batch that caused the composition,
+  and later unrelated durable transcript activity cannot move that anchor. The
+  anchor is frozen by the semantic owner — the Agent Loop, at the batch commit
+  that establishes the opportunity — and travels with the opportunity through
+  composition into the observation. The Runtime Client projects that already
+  determined fact; it never reconstructs placement by reading whatever the
+  global transcript frontier happens to be when it folds the status
+  observation. Inbound acceptance is an independent durable boundary and may
+  commit between the composition and its observation, so a fold-time frontier
+  would place the status after an unrelated inbound turn.
+- The Runtime Client snapshot carries a bounded window of compositions in
+  composition order rather than a latest value, identified by
+  `status_message_id`: a new attempt clears none of them and a replayed
+  observation adds none. The retention bound is Runtime Client projection
+  policy and is not part of the wire contract; `agent_status_composed`
+  publishes the whole window transition — the admitted composition and the
+  `evicted_status_message_id` that admission caused, if any — and a client
+  folds exactly that and applies no retention rule of its own. Folding every
+  live event through cursor `C` and replacing state from the authoritative
+  snapshot at cursor `C` therefore reconstruct the same window, the same
+  order, and the same placement, past the bound as well as below it. A
+  replayed observation admits nothing and evicts nothing, so replay stays
+  idempotent in a full window.
 - Time, Background, and Todo are compile-time-owned modules represented by a
   closed rustX engine in semantic source order `Time -> Background -> Todo`.
   There is no provider registration API, dynamic plugin boundary, provider
@@ -4464,6 +4499,17 @@ semantic normalization boundary. The frozen invariants:
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
   explicit at attachment admission; the current protocol is the sole
   supported version, and every superseded version is rejected explicitly.
+- **Runtime Client protocol v14 introduces the Issue #194 Agent Status
+  contextual annotation projection.** The snapshot's latest-only `status` is
+  replaced by the bounded window `statuses`; each status opportunity carries
+  the durable identity it was established against (`FreshInbound` the inbound
+  message, `PostToolBatch` its settled tool batch's `transcript_anchor`); and
+  `agent_status_composed` publishes the whole window transition, including the
+  `evicted_status_message_id` that admission caused. The retention bound stays
+  Runtime Client projection policy and never reaches the wire. v14 carries the
+  v13 workspace authority projection unchanged; it does not replace it. There
+  is no v13 -> v14 conversion and no legacy `status` decoding: a v13 client is
+  rejected explicitly at negotiation.
 - **Runtime Client protocol v13 introduces the Issue #187 subagent
   workspace representation.** The workspace projection separates logical
   child project authority (`logical_workspace`) from physical Git worktree

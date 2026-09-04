@@ -642,6 +642,26 @@ pub async fn unsupported_protocol_version_is_typed(factory: &dyn DriverFactory) 
         }
     );
 
+    // The immediately superseded version is rejected exactly like any other
+    // superseded one. Nothing decodes it, nothing converts it, and the
+    // rejection carries the one supported version rather than a negotiated
+    // range: there is exactly one current Runtime Client protocol shape.
+    let superseded = rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION - 1;
+    let response = driver
+        .request(RuntimeClientRequest::Initialize {
+            id: RequestId::new(9),
+            protocol_version: superseded,
+        })
+        .await;
+    assert_eq!(response.id, RequestId::new(9));
+    assert_eq!(
+        error(response),
+        RuntimeClientError::UnsupportedProtocolVersion {
+            supported: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
+            requested: superseded,
+        }
+    );
+
     // A rejected negotiation admitted nothing, and the supported version
     // still attaches.
     let response = driver
@@ -1564,7 +1584,7 @@ pub async fn agent_status_is_runtime_owned(factory: &dyn DriverFactory) {
     let mut driver = connect(&fixture, factory);
     let (initial, cursor) = initialize(&mut *driver, 1).await;
     assert!(
-        initial.status.is_none(),
+        initial.statuses.is_empty(),
         "no status exists before the first turn"
     );
     subscribe(&mut *driver, 2, cursor).await;
@@ -1607,9 +1627,27 @@ pub async fn agent_status_is_runtime_owned(factory: &dyn DriverFactory) {
     );
     assert!(!status.rendered.is_empty());
 
-    // The snapshot carries the same composed observation.
+    // Placement is a runtime fact, published once with the opportunity that
+    // established it, not something a client derives from arrival order. This
+    // composition is `FreshInbound`, so it is placed by the exact inbound
+    // message identity and carries no transcript position of its own.
+    assert!(
+        status
+            .opportunities
+            .fresh_inbound
+            .as_ref()
+            .is_some_and(|fresh| !fresh.target_message_id.as_str().is_empty()),
+        "a FreshInbound composition publishes the message identity that places it"
+    );
+    assert!(
+        status.opportunities.post_tool_batch.is_none(),
+        "no settled tool batch made this composition eligible"
+    );
+
+    // The snapshot carries the same composed observation, in the same
+    // bounded window a subscriber folded.
     let (snapshot, _) = snapshot_of(&mut *driver, 4).await;
-    assert_eq!(snapshot.status.as_ref(), Some(status));
+    assert_eq!(snapshot.statuses.as_slice(), std::slice::from_ref(status));
     assert!(snapshot.messages.iter().any(|message| {
         matches!(
             message,

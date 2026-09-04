@@ -18,6 +18,7 @@ import { RuntimeClientAttachment } from "../src/runtime/attachment.ts";
 import { TransientFeedbackSurface } from "../src/ui/components/transient-feedback.ts";
 import { ArgumentError, parseArguments, replacementArguments } from "../src/cli.ts";
 import {
+  agentStatus,
   attemptModel,
   approvalInteraction,
   catalogModel,
@@ -27,6 +28,9 @@ import {
   sessionModel,
   sessionView,
   snapshot,
+  temporalSection,
+  todoSection,
+  transcriptCursor,
 } from "./support/fixtures.ts";
 import { ScriptedPeer } from "./support/scripted-peer.ts";
 
@@ -888,18 +892,59 @@ describe("CommandDispatcher", () => {
     }
   });
 
-  it("renders /status from the runtime's own Agent Status composition", async () => {
-    const rendered = "## Agent Status\n- current time: 2026-08-14T00:00:00Z";
+  it("renders /status from typed sections, never the rendered body", async () => {
+    // The model-facing body says something the typed sections do not, so a
+    // renderer that parsed it would be caught here.
+    const rendered = "<system-reminder>\nTimezone: UTC\nsentinel-from-rendered\n</system-reminder>";
     const { dispatcher } = await harness(
       snapshot({
-        status: {
-          attempt_id: "a1",
-          turn: 2,
-          status_message_id: "status-1",
-          opportunities: { fresh_inbound: { target_message_id: "m1" } },
-          sections: [],
-          rendered,
-        },
+        statuses: [
+          agentStatus({
+            status_message_id: "status-1",
+            turn: 2,
+            opportunities: { fresh_inbound: { target_message_id: "m1" } },
+            sections: [
+              temporalSection("2026-08-14T15:42:00Z"),
+              todoSection({ active_count: 3, blocked_count: 1 }),
+            ],
+            rendered,
+          }),
+        ],
+      }),
+    );
+
+    const outcome = await dispatcher.submit("/status");
+    assert.equal(outcome.kind, "inspect");
+    if (outcome.kind !== "inspect") {
+      return;
+    }
+    assert.match(outcome.body, /### Agent Status/);
+    assert.match(outcome.body, /\*\*time\*\* — 15:42 UTC/);
+    assert.match(outcome.body, /\*\*todo\*\* — 3 active · 1 blocked/);
+    assert.ok(
+      !outcome.body.includes("sentinel-from-rendered"),
+      "/status renders typed sections; the model-facing body is not a source",
+    );
+    // Provenance about the composition is kept and separated; generic
+    // runtime diagnostics moved to the one diagnostic surface.
+    assert.match(outcome.body, /Composed by attempt `a1` on turn 2/);
+    assert.match(outcome.body, /`\/debug`/);
+  });
+
+  it("says so plainly when no Agent Status has been composed", async () => {
+    const { dispatcher } = await harness(snapshot());
+    const outcome = await dispatcher.submit("/status");
+    assert.equal(outcome.kind, "inspect");
+    if (outcome.kind !== "inspect") {
+      return;
+    }
+    assert.match(outcome.body, /No Agent Status has been composed yet/);
+  });
+
+  it("keeps runtime and mailbox diagnostics on /debug", async () => {
+    const { dispatcher } = await harness(
+      snapshot({
+        statuses: [agentStatus({ status_message_id: "status-1" })],
         inbound: {
           pending: [
             {
@@ -917,15 +962,15 @@ describe("CommandDispatcher", () => {
       }),
     );
 
-    const outcome = await dispatcher.submit("/status");
+    const outcome = await dispatcher.submit("/debug");
     assert.equal(outcome.kind, "inspect");
     if (outcome.kind !== "inspect") {
       return;
     }
-    // The rendering is the runtime's, verbatim.
-    assert.ok(outcome.body.includes(rendered));
     assert.match(outcome.body, /inbound pending: 1/);
     assert.match(outcome.body, /last drain: watermark 2, 2 item\(s\)/);
+    assert.match(outcome.body, /composed Agent Statuses: 1/);
+    assert.match(outcome.body, /attempt: none/);
   });
 
   it("runs /compact through one canonical Runtime Client operation", async () => {

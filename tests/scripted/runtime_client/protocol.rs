@@ -357,20 +357,33 @@ async fn attachment_request_correlation_and_version_negotiation() {
 
     // Incompatible version negotiation fails explicitly, in both
     // directions and including every superseded wire contract.
-    let incompatible = host.attach(14);
+    let incompatible = host.attach(15);
     assert!(matches!(
         incompatible,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 13,
-            requested: 14,
+            supported: 14,
+            requested: 15,
         })
     ));
     let old_protocol = host.attach(7);
     assert!(matches!(
         old_protocol,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 13,
+            supported: 14,
             requested: 7,
+        })
+    ));
+    // v13 carried Issue #187's workspace authority projection together with
+    // the pre-#194 latest-only Agent Status shape (`status`, no published
+    // placement, no window transition). Issue #194 replaced that shape under
+    // v14, so a v13 client is refused rather than served a projection it
+    // would misread. There is no v13 -> v14 conversion.
+    let latest_only_status = host.attach(13);
+    assert!(matches!(
+        latest_only_status,
+        Err(RuntimeClientError::UnsupportedProtocolVersion {
+            supported: 14,
+            requested: 13,
         })
     ));
     // v6 carried the obsolete profile-shaped subagent projection (Issue
@@ -379,19 +392,19 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         profile_shaped,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 13,
+            supported: 14,
             requested: 6,
         })
     ));
     // v12 carried the pre-#187 workspace wire shape (flat `workspace`,
-    // `isolated`, handoff `workspace`). Issue #187 replaced it with the
-    // logical/physical workspace projection under v13, so a v12 client is
-    // rejected explicitly rather than decoded into the new shape.
+    // `isolated`, handoff `workspace`) as well as the pre-#194 status shape.
+    // Both were replaced by later breaking versions, so a v12 client is
+    // rejected explicitly rather than decoded into either new shape.
     let pre_workspace_boundary = host.attach(12);
     assert!(matches!(
         pre_workspace_boundary,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 13,
+            supported: 14,
             requested: 12,
         })
     ));
@@ -399,7 +412,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     // The initialize method cannot re-initialize an admitted attachment.
     let reinit = attachment.handle_request(RuntimeClientRequest::Initialize {
         id: request_id(9),
-        protocol_version: 13,
+        protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
     });
     assert!(matches!(
         reinit.error,
@@ -495,13 +508,15 @@ async fn attachment_raii_drop_detaches() {
         .expect("attach after drop");
 }
 
-/// The v13 subagent workspace projection serializes exactly as the shared
+/// The subagent workspace projection serializes exactly as the shared
 /// `tests/fixtures/runtime-client/*.json` fixtures the TUI protocol mirror
 /// is validated against. This is the cross-language regression for the
-/// Issue #187 wire shape: if either side drifts back to the pre-#187 flat
-/// `workspace`/`isolated` schema, one of the two fixture assertions fails.
+/// Issue #187 wire shape, carried unchanged into v14: if either side drifts
+/// back to the pre-#187 flat `workspace`/`isolated` schema, or the Issue #194
+/// renumbering silently dropped a workspace field, one of the two fixture
+/// assertions fails.
 #[test]
-fn v13_workspace_wire_shape_matches_the_shared_fixtures() {
+fn v14_workspace_wire_shape_matches_the_shared_fixtures() {
     let shared = RuntimeClientSubagentWorkspace {
         logical_workspace: std::path::PathBuf::from("/repo"),
         isolation: RuntimeClientWorkspaceIsolation::Shared,
@@ -531,11 +546,11 @@ fn v13_workspace_wire_shape_matches_the_shared_fixtures() {
 
     for (fixture, workspace) in [
         (
-            "tests/fixtures/runtime-client/workspace-shared-v13.json",
+            "tests/fixtures/runtime-client/workspace-shared-v14.json",
             &shared,
         ),
         (
-            "tests/fixtures/runtime-client/workspace-git-worktree-v13.json",
+            "tests/fixtures/runtime-client/workspace-git-worktree-v14.json",
             &isolated_subdirectory,
         ),
     ] {
@@ -544,7 +559,7 @@ fn v13_workspace_wire_shape_matches_the_shared_fixtures() {
         assert_eq!(
             serialized,
             expected.trim_end(),
-            "{fixture}: the serialized v13 workspace shape drifted from the \
+            "{fixture}: the serialized v14 workspace shape drifted from the \
              fixture the TUI mirror is validated against"
         );
         let decoded: RuntimeClientSubagentWorkspace =
