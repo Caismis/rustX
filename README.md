@@ -149,13 +149,17 @@ not support globs, negation, escaping, directory recursion, absolute paths, or
 
 Every selected path must exist as an individual regular file, remain inside
 the logical workspace, contain no symlink component, be untracked, and be
-classified as ignored by Git. Duplicate normalized/canonical destinations are
-rejected. A manifest may select at most 64 files and 8 MiB of content in
-total; the manifest itself is limited to 64 KiB. Missing or ineligible files
-fail isolated acquisition instead of being skipped.
+classified as ignored by Git. The manager acquires each source beneath a
+stable logical-workspace handle with no-symlink traversal and retains the
+validated file handle through freezing; no later pathname reopen supplies
+overlay bytes. Duplicate normalized/canonical destinations are rejected. A
+manifest may select at most 64 files and 8 MiB of content in total; the
+manifest itself is limited to 64 KiB. Missing or ineligible files fail
+isolated acquisition instead of being skipped.
 
-The workspace manager freezes all selected bytes before creating the child
-worktree, then materializes and byte-verifies them before child ownership can
+The workspace manager freezes all selected bytes from those retained handles
+before creating the child worktree, then materializes and byte-verifies them
+through the child logical-workspace authority before child ownership can
 commit. Later parent edits therefore cannot change the acquired overlay.
 These files are local execution inputs, not source synchronization: they do
 not copy dirty tracked or arbitrary untracked state, and overlay-only edits in

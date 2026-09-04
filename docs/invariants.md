@@ -1926,14 +1926,17 @@ second authority:
   The fixed limits are 64 files, 8 MiB total frozen bytes, and a 64 KiB UTF-8
   regular-file manifest.
 - **Overlay bytes freeze before physical creation and ownership commit.** The
-  manager validates the complete overlay selection before reading selected
-  contents, freezes the bytes in acquisition-private state, creates the Git
-  worktree at `C`, materializes only those frozen bytes beneath the child
-  logical workspace, and byte-verifies every destination. It never reopens a
-  parent overlay file after freezing. Frozen contents cross no journal,
-  snapshot, IPC, log, diagnostic, or handoff boundary. The child ownership
-  linearization point remains `SubagentOwnershipCommitted`, after worktree,
-  overlay, process, and Ready staging have all completed.
+  manager opens the authoritative parent logical workspace as a stable
+  directory handle, acquires every selected source through component-by-
+  component no-symlink traversal, and retains the regular file handles while
+  it validates the complete selection. It then freezes bytes only from those
+  retained handles, creates the Git worktree at `C`, materializes only those
+  frozen bytes beneath a stable child logical-workspace handle, and
+  byte-verifies every destination from its created file object. It never
+  reopens a parent overlay pathname to obtain frozen bytes. Frozen contents
+  cross no journal, snapshot, IPC, log, diagnostic, or handoff boundary. The
+  child ownership linearization point remains `SubagentOwnershipCommitted`,
+  after worktree, overlay, process, and Ready staging have all completed.
 - **Overlay staging uses the existing lease settlement.** Cancellation or
   failure before physical creation leaves no worktree. After creation and
   before ownership commit, the same staged `WorkspaceLease` remains the sole

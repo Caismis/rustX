@@ -5164,8 +5164,10 @@ resolve/freeze named-agent resources
   → observe parent tracked/index/untracked status
   → enforce require_clean_parent
   → resolve <logical-workspace>/.worktreeinclude
-  → validate every exact selected path and its Git ignored/untracked state
-  → freeze all selected bytes into bounded runtime-owned memory
+  → open a stable handle to the authoritative logical workspace
+  → acquire every selected regular file with handle-relative no-symlink traversal
+  → validate the complete selection and its Git ignored/untracked state
+  → freeze all selected bytes from the retained file handles
   → git -c core.hooksPath=/dev/null worktree add -b <runtime-ref> <physical-root> C
   → verify child HEAD = C
   → derive child logical workspace = <physical-root>/<repository-relative-workspace>
@@ -5199,16 +5201,20 @@ destinations, tracked paths, and paths Git does not classify as ignored all
 fail acquisition. The fixed bounds are 64 selected files, 8 MiB of total
 frozen content, and a 64 KiB UTF-8 regular-file manifest.
 
-Path validation and Git eligibility complete for the whole selection before
-the manager reads any selected contents. The resulting private
-`FrozenOverlayFile` values hold only logical/repository-relative paths and
-bytes. They are never serialized, journaled, logged, added to
-`WorkspaceSnapshot`, or exposed as handoff metadata. Materialization happens
-only after the exact-commit Git worktree exists, uses `create_new` beneath the
-preserved child logical workspace, rejects destination symlinks/collisions,
-and reads every destination back for byte comparison. The parent overlay
-files are never reopened after the freeze phase, so later edits cannot affect
-the child.
+The manager acquires every selected source beneath a stable handle to the
+authoritative logical workspace. Intermediate components and the final file
+are opened without following symlinks, and the retained regular file handles
+remain the only source objects read during freezing. Thus path validation and
+source-object acquisition are one ownership operation, while Git eligibility
+still completes for the whole selection before any selected contents are
+read. The resulting private `FrozenOverlayFile` values hold only
+logical/repository-relative paths and bytes. They are never serialized,
+journaled, logged, added to `WorkspaceSnapshot`, or exposed as handoff
+metadata. Materialization happens only after the exact-commit Git worktree
+exists, uses a stable child logical-workspace handle with `create_new` and
+no-symlink traversal, rejects destination symlinks/collisions, and verifies
+each destination from the created file object. No parent pathname is reopened
+after the freeze phase, so later edits cannot affect the child.
 
 Any failure or cancellation after worktree creation is still ordinary staged
 workspace failure: the same uncommitted `WorkspaceLease` remains manager-owned
