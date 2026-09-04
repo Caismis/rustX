@@ -49,7 +49,6 @@ import {
   Key,
   matchesKey,
   truncateToWidth,
-  wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 
 import type {
@@ -74,6 +73,7 @@ import {
   isInteractionExpanded,
   type PresentationPreferences,
 } from "../preferences.ts";
+import { hardWrapLossless } from "../text-wrap.ts";
 import { role, style } from "../theme.ts";
 import { windowAroundSelected, type PopupContent } from "./popup-frame.ts";
 import { QuestionnaireOverlay } from "./questionnaire.ts";
@@ -521,17 +521,19 @@ export class HumanInteractionOverlay implements PopupContent {
       }
       return [...headBase, ...visible, ...foot];
     }
-    // The expanded detail is complete in both dimensions: every authoritative
-    // line is first wrapped to the actual viewport width into visual rows —
-    // on the plain text, before any styling is applied per row, so no SGR
-    // sequence is ever sliced and no wide character is split — and only then
-    // is the vertical window taken. PgUp/PgDn therefore reaches every
-    // character of the reason and the arguments, however long a single line
-    // is; the width decides how many rows exist, never what content exists.
+    // The expanded detail is a lossless viewport transformation over the
+    // authoritative text: every logical line is hard-wrapped to the actual
+    // viewport width into visual rows — on the plain text, before any styling
+    // is applied per row — and only then is the vertical window taken. The
+    // wrap inserts row boundaries only; it never trims, collapses, or
+    // relocates a character, so concatenating one logical line's rows
+    // reproduces it exactly and PgUp/PgDn reaches every character of the
+    // reason and the arguments, however long a single line is. The width
+    // decides how many rows exist, never what content exists.
     const detailRows = [
-      ...toLines(kind.reason).flatMap((line) => wrapTextWithAnsi(line, width)),
+      ...toLines(kind.reason).flatMap((line) => hardWrapLossless(line, width)),
       ...formatJson(kind.arguments)
-        .flatMap((line) => wrapTextWithAnsi(line, width))
+        .flatMap((line) => hardWrapLossless(line, width))
         .map((line) => role.meta(line)),
     ];
     // The position line is always present in expanded mode, so the geometry

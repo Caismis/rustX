@@ -12,6 +12,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { visibleWidth } from "@earendil-works/pi-tui";
+
 import { HumanInteractionOverlay } from "../src/ui/components/hitl.ts";
 import type {
   ApprovalDecision,
@@ -654,6 +656,130 @@ describe("human-input surface", () => {
     }
     assert.ok(flattened(paged).includes(marker), "the reason tail is reachable");
     assert.equal(recorded.decisions.length, 0, "paging settles nothing");
+  });
+
+  it("preserves a semantic space exactly on an expanded-detail wrap boundary", () => {
+    const base = approvalInteraction();
+    if (base.request.kind.type !== "approval") throw new Error("fixture");
+    const approval: RoutedInteraction = {
+      ...base,
+      request: {
+        ...base.request,
+        kind: {
+          ...base.request.kind,
+          arguments: { command: "prefix foo bar suffix" },
+        },
+      },
+    };
+    // At width 21 the space between "prefix" and "foo" is the last column of
+    // the first wrapped row of the argument line. A prose wrapper trims it
+    // and the flattened content reads "prefixfoo"; the authorization surface
+    // may not.
+    const width = 21;
+    const { overlay, recorded } = surface({
+      interactions: [approval],
+      preferences: withExpandedInteractions(defaultPreferences(), [
+        approval.interaction,
+      ]),
+    });
+    const rows = overlay.render(width).map((line) => plainText(line));
+    assert.ok(
+      rows.some((line) => line === '  "command": "prefix '),
+      "the boundary row keeps its trailing space",
+    );
+    const page = rendered(overlay, width);
+    assert.ok(
+      flattened(page).includes('{  "command": "prefix foo bar suffix"}'),
+      "the flattened detail reconstructs the authoritative line exactly",
+    );
+    for (const line of overlay.render(width)) {
+      assert.ok(visibleWidth(line) <= width, "no horizontal overflow");
+    }
+    assert.equal(recorded.decisions.length, 0, "wrapping settles nothing");
+  });
+
+  it("preserves repeated and value-internal whitespace across wrap boundaries", () => {
+    const base = approvalInteraction();
+    if (base.request.kind.type !== "approval") throw new Error("fixture");
+    const cases = [
+      // The two spaces between "alpha" and "beta" are columns 17 and 18: one
+      // ends the first row, the other opens the second, at width 18. Both
+      // must survive; a trim on either side reads "alphabeta".
+      {
+        arguments: { value: "alpha  beta" },
+        width: 18,
+        boundaryRow: '  "value": "alpha ',
+        reconstructed: '"alpha  beta"',
+      },
+      // Significant leading/trailing spaces inside the JSON string value,
+      // with the trailing pair landing on row boundaries at width 27.
+      {
+        arguments: { value: "  payload tail  " },
+        width: 27,
+        boundaryRow: '  "value": "  payload tail ',
+        reconstructed: '"  payload tail  "',
+      },
+    ];
+    for (const { arguments: args, width, boundaryRow, reconstructed } of cases) {
+      const approval: RoutedInteraction = {
+        ...base,
+        request: {
+          ...base.request,
+          kind: { ...base.request.kind, arguments: args },
+        },
+      };
+      const { overlay, recorded } = surface({
+        interactions: [approval],
+        preferences: withExpandedInteractions(defaultPreferences(), [
+          approval.interaction,
+        ]),
+      });
+      const rows = overlay.render(width).map((line) => plainText(line));
+      assert.ok(
+        rows.some((line) => line === boundaryRow),
+        `the boundary row keeps its whitespace at width ${width}`,
+      );
+      assert.ok(
+        flattened(rendered(overlay, width)).includes(reconstructed),
+        `the flattened detail reconstructs ${reconstructed} at width ${width}`,
+      );
+      assert.equal(recorded.decisions.length, 0, "wrapping settles nothing");
+    }
+  });
+
+  it("preserves wide and composed graphemes across wrap boundaries", () => {
+    const base = approvalInteraction();
+    if (base.request.kind.type !== "approval") throw new Error("fixture");
+    // CJK (two columns), an emoji, a composed grapheme, and another emoji:
+    // the value is wider than the viewport, so the wrap must cut between
+    // graphemes without breaking one and without changing the content.
+    const value = "認証🔒é🚀";
+    const approval: RoutedInteraction = {
+      ...base,
+      request: {
+        ...base.request,
+        kind: {
+          ...base.request.kind,
+          arguments: { note: value },
+        },
+      },
+    };
+    const width = 14;
+    const { overlay, recorded } = surface({
+      interactions: [approval],
+      preferences: withExpandedInteractions(defaultPreferences(), [
+        approval.interaction,
+      ]),
+    });
+    const page = rendered(overlay, width);
+    assert.ok(
+      flattened(page).includes(value),
+      "the flattened detail reconstructs the wide-grapheme value exactly",
+    );
+    for (const line of overlay.render(width)) {
+      assert.ok(visibleWidth(line) <= width, "no row exceeds the width");
+    }
+    assert.equal(recorded.decisions.length, 0, "wrapping settles nothing");
   });
 
   it("loses no content when the viewport width changes", () => {
