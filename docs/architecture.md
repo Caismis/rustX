@@ -5221,6 +5221,18 @@ excluding parent-local dirty bytes. Ignored-only artifacts never make the
 source workspace dirty. Parent movement after acquisition cannot change the
 child's base.
 
+The rejection crosses three layers as a typed fact rather than as prose. The
+workspace manager owns Git inspection and reports
+`WorkspaceAcquireError::DirtyParent { base_commit }` with a workspace-domain
+diagnostic only; it does not know the public configuration spelling or where
+that configuration lives. The registry preserves the semantic identity as
+`SubagentStartError::WorkspaceDirtyParent`, keeping it distinguishable from
+generic Git/worktree failure, settlement/rollback, and cancellation. The
+native `subagent` tool — the boundary at which an internal failure becomes
+model-visible output — renders the actionable remediation naming
+`requireCleanParent`. That split is why no layer below the tool parses or
+formats configuration guidance.
+
 Terminal workspace settlement is ordered after the direct child is reaped
 and every retained Issue #145 nested-process anchor is physically contained
 or explicitly proven uncontainable. Only then does the manager inspect

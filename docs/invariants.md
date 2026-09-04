@@ -1914,6 +1914,19 @@ second authority:
   workspace dirty. `requireCleanParent = false` is the only explicit opt-out:
   the child then sees the committed tree at `C` only, while parent-local
   dirty bytes are intentionally excluded and never copied.
+- **The dirty-parent rejection is a typed fact, not a message.** The workspace
+  manager owns Git inspection and reports
+  `WorkspaceAcquireError::DirtyParent { base_commit }`; its own diagnostic is
+  workspace-domain only and never names the public configuration spelling,
+  the definition that carries it, or the Git commands used to observe the
+  parent. The subagent lifecycle preserves that identity as
+  `SubagentStartError::WorkspaceDirtyParent`, so the reason stays
+  distinguishable from generic Git/worktree failure, settlement/rollback, and
+  cancellation without parsing prose. The native `subagent` tool is the one
+  boundary that renders the actionable public remediation — commit or clean
+  the parent, or set `requireCleanParent: false` to run from the committed
+  `HEAD` snapshot while ignoring local changes — because that is where an
+  internal failure becomes model-visible output.
 - **Runtime worktree identity is deterministic and bounded.** For semantic
   `SubagentId = S`, the manager hashes
   `rustx-subagent-worktree-v1\n<length(S)>\nS` with SHA-256 and uses the

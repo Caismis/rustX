@@ -503,6 +503,20 @@ pub enum SubagentStartError {
         /// The bounded workspace diagnostic.
         detail: String,
     },
+    /// The isolated-worktree policy rejected acquisition because the parent
+    /// workspace has uncommitted changes (Issue #188).
+    ///
+    /// This is deliberately a distinct typed reason rather than a
+    /// [`Workspace`](Self::Workspace) string: the workspace manager owns the
+    /// execution fact, this boundary preserves its semantic identity, and the
+    /// model-facing `subagent` tool boundary owns the actionable public
+    /// configuration remediation. Collapsing it into a diagnostic here would
+    /// force that boundary to parse prose.
+    WorkspaceDirtyParent {
+        /// The exact committed source `HEAD` captured before the dirty
+        /// observation. Retained as an internal execution fact.
+        base_commit: String,
+    },
     /// The durable ownership commit failed.
     Durability {
         /// The failure detail.
@@ -554,6 +568,14 @@ impl core::fmt::Display for SubagentStartError {
             Self::Workspace { detail } => {
                 write!(f, "could not prepare the child workspace: {detail}")
             }
+            // Domain wording only. The actionable configuration remediation
+            // is rendered at the model-facing `subagent` tool boundary.
+            Self::WorkspaceDirtyParent { .. } => write!(
+                f,
+                "could not prepare the child workspace: the parent workspace has \
+                 uncommitted changes and the clean-parent policy rejected isolated \
+                 workspace acquisition"
+            ),
             Self::Durability { detail } => {
                 write!(f, "the durable ownership commit failed: {detail}")
             }
@@ -1054,6 +1076,14 @@ impl SubagentRegistry {
                     }
                     super::workspace::WorkspaceAcquireError::Settlement { detail } => {
                         SubagentStartError::Rollback { detail }
+                    }
+                    // Issue #188: the dirty-parent rejection keeps its typed
+                    // identity across this boundary. Flattening it into a
+                    // string here would destroy the only fact the
+                    // model-facing tool boundary needs to render actionable
+                    // remediation without parsing prose.
+                    super::workspace::WorkspaceAcquireError::DirtyParent { base_commit } => {
+                        SubagentStartError::WorkspaceDirtyParent { base_commit }
                     }
                     error => SubagentStartError::Workspace {
                         detail: error.to_string(),
@@ -2844,6 +2874,20 @@ mod tests {
         git(&workspace, &["commit", "-m", "initial"]);
     }
 
+    fn head(workspace: &std::path::Path) -> String {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(workspace)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("git rev-parse HEAD");
+        assert!(output.status.success(), "git rev-parse HEAD failed");
+        String::from_utf8(output.stdout)
+            .expect("utf-8 commit")
+            .trim()
+            .to_owned()
+    }
+
     fn make_dirty_git_workspace(plane: &TestPlane) {
         make_clean_git_workspace(plane);
         let workspace = plane.dir.path().join("workspace");
@@ -2986,23 +3030,39 @@ mod tests {
             .prepare(&start, &CancellationSignal::new())
             .await
             .expect_err("strict dirty parent must reject preparation");
-        assert!(matches!(error, SubagentStartError::Workspace { .. }));
-        // Issue #188: the model-facing projection is the concise actionable
-        // contract — it names the actionable condition, explains why the
-        // isolated child was not started, and points at the explicit opt-out
-        // without leaking low-level Git command details.
+        // Issue #188 ownership: the dirty-parent rejection keeps its typed
+        // identity across this boundary. It is structurally distinguishable
+        // from an arbitrary Git/worktree failure, from settlement/rollback,
+        // and from cancellation — no string is parsed to tell them apart —
+        // and it still carries the exact committed HEAD the workspace layer
+        // captured before observing the dirty parent.
+        let SubagentStartError::WorkspaceDirtyParent { base_commit } = &error else {
+            panic!("the dirty-parent reason must survive as its own variant: {error:?}");
+        };
+        assert_eq!(
+            base_commit.as_str(),
+            head(&plane.dir.path().join("workspace")),
+            "the preserved reason retains the exact captured committed HEAD"
+        );
+        // The remediation vocabulary is not owned here: this layer states the
+        // execution fact, and the native `subagent` tool renders the
+        // actionable configuration guidance for the model.
         let message = error.to_string();
         assert!(
-            message.contains("could not prepare the child workspace")
-                && message.contains("uncommitted changes")
-                && message.contains("requireCleanParent")
-                && message.contains("committed HEAD"),
-            "unexpected model-facing dirty-parent projection: {message}"
+            message.contains("uncommitted changes") && message.contains("clean-parent"),
+            "unexpected lifecycle dirty-parent diagnostic: {message}"
         );
-        assert!(
-            !message.contains("porcelain") && !message.contains("rev-parse"),
-            "the model-facing error must not expose Git command details: {message}"
-        );
+        for leaked in [
+            "requireCleanParent",
+            "subagent definition",
+            "porcelain",
+            "rev-parse",
+        ] {
+            assert!(
+                !message.contains(leaked),
+                "the lifecycle diagnostic must not own {leaked:?}: {message}"
+            );
+        }
         assert!(plane.registry.all_snapshots().is_empty());
         assert!(!events(&plane).iter().any(|event| matches!(
             event,

@@ -396,14 +396,9 @@ impl core::fmt::Display for WorkspaceAcquireError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Cancelled => formatter.write_str("workspace acquisition was cancelled"),
-            Self::DirtyParent { .. } => write!(
-                formatter,
-                "the parent workspace has uncommitted changes, so the isolated \
-                 subagent was not started: local changes are never silently \
-                 dropped. Commit or clean the parent workspace, or explicitly \
-                 configure \"requireCleanParent\": false in this subagent's \
-                 definition to run from the committed HEAD snapshot while \
-                 intentionally ignoring local changes"
+            Self::DirtyParent { .. } => formatter.write_str(
+                "the parent workspace has uncommitted changes and the clean-parent \
+                 policy rejected isolated workspace acquisition",
             ),
             Self::Git { operation, detail } => {
                 write!(formatter, "Git {operation} failed: {detail}")
@@ -2520,6 +2515,54 @@ mod tests {
             other => panic!("unexpected acquisition error: {other:?}"),
         }
         assert!(!dir.path().join("artifacts/worktrees").exists());
+    }
+
+    /// Issue #188 ownership: the workspace layer reports a typed execution
+    /// fact and nothing more. Its domain diagnostic must not name the public
+    /// configuration spelling, the definition file that carries it, or the
+    /// Git commands used to observe the parent — those belong to higher
+    /// layers, and the model-facing remediation is rendered at the native
+    /// `subagent` tool boundary.
+    #[tokio::test]
+    async fn the_dirty_parent_diagnostic_owns_no_configuration_or_git_vocabulary() {
+        let dir = repository();
+        let base = head(dir.path());
+        std::fs::write(dir.path().join("tracked.txt"), "dirty\n").expect("dirty file");
+        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let error = manager
+            .acquire(
+                default_isolated(),
+                &SubagentId::new("conversation-a-subagent-1"),
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect_err("dirty parent");
+
+        // The typed fact, with the exact captured commit, stays available.
+        let super::WorkspaceAcquireError::DirtyParent {
+            base_commit: captured,
+        } = &error
+        else {
+            panic!("unexpected acquisition error: {error:?}");
+        };
+        assert_eq!(captured, &base);
+
+        let diagnostic = error.to_string();
+        for leaked in [
+            "requireCleanParent",
+            "subagent definition",
+            "rev-parse",
+            "porcelain",
+        ] {
+            assert!(
+                !diagnostic.contains(leaked),
+                "the workspace diagnostic must not own {leaked:?}: {diagnostic}"
+            );
+        }
+        assert!(
+            diagnostic.contains("uncommitted changes") && diagnostic.contains("clean-parent"),
+            "the workspace diagnostic still states its own domain fact: {diagnostic}"
+        );
     }
 
     /// Issue #188: ignored-only parent artifacts (build/cache output) never
