@@ -604,6 +604,71 @@ async fn a_listing_never_carries_detached_execution_output() {
     );
 }
 
+/// Issue #202: `execution(status)` exposes the honest typed pair for a
+/// background execution whose external outcome is unknown — lifecycle
+/// `outcome_unknown` with the `outcome_unknown` result status — and never
+/// labels it `failed`.
+#[tokio::test]
+async fn execution_status_preserves_an_honest_outcome_unknown() {
+    let fixture = execution_fixture(None);
+    let registry = fixture.runtime.background().clone();
+    dispatch_outcome_unknown(&registry, "exec_1").await;
+
+    let status = json_content(
+        &run_execution(
+            &fixture,
+            serde_json::json!({
+                "action": "status",
+                "target": {"kind": "tool", "id": "exec_1"},
+            }),
+        )
+        .await,
+    );
+    assert_eq!(status["kind"], "tool");
+    assert_eq!(
+        status["state"], "outcome_unknown",
+        "the lifecycle is the truthful unknown, never failed: {status}"
+    );
+    assert_eq!(
+        status["result"]["status"]["type"], "outcome_unknown",
+        "the result status agrees with the lifecycle: {status}"
+    );
+}
+
+/// Issue #202: `execution(list)` drops the result deliberately, so the
+/// lifecycle state is the only outcome signal left — it must be
+/// `outcome_unknown`, never `failed`, for an execution whose external
+/// outcome is unknown.
+#[tokio::test]
+async fn execution_list_never_hides_outcome_unknown_behind_failed() {
+    let fixture = execution_fixture(None);
+    let registry = fixture.runtime.background().clone();
+    dispatch_outcome_unknown(&registry, "exec_1").await;
+
+    let listing = json_content(&run_execution(&fixture, list(&serde_json::json!({}))).await);
+    let entry = &listing["executions"][0];
+    assert_eq!(entry["execution"]["id"], "exec_1");
+    assert_eq!(
+        entry["state"], "outcome_unknown",
+        "the result-less listing still reports the honest unknown: {entry}"
+    );
+    assert_ne!(
+        entry["state"], "failed",
+        "an unknown outcome is never listed as failed: {entry}"
+    );
+    // Terminal, not active: the unknown outcome is settled, not pending.
+    let active = json_content(
+        &run_execution(&fixture, list(&serde_json::json!({"active_only": true}))).await,
+    );
+    assert!(
+        active["executions"]
+            .as_array()
+            .expect("executions")
+            .is_empty(),
+        "an unknown outcome is terminal, not active: {active}"
+    );
+}
+
 /// Attaching an empty optional subsystem changes nothing: a runtime that
 /// owns an empty subagent registry lists exactly what a runtime without one
 /// lists, and the discovery machinery's mere existence alters no tool
@@ -700,6 +765,44 @@ async fn dispatch_parking(
         .expect("dispatch commits");
     support::fake::await_started(&mut started, "parking background execution").await;
     release
+}
+
+/// Dispatches one background execution whose executor reports
+/// `OutcomeUnknown`, and waits for the registry's own terminal settlement.
+async fn dispatch_outcome_unknown(
+    registry: &rustx::tools::background::ConversationBackgroundRegistry,
+    expected_id: &str,
+) -> ToolExecutionId {
+    let executor = support::fake::FakeTool::new(
+        common::tool_policies(
+            "bash",
+            "tool-bash",
+            rustx::tools::types::ToolExecutionPolicy::ModelSelectable,
+            rustx::tools::types::ToolConcurrencyPolicy::Sequential,
+        ),
+        rustx::tools::types::ToolExecutionResult {
+            status: ToolExecutionStatus::OutcomeUnknown {
+                detail: "remote termination could not be confirmed".to_owned(),
+            },
+            ..support::fake::success_result("unreachable")
+        },
+    );
+    let prepared = registry
+        .prepare_dispatch(
+            &background_invocation("bash"),
+            &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
+            rustx::tools::environment::ToolEnvironment::new(),
+        )
+        .expect("prepare");
+    registry
+        .commit_dispatch(prepared, &CancellationSignal::new())
+        .expect("dispatch commits");
+    let execution_id = ToolExecutionId::new(expected_id);
+    registry
+        .wait_until_terminal(&execution_id)
+        .await
+        .expect("the registry settles the execution");
+    execution_id
 }
 
 /// Dispatches one background execution and waits for the registry's own
