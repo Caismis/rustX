@@ -5432,6 +5432,7 @@ mod tests {
                 "sha256:0000000000000000000000000000000000000000000000000000000000000000"
             ))
             .expect("digest"),
+            execution_deadline: None,
             workspace_policy: crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
             instructions: "instructions".to_owned(),
             model: crate::model::frozen::test_frozen_model_spec(
@@ -6079,6 +6080,7 @@ mod tests {
                 agent_id: AgentId::new("agent-a"),
                 mailbox: tool_runtime.mailbox(),
                 clock: Arc::new(crate::runtime::types::SystemClock),
+                monotonic_clock: Arc::new(crate::runtime::ManualMonotonicClock::new()),
                 spawn: crate::runtime::subagent::SubagentSpawnPlan {
                     program: std::path::PathBuf::from("/nonexistent/rustx"),
                     runtime_root: dir.path().join("subagents"),
@@ -6188,6 +6190,7 @@ mod tests {
                 agent_id: registry_agent.clone(),
                 mailbox: tool_runtime.mailbox(),
                 clock: Arc::new(crate::runtime::types::SystemClock),
+                monotonic_clock: Arc::new(crate::runtime::ManualMonotonicClock::new()),
                 spawn: crate::runtime::subagent::SubagentSpawnPlan {
                     program: std::path::PathBuf::from("/nonexistent/rustx"),
                     runtime_root: dir.path().join("subagents"),

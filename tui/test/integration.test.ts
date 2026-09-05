@@ -99,14 +99,14 @@ function modelsJson(baseUrl: string): string {
 }
 
 const RUNTIME_CONFIG_JSON = JSON.stringify({
-  schemaVersion: 5,
+  schemaVersion: 6,
   agentId: "agent-tui-integration",
   model: { model: "fixture/integration-model" },
   context: { reserveTokens: 1024, keepRecentTokens: 8192 },
 });
 
 const BEFORE_START_RUNTIME_CONFIG_JSON = JSON.stringify({
-  schemaVersion: 5,
+  schemaVersion: 6,
   agentId: "agent-tui-before-start",
   model: { model: "fixture/integration-model" },
   context: { reserveTokens: 1024, keepRecentTokens: 8192 },
@@ -702,7 +702,7 @@ describe("real rustx structured ask_user questionnaire", { skip: SKIP }, () => {
 // ---------------------------------------------------------------------------
 
 const COMPACTION_RUNTIME_CONFIG_JSON = JSON.stringify({
-  schemaVersion: 5,
+  schemaVersion: 6,
   agentId: "agent-tui-compaction",
   model: { model: "fixture/integration-model" },
   // Both compaction budgets carry the reserve, so the shared limit is

@@ -25,7 +25,8 @@
 //!   owns: SubagentId allocation/correlation, child identity correlation,
 //!         committed (agent, definition_digest) identity, logical lifecycle,
 //!         ownership state, capacity, cancellation intent, terminal
-//!         metadata, bounded result metadata
+//!         metadata, bounded result metadata, and each owned child's
+//!         whole-lifecycle execution deadline
 //!   never owns: configuration/definition semantics, parent Ledger/Surface,
 //!               parent InboundSequence allocation, parent AgentExecution
 //!               admission, a private result queue, the OS process handle
@@ -157,10 +158,11 @@ pub use activity::{
     SubagentWaitReason,
 };
 pub use catalog::{
-    CHILD_UNSAFE_BUILTIN_TOOLS, MAX_SUBAGENT_DEFINITIONS, SUBAGENT_DEFINITION_DIGEST_VERSION,
-    SubagentAdmissionError, SubagentCatalog, SubagentDefinition, SubagentDefinitionDigest,
-    SubagentDefinitionError, SubagentName, SubagentNameError, SubagentProjectInstructionPolicy,
-    SubagentToolSelector,
+    CHILD_UNSAFE_BUILTIN_TOOLS, MAX_SUBAGENT_DEFINITIONS, MAX_SUBAGENT_EXECUTION_DEADLINE_MS,
+    SUBAGENT_DEFINITION_DIGEST_VERSION, SubagentAdmissionError, SubagentCatalog,
+    SubagentDefinition, SubagentDefinitionDigest, SubagentDefinitionError,
+    SubagentExecutionDeadline, SubagentExecutionDeadlineError, SubagentName, SubagentNameError,
+    SubagentProjectInstructionPolicy, SubagentToolSelector,
 };
 pub use process::SubagentSpawnPlan;
 #[cfg(test)]

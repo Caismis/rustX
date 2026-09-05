@@ -1400,6 +1400,7 @@ mod tests {
                     "sha256:0000000000000000000000000000000000000000000000000000000000000000"
                 ))
                 .expect("digest"),
+                execution_deadline: None,
                 workspace_policy:
                     crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
                 instructions: "frozen child instructions".to_owned(),

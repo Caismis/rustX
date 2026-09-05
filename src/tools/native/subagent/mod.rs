@@ -308,6 +308,7 @@ mod tests {
                 "instructions".to_owned(),
                 std::path::PathBuf::from("/w/research.md"),
                 None,
+                None,
                 Vec::new(),
                 Vec::new(),
                 SubagentProjectInstructionPolicy {
@@ -322,6 +323,7 @@ mod tests {
                 "Read-only repository exploration.".to_owned(),
                 "instructions".to_owned(),
                 std::path::PathBuf::from("/w/explore.md"),
+                None,
                 None,
                 Vec::new(),
                 Vec::new(),
@@ -541,6 +543,7 @@ mod tests {
             agent_id: AgentId::new("agent-parent"),
             mailbox: ConversationInboundMailbox::over_store(store),
             clock: Arc::new(SystemClock),
+            monotonic_clock: Arc::new(crate::runtime::ManualMonotonicClock::new()),
             spawn: SubagentSpawnPlan {
                 program: std::path::PathBuf::from("/nonexistent/rustx"),
                 runtime_root: runtime_root.clone(),
@@ -564,6 +567,7 @@ mod tests {
             "instructions".to_owned(),
             workspace_root.join("isolated.md"),
             Some(model.clone()),
+            None,
             Vec::new(),
             Vec::new(),
             SubagentProjectInstructionPolicy {
@@ -754,5 +758,18 @@ mod tests {
         let mut names = properties.keys().cloned().collect::<Vec<_>>();
         names.sort();
         assert_eq!(names, vec!["agent", "context", "task"]);
+        for forbidden in [
+            "timeout",
+            "timeoutMs",
+            "deadline",
+            "deadlineMs",
+            "set_timeout",
+            "extend_deadline",
+        ] {
+            assert!(
+                !properties.contains_key(forbidden),
+                "the model cannot control a named subagent deadline: {forbidden}"
+            );
+        }
     }
 }

@@ -870,6 +870,19 @@ mod tests {
         assert_eq!(schema["type"], "object", "a root object schema: {schema}");
         let branches = schema["oneOf"].as_array().expect("one branch per action");
         assert_eq!(branches.len(), 3);
+        for forbidden in [
+            "timeout",
+            "timeoutMs",
+            "deadline",
+            "deadlineMs",
+            "set_timeout",
+            "extend_deadline",
+        ] {
+            assert!(
+                !schema.to_string().contains(&format!("\"{forbidden}\"")),
+                "execution control must not expose deadline authority: {forbidden}"
+            );
+        }
 
         let mut actions = Vec::new();
         for branch in branches {

@@ -25,7 +25,8 @@ use crate::model::session::SessionModelConfig;
 use crate::runtime::ApprovalMode;
 use crate::runtime::identity::{AgentId, McpServerId};
 use crate::runtime::subagent::{
-    MAX_SUBAGENT_DEFINITIONS, SubagentName, SubagentToolSelector, SubagentWorkspacePolicy,
+    MAX_SUBAGENT_DEFINITIONS, SubagentExecutionDeadline, SubagentName, SubagentToolSelector,
+    SubagentWorkspacePolicy,
 };
 use crate::runtime::workflow::{MAX_WORKFLOW_DEFINITIONS, WorkflowId};
 use crate::tools::environment::{ToolEnvironment, ToolEnvironmentError};
@@ -34,7 +35,7 @@ use crate::tools::native::NativeToolPolicies;
 use crate::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocationPolicy};
 
 /// The only current runtime configuration schema version this runtime accepts.
-pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 5;
+pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 6;
 
 /// The explicit current runtime/project configuration.
 ///
@@ -168,6 +169,10 @@ pub struct SubagentDocument {
     /// attempt's frozen effective model configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<ModelRef>,
+    /// The optional maximum wall-clock duration of the complete child
+    /// lifecycle, in milliseconds. The model cannot override or extend it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
     /// The exact source-qualified capability selection.
     #[serde(default)]
     pub tools: SubagentToolsDocument,
@@ -180,6 +185,21 @@ pub struct SubagentDocument {
     /// The bounded project-workspace policy of this agent.
     #[serde(default)]
     pub worktree: SubagentWorktreeDocument,
+}
+
+impl SubagentDocument {
+    /// Converts the JSONC millisecond field into the validated runtime type.
+    ///
+    /// # Errors
+    ///
+    /// Returns the explicit zero/maximum validation detail. Malformed JSON
+    /// values are rejected by serde before this boundary is reached.
+    pub fn execution_deadline(&self) -> Result<Option<SubagentExecutionDeadline>, String> {
+        self.timeout_ms
+            .map(SubagentExecutionDeadline::from_millis)
+            .transpose()
+            .map_err(|error| error.to_string())
+    }
 }
 
 /// The source-qualified capability selection of one named definition.
@@ -461,6 +481,11 @@ impl CurrentRuntimeConfig {
             &self.subagents.definitions,
         )?;
         for (name, document) in &self.subagents.definitions {
+            if let Err(error) = document.execution_deadline() {
+                return Err(CurrentRuntimeConfigError::Invalid {
+                    detail: format!("subagents.definitions.{name}.timeoutMs {error}"),
+                });
+            }
             if document.instructions_file.as_os_str().is_empty() {
                 return Err(CurrentRuntimeConfigError::Invalid {
                     detail: format!(
@@ -1173,6 +1198,70 @@ mod tests {
             policy.stream_idle_timeout,
             std::time::Duration::from_millis(11)
         );
+    }
+
+    fn worker_config(timeout: &str) -> String {
+        MINIMAL.replace(
+            r#""agentId": "agent-a""#,
+            &format!(
+                r#""agentId": "agent-a", "subagents": {{"definitions": {{"worker": {{"description": "worker", "instructionsFile": "worker.md", "timeoutMs": {timeout}}}}}, "main": ["worker"], "workflow": []}}"#
+            ),
+        )
+    }
+
+    #[test]
+    fn named_subagent_execution_deadline_is_optional_and_typed_at_admission() {
+        let absent = CurrentRuntimeConfig::from_jsonc_slice(
+            MINIMAL
+                .replace(
+                    r#""agentId": "agent-a""#,
+                    r#""agentId": "agent-a", "subagents": {"definitions": {"worker": {"description": "worker", "instructionsFile": "worker.md"}}, "main": ["worker"], "workflow": []}"#,
+                )
+                .as_bytes(),
+        )
+        .expect("deadline is optional");
+        let worker = absent
+            .subagents
+            .definitions
+            .get(&crate::runtime::subagent::SubagentName::parse("worker").expect("name"))
+            .expect("worker");
+        assert_eq!(worker.timeout_ms, None);
+        assert_eq!(worker.execution_deadline().expect("valid absence"), None);
+
+        let config = CurrentRuntimeConfig::from_jsonc_slice(worker_config("30000").as_bytes())
+            .expect("valid deadline");
+        let worker = config
+            .subagents
+            .definitions
+            .get(&crate::runtime::subagent::SubagentName::parse("worker").expect("name"))
+            .expect("worker");
+        assert_eq!(
+            worker
+                .execution_deadline()
+                .expect("valid deadline")
+                .expect("present")
+                .as_millis(),
+            30_000
+        );
+    }
+
+    #[test]
+    fn named_subagent_execution_deadline_rejects_zero_and_values_above_maximum() {
+        for (raw, expected) in [
+            ("0", "must be positive"),
+            ("86400001", "must not exceed 86400000 milliseconds"),
+        ] {
+            let error = CurrentRuntimeConfig::from_jsonc_slice(worker_config(raw).as_bytes())
+                .expect_err("invalid deadline");
+            assert!(matches!(error, CurrentRuntimeConfigError::Invalid { .. }));
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+        let malformed = CurrentRuntimeConfig::from_jsonc_slice(worker_config("\"30s\"").as_bytes())
+            .expect_err("malformed deadline");
+        assert!(matches!(
+            malformed,
+            CurrentRuntimeConfigError::Syntax { .. }
+        ));
     }
 
     /// A zero deadline is rejected at the current-runtime composition

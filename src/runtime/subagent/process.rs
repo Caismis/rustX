@@ -2369,6 +2369,7 @@ mod tests {
                 agent: crate::runtime::subagent::SubagentName::parse("explore").expect("name"),
                 definition_digest: serde_json::from_value(serde_json::json!("sha256:frozen"))
                     .expect("digest"),
+                execution_deadline: None,
                 workspace_policy:
                     crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
                 instructions: String::new(),

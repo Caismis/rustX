@@ -64,7 +64,7 @@ fn models_json(emulator: &ProviderEmulator) -> String {
 }
 
 const CONFIG: &str = r#"{
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "agentId": "agent-issue83",
   "model": {"model": "emulator/workflow-model"},
   "context": {"reserveTokens": 0, "keepRecentTokens": 0},

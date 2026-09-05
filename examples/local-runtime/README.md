@@ -163,6 +163,16 @@ primary provider requests and compaction summary requests:
 admitted request and is not part of Session history or the provider model
 input.
 
+Each named `subagents.definitions.<name>` may instead set an optional
+`timeoutMs` execution deadline. It is a positive integer number of
+milliseconds, bounded at 86,400,000 (24 hours); when omitted, no
+definition-level deadline is installed. This limit covers the whole owned
+child lifecycle — startup, model streaming, tools, and physical/workspace
+settlement — and is separate from `modelTimeoutPolicy`. Expiration uses the
+ordinary cancellation path with a deadline-specific reason; there is no
+`TimedOut` subagent state. The model chooses only the named agent and its
+task/context, and cannot set or extend this deadline per invocation.
+
 `approvalMode` is the current runtime-wide HITL mode. It defaults to `policy`;
 `full_access` suppresses only approval prompts for the current runtime and is
 never restored from Session history. The runtime applies it at attempt

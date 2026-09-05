@@ -82,8 +82,8 @@ use crate::tools::mcp::{McpServerBinding, McpServerBindings};
 use crate::tools::types::{ToolDefinition, ToolOrigin};
 
 use super::catalog::{
-    SubagentCatalog, SubagentDefinition, SubagentDefinitionDigest, SubagentName,
-    SubagentToolSelector,
+    SubagentCatalog, SubagentDefinition, SubagentDefinitionDigest, SubagentExecutionDeadline,
+    SubagentName, SubagentToolSelector,
 };
 use super::workspace::SubagentWorkspacePolicy;
 
@@ -249,6 +249,10 @@ pub struct ResolvedSubagentSpec {
     pub agent: SubagentName,
     /// The deterministic semantic identity of the definition at start.
     pub definition_digest: SubagentDefinitionDigest,
+    /// The optional whole-lifecycle execution deadline frozen by definition
+    /// resolution. The registry starts its monotonic countdown only after
+    /// durable ownership commits.
+    pub execution_deadline: Option<SubagentExecutionDeadline>,
     /// The definition-level project workspace policy resolved before any
     /// child process or lease is staged.
     pub workspace_policy: SubagentWorkspacePolicy,
@@ -476,6 +480,7 @@ impl SubagentResolver {
         Ok(ResolvedSubagentSpec {
             agent: definition.name().clone(),
             definition_digest: definition.digest().clone(),
+            execution_deadline: definition.execution_deadline(),
             workspace_policy: definition.workspace_policy(),
             instructions: definition.instructions().to_owned(),
             model,
@@ -914,6 +919,7 @@ mod tests {
             "instructions".to_owned(),
             std::path::PathBuf::from("/w/explore.md"),
             None,
+            None,
             tools,
             Vec::new(),
             SubagentProjectInstructionPolicy {
@@ -1168,6 +1174,7 @@ mod tests {
                 "instructions".to_owned(),
                 std::path::PathBuf::from("/w/research.md"),
                 None,
+                None,
                 Vec::new(),
                 Vec::new(),
                 SubagentProjectInstructionPolicy {
@@ -1182,6 +1189,7 @@ mod tests {
                 "Read-only exploration.".to_owned(),
                 "instructions".to_owned(),
                 std::path::PathBuf::from("/w/explore.md"),
+                None,
                 None,
                 Vec::new(),
                 Vec::new(),

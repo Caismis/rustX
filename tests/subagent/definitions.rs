@@ -168,7 +168,7 @@ impl Lab {
                 .or_insert_with(|| serde_json::Value::Array(definition_names));
         }
         let document = serde_json::json!({
-            "schemaVersion": 5,
+            "schemaVersion": 6,
             "agentId": "agent-issue144",
             "model": {"model": "local/model-a"},
             "context": {"reserveTokens": 0, "keepRecentTokens": 0},
@@ -418,7 +418,9 @@ async fn only_named_catalog_definitions_are_admitted() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_attempt_frozen_on_r1_resolves_r1_after_r2_becomes_current() {
     let lab = Lab::new();
-    lab.write_config(&explore(&["read"]));
+    let mut r1_config = explore(&["read"]);
+    r1_config["definitions"]["explore"]["timeoutMs"] = serde_json::json!(100);
+    lab.write_config(&r1_config);
     let product = lab.compose().await;
 
     // R1: exactly what an attempt admitted now would freeze.
@@ -446,6 +448,7 @@ async fn an_attempt_frozen_on_r1_resolves_r1_after_r2_becomes_current() {
                 "description": "Read-only repository exploration.",
                 "instructionsFile": ".agents/subagents/explore/instructions.md",
                 "tools": {"builtin": ["read"]},
+                "timeoutMs": 200,
             },
             "research": {
                 "description": "Deep research.",
@@ -467,6 +470,14 @@ async fn an_attempt_frozen_on_r1_resolves_r1_after_r2_becomes_current() {
         .expect("R1 still resolves its own agent");
     assert_eq!(resolved.definition_digest, r1_digest);
     assert_eq!(
+        resolved
+            .execution_deadline
+            .expect("R1 deadline")
+            .as_millis(),
+        100,
+        "the R1 launch keeps its frozen deadline"
+    );
+    assert_eq!(
         resolved.instructions, "Explore the shared workspace read-only.\n",
         "the R1 attempt observes R1's instruction document, not R2's"
     );
@@ -481,6 +492,11 @@ async fn an_attempt_frozen_on_r1_resolves_r1_after_r2_becomes_current() {
     // And the newly current generation is genuinely different.
     let from_r2 = SubagentResolver::resolve(&r2, &agent("explore"), &inherited_model(), &registry)
         .expect("R2 resolves its own agent");
+    assert_eq!(
+        from_r2.execution_deadline.expect("R2 deadline").as_millis(),
+        200,
+        "the current R2 definition has its independent deadline"
+    );
     assert_ne!(from_r2.definition_digest, r1_digest);
     assert!(
         SubagentResolver::resolve(&r2, &agent("research"), &inherited_model(), &registry).is_ok()
@@ -712,7 +728,7 @@ async fn an_explicit_ask_user_selection_is_admitted_for_a_child() {
 async fn an_unavailable_source_keeps_the_runtime_healthy_but_blocks_the_agent_that_needs_it() {
     let lab = Lab::new();
     let document = serde_json::json!({
-        "schemaVersion": 5,
+        "schemaVersion": 6,
         "agentId": "agent-issue144",
         "model": {"model": "local/model-a"},
         "context": {"reserveTokens": 0, "keepRecentTokens": 0},
@@ -1004,7 +1020,7 @@ async fn the_definition_digest_ignores_incidental_formatting_and_tracks_semantic
         lab.root().join("rustx.jsonc"),
         r#"{
   // A comment cannot change the semantic identity of a definition.
-  "schemaVersion": 5, "agentId": "agent-issue144",
+  "schemaVersion": 6, "agentId": "agent-issue144",
   "context": {"keepRecentTokens": 0, "reserveTokens": 0},
   "model": {"model": "local/model-a"},
   "defaultTools": ["read", "subagent"],
@@ -1061,7 +1077,9 @@ async fn the_definition_digest_ignores_incidental_formatting_and_tracks_semantic
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_frozen_specification_preserves_exact_builtin_identity_through_serialization() {
     let lab = Lab::new();
-    lab.write_config(&explore(&["read", "grep"]));
+    let mut config = explore(&["read", "grep"]);
+    config["definitions"]["explore"]["timeoutMs"] = serde_json::json!(30_000);
+    lab.write_config(&config);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
     let resolved = SubagentResolver::resolve(
@@ -1071,6 +1089,14 @@ async fn the_frozen_specification_preserves_exact_builtin_identity_through_seria
         &model_registry(),
     )
     .expect("the definition resolves");
+    assert_eq!(
+        resolved
+            .execution_deadline
+            .expect("resolved deadline")
+            .as_millis(),
+        30_000,
+        "resolution freezes the admitted definition deadline"
+    );
 
     for tool in &resolved.tools {
         let ResolvedSubagentTool::Builtin {
@@ -1443,7 +1469,7 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
     let lab = Lab::new();
     // The generation admits `grep` with a non-default policy on every axis.
     let document = serde_json::json!({
-        "schemaVersion": 5,
+        "schemaVersion": 6,
         "agentId": "agent-issue144",
         "model": {"model": "local/model-a"},
         "context": {"reserveTokens": 0, "keepRecentTokens": 0},
@@ -1520,7 +1546,7 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
 async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
     let lab = Lab::new();
     let document = serde_json::json!({
-        "schemaVersion": 5,
+        "schemaVersion": 6,
         "agentId": "agent-issue144",
         "model": {"model": "local/model-a"},
         "context": {"reserveTokens": 0, "keepRecentTokens": 0},

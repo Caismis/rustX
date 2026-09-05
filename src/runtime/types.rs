@@ -699,6 +699,9 @@ pub enum CancellationReason {
     RuntimeShutdown,
     /// A parent operation that owns this work was cancelled.
     ParentCancelled,
+    /// A conversation-owned subagent reached its definition-level whole-
+    /// lifecycle execution deadline.
+    SubagentExecutionDeadlineExceeded,
 }
 
 /// A normalized runtime-owned execution error.

@@ -308,6 +308,7 @@ fn resolved_child_spec(agent: &str) -> ResolvedSubagentSpec {
             "sha256:0000000000000000000000000000000000000000000000000000000000000000"
         ))
         .expect("definition digest"),
+        execution_deadline: None,
         workspace_policy: rustx::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
         instructions: "Issue 138 conformance child".to_owned(),
         model: rustx::model::frozen::test_frozen_model_spec(
@@ -394,6 +395,7 @@ fn standalone_parent_plane(dir: &tempfile::TempDir, conversation: &str) -> Paren
         agent_id: AgentId::new("agent-parent-138"),
         mailbox,
         clock: Arc::new(SystemClock),
+        monotonic_clock: Arc::new(rustx::runtime::ManualMonotonicClock::new()),
         spawn: test_spawn_plan(&runtime_root),
         workspace: rustx::runtime::subagent::SubagentWorkspaceManager::new(
             dir.path().join("parent-workspace"),
@@ -482,6 +484,7 @@ async fn compose_parent_runtime_plane(
         agent_id: AgentId::new("agent-parent-138"),
         mailbox: tool_runtime.mailbox(),
         clock: Arc::new(SystemClock),
+        monotonic_clock: Arc::new(rustx::runtime::ManualMonotonicClock::new()),
         spawn: test_spawn_plan(&runtime_root),
         workspace: rustx::runtime::subagent::SubagentWorkspaceManager::new(
             &workspace,

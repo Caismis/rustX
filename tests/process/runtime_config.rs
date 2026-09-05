@@ -97,7 +97,7 @@ fn config_json(
         serde_json::json!({})
     };
     serde_json::json!({
-        "schemaVersion": 5,
+        "schemaVersion": 6,
         "agentId": "agent-issue96",
         "model": {"model": model},
         "agentStatus": {
@@ -466,7 +466,7 @@ async fn commented_configuration_documents_compose_a_runtime() {
     std::fs::write(
         &config_path,
         r#"{
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "agentId": "agent-issue96",
   // The default model of a brand-new Session.
   "model": {"model": "local/model-a"},
@@ -509,7 +509,7 @@ async fn relaxations_beyond_jsonc_still_fail_composition() {
     std::fs::write(
         &config_path,
         r#"{
-  schemaVersion: 5,
+  schemaVersion: 6,
   'agentId': 'agent-issue96',
   "model": {"model": "local/model-a"},
   "context": {"reserveTokens": 11, "keepRecentTokens": 4096}
