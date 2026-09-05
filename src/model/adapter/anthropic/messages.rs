@@ -283,6 +283,8 @@ async fn open_stream(
                 provider_code: None,
                 context_overflow: None,
                 malformed_tool_proposal: None,
+                timeout_phase: None,
+                generation: None,
             })
         }
     }
@@ -350,6 +352,8 @@ fn cancelled_error() -> ModelError {
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
+        generation: None,
     }
 }
 
@@ -370,6 +374,8 @@ fn sse_failure(error: &eventsource_stream::EventStreamError<reqwest::Error>) -> 
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
+        generation: None,
     }
 }
 
@@ -599,6 +605,8 @@ impl AnthropicStreamNormalizer {
                     provider_code,
                     context_overflow: None,
                     malformed_tool_proposal: None,
+                    timeout_phase: None,
+                    generation: None,
                 }
                 .normalized())
             }
@@ -1037,6 +1045,8 @@ impl AnthropicStreamNormalizer {
                 provider_code: Some(stop_reason),
                 context_overflow: None,
                 malformed_tool_proposal: None,
+                timeout_phase: None,
+                generation: None,
             }));
         }
         let mut events = Vec::new();
@@ -1121,6 +1131,8 @@ fn provider_error(message: String) -> ModelError {
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
+        generation: None,
     }
 }
 
@@ -1154,5 +1166,7 @@ fn unsupported(message: impl Into<String>) -> ModelError {
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
+        generation: None,
     }
 }

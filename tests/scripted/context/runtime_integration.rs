@@ -105,6 +105,8 @@ fn fail(kind: rustx::model::ModelErrorKind, message: &str) -> ModelEvent {
             provider_code: None,
             context_overflow: None,
             malformed_tool_proposal: None,
+            timeout_phase: None,
+            generation: None,
         },
     }
 }
@@ -125,6 +127,8 @@ fn overflow_error() -> rustx::model::ModelError {
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
+        generation: None,
     }
 }
 

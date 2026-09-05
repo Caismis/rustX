@@ -70,6 +70,7 @@ use crate::model::catalog::{
     ModelRef, ProviderId, ReasoningProfileId, ReasoningProfileView, ResolvedModelCatalog,
 };
 use crate::model::error::{ModelError, ModelErrorKind};
+use crate::model::generation::GenerationSafetyPolicy;
 use crate::model::types::ModelProtocol;
 
 /// An opaque provider request-parameter object.
@@ -238,6 +239,8 @@ pub fn finalize_provider_request(
             provider_code: None,
             context_overflow: None,
             malformed_tool_proposal: None,
+            timeout_phase: None,
+            generation: None,
         });
     };
     validate_request_params_layer(params, protocol, RequestParamsLayer::EffectiveRequest).map_err(
@@ -249,6 +252,8 @@ pub fn finalize_provider_request(
             provider_code: None,
             context_overflow: None,
             malformed_tool_proposal: None,
+            timeout_phase: None,
+            generation: None,
         },
     )?;
     overlay_shallow(&mut object, params);
@@ -288,6 +293,77 @@ pub fn effective_capabilities(
     declared
         .intersect(&adapter_capabilities(protocol))
         .intersect(&runtime_capabilities())
+}
+
+/// The runtime byte allowance granted per resolved output token.
+///
+/// **This is not a token count and must never be described as one.** The
+/// provider-neutral output limit of a request is
+/// [`ModelRequest::max_output_tokens`](crate::model::types::ModelRequest::max_output_tokens);
+/// it is resolved before the adapter boundary and the provider is expected to
+/// enforce it, reporting exhaustion as
+/// [`ModelFinishReason::Length`](crate::model::finish::ModelFinishReason::Length).
+/// The runtime safeguard exists only because a self-hosted backend may ignore
+/// its own request limit, so it is deliberately generous: no honest
+/// generation reaches thirty-two bytes of normalized output per permitted
+/// output token in any script this runtime supports, and a generous
+/// multiplier is the right trade — the safeguard exists to stop a runaway
+/// stream, not to shape an answer, so a bound that could plausibly reject a
+/// legitimate long generation would be the worse error.
+///
+/// Deriving the safeguard from the already-resolved limit is what keeps this
+/// from becoming a second output-limit mechanism: there is one configured
+/// output budget, and this is a bound on how far a backend may overrun it.
+pub const RUNTIME_GENERATED_BYTES_PER_OUTPUT_TOKEN: u64 = 32;
+
+/// The floor of the runtime output safeguard, in bytes.
+///
+/// Below roughly this size the byte-per-token uncertainty dominates the
+/// bound, and a safeguard that fires there would be deciding ordinary
+/// outcomes rather than bounding runaway ones. A deliberately small resolved
+/// output budget — a narrow summary cap, a small configured maximum —
+/// therefore still gets a usable floor, and the provider's own
+/// `max_output_tokens` remains the mechanism that actually shapes an answer.
+///
+/// The repetition detector, not this floor, is what catches the failure mode
+/// Issue #203 actually observed: a generation stuck in a loop is classified
+/// after roughly one kilobyte of evidence, long before any byte budget is
+/// relevant. This bound is the backstop for the rarer non-repeating runaway.
+pub const RUNTIME_MIN_GENERATED_BYTES: u64 = 262_144;
+
+/// The share of the runtime output safeguard the **current default fallback
+/// policy** grants to reasoning (numerator).
+///
+/// This is a policy decision of this resolution layer, and it is a current
+/// default rather than a model-independent invariant: there is no semantic
+/// law making a reasoning budget three quarters of an output budget. It
+/// exists because a bounded default is needed and no product requirement yet
+/// asks for a separately configured reasoning bound. Nothing that *enforces*
+/// the bounds knows this number.
+pub const DEFAULT_RUNTIME_REASONING_BYTE_SHARE_NUMERATOR: u64 = 3;
+
+/// The denominator of [`DEFAULT_RUNTIME_REASONING_BYTE_SHARE_NUMERATOR`].
+pub const DEFAULT_RUNTIME_REASONING_BYTE_SHARE_DENOMINATOR: u64 = 4;
+
+/// The current runtime fallback generation-safety policy for one resolved
+/// output-token budget.
+///
+/// It is named a *fallback* deliberately. It is what the runtime uses when
+/// nothing more specific has been resolved, and both of its bounds are
+/// ordinary policy values that a future configured source may replace
+/// independently of each other.
+#[must_use]
+pub fn runtime_fallback_generation_safety_policy(max_output_tokens: u32) -> GenerationSafetyPolicy {
+    let max_generated_bytes = u64::from(max_output_tokens)
+        .saturating_mul(RUNTIME_GENERATED_BYTES_PER_OUTPUT_TOKEN)
+        .max(RUNTIME_MIN_GENERATED_BYTES);
+    GenerationSafetyPolicy {
+        max_generated_bytes,
+        max_reasoning_bytes: Some(
+            max_generated_bytes / DEFAULT_RUNTIME_REASONING_BYTE_SHARE_DENOMINATOR
+                * DEFAULT_RUNTIME_REASONING_BYTE_SHARE_NUMERATOR,
+        ),
+    }
 }
 
 /// The provider-neutral invocation configuration one model request carries
@@ -421,6 +497,30 @@ impl ResolvedModelInvocation {
     #[must_use]
     pub const fn max_output_tokens(&self) -> u32 {
         self.effective_output_tokens
+    }
+
+    /// The resolved runtime generation-safety policy of this invocation.
+    ///
+    /// This is the **policy-resolution seam**: it decides what the runtime's
+    /// provider-independent safety bounds are, and
+    /// [`GenerationGuard`](crate::model::generation::GenerationGuard) only
+    /// enforces the result. The two bounds are independent dimensions of the
+    /// resolved policy, so no ratio between them is embedded in the
+    /// accounting code that enforces them.
+    ///
+    /// This layer is the smallest existing owner that can answer the
+    /// question: the effective output budget is already resolved here from
+    /// the catalog model, the session override, and the context plane's
+    /// summary cap, and the result is already frozen for the whole attempt.
+    ///
+    /// Both bounds currently come from the documented runtime fallback in
+    /// [`runtime_fallback_generation_safety_policy`], because no product
+    /// requirement yet asks for a separately configured reasoning bound.
+    /// When one does, it is resolved here — beside the output budget — and
+    /// nothing downstream changes.
+    #[must_use]
+    pub fn generation_safety_policy(&self) -> GenerationSafetyPolicy {
+        runtime_fallback_generation_safety_policy(self.effective_output_tokens)
     }
 
     /// The selected reasoning profile, when the model declares any.
@@ -1159,6 +1259,8 @@ pub fn validate_content_modalities(
                 provider_code: None,
                 context_overflow: None,
                 malformed_tool_proposal: None,
+                timeout_phase: None,
+                generation: None,
             });
         }
     }
@@ -1168,10 +1270,43 @@ pub fn validate_content_modalities(
 #[cfg(test)]
 mod tests {
     use super::{
-        ModelInvocationError, RequestParams, RequestParamsLayer, finalize_provider_request,
-        overlay_shallow, protected_keys, validate_request_params_layer,
+        DEFAULT_RUNTIME_REASONING_BYTE_SHARE_DENOMINATOR,
+        DEFAULT_RUNTIME_REASONING_BYTE_SHARE_NUMERATOR, ModelInvocationError,
+        RUNTIME_GENERATED_BYTES_PER_OUTPUT_TOKEN, RUNTIME_MIN_GENERATED_BYTES, RequestParams,
+        RequestParamsLayer, finalize_provider_request, overlay_shallow, protected_keys,
+        runtime_fallback_generation_safety_policy, validate_request_params_layer,
     };
     use crate::model::types::ModelProtocol;
+
+    /// The runtime fallback policy is resolved *here*, at the layer that
+    /// already resolves the effective output budget, and it is a policy
+    /// decision rather than an accounting rule: both bounds are ordinary
+    /// values this function chooses and the guard merely enforces.
+    #[test]
+    fn the_runtime_fallback_policy_is_resolved_from_the_output_budget() {
+        let policy = runtime_fallback_generation_safety_policy(32_768);
+        assert_eq!(
+            policy.max_generated_bytes,
+            32_768 * RUNTIME_GENERATED_BYTES_PER_OUTPUT_TOKEN
+        );
+        assert_eq!(
+            policy.max_reasoning_bytes,
+            Some(
+                policy.max_generated_bytes / DEFAULT_RUNTIME_REASONING_BYTE_SHARE_DENOMINATOR
+                    * DEFAULT_RUNTIME_REASONING_BYTE_SHARE_NUMERATOR
+            ),
+            "the current default fallback share, decided at this layer"
+        );
+
+        // A deliberately small resolved budget still gets the documented
+        // floor, so the safeguard never decides an ordinary outcome.
+        let tiny = runtime_fallback_generation_safety_policy(1);
+        assert_eq!(tiny.max_generated_bytes, RUNTIME_MIN_GENERATED_BYTES);
+
+        // A pathological catalog value cannot overflow the derivation.
+        let huge = runtime_fallback_generation_safety_policy(u32::MAX);
+        assert!(huge.max_reasoning_bytes.expect("a bound") < huge.max_generated_bytes);
+    }
 
     fn params(json: serde_json::Value) -> RequestParams {
         match json {

@@ -2,6 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::model::deadline::ModelTimeoutPhase;
+use crate::model::generation::GenerationFailure;
+
 /// Error classes the runtime distinguishes for retry/termination decisions.
 /// Provider SDK error structs never cross this boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,6 +38,22 @@ pub enum ModelErrorKind {
     /// class authorizes; see [`MalformedToolProposalSource`] for the
     /// provider-independent provenance carried alongside it.
     MalformedToolProposal,
+    /// One generated channel deterministically degenerated into repetition.
+    ///
+    /// Like [`Self::MalformedToolProposal`] this is a *generation* defect:
+    /// the physical generation is discarded before the canonical commit
+    /// boundary, and it shares the one semantic corrective-generation budget
+    /// of the logical model step. The typed evidence is carried in
+    /// [`ModelError::generation`].
+    GenerationDegenerated,
+    /// One generation budget was exhausted before the generation completed.
+    ///
+    /// Either the provider terminated at its own token limit, or the
+    /// runtime's byte safeguard fired. Both mean the generation is
+    /// incomplete, so it is never accepted as an ordinary successful
+    /// assistant completion. The typed detail is carried in
+    /// [`ModelError::generation`].
+    GenerationBudgetExceeded,
 }
 
 /// Why a model-emitted tool proposal was refused at `ToolCall` acceptance.
@@ -145,6 +164,28 @@ pub struct ModelError {
     /// Present for exactly that class and absent for every other one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub malformed_tool_proposal: Option<MalformedToolProposalSource>,
+    /// The typed liveness contract a runtime-owned
+    /// [`ModelErrorKind::Timeout`] violated.
+    ///
+    /// Present for exactly that class, and only when the runtime built the
+    /// failure from an expired request deadline; a provider-reported timeout
+    /// carries no phase because this runtime did not observe one. It is a
+    /// *transport* fact and is deliberately a separate field from
+    /// [`Self::generation`]: "the provider stopped producing" and "what the
+    /// provider produced is unusable" are different contracts with different
+    /// recovery architectures, and no consumer should have to distinguish
+    /// them by reading a message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_phase: Option<ModelTimeoutPhase>,
+    /// The typed provider-independent detail of one single-generation safety
+    /// failure: degeneration or budget exhaustion.
+    ///
+    /// Present for [`ModelErrorKind::GenerationDegenerated`] and
+    /// [`ModelErrorKind::GenerationBudgetExceeded`]; absent otherwise, and
+    /// never present for a timeout. Consumers read this typed fact and never
+    /// re-read [`Self::message`] for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<GenerationFailure>,
 }
 
 /// The byte bound of a [`ModelErrorKind::MalformedToolProposal`] diagnostic.
@@ -216,6 +257,73 @@ impl ModelError {
             provider_code: None,
             context_overflow: None,
             malformed_tool_proposal: Some(source),
+            timeout_phase: None,
+            generation: None,
+        }
+    }
+
+    /// Builds the normalized failure of one expired request deadline.
+    ///
+    /// This is the only constructor of a runtime-owned
+    /// [`ModelErrorKind::Timeout`], and the phase it takes can only come
+    /// from [`ModelRequestDeadline::pending`](crate::model::deadline::ModelRequestDeadline::pending),
+    /// which yields one only while a deadline actually exists. A phase that
+    /// cannot expire therefore has no path to a timeout fact.
+    ///
+    /// A deadline is a **transport** failure: the provider stopped
+    /// producing, which says nothing about whether what it produced is
+    /// usable. It keeps [`ModelRetryDisposition::Transient`] and the existing
+    /// Agent-Loop transient retry budget, and it carries no generation
+    /// detail.
+    #[must_use]
+    pub fn timeout(phase: ModelTimeoutPhase) -> Self {
+        Self {
+            kind: ModelErrorKind::Timeout,
+            message: format!("model request exceeded its {} deadline", phase.as_str()),
+            retry_disposition: ModelRetryDisposition::Transient,
+            retry_after_ms: None,
+            provider_code: None,
+            context_overflow: None,
+            malformed_tool_proposal: None,
+            timeout_phase: Some(phase),
+            generation: None,
+        }
+    }
+
+    /// Builds the normalized failure of one single-generation safety fact.
+    ///
+    /// This is the only constructor of
+    /// [`ModelErrorKind::GenerationDegenerated`] and
+    /// [`ModelErrorKind::GenerationBudgetExceeded`], so the class, its retry
+    /// disposition, and its typed detail can never disagree.
+    ///
+    /// A degenerate or over-budget generation is a **generation** defect, so
+    /// it is [`ModelRetryDisposition::Never`]: repeating the identical
+    /// request is not recovery, and the bounded semantic corrective
+    /// generation the Agent Loop owns is. It carries no timeout phase,
+    /// because it is not a liveness fact.
+    ///
+    /// The diagnostic is rendered from the typed fact, so it is authored by
+    /// this runtime and can never carry provider output.
+    #[must_use]
+    pub fn generation_failure(failure: GenerationFailure) -> Self {
+        let kind = match failure {
+            GenerationFailure::Degenerated { .. } => ModelErrorKind::GenerationDegenerated,
+            GenerationFailure::ProviderLengthLimit
+            | GenerationFailure::RuntimeBudgetExceeded { .. } => {
+                ModelErrorKind::GenerationBudgetExceeded
+            }
+        };
+        Self {
+            kind,
+            message: failure.message(),
+            retry_disposition: ModelRetryDisposition::Never,
+            retry_after_ms: None,
+            provider_code: None,
+            context_overflow: None,
+            malformed_tool_proposal: None,
+            timeout_phase: None,
+            generation: Some(failure),
         }
     }
 
@@ -429,8 +537,9 @@ fn last_number(text: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES, MalformedToolProposalSource, ModelError,
-        ModelErrorKind, ModelRetryDisposition, context_overflow_report, is_context_window_error,
+        GenerationFailure, MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES, MalformedToolProposalSource,
+        ModelError, ModelErrorKind, ModelRetryDisposition, ModelTimeoutPhase,
+        context_overflow_report, is_context_window_error,
     };
 
     /// Model errors round-trip with stable kind discriminators.
@@ -444,6 +553,8 @@ mod tests {
             provider_code: Some("rate_limit_exceeded".to_owned()),
             context_overflow: None,
             malformed_tool_proposal: None,
+            timeout_phase: None,
+            generation: None,
         };
         let json = serde_json::to_string(&error).expect("serialize error");
         assert!(json.contains("\"rate_limit\""));
@@ -561,6 +672,97 @@ mod tests {
         );
     }
 
+    /// The typed generation payload round-trips, is present for exactly the
+    /// generation classes, and is absent for every other one.
+    #[test]
+    fn the_generation_payload_is_present_for_exactly_its_classes() {
+        let cases = [
+            (
+                GenerationFailure::Degenerated {
+                    channel: crate::model::generation::GenerationChannel::Reasoning,
+                    period_bytes: 9,
+                    repetitions: 114,
+                    span_bytes: 1_026,
+                },
+                ModelErrorKind::GenerationDegenerated,
+                ModelRetryDisposition::Never,
+            ),
+            (
+                GenerationFailure::ProviderLengthLimit,
+                ModelErrorKind::GenerationBudgetExceeded,
+                ModelRetryDisposition::Never,
+            ),
+            (
+                GenerationFailure::RuntimeBudgetExceeded {
+                    budget: crate::model::generation::GenerationBudgetKind::Reasoning,
+                    limit_bytes: 512,
+                    observed_bytes: 540,
+                },
+                ModelErrorKind::GenerationBudgetExceeded,
+                ModelRetryDisposition::Never,
+            ),
+        ];
+        for (failure, kind, disposition) in cases {
+            let error = ModelError::generation_failure(failure);
+            assert_eq!(error.kind, kind);
+            assert_eq!(error.retry_disposition, disposition);
+            assert_eq!(error.generation, Some(failure));
+            assert!(
+                error.timeout_phase.is_none(),
+                "a generation defect is not a liveness fact"
+            );
+            assert!(error.malformed_tool_proposal.is_none());
+            assert!(error.context_overflow.is_none());
+            let json = serde_json::to_string(&error).expect("serialize error");
+            let decoded: ModelError = serde_json::from_str(&json).expect("deserialize error");
+            assert_eq!(decoded, error);
+        }
+
+        let unrelated = ModelError {
+            kind: ModelErrorKind::Transport,
+            message: "connection reset".to_owned(),
+            retry_disposition: ModelRetryDisposition::Transient,
+            retry_after_ms: None,
+            provider_code: None,
+            context_overflow: None,
+            malformed_tool_proposal: None,
+            timeout_phase: None,
+            generation: None,
+        };
+        let value = serde_json::to_value(&unrelated).expect("serialize error");
+        assert!(value.get("generation").is_none());
+        assert!(value.get("timeout_phase").is_none());
+    }
+
+    /// A runtime-owned timeout is a *liveness* fact: it carries a typed
+    /// phase, keeps the transient transport disposition, and carries no
+    /// generation detail at all. The two constructors cannot produce each
+    /// other's shape.
+    #[test]
+    fn a_timeout_is_a_liveness_fact_and_never_a_generation_fact() {
+        for phase in [
+            ModelTimeoutPhase::ResponseStart,
+            ModelTimeoutPhase::StreamIdle,
+        ] {
+            let error = ModelError::timeout(phase);
+            assert_eq!(error.kind, ModelErrorKind::Timeout);
+            assert_eq!(
+                error.retry_disposition,
+                ModelRetryDisposition::Transient,
+                "transport liveness keeps the existing transient retry architecture"
+            );
+            assert_eq!(error.timeout_phase, Some(phase));
+            assert!(
+                error.generation.is_none(),
+                "a timeout is not a generation-safety fact"
+            );
+            assert!(error.message.contains(phase.as_str()));
+            let json = serde_json::to_string(&error).expect("serialize error");
+            let decoded: ModelError = serde_json::from_str(&json).expect("deserialize error");
+            assert_eq!(decoded, error);
+        }
+    }
+
     /// Normalization re-bounds the class as well, so an error assembled from
     /// its public fields rather than through the constructor still cannot
     /// carry unbounded provider text past the model boundary.
@@ -574,6 +776,8 @@ mod tests {
             provider_code: None,
             context_overflow: None,
             malformed_tool_proposal: Some(MalformedToolProposalSource::ProviderDeclared),
+            timeout_phase: None,
+            generation: None,
         }
         .normalized();
         assert!(error.message.len() <= MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES);
@@ -595,6 +799,8 @@ mod tests {
             provider_code: None,
             context_overflow: None,
             malformed_tool_proposal: None,
+            timeout_phase: None,
+            generation: None,
         };
         let value = serde_json::to_value(&error).expect("serialize error");
         assert!(value.get("malformed_tool_proposal").is_none());

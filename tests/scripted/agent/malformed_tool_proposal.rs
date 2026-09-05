@@ -191,6 +191,8 @@ fn transient(message: &str) -> ModelEvent {
             provider_code: Some("rate_limit_error".to_owned()),
             context_overflow: None,
             malformed_tool_proposal: None,
+            timeout_phase: None,
+            generation: None,
         },
     }
 }
@@ -211,6 +213,8 @@ fn overflow(message: &str) -> ModelEvent {
                 context_limit: None,
             }),
             malformed_tool_proposal: None,
+            timeout_phase: None,
+            generation: None,
         },
     }
 }
@@ -356,7 +360,7 @@ fn reconstructed_request_text(model: &Arc<FakeModel>) -> String {
 
 /// The corrective-context marker of the malformed-proposal regeneration, as
 /// it appears in a request's exact Effective System Prompt.
-const CORRECTIVE_MARKER: &str = "[runtime tool-call feedback]";
+const CORRECTIVE_MARKER: &str = "[runtime generation feedback]";
 
 /// The exact Effective System Prompt of every actual request, in order.
 fn request_prompts(model: &Arc<FakeModel>) -> Vec<String> {
@@ -582,15 +586,15 @@ async fn the_discarded_generation_never_reaches_a_later_request() {
         .collect();
     assert_eq!(prompts.len(), 3);
     assert!(
-        !prompts[0].contains("[runtime tool-call feedback]"),
+        !prompts[0].contains("[runtime generation feedback]"),
         "the first generation has no corrective context"
     );
     assert!(
-        prompts[1].contains("[runtime tool-call feedback]"),
+        prompts[1].contains("[runtime generation feedback]"),
         "the regeneration carries exactly one corrective hint"
     );
     assert!(
-        !prompts[2].contains("[runtime tool-call feedback]"),
+        !prompts[2].contains("[runtime generation feedback]"),
         "the corrective hint does not survive its generation into later requests"
     );
     // The corrective hint is provider-independent guidance plus a bounded
@@ -661,12 +665,12 @@ async fn schema_rejection_stays_on_the_tool_path() {
     assert!(
         !model.requests()[0]
             .effective_system_prompt
-            .contains("[runtime tool-call feedback]")
+            .contains("[runtime generation feedback]")
     );
     assert!(
         !model.requests()[1]
             .effective_system_prompt
-            .contains("[runtime tool-call feedback]")
+            .contains("[runtime generation feedback]")
     );
 }
 

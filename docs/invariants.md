@@ -297,22 +297,27 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
   `ToolCall`, so it can never be preflighted, executed, approved, or settled,
   and it never requires a `ToolResult`.
 
-- **A malformed physical generation is noncanonical, and its recovery is
-  bounded at one.** A malformed proposal discards the whole physical
-  generation: no Assistant message representing it is committed, no orphan
-  canonical `ToolCall` or `ToolResult` exists, no provider continuation state
-  survives it, and it appears in no later request reconstruction. The Agent
-  Loop may regenerate the same logical model step exactly **once**. Two
-  semantic generations is therefore the hard maximum this mechanism can
-  cause; a second malformed generation terminates the attempt with an
-  explicit model failure rather than an ordinary completion. This budget is
-  keyed on the error class and is disjoint from the transient, overflow, and
-  Tool budgets, so the bounds compose additively and never multiply.
-  Cancellation observable before the regeneration begins wins over the
-  remaining budget.
+- **A rejected physical generation is noncanonical, and the recovery of all
+  rejected generations is bounded at one, together.** A malformed tool
+  proposal (Issue #201), a deterministically degenerate channel, and an
+  exhausted generation budget (Issue #203) are the same kind of fact — *this
+  generation is unusable* — and each discards the whole physical generation:
+  no Assistant message representing it is committed, no orphan canonical
+  `ToolCall` or `ToolResult` exists, no provider continuation state survives
+  it, and it appears in no later request reconstruction. The Agent Loop may
+  regenerate the same logical model step exactly **once**, and that one
+  corrective generation is shared by all three classes rather than granted per
+  class. Two semantic generations is therefore the hard maximum this mechanism
+  can cause in any ordering: `malformed -> degeneration -> another corrective`
+  and its reverse are not representable, because the second anomaly finds the
+  budget spent and terminates the attempt with an explicit model failure
+  rather than an ordinary completion. This budget is keyed on the error class
+  and is disjoint from the transient, overflow, and Tool budgets, so the
+  bounds compose additively and never multiply. Cancellation observable before
+  the regeneration begins wins over the remaining budget.
 
-- **Malformed-proposal corrective context belongs to the corrective
-  generation, not to one actual request.** A malformed generation authorizes
+- **Corrective context belongs to the corrective
+  generation, not to one actual request.** A rejected generation authorizes
   one *corrective generation*; an actual provider request is one attempt to
   realize that frozen semantic state. The bounded provider-independent
   corrective hint is therefore created when the corrective generation is
@@ -336,6 +341,100 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
   different surfaces with different contents. The malformed diagnostic
   likewise survives as `ModelRequestFailed` in the Event Journal, which is
   execution fact, not conversation history.
+
+- **Single-generation liveness, budget, and integrity are three contracts, not
+  one.** Transport liveness (`ModelRequestDeadline`) asks whether the provider
+  is still producing; a generation budget asks whether one generation produced
+  too much; generation integrity asks whether the output is still a generation
+  rather than a repetition loop. A stream that reasons forever is perfectly
+  live, and a degenerate stream is live and inside its budget for a long time,
+  so none of the three can stand in for another. A deadline failure remains a
+  transient transport failure on the existing retry budget; a degeneration or
+  budget failure is a semantic generation defect that is never transport-
+  retried and consumes the one shared corrective generation. The separation is
+  structural: `src/model/deadline.rs` owns the liveness policy, the phase
+  machine, and `ModelTimeoutPhase`; `src/model/generation.rs` owns the budget
+  and integrity mechanism and neither defines nor depends on liveness
+  vocabulary; a timeout is not a `GenerationFailure` and a generation defect
+  carries no timeout phase.
+
+- **A deadline that cannot expire has no expiry representation.** The
+  request-local phase machine has one more state than the timeout vocabulary
+  has phases: a terminated request is in a real phase but owns no deadline.
+  The only source of a `ModelTimeoutPhase` is
+  `ModelRequestDeadline::pending`, which yields a `(phase, instant)` pair only
+  while a deadline exists, and `ModelError::timeout` accepts nothing else. A
+  terminal request therefore yields no phase at all — there is nothing to
+  default, and an impossible expiry is never normalized into a plausible one.
+
+- **The degeneration detector is a strong-evidence guard, never a quality
+  judge.** It is deterministic, uses bounded memory (a fixed rolling window and
+  prefix-function table per channel, about 6.1 KiB), does bounded work per
+  generated byte, invokes no model, consults no
+  randomness, no wall clock, no provider or model name, and no sampling
+  configuration. It classifies only exact suffix periodicity meeting an
+  explicit threshold — at least four consecutive repetitions of a unit whose
+  *primitive* period is at least four bytes, spanning at least 1024 bytes — so
+  a run of `,`, `}`, `]`, or `</tag>` is never evidence, and ordinary
+  repetitive code, JSON, and XML are not classified. It scans at
+  cumulative-byte checkpoints rather than at provider delta boundaries, so a
+  re-chunked but byte-identical generation classifies identically. Reasoning
+  and visible content are tracked separately so the fact states which channel
+  degenerated; refusal deltas are content, explicitly; tool-call argument
+  streams are structured wire data and are never inspected as text.
+
+- **The detector's work bound is exact, not typical.** One scan computes the
+  Knuth–Morris–Pratt prefix function of the reversed window — fewer than
+  `2 * 2048` byte comparisons — and then answers every candidate period from
+  that table in constant time, at most one lookup per candidate. Scans happen
+  once per 64 generated bytes, so the cost per generated byte is a fixed
+  constant for **every** input, adversarial or ordinary. There is no sampling,
+  no hashing, no probabilistic filter, and no on-demand byte verification that
+  an input could inflate, so untrusted model output cannot turn the detector
+  into a CPU surface. A deterministic work-count regression asserts the bound;
+  no test measures elapsed time.
+
+- **A generation budget is a byte safeguard, never a token count.** The
+  provider-neutral output limit is the resolved `max_output_tokens`, and the
+  provider enforces it. The runtime safeguard bounds normalized generated
+  **bytes** — deliberately generously, because it exists to stop a runaway
+  backend rather than to shape an answer. It is never described as, or
+  substituted for, model-token accounting.
+
+- **The safety policy is resolved by a policy owner and merely enforced by the
+  guard.** `GenerationSafetyPolicy` carries `max_generated_bytes` and an
+  optional `max_reasoning_bytes` as two **independent** dimensions; no ratio
+  between them exists in the accounting code. Resolution belongs to
+  `ResolvedModelInvocation::generation_safety_policy`, the layer that already
+  resolves the effective output budget and freezes it for the attempt. The
+  current values come from one documented **runtime fallback policy**, whose
+  reasoning share is a default of that layer and not a model-independent
+  invariant. An absent reasoning bound has explicit semantics: no separate
+  reasoning limit and no reasoning attribution, while reasoning bytes still
+  count against the total — it is neither unlimited nor zero. Provider-native
+  reasoning controls stay adapter/request-param concerns, and runtime safety
+  never depends on a provider honoring them.
+
+- **Provider length exhaustion is never a successful completion.** A
+  `ModelFinishReason::Length` terminal is the provider stating that it stopped
+  at its limit rather than because the answer was finished, so the generation
+  is incomplete. It is reclassified as a typed budget fact *before* the
+  canonical commit boundary and never commits a truncated Assistant turn. The
+  same rule applies to a compaction summary, which replaces retired history.
+
+- **Generation-safety facts are typed and structurally bounded, and they are
+  not liveness facts.** Degeneration and budget exhaustion normalize into
+  `ModelErrorKind::{GenerationDegenerated, GenerationBudgetExceeded}` with a
+  typed `ModelError.generation` payload and no timeout phase; an expired
+  deadline normalizes into `ModelErrorKind::Timeout` with a typed
+  `ModelError.timeout_phase` and no generation payload. Two constructors —
+  `ModelError::timeout` and `ModelError::generation_failure` — are the only
+  sources of either shape and cannot produce the other's. Every payload field
+  is an enumeration or an integer, so provider output can never author
+  unbounded durable diagnostic data through them, and no consumer above the
+  model layer infers status from a message substring or a finish-reason
+  string. Both reuse `ModelRequestFailed`; no new top-level runtime event
+  exists for them.
 
 - **Malformed-proposal diagnostics are bounded where the class is
   constructed.** `ModelErrorKind::MalformedToolProposal` carries
@@ -369,8 +468,8 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
   compaction boundary that establishes a new post-compaction frozen state.
 
 - The one shared actual-request ordinal is collision-free across transient,
-  overflow, and malformed-proposal recovery. There are at most three transient
-  retries, one overflow retry, and one malformed-proposal corrective
+  overflow, and semantic corrective recovery. There are at most three transient
+  retries, one overflow retry, and one semantic corrective
   generation per logical step (at most six primary requests total).
   Transient backoff is 2, 4, and 8 seconds, or the adapter's capped
   `retry_after_ms` hint, using the runtime monotonic clock. No jitter or

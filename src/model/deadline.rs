@@ -7,6 +7,8 @@
 
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 use crate::model::adapter::{ModelStreamItem, ModelStreamProgress};
 use crate::model::event::ModelEvent;
 
@@ -103,6 +105,12 @@ impl ModelProgress {
 }
 
 /// The request-local phase that owns the current deadline.
+///
+/// This is the *state* of the liveness machine. It has one more inhabitant
+/// than [`ModelTimeoutPhase`] on purpose: a request whose stream has already
+/// terminated is in a real phase, but it owns no deadline and therefore can
+/// never expire. The two types are deliberately not the same type, so an
+/// unexpirable state has no representation as an expiry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelDeadlinePhase {
     /// No generation progress has been observed yet.
@@ -111,6 +119,45 @@ pub enum ModelDeadlinePhase {
     Streaming,
     /// A terminal event transferred deadline ownership away.
     Terminal,
+}
+
+/// The transport-liveness contract a request violated when its deadline
+/// expired.
+///
+/// It is a typed fact rather than a substring of a diagnostic message, so no
+/// consumer above the model layer has to read prose to learn which liveness
+/// contract was violated.
+///
+/// It is owned here, by the liveness module, and deliberately **not** by
+/// `crate::model::generation`: transport liveness asks whether the provider
+/// is still producing at all, which is a different question from whether
+/// what it produced is usable. A timeout is not a generation-safety fact and
+/// is not represented as one.
+///
+/// The enum has exactly the phases that can expire. It is unreachable from
+/// [`ModelDeadlinePhase::Terminal`] because there is no conversion from the
+/// state type to this one: the only source of a [`ModelTimeoutPhase`] is
+/// [`ModelRequestDeadline::pending`], which yields one only while a deadline
+/// actually exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelTimeoutPhase {
+    /// The provider produced no generation progress at all.
+    ResponseStart,
+    /// The provider stopped producing progress after generation began.
+    StreamIdle,
+}
+
+impl ModelTimeoutPhase {
+    /// The human-readable phase name used in runtime diagnostics. The stable
+    /// wire value is the serde representation, not this string.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ResponseStart => "response-start",
+            Self::StreamIdle => "stream-idle",
+        }
+    }
 }
 
 /// The narrow request-local deadline state machine shared by model paths.
@@ -181,6 +228,28 @@ impl ModelRequestDeadline {
         self.deadline_millis
     }
 
+    /// The deadline this request is currently running against: the liveness
+    /// contract that will be violated, and the absolute monotonic instant at
+    /// which it is violated.
+    ///
+    /// This is the only way to obtain a [`ModelTimeoutPhase`], and it is the
+    /// structural reason an impossible expiry cannot be fabricated. A
+    /// terminal request owns no deadline, so it yields `None` and there is no
+    /// pair for a caller to turn into a timeout; a caller that has a pair
+    /// has, by construction, a phase that could really expire.
+    #[must_use]
+    pub const fn pending(self) -> Option<(ModelTimeoutPhase, u64)> {
+        match (self.phase, self.deadline_millis) {
+            (ModelDeadlinePhase::AwaitingGeneration, Some(deadline)) => {
+                Some((ModelTimeoutPhase::ResponseStart, deadline))
+            }
+            (ModelDeadlinePhase::Streaming, Some(deadline)) => {
+                Some((ModelTimeoutPhase::StreamIdle, deadline))
+            }
+            _ => None,
+        }
+    }
+
     fn deadline_after(now_millis: u64, duration: Duration) -> u64 {
         now_millis.saturating_add(u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
     }
@@ -188,7 +257,10 @@ impl ModelRequestDeadline {
 
 #[cfg(test)]
 mod tests {
-    use super::{ModelDeadlinePhase, ModelProgress, ModelRequestDeadline, ModelTimeoutPolicy};
+    use super::{
+        ModelDeadlinePhase, ModelProgress, ModelRequestDeadline, ModelTimeoutPhase,
+        ModelTimeoutPolicy,
+    };
     use crate::message::types::ContentBlockIndex;
     use crate::model::adapter::{ModelStreamItem, ModelStreamProgress};
     use crate::model::event::ModelEvent;
@@ -209,6 +281,15 @@ mod tests {
         ModelEvent::TextDelta {
             block_index: ContentBlockIndex::new(0),
             text: "x".to_owned(),
+        }
+    }
+
+    /// One terminal failure event. Its error payload is irrelevant to
+    /// progress classification, so it is built once here rather than spelled
+    /// out inside the matrix below.
+    fn failed() -> ModelEvent {
+        ModelEvent::Failed {
+            error: crate::model::error::ModelError::timeout(ModelTimeoutPhase::StreamIdle),
         }
     }
 
@@ -292,17 +373,7 @@ mod tests {
             ModelProgress::Liveness
         );
         assert_eq!(
-            ModelProgress::classify(&ModelStreamItem::Event(ModelEvent::Failed {
-                error: crate::model::error::ModelError {
-                    kind: crate::model::error::ModelErrorKind::Transport,
-                    message: "failed".to_owned(),
-                    retry_disposition: crate::model::error::ModelRetryDisposition::Never,
-                    retry_after_ms: None,
-                    provider_code: None,
-                    context_overflow: None,
-                    malformed_tool_proposal: None,
-                },
-            })),
+            ModelProgress::classify(&ModelStreamItem::Event(failed())),
             ModelProgress::Terminal
         );
         assert_eq!(

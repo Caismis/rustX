@@ -84,10 +84,16 @@ invariant is a real process boundary.
   canonical result ordering, cancellation arbitration and structural
   settlement, transient retry with frozen replay, model deadlines,
   unresolved-output carryover, publication interaction at the loop boundary,
-  and the Agent-Loop half of the malformed-tool-proposal boundary (bounded
-  one-regeneration recovery, canonical-history exclusion, budget composition).
-  Which *provider* evidence becomes a malformed proposal is owned by the
-  `provider` target instead.
+  and the Agent-Loop half of single-generation safety: the
+  malformed-tool-proposal boundary and the degeneration/budget guard share one
+  suite pair (`malformed_tool_proposal`, `generation_safety`) proving one
+  bounded corrective generation for all semantic anomaly classes,
+  canonical-history exclusion, budget composition, and the
+  cancellation-versus-rejected-generation race. Which *provider* evidence
+  becomes a malformed proposal is owned by the `provider` target instead, and
+  the degeneration detector's own algorithm — evidence threshold, chunk
+  invariance, false-positive controls — is owned by the unit tests in
+  `src/model/generation.rs`.
 - `context/` — layered context ownership: `engine` (provider-independent
   projection, token accounting, compaction planning/span selection, driven
   through `ContextEngine` directly), `compaction_pipeline` (the shared

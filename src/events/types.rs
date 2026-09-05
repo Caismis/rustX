@@ -965,6 +965,8 @@ mod tests {
                         provider_code: None,
                         context_overflow: None,
                         malformed_tool_proposal: None,
+                        timeout_phase: None,
+                        generation: None,
                     },
                 },
             },
@@ -1133,6 +1135,8 @@ mod tests {
             provider_code: Some("rate_limit_exceeded".to_owned()),
             context_overflow: None,
             malformed_tool_proposal: None,
+            timeout_phase: None,
+            generation: None,
         };
         let event = RuntimeEvent::AttemptFailed {
             attempt_id: AttemptId::new("attempt-1"),

@@ -542,6 +542,8 @@ async fn cancellation_while_headers_delayed_anthropic() {
                 provider_code: None,
                 context_overflow: None,
                 malformed_tool_proposal: None,
+                timeout_phase: None,
+                generation: None,
             },
         }],
         "lifecycle is Started then Failed(Cancelled), nothing after"
@@ -602,6 +604,8 @@ async fn cancellation_while_headers_delayed_openai_chat() {
                 provider_code: None,
                 context_overflow: None,
                 malformed_tool_proposal: None,
+                timeout_phase: None,
+                generation: None,
             },
         }],
         "lifecycle is Started then Failed(Cancelled), nothing after"
@@ -662,6 +666,8 @@ async fn cancellation_while_headers_delayed_openai_responses() {
                 provider_code: None,
                 context_overflow: None,
                 malformed_tool_proposal: None,
+                timeout_phase: None,
+                generation: None,
             },
         }],
         "lifecycle is Started then Failed(Cancelled), nothing after"

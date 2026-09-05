@@ -158,6 +158,8 @@ fn fail(kind: rustx::model::ModelErrorKind, message: &str) -> ModelEvent {
             provider_code: None,
             context_overflow: None,
             malformed_tool_proposal: None,
+            timeout_phase: None,
+            generation: None,
         },
     }
 }
@@ -303,6 +305,8 @@ async fn model_failure_before_content_fails_attempt() {
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
+        generation: None,
     };
     let expected = vec![
         RuntimeEvent::AttemptStarted {
@@ -337,6 +341,8 @@ async fn model_failure_before_content_fails_attempt() {
                     provider_code: None,
                     context_overflow: None,
                     malformed_tool_proposal: None,
+                    timeout_phase: None,
+                    generation: None,
                 },
             },
         },
@@ -1586,6 +1592,8 @@ async fn missing_required_continuation_fails_explicitly() {
                     provider_code: None,
                     context_overflow: None,
                     malformed_tool_proposal: None,
+                    timeout_phase: None,
+                    generation: None,
                 },
             },
         },
@@ -1662,6 +1670,8 @@ async fn unsupported_capability_stays_terminal_failure() {
                     provider_code: None,
                     context_overflow: None,
                     malformed_tool_proposal: None,
+                    timeout_phase: None,
+                    generation: None,
                 },
             },
         },

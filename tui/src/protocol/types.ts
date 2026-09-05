@@ -682,7 +682,9 @@ export type ModelErrorKind =
   | "context_window_exceeded"
   | "cancelled"
   | "unsupported"
-  | "malformed_tool_proposal";
+  | "malformed_tool_proposal"
+  | "generation_degenerated"
+  | "generation_budget_exceeded";
 
 export interface RuntimeErrorShape {
   type: string;

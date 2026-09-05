@@ -80,6 +80,8 @@ pub fn validate_request(
             provider_code: None,
             context_overflow: None,
             malformed_tool_proposal: None,
+            timeout_phase: None,
+            generation: None,
         });
     }
 
@@ -157,6 +159,8 @@ fn invalid_request(message: String) -> ModelError {
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
+        generation: None,
     }
 }
 

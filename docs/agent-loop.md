@@ -1,4 +1,4 @@
-# Agent Loop (M3 + Issue #22 + Issue #55 + Issue #56 + Issue #130 + Issue #136 + Issue #137 + Issue #201)
+# Agent Loop (M3 + Issue #22 + Issue #55 + Issue #56 + Issue #130 + Issue #136 + Issue #137 + Issue #201 + Issue #203)
 
 This document describes the runtime boundary implemented by the M3
 deterministic agent loop, mirroring the M2 model-plane documentation in
@@ -76,34 +76,55 @@ adapter-provided retry hint taking precedence and capped at 60 seconds. Both
 publication latency and retry deadlines use the runtime-owned monotonic clock;
 tests inject a manually advanced clock.
 
-#### Bounded malformed-tool-proposal regeneration (Issue #201)
+#### Bounded semantic corrective regeneration (Issues #201 and #203)
 
-A physical generation whose tool intent could not cross ToolCall acceptance is
-a **model-generation** defect, not a transport defect. The adapter reports it
-as `ModelErrorKind::MalformedToolProposal`, and the loop treats it as its own
-recovery class:
+A physical generation can fail in a way that is not a transport failure at
+all: the request reached the provider, the provider generated, and the
+*generation itself* is unusable. Three conditions mean exactly that, and the
+loop treats them as one class:
+
+| Condition | `ModelErrorKind` | Owner of the evidence |
+| --- | --- | --- |
+| tool intent could not cross `ToolCall` acceptance | `MalformedToolProposal` | provider adapter (Issue #201) |
+| a generated channel deterministically degenerated | `GenerationDegenerated` | `GenerationGuard` (Issue #203) |
+| a generation budget was exhausted before completion | `GenerationBudgetExceeded` | `GenerationGuard` (Issue #203) |
+
+A request deadline is deliberately absent from that table. `Timeout` is a
+transport-liveness class with its own typed detail and its own recovery
+architecture; it consumes the transient request-retry budget and never this
+one.
+
+They share **one** corrective-generation budget per logical model step —
+`MAX_SEMANTIC_CORRECTIVE_GENERATIONS_PER_LOGICAL_STEP = 1` — rather than one
+budget each:
 
 ```text
 logical model step
-  semantic generation #1 -> malformed tool proposal
-      discard the whole noncanonical generation
-      settle its publication as audit evidence
-      authorize ONE corrective generation and own its corrective hint
-  semantic generation #2 (the corrective generation)
-      realized by one or more actual requests, all carrying the hint
-      valid       -> continue normally
-      malformed   -> explicit terminal model-generation failure
+  semantic generation #1
+      accepted -> commit
+      semantic anomaly (any class)
+          shared correction unused
+              -> discard the whole noncanonical generation
+              -> settle its publication as audit evidence
+              -> bounded ephemeral corrective context
+              -> semantic generation #2
+          shared correction already used
+              -> explicit terminal model-generation failure
 ```
 
-The budget is **one** corrective generation per logical model step, so this
-mechanism alone can never cause more than two semantic generations, and a
-third malformed-proposal regeneration for the same step is not representable.
+Because the budget is shared, `malformed -> corrective -> degeneration ->
+another corrective` is not representable, and neither is the reverse: the
+second anomaly, whatever its class, finds the budget spent. A third semantic
+generation for the same logical step cannot be reached through these
+conditions in any order. Per-class budgets would have permitted exactly that,
+which is why `MalformedProposalRecovery` was generalized into
+`SemanticGenerationRecovery` rather than gaining a sibling flag.
 
-The budget is separate from every other one and is keyed on the error class,
-which no other recovery path accepts. It therefore neither resets nor is reset
-by the transient budget, the overflow budget, or anything on the Tool side:
-the bounds compose additively, never multiplicatively. A transient retry
-between two malformed generations does not restore the spent regeneration.
+The budget is keyed on the error class, and no other recovery path accepts
+those classes. It therefore neither resets nor is reset by the transient
+budget, the overflow budget, or anything on the Tool side: the bounds compose
+additively, never multiplicatively. A transient retry between two semantic
+anomalies does not restore the spent corrective generation.
 
 The corrective generation is realized by ordinary actual requests of the same
 logical step. Each replays the frozen state through the same stage/finalize,
@@ -111,20 +132,47 @@ cancellation-vs-start arbitration, durable start, and adapter frontier as
 every other request, so cancellation observable before one begins wins over
 the remaining budget and no further provider request starts.
 
+##### Semantic generation is not actual request
+
+This is the distinction the whole mechanism rests on:
+
+```text
+semantic generation   one attempt to produce an acceptable model output
+actual request        one attempt to realize a frozen semantic state
+```
+
+An actual request can fail before producing any generation at all. Transient
+transport recovery and context-overflow recovery therefore produce further
+actual requests *of the same semantic generation*, and they consume the
+transient and overflow budgets, never the semantic one:
+
+```text
+generation #1 -> degeneration -> shared correction consumed
+generation #2, request A -> transient transport failure
+generation #2, request B -> succeeds          (still two semantic generations)
+```
+
 ##### The lifetime of the corrective hint
 
-The hint is bounded, provider-independent, noncanonical request-only context:
-it states that the previous generation produced no structurally valid tool
-call and that the step should be regenerated, plus the bounded adapter reason
-(bounded by the model layer at construction — see
-`MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES`). It never carries the malformed
-output itself, and it is never a durable few-shot conversation message.
+The hint is bounded, provider-independent, noncanonical request-only context.
+Its instruction is chosen by the anomaly class — regenerate a structurally
+valid tool call, answer once without repeating, finish within the budget — and
+it carries the bounded reason recorded with the discarded generation. It never
+carries the discarded output itself: a repetition loop quoted back to the
+model is a few-shot example of the exact failure, and a truncated answer
+replayed as context is the same mistake in another form.
+
+Both reasons are bounded at their construction boundary and not by this loop:
+a malformed-proposal diagnostic by the model layer
+(`MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES`), and a generation-safety
+diagnostic structurally, because it is rendered from a typed all-numeric fact
+that cannot contain provider output at all.
 
 Its owner is the **corrective generation**, not any one request:
 
 ```text
-created   when a malformed generation is observed and the step's budget
-          still allows a corrective generation
+created   when a semantic anomaly is observed and the step's budget still
+          allows a corrective generation
 carried   by EVERY actual request that tries to realize that corrective
           generation — the first one, a transient/rate-limit/timeout retry
           of it, a post-compaction retry of it
@@ -133,12 +181,10 @@ discarded with the rest of the step's recovery state at the next logical
           model step boundary
 ```
 
-The distinction matters because an actual request can fail before producing
-any generation at all. A hint consumed at request construction would vanish on
-the first transport failure, and the retry would ask the model to regenerate
-the step without saying why the previous answer was discarded. The Agent Loop
-therefore keeps the hint and the spent budget together as semantic state of
-the logical step, and request construction only *borrows* the hint.
+A hint consumed at request construction would vanish on the first transport
+failure, and the retry would ask the model to regenerate the step without
+saying why the previous answer was discarded. Request construction only
+*borrows* the hint.
 
 ##### Canonical history is not durable request audit
 
@@ -160,21 +206,53 @@ historical reconstruction a lie. It does not make the hint conversation
 history — no Assistant or User message contains it, and no later model step
 sees it as context.
 
-Nothing from the discarded generation survives. Its assembler, provisional
-Assistant identity, provisional content, and any provider continuation state
-are dropped with the failed invocation, so no malformed Assistant message,
-orphan canonical `ToolCall`, `ToolResult`, or provider continuation fragment
-can reach canonical history or a later request reconstruction. The bounded
-diagnostic survives as `ModelRequestFailed` in the Event Journal, which is
-execution fact, not conversation history, and is bounded where the malformed
-class is constructed so provider output cannot author an arbitrarily large
-durable diagnostic.
+##### The commit boundary is unchanged, and it is the point
+
+A rejected generation may already have streamed deltas that an observer or the
+TUI displayed. That is transient publication, not history:
+
+```text
+transient publication / Runtime Client projection   !=   canonical history
+```
+
+The invariant this issue enforces is one sentence:
+
+> A physical model generation that violates a hard liveness/budget contract or
+> deterministically degenerates must not cross the canonical assistant commit
+> boundary. A logical model step has at most one semantic corrective
+> regeneration in total.
+
+Mechanically, a semantic anomaly terminates the stream as a `StreamTerminal::
+Failed`, so the loop takes the failure path and never reaches `complete_turn`.
+`commit_assistant_message` runs only after a successful `Completed` terminal
+and successful preflight, and a provider `Length` terminal is reclassified as
+a failure *before* it can reach that path. The failed `ModelInvocation` is
+dropped whole — assembler, provisional Assistant identity, provisional
+content, provider continuation state — before another request starts, so there
+is no rejected Assistant message, no orphan canonical `ToolCall`, no
+`ToolResult` for an unaccepted call, and no replay-poisoning state. The failed
+request's partial deltas settle into the Publication Audit and the bounded
+typed diagnostic survives as `ModelRequestFailed` in the Event Journal:
+execution fact, not conversation history.
 
 Tool schema rejection is deliberately outside this mechanism. A structurally
 valid canonical `ToolCall` whose JSON violates a declared Tool schema has
 already crossed acceptance: it is preflighted, rejected, and settled as a
 failed `ToolResult` on the ordinary Tool path, and it consumes none of this
 budget.
+
+##### Cancellation and generation rejection have one terminal winner
+
+The rejected generation is durably settled — one `ModelRequestFailed`, one
+settled publication — before the loop decides whether a corrective generation
+is authorized, and that decision begins by observing cancellation. Every
+corrective request additionally passes the ordinary cancellation-vs-start
+arbitration. So cancellation observable at or before the recovery decision
+wins and no further provider request starts, while a corrective generation
+that has already started settles through the ordinary path. Neither path can
+commit the rejected generation, and neither can start an unauthorized
+corrective generation. The regression proves the interleaving with an explicit
+park at that exact cut rather than making it statistically likely.
 
 The Conversation Runtime owns the current `ModelTimeoutPolicy` and the shared
 `MonotonicClock`. Attempt admission freezes the policy and passes the same
@@ -272,6 +350,20 @@ settles partial publication through the existing noncanonical path, and sends
 the error through the Issue #134 retry disposition/budget. It never signals or
 mutates `AgentCancellation`.
 
+The branch takes both the instant it waits on and the phase it reports from
+one place, `ModelRequestDeadline::pending`, which yields a `(phase, instant)`
+pair only while a deadline exists. That is what makes an impossible expiry
+unrepresentable: a terminated request owns no deadline, so it offers nothing
+to wait on *and* no phase to report, and there is no default to fall back to.
+`ModelError::timeout` accepts only such a phase.
+
+A timeout is **transport liveness, not generation safety**. It carries a typed
+`timeout_phase` and no generation detail, it keeps the transient disposition
+and the Issue #134 request-retry budget, and it never touches the semantic
+corrective-generation budget below. A generation defect is the mirror image:
+a typed generation detail, no timeout phase, disposition `Never`, and the
+shared semantic budget. Neither is inferred from a message.
+
 The summarizer uses the same deadline state machine and runtime monotonic clock,
 but maps a timeout through its existing summary/context failure boundary and
 does not enter generic model retry. Both primary and summary deadlines use the
@@ -299,6 +391,23 @@ and keep provider-specific buffering and identity state inside the adapter.
 They never execute tools, decide attempt outcomes, or emit `RuntimeEvent`
 values. Provider SDK and wire types terminate inside the adapter modules. The
 loop never branches on a provider protocol.
+
+Adapters own provider-native generation controls where an API exposes them —
+a model's declared reasoning profiles carry the exact `requestParams` an
+adapter maps to its own reasoning API, and the resolved `max_output_tokens`
+becomes whichever max-token field the protocol spells. They do **not** own
+generation budgets, degeneration detection, or any recovery decision: those
+are provider-independent and live above the adapter boundary, so runtime
+correctness never depends on a backend honoring a native limit.
+
+The runtime's own safety bounds are decided one layer higher still, by
+`ResolvedModelInvocation::generation_safety_policy`, which resolves a
+`GenerationSafetyPolicy` for the attempt. Total output and reasoning are
+independent dimensions of that policy — `max total output != max reasoning`
+means two separately resolvable bounds, not one scaled from the other — and
+the enforcing `GenerationGuard` knows only the resolved answer. The current
+values come from a documented runtime *fallback* policy; its reasoning share
+is a default of the resolution layer, not a model-independent invariant.
 
 Adapters also own the **ToolCall acceptance boundary** and every piece of
 provider-specific evidence that a tool proposal is malformed — a provider that
