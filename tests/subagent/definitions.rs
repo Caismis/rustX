@@ -1266,6 +1266,7 @@ fn the_runtime_client_projection_carries_the_named_identity() {
         handoff: None,
         workspace_resource_state: SubagentWorkspaceResourceState::None,
         state: SubagentState::Running,
+        cancel_reason: None,
         detail: None,
         observation: rustx::runtime::subagent::SubagentObservation::default(),
         profile: None,

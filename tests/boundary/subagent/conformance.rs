@@ -931,6 +931,56 @@ fn parent_pending_texts(plane: &ParentPlane) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Asserts the parent received exactly one successful terminal publication
+/// (Issue #192): the runtime-authored correlation notice first — naming the
+/// typed execution handle — then the byte-for-byte child-authored report as
+/// the last item, and no other pending inbound.
+fn assert_parent_terminal_publication(plane: &ParentPlane, answer: &str) {
+    let batch = plane
+        .store
+        .select_pending_batch()
+        .expect("pending batch")
+        .expect("one pending batch");
+    assert_eq!(
+        batch.items.len(),
+        2,
+        "the correlation notice and the report, exactly once each"
+    );
+    let notice = &batch.items[0];
+    let report = &batch.items[1];
+    assert!(
+        matches!(notice.message.source, UserSource::Runtime)
+            && matches!(notice.message.kind, InboundKind::Message),
+        "the correlation notice is runtime-authored"
+    );
+    assert!(
+        notice.message.id.as_str().ends_with("-terminal-notice")
+            && notice.message.id.as_str().strip_suffix("-terminal-notice")
+                == report.message.id.as_str().strip_suffix("-terminal"),
+        "the notice and the report belong to one execution: {} / {}",
+        notice.message.id,
+        report.message.id
+    );
+    let notice_text = parent_pending_texts(plane)[0].clone();
+    assert!(
+        notice_text.contains("{\"kind\":\"subagent\",\"id\":\""),
+        "the notice names the typed execution handle: {notice_text}"
+    );
+    assert!(
+        !notice_text.contains(answer),
+        "the notice carries no result content: {notice_text}"
+    );
+    assert!(
+        matches!(report.message.source, UserSource::Agent { .. }),
+        "the report is child-authored"
+    );
+    assert_eq!(
+        parent_pending_texts(plane)[1],
+        answer,
+        "the report is byte-for-byte the child's final answer"
+    );
+}
+
 /// The canonical messages at the child store's durable head.
 fn child_canonical_messages(child: &ChildFixture) -> Vec<MessageBlock> {
     let head = child.store.load_head().expect("child head");
@@ -1090,15 +1140,14 @@ async fn child_transient_retries_settle_one_parent_success() {
         vec![SubagentTerminalState::Succeeded],
         "any number of internal retries still publishes exactly one terminal"
     );
-    let texts = parent_pending_texts(&plane);
-    assert_eq!(texts, vec!["CHILD-FINAL-ANSWER".to_owned()]);
+    assert_parent_terminal_publication(&plane, "CHILD-FINAL-ANSWER");
     let batch = plane
         .store
         .select_pending_batch()
         .expect("pending")
         .expect("one batch");
     assert!(matches!(
-        batch.items[0].message.source,
+        batch.items[1].message.source,
         UserSource::Agent { ref agent_id } if *agent_id == wired.accepted.child_agent_id
     ));
     child
@@ -1192,8 +1241,7 @@ async fn failed_attempt_publication_stays_child_local() {
         "an internal retry success installs no carryover"
     );
 
-    let texts = parent_pending_texts(&plane);
-    assert_eq!(texts, vec!["FINAL-ANSWER".to_owned()]);
+    assert_parent_terminal_publication(&plane, "FINAL-ANSWER");
     child
         .runtime
         .shutdown()
@@ -1796,11 +1844,7 @@ async fn cancellation_after_terminalization_cannot_rewrite_the_result() {
         vec![SubagentTerminalState::Succeeded],
         "the committed terminal is never rewritten"
     );
-    assert_eq!(
-        parent_pending_texts(&plane),
-        vec!["LATE-CANCEL-ANSWER".to_owned()],
-        "the answer exists exactly once, in the canonical terminal inbound"
-    );
+    assert_parent_terminal_publication(&plane, "LATE-CANCEL-ANSWER");
     child
         .runtime
         .shutdown()
@@ -3458,11 +3502,7 @@ async fn model_activity_projects_while_lifecycle_stays_running() {
     );
     assert_eq!(settled.detail, None, "the answer never rides the detail");
     await_serve(wired.serve).await;
-    assert_eq!(
-        parent_pending_texts(&plane),
-        vec!["MODEL-ACTIVITY-ANSWER".to_owned()],
-        "the answer arrives exactly once, through the canonical inbound"
-    );
+    assert_parent_terminal_publication(&plane, "MODEL-ACTIVITY-ANSWER");
     child
         .runtime
         .shutdown()
@@ -3651,10 +3691,7 @@ async fn tool_activity_projects_identity_scoped_progress_and_counts_executions()
         "the completion transition and the terminal reset both advanced the revision"
     );
     await_serve(wired.serve).await;
-    assert_eq!(
-        parent_pending_texts(&plane),
-        vec!["TOOL-ACTIVITY-ANSWER".to_owned()]
-    );
+    assert_parent_terminal_publication(&plane, "TOOL-ACTIVITY-ANSWER");
     // The child's tool work committed no parent journal facts at all.
     let parent_events = journal(&plane.store);
     assert_eq!(count_events(&parent_events, is_request_started), 0);
@@ -3852,11 +3889,7 @@ async fn parallel_tool_group_never_projects_neutral_while_a_sibling_runs() {
         "every applied transition advanced the revision"
     );
     await_serve(wired.serve).await;
-    assert_eq!(
-        parent_pending_texts(&plane),
-        vec!["PARALLEL-ACTIVITY-ANSWER".to_owned()],
-        "the answer arrives exactly once, through the canonical inbound"
-    );
+    assert_parent_terminal_publication(&plane, "PARALLEL-ACTIVITY-ANSWER");
     child
         .runtime
         .shutdown()
@@ -3956,10 +3989,7 @@ async fn a_transient_retry_projects_retrying_model_then_the_retried_request() {
     assert_eq!(settled.observation.counters.model_retries, 1);
     assert_eq!(settled.observation.counters.model_requests, 2);
     await_serve(wired.serve).await;
-    assert_eq!(
-        parent_pending_texts(&plane),
-        vec!["RETRY-ACTIVITY-ANSWER".to_owned()]
-    );
+    assert_parent_terminal_publication(&plane, "RETRY-ACTIVITY-ANSWER");
     child
         .runtime
         .shutdown()
@@ -4221,11 +4251,7 @@ async fn the_observation_consumer_topology_never_changes_child_execution() {
         // not.
         match topology {
             Topology::Standalone | Topology::ObservationBroken => {
-                assert_eq!(
-                    parent_pending_texts(&plane),
-                    vec!["TOPOLOGY-ANSWER".to_owned()],
-                    "the canonical answer exists exactly once, in the pending terminal inbound"
-                );
+                assert_parent_terminal_publication(&plane, "TOPOLOGY-ANSWER");
             }
             Topology::Draining | Topology::Stalled => {
                 // The parent runtime adopted the canonical terminal inbound
@@ -4961,10 +4987,7 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
         terminal_publications(&journal(&plane.store)),
         vec![SubagentTerminalState::Succeeded]
     );
-    assert_eq!(
-        parent_pending_texts(&plane),
-        vec!["LIVE-PROGRESS-ANSWER".to_owned()]
-    );
+    assert_parent_terminal_publication(&plane, "LIVE-PROGRESS-ANSWER");
 
     // The durable ordering proof: every durable ToolExecutionProgress
     // committed after the start fact and immediately before the completion
@@ -5107,10 +5130,7 @@ async fn a_fresh_request_after_a_retry_projects_retry_zero() {
     assert_eq!(settled.observation.counters.model_requests, 3);
     assert_eq!(settled.observation.counters.model_retries, 1);
     await_serve(wired.serve).await;
-    assert_eq!(
-        parent_pending_texts(&plane),
-        vec!["RETRY-ZERO-ANSWER".to_owned()]
-    );
+    assert_parent_terminal_publication(&plane, "RETRY-ZERO-ANSWER");
     child
         .runtime
         .shutdown()
@@ -5411,12 +5431,9 @@ async fn the_successful_answer_never_enters_the_observation_plane() {
     );
 
     // The answer exists exactly once: the canonical durable terminal
-    // inbound.
-    assert_eq!(
-        parent_pending_texts(&plane),
-        vec![ANSWER.to_owned()],
-        "the canonical inbound is the one result channel"
-    );
+    // publication — the runtime-authored correlation notice, then the
+    // child-authored report (Issue #192).
+    assert_parent_terminal_publication(&plane, ANSWER);
     child
         .runtime
         .shutdown()

@@ -1497,8 +1497,10 @@ impl LocalConversationCore {
     ///   child performs **no** ancestor discovery of its own, which is what
     ///   makes the boundary correct once a child's filesystem ancestry can
     ///   differ from the parent workspace;
-    /// - the definition's instruction document is immutable `AgentProfile`
-    ///   System authority and canonical history starts empty;
+    /// - the definition's instruction document, composed with the
+    ///   runtime-owned terminal-mode-aware final-report rule (Issue #192),
+    ///   is the immutable `AgentProfile` System authority and canonical
+    ///   history starts empty;
     /// - the durable authority is the stable child store beside the physical
     ///   spawn-incarnation directory, disjoint from the parent's store. The
     ///   physical root remains disposable execution/artifact state.
@@ -1670,12 +1672,17 @@ impl LocalConversationCore {
         // The child's project instructions and Skill catalog are the
         // parent-frozen values, by value. `load_project_context_files` is
         // deliberately never called on this path: the child observes only
-        // what its invoking generation froze.
+        // what its invoking generation froze. The AgentProfile authority is
+        // the definition's instruction document composed with the
+        // runtime-owned terminal-mode-aware final-report rule (Issue #192).
         let resources = Arc::new(
             RuntimeResourceSnapshot::new(
                 RuntimeResourceRevision::new(1),
                 spec.resolved.project_instructions.clone(),
-                Some(spec.resolved.instructions.clone()),
+                Some(crate::runtime::subagent::compose_child_agent_profile(
+                    &spec.resolved.instructions,
+                    &spec.terminal,
+                )),
                 crate::context::ContextAssembly::new(),
                 capability.current_snapshot(),
             )
@@ -2764,13 +2771,71 @@ mod subagent_child_tests {
         );
         assert_eq!(
             resources.agent_profile(),
-            Some("frozen child instructions"),
-            "the definition's instructions are the child's AgentProfile authority"
+            Some(
+                format!(
+                    "frozen child instructions\n\n{}",
+                    crate::runtime::subagent::SUBAGENT_FINAL_REPORT_INSTRUCTION
+                )
+                .as_str()
+            ),
+            "the definition's instructions, composed with the runtime-owned final-report rule, \
+             are the child's AgentProfile authority"
         );
         assert_eq!(
             core.capability().current_snapshot().tool_registry().names(),
             vec!["read"],
             "the child's active set is exactly its authorized set"
+        );
+    }
+
+    /// Issue #192: the runtime-owned final-report handoff rule is generic
+    /// subagent execution semantics — a normal one-shot child receives it
+    /// appended to its definition's instructions even when the user-authored
+    /// document never mentions the handoff. A Workflow-owned child keeps its
+    /// structured `workflow_output` terminal protocol instead: the free-form
+    /// final-report rule would contradict it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_final_report_rule_is_runtime_owned_and_terminal_mode_aware() {
+        let dir = lab();
+
+        // The user-authored document says nothing about the handoff.
+        let normal = LocalConversationCore::compose_subagent_child(
+            &spec(dir.path(), vec![builtin("read")], Vec::new(), Vec::new()),
+            &dependencies(),
+            &ChildPreparation::detached(),
+        )
+        .await
+        .expect("the normal child composes");
+        let profile = normal
+            .runtime()
+            .runtime_resources()
+            .agent_profile()
+            .expect("agent profile")
+            .to_owned();
+        assert!(
+            profile.starts_with("frozen child instructions\n\n"),
+            "the user-authored instructions are preserved first: {profile}"
+        );
+        assert!(
+            profile.contains("Your final response is the complete handoff to the parent agent."),
+            "the runtime-owned handoff rule is composed for a normal child: {profile}"
+        );
+
+        let mut workflow_spec = spec(dir.path(), vec![builtin("read")], Vec::new(), Vec::new());
+        workflow_spec.terminal = crate::runtime::subagent::ipc::ChildTerminalMode::WorkflowOutput {
+            output_schema: serde_json::json!({"type": "object"}),
+        };
+        let workflow = LocalConversationCore::compose_subagent_child(
+            &workflow_spec,
+            &dependencies(),
+            &ChildPreparation::detached(),
+        )
+        .await
+        .expect("the Workflow child composes");
+        assert_eq!(
+            workflow.runtime().runtime_resources().agent_profile(),
+            Some("frozen child instructions"),
+            "a Workflow-owned child keeps its structured terminal protocol, unamended"
         );
     }
 

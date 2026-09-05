@@ -185,7 +185,14 @@ subagent, exposed in the TUI as the confirmed `D` action. It discards the
 retained worktree, including uncommitted source changes, and removes only the
 runtime-created branch proven to belong to that worktree. The model-facing
 `execution` intrinsic cannot dispose workspaces, and clients cannot supply an
-arbitrary filesystem path or Git ref.
+arbitrary filesystem path or Git ref. The parent model learns of retained
+work only as a runtime-authored semantic fact in the canonical inbound
+terminal publication — folded into the runtime-authored terminal notice of
+a successful publication, or into the one runtime-authored terminal message
+of a failed/cancelled/interrupted one — that the child's isolated changes
+were retained and are not
+applied to its workspace — never as a physical path, branch, or commit
+(Issue #192).
 
 The post-terminal resource lifecycle is separate from the child's absorbing
 logical `Succeeded`, `Failed`, `Cancelled`, or `Interrupted` state:

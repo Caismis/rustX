@@ -68,8 +68,13 @@
 //! path (`UserSource::Agent(parent)`); the child's bounded result enters
 //! the parent through the parent's ordinary durable inbound acceptance
 //! (`UserSource::Agent(child)` on success, `UserSource::Runtime` for
-//! failure/cancellation/interruption notices). Child-process IPC only
-//! transports bounded envelopes and control.
+//! failure/cancellation/interruption notices). A successful report is
+//! preceded, in the same durable transaction, by exactly one
+//! runtime-authored terminal notice that names the typed execution handle
+//! the parent's `subagent` creation result returned, so the parent model
+//! can unambiguously correlate every report with its execution — the
+//! report body itself stays byte-for-byte child-authored (Issue #192).
+//! Child-process IPC only transports bounded envelopes and control.
 
 pub mod activity;
 pub mod catalog;
@@ -357,6 +362,44 @@ pub(crate) const MAX_TASK_BYTES: usize = 32 * 1024;
 /// The bounded explicit context-package size.
 pub(crate) const MAX_CONTEXT_PACKAGE_BYTES: usize = 64 * 1024;
 
+/// The runtime-owned final-report instruction of every normal one-shot
+/// subagent child (Issue #192).
+///
+/// This is generic subagent execution semantics — the Subagent Final Report
+/// Principle: the parent receives the child's complete final assistant
+/// report and nothing else. It is owned by the runtime, composed exactly
+/// once at the child instruction boundary, and never repeated in a
+/// user-authored `instructionsFile`, never owned by a provider adapter, and
+/// never rewritten per definition.
+pub(crate) const SUBAGENT_FINAL_REPORT_INSTRUCTION: &str = "Your final response is the complete handoff to the parent agent. Include all findings, \
+     conclusions, changes, validation results, and caveats the parent needs to continue the \
+     task. Do not assume the parent can see your intermediate reasoning, tool calls, tool \
+     outputs, or conversation history.";
+
+/// Composes the child's immutable `AgentProfile` System authority from the
+/// definition's instruction document (Issue #192).
+///
+/// The user-authored instructions are preserved exactly; the generic
+/// final-report handoff rule is appended for a **normal** one-shot child,
+/// whose final response is the whole semantic result the parent receives.
+///
+/// A Workflow-owned child (`workflow_output` terminal protocol) is
+/// deliberately excluded: its terminal contract is the structured,
+/// schema-validated `workflow_output` commit, so a free-form final-report
+/// instruction would contradict the terminal protocol its Agent Loop must
+/// satisfy.
+pub(crate) fn compose_child_agent_profile(
+    instructions: &str,
+    terminal: &ipc::ChildTerminalMode,
+) -> String {
+    match terminal {
+        ipc::ChildTerminalMode::Normal => {
+            format!("{instructions}\n\n{SUBAGENT_FINAL_REPORT_INSTRUCTION}")
+        }
+        ipc::ChildTerminalMode::WorkflowOutput { .. } => instructions.to_owned(),
+    }
+}
+
 /// Bounds model-generated or diagnostic text by UTF-8 bytes without ever
 /// splitting a Unicode scalar value.
 ///
@@ -448,6 +491,96 @@ pub(crate) fn terminal_correlation(subagent_id: &SubagentId) -> String {
 /// The deterministic message identity of a subagent terminal publication.
 pub(crate) fn terminal_message_id(subagent_id: &SubagentId) -> MessageId {
     MessageId::new(format!("subagent-{subagent_id}-terminal"))
+}
+
+/// The deterministic message identity of the runtime-authored terminal
+/// notice accompanying a successful terminal publication (Issue #192).
+pub(crate) fn terminal_notice_message_id(subagent_id: &SubagentId) -> MessageId {
+    MessageId::new(format!("subagent-{subagent_id}-terminal-notice"))
+}
+
+/// The one producer correlation of a successful terminal's runtime-authored
+/// notice. It shares the terminal publication's exactly-once durable
+/// transaction, so the bounded retry rebuilds it byte-identically and an
+/// ambiguous commit resolves as the idempotent correlation retry.
+pub(crate) fn terminal_notice_correlation(subagent_id: &SubagentId) -> String {
+    format!("subagent-terminal-notice:{subagent_id}")
+}
+
+/// The minimal actionable parent-facing fact of a retained changed isolated
+/// workspace (Issue #192): semantic only — never a physical path, branch,
+/// or commit, which remain user/Runtime Client concerns below the model
+/// boundary.
+pub(crate) const RETAINED_WORKSPACE_FACT: &str = "changes were retained and are not applied to your workspace; the user can inspect or \
+     dispose of the retained workspace";
+
+/// The canonical model-facing text of a successful terminal's
+/// runtime-authored notice (Issue #192).
+///
+/// The notice is the parent-model correlation projection of the terminal
+/// publication: it names exactly the typed execution handle the `subagent`
+/// creation result returned (`{"kind":"subagent","id":...}`) plus the
+/// named agent, so the parent model can unambiguously attribute the
+/// child-authored report that immediately follows it — even when two
+/// concurrent children share one named agent. When terminal settlement
+/// retained changed isolated work, that runtime-observed semantic fact is
+/// folded into the same one notice. It carries no internal child identity:
+/// no `child_agent_id`, no child conversation id, no definition digest, no
+/// physical workspace path or ref.
+///
+/// This exact rendering is the durable contract: the store recomputes it
+/// from the committed ownership fact and the terminal event and rejects any
+/// other notice content, so a semantically unreachable publication cannot
+/// enter durable authority.
+pub(crate) fn terminal_notice_text(
+    subagent_id: &SubagentId,
+    agent: &str,
+    retained: bool,
+) -> String {
+    // The exact model-facing serialization of the typed execution handle
+    // the creation result returned; the boundary regression proves this
+    // spelling and the control plane's handle serialization cannot drift
+    // apart (the domain layering rule forbids naming the control-plane
+    // type from here).
+    let handle = serde_json::json!({"kind": "subagent", "id": subagent_id.to_string()});
+    let retained_sentence = if retained {
+        format!(" Its {RETAINED_WORKSPACE_FACT}.")
+    } else {
+        String::new()
+    };
+    format!(
+        "Subagent execution {handle} (agent \"{agent}\") completed; the message that follows \
+         is its final report.{retained_sentence}"
+    )
+}
+
+/// The runtime-authored adjacent notice of a successful normal child
+/// terminal (Issue #192).
+///
+/// The success report itself is child-authored, so the runtime correlation
+/// metadata and the runtime-observed workspace settlement fact must not be
+/// concatenated into it — that would falsely attribute runtime statements
+/// to the child, and the child cannot authoritatively know terminal
+/// workspace settlement anyway. The notice is a separate
+/// `UserSource::Runtime` inbound item committed in the **same** durable
+/// transaction as the terminal publication, ordered strictly before the
+/// report: the terminal result remains the last item of the publication.
+pub(crate) fn terminal_notice(
+    subagent_id: &SubagentId,
+    agent: &SubagentName,
+    retained: bool,
+    timestamp: DateTime<Utc>,
+) -> InboundDraft {
+    InboundDraft {
+        message_id: Some(terminal_notice_message_id(subagent_id)),
+        source: UserSource::Runtime,
+        kind: InboundKind::Message,
+        content: vec![UserContentBlock::Text(TextBlock {
+            text: terminal_notice_text(subagent_id, agent.as_str(), retained),
+        })],
+        timestamp,
+        correlation: Some(terminal_notice_correlation(subagent_id)),
+    }
 }
 
 /// The deterministic event identity of a subagent terminal publication.
@@ -634,7 +767,9 @@ pub(crate) fn workflow_output_event(
 
 /// Builds the terminal publication pair: the inbound draft (exactly-once
 /// correlated) and the dependent durable terminal fact, committed together
-/// through the narrow `accept_inbound_with_event` transition.
+/// through the narrow `accept_subagent_terminal` transition — the one
+/// durable authority for every normal `SubagentTerminalPublished` fact
+/// (Issue #192).
 pub(crate) fn terminal_publication(
     conversation_id: &ConversationId,
     subagent_id: &SubagentId,
@@ -718,6 +853,14 @@ pub fn recovery_terminal_publication(
     workspace_resource: &SubagentWorkspaceTerminalResource,
     timestamp: DateTime<Utc>,
 ) -> (InboundDraft, RuntimeEventEnvelope) {
+    // The notice is runtime-authored, so the retained-workspace fact folds
+    // into the same message without any provenance ambiguity.
+    let retained = matches!(
+        workspace_resource,
+        SubagentWorkspaceTerminalResource::Retained { .. }
+    )
+    .then(|| format!(" Its {RETAINED_WORKSPACE_FACT}."))
+    .unwrap_or_default();
     terminal_publication(
         conversation_id,
         subagent_id,
@@ -727,7 +870,7 @@ pub fn recovery_terminal_publication(
             text: format!(
                 "Subagent {subagent_id} (agent {agent}, definition {definition_digest}) was \
                  interrupted by a runtime restart: its actual outcome is unknown and it was \
-                 not restarted."
+                 not restarted.{retained}"
             ),
         })],
         workspace_resource,
@@ -738,6 +881,137 @@ pub fn recovery_terminal_publication(
 #[cfg(test)]
 mod tests {
     use super::bound_utf8;
+    use super::*;
+
+    /// The recovery-authored interruption notice preserves the "actual
+    /// outcome unknown" semantics and folds the runtime-observed retained
+    /// workspace fact into the same Runtime-authored message (Issue #192).
+    #[test]
+    fn the_recovery_interruption_notice_is_runtime_authored_and_carries_the_retained_fact() {
+        let subagent_id = SubagentId::new("conv-1-subagent-1");
+        let child_agent_id = AgentId::new("agent-child");
+        let conversation_id = ConversationId::new("conv-1");
+        let timestamp = chrono::Utc::now();
+        let handoff = crate::runtime::subagent::WorkspaceHandoff {
+            logical_workspace: std::path::PathBuf::from("/physical/worktree"),
+            physical_worktree_root: std::path::PathBuf::from("/physical/worktree"),
+            branch: "rustx/subagent/secret-branch".to_owned(),
+            base_commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            head_commit: "89abcdef012345670123456789abcdef01234567".to_owned(),
+            dirty: true,
+        };
+        let retained = SubagentWorkspaceTerminalResource::Retained {
+            handoff: handoff.clone(),
+        };
+        let (draft, event) = super::recovery_terminal_publication(
+            &conversation_id,
+            &subagent_id,
+            &child_agent_id,
+            "explore",
+            "sha256:d1",
+            &retained,
+            timestamp,
+        );
+        assert_eq!(draft.source, UserSource::Runtime);
+        let text = match &draft.content[0] {
+            UserContentBlock::Text(text) => text.text.clone(),
+            other => panic!("the notice is text: {other:?}"),
+        };
+        assert!(
+            text.contains("its actual outcome is unknown and it was not restarted"),
+            "interruption never becomes a proven failure or cancellation: {text}"
+        );
+        assert!(
+            text.contains("changes were retained and are not applied to your workspace"),
+            "the retained fact is reported: {text}"
+        );
+        for physical in ["/physical/worktree", "secret-branch"] {
+            assert!(
+                !text.contains(physical),
+                "no physical fact crosses into the notice: {physical} in {text}"
+            );
+        }
+        assert!(matches!(
+            event.event,
+            RuntimeEvent::SubagentTerminalPublished {
+                state: SubagentTerminalState::Interrupted,
+                ..
+            }
+        ));
+
+        // Without a retained settlement, no retained fact is fabricated.
+        let (draft, _) = super::recovery_terminal_publication(
+            &conversation_id,
+            &subagent_id,
+            &child_agent_id,
+            "explore",
+            "sha256:d1",
+            &SubagentWorkspaceTerminalResource::None,
+            timestamp,
+        );
+        let text = match &draft.content[0] {
+            UserContentBlock::Text(text) => text.text.clone(),
+            other => panic!("the notice is text: {other:?}"),
+        };
+        assert!(
+            !text.contains("retained"),
+            "no retained-workspace claim without a retained settlement: {text}"
+        );
+    }
+
+    /// The successful-terminal notice correlates the exact typed execution
+    /// handle the creation result returned, plus the named agent — and no
+    /// internal child identity (Issue #192). The retained-workspace fact
+    /// folds into the same one notice when settlement retained work.
+    #[test]
+    fn the_terminal_notice_correlates_the_exact_execution_handle() {
+        let subagent_id = SubagentId::new("conv-1-subagent-2");
+        let plain = super::terminal_notice_text(&subagent_id, "explore", false);
+        assert_eq!(
+            plain,
+            "Subagent execution {\"kind\":\"subagent\",\"id\":\"conv-1-subagent-2\"} \
+             (agent \"explore\") completed; the message that follows is its final report."
+        );
+        let retained = super::terminal_notice_text(&subagent_id, "explore", true);
+        assert!(
+            retained.starts_with(&plain),
+            "the retained fact extends the same one notice: {retained}"
+        );
+        assert!(
+            retained.contains(super::RETAINED_WORKSPACE_FACT),
+            "the retained semantic fact is stated: {retained}"
+        );
+
+        let agent = SubagentName::parse("explore").expect("name");
+        let timestamp = chrono::Utc::now();
+        let draft = super::terminal_notice(&subagent_id, &agent, false, timestamp);
+        assert_eq!(draft.source, UserSource::Runtime);
+        assert_eq!(draft.kind, InboundKind::Message);
+        assert_eq!(
+            draft.message_id,
+            Some(super::terminal_notice_message_id(&subagent_id))
+        );
+        assert_eq!(
+            draft.correlation,
+            Some(super::terminal_notice_correlation(&subagent_id))
+        );
+        let text = match &draft.content[0] {
+            UserContentBlock::Text(text) => text.text.clone(),
+            other => panic!("the notice is text: {other:?}"),
+        };
+        for internal in [
+            "child_agent_id",
+            "child_conversation_id",
+            "definition_digest",
+            "tool_call_id",
+            "sha256:",
+        ] {
+            assert!(
+                !text.contains(internal),
+                "no internal child identity crosses into the notice: {internal} in {text}"
+            );
+        }
+    }
 
     #[test]
     fn utf8_bounds_are_byte_caps_at_character_boundaries() {

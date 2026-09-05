@@ -100,11 +100,13 @@ const ISOLATED_SUBDIRECTORY_SESSION_JSON: &str = r#"{
 }"#;
 
 /// The `explore` agent's instruction document, written into the workspace so
-/// the parent generation can freeze it.
+/// the parent generation can freeze it. It deliberately says nothing about
+/// the final handoff: that rule is runtime-owned subagent execution
+/// semantics (Issue #192), composed by the runtime rather than repeated by
+/// every user-authored `instructionsFile`.
 const EXPLORE_INSTRUCTIONS: &str = "You are a read-only exploration subagent of the rustX \
 runtime. Answer the delegated task by inspecting the shared workspace with the capabilities \
-your definition authorized. Produce one bounded final answer; your runtime is one-shot and \
-terminates with it.";
+your definition authorized.";
 
 /// One spawned `rustx` process wired to its stdio JSONL transport.
 struct Process {
@@ -820,6 +822,25 @@ async fn a_subagent_child_runs_end_to_end_through_the_real_process_stack() {
             bodies.join("\n---\n")
         );
     };
+
+    // Issue #192: the child's model request carries the definition's
+    // user-authored instructions composed with the runtime-owned
+    // final-report rule — the user-authored document itself never states
+    // the handoff rule.
+    let bodies = server.request_bodies();
+    let child_request = bodies
+        .iter()
+        .find(|body| body.contains("count the workspace files"))
+        .expect("the child's own model request was observed");
+    assert!(
+        child_request.contains(EXPLORE_INSTRUCTIONS),
+        "the child request carries the frozen user-authored instructions"
+    );
+    assert!(
+        child_request.contains("Your final response is the complete handoff to the parent agent."),
+        "the runtime-owned final-report rule reaches the child model without any \
+         user-authored repetition"
+    );
 
     // The registry surface is the authoritative lifecycle: one child,
     // succeeded, with no result content on the live projection (Issue

@@ -2219,6 +2219,7 @@ fn assert_cut_lineage(scenario: &str) {
             "tool",
             "assistant",
             "user",
+            "user",
             "assistant",
         ],
         "the seed is the exact prefix before the selected human message"
@@ -2413,6 +2414,7 @@ fn assert_publication_is_atomic(
             "assistant-call",
             "tool",
             "assistant",
+            "user",
             "user",
             "assistant",
         ],
