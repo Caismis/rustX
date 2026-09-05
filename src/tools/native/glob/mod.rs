@@ -9,6 +9,7 @@ mod input;
 
 use futures_util::future::BoxFuture;
 
+use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::NATIVE_FILE_TOOL_MAX_BYTES;
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
@@ -46,6 +47,10 @@ impl ToolExecutor for GlobTool {
         context: ToolExecutionContext<'a>,
     ) -> BoxFuture<'a, ToolExecutionResult> {
         Box::pin(async move { run_glob(&invocation, &context) })
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 

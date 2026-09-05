@@ -196,6 +196,10 @@ impl rustx::tools::executor::ToolExecutor for ParkedBackgroundTool {
             }
         })
     }
+
+    fn progress_capability(&self) -> rustx::tools::ToolProgressCapability {
+        rustx::tools::ToolProgressCapability::None
+    }
 }
 
 /// Commits one authoritative background dispatch on the runtime's registry

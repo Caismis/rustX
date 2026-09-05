@@ -2412,6 +2412,7 @@ mod tests {
         BackgroundDispatchError, BackgroundDispatchOutcome, BackgroundExecutionSnapshot,
         BackgroundLifecycle, ConversationBackgroundRegistry,
     };
+    use crate::tools::deadline::ToolProgressCapability;
     use crate::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
     use crate::tools::types::{
         ToolCall, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
@@ -2646,6 +2647,10 @@ mod tests {
                     managed_output: None,
                 }
             })
+        }
+
+        fn progress_capability(&self) -> ToolProgressCapability {
+            ToolProgressCapability::None
         }
     }
 

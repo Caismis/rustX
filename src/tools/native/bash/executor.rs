@@ -27,6 +27,7 @@ use crate::runtime::process_runner::{
 use crate::runtime::process_runner::{
     RunnerChannelEofHook as ChannelEofHook, RunnerTerminalHold as TerminalHold,
 };
+use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{BASH_TERMINATION_CONFIRMATION, FOREGROUND_TOOL_RESULT_PREVIEW_BYTES};
 use crate::tools::native::support::failed_result;
@@ -80,6 +81,11 @@ impl ToolExecutor for BashTool {
         return Box::pin(async move { run_bash(&invocation, &context, control.as_ref()).await });
         #[cfg(not(test))]
         Box::pin(async move { run_bash(&invocation, &context, None).await })
+    }
+
+    // No progress protocol; the generic hard deadline bounds one execution.
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 

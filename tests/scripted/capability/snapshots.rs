@@ -17,6 +17,7 @@ use rustx::capabilities::{
 use rustx::runtime::identity::{ConversationId, ToolCallId, ToolExecutionId, ToolId};
 use rustx::runtime::inbound::ConversationInboundMailbox;
 use rustx::skills::Ecosystem;
+use rustx::tools::ToolProgressCapability;
 use rustx::tools::artifacts::ArtifactStore;
 use rustx::tools::background::{
     BackgroundDispatchOutcome, BackgroundResources, ConversationBackgroundRegistry,
@@ -1443,6 +1444,10 @@ impl ToolExecutor for RecordingParkingExecutor {
                 managed_output: None,
             }
         })
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 

@@ -13,6 +13,7 @@ use std::ops::Range;
 use futures_util::future::BoxFuture;
 use unicode_normalization::char::{canonical_combining_class, compose, decompose_compatible};
 
+use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::support::{
@@ -58,6 +59,10 @@ impl ToolExecutor for EditTool {
         context: ToolExecutionContext<'a>,
     ) -> BoxFuture<'a, ToolExecutionResult> {
         Box::pin(async move { run_edit(&invocation, &context) })
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 

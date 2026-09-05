@@ -9,17 +9,25 @@
 //!   admitted execution: progress evidence never extends it.
 //! - the **idle-liveness deadline** bounds the time an execution may go
 //!   without meaningful executor progress evidence. Every progress report
-//!   refreshes it. Executors that cannot produce honest progress run with
-//!   the hard deadline only; they must never invent heartbeat reports.
+//!   refreshes it. It applies only to executions whose executor declares
+//!   [`ToolProgressCapability::Meaningful`]: an executor that cannot produce
+//!   honest progress runs with the hard deadline only and must never invent
+//!   heartbeat reports.
 //!
 //! A deadline expiring is cancellation/liveness **intent**, not proof that
 //! external execution stopped (Issue #202). The lifecycle requests
-//! executor-owned physical cancellation and classifies the settled result by
-//! its evidence: proven terminal settlement after a deadline winner is
-//! [`ToolExecutionStatus::TimedOut`], an executor-proven `OutcomeUnknown`
-//! stays unknown, and a normal completion that won the physical race inside
-//! the executor survives untouched. Dropping an executor future is never
-//! settlement.
+//! executor-owned physical cancellation and then awaits the executor's
+//! settlement evidence, bounded by [`TOOL_SETTLEMENT_CONFIRMATION`]. The
+//! settled evidence selects the canonical status: proven terminal settlement
+//! after a deadline winner is [`ToolExecutionStatus::TimedOut`], an
+//! executor-proven `OutcomeUnknown` stays unknown, and a normal completion
+//! that won the physical race inside the executor survives untouched. When
+//! the executor's execution future does not return within the confirmation
+//! window, the lifecycle has exhausted the accepted executor-owned
+//! settlement mechanism without proving terminality: the canonical result is
+//! `OutcomeUnknown` — never `TimedOut`, because "the execution future did
+//! not return" is not "physical execution definitely stopped" — and the
+//! lifecycle drops the uncooperative future so the Agent Loop stays live.
 //!
 //! [`ToolExecutionStatus::TimedOut`]: crate::tools::types::ToolExecutionStatus::TimedOut
 
@@ -28,6 +36,22 @@ use std::time::Duration;
 /// The hard execution deadline used when a runtime configuration does not
 /// provide another value.
 pub const DEFAULT_TOOL_HARD_DEADLINE: Duration = Duration::from_mins(2);
+
+/// The bounded window the generic lifecycle awaits an executor's physical
+/// settlement evidence after cancellation intent (a deadline winner or
+/// attempt cancellation) was delivered to the execution (Issue #204).
+///
+/// This is not a second execution deadline and its expiry is never
+/// `TimedOut`: it bounds only the wait for *settlement evidence* from an
+/// executor that was already asked to cancel. Cooperative executors settle
+/// promptly inside their own bounded physical ladders (for example Bash's
+/// process-group kill, wait, and reap, bounded well below this window). An
+/// executor whose execution future still has not returned when the window
+/// expires has crossed — or may have crossed — the external-effect frontier
+/// without provable terminality, so the lifecycle commits `OutcomeUnknown`
+/// and drops the uncooperative future rather than blocking the Agent Loop
+/// forever.
+pub const TOOL_SETTLEMENT_CONFIRMATION: Duration = Duration::from_secs(30);
 
 /// The immutable execution-liveness policy of one runtime.
 ///
@@ -46,8 +70,9 @@ pub struct ToolExecutionDeadlinePolicy {
     pub hard_deadline: Duration,
     /// The maximum time one started execution may go without meaningful
     /// progress evidence; each report starts a fresh idle window. `None`
-    /// disables the idle watchdog, which is the honest configuration for
-    /// executors that cannot produce progress evidence.
+    /// disables the idle watchdog. The window is additionally gated by the
+    /// admitted executor's [`ToolProgressCapability`]: it applies only to
+    /// executions whose executor can emit meaningful progress evidence.
     pub idle_liveness: Option<Duration>,
 }
 
@@ -79,6 +104,52 @@ impl ToolExecutionDeadlinePolicy {
                 None => true,
             }
     }
+
+    /// The absolute hard deadline of an execution that crossed its
+    /// executor-start frontier at `started_millis` on the runtime monotonic
+    /// clock. Immutable after start: progress evidence never extends the
+    /// total execution lifetime.
+    #[must_use]
+    pub fn hard_deadline_millis(&self, started_millis: u64) -> u64 {
+        deadline_after(started_millis, self.hard_deadline)
+    }
+
+    /// The effective idle-liveness window for one admitted execution
+    /// (Issue #204): the configured policy window applies exactly when the
+    /// admitted executor declared [`ToolProgressCapability::Meaningful`] at
+    /// invocation resolution. An executor without meaningful progress
+    /// evidence runs under the hard deadline only — the runtime never
+    /// imposes an idle timeout it could only satisfy by fabricating
+    /// heartbeats.
+    #[must_use]
+    pub fn effective_idle_liveness(&self, capability: ToolProgressCapability) -> Option<Duration> {
+        match (self.idle_liveness, capability) {
+            (Some(idle), ToolProgressCapability::Meaningful) => Some(idle),
+            _ => None,
+        }
+    }
+}
+
+/// Whether an executor can emit meaningful progress evidence for one
+/// execution (Issue #204).
+///
+/// This is explicit typed executor state, declared by the executor itself
+/// and frozen into the admitted invocation at resolution: it is never
+/// inferred from whether progress happened yet, from the executor's name or
+/// origin, or from timing. The capability gates only the idle-liveness
+/// watchdog; the hard deadline applies to every admitted execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolProgressCapability {
+    /// The executor has no meaningful progress protocol. Its executions run
+    /// under the hard deadline only, even when the runtime policy configures
+    /// an idle-liveness window; the executor must never fabricate heartbeat
+    /// reports to satisfy a watchdog it cannot honestly inform.
+    None,
+    /// The executor can emit semantically meaningful liveness evidence
+    /// through the execution's progress reporter (for example an MCP
+    /// executor forwarding genuine remote progress notifications), so a
+    /// configured idle-liveness window applies to its executions.
+    Meaningful,
 }
 
 /// The generic liveness deadline that fired for one started execution.
@@ -95,60 +166,9 @@ pub enum ToolDeadlineKind {
     Idle,
 }
 
-/// The execution-local liveness state of one started foreground call.
-///
-/// The state is pure monotonic-clock arithmetic: the owning Agent Loop reads
-/// the runtime clock, feeds progress observations, and owns all waiting and
-/// winner arbitration itself, mirroring
-/// [`crate::model::deadline::ModelRequestDeadline`]. The executor-start
-/// frontier is the one clock-reading frontier of both deadlines: the hard
-/// deadline of an admitted call is fixed the moment the lifecycle admits the
-/// invocation to its executor, and queueing/scheduling time before that
-/// frontier is attempt lifecycle, never execution lifetime.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ToolExecutionLiveness {
-    policy: ToolExecutionDeadlinePolicy,
-    started_millis: u64,
-    last_progress_millis: u64,
-}
-
-impl ToolExecutionLiveness {
-    /// Starts both deadlines at the executor-start frontier.
-    #[must_use]
-    pub const fn new(policy: ToolExecutionDeadlinePolicy, now_millis: u64) -> Self {
-        Self {
-            policy,
-            started_millis: now_millis,
-            last_progress_millis: now_millis,
-        }
-    }
-
-    /// Records meaningful executor progress evidence.
-    ///
-    /// Progress refreshes the idle-liveness deadline only. It can never
-    /// extend the hard deadline: the total execution lifetime is fixed at
-    /// the start frontier.
-    pub const fn observe_progress(&mut self, now_millis: u64) {
-        self.last_progress_millis = now_millis;
-    }
-
-    /// The absolute hard deadline of this execution. Immutable after start.
-    #[must_use]
-    pub fn hard_deadline_millis(&self) -> u64 {
-        deadline_after(self.started_millis, self.policy.hard_deadline)
-    }
-
-    /// The absolute idle deadline from the latest progress evidence, when
-    /// the policy enables the idle watchdog.
-    #[must_use]
-    pub fn idle_deadline_millis(&self) -> Option<u64> {
-        self.policy
-            .idle_liveness
-            .map(|idle| deadline_after(self.last_progress_millis, idle))
-    }
-}
-
-fn deadline_after(now_millis: u64, duration: Duration) -> u64 {
+/// The absolute monotonic-clock deadline `duration` after `now_millis`,
+/// saturating at the representable maximum.
+pub(crate) fn deadline_after(now_millis: u64, duration: Duration) -> u64 {
     let millis = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
     now_millis.saturating_add(millis)
 }
@@ -156,8 +176,8 @@ fn deadline_after(now_millis: u64, duration: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_TOOL_HARD_DEADLINE, ToolDeadlineKind, ToolExecutionDeadlinePolicy,
-        ToolExecutionLiveness,
+        DEFAULT_TOOL_HARD_DEADLINE, TOOL_SETTLEMENT_CONFIRMATION, ToolDeadlineKind,
+        ToolExecutionDeadlinePolicy, ToolProgressCapability, deadline_after,
     };
     use std::time::Duration;
 
@@ -191,40 +211,49 @@ mod tests {
         );
     }
 
-    /// Both deadlines are measured from the executor-start frontier.
+    /// The settlement-confirmation window is finite and comfortably exceeds
+    /// the bounded physical settlement ladders of cooperative executors.
     #[test]
-    fn deadlines_start_at_the_executor_start_frontier() {
-        let liveness = ToolExecutionLiveness::new(policy(), 40);
-        assert_eq!(liveness.hard_deadline_millis(), 140);
-        assert_eq!(liveness.idle_deadline_millis(), Some(50));
+    fn settlement_confirmation_is_finite_and_generous() {
+        assert!(TOOL_SETTLEMENT_CONFIRMATION >= Duration::from_secs(10));
+        assert!(TOOL_SETTLEMENT_CONFIRMATION <= Duration::from_mins(5));
     }
 
-    /// Progress refreshes the idle deadline but never the hard deadline.
+    /// The hard deadline is measured from the executor-start frontier and
+    /// never moves.
     #[test]
-    fn progress_refreshes_idle_only() {
-        let mut liveness = ToolExecutionLiveness::new(policy(), 0);
-        liveness.observe_progress(90);
-        assert_eq!(liveness.idle_deadline_millis(), Some(100));
+    fn hard_deadline_starts_at_the_executor_start_frontier() {
+        assert_eq!(policy().hard_deadline_millis(40), 140);
         assert_eq!(
-            liveness.hard_deadline_millis(),
-            100,
-            "progress must never extend the total execution lifetime"
+            deadline_after(u64::MAX - 1, Duration::from_millis(5)),
+            u64::MAX
         );
-        liveness.observe_progress(99);
-        assert_eq!(liveness.idle_deadline_millis(), Some(109));
-        assert_eq!(liveness.hard_deadline_millis(), 100);
     }
 
-    /// Without an idle policy the watchdog is absent, not faked.
+    /// The idle-liveness window applies only to executors that declared
+    /// meaningful progress evidence (Issue #204, capability gating).
     #[test]
-    fn hard_only_policy_has_no_idle_deadline() {
-        let mut liveness = ToolExecutionLiveness::new(ToolExecutionDeadlinePolicy::default(), 7);
-        assert_eq!(liveness.idle_deadline_millis(), None);
-        liveness.observe_progress(50);
-        assert_eq!(liveness.idle_deadline_millis(), None);
+    fn effective_idle_liveness_is_capability_gated() {
+        let policy = policy();
         assert_eq!(
-            liveness.hard_deadline_millis(),
-            7 + u64::try_from(DEFAULT_TOOL_HARD_DEADLINE.as_millis()).expect("fits")
+            policy.effective_idle_liveness(ToolProgressCapability::Meaningful),
+            Some(Duration::from_millis(10)),
+            "configured idle policy plus meaningful progress capability enables the watchdog"
+        );
+        assert_eq!(
+            policy.effective_idle_liveness(ToolProgressCapability::None),
+            None,
+            "an executor without meaningful progress runs hard-deadline-only"
+        );
+        let hard_only = ToolExecutionDeadlinePolicy::default();
+        assert_eq!(
+            hard_only.effective_idle_liveness(ToolProgressCapability::Meaningful),
+            None,
+            "an absent idle policy never enables the watchdog"
+        );
+        assert_eq!(
+            hard_only.effective_idle_liveness(ToolProgressCapability::None),
+            None
         );
     }
 

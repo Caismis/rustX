@@ -1602,10 +1602,13 @@ started call, both measured from the call's executor-start frontier:
 - the **hard deadline** — the immutable total execution lifetime. Progress
   never extends it.
 - the **idle-liveness deadline** — present only when the policy configures
-  an idle window; every executor progress report through the existing
-  `ProgressReporter` seam starts a fresh window. Executors that cannot
-  produce honest progress run under the hard deadline only and never
-  fabricate heartbeat reports.
+  an idle window **and** the admitted executor declared
+  `ToolProgressCapability::Meaningful` at invocation resolution (the
+  capability is frozen into the prepared invocation, so a running call's
+  liveness contract never changes). Every executor progress report through
+  the existing `ProgressReporter` seam starts a fresh window. Executors that
+  cannot produce honest progress declare `ToolProgressCapability::None`,
+  run under the hard deadline only, and never fabricate heartbeat reports.
 
 The lifecycle of one started call is:
 
@@ -1618,16 +1621,22 @@ Started (executor-start frontier; ToolExecutionStarted)
        |-- attempt cancellation (intent) --------'    cancellation of exactly
                                                      this call's signal
                                                      -> await executor
-                                                        settlement
+                                                        settlement evidence,
+                                                        bounded by the
+                                                        settlement-
+                                                        confirmation window
 ```
 
 One biased `select!` in `run_foreground` is the single winner-arbitration
 point with the contractual readiness order attempt cancellation > hard
 deadline > idle deadline > physical completion; the winner freezes
-provenance. A deadline/cancellation winner then awaits the executor future
-to physical settlement — the future is never dropped as a substitute for
-settlement — and the executor's evidence selects the canonical status under
-the Issue #202 outcome-certainty contract:
+provenance. A deadline/cancellation winner then awaits the executor's
+physical settlement evidence bounded by `TOOL_SETTLEMENT_CONFIRMATION` —
+the finite-settlement invariant: once cancellation intent wins, the
+lifecycle reaches one finite canonical settlement even when the execution
+future never returns. Proven evidence (which always wins a tie with the
+window's expiry) selects the canonical status under the Issue #202
+outcome-certainty contract:
 
 - executor-proven cancellation settlement after a **deadline** winner →
   `TimedOut` (proven terminal because the deadline expired);
@@ -1638,7 +1647,14 @@ the Issue #202 outcome-certainty contract:
   frontier and terminality cannot be proven) survives — a deadline can never
   manufacture `TimedOut` from it;
 - any executor-proven normal outcome (`Success`/`Failed`) that won the
-  physical race survives untouched.
+  physical race survives untouched;
+- **confirmation-window expiry without settlement evidence** →
+  `OutcomeUnknown`: the execution future not returning is not proof that
+  physical execution stopped, so the lifecycle never reports `TimedOut` it
+  cannot prove. The uncooperative future is then dropped — its destructors
+  are the bounded physical cleanup — and the committed terminal result is
+  absorbing: no late physical completion can publish a second result, emit a
+  post-terminal event, or rewrite canonical history.
 
 A deadline cancels only its own call's child signal: batch siblings settle
 exactly once each and the batch commits in canonical model call order.

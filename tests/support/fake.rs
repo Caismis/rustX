@@ -23,6 +23,7 @@ use rustx::model::{
 };
 use rustx::runtime::CancellationSignal;
 use rustx::runtime::identity::ToolCallId;
+use rustx::tools::ToolProgressCapability;
 use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
 use rustx::tools::types::{
     ToolCall, ToolDefinition, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
@@ -498,6 +499,10 @@ impl ToolExecutor for FakeTool {
             completed.send_modify(|order| order.push(invocation.tool_name.clone()));
             outcome
         })
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 

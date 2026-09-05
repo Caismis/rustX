@@ -39,7 +39,10 @@ pub use background::{
     BackgroundDispatchOutcome, BackgroundExecutionSnapshot, BackgroundLifecycle,
     ConversationBackgroundRegistry,
 };
-pub use deadline::{ToolDeadlineKind, ToolExecutionDeadlinePolicy, ToolExecutionLiveness};
+pub use deadline::{
+    TOOL_SETTLEMENT_CONFIRMATION, ToolDeadlineKind, ToolExecutionDeadlinePolicy,
+    ToolProgressCapability,
+};
 pub use environment::{ToolEnvironment, ToolEnvironmentError};
 pub use execution::{ExecutionHandle, ExecutionKind};
 pub use executor::{

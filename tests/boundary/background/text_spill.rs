@@ -762,6 +762,10 @@ async fn genuine_artifacts_still_publish_as_file_blocks_in_the_terminal_inbound(
                 }
             })
         }
+
+        fn progress_capability(&self) -> rustx::tools::ToolProgressCapability {
+            rustx::tools::ToolProgressCapability::None
+        }
     }
 
     let fixture = fixture();

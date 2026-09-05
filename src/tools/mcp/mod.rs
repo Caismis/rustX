@@ -77,6 +77,7 @@ use crate::runtime::identity::{McpServerId, ToolId};
 use crate::runtime::interactive_process::{InteractiveProcessSpec, SupervisedInteractiveProcess};
 use crate::runtime::types::LifecycleAdmission;
 use crate::tools::artifacts::ArtifactStore;
+use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{
     FOREGROUND_TOOL_RESULT_PREVIEW_BYTES, MAX_MODEL_TOOL_RESULT_BYTES, bound_tool_progress,
@@ -2060,6 +2061,13 @@ impl ToolExecutor for McpToolExecutor {
                 .call(&self.remote_name, invocation.arguments, &context)
                 .await
         })
+    }
+
+    // The executor forwards genuine remote MCP progress notifications to
+    // `context.progress.report(...)`, so a configured idle-liveness window
+    // is honestly informed.
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::Meaningful
     }
 }
 

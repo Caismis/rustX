@@ -10,6 +10,7 @@ mod input;
 
 use futures_util::future::BoxFuture;
 
+use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::support::{
@@ -54,6 +55,10 @@ impl ToolExecutor for WriteTool {
         context: ToolExecutionContext<'a>,
     ) -> BoxFuture<'a, ToolExecutionResult> {
         Box::pin(async move { run_write(&invocation, &context) })
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 

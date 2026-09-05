@@ -106,6 +106,7 @@ use crate::tools::background::{
     BackgroundExecutionListing, BackgroundExecutionSnapshot, BackgroundLifecycle,
     ConversationBackgroundRegistry,
 };
+use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::execution::{ExecutionHandle, ExecutionKind, MAX_LISTED_EXECUTIONS};
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
@@ -205,6 +206,10 @@ impl ToolExecutor for ExecutionExecutor {
         Box::pin(
             async move { run_execution(&background, subagents.as_ref(), &invocation.arguments) },
         )
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 

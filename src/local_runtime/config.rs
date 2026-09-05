@@ -390,7 +390,9 @@ pub struct ToolDeadlinePolicyDocument {
     pub hard_deadline_ms: u64,
     /// The optional idle-liveness window: the maximum time one started
     /// execution may go without meaningful executor progress evidence.
-    /// Omitted means no idle watchdog.
+    /// Omitted means no idle watchdog. The window applies only to
+    /// executions whose executor declares meaningful progress capability;
+    /// all other executions run under the hard deadline only.
     pub idle_liveness_ms: Option<u64>,
 }
 
