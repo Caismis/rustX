@@ -2206,7 +2206,11 @@ impl RecoveryPlan {
     /// honest interrupted outcome, and the durable `subagent:{subagent_id}`
     /// lifecycle plus the stable producer correlation make the publication
     /// exactly-once across any number of restarts. Nothing is reattached,
-    /// relaunched, or replayed.
+    /// relaunched, or replayed. A normal child publishes through
+    /// [`ConversationStore::accept_subagent_terminal`] — the one
+    /// normal-subagent terminal authority, shared with the live settlement
+    /// path (Issue #192); a Workflow-owned child closes through its own
+    /// Workflow terminal settlement, which never creates parent inbound.
     fn publish_subagent_terminals(
         &self,
         store: &dyn ConversationStore,
@@ -2234,7 +2238,13 @@ impl RecoveryPlan {
                         &workspace_resource,
                         timestamp,
                     );
-                    store.accept_inbound_with_event(draft, event)?;
+                    // Recovery publishes through the one normal-subagent
+                    // terminal authority (Issue #192): an interruption is a
+                    // runtime-authored terminal message, so no
+                    // successful-terminal notice accompanies it — the
+                    // retained-workspace fact is folded into the message
+                    // itself.
+                    store.accept_subagent_terminal(None, draft, event)?;
                 }
                 SubagentOwnershipKind::Workflow => {
                     // Workflow children have no parent notification phase.

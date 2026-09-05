@@ -33,9 +33,10 @@ use crate::events::interaction::{
 use crate::events::types::{
     EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope, agent_status_emission_event_id,
 };
+use crate::message::content::TextBlock;
 use crate::message::types::{
     AgentStatusEmission, AgentStatusModuleId, AssistantContentBlock, ContentBlockIndex,
-    InboundKind, MessageBlock, UserMessageBlock, UserSource,
+    InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
 use crate::model::snapshot::RequestSnapshot;
 use crate::model::types::ModelRequest;
@@ -820,29 +821,29 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("accept/event transaction: {error}")))?;
-        let accepted = accept_inbound_tx(self, &transaction, draft)?;
-        if event.event_id.as_str().is_empty() {
-            match &event.event {
-                RuntimeEvent::BackgroundTerminalPublished { execution_id, .. } => {
-                    event.event_id =
-                        EventId::new(format!("background-terminal-event:{execution_id}"));
-                }
-                RuntimeEvent::SubagentTerminalPublished { subagent_id, .. } => {
-                    event.event_id = EventId::new(format!("subagent-terminal-event:{subagent_id}"));
-                }
-                _ => {}
-            }
-        }
-        let event_message_id = match &event.event {
-            RuntimeEvent::BackgroundTerminalPublished { message_id, .. }
-            | RuntimeEvent::SubagentTerminalPublished { message_id, .. } => message_id.clone(),
-            _ => {
-                return Err(ConversationStoreError::InvalidReference(
-                    "inbound/event acceptance requires a detached terminal fact".to_owned(),
-                ));
-            }
+        // Issue #192: this generic compound transition owns exactly the
+        // detached background terminal domain. A normal subagent terminal
+        // fact has its own semantically closed authority
+        // (`accept_subagent_terminal`) and is rejected here, so no
+        // `SubagentTerminalPublished` can bypass the Issue #192
+        // terminal-publication contract.
+        let RuntimeEvent::BackgroundTerminalPublished {
+            execution_id,
+            message_id: event_message_id,
+            ..
+        } = &event.event
+        else {
+            return Err(ConversationStoreError::InvalidReference(
+                "inbound/event acceptance owns only a detached background terminal fact; a \
+                 subagent terminal publishes through accept_subagent_terminal"
+                    .to_owned(),
+            ));
         };
-        if event_message_id != accepted.message_id {
+        if event.event_id.as_str().is_empty() {
+            event.event_id = EventId::new(format!("background-terminal-event:{execution_id}"));
+        }
+        let accepted = accept_inbound_tx(self, &transaction, draft)?;
+        if *event_message_id != accepted.message_id {
             return Err(ConversationStoreError::InvalidReference(format!(
                 "detached terminal fact references {}, accepted inbound is {}",
                 event_message_id, accepted.message_id
@@ -900,20 +901,11 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("subagent terminal transaction: {error}")))?;
-        // The notice is ordered first, so the terminal report remains the
-        // last item of the publication.
-        let notice = notice
-            .map(|notice| accept_inbound_tx(self, &transaction, notice))
-            .transpose()?;
-        if let Some(notice) = &notice
-            && (notice.message.source != UserSource::Runtime
-                || notice.message.kind != InboundKind::Message)
-        {
-            return Err(ConversationStoreError::InvalidReference(
-                "a subagent terminal notice is runtime-authored only".to_owned(),
-            ));
-        }
-        let accepted = accept_inbound_tx(self, &transaction, draft)?;
+        // The transition is semantically closed (Issue #192): every input
+        // is validated against the durable ownership fact and the canonical
+        // identities before anything is accepted, so no semantically
+        // unreachable durable state can be created.
+        validate_subagent_terminal_publication(&transaction, notice.as_ref(), &draft, &event)?;
         if event.event_id.as_str().is_empty()
             && let RuntimeEvent::SubagentTerminalPublished { subagent_id, .. } = &event.event
         {
@@ -921,12 +913,14 @@ impl ConversationStore for SqliteConversationStore {
         }
         let event_message_id = match &event.event {
             RuntimeEvent::SubagentTerminalPublished { message_id, .. } => message_id.clone(),
-            _ => {
-                return Err(ConversationStoreError::InvalidReference(
-                    "subagent terminal acceptance requires a subagent terminal fact".to_owned(),
-                ));
-            }
+            _ => unreachable!("the payload was validated above"),
         };
+        // The notice is ordered first, so the terminal report remains the
+        // last item of the publication.
+        let notice = notice
+            .map(|notice| accept_inbound_tx(self, &transaction, notice))
+            .transpose()?;
+        let accepted = accept_inbound_tx(self, &transaction, draft)?;
         if event_message_id != accepted.message_id {
             return Err(ConversationStoreError::InvalidReference(format!(
                 "subagent terminal fact references {}, accepted inbound is {}",
@@ -935,7 +929,9 @@ impl ConversationStore for SqliteConversationStore {
         }
         // The notice/report pair is one atomic publication: a retry must
         // find both sides already accepted, never exactly one.
-        if notice.as_ref().is_some_and(|notice| notice.retried) != accepted.retried {
+        if let Some(notice) = &notice
+            && notice.retried != accepted.retried
+        {
             return Err(ConversationStoreError::InvalidReference(
                 "a subagent terminal notice/report pair must retry together".to_owned(),
             ));
@@ -6377,6 +6373,7 @@ fn find_subagent_ownership(
         AgentId,
         crate::runtime::subagent::WorkspaceSnapshot,
         crate::events::types::SubagentOwnershipKind,
+        String,
     ),
     ConversationStoreError,
 > {
@@ -6392,8 +6389,9 @@ fn find_subagent_ownership(
             child_agent_id,
             ownership,
             workspace,
+            agent,
             ..
-        } if embedded == *subagent_id => Ok((child_agent_id, workspace, ownership)),
+        } if embedded == *subagent_id => Ok((child_agent_id, workspace, ownership, agent)),
         RuntimeEvent::SubagentOwnershipCommitted {
             subagent_id: embedded,
             ..
@@ -6403,6 +6401,163 @@ fn find_subagent_ownership(
         _ => Err(ConversationStoreError::InvalidReference(format!(
             "the subagent ownership event {event_id} is not the typed ownership fact"
         ))),
+    }
+}
+
+/// The complete legal-state validation of one normal subagent terminal
+/// publication (Issue #192), run before anything is accepted.
+///
+/// The transition is semantically closed: it binds the
+/// `SubagentTerminalPublished` fact, the terminal report draft, and — on
+/// success — the runtime-authored terminal notice draft to each other and
+/// to the committed ownership fact, so a caller cannot create durable
+/// state no legal sequence of runtime decisions could reach:
+///
+/// - the event identity, the report message identity, and both producer
+///   correlations are the canonical functions of the one `SubagentId`;
+/// - the event names the committed child agent of a `Normal` ownership;
+/// - a successful report is authored by that child agent, every other
+///   terminal by the runtime;
+/// - a success is impossible while the terminal workspace resource is
+///   unresolved (successful settlement is what proves the resource);
+/// - exactly a success carries the runtime-authored terminal notice, whose
+///   identity, correlation, provenance, and exact canonical text —
+///   including the retained-workspace semantic fact precisely when the
+///   terminal resource is `Retained` — are recomputed from durable facts.
+#[allow(clippy::too_many_lines)] // one semantically closed validation boundary
+fn validate_subagent_terminal_publication(
+    transaction: &Transaction<'_>,
+    notice: Option<&InboundDraft>,
+    report: &InboundDraft,
+    event: &RuntimeEventEnvelope,
+) -> Result<(), ConversationStoreError> {
+    let RuntimeEvent::SubagentTerminalPublished {
+        subagent_id,
+        child_agent_id,
+        message_id,
+        state,
+        workspace_resource,
+    } = &event.event
+    else {
+        return Err(ConversationStoreError::InvalidReference(
+            "subagent terminal acceptance requires a subagent terminal fact".to_owned(),
+        ));
+    };
+    if event.attempt_id.is_some() || event.turn_id.is_some() {
+        return Err(ConversationStoreError::InvalidReference(
+            "subagent terminal publication must not carry an attempt or turn envelope".to_owned(),
+        ));
+    }
+    let canonical_event_id = crate::runtime::subagent::terminal_event_id(subagent_id);
+    if !event.event_id.as_str().is_empty() && event.event_id != canonical_event_id {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "subagent terminal event identity {} does not match the canonical identity {canonical_event_id}",
+            event.event_id
+        )));
+    }
+    let (committed_child_agent_id, _workspace, ownership, agent) =
+        find_subagent_ownership(transaction, subagent_id)?;
+    if ownership != crate::events::types::SubagentOwnershipKind::Normal {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "subagent {subagent_id} Workflow ownership cannot use parent terminal publication"
+        )));
+    }
+    if committed_child_agent_id != *child_agent_id {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "subagent {subagent_id} terminal claims child agent {child_agent_id}, but durable ownership committed {committed_child_agent_id}"
+        )));
+    }
+    let canonical_report_id = crate::runtime::subagent::terminal_message_id(subagent_id);
+    if *message_id != canonical_report_id {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "subagent {subagent_id} terminal references {message_id}, not its canonical report message {canonical_report_id}"
+        )));
+    }
+    if report.message_id.as_ref() != Some(&canonical_report_id) {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "subagent {subagent_id} terminal report identity is not the canonical {canonical_report_id}"
+        )));
+    }
+    if report.correlation.as_deref()
+        != Some(crate::runtime::subagent::terminal_correlation(subagent_id).as_str())
+    {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "subagent {subagent_id} terminal report does not carry the canonical producer correlation"
+        )));
+    }
+    if report.kind != InboundKind::Message {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "subagent {subagent_id} terminal report has an ineligible inbound kind"
+        )));
+    }
+    let success = matches!(
+        state,
+        crate::events::types::SubagentTerminalState::Succeeded
+    );
+    let provenance_ok = if success {
+        report.source
+            == UserSource::Agent {
+                agent_id: child_agent_id.clone(),
+            }
+    } else {
+        report.source == UserSource::Runtime
+    };
+    if !provenance_ok {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "subagent {subagent_id} terminal report provenance does not match its terminal state"
+        )));
+    }
+    if success
+        && matches!(
+            workspace_resource,
+            crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved { .. }
+        )
+    {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "subagent {subagent_id} cannot succeed while its terminal workspace resource is unresolved"
+        )));
+    }
+    let retained = matches!(
+        workspace_resource,
+        crate::events::types::SubagentWorkspaceTerminalResource::Retained { .. }
+    );
+    match (success, notice) {
+        (true, Some(notice)) => {
+            if notice.source != UserSource::Runtime || notice.kind != InboundKind::Message {
+                return Err(ConversationStoreError::InvalidReference(
+                    "a subagent terminal notice is runtime-authored only".to_owned(),
+                ));
+            }
+            let canonical_notice_id =
+                crate::runtime::subagent::terminal_notice_message_id(subagent_id);
+            if notice.message_id.as_ref() != Some(&canonical_notice_id) {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "subagent {subagent_id} terminal notice identity is not the canonical {canonical_notice_id}"
+                )));
+            }
+            if notice.correlation.as_deref()
+                != Some(crate::runtime::subagent::terminal_notice_correlation(subagent_id).as_str())
+            {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "subagent {subagent_id} terminal notice does not carry the canonical producer correlation"
+                )));
+            }
+            let expected =
+                crate::runtime::subagent::terminal_notice_text(subagent_id, &agent, retained);
+            if notice.content != [UserContentBlock::Text(TextBlock { text: expected })] {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "subagent {subagent_id} terminal notice is not the canonical runtime-authored terminal metadata"
+                )));
+            }
+            Ok(())
+        }
+        (true, None) => Err(ConversationStoreError::InvalidReference(format!(
+            "subagent {subagent_id} successful terminal requires the runtime-authored terminal notice"
+        ))),
+        (false, Some(_)) => Err(ConversationStoreError::InvalidReference(format!(
+            "subagent {subagent_id} non-success terminal must not carry a successful-terminal notice"
+        ))),
+        (false, None) => Ok(()),
     }
 }
 
@@ -7023,7 +7178,26 @@ fn validate_event_reference(
             workspace_resource,
             ..
         } => {
-            let (committed_child_agent_id, workspace, ownership) =
+            let expected_event_id = crate::runtime::subagent::terminal_event_id(subagent_id);
+            if envelope.event_id != expected_event_id {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "subagent terminal event identity {} does not match the canonical identity {expected_event_id}",
+                    envelope.event_id
+                )));
+            }
+            if envelope.attempt_id.is_some() || envelope.turn_id.is_some() {
+                return Err(ConversationStoreError::InvalidReference(
+                    "subagent terminal publication must not carry an attempt or turn envelope"
+                        .to_owned(),
+                ));
+            }
+            if *message_id != crate::runtime::subagent::terminal_message_id(subagent_id) {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "subagent {subagent_id} terminal references {message_id}, not its canonical report message {}",
+                    crate::runtime::subagent::terminal_message_id(subagent_id)
+                )));
+            }
+            let (committed_child_agent_id, workspace, ownership, agent) =
                 find_subagent_ownership(transaction, subagent_id)?;
             if ownership != crate::events::types::SubagentOwnershipKind::Normal {
                 return Err(ConversationStoreError::InvalidReference(format!(
@@ -7056,6 +7230,34 @@ fn validate_event_reference(
                     "subagent terminal fact references an ineligible publication {message_id}"
                 )));
             }
+            // A successful publication commits with its runtime-authored
+            // terminal notice (Issue #192): the exact canonical notice of
+            // this subagent, this named agent, and this workspace
+            // settlement must already be durable in the same transaction.
+            if *state == crate::events::types::SubagentTerminalState::Succeeded {
+                let retained = matches!(
+                    workspace_resource,
+                    crate::events::types::SubagentWorkspaceTerminalResource::Retained { .. }
+                );
+                let notice = load_user_notification_tx(
+                    transaction,
+                    &crate::runtime::subagent::terminal_notice_message_id(subagent_id),
+                    "subagent terminal",
+                )?;
+                let expected_notice =
+                    crate::runtime::subagent::terminal_notice_text(subagent_id, &agent, retained);
+                let notice_text_ok = notice.source == UserSource::Runtime
+                    && notice.kind == InboundKind::Message
+                    && notice.content
+                        == vec![UserContentBlock::Text(TextBlock {
+                            text: expected_notice,
+                        })];
+                if !notice_text_ok {
+                    return Err(ConversationStoreError::InvalidReference(format!(
+                        "subagent {subagent_id} successful terminal lacks its canonical runtime-authored terminal notice"
+                    )));
+                }
+            }
             validate_subagent_terminal_resource(subagent_id, &workspace, workspace_resource)?;
         }
         RuntimeEvent::SubagentTerminalSettled {
@@ -7072,7 +7274,7 @@ fn validate_event_reference(
                     envelope.event_id
                 )));
             }
-            let (committed_child_agent_id, workspace, ownership) =
+            let (committed_child_agent_id, workspace, ownership, _agent) =
                 find_subagent_ownership(transaction, subagent_id)?;
             if ownership != crate::events::types::SubagentOwnershipKind::Workflow {
                 return Err(ConversationStoreError::InvalidReference(format!(
@@ -7109,7 +7311,7 @@ fn validate_event_reference(
                     "subagent {subagent_id} disposal intent has an invalid workspace handoff: {detail}"
                 ))
             })?;
-            let (_, workspace, ownership) = find_subagent_ownership(transaction, subagent_id)?;
+            let (_, workspace, ownership, _) = find_subagent_ownership(transaction, subagent_id)?;
             if !workspace.matches_handoff(workspace_handoff) {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "subagent {subagent_id} disposal intent handoff does not match its durable workspace ownership"
@@ -7178,7 +7380,7 @@ fn validate_event_reference(
                     "subagent {subagent_id} disposal settlement has an invalid workspace handoff: {detail}"
                 ))
             })?;
-            let (_, workspace, ownership) = find_subagent_ownership(transaction, subagent_id)?;
+            let (_, workspace, ownership, _) = find_subagent_ownership(transaction, subagent_id)?;
             if !workspace.matches_handoff(workspace_handoff) {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "subagent {subagent_id} disposal settlement handoff does not match its durable workspace ownership"
@@ -7250,7 +7452,7 @@ fn validate_event_reference(
                     "Workflow output event exceeds the bounded value size".to_owned(),
                 ));
             }
-            let (_, _, ownership) = find_subagent_ownership(transaction, subagent_id)?;
+            let (_, _, ownership, _) = find_subagent_ownership(transaction, subagent_id)?;
             if ownership != crate::events::types::SubagentOwnershipKind::Workflow {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "subagent {subagent_id} normal ownership cannot commit a Workflow output"
@@ -9619,11 +9821,116 @@ mod tests {
         assert_eq!(store.load_pending().unwrap().len(), 1);
     }
 
-    /// A subagent terminal publication is a correlated User inbound plus the
-    /// `SubagentTerminalPublished` fact in one transaction: the retry is an
-    /// idempotent no-op, a second terminal for the same child violates the
-    /// lifecycle, and the provenance rules (Agent-authored success versus
-    /// Runtime-authored notice) are enforced.
+    /// Commits the canonical Normal-ownership fact of one subagent child
+    /// over a shared workspace (agent name `explore`).
+    fn own_normal_subagent(
+        store: &SqliteConversationStore,
+        subagent_id: &crate::runtime::identity::SubagentId,
+        child_agent_id: &AgentId,
+    ) {
+        own_normal_subagent_with_workspace(
+            store,
+            subagent_id,
+            child_agent_id,
+            crate::runtime::subagent::WorkspaceSnapshot::shared(std::path::PathBuf::from(
+                "<shared-workspace>",
+            )),
+        );
+    }
+
+    /// Commits the canonical Normal-ownership fact over an explicit
+    /// workspace snapshot.
+    fn own_normal_subagent_with_workspace(
+        store: &SqliteConversationStore,
+        subagent_id: &crate::runtime::identity::SubagentId,
+        child_agent_id: &AgentId,
+        workspace: crate::runtime::subagent::WorkspaceSnapshot,
+    ) {
+        store
+            .append_event(envelope(
+                store.conversation_id(),
+                crate::runtime::subagent::subagent_ownership_event_id(subagent_id).as_ref(),
+                None,
+                RuntimeEvent::SubagentOwnershipCommitted {
+                    subagent_id: subagent_id.clone(),
+                    child_agent_id: child_agent_id.clone(),
+                    child_conversation_id: crate::runtime::identity::ConversationId::new(
+                        subagent_id.as_str(),
+                    ),
+                    tool_call_id: ToolCallId::new("call-sub"),
+                    agent: "explore".to_owned(),
+                    definition_digest: "sha256:definition".to_owned(),
+                    ownership: crate::events::types::SubagentOwnershipKind::Normal,
+                    workspace,
+                },
+            ))
+            .expect("ownership fact");
+    }
+
+    /// The canonical successful terminal publication triple (notice,
+    /// report, event) exactly as the registry builds it (Issue #192).
+    fn success_publication(
+        store: &SqliteConversationStore,
+        subagent_id: &crate::runtime::identity::SubagentId,
+        child_agent_id: &AgentId,
+        report_text: &str,
+        workspace_resource: &crate::events::types::SubagentWorkspaceTerminalResource,
+    ) -> (InboundDraft, InboundDraft, RuntimeEventEnvelope) {
+        let timestamp = Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap();
+        let retained = matches!(
+            workspace_resource,
+            crate::events::types::SubagentWorkspaceTerminalResource::Retained { .. }
+        );
+        let (report, event) = crate::runtime::subagent::terminal_publication(
+            store.conversation_id(),
+            subagent_id,
+            child_agent_id,
+            SubagentTerminalState::Succeeded,
+            vec![UserContentBlock::Text(TextBlock {
+                text: report_text.to_owned(),
+            })],
+            workspace_resource,
+            timestamp,
+        );
+        let notice = crate::runtime::subagent::terminal_notice(
+            subagent_id,
+            &crate::runtime::subagent::SubagentName::parse("explore").expect("canonical name"),
+            retained,
+            timestamp,
+        );
+        (notice, report, event)
+    }
+
+    /// The canonical non-success terminal publication pair (report, event):
+    /// one runtime-authored terminal message and no notice.
+    fn non_success_publication(
+        store: &SqliteConversationStore,
+        subagent_id: &crate::runtime::identity::SubagentId,
+        child_agent_id: &AgentId,
+        state: SubagentTerminalState,
+        text: &str,
+        workspace_resource: &crate::events::types::SubagentWorkspaceTerminalResource,
+    ) -> (InboundDraft, RuntimeEventEnvelope) {
+        crate::runtime::subagent::terminal_publication(
+            store.conversation_id(),
+            subagent_id,
+            child_agent_id,
+            state,
+            vec![UserContentBlock::Text(TextBlock {
+                text: text.to_owned(),
+            })],
+            workspace_resource,
+            Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
+        )
+    }
+
+    /// A normal subagent terminal publication commits through
+    /// `accept_subagent_terminal` — the one durable authority for
+    /// `SubagentTerminalPublished` (Issue #192). The retry of a notice-free
+    /// non-success publication is an idempotent no-op, a semantically
+    /// different retry of the same child conflicts deterministically, and
+    /// the obsolete generic `accept_inbound_with_event` path rejects the
+    /// payload so it can never bypass the terminal-publication contract.
     #[test]
     #[allow(clippy::too_many_lines)]
     fn subagent_terminal_publication_is_idempotent_and_terminal_unique() {
@@ -9632,140 +9939,95 @@ mod tests {
         let subagent_id =
             crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
         let child_agent_id = crate::runtime::identity::AgentId::new(format!("agent-{subagent_id}"));
-        let message_id = MessageId::new("subagent-notification-1");
-        let timestamp = Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap();
-        // The ownership commit opens the lifecycle before the terminal. The
-        // event identity is the canonical
-        // `subagent-committed-event:{id}` the registry writes in production
-        // (the shared `subagent_ownership_event_id` helper); terminal
-        // validation resolves the ownership fact through that unique event
-        // identity.
-        store
-            .append_event(envelope(
-                &conversation_id,
-                crate::runtime::subagent::subagent_ownership_event_id(&subagent_id).as_ref(),
-                None,
-                RuntimeEvent::SubagentOwnershipCommitted {
-                    subagent_id: subagent_id.clone(),
-                    child_agent_id: child_agent_id.clone(),
-                    child_conversation_id: crate::runtime::identity::ConversationId::new(
-                        subagent_id.as_str(),
-                    ),
-                    tool_call_id: crate::runtime::identity::ToolCallId::new("call-sub"),
-                    agent: "explore".to_owned(),
-                    definition_digest: "sha256:definition".to_owned(),
-                    ownership: crate::events::types::SubagentOwnershipKind::Normal,
-                    workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
-                        std::path::PathBuf::from("<shared-workspace>"),
-                    ),
-                },
-            ))
-            .unwrap();
-        let event = envelope(
-            &conversation_id,
-            "subagent-event-1",
-            None,
-            RuntimeEvent::SubagentTerminalPublished {
-                subagent_id: subagent_id.clone(),
-                child_agent_id: child_agent_id.clone(),
-                message_id: message_id.clone(),
-                state: crate::events::types::SubagentTerminalState::Succeeded,
-                workspace_resource: crate::events::types::SubagentWorkspaceTerminalResource::None,
-            },
+        own_normal_subagent(&store, &subagent_id, &child_agent_id);
+
+        // A failed terminal: one runtime-authored message, no notice.
+        let (report, event) = non_success_publication(
+            &store,
+            &subagent_id,
+            &child_agent_id,
+            SubagentTerminalState::Failed,
+            "subagent failed: boom",
+            &crate::events::types::SubagentWorkspaceTerminalResource::None,
         );
-        // A successful child answer is authored by the child agent.
-        let draft_for_store = || InboundDraft {
-            message_id: Some(message_id.clone()),
-            source: UserSource::Agent {
-                agent_id: child_agent_id.clone(),
-            },
-            kind: InboundKind::Message,
-            content: draft("subagent").content,
-            timestamp,
-            correlation: Some(format!("subagent-terminal:{subagent_id}")),
-        };
-        let (accepted, persisted) = store
-            .accept_inbound_with_event(draft_for_store(), event.clone())
+
+        // The obsolete generic path can no longer publish a normal subagent
+        // terminal fact — for either a success-shaped or a failure-shaped
+        // payload.
+        assert!(matches!(
+            store.accept_inbound_with_event(report.clone(), event.clone()),
+            Err(ConversationStoreError::InvalidReference(_))
+        ));
+        assert_eq!(
+            store.load_pending().unwrap().len(),
+            0,
+            "the rejected generic transition accepted nothing"
+        );
+
+        let (notice, accepted, persisted) = store
+            .accept_subagent_terminal(None, report.clone(), event.clone())
             .unwrap();
+        assert!(
+            notice.is_none(),
+            "a non-success terminal carries no successful-terminal notice"
+        );
         assert!(!accepted.retried);
         assert_eq!(persisted.sequence, 2, "the ownership commit is sequence 1");
 
-        let (retried, persisted_retry) = store
-            .accept_inbound_with_event(draft_for_store(), event)
+        // The notice-free retry is an idempotent no-op.
+        let (notice, retried, persisted_retry) = store
+            .accept_subagent_terminal(None, report.clone(), event.clone())
             .unwrap();
+        assert!(notice.is_none());
         assert!(retried.retried);
         assert_eq!(persisted_retry.sequence, persisted.sequence);
 
-        // The terminal fact closed the lifecycle, so a second terminal for
-        // the same child violates it.
-        let second_message_id = MessageId::new("subagent-notification-2");
-        let second_event = envelope(
-            &conversation_id,
-            "subagent-event-2",
-            None,
-            RuntimeEvent::SubagentTerminalPublished {
-                subagent_id: subagent_id.clone(),
-                child_agent_id: child_agent_id.clone(),
-                message_id: second_message_id.clone(),
-                state: crate::events::types::SubagentTerminalState::Failed,
-                workspace_resource: crate::events::types::SubagentWorkspaceTerminalResource::None,
-            },
+        // A semantically different retry of the same child's terminal —
+        // same canonical identities, changed content — is a deterministic
+        // conflict, never a second publication.
+        let (conflicting_report, _) = non_success_publication(
+            &store,
+            &subagent_id,
+            &child_agent_id,
+            SubagentTerminalState::Failed,
+            "a different diagnostic",
+            &crate::events::types::SubagentWorkspaceTerminalResource::None,
         );
-        let second_draft = InboundDraft {
-            message_id: Some(second_message_id),
-            source: UserSource::Runtime,
-            kind: InboundKind::Message,
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: "second".to_owned(),
-            })],
-            timestamp,
-            correlation: Some("subagent-terminal:other".to_owned()),
-        };
         assert!(matches!(
-            store.accept_inbound_with_event(second_draft, second_event),
-            Err(ConversationStoreError::TerminalViolation(_))
+            store.accept_subagent_terminal(None, conflicting_report, event),
+            Err(ConversationStoreError::CorrelationConflict { .. })
         ));
-        assert_eq!(store.load_pending().unwrap().len(), 1);
+        assert_eq!(store.load_pending().unwrap().len(), 1, "exactly once");
 
-        // Provenance: a failed terminal must be a Runtime-authored notice —
-        // an Agent-authored one is an ineligible publication.
-        let other_id = crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 2);
-        let other_message_id = MessageId::new("subagent-notification-3");
-        let wrong_provenance = envelope(
-            &conversation_id,
-            "subagent-event-3",
-            None,
-            RuntimeEvent::SubagentTerminalPublished {
-                subagent_id: other_id.clone(),
-                child_agent_id: crate::runtime::identity::AgentId::new("agent-other"),
-                message_id: other_message_id.clone(),
-                state: crate::events::types::SubagentTerminalState::Failed,
-                workspace_resource: crate::events::types::SubagentWorkspaceTerminalResource::None,
-            },
+        // Provenance: a failed terminal must be Runtime-authored — an
+        // Agent-authored one is rejected before anything is accepted.
+        let other = crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 2);
+        let other_child = crate::runtime::identity::AgentId::new("agent-other");
+        own_normal_subagent(&store, &other, &other_child);
+        let (mut wrong_report, wrong_event) = non_success_publication(
+            &store,
+            &other,
+            &other_child,
+            SubagentTerminalState::Failed,
+            "subagent failed: boom",
+            &crate::events::types::SubagentWorkspaceTerminalResource::None,
         );
-        let wrong_draft = InboundDraft {
-            message_id: Some(other_message_id),
-            source: UserSource::Agent {
-                agent_id: crate::runtime::identity::AgentId::new("agent-other"),
-            },
-            kind: InboundKind::Message,
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: "wrong".to_owned(),
-            })],
-            timestamp,
-            correlation: Some(format!("subagent-terminal:{other_id}")),
+        wrong_report.source = UserSource::Agent {
+            agent_id: other_child,
         };
         assert!(matches!(
-            store.accept_inbound_with_event(wrong_draft, wrong_provenance),
+            store.accept_subagent_terminal(None, wrong_report, wrong_event),
             Err(ConversationStoreError::InvalidReference(_))
         ));
         assert_eq!(store.load_pending().unwrap().len(), 1);
     }
 
-    /// The Issue #192 pair publication: a successful terminal whose
-    /// settlement retained changed isolated work commits the runtime-authored
-    /// notice and the child-authored report in one transaction — notice
-    /// first, report (the terminal result) last, event committed once.
+    /// The Issue #192 pair publication: a successful terminal commits the
+    /// runtime-authored terminal notice (the parent-model execution
+    /// correlation, with the retained-workspace semantic fact folded in
+    /// when applicable) and the child-authored report in one transaction —
+    /// notice first, report (the terminal result) last, the event
+    /// committed once.
     #[test]
     #[allow(clippy::too_many_lines)]
     fn subagent_terminal_pair_publication_is_atomic_idempotent_and_ordered() {
@@ -9774,76 +10036,19 @@ mod tests {
         let subagent_id =
             crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
         let child_agent_id = crate::runtime::identity::AgentId::new(format!("agent-{subagent_id}"));
-        let timestamp = Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap();
-        store
-            .append_event(envelope(
-                &conversation_id,
-                crate::runtime::subagent::subagent_ownership_event_id(&subagent_id).as_ref(),
-                None,
-                RuntimeEvent::SubagentOwnershipCommitted {
-                    subagent_id: subagent_id.clone(),
-                    child_agent_id: child_agent_id.clone(),
-                    child_conversation_id: crate::runtime::identity::ConversationId::new(
-                        subagent_id.as_str(),
-                    ),
-                    tool_call_id: crate::runtime::identity::ToolCallId::new("call-sub"),
-                    agent: "explore".to_owned(),
-                    definition_digest: "sha256:definition".to_owned(),
-                    ownership: crate::events::types::SubagentOwnershipKind::Normal,
-                    workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
-                        std::path::PathBuf::from("<shared-workspace>"),
-                    ),
-                },
-            ))
-            .unwrap();
+        own_normal_subagent(&store, &subagent_id, &child_agent_id);
         let notice_id = crate::runtime::subagent::terminal_notice_message_id(&subagent_id);
         let report_id = crate::runtime::subagent::terminal_message_id(&subagent_id);
-        let notice_for_store = || InboundDraft {
-            message_id: Some(notice_id.clone()),
-            source: UserSource::Runtime,
-            kind: InboundKind::Message,
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: "retained".to_owned(),
-            })],
-            timestamp,
-            correlation: Some(crate::runtime::subagent::terminal_notice_correlation(
-                &subagent_id,
-            )),
-        };
-        let report_for_store = || InboundDraft {
-            message_id: Some(report_id.clone()),
-            source: UserSource::Agent {
-                agent_id: child_agent_id.clone(),
-            },
-            kind: InboundKind::Message,
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: "the final report".to_owned(),
-            })],
-            timestamp,
-            correlation: Some(format!("subagent-terminal:{subagent_id}")),
-        };
-        let event_for_store = || {
-            envelope(
-                &conversation_id,
-                crate::runtime::subagent::terminal_event_id(&subagent_id).as_ref(),
-                None,
-                RuntimeEvent::SubagentTerminalPublished {
-                    subagent_id: subagent_id.clone(),
-                    child_agent_id: child_agent_id.clone(),
-                    message_id: report_id.clone(),
-                    state: crate::events::types::SubagentTerminalState::Succeeded,
-                    workspace_resource:
-                        crate::events::types::SubagentWorkspaceTerminalResource::None,
-                },
-            )
-        };
+        let (notice, report, event) = success_publication(
+            &store,
+            &subagent_id,
+            &child_agent_id,
+            "the final report",
+            &crate::events::types::SubagentWorkspaceTerminalResource::None,
+        );
 
         let (notice, report, persisted) = store
-            .accept_subagent_terminal(
-                Some(notice_for_store()),
-                report_for_store(),
-                event_for_store(),
-            )
+            .accept_subagent_terminal(Some(notice), report, event)
             .unwrap();
         let notice = notice.expect("the notice was accepted");
         assert!(!notice.retried && !report.retried);
@@ -9855,15 +10060,32 @@ mod tests {
         assert_eq!(pending.len(), 2);
         assert_eq!(pending[0].message.id, notice_id);
         assert_eq!(pending[1].message.id, report_id);
+        let notice_text = match &pending[0].message.content[0] {
+            UserContentBlock::Text(text) => text.text.clone(),
+            other => panic!("the notice is text: {other:?}"),
+        };
+        assert!(
+            notice_text.contains(&format!(
+                "{{\"kind\":\"subagent\",\"id\":\"{subagent_id}\"}}"
+            )),
+            "the notice names the exact typed execution handle: {notice_text}"
+        );
+        assert!(
+            !notice_text.contains("retained"),
+            "no retained-workspace claim without a retained settlement: {notice_text}"
+        );
 
         // The retry of the identical pair is an idempotent no-op on both
         // sides and never re-commits the event.
+        let (notice, report, event) = success_publication(
+            &store,
+            &subagent_id,
+            &child_agent_id,
+            "the final report",
+            &crate::events::types::SubagentWorkspaceTerminalResource::None,
+        );
         let (notice_retry, report_retry, persisted_retry) = store
-            .accept_subagent_terminal(
-                Some(notice_for_store()),
-                report_for_store(),
-                event_for_store(),
-            )
+            .accept_subagent_terminal(Some(notice), report, event)
             .unwrap();
         assert!(notice_retry.expect("notice").retried);
         assert!(report_retry.retried);
@@ -9873,55 +10095,18 @@ mod tests {
         // A notice that is not runtime-authored is rejected before anything
         // is accepted.
         let other = crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 2);
-        store
-            .append_event(envelope(
-                &conversation_id,
-                crate::runtime::subagent::subagent_ownership_event_id(&other).as_ref(),
-                None,
-                RuntimeEvent::SubagentOwnershipCommitted {
-                    subagent_id: other.clone(),
-                    child_agent_id: crate::runtime::identity::AgentId::new("agent-other"),
-                    child_conversation_id: crate::runtime::identity::ConversationId::new(
-                        other.as_str(),
-                    ),
-                    tool_call_id: crate::runtime::identity::ToolCallId::new("call-other"),
-                    agent: "explore".to_owned(),
-                    definition_digest: "sha256:definition".to_owned(),
-                    ownership: crate::events::types::SubagentOwnershipKind::Normal,
-                    workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
-                        std::path::PathBuf::from("<shared-workspace>"),
-                    ),
-                },
-            ))
-            .unwrap();
-        let mut child_authored_notice = notice_for_store();
-        child_authored_notice.message_id =
-            Some(crate::runtime::subagent::terminal_notice_message_id(&other));
+        let other_child = crate::runtime::identity::AgentId::new("agent-other");
+        own_normal_subagent(&store, &other, &other_child);
+        let (mut child_authored_notice, other_report, other_event) = success_publication(
+            &store,
+            &other,
+            &other_child,
+            "the other report",
+            &crate::events::types::SubagentWorkspaceTerminalResource::None,
+        );
         child_authored_notice.source = UserSource::Agent {
-            agent_id: crate::runtime::identity::AgentId::new("agent-other"),
+            agent_id: other_child.clone(),
         };
-        child_authored_notice.correlation = Some(
-            crate::runtime::subagent::terminal_notice_correlation(&other),
-        );
-        let other_report_id = crate::runtime::subagent::terminal_message_id(&other);
-        let mut other_report = report_for_store();
-        other_report.message_id = Some(other_report_id.clone());
-        other_report.source = UserSource::Agent {
-            agent_id: crate::runtime::identity::AgentId::new("agent-other"),
-        };
-        other_report.correlation = Some(format!("subagent-terminal:{other}"));
-        let other_event = envelope(
-            &conversation_id,
-            crate::runtime::subagent::terminal_event_id(&other).as_ref(),
-            None,
-            RuntimeEvent::SubagentTerminalPublished {
-                subagent_id: other.clone(),
-                child_agent_id: crate::runtime::identity::AgentId::new("agent-other"),
-                message_id: other_report_id,
-                state: crate::events::types::SubagentTerminalState::Succeeded,
-                workspace_resource: crate::events::types::SubagentWorkspaceTerminalResource::None,
-            },
-        );
         assert!(matches!(
             store.accept_subagent_terminal(
                 Some(child_authored_notice),
@@ -9937,11 +10122,11 @@ mod tests {
             None,
             RuntimeEvent::SubagentOwnershipCommitted {
                 subagent_id: other.clone(),
-                child_agent_id: crate::runtime::identity::AgentId::new("agent-other"),
+                child_agent_id: other_child,
                 child_conversation_id: crate::runtime::identity::ConversationId::new(
                     other.as_str(),
                 ),
-                tool_call_id: crate::runtime::identity::ToolCallId::new("call-other"),
+                tool_call_id: ToolCallId::new("call-other"),
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
                 ownership: crate::events::types::SubagentOwnershipKind::Normal,
@@ -9971,74 +10156,22 @@ mod tests {
         let subagent_id =
             crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
         let child_agent_id = crate::runtime::identity::AgentId::new(format!("agent-{subagent_id}"));
-        let timestamp = Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap();
-        store
-            .append_event(envelope(
-                &conversation_id,
-                crate::runtime::subagent::subagent_ownership_event_id(&subagent_id).as_ref(),
-                None,
-                RuntimeEvent::SubagentOwnershipCommitted {
-                    subagent_id: subagent_id.clone(),
-                    child_agent_id: child_agent_id.clone(),
-                    child_conversation_id: crate::runtime::identity::ConversationId::new(
-                        subagent_id.as_str(),
-                    ),
-                    tool_call_id: crate::runtime::identity::ToolCallId::new("call-sub"),
-                    agent: "explore".to_owned(),
-                    definition_digest: "sha256:definition".to_owned(),
-                    ownership: crate::events::types::SubagentOwnershipKind::Normal,
-                    workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
-                        std::path::PathBuf::from("<shared-workspace>"),
-                    ),
-                },
-            ))
-            .unwrap();
-        let notice = || InboundDraft {
-            message_id: Some(crate::runtime::subagent::terminal_notice_message_id(
+        own_normal_subagent(&store, &subagent_id, &child_agent_id);
+        let publication = || {
+            success_publication(
+                &store,
                 &subagent_id,
-            )),
-            source: UserSource::Runtime,
-            kind: InboundKind::Message,
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: "retained".to_owned(),
-            })],
-            timestamp,
-            correlation: Some(crate::runtime::subagent::terminal_notice_correlation(
-                &subagent_id,
-            )),
-        };
-        let report = || InboundDraft {
-            message_id: Some(crate::runtime::subagent::terminal_message_id(&subagent_id)),
-            source: UserSource::Agent {
-                agent_id: child_agent_id.clone(),
-            },
-            kind: InboundKind::Message,
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: "the final report".to_owned(),
-            })],
-            timestamp,
-            correlation: Some(format!("subagent-terminal:{subagent_id}")),
-        };
-        let event = || {
-            envelope(
-                &conversation_id,
-                crate::runtime::subagent::terminal_event_id(&subagent_id).as_ref(),
-                None,
-                RuntimeEvent::SubagentTerminalPublished {
-                    subagent_id: subagent_id.clone(),
-                    child_agent_id: child_agent_id.clone(),
-                    message_id: crate::runtime::subagent::terminal_message_id(&subagent_id),
-                    state: crate::events::types::SubagentTerminalState::Succeeded,
-                    workspace_resource:
-                        crate::events::types::SubagentWorkspaceTerminalResource::None,
-                },
+                &child_agent_id,
+                "the final report",
+                &crate::events::types::SubagentWorkspaceTerminalResource::None,
             )
         };
 
         store.arm_fail_event_times(1);
+        let (notice, report, event) = publication();
         assert!(
             store
-                .accept_subagent_terminal(Some(notice()), report(), event())
+                .accept_subagent_terminal(Some(notice), report, event)
                 .is_err(),
             "the injected journal fault fails the publication"
         );
@@ -10048,13 +10181,321 @@ mod tests {
             "the failed transaction committed neither the notice nor the report"
         );
 
+        let (notice, report, event) = publication();
         let (notice, report, persisted) = store
-            .accept_subagent_terminal(Some(notice()), report(), event())
+            .accept_subagent_terminal(Some(notice), report, event)
             .expect("the bounded retry commits the pair");
         assert!(!notice.expect("notice").retried);
         assert!(!report.retried);
         assert_eq!(persisted.sequence, 2);
         assert_eq!(store.load_pending().unwrap().len(), 2);
+    }
+
+    /// The subagent terminal transition is semantically closed (Issue #192):
+    /// every combination of event, report, and notice that no legal runtime
+    /// decision sequence could produce is rejected deterministically, and a
+    /// rejection accepts nothing.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn subagent_terminal_transition_rejects_semantically_unreachable_states() {
+        let store = store();
+        let conversation_id = store.conversation_id().clone();
+        let none = crate::events::types::SubagentWorkspaceTerminalResource::None;
+        let owned = |ordinal: u64| {
+            let subagent_id =
+                crate::runtime::identity::SubagentId::for_conversation(&conversation_id, ordinal);
+            let child_agent_id =
+                crate::runtime::identity::AgentId::new(format!("agent-{subagent_id}"));
+            own_normal_subagent(&store, &subagent_id, &child_agent_id);
+            (subagent_id, child_agent_id)
+        };
+        let reject = |result: Result<_, ConversationStoreError>, pending: usize| {
+            assert!(
+                matches!(result, Err(ConversationStoreError::InvalidReference(_))),
+                "the unreachable state is rejected"
+            );
+            assert_eq!(
+                store.load_pending().unwrap().len(),
+                pending,
+                "a rejection accepts nothing"
+            );
+        };
+
+        // A success without its runtime-authored terminal notice.
+        let (subagent_id, child) = owned(1);
+        let (_, report, event) = success_publication(&store, &subagent_id, &child, "report", &none);
+        reject(store.accept_subagent_terminal(None, report, event), 0);
+
+        // A success whose notice names a different subagent.
+        let (subagent_id, child) = owned(2);
+        let (other_id, other_child) = owned(22);
+        let (wrong_notice, _, _) =
+            success_publication(&store, &other_id, &other_child, "other", &none);
+        let (_, report, event) = success_publication(&store, &subagent_id, &child, "report", &none);
+        reject(
+            store.accept_subagent_terminal(Some(wrong_notice), report, event),
+            0,
+        );
+        let _ = other_child;
+
+        // A success with a non-canonical report message identity.
+        let (subagent_id, child) = owned(3);
+        let (notice, mut report, event) =
+            success_publication(&store, &subagent_id, &child, "report", &none);
+        report.message_id = Some(MessageId::new("subagent-3-not-the-terminal"));
+        reject(
+            store.accept_subagent_terminal(Some(notice), report, event),
+            0,
+        );
+
+        // A success with the wrong report producer correlation.
+        let (subagent_id, child) = owned(4);
+        let (notice, mut report, event) =
+            success_publication(&store, &subagent_id, &child, "report", &none);
+        report.correlation = Some("subagent-terminal:someone-else".to_owned());
+        reject(
+            store.accept_subagent_terminal(Some(notice), report, event),
+            0,
+        );
+
+        // A success whose notice carries the wrong producer correlation.
+        let (subagent_id, child) = owned(5);
+        let (mut notice, report, event) =
+            success_publication(&store, &subagent_id, &child, "report", &none);
+        notice.correlation = Some("subagent-terminal-notice:someone-else".to_owned());
+        reject(
+            store.accept_subagent_terminal(Some(notice), report, event),
+            0,
+        );
+
+        // A success whose notice has an invalid inbound kind.
+        let (subagent_id, child) = owned(6);
+        let (mut notice, report, event) =
+            success_publication(&store, &subagent_id, &child, "report", &none);
+        notice.kind =
+            InboundKind::Context(crate::message::types::ContextKind::RuntimeToolObservation);
+        reject(
+            store.accept_subagent_terminal(Some(notice), report, event),
+            0,
+        );
+
+        // A terminal event referencing the wrong report message.
+        let (subagent_id, child) = owned(7);
+        let (notice, report, mut event) =
+            success_publication(&store, &subagent_id, &child, "report", &none);
+        let RuntimeEvent::SubagentTerminalPublished { message_id, .. } = &mut event.event else {
+            panic!("terminal event");
+        };
+        *message_id = MessageId::new("some-other-message");
+        reject(
+            store.accept_subagent_terminal(Some(notice), report, event),
+            0,
+        );
+
+        // A success over an unresolved workspace resource is impossible:
+        // successful settlement is what proves the terminal resource.
+        let (subagent_id, child) = owned(8);
+        let unresolved =
+            crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved {
+                reason: crate::runtime::subagent::WorkspaceUnresolvedReason::PhysicalSettlement,
+                detail: "the final workspace inspection was unavailable".to_owned(),
+            };
+        let (notice, report, event) =
+            success_publication(&store, &subagent_id, &child, "report", &unresolved);
+        reject(
+            store.accept_subagent_terminal(Some(notice), report, event),
+            0,
+        );
+
+        // A non-success terminal must not carry the successful-terminal
+        // notice (the retained fact folds into its runtime-authored message).
+        for (ordinal, state) in [
+            (9, SubagentTerminalState::Failed),
+            (10, SubagentTerminalState::Cancelled),
+            (11, SubagentTerminalState::Interrupted),
+        ] {
+            let (subagent_id, child) = owned(ordinal);
+            let (report, event) = non_success_publication(
+                &store,
+                &subagent_id,
+                &child,
+                state,
+                "runtime terminal",
+                &none,
+            );
+            let notice = crate::runtime::subagent::terminal_notice(
+                &subagent_id,
+                &crate::runtime::subagent::SubagentName::parse("explore").expect("canonical name"),
+                false,
+                Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
+            );
+            reject(
+                store.accept_subagent_terminal(Some(notice), report, event),
+                0,
+            );
+        }
+
+        // A non-canonical event identity.
+        let (subagent_id, child) = owned(12);
+        let (notice, report, mut event) =
+            success_publication(&store, &subagent_id, &child, "report", &none);
+        event.event_id = EventId::new("not-the-canonical-terminal-event");
+        reject(
+            store.accept_subagent_terminal(Some(notice), report, event),
+            0,
+        );
+
+        // An attempt/turn envelope is not a publication fact's shape.
+        let (subagent_id, child) = owned(13);
+        let (notice, report, mut event) =
+            success_publication(&store, &subagent_id, &child, "report", &none);
+        event.attempt_id = Some(AttemptId::new("attempt-13"));
+        reject(
+            store.accept_subagent_terminal(Some(notice), report, event),
+            0,
+        );
+    }
+
+    /// The notice's retained-workspace semantic fact and the terminal
+    /// event's workspace resource are one bound fact (Issue #192): a notice
+    /// claiming retention over a `None` resource and a `Retained` resource
+    /// without the retained semantic fact are both rejected.
+    #[test]
+    fn subagent_terminal_notice_and_workspace_resource_must_agree() {
+        let store = store();
+        let conversation_id = store.conversation_id().clone();
+        let subagent_id =
+            crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
+        let child_agent_id = crate::runtime::identity::AgentId::new(format!("agent-{subagent_id}"));
+        own_normal_subagent(&store, &subagent_id, &child_agent_id);
+        let none = crate::events::types::SubagentWorkspaceTerminalResource::None;
+
+        // The event claims no retained workspace but the notice claims
+        // retention.
+        let (_, report, event) =
+            success_publication(&store, &subagent_id, &child_agent_id, "report", &none);
+        let retained_notice = crate::runtime::subagent::terminal_notice(
+            &subagent_id,
+            &crate::runtime::subagent::SubagentName::parse("explore").expect("canonical name"),
+            true,
+            Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
+        );
+        assert!(matches!(
+            store.accept_subagent_terminal(Some(retained_notice), report, event),
+            Err(ConversationStoreError::InvalidReference(_))
+        ));
+        assert_eq!(store.load_pending().unwrap().len(), 0);
+
+        // The event retains a workspace but the notice omits the retained
+        // semantic fact. The handoff must match the (shared) ownership
+        // workspace, so use the shared snapshot's own handoff shape: a
+        // shared workspace cannot retain, so bind an isolated child.
+        let isolated_id =
+            crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 2);
+        let isolated_child = crate::runtime::identity::AgentId::new(format!("agent-{isolated_id}"));
+        let workspace = crate::runtime::subagent::WorkspaceSnapshot {
+            logical_workspace: std::path::PathBuf::from("/tmp/rustx-worktree-9/backend"),
+            isolation: crate::runtime::subagent::WorkspaceIsolation::GitWorktree(
+                crate::runtime::subagent::GitWorktreeSnapshot {
+                    source_repository_root: std::path::PathBuf::from("/tmp/rustx-repository"),
+                    repository_relative_workspace: std::path::PathBuf::from("backend"),
+                    physical_worktree_root: std::path::PathBuf::from("/tmp/rustx-worktree-9"),
+                    base_commit: "1111111111111111111111111111111111111111".to_owned(),
+                    branch: "rustx/subagent/xyz".to_owned(),
+                    parent_had_uncommitted_changes: false,
+                },
+            ),
+        };
+        let handoff = crate::runtime::subagent::WorkspaceHandoff {
+            logical_workspace: workspace.logical_workspace.clone(),
+            physical_worktree_root: std::path::PathBuf::from("/tmp/rustx-worktree-9"),
+            branch: "rustx/subagent/xyz".to_owned(),
+            base_commit: "1111111111111111111111111111111111111111".to_owned(),
+            head_commit: "2222222222222222222222222222222222222222".to_owned(),
+            dirty: true,
+        };
+        own_normal_subagent_with_workspace(&store, &isolated_id, &isolated_child, workspace);
+        let retained =
+            crate::events::types::SubagentWorkspaceTerminalResource::Retained { handoff };
+        let (_, report, event) =
+            success_publication(&store, &isolated_id, &isolated_child, "report", &retained);
+        let bare_notice = crate::runtime::subagent::terminal_notice(
+            &isolated_id,
+            &crate::runtime::subagent::SubagentName::parse("explore").expect("canonical name"),
+            false,
+            Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
+        );
+        assert!(matches!(
+            store.accept_subagent_terminal(Some(bare_notice), report, event),
+            Err(ConversationStoreError::InvalidReference(_))
+        ));
+        assert_eq!(store.load_pending().unwrap().len(), 0);
+    }
+
+    /// The notice/report pair is one atomic publication: a retry that finds
+    /// exactly one side already durable — a state only a bypass could reach —
+    /// is rejected, and the ambiguous conflicting retry of the same
+    /// correlation is a deterministic conflict.
+    #[test]
+    fn subagent_terminal_pair_retry_must_be_unambiguous() {
+        let store = store();
+        let conversation_id = store.conversation_id().clone();
+        let none = crate::events::types::SubagentWorkspaceTerminalResource::None;
+
+        // Only the notice side is durable (committed through the plain
+        // acceptance seam): the pair retry must not complete.
+        let subagent_id =
+            crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
+        let child_agent_id = crate::runtime::identity::AgentId::new(format!("agent-{subagent_id}"));
+        own_normal_subagent(&store, &subagent_id, &child_agent_id);
+        let (notice, report, event) =
+            success_publication(&store, &subagent_id, &child_agent_id, "report", &none);
+        store.accept_inbound(notice.clone()).expect("notice alone");
+        assert!(matches!(
+            store.accept_subagent_terminal(Some(notice), report, event),
+            Err(ConversationStoreError::InvalidReference(_))
+        ));
+        assert_eq!(
+            store.load_pending().unwrap().len(),
+            1,
+            "the mismatched pair retry accepted nothing further"
+        );
+
+        // Only the report side is durable: symmetric rejection.
+        let subagent_id =
+            crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 2);
+        let child_agent_id = crate::runtime::identity::AgentId::new(format!("agent-{subagent_id}"));
+        own_normal_subagent(&store, &subagent_id, &child_agent_id);
+        let (notice, report, event) =
+            success_publication(&store, &subagent_id, &child_agent_id, "report", &none);
+        store.accept_inbound(report.clone()).expect("report alone");
+        assert!(matches!(
+            store.accept_subagent_terminal(Some(notice), report, event),
+            Err(ConversationStoreError::InvalidReference(_))
+        ));
+        assert_eq!(store.load_pending().unwrap().len(), 2);
+
+        // A committed pair retried with the same correlations but changed
+        // content is a deterministic correlation conflict.
+        let subagent_id =
+            crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 3);
+        let child_agent_id = crate::runtime::identity::AgentId::new(format!("agent-{subagent_id}"));
+        own_normal_subagent(&store, &subagent_id, &child_agent_id);
+        let (notice, report, event) =
+            success_publication(&store, &subagent_id, &child_agent_id, "report", &none);
+        store
+            .accept_subagent_terminal(Some(notice), report, event)
+            .expect("pair commits");
+        let (notice, mut report, event) =
+            success_publication(&store, &subagent_id, &child_agent_id, "report", &none);
+        report.content = vec![UserContentBlock::Text(TextBlock {
+            text: "a conflicting report body".to_owned(),
+        })];
+        assert!(matches!(
+            store.accept_subagent_terminal(Some(notice), report, event),
+            Err(ConversationStoreError::CorrelationConflict { .. })
+        ));
+        assert_eq!(store.load_pending().unwrap().len(), 4, "exactly once");
     }
 
     #[test]
@@ -10203,53 +10644,27 @@ mod tests {
             head_commit: "2222222222222222222222222222222222222222".to_owned(),
             dirty: false,
         };
-        store
-            .append_event(envelope(
-                &conversation_id,
-                crate::runtime::subagent::subagent_ownership_event_id(&subagent_id).as_ref(),
-                None,
-                RuntimeEvent::SubagentOwnershipCommitted {
-                    subagent_id: subagent_id.clone(),
-                    child_agent_id: child_agent_id.clone(),
-                    child_conversation_id: crate::runtime::identity::ConversationId::new(
-                        subagent_id.as_str(),
-                    ),
-                    tool_call_id: crate::runtime::identity::ToolCallId::new("call-sub"),
-                    agent: "worker".to_owned(),
-                    definition_digest: "sha256:definition".to_owned(),
-                    ownership: crate::events::types::SubagentOwnershipKind::Normal,
-                    workspace,
-                },
-            ))
-            .expect("ownership fact");
-        let message_id = MessageId::new("subagent-handoff-terminal");
-        let event = envelope(
-            &conversation_id,
-            "subagent-handoff-terminal-event",
-            None,
-            RuntimeEvent::SubagentTerminalPublished {
-                subagent_id: subagent_id.clone(),
-                child_agent_id: child_agent_id.clone(),
-                message_id: message_id.clone(),
-                state: SubagentTerminalState::Succeeded,
-                workspace_resource:
-                    crate::events::types::SubagentWorkspaceTerminalResource::Retained {
-                        handoff: handoff.clone(),
-                    },
-            },
-        );
-        let draft = InboundDraft {
-            message_id: Some(message_id),
-            source: UserSource::Agent {
-                agent_id: child_agent_id,
-            },
-            kind: InboundKind::Message,
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: "child answer".to_owned(),
-            })],
-            timestamp: Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
-            correlation: Some(format!("subagent-terminal:{subagent_id}")),
+        own_normal_subagent_with_workspace(&store, &subagent_id, &child_agent_id, workspace);
+        let retained = crate::events::types::SubagentWorkspaceTerminalResource::Retained {
+            handoff: handoff.clone(),
         };
+        let (notice, report, event) = success_publication(
+            &store,
+            &subagent_id,
+            &child_agent_id,
+            "child answer",
+            &retained,
+        );
+        let notice_text = match &notice.content[0] {
+            UserContentBlock::Text(text) => text.text.clone(),
+            other => panic!("the notice is text: {other:?}"),
+        };
+        assert!(
+            notice_text.contains("changes were retained and are not applied to your workspace"),
+            "a retained settlement folds the semantic fact into the notice: {notice_text}"
+        );
+
+        // A handoff cannot widen the owned logical workspace.
         let mut widened_handoff = handoff.clone();
         widened_handoff.logical_workspace = widened_handoff.physical_worktree_root.clone();
         let mut malformed_event = event.clone();
@@ -10263,14 +10678,19 @@ mod tests {
             handoff: widened_handoff,
         };
         let malformed = store
-            .accept_inbound_with_event(draft.clone(), malformed_event)
+            .accept_subagent_terminal(Some(notice.clone()), report.clone(), malformed_event)
             .expect_err("a handoff cannot widen the owned logical workspace");
         assert!(matches!(
             malformed,
             ConversationStoreError::InvalidReference(_)
         ));
+        assert_eq!(
+            store.load_pending().unwrap().len(),
+            0,
+            "the rejected publication accepted nothing"
+        );
         store
-            .accept_inbound_with_event(draft, event)
+            .accept_subagent_terminal(Some(notice), report, event)
             .expect("terminal handoff");
         let events = store.read_events(None, 64).expect("events").events;
         assert!(events.iter().any(|event| {
@@ -10449,65 +10869,39 @@ mod tests {
                 },
             ),
         };
-        store
-            .append_event(envelope(
-                &conversation_id,
-                crate::runtime::subagent::subagent_ownership_event_id(&subagent_id).as_ref(),
-                None,
-                RuntimeEvent::SubagentOwnershipCommitted {
-                    subagent_id: subagent_id.clone(),
-                    child_agent_id: child_agent_id.clone(),
-                    child_conversation_id: crate::runtime::identity::ConversationId::new(
-                        subagent_id.as_str(),
-                    ),
-                    tool_call_id: crate::runtime::identity::ToolCallId::new("call-unresolved"),
-                    agent: "worker".to_owned(),
-                    definition_digest: "sha256:definition".to_owned(),
-                    ownership: crate::events::types::SubagentOwnershipKind::Normal,
-                    workspace: workspace.clone(),
-                },
-            ))
-            .expect("ownership fact");
-
-        let message_id = MessageId::new("unresolved-terminal");
-        let terminal = envelope(
-            &conversation_id,
-            "unresolved-terminal-event",
-            None,
-            RuntimeEvent::SubagentTerminalPublished {
-                subagent_id: subagent_id.clone(),
-                child_agent_id: child_agent_id.clone(),
-                message_id: message_id.clone(),
-                state: SubagentTerminalState::Failed,
-                workspace_resource:
-                    crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved {
-                        reason:
-                            crate::runtime::subagent::WorkspaceUnresolvedReason::PhysicalSettlement,
-                        detail: "the final workspace inspection was unavailable".to_owned(),
-                    },
-            },
+        own_normal_subagent_with_workspace(
+            &store,
+            &subagent_id,
+            &child_agent_id,
+            workspace.clone(),
         );
-        let draft = InboundDraft {
-            message_id: Some(message_id),
-            source: UserSource::Runtime,
-            kind: InboundKind::Message,
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: "workspace settlement remained unresolved".to_owned(),
-            })],
-            timestamp: Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
-            correlation: Some(format!("subagent-terminal:{subagent_id}")),
-        };
-        let committed_terminal = store
-            .accept_inbound_with_event(draft.clone(), terminal.clone())
-            .expect("unresolved terminal resource fact");
-        let replayed_terminal = store
-            .accept_inbound_with_event(draft, terminal)
-            .expect("identical unresolved terminal replay");
-        assert_eq!(replayed_terminal.1, committed_terminal.1);
-        assert!(!committed_terminal.0.retried);
-        assert!(replayed_terminal.0.retried);
 
-        let mut conflicting_terminal = committed_terminal.1.clone();
+        let unresolved_resource =
+            crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved {
+                reason: crate::runtime::subagent::WorkspaceUnresolvedReason::PhysicalSettlement,
+                detail: "the final workspace inspection was unavailable".to_owned(),
+            };
+        let (draft, terminal) = non_success_publication(
+            &store,
+            &subagent_id,
+            &child_agent_id,
+            SubagentTerminalState::Failed,
+            "workspace settlement remained unresolved",
+            &unresolved_resource,
+        );
+        let (notice, accepted, committed_terminal) = store
+            .accept_subagent_terminal(None, draft.clone(), terminal.clone())
+            .expect("unresolved terminal resource fact");
+        assert!(notice.is_none(), "a failed terminal carries no notice");
+        let (notice, retried, replayed_terminal) = store
+            .accept_subagent_terminal(None, draft, terminal)
+            .expect("identical unresolved terminal replay");
+        assert!(notice.is_none());
+        assert_eq!(replayed_terminal, committed_terminal);
+        assert!(!accepted.retried);
+        assert!(retried.retried);
+
+        let mut conflicting_terminal = committed_terminal.clone();
         let RuntimeEvent::SubagentTerminalPublished {
             workspace_resource, ..
         } = &mut conflicting_terminal.event
@@ -10519,18 +10913,16 @@ mod tests {
                 reason: crate::runtime::subagent::WorkspaceUnresolvedReason::NestedContainment,
                 detail: "different unresolved authority".to_owned(),
             };
-        let conflicting_draft = InboundDraft {
-            message_id: Some(MessageId::new("unresolved-terminal")),
-            source: UserSource::Runtime,
-            kind: InboundKind::Message,
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: "workspace settlement remained unresolved".to_owned(),
-            })],
-            timestamp: Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
-            correlation: Some(format!("subagent-terminal:{subagent_id}")),
-        };
+        let (conflicting_draft, _) = non_success_publication(
+            &store,
+            &subagent_id,
+            &child_agent_id,
+            SubagentTerminalState::Failed,
+            "workspace settlement remained unresolved",
+            &unresolved_resource,
+        );
         assert!(matches!(
-            store.accept_inbound_with_event(conflicting_draft, conflicting_terminal),
+            store.accept_subagent_terminal(None, conflicting_draft, conflicting_terminal),
             Err(ConversationStoreError::InvalidReference(_))
         ));
 
@@ -10656,68 +11048,33 @@ mod tests {
     fn subagent_terminal_provenance_is_authorized_by_ownership_fact() {
         let store = store();
         let conversation_id = store.conversation_id().clone();
-        let timestamp = Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap();
 
         let own = |ordinal: u64, child_agent_id: &AgentId| {
             let subagent_id =
                 crate::runtime::identity::SubagentId::for_conversation(&conversation_id, ordinal);
-            store
-                .append_event(envelope(
-                    &conversation_id,
-                    crate::runtime::subagent::subagent_ownership_event_id(&subagent_id).as_ref(),
-                    None,
-                    RuntimeEvent::SubagentOwnershipCommitted {
-                        subagent_id,
-                        child_agent_id: child_agent_id.clone(),
-                        child_conversation_id: crate::runtime::identity::ConversationId::new(
-                            format!("child-{ordinal}"),
-                        ),
-                        tool_call_id: crate::runtime::identity::ToolCallId::new(format!(
-                            "call-{ordinal}"
-                        )),
-                        agent: "explore".to_owned(),
-                        definition_digest: "sha256:definition".to_owned(),
-                        ownership: crate::events::types::SubagentOwnershipKind::Normal,
-                        workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
-                            std::path::PathBuf::from("<shared-workspace>"),
-                        ),
-                    },
-                ))
-                .expect("ownership fact");
+            own_normal_subagent(&store, &subagent_id, child_agent_id);
         };
         let publish = |ordinal: u64,
                        claimed_child: &AgentId,
-                       state: SubagentTerminalState,
-                       source: UserSource,
+                       authored_by: &AgentId,
                        suffix: &str|
          -> Result<(), ConversationStoreError> {
             let subagent_id =
                 crate::runtime::identity::SubagentId::for_conversation(&conversation_id, ordinal);
-            let message_id = MessageId::new(format!("terminal-{ordinal}-{suffix}"));
-            let event = envelope(
-                &conversation_id,
-                &format!("terminal-{ordinal}-{suffix}"),
-                None,
-                RuntimeEvent::SubagentTerminalPublished {
-                    subagent_id: subagent_id.clone(),
-                    child_agent_id: claimed_child.clone(),
-                    message_id: message_id.clone(),
-                    state,
-                    workspace_resource:
-                        crate::events::types::SubagentWorkspaceTerminalResource::None,
-                },
+            let (notice, report, event) = success_publication(
+                &store,
+                &subagent_id,
+                claimed_child,
+                &format!("terminal-{suffix}"),
+                &crate::events::types::SubagentWorkspaceTerminalResource::None,
             );
-            let draft = InboundDraft {
-                message_id: Some(message_id),
-                source,
-                kind: InboundKind::Message,
-                content: vec![UserContentBlock::Text(TextBlock {
-                    text: "terminal".to_owned(),
-                })],
-                timestamp,
-                correlation: Some(format!("subagent-terminal:{subagent_id}")),
+            let mut report = report;
+            report.source = UserSource::Agent {
+                agent_id: authored_by.clone(),
             };
-            store.accept_inbound_with_event(draft, event).map(|_| ())
+            store
+                .accept_subagent_terminal(Some(notice), report, event)
+                .map(|_| ())
         };
 
         let child_a = AgentId::new("agent-a");
@@ -10727,15 +11084,7 @@ mod tests {
         // invalid reference: the deterministic ownership-identity lookup
         // finds no opening fact.
         assert!(matches!(
-            publish(
-                50,
-                &child_a,
-                SubagentTerminalState::Succeeded,
-                UserSource::Agent {
-                    agent_id: child_a.clone()
-                },
-                "missing-ownership"
-            ),
+            publish(50, &child_a, &child_a, "missing-ownership"),
             Err(ConversationStoreError::InvalidReference(_))
         ));
 
@@ -10743,58 +11092,54 @@ mod tests {
         // so a success claiming B and authored by B is rejected.
         own(10, &child_a);
         assert!(matches!(
-            publish(
-                10,
-                &child_b,
-                SubagentTerminalState::Succeeded,
-                UserSource::Agent {
-                    agent_id: child_b.clone()
-                },
-                "wrong-child"
-            ),
+            publish(10, &child_b, &child_b, "wrong-child"),
             Err(ConversationStoreError::InvalidReference(_))
         ));
 
         // Correct child provenance succeeds.
         own(11, &child_a);
-        publish(
-            11,
-            &child_a,
-            SubagentTerminalState::Succeeded,
-            UserSource::Agent {
-                agent_id: child_a.clone(),
-            },
-            "success",
-        )
-        .expect("correct Agent(A) success");
+        publish(11, &child_a, &child_a, "success").expect("correct Agent(A) success");
 
         // Success must not be Runtime-authored.
         own(12, &child_a);
-        assert!(matches!(
-            publish(
-                12,
+        {
+            let subagent_id =
+                crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 12);
+            let (notice, mut report, event) = success_publication(
+                &store,
+                &subagent_id,
                 &child_a,
-                SubagentTerminalState::Succeeded,
-                UserSource::Runtime,
-                "runtime-success"
-            ),
-            Err(ConversationStoreError::InvalidReference(_))
-        ));
+                "terminal-runtime-success",
+                &crate::events::types::SubagentWorkspaceTerminalResource::None,
+            );
+            report.source = UserSource::Runtime;
+            assert!(matches!(
+                store.accept_subagent_terminal(Some(notice), report, event),
+                Err(ConversationStoreError::InvalidReference(_))
+            ));
+        }
 
         // A failed/cancelled/interrupted terminal must not be Agent-authored.
         own(13, &child_a);
-        assert!(matches!(
-            publish(
-                13,
+        {
+            let subagent_id =
+                crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 13);
+            let (mut report, event) = non_success_publication(
+                &store,
+                &subagent_id,
                 &child_a,
                 SubagentTerminalState::Failed,
-                UserSource::Agent {
-                    agent_id: child_a.clone()
-                },
-                "agent-failure"
-            ),
-            Err(ConversationStoreError::InvalidReference(_))
-        ));
+                "subagent failed",
+                &crate::events::types::SubagentWorkspaceTerminalResource::None,
+            );
+            report.source = UserSource::Agent {
+                agent_id: child_a.clone(),
+            };
+            assert!(matches!(
+                store.accept_subagent_terminal(None, report, event),
+                Err(ConversationStoreError::InvalidReference(_))
+            ));
+        }
 
         for (ordinal, state) in [
             (14, SubagentTerminalState::Failed),
@@ -10802,14 +11147,19 @@ mod tests {
             (16, SubagentTerminalState::Interrupted),
         ] {
             own(ordinal, &child_a);
-            publish(
-                ordinal,
+            let subagent_id =
+                crate::runtime::identity::SubagentId::for_conversation(&conversation_id, ordinal);
+            let (report, event) = non_success_publication(
+                &store,
+                &subagent_id,
                 &child_a,
                 state,
-                UserSource::Runtime,
-                "runtime-terminal",
-            )
-            .expect("Runtime-authored terminal");
+                "runtime terminal",
+                &crate::events::types::SubagentWorkspaceTerminalResource::None,
+            );
+            store
+                .accept_subagent_terminal(None, report, event)
+                .expect("Runtime-authored terminal");
         }
     }
 
@@ -10945,34 +11295,16 @@ mod tests {
 
         // A terminal for S1 resolves the ownership fact by S1's canonical
         // EventId and must reject the embedded-S2 mismatch.
-        let message_id = MessageId::new("terminal-s1");
-        let event = envelope(
-            &conversation_id,
-            "terminal-s1-event",
-            None,
-            RuntimeEvent::SubagentTerminalPublished {
-                subagent_id: s1.clone(),
-                child_agent_id: AgentId::new("agent-b"),
-                message_id: message_id.clone(),
-                state: SubagentTerminalState::Succeeded,
-                workspace_resource: crate::events::types::SubagentWorkspaceTerminalResource::None,
-            },
+        let (notice, report, event) = success_publication(
+            &store,
+            &s1,
+            &AgentId::new("agent-b"),
+            "terminal",
+            &crate::events::types::SubagentWorkspaceTerminalResource::None,
         );
-        let draft = InboundDraft {
-            message_id: Some(message_id),
-            source: UserSource::Agent {
-                agent_id: AgentId::new("agent-b"),
-            },
-            kind: InboundKind::Message,
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: "terminal".to_owned(),
-            })],
-            timestamp: Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
-            correlation: Some(format!("subagent-terminal:{s1}")),
-        };
         assert!(
             matches!(
-                store.accept_inbound_with_event(draft, event),
+                store.accept_subagent_terminal(Some(notice), report, event),
                 Err(ConversationStoreError::InvalidReference(_))
             ),
             "the ownership fact located by S1's canonical EventId belongs to S2 and must be rejected"

@@ -776,9 +776,11 @@ fn commit_background_ownership_through(
 /// notice.
 ///
 /// The narrow capability must not become a general multi-inbound seam: the
-/// subagent plane may commit exactly its terminal report, at most one
-/// runtime-authored retained-workspace notice, and the one dependent
-/// terminal fact, in one transaction — nothing else (Issue #192).
+/// subagent plane may commit exactly its terminal report, its
+/// runtime-authored terminal notice when the terminal succeeded, and the
+/// one dependent terminal fact, in one transaction — nothing else
+/// (Issue #192). The store itself owns the complete legal-state
+/// validation; these checks are the capability's own cheap refusal.
 fn accept_subagent_terminal_through(
     store: &(impl ConversationStore + ?Sized),
     notice: Option<InboundDraft>,
@@ -792,12 +794,25 @@ fn accept_subagent_terminal_through(
     ),
     ConversationStoreError,
 > {
+    let success = matches!(
+        &event.event,
+        crate::events::types::RuntimeEvent::SubagentTerminalPublished {
+            state: crate::events::types::SubagentTerminalState::Succeeded,
+            ..
+        }
+    );
     if !matches!(
         event.event,
         crate::events::types::RuntimeEvent::SubagentTerminalPublished { .. }
     ) {
         return Err(ConversationStoreError::InvalidReference(
             "the subagent terminal transition requires a subagent terminal fact".to_owned(),
+        ));
+    }
+    if success != notice.is_some() {
+        return Err(ConversationStoreError::InvalidReference(
+            "exactly a successful subagent terminal carries the runtime-authored terminal notice"
+                .to_owned(),
         ));
     }
     if let Some(notice) = &notice
@@ -1016,7 +1031,8 @@ pub trait ConversationInteractionAudit: Send + Sync + 'static {
 /// commit_background_ownership  -> BackgroundExecutionCommitted   (background start commit)
 /// commit_subagent_ownership    -> SubagentOwnershipCommitted     (subagent start commit)
 /// accept_inbound_with_event    -> BackgroundTerminalPublished    (background terminal commit)
-/// accept_inbound_with_event    -> SubagentTerminalPublished      (subagent terminal commit)
+/// accept_subagent_terminal     -> SubagentTerminalPublished      (the one normal subagent
+///                                  terminal authority, Issue #192)
 /// commit_subagent_terminal     -> SubagentTerminalSettled        (Workflow terminal commit)
 /// commit_workflow_agent_terminal -> SubagentTerminalSettled + WorkflowAgentOutputCommitted
 ///                                  (successful Workflow terminal commit)
@@ -1038,24 +1054,37 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
     ) -> Result<AcceptedInbound, ConversationStoreError>;
 
     /// Atomically accepts one inbound item and its dependent background fact.
+    ///
+    /// This transition owns exactly the detached background terminal domain
+    /// (Issue #192): a [`RuntimeEvent::SubagentTerminalPublished`](crate::events::types::RuntimeEvent::SubagentTerminalPublished)
+    /// payload is rejected — every normal subagent terminal fact commits
+    /// through [`ConversationInboundCapability::accept_subagent_terminal`],
+    /// the one semantic durable authority for that domain.
     fn accept_inbound_with_event(
         &self,
         draft: InboundDraft,
         event: RuntimeEventEnvelope,
     ) -> Result<(AcceptedInbound, RuntimeEventEnvelope), ConversationStoreError>;
 
-    /// Atomically accepts one subagent terminal publication: the optional
-    /// runtime-authored retained-workspace notice (ordered first), the
-    /// terminal report, and the dependent `SubagentTerminalPublished` fact,
-    /// in one transaction (Issue #192).
+    /// Atomically accepts one subagent terminal publication — the one
+    /// durable authority for every normal `SubagentTerminalPublished` fact
+    /// (Issue #192): on success, the runtime-authored terminal notice
+    /// (the parent-model correlation projection naming the exact typed
+    /// execution handle, with the retained-workspace semantic fact folded
+    /// in when applicable), ordered first; then the terminal report; then
+    /// the dependent terminal fact — one transaction.
     ///
-    /// The notice must be `UserSource::Runtime`-authored: it states a
-    /// runtime-observed workspace settlement fact and must never be
-    /// attributed to the child. The event references the report's accepted
-    /// `MessageId`, so the terminal result remains the last item of the
-    /// publication. The payload must be a
+    /// Exactly a successful terminal carries the notice. The notice must be
+    /// `UserSource::Runtime`-authored with `InboundKind::Message`: it
+    /// states runtime-observed facts and must never be attributed to the
+    /// child. The event references the report's accepted `MessageId`, so
+    /// the terminal result remains the last item of the publication. The
+    /// payload must be a
     /// [`RuntimeEvent::SubagentTerminalPublished`](crate::events::types::RuntimeEvent::SubagentTerminalPublished);
-    /// every other event is rejected.
+    /// every other event is rejected, and the store enforces the complete
+    /// legal state — canonical identities and correlations, ownership-
+    /// authorized provenance, and notice/workspace consistency — before
+    /// accepting anything.
     fn accept_subagent_terminal(
         &self,
         notice: Option<InboundDraft>,
@@ -1195,25 +1224,41 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// that grants it durable publication ownership. This specialized
     /// transition is used by detached background terminal settlement; the
     /// Event Journal fact references the accepted `MessageId` and is committed
-    /// in the same transaction as the Pending Inbound row.
+    /// in the same transaction as the Pending Inbound row. It owns no other
+    /// domain (Issue #192): a `SubagentTerminalPublished` payload is
+    /// rejected, because every normal subagent terminal fact commits
+    /// through [`ConversationStore::accept_subagent_terminal`] — the one
+    /// semantic durable authority for that domain.
     fn accept_inbound_with_event(
         &self,
         draft: InboundDraft,
         event: RuntimeEventEnvelope,
     ) -> Result<(AcceptedInbound, RuntimeEventEnvelope), ConversationStoreError>;
 
-    /// Atomically accepts one subagent terminal publication: the optional
-    /// runtime-authored retained-workspace notice first, then the terminal
-    /// report, then the dependent `SubagentTerminalPublished` fact — one
-    /// transaction, so a crash can never observe the report without its
-    /// notice or the fact without either (Issue #192).
+    /// Atomically accepts one subagent terminal publication — the one
+    /// durable authority for every normal `SubagentTerminalPublished` fact
+    /// (Issue #192). On success: the runtime-authored terminal notice first
+    /// (the parent-model correlation projection naming the exact typed
+    /// execution handle, with the retained-workspace semantic fact folded
+    /// in when applicable), then the child-authored terminal report, then
+    /// the dependent terminal fact — one transaction, so a crash can never
+    /// observe the report without its notice or the fact without either.
+    /// A failed/cancelled/interrupted terminal carries no notice: its
+    /// report is already the one runtime-authored terminal message.
     ///
-    /// The notice must be a `UserSource::Runtime` `InboundKind::Message`
-    /// item: it states a runtime-observed workspace settlement fact and
-    /// must never be attributed to the child. The terminal fact references
-    /// the report's `MessageId`, so the report remains the last item of
-    /// the publication. Both drafts carry their deterministic producer
-    /// correlations, so an ambiguous commit retries idempotently.
+    /// The transition is semantically closed. Before accepting anything it
+    /// validates, against the committed ownership fact: the canonical event
+    /// identity, the canonical report message identity and producer
+    /// correlation, the state/provenance pairing (a successful report is
+    /// authored by the committed child agent; every other terminal is
+    /// runtime-authored), the notice rules (exactly a success carries it,
+    /// with the canonical runtime-authored identity, correlation, and
+    /// text), and the workspace-resource consistency (the retained semantic
+    /// fact exactly when the terminal resource is `Retained`, and never a
+    /// success over an unresolved resource). Both drafts carry their
+    /// deterministic producer correlations, so an ambiguous commit retries
+    /// idempotently and a pair retry with only one side durable is
+    /// rejected.
     fn accept_subagent_terminal(
         &self,
         notice: Option<InboundDraft>,
