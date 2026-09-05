@@ -3002,6 +3002,14 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   transport loss and unconfirmed cancellation to `OutcomeUnknown`; the
   background registry preserves an executor's `OutcomeUnknown` instead of
   rewriting it to the cancellation winner.
+- **The background lifecycle's terminal vocabulary is honest.** An execution
+  settles as exactly one of `succeeded`, `failed`, `cancelled`, `timed_out`,
+  or `outcome_unknown`. `failed` claims a known, proven failure — never
+  "anything that is not success or cancelled". An executor `OutcomeUnknown`
+  settles as lifecycle `outcome_unknown`, including when cancellation intent
+  won the settlement race (a cancellation request is not a confirmed
+  cancellation), and a proven deadline settlement (`TimedOut`) is reported
+  as lifecycle `timed_out`.
 - **Every terminal non-success status produces non-empty, bounded,
   provider-independent model-facing feedback** through
   `ToolExecutionResult::model_facing_projection()` and the typed status
@@ -3028,8 +3036,12 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   allocated under the same synchronization boundary that owns background
   records.
 - The public lifecycle is `Starting -> Running -> Cancelling -> terminal`,
-  with terminal states absorbing; exactly one terminal transition settles
-  an execution.
+  with the five terminal states (`Succeeded`, `Failed`, `Cancelled`,
+  `TimedOut`, `OutcomeUnknown`) absorbing; exactly one terminal transition
+  settles an execution. `Cancelling` means cancellation intent committed and
+  owns settlement — it is not a confirmed cancellation: an executor
+  `OutcomeUnknown` survives the cancellation winner and settles the
+  lifecycle as `OutcomeUnknown`, never as `Cancelled`.
 - The dispatch ownership commit is the background linearization point: the
   registry synchronization boundary is acquired first, the deciding
   attempt-cancellation observation happens at that same protected boundary,
@@ -3044,13 +3056,15 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   terminal snapshot; cancellation-intent-first owns settlement
   (`Cancelling -> Cancelled`) and canonicalizes the stored terminal result
   to `Cancelled` with the retained reason, so a normal executor return
-  (`Success`, `TimedOut`, executor-level `Cancelled`) can
-  never contradict the registry winner. An executor `OutcomeUnknown` is the
-  one exception: a cancellation request is not a confirmed cancellation
-  result, so the registry preserves the executor's honest unknown instead of
-  rewriting it to the cancellation winner. Only an explicit
-  runtime/process-control failure after cancellation intent settles as
-  `Failed`.
+  (`Success`, executor-level `Cancelled`) can
+  never contradict the registry winner. Executor-proven facts survive the
+  cancellation winner under their own truthful terminal states: a proven
+  deadline settlement settles as `TimedOut` (the cancellation request did
+  not manufacture it), a known executor failure as `Failed`, and an
+  executor `OutcomeUnknown` as `OutcomeUnknown` — a cancellation request is
+  not a confirmed cancellation result, so the registry preserves the
+  executor's honest unknown instead of rewriting it to the cancellation
+  winner.
 - Every successfully dispatched execution reaches exactly one terminal
   registry state and claims at most one terminal inbound publication
   (a timestamped `UserMessageBlock` with `UserSource::Runtime` through the
@@ -4735,9 +4749,11 @@ semantic normalization boundary. The frozen invariants:
   background terminal state `interrupted` becomes `outcome_unknown`.
   `timed_out` now claims proven terminal settlement, and every terminal
   non-success status carries bounded model-facing feedback through the
-  canonical projection. There is no v15 -> v16 conversion and no legacy
-  `interrupted` decoding: a v15 client is rejected explicitly at
-  negotiation.
+  canonical projection. The background lifecycle gains the `timed_out` and
+  `outcome_unknown` terminal states, so an unknown outcome is never observed
+  as `failed` through the Runtime Client. There is no v15 -> v16 conversion
+  and no legacy `interrupted` decoding: a v15 client is rejected explicitly
+  at negotiation.
 - **Runtime Client protocol v15 exposes retained-workspace disposal as a
   separate resource lifecycle.** The request names only a terminal
   `SubagentId`; it never carries an arbitrary path or Git ref and is not

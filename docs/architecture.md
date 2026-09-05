@@ -3576,7 +3576,10 @@ explicit tool outcome certainty: the canonical `ToolExecutionStatus`
 replaces `interrupted` with `outcome_unknown` (a bounded producer-owned
 `detail` accompanies it and is never parsed for semantics), the background
 terminal state `interrupted` becomes `outcome_unknown`, `timed_out` now
-claims proven terminal settlement rather than mere deadline expiry, and
+claims proven terminal settlement rather than mere deadline expiry, the
+background lifecycle's terminal vocabulary is the honest `succeeded`,
+`failed`, `cancelled`, `timed_out`, and `outcome_unknown` — an unknown
+outcome is never collapsed into `failed` — and
 every terminal non-success status carries bounded model-facing feedback
 through the canonical projection. Version 15 added the explicit
 retained-workspace disposal resource lifecycle, including the

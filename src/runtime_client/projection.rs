@@ -5138,6 +5138,88 @@ mod tests {
         assert_eq!(snapshot.background[1].execution_id.as_str(), "exec_2");
     }
 
+    /// Issue #202: the projection carries the honest background terminal
+    /// lifecycle vocabulary verbatim. `OutcomeUnknown` and `TimedOut` are
+    /// first-class terminal states and are never collapsed into `Failed`,
+    /// in neither the folded view nor the published event, on or off the
+    /// wire.
+    #[test]
+    fn issue202_background_terminal_states_project_verbatim() {
+        use crate::tools::background::{BackgroundExecutionSnapshot, BackgroundLifecycle};
+        let mut projection = projection();
+        let outcome_unknown_result = ToolExecutionResult {
+            status: ToolExecutionStatus::OutcomeUnknown {
+                detail: "cancellation raced the executor after dispatch".to_owned(),
+            },
+            ..success_result()
+        };
+        projection.apply(ConversationObservation::Background(
+            BackgroundExecutionSnapshot {
+                execution_id: crate::runtime::identity::ToolExecutionId::new("exec_unknown"),
+                tool_id: ToolId::new("tool-bg"),
+                tool_name: "bg".to_owned(),
+                state: BackgroundLifecycle::OutcomeUnknown,
+                progress: None,
+                result: Some(outcome_unknown_result),
+            },
+        ));
+        projection.apply(ConversationObservation::Background(
+            BackgroundExecutionSnapshot {
+                execution_id: crate::runtime::identity::ToolExecutionId::new("exec_timed_out"),
+                tool_id: ToolId::new("tool-bg"),
+                tool_name: "bg".to_owned(),
+                state: BackgroundLifecycle::TimedOut,
+                progress: None,
+                result: Some(ToolExecutionResult {
+                    status: ToolExecutionStatus::TimedOut,
+                    ..success_result()
+                }),
+            },
+        ));
+
+        // The folded view keeps the typed terminal states verbatim.
+        let (snapshot, _) = projection.snapshot().expect("snapshot");
+        assert_eq!(snapshot.background.len(), 2);
+        assert_eq!(
+            snapshot.background[0].state,
+            BackgroundLifecycle::OutcomeUnknown
+        );
+        assert_eq!(snapshot.background[1].state, BackgroundLifecycle::TimedOut);
+
+        // The published events carry the same verbatim states.
+        let events = collect(&mut projection, RuntimeClientCursor::new(0));
+        let [unknown_event, timed_out_event] = events.as_slice() else {
+            panic!("two BackgroundExecutionUpdated events: {events:?}");
+        };
+        let RuntimeClientEvent::BackgroundExecutionUpdated {
+            execution: unknown_view,
+        } = &unknown_event.event
+        else {
+            panic!(
+                "a BackgroundExecutionUpdated event: {:?}",
+                unknown_event.event
+            );
+        };
+        let RuntimeClientEvent::BackgroundExecutionUpdated {
+            execution: timed_out_view,
+        } = &timed_out_event.event
+        else {
+            panic!(
+                "a BackgroundExecutionUpdated event: {:?}",
+                timed_out_event.event
+            );
+        };
+        assert_eq!(unknown_view.state, BackgroundLifecycle::OutcomeUnknown);
+        assert_eq!(timed_out_view.state, BackgroundLifecycle::TimedOut);
+
+        // On the wire the states serialize as their typed snake_case names,
+        // never "failed".
+        let unknown_json = serde_json::to_value(unknown_view).expect("execution JSON");
+        assert_eq!(unknown_json["state"], "outcome_unknown");
+        let timed_out_json = serde_json::to_value(timed_out_view).expect("execution JSON");
+        assert_eq!(timed_out_json["state"], "timed_out");
+    }
+
     /// Issue #178: a subagent registry snapshot folds into the whole-view
     /// `SubagentUpdated` event carrying the live activity projection and
     /// the redacted execution profile, and the snapshot repair path serves
