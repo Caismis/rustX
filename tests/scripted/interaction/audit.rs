@@ -55,6 +55,7 @@ use rustx::runtime::types::{CancellationReason, ConversationLifecycle};
 use rustx::runtime::{
     ApprovalDecision, InteractionOutcome, InteractionRequest, InteractionResponse,
 };
+use rustx::tools::ToolProgressCapability;
 use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
 use rustx::tools::types::{
     ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
@@ -197,6 +198,10 @@ impl ToolExecutor for SpyTool {
                 managed_output: None,
             }
         })
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 

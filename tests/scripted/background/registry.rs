@@ -32,6 +32,7 @@ use rustx::runtime::identity::{
 };
 use rustx::runtime::inbound::ConversationInboundMailbox;
 use rustx::runtime::types::CancellationReason;
+use rustx::tools::ToolProgressCapability;
 use rustx::tools::artifacts::ArtifactStore;
 use rustx::tools::background::{
     BackgroundDispatchOutcome, BackgroundExecutionSnapshot, BackgroundLifecycle,
@@ -157,6 +158,10 @@ impl ToolExecutor for ControlledExecutor {
             }
             result
         })
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 

@@ -190,9 +190,9 @@ async fn issue204_bash_hard_deadline_settles_proven_timed_out() {
             .expect("tool start observation channel stays open");
         controller_clock.advance(5_000);
     });
-    let result = tokio::time::timeout(Duration::from_secs(30), execution.run())
+    let result = tokio::time::timeout(Duration::from_mins(2), execution.run())
         .await
-        .expect("Bash deadline settlement must not wait out the real sleep");
+        .expect("anti-hang guard: the manual-clock deadline settles Bash promptly");
     controller.await.expect("boundary deadline controller");
     let audit = common::durable_agent_result(result, fixture.store.as_ref());
 

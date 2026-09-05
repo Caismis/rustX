@@ -184,6 +184,7 @@ mod tests {
 
     use super::{ToolActivationPolicy, select_tools};
     use crate::runtime::identity::ToolId;
+    use crate::tools::deadline::ToolProgressCapability;
     use crate::tools::executor::{
         ToolExecutionContext, ToolExecutor, ToolRegistration, ToolRegistry,
     };
@@ -211,6 +212,10 @@ mod tests {
                     managed_output: None,
                 }
             })
+        }
+
+        fn progress_capability(&self) -> ToolProgressCapability {
+            ToolProgressCapability::None
         }
     }
 

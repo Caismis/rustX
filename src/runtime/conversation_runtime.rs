@@ -5544,6 +5544,10 @@ mod tests {
                 success_result("background settled")
             })
         }
+
+        fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+            crate::tools::deadline::ToolProgressCapability::None
+        }
     }
 
     struct NoProgressForMcp;
@@ -11863,6 +11867,10 @@ mod tests {
                 }
             })
         }
+
+        fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+            crate::tools::deadline::ToolProgressCapability::None
+        }
     }
 
     /// Commits one conversation-owned background execution through the
@@ -13391,6 +13399,10 @@ mod tests {
                 }
             })
         }
+
+        fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+            crate::tools::deadline::ToolProgressCapability::None
+        }
     }
 
     /// Builds the one-tool-call model script the parked foreground-probe
@@ -13651,6 +13663,10 @@ mod tests {
                 }
             })
         }
+
+        fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+            crate::tools::deadline::ToolProgressCapability::None
+        }
     }
 
     /// Issue #204 (case L, runtime level): the policy frozen at runtime
@@ -13791,8 +13807,10 @@ mod tests {
     /// Runtime drain cancels the admitted attempt and requests physical
     /// cancellation of its foreground execution, but `shutdown` cannot
     /// complete while the executor's settlement is still unresolved — the
-    /// drain barrier awaits the executor's real terminal evidence rather
-    /// than dropping the execution future.
+    /// drain barrier awaits the executor's real terminal evidence (bounded
+    /// by the settlement-confirmation window, which this test never
+    /// approaches on the wall clock) rather than dropping the execution
+    /// future.
     ///
     /// Happens-before: `cancel_observed` proves the drain's cancellation
     /// request already reached the executor and the executor is now parked

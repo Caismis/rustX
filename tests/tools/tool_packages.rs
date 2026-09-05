@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 use rustx::runtime::identity::ToolId;
+use rustx::tools::ToolProgressCapability;
 use rustx::tools::Workspace;
 use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
 use rustx::tools::python::discover_python_packages;
@@ -34,6 +35,10 @@ impl ToolExecutor for NoopExecutor {
                 managed_output: None,
             }
         })
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 

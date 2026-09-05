@@ -27,6 +27,7 @@ use rustx::model::finish::ModelFinishReason;
 use rustx::publication::{PublicationAudit, PublicationFrame, PublicationStreamStart};
 use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolCallId};
 use rustx::runtime::types::CancellationReason;
+use rustx::tools::ToolProgressCapability;
 use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
 use rustx::tools::types::{
     ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
@@ -356,6 +357,10 @@ impl ToolExecutor for PhysicalCancelledTool {
         let result = self.result.clone();
         Box::pin(async move { result })
     }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
+    }
 }
 
 impl LateCompletionTool {
@@ -385,6 +390,10 @@ impl ToolExecutor for LateCompletionTool {
             side_effect.store(true, Ordering::SeqCst);
             result
         })
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 

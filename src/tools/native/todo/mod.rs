@@ -46,6 +46,7 @@ use core::fmt::Write as _;
 use futures_util::future::BoxFuture;
 
 use crate::message::content::TextBlock;
+use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
 use crate::tools::native::support::failed_result;
@@ -129,6 +130,10 @@ impl ToolExecutor for TodoExecutor {
                 Err(error) => failed_result(error),
             }
         })
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 

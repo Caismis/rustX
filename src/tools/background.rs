@@ -2395,6 +2395,7 @@ mod tests {
     use crate::runtime::inbound::ConversationInboundMailbox;
     use crate::runtime::types::CancellationReason;
     use crate::tools::artifacts::ArtifactStore;
+    use crate::tools::deadline::ToolProgressCapability;
     use crate::tools::environment::ToolEnvironment;
     use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
     use crate::tools::types::{
@@ -2709,6 +2710,10 @@ mod tests {
                     .expect("release channel stays open");
                 result
             })
+        }
+
+        fn progress_capability(&self) -> ToolProgressCapability {
+            ToolProgressCapability::None
         }
     }
 
@@ -3644,6 +3649,10 @@ mod tests {
                 });
                 Box::pin(async move { success() })
             }
+
+            fn progress_capability(&self) -> ToolProgressCapability {
+                ToolProgressCapability::None
+            }
         }
         let sink = Arc::new(RecordingEventSink::new());
         let sink_dyn: Arc<dyn crate::events::RuntimeEventSink> = sink.clone();
@@ -3817,6 +3826,10 @@ mod tests {
                 context.environment.authorized_entries().to_vec();
             Box::pin(async move { success() })
         }
+
+        fn progress_capability(&self) -> ToolProgressCapability {
+            ToolProgressCapability::None
+        }
     }
 
     /// An executor that returns its fixed result immediately.
@@ -3830,6 +3843,10 @@ mod tests {
         ) -> BoxFuture<'a, ToolExecutionResult> {
             let result = self.0.clone();
             Box::pin(async move { result })
+        }
+
+        fn progress_capability(&self) -> ToolProgressCapability {
+            ToolProgressCapability::None
         }
     }
 

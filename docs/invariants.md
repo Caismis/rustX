@@ -3167,15 +3167,19 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   configuration handle. Subagent children inherit the parent's frozen policy
   through their typed startup specification, exactly like the model timeout
   policy (Issue #138).
-- **Both deadlines start at the executor-start frontier** of the call (the
-  lifecycle's clock read when the admitted invocation crosses into its
-  executor). Scheduling-barrier and approval time before that frontier is
-  attempt lifecycle, never execution lifetime.
+- **Both deadlines start at the executor-start frontier** of the call — the
+  lifecycle's one clock read when the admitted invocation crosses into its
+  executor, shared by the hard deadline and the initial idle window.
+  Scheduling-barrier and approval time before that frontier is attempt
+  lifecycle, never execution lifetime.
 - **Progress refreshes idle liveness, never the hard deadline.** Executor
   progress reports through the existing `ProgressReporter` seam are the only
-  liveness evidence; the lifecycle taps them into its idle watchdog.
-  Executors that cannot produce honest progress run under the hard deadline
-  only and must never fabricate heartbeat reports.
+  liveness evidence; the lifecycle taps them into its idle watchdog. The
+  watchdog exists only when the runtime policy configures an idle window
+  **and** the executor declared `ToolProgressCapability::Meaningful`, frozen
+  into the prepared invocation at resolution. Executors that cannot produce
+  honest progress declare `None`, run under the hard deadline only, and must
+  never fabricate heartbeat reports.
 - **Deadline expiration is cancellation intent, not settlement.** A deadline
   winner cancels exactly that execution's child cancellation signal and the
   lifecycle then awaits the executor's physical settlement; dropping an
@@ -3184,11 +3188,25 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   deadline winner settles canonically as `TimedOut`; an executor's honest
   `OutcomeUnknown` (post-effect-frontier, terminality unproven) and any
   executor-proven normal outcome survive untouched.
+- **Settlement is finite even for an uncooperative executor.** The
+  post-intent settlement wait is bounded by the settlement-confirmation
+  window (`TOOL_SETTLEMENT_CONFIRMATION`); proven executor evidence always
+  wins a tie with the window's expiry. When the window expires with the
+  execution future still unresolved, the accepted executor-owned settlement
+  mechanism is exhausted without proof of terminality past the
+  external-effect frontier: the canonical result is `OutcomeUnknown` —
+  never `TimedOut`, because an unreturned future is not a stopped operation
+  — and the lifecycle drops the uncooperative future, whose destructors are
+  the bounded physical cleanup. The committed terminal result is absorbing:
+  no late physical completion can publish a second result, emit a
+  post-terminal canonical event, or reopen the call's slot. No detached
+  runtime-owned execution task is left behind.
 - **The winner arbitration is one explicit linearization point.** At equal
   readiness the contractual order is: attempt cancellation > hard deadline >
   idle deadline > physical completion. The winner freezes the settlement
-  provenance; the executor's awaited physical result then supplies the
-  evidence. There is exactly one terminal ToolResult per call.
+  provenance; the executor's settlement evidence (or the confirmation
+  window's expiry) then supplies the outcome certainty. There is exactly one
+  terminal ToolResult per call.
 - **Bash keeps its strong physical settlement.** The native Bash tool's
   explicit model-requested `timeout` remains tool-owned business input that
   the executor settles physically (kill process group, wait, reap → proven
@@ -3200,8 +3218,12 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   once, and the batch commits in canonical model call order.
 - **Runtime drain waits for execution ownership, not for polling to stop.**
   Drain cancels the attempt, the lifecycle requests physical cancellation and
-  awaits executor settlement, and the attempt returns only after every
-  admitted execution reached its accepted terminal contract.
+  awaits executor settlement bounded by the confirmation window, and the
+  attempt returns only after every admitted execution reached its accepted
+  terminal contract — `OutcomeUnknown` included. Because an unproven
+  execution's future is dropped at its canonical settlement, drain leaves no
+  runtime-owned execution capable of later publishing conflicting canonical
+  state.
 - **The Event Journal records the typed intent fact.** Per started call the
   journal orders `ToolExecutionStarted`, retained `ToolExecutionProgress`
   facts, `ToolExecutionDeadlineFired { kind }` when a deadline fired, and

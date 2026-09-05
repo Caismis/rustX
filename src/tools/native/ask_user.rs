@@ -16,6 +16,7 @@ use crate::events::{
 };
 use crate::runtime::interaction::QuestionnaireFacts;
 use crate::runtime::{InteractionOutcome, InteractionResponse};
+use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
 use crate::tools::native::support::{cancelled_result, failed_result, success_json};
@@ -184,6 +185,10 @@ impl ToolExecutor for AskUserExecutor {
                 Err(_) => failed_result("ask_user interaction control path failed"),
             }
         })
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 

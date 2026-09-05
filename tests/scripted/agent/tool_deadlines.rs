@@ -4,14 +4,21 @@
 //! The Agent Loop owns the one generic deadline lifecycle: a frozen
 //! per-admission [`ToolExecutionDeadlinePolicy`], a hard lifetime deadline
 //! that progress never extends, and an idle-liveness deadline that each
-//! honest progress observation refreshes. Deadline expiration is
-//! cancellation/liveness *intent*, never proof of settlement: the loop
+//! honest progress observation refreshes — gated by the admitted executor's
+//! declared [`rustx::tools::ToolProgressCapability`], so executors without
+//! meaningful progress evidence run hard-deadline-only. Deadline expiration
+//! is cancellation/liveness *intent*, never proof of settlement: the loop
 //! requests physical cancellation of exactly the admitted execution and
-//! awaits the executor's settlement, committing `TimedOut` only when the
-//! executor proved terminality because of the deadline, keeping an
-//! executor-proven completion or failure that won the physical race, and
-//! keeping an honest `OutcomeUnknown` when a post-frontier termination
-//! cannot be proven (the Issue #202 outcome-certainty contract).
+//! awaits the executor's settlement, bounded by the settlement-confirmation
+//! window so an executor whose execution future never returns cannot block
+//! the Agent Loop. The loop commits `TimedOut` only when the executor
+//! proved terminality because of the deadline, keeps an executor-proven
+//! completion or failure that won the physical race, keeps an honest
+//! `OutcomeUnknown` when a post-frontier termination cannot be proven, and
+//! commits `OutcomeUnknown` itself when the confirmation window expires
+//! without settlement evidence (the Issue #202 outcome-certainty contract).
+//! The committed terminal result is absorbing: a late physical completion
+//! can never publish a second result.
 //!
 //! Every cut below is driven by the manual monotonic clock and explicit
 //! watch-channel gates; wall-clock time appears only as an outer anti-hang
@@ -276,6 +283,95 @@ impl ToolExecutor for DeadlineProbeTool {
             }
             outcome
         })
+    }
+
+    /// The probe reports genuine phase progress, so it honestly declares
+    /// meaningful progress capability and the idle-liveness watchdog applies.
+    fn progress_capability(&self) -> rustx::tools::ToolProgressCapability {
+        rustx::tools::ToolProgressCapability::Meaningful
+    }
+}
+
+/// A deterministic executor that violates the settlement contract (the
+/// Issue #204 uncooperative-executor cut): it signals `started`, and when
+/// its cancellation signal fires it records the observation through
+/// `cancel_observed` — but its execution future then never resolves, however
+/// long the lifecycle waits and whatever the release gate later does.
+/// Without cancellation it settles normally once released.
+struct UncooperativeTool {
+    result: ToolExecutionResult,
+    release: watch::Sender<bool>,
+    started: watch::Sender<bool>,
+    cancel_observed: watch::Sender<bool>,
+}
+
+impl UncooperativeTool {
+    /// Registers the tool and returns its controller handles: start and
+    /// cancellation observation receivers plus the release gate.
+    fn register(
+        registry: &mut ToolRegistry,
+        name: &str,
+        tool_id: &str,
+        result: ToolExecutionResult,
+    ) -> (
+        watch::Receiver<bool>,
+        watch::Receiver<bool>,
+        watch::Sender<bool>,
+    ) {
+        let tool = Self {
+            result,
+            release: watch::Sender::new(false),
+            started: watch::Sender::new(false),
+            cancel_observed: watch::Sender::new(false),
+        };
+        let handles = (
+            tool.started.subscribe(),
+            tool.cancel_observed.subscribe(),
+            tool.release.clone(),
+        );
+        registry
+            .register(
+                common::tool_policies(
+                    name,
+                    tool_id,
+                    ToolExecutionPolicy::ForegroundOnly,
+                    ToolConcurrencyPolicy::Sequential,
+                ),
+                Arc::new(tool),
+            )
+            .expect("uncooperative tool registration");
+        handles
+    }
+}
+
+impl ToolExecutor for UncooperativeTool {
+    fn execute<'a>(
+        &'a self,
+        _invocation: ToolInvocation,
+        context: ToolExecutionContext<'a>,
+    ) -> BoxFuture<'a, ToolExecutionResult> {
+        Box::pin(async move {
+            self.started.send_replace(true);
+            let mut released = self.release.subscribe();
+            tokio::select! {
+                biased;
+                () = context.cancellation.cancelled() => {
+                    self.cancel_observed.send_replace(true);
+                }
+                ok = released.wait_for(|is_released| *is_released) => {
+                    ok.expect("release gate stays open");
+                    return self.result.clone();
+                }
+            }
+            // The contract violation under test: the cancellation request
+            // was observed, yet the execution future never settles.
+            std::future::pending::<()>().await;
+            unreachable!("the uncooperative execution never settles")
+        })
+    }
+
+    fn progress_capability(&self) -> rustx::tools::ToolProgressCapability {
+        rustx::tools::ToolProgressCapability::None
     }
 }
 
@@ -902,10 +998,10 @@ async fn issue204_physical_completion_winner_never_fires_a_deadline() {
 
 /// K: repeated cancellation intent — the hard deadline first, then an
 /// attempt-level cancellation while physical settlement is still in flight,
-/// then further clock advances — settles the call exactly once. The
-/// already-linearized deadline winner keeps the executor's honest
-/// `OutcomeUnknown`; the attempt terminates cancelled without a second
-/// turn.
+/// then further clock advances inside the settlement-confirmation window —
+/// settles the call exactly once. The already-linearized deadline winner
+/// keeps the executor's honest `OutcomeUnknown`; the attempt terminates
+/// cancelled without a second turn.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn issue204_repeated_cancellation_intent_settles_exactly_once() {
     let scripted = call("call-repeat", "tool-repeat", "repeated");
@@ -937,9 +1033,11 @@ async fn issue204_repeated_cancellation_intent_settles_exactly_once() {
             .await
             .expect("cancellation observation channel stays open");
         // A second, attempt-level cancellation intent while the executor's
-        // physical settlement is still in flight, plus further time.
+        // physical settlement is still in flight, plus further time that
+        // stays inside the settlement-confirmation window — so the executor's
+        // own late evidence, not the window's expiry, supplies the outcome.
         assert!(controller_cancellation.request_cancel(CancellationReason::UserRequested));
-        controller_clock.advance(50_000);
+        controller_clock.advance(5_000);
         settle_gate.send_replace(true);
     });
     let audit = run(
@@ -954,10 +1052,16 @@ async fn issue204_repeated_cancellation_intent_settles_exactly_once() {
 
     let messages = tool_messages(&audit);
     assert_eq!(messages.len(), 1, "exactly one canonical tool result");
-    assert!(matches!(
-        messages[0].result.status,
-        ToolExecutionStatus::OutcomeUnknown { .. }
-    ));
+    let ToolExecutionStatus::OutcomeUnknown { detail } = &messages[0].result.status else {
+        panic!(
+            "the executor-proven unknown outcome survives repeated intent: {:?}",
+            messages[0].result.status
+        );
+    };
+    assert!(
+        detail.contains("could not be confirmed"),
+        "the outcome is the executor's own evidence, not the confirmation window's expiry: {detail}"
+    );
     assert_eq!(
         fact_sequence(&audit, "call-repeat"),
         vec!["started", "deadline:hard", "completed"],
@@ -979,7 +1083,10 @@ async fn issue204_repeated_cancellation_intent_settles_exactly_once() {
 /// J: one parallel batch where a sibling reaches its hard deadline while
 /// the other completes normally. Every accepted call receives exactly one
 /// canonical result, in model call order, and the deadline intent of one
-/// call never touches its sibling.
+/// call never touches its sibling. The sibling's physical settlement is
+/// linearized through the test pause *before* the clock may cross the
+/// shared hard deadline, so the sibling's completion can never race the
+/// deadline intent on task scheduling.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn issue204_batch_siblings_settle_exactly_once_in_model_order() {
     let slow = call("call-slow", "tool-slow", "slow");
@@ -1007,22 +1114,45 @@ async fn issue204_batch_siblings_settle_exactly_once_in_model_order() {
         success_result("sibling done"),
     )
     .register(&mut tools);
+    let (pause, mut pause_reached, pause_release) =
+        crate::agent::execution::test_sync::ToolPhysicalSettlementPause::install();
 
     let clock = Arc::new(ManualMonotonicClock::new());
     let controller_clock = clock.clone();
     let controller = tokio::spawn(async move {
         await_started(&mut started, "slow sibling").await;
+        pause_reached
+            .wait_for(|reached| *reached)
+            .await
+            .expect("physical settlement pause channel stays open");
+        // The sibling parked at its physical-settlement linearization: the
+        // clock crosses the hard deadline now, so the deadline intent is
+        // provably too late to claim the sibling's slot.
         controller_clock.advance(10_000);
+        pause_release
+            .send(())
+            .expect("physical settlement pause remains installed");
     });
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let audit = run(
-        &model,
-        tools,
-        deadline_policy(10_000, None),
-        clock,
+
+    let tool_runtime = common::tool_runtime(CONVERSATION);
+    let store = tool_runtime.durable_store();
+    let capability = common::capability_lease(tools, &tool_runtime).await;
+    let mut execution = AgentExecution::new(
+        request(&model),
+        capability.into_lease(),
         &cancellation,
+        execution_policy(deadline_policy(10_000, None), clock.clone()),
+        context_runtime(&model, clock),
+        &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
-    .await;
+    .expect("conversation identity matches the tool runtime");
+    execution.install_tool_physical_settlement_pause(pause);
+    let result = tokio::time::timeout(GUARD, execution.run())
+        .await
+        .expect("Issue #204 execution must settle without wall-clock waiting");
+    let audit = common::durable_agent_result(result, store.as_ref());
     controller.await.expect("batch controller");
 
     let messages = tool_messages(&audit);
@@ -1137,4 +1267,157 @@ async fn issue204_admitted_executions_obey_their_own_frozen_policy() {
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].result, success_result("released"));
     assert!(deadline_kinds(&audit_p2, "call-frozen-2").is_empty());
+}
+
+/// M (finite settlement, the primary #204 liveness goal): an executor whose
+/// execution future NEVER resolves after observing the cancellation request
+/// cannot block the Agent Loop. The hard deadline fires, the lifecycle
+/// requests physical cancellation, the executor provably observes it and
+/// still never settles — so the bounded settlement-confirmation window
+/// expires and the lifecycle commits one canonical `OutcomeUnknown` (never
+/// `TimedOut`: an unreturned future is not proven terminality). The run
+/// completes its second model turn, proving the loop stayed live, and a
+/// late release of the executor's gate cannot change the committed result.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn issue204_uncooperative_executor_settles_outcome_unknown_in_finite_time() {
+    let scripted = call("call-stuck", "tool-stuck", "stuck");
+    let model = fake_model(tool_turn_then_stop(&[scripted]));
+    let mut tools = ToolRegistry::new();
+    let (mut started, mut cancel_observed, release) = UncooperativeTool::register(
+        &mut tools,
+        "stuck",
+        "tool-stuck",
+        success_result("must never be committed"),
+    );
+
+    let clock = Arc::new(ManualMonotonicClock::new());
+    let controller_clock = clock.clone();
+    let controller = tokio::spawn(async move {
+        await_started(&mut started, "stuck tool").await;
+        // t=20_000: the hard deadline fires cancellation intent.
+        controller_clock.advance(20_000);
+        // The executor provably observed the request — and never settles.
+        cancel_observed
+            .wait_for(|observed| *observed)
+            .await
+            .expect("cancellation observation channel stays open");
+        // Exhaust the settlement-confirmation window (30s from the intent):
+        // the accepted executor-owned settlement mechanism is exhausted
+        // without any evidence.
+        controller_clock.advance(30_000);
+    });
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let audit = run(
+        &model,
+        tools,
+        deadline_policy(20_000, None),
+        clock,
+        &cancellation,
+    )
+    .await;
+    controller.await.expect("uncooperative controller");
+    // The canonical result is already committed; a late physical release
+    // must be unable to publish a second result or rewrite the first.
+    release.send_replace(true);
+
+    let messages = tool_messages(&audit);
+    assert_eq!(messages.len(), 1, "exactly one canonical tool result");
+    let ToolExecutionStatus::OutcomeUnknown { detail } = &messages[0].result.status else {
+        panic!(
+            "an unprovable settlement is OutcomeUnknown, never TimedOut: {:?}",
+            messages[0].result.status
+        );
+    };
+    assert!(
+        detail.contains("did not confirm physical settlement"),
+        "the lifecycle's own unproven-settlement evidence: {detail}"
+    );
+    assert_eq!(
+        fact_sequence(&audit, "call-stuck"),
+        vec!["started", "deadline:hard", "completed"],
+        "one intent fact and exactly one terminal fact"
+    );
+    assert_eq!(
+        audit
+            .event_history
+            .iter()
+            .filter(|event| matches!(
+                event,
+                RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. }
+                    if tool_call_id.as_str() == "call-stuck"
+            ))
+            .count(),
+        1,
+        "terminal ToolExecutionCompleted exactly once — no late duplicate"
+    );
+    assert_eq!(
+        model.requests().len(),
+        2,
+        "the hung executor never blocked the Agent Loop: the second turn ran"
+    );
+    assert!(matches!(
+        audit.result.outcome,
+        AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop
+        }
+    ));
+}
+
+/// N (capability gating): the configured idle-liveness window applies only
+/// to executors that declared meaningful progress capability. A parked
+/// executor with `ToolProgressCapability::None` is legitimately still
+/// running long past the idle window: no idle intent fires, no cancellation
+/// is requested, and its later normal completion settles as `Success`. Only
+/// the hard deadline bounds it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn issue204_idle_liveness_is_gated_by_progress_capability() {
+    let scripted = call("call-quiet", "tool-quiet", "quiet");
+    let model = fake_model(tool_turn_then_stop(&[scripted]));
+    // `FakeTool` declares no progress capability: with a broken gate the
+    // configured 10s idle window would cancel this parked execution at
+    // t=10_000 and the biased cancellation race would settle it `TimedOut`
+    // before the release at t=50_000.
+    let (tool, release) = FakeTool::parking(
+        common::tool("quiet", "tool-quiet"),
+        success_result("quiet done"),
+    );
+    let mut started = tool.started();
+    let mut tools = ToolRegistry::new();
+    tool.register(&mut tools);
+
+    let clock = Arc::new(ManualMonotonicClock::new());
+    let controller_clock = clock.clone();
+    let controller = tokio::spawn(async move {
+        await_started(&mut started, "quiet tool").await;
+        // t=50_000: far past the configured idle window (10s), before the
+        // hard deadline (100s). The execution must still be alive.
+        controller_clock.advance(50_000);
+        release.send_replace(true);
+    });
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let audit = run(
+        &model,
+        tools,
+        deadline_policy(100_000, Some(10_000)),
+        clock,
+        &cancellation,
+    )
+    .await;
+    controller.await.expect("capability gate controller");
+
+    let messages = tool_messages(&audit);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(
+        messages[0].result,
+        success_result("quiet done"),
+        "a no-progress-capability executor is never idle-cancelled"
+    );
+    assert!(
+        deadline_kinds(&audit, "call-quiet").is_empty(),
+        "no idle intent fired for an executor without progress capability"
+    );
+    assert_eq!(
+        fact_sequence(&audit, "call-quiet"),
+        vec!["started", "completed"]
+    );
 }

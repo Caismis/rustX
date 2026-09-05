@@ -58,6 +58,7 @@ use rustx::runtime::identity::{
     MessageId, NativeContextContributor, ToolCallId, ToolId,
 };
 use rustx::runtime::types::{CancellationReason, ConversationLifecycle, RuntimeError};
+use rustx::tools::ToolProgressCapability;
 use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
 use rustx::tools::types::{
     ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
@@ -624,6 +625,10 @@ impl ToolExecutor for InstantTool {
             }
         })
     }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
+    }
 }
 
 /// A gated fixture tool that records the physical completion order of a
@@ -747,6 +752,10 @@ impl ToolExecutor for GatedTool {
                 managed_output: None,
             }
         })
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 

@@ -33,6 +33,7 @@ use crate::runtime::cancellation::ExecutionCancellation;
 use crate::runtime::identity::{ConversationId, ToolExecutionId, ToolId};
 use crate::runtime::interaction::QuestionnaireRequester;
 use crate::tools::artifacts::ArtifactStore;
+use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::managed_output::ManagedToolOutput;
 use crate::tools::schema::{
@@ -269,6 +270,18 @@ pub trait ToolExecutor: Send + Sync {
         invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
     ) -> BoxFuture<'a, ToolExecutionResult>;
+
+    /// Whether this executor can emit meaningful progress evidence for one
+    /// execution (Issue #204).
+    ///
+    /// The declaration is honest executor-owned state: `Meaningful` only when
+    /// the executor genuinely reports semantically meaningful liveness
+    /// progress through the execution's [`ProgressReporter`] — never merely
+    /// because the parameter exists, and never backed by fabricated
+    /// heartbeats. The Agent Loop freezes the declared capability into the
+    /// admitted invocation at preflight and uses it to gate the configured
+    /// idle-liveness watchdog; the hard deadline applies regardless.
+    fn progress_capability(&self) -> ToolProgressCapability;
 }
 
 /// A registration or resolution failure of the tool registry.
@@ -394,6 +407,10 @@ pub struct PreparedInvocation {
     /// `invocation`, so no second stored identity can disagree with the
     /// registry.
     pub origin: ToolOrigin,
+    /// The executor's declared progress capability (Issue #204), frozen at
+    /// invocation resolution so a running call's effective idle-liveness
+    /// contract can never change mid-execution.
+    pub progress_capability: ToolProgressCapability,
 }
 
 /// The immutable validating tool registry of one attempt's capability set.
@@ -787,6 +804,11 @@ impl ToolRegistry {
             concurrency: entry.definition.concurrency_policy,
             approval: entry.definition.approval_policy,
             origin: entry.definition.origin.clone(),
+            // The executor's declared progress capability is captured here,
+            // at invocation resolution, so the admitted call's effective
+            // idle-liveness contract is frozen even if a later registry
+            // generation would declare otherwise.
+            progress_capability: entry.executor.progress_capability(),
         }))
     }
 
@@ -909,6 +931,10 @@ mod tests {
             _context: super::ToolExecutionContext<'a>,
         ) -> BoxFuture<'a, ToolExecutionResult> {
             Box::pin(ready(self.result.clone()))
+        }
+
+        fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+            crate::tools::deadline::ToolProgressCapability::None
         }
     }
 
@@ -1567,6 +1593,10 @@ mod tests {
                     truncation: None,
                     managed_output: None,
                 }))
+            }
+
+            fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+                crate::tools::deadline::ToolProgressCapability::None
             }
         }
         let dir = tempfile::tempdir().expect("temp dir");

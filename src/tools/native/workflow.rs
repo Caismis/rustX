@@ -10,6 +10,7 @@ use std::sync::Arc;
 use futures_util::future::BoxFuture;
 
 use crate::runtime::workflow::{WorkflowCatalog, WorkflowProgram, WorkflowRuntime};
+use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::native::registration::NativeToolRegistration;
 use crate::tools::native::support::{cancelled_result, failed_result, success_json};
@@ -91,5 +92,9 @@ impl ToolExecutor for WorkflowToolExecutor {
                 Err(error) => failed_result(error.to_string()),
             }
         })
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }

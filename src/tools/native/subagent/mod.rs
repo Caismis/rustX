@@ -50,6 +50,7 @@ use crate::runtime::subagent::{
     SubagentAccepted, SubagentRegistry, SubagentStartError, SubagentStartOutcome,
     SubagentStartSpec, SubagentTerminalMode,
 };
+use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
 use crate::tools::types::{
@@ -288,6 +289,12 @@ impl ToolExecutor for SubagentExecutor {
                 Err(error) => start_failure_result(&error),
             }
         })
+    }
+
+    // Dispatch only: the executor returns `Accepted` immediately after the
+    // ownership commit, so it has no progress protocol of its own.
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 

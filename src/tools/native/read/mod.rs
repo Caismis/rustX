@@ -21,6 +21,7 @@ mod testdata;
 use futures_util::future::BoxFuture;
 use std::fmt::Write as _;
 
+use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{MAX_READ_LINES, NATIVE_FILE_TOOL_MAX_BYTES};
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
@@ -66,6 +67,10 @@ impl ToolExecutor for ReadTool {
         context: ToolExecutionContext<'a>,
     ) -> BoxFuture<'a, ToolExecutionResult> {
         Box::pin(async move { run_read(&invocation, &context).await })
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 
