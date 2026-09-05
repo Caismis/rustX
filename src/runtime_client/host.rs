@@ -2786,6 +2786,7 @@ mod tests {
             model: scripted_session_model(adapter.clone()),
             approval_mode: crate::runtime::ApprovalMode::Policy,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -2866,6 +2867,8 @@ mod tests {
                 model: scripted_session_model(adapter.clone()),
                 approval_mode: crate::runtime::ApprovalMode::Policy,
                 model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+                tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
+                ),
                 context: ConversationContextConfig {
                     policy: crate::context::SessionContextPolicy {
                         reserve_tokens: 0,
@@ -6659,6 +6662,7 @@ mod tests {
             model: crate::scripted_suites::support::model::scripted_session_model(adapter.clone()),
             approval_mode: crate::runtime::ApprovalMode::Policy,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -6743,6 +6747,8 @@ mod tests {
                 ),
                 approval_mode: crate::runtime::ApprovalMode::Policy,
                 model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+                tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
+                ),
                 context: ConversationContextConfig {
                     policy: crate::context::SessionContextPolicy {
                         reserve_tokens: 0,
@@ -6853,6 +6859,7 @@ mod tests {
             model: scripted_session_model(adapter.clone()),
             approval_mode: crate::runtime::ApprovalMode::Policy,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -8075,6 +8082,7 @@ mod tests {
             model: scripted_session_model(fixture.adapter.clone()),
             approval_mode: crate::runtime::ApprovalMode::Policy,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,

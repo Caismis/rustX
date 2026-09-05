@@ -372,6 +372,26 @@ pub enum RuntimeEvent {
         /// The bounded structured progress notification.
         progress: ToolProgress,
     },
+    /// A generic execution-liveness deadline fired for a started foreground
+    /// tool execution (Issue #204).
+    ///
+    /// This fact is cancellation/liveness **intent**, never a settlement
+    /// claim: when the owning generic lifecycle recorded it, it requested
+    /// executor-owned physical cancellation of exactly this call. The
+    /// settlement evidence arrives with the call's terminal
+    /// [`RuntimeEvent::ToolExecutionCompleted`] — `TimedOut` when the
+    /// executor proved terminal settlement after the deadline,
+    /// `OutcomeUnknown` when post-frontier terminality could not be
+    /// established, or an ordinary executor-proven outcome that won the
+    /// physical race.
+    ToolExecutionDeadlineFired {
+        /// Identity of the executing tool call.
+        tool_call_id: ToolCallId,
+        /// Identity of the executed tool.
+        tool_id: ToolId,
+        /// Which generic deadline fired.
+        kind: crate::tools::deadline::ToolDeadlineKind,
+    },
     /// Tool execution finished and produced a normalized result.
     ToolExecutionCompleted {
         /// Identity of the tool call that finished.

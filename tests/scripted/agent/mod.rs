@@ -25,5 +25,6 @@ mod retry;
 mod status;
 mod stream_progress;
 mod tool_cancellation;
+mod tool_deadlines;
 mod tool_progress;
 mod tool_scheduling;

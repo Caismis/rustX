@@ -41,6 +41,9 @@
 //!   servers: the configured-server fixture (this binary re-executed in
 //!   fixture mode) and the managed Python package projection (a real,
 //!   network-bound `uv` build serving a real `FastMCP` child).
+//! - [`tool_deadline`] — the generic Issue #204 hard deadline bounding a
+//!   real foreground Bash process: process-group kill and reap are the
+//!   physical settlement behind the proven `TimedOut`.
 //!
 //! See `tests/README.md` for the full test architecture.
 
@@ -57,3 +60,4 @@ mod background;
 mod durable;
 mod runtime_client;
 mod subagent;
+mod tool_deadline;

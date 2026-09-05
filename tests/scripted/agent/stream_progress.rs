@@ -186,6 +186,7 @@ async fn make_execution(setup: ExecutionSetup<'_>) -> AgentExecution<'_> {
             subagent_context: None,
             workflow_output: None,
             model_timeout_policy: policy,
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             monotonic_clock: Arc::clone(&clock) as Arc<dyn MonotonicClock>,
         },
         context_runtime(),

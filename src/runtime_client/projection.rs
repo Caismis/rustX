@@ -1101,6 +1101,10 @@ impl RuntimeClientProjection {
                     progress: progress.clone(),
                 }]
             }
+            // A deadline fact is durable liveness *intent* evidence only
+            // (Issue #204): the terminal `ToolExecutionCompleted` carries the
+            // client-facing settlement, so the projection has nothing to add.
+            RuntimeEvent::ToolExecutionDeadlineFired { .. } => Vec::new(),
             RuntimeEvent::ToolExecutionCompleted {
                 tool_call_id,
                 tool_id,

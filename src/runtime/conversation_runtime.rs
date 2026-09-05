@@ -355,6 +355,8 @@ pub enum ConversationRuntimeError {
     Context(String),
     /// The runtime-owned model request deadline policy is invalid.
     InvalidModelTimeoutPolicy,
+    /// The runtime-owned tool execution-liveness policy is invalid.
+    InvalidToolDeadlinePolicy,
     /// The initial canonical messages do not form a valid conversation
     /// state (for example a duplicate `MessageId`).
     InvalidInitialConversation(String),
@@ -447,6 +449,10 @@ impl core::fmt::Display for ConversationRuntimeError {
             Self::InvalidModelTimeoutPolicy => write!(
                 f,
                 "model request timeout policy is invalid: response-start and stream-idle timeouts must be positive"
+            ),
+            Self::InvalidToolDeadlinePolicy => write!(
+                f,
+                "tool execution deadline policy is invalid: the hard deadline and any idle-liveness window must be positive"
             ),
             Self::InvalidInitialConversation(message) => write!(
                 f,
@@ -542,6 +548,11 @@ pub struct RuntimeConversationConfig {
     /// at attempt/manual-operation admission and never enters model input or
     /// durable historical state.
     pub model_timeout_policy: ModelTimeoutPolicy,
+    /// The current runtime-owned tool execution-liveness policy (Issue #204).
+    /// It is copied at attempt admission into the attempt's frozen execution
+    /// policy, so a running `ToolCall` never observes a later value; it never
+    /// enters model input, executor context, or durable historical state.
+    pub tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy,
     /// The shared context-plane pieces.
     pub context: ConversationContextConfig,
     /// The conversation tool runtime (owns the canonical mailbox and the
@@ -1149,6 +1160,10 @@ pub(crate) struct RuntimeInner {
     /// The current model request deadline policy. Admission copies this value
     /// into each actual attempt/operation; it is never part of model state.
     model_timeout_policy: ModelTimeoutPolicy,
+    /// The current tool execution-liveness policy (Issue #204). Attempt
+    /// admission copies this value into the attempt's frozen execution
+    /// policy; it is immutable runtime state, never executor-visible.
+    tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy,
     /// The one runtime-owned monotonic clock shared by publication, retry
     /// backoff, primary request deadlines, and summary request deadlines.
     monotonic_clock: Arc<dyn MonotonicClock>,
@@ -2045,6 +2060,7 @@ impl RuntimeInner {
         cancellation: &AgentCancellation,
         model: AttemptModelSnapshot,
         model_timeout_policy: ModelTimeoutPolicy,
+        tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy,
         approval_mode: ApprovalMode,
         resources: Arc<RuntimeResourceSnapshot>,
         model_config: crate::model::session::SessionModelConfig,
@@ -2066,6 +2082,7 @@ impl RuntimeInner {
         let context_runtime = context_runtime.with_runtime_resources(&resources);
         let execution_policy = crate::agent::execution::AgentExecutionRuntimePolicy {
             model_timeout_policy,
+            tool_deadline_policy,
             monotonic_clock,
             // The attempt-scoped subagent seam. It is derived from the very
             // generation and model configuration this attempt was admitted
@@ -2669,6 +2686,10 @@ impl RuntimeInner {
         // the attempt's model snapshot. A later configuration change can
         // therefore affect only a future admitted attempt.
         let model_timeout_policy = self.model_timeout_policy;
+        // The tool execution-liveness policy freezes at the same boundary
+        // (Issue #204): every foreground ToolCall of this attempt runs under
+        // exactly this policy value.
+        let tool_deadline_policy = self.tool_deadline_policy;
         let approval_mode = state.effective_approval_mode;
         let resources = state.resources.clone();
         let lease = self
@@ -2701,6 +2722,7 @@ impl RuntimeInner {
                     &cancellation,
                     model,
                     model_timeout_policy,
+                    tool_deadline_policy,
                     approval_mode,
                     resources,
                     model_config,
@@ -2856,6 +2878,8 @@ impl ConversationRuntime {
     /// share the same conversation/workspace ownership domain,
     /// [`ConversationRuntimeError::InvalidModelTimeoutPolicy`] when either
     /// runtime model deadline is zero,
+    /// [`ConversationRuntimeError::InvalidToolDeadlinePolicy`] when the tool
+    /// hard deadline or any idle-liveness window is zero,
     /// [`ConversationRuntimeError::Context`] when the context engine
     /// configuration is impossible,
     /// [`ConversationRuntimeError::InvalidInitialConversation`] when the
@@ -2900,6 +2924,9 @@ impl ConversationRuntime {
         // per-attempt wiring infallible.
         if !config.model_timeout_policy.is_positive() {
             return Err(ConversationRuntimeError::InvalidModelTimeoutPolicy);
+        }
+        if !config.tool_deadline_policy.is_positive() {
+            return Err(ConversationRuntimeError::InvalidToolDeadlinePolicy);
         }
         let snapshot = config.capability.current_snapshot();
         // The coordinator is a separate authoritative identity, so it is
@@ -3152,6 +3179,7 @@ impl ConversationRuntime {
             lifecycle,
             clock,
             model_timeout_policy: config.model_timeout_policy,
+            tool_deadline_policy: config.tool_deadline_policy,
             monotonic_clock: injected_monotonic_clock.unwrap_or_else(|| {
                 Arc::new(SystemMonotonicClock::new()) as Arc<dyn MonotonicClock>
             }),
@@ -5906,6 +5934,7 @@ mod tests {
             model: scripted_session_model(adapter),
             approval_mode: ApprovalMode::Policy,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
                 policy: options.policy,
                 estimator: options.estimator,
@@ -6007,6 +6036,7 @@ mod tests {
             model: scripted_session_model(adapter),
             approval_mode: ApprovalMode::Policy,
             model_timeout_policy,
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -6085,6 +6115,8 @@ mod tests {
                     program: std::path::PathBuf::from("/nonexistent/rustx"),
                     runtime_root: dir.path().join("subagents"),
                     model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+                    tool_deadline_policy:
+                        crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
                     agent_status: crate::context::AgentStatusConfig::default(),
                     context: crate::context::SessionContextPolicy {
                         reserve_tokens: 0,
@@ -6106,6 +6138,7 @@ mod tests {
             model: scripted_session_model(adapter),
             approval_mode: ApprovalMode::Policy,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -6195,6 +6228,8 @@ mod tests {
                     program: std::path::PathBuf::from("/nonexistent/rustx"),
                     runtime_root: dir.path().join("subagents"),
                     model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+                    tool_deadline_policy:
+                        crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
                     agent_status: crate::context::AgentStatusConfig::default(),
                     context: crate::context::SessionContextPolicy {
                         reserve_tokens: 0,
@@ -6216,6 +6251,7 @@ mod tests {
             model: scripted_session_model(adapter),
             approval_mode: ApprovalMode::Policy,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -9900,6 +9936,7 @@ mod tests {
             model: scripted_session_model(Arc::new(FakeModel::new(Vec::new()))),
             approval_mode: ApprovalMode::Policy,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -9962,6 +9999,7 @@ mod tests {
             model: scripted_session_model(Arc::new(FakeModel::new(Vec::new()))),
             approval_mode: ApprovalMode::Policy,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -13355,10 +13393,10 @@ mod tests {
         }
     }
 
-    /// Builds the one-tool-call model script the cancellation-cause
-    /// regressions drive.
+    /// Builds the one-tool-call model script the parked foreground-probe
+    /// regressions (cancellation cause, deadline, settlement) drive.
     fn cause_probe_registry_and_script(
-        tool: CauseProbeTool,
+        tool: Arc<dyn ToolExecutor>,
     ) -> (crate::tools::executor::ToolRegistry, Vec<FakeStep>) {
         use crate::tools::types::{
             ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin,
@@ -13381,7 +13419,7 @@ mod tests {
         };
         let mut registry = crate::tools::executor::ToolRegistry::new();
         registry
-            .register(definition.clone(), Arc::new(tool))
+            .register(definition.clone(), tool)
             .expect("cause probe registration");
         let call_id = ToolCallId::new("call-cause-probe");
         let script = vec![
@@ -13428,7 +13466,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn foreground_executor_observes_the_winning_runtime_shutdown_cause() {
         let (tool, mut started, observed) = CauseProbeTool::new();
-        let (registry, script) = cause_probe_registry_and_script(tool);
+        let (registry, script) = cause_probe_registry_and_script(Arc::new(tool));
         let dir = tempfile::tempdir().expect("temp dir");
         let (runtime, _model) =
             headless_runtime(&dir, vec![script, one_turn_script()], Some(registry), None).await;
@@ -13480,7 +13518,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn first_cancellation_cause_survives_a_later_runtime_drain() {
         let (tool, mut started, observed) = CauseProbeTool::new();
-        let (registry, script) = cause_probe_registry_and_script(tool);
+        let (registry, script) = cause_probe_registry_and_script(Arc::new(tool));
         let dir = tempfile::tempdir().expect("temp dir");
         let (runtime, _model) =
             headless_runtime(&dir, vec![script, one_turn_script()], Some(registry), None).await;
@@ -13537,6 +13575,298 @@ mod tests {
                     }
                 )),
             "the terminal event reports the first winner"
+        );
+    }
+
+    /// A foreground executor whose physical settlement evidence arrives
+    /// late: it signals `started`, observes the cancellation request,
+    /// signals `cancel_observed`, then parks on a settle gate before
+    /// returning its `Cancelled` result — exactly the Issue #204 case-M cut
+    /// where runtime drain must keep awaiting the executor's real terminal
+    /// evidence.
+    struct SettleGateProbeTool {
+        started: tokio::sync::watch::Sender<bool>,
+        cancel_observed: tokio::sync::watch::Sender<bool>,
+        settle_gate: tokio::sync::watch::Sender<bool>,
+    }
+
+    impl SettleGateProbeTool {
+        fn new() -> (
+            Self,
+            tokio::sync::watch::Receiver<bool>,
+            tokio::sync::watch::Receiver<bool>,
+            tokio::sync::watch::Sender<bool>,
+        ) {
+            let (started, started_rx) = tokio::sync::watch::channel(false);
+            let (cancel_observed, cancel_observed_rx) = tokio::sync::watch::channel(false);
+            let (settle_gate, _) = tokio::sync::watch::channel(false);
+            (
+                Self {
+                    started,
+                    cancel_observed,
+                    settle_gate: settle_gate.clone(),
+                },
+                started_rx,
+                cancel_observed_rx,
+                settle_gate,
+            )
+        }
+    }
+
+    impl ToolExecutor for SettleGateProbeTool {
+        fn execute<'a>(
+            &'a self,
+            _invocation: ToolInvocation,
+            context: ToolExecutionContext<'a>,
+        ) -> BoxFuture<'a, crate::tools::types::ToolExecutionResult> {
+            let started = self.started.clone();
+            let cancel_observed = self.cancel_observed.clone();
+            let settle_gate = self.settle_gate.clone();
+            Box::pin(async move {
+                assert!(!context.cancellation.is_cancelled());
+                started.send_replace(true);
+                context.cancellation.cancelled().await;
+                cancel_observed.send_replace(true);
+                // The settlement gate models late physical settlement
+                // evidence: the outcome is already decided, but the
+                // execution future does not resolve until the executor's
+                // settlement is real.
+                let mut released = settle_gate.subscribe();
+                released
+                    .wait_for(|is_released| *is_released)
+                    .await
+                    .expect("settle gate stays open");
+                let reason = context.cancellation.reason();
+                crate::tools::types::ToolExecutionResult {
+                    status: ToolExecutionStatus::Cancelled {
+                        reason,
+                        phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
+                    },
+                    content: Vec::new(),
+                    duration_ms: 0,
+                    exit_code: None,
+                    artifacts: Vec::new(),
+                    truncation: None,
+                    managed_output: None,
+                }
+            })
+        }
+    }
+
+    /// Issue #204 (case L, runtime level): the policy frozen at runtime
+    /// construction is the exact policy the admitted execution runs under.
+    /// The runtime is composed with a 10s hard deadline on the manual
+    /// monotonic clock; when the clock crosses that deadline, the loop fires
+    /// cancellation intent for exactly this execution and the
+    /// executor-proven `Cancelled` settles as the canonical `TimedOut` —
+    /// both facts journaled through the real attempt-admission path.
+    ///
+    /// Happens-before: the executor publishes `started` only after its
+    /// executor-start frontier — at which point the frozen liveness window
+    /// is already running — and only then is the clock advanced, so the
+    /// deadline winner is provably the construction-time hard deadline and
+    /// no wall clock is involved. The settlement waiter is registered
+    /// before the advance, so the winner cannot settle unobserved.
+    #[allow(clippy::too_many_lines)] // one linear deterministic scenario
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn admitted_attempt_executes_under_the_frozen_tool_deadline_policy() {
+        let (tool, mut started, _observed) = CauseProbeTool::new();
+        let (registry, script) = cause_probe_registry_and_script(Arc::new(tool));
+        let dir = tempfile::tempdir().expect("temp dir");
+        let conversation_id = ConversationId::new("conv-204-frozen-policy");
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+            conversation_id.clone(),
+            &workspace,
+            dir.path().join("artifacts"),
+        )
+        .expect("tool runtime");
+        let coordinator = crate::capabilities::CapabilityCoordinator::new(
+            crate::capabilities::CapabilityCoordinatorConfig {
+                conversation_id,
+                workspace: tool_runtime.workspace().clone(),
+                base_tool_registry: Arc::new(registry),
+                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
+                mcp_servers: std::collections::BTreeMap::new(),
+                base_environment: tool_runtime.environment().clone(),
+                environment_store_root: dir.path().join("skill-env"),
+            },
+        )
+        .expect("coordinator");
+        let candidate = coordinator.prepare_candidate().await.expect("prepare");
+        coordinator.commit(candidate).expect("commit");
+        let model = Arc::new(FakeModel::new(vec![script, one_turn_script()]));
+        let adapter: Arc<dyn ModelAdapter> = model.clone();
+        let clock = Arc::new(crate::runtime::ManualMonotonicClock::new());
+        let config = RuntimeConversationConfig {
+            agent_id: AgentId::new("agent-a"),
+            model: scripted_session_model(adapter),
+            approval_mode: ApprovalMode::Policy,
+            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::new(
+                std::time::Duration::from_secs(10),
+                None,
+            ),
+            context: ConversationContextConfig {
+                policy: crate::context::SessionContextPolicy {
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 0,
+                    summary_output_cap: None,
+                },
+                estimator: Arc::new(DefaultTokenEstimator),
+                status_engine: AgentStatusEngine::default(),
+            },
+            tool_runtime,
+            resources: test_resources(&coordinator),
+            resource_loader: test_resource_loader(&coordinator),
+            capability: coordinator,
+            clock: None,
+            initial_messages: Vec::new(),
+            subagents: None,
+            workflow_output: None,
+        };
+        let runtime = ConversationRuntime::with_test_monotonic_clock(
+            config,
+            clock.clone() as Arc<dyn crate::runtime::MonotonicClock>,
+        )
+        .expect("runtime composition");
+        runtime.activate();
+        runtime
+            .submit_inbound(text_content("start the foreground tool"))
+            .expect("accepted");
+        within_liveness_guard(
+            "the foreground tool to start at its executor-start frontier",
+            started.wait_for(|is_started| *is_started),
+        )
+        .await
+        .expect("start channel stays open");
+
+        let settled = runtime.settlement_signal().notified();
+        tokio::pin!(settled);
+        settled.as_mut().enable();
+        clock.advance(10_000);
+        within_liveness_guard("the admitted attempt to settle", settled).await;
+        within_liveness_guard("runtime shutdown", runtime.shutdown())
+            .await
+            .expect("drain reaches quiescence");
+
+        let events = runtime
+            .tool_runtime()
+            .durable_store()
+            .read_events(None, 256)
+            .expect("events")
+            .events;
+        assert!(
+            events.iter().any(|envelope| matches!(
+                &envelope.event,
+                RuntimeEvent::ToolExecutionDeadlineFired {
+                    kind: crate::tools::deadline::ToolDeadlineKind::Hard,
+                    ..
+                }
+            )),
+            "the frozen construction-time hard deadline fired for the admitted execution"
+        );
+        let completed = events
+            .iter()
+            .filter_map(|envelope| match &envelope.event {
+                RuntimeEvent::ToolExecutionCompleted {
+                    tool_call_id,
+                    result,
+                    ..
+                } if tool_call_id == &ToolCallId::new("call-cause-probe") => Some(result),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(completed.len(), 1, "exactly one canonical tool result");
+        assert!(
+            matches!(completed[0].status, ToolExecutionStatus::TimedOut),
+            "executor-proven cancellation after the deadline is the proven timeout: {:?}",
+            completed[0].status
+        );
+    }
+
+    /// Issue #204 (case M): cancellation intent is never settlement.
+    /// Runtime drain cancels the admitted attempt and requests physical
+    /// cancellation of its foreground execution, but `shutdown` cannot
+    /// complete while the executor's settlement is still unresolved — the
+    /// drain barrier awaits the executor's real terminal evidence rather
+    /// than dropping the execution future.
+    ///
+    /// Happens-before: `cancel_observed` proves the drain's cancellation
+    /// request already reached the executor and the executor is now parked
+    /// on its settle gate, mid-settlement. The shutdown result channel must
+    /// still be empty at that instant; only releasing the gate lets drain
+    /// cross its settlement barrier and return.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn shutdown_waits_for_executor_physical_settlement() {
+        let (tool, mut started, mut cancel_observed, settle_release) = SettleGateProbeTool::new();
+        let (registry, script) = cause_probe_registry_and_script(Arc::new(tool));
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (runtime, _model) =
+            headless_runtime(&dir, vec![script, one_turn_script()], Some(registry), None).await;
+        runtime.activate();
+        runtime
+            .submit_inbound(text_content("start the foreground tool"))
+            .expect("accepted");
+        within_liveness_guard(
+            "the foreground tool to start before any cancellation",
+            started.wait_for(|is_started| *is_started),
+        )
+        .await
+        .expect("start channel stays open");
+
+        let runtime_for_shutdown = runtime.clone();
+        let (shutdown_sender, mut shutdown_receiver) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let _ = shutdown_sender.send(runtime_for_shutdown.shutdown().await);
+        });
+        within_liveness_guard(
+            "the executor to observe the drain's cancellation request",
+            cancel_observed.wait_for(|observed| *observed),
+        )
+        .await
+        .expect("cancel-observation channel stays open");
+        assert_eq!(
+            shutdown_receiver.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty),
+            "drain cannot complete while the admitted execution's settlement is unresolved"
+        );
+
+        settle_release.send_replace(true);
+        within_liveness_guard("runtime shutdown", shutdown_receiver)
+            .await
+            .expect("shutdown task stays alive")
+            .expect("drain reaches quiescence");
+
+        let events = runtime
+            .tool_runtime()
+            .durable_store()
+            .read_events(None, 256)
+            .expect("events")
+            .events;
+        assert!(
+            events.iter().any(|envelope| matches!(
+                &envelope.event,
+                RuntimeEvent::AttemptCancelled {
+                    reason: CancellationReason::RuntimeShutdown,
+                    ..
+                }
+            )),
+            "the attempt terminal cancellation event is journaled"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|envelope| matches!(
+                    &envelope.event,
+                    RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. }
+                        if tool_call_id == &ToolCallId::new("call-cause-probe")
+                ))
+                .count(),
+            1,
+            "exactly one terminal result is committed for the call"
         );
     }
 
@@ -15029,6 +15359,8 @@ mod tests {
                     model: scripted_session_model(Arc::new(FakeModel::new(Vec::new()))),
                     approval_mode: ApprovalMode::Policy,
                     model_timeout_policy,
+                    tool_deadline_policy:
+                        crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
                     context: ConversationContextConfig {
                         policy: crate::context::SessionContextPolicy {
                             reserve_tokens: 0,
@@ -15109,6 +15441,114 @@ mod tests {
             .expect("valid runtime admits no work and shuts down cleanly");
     }
 
+    /// A public runtime composition rejects an invalid tool
+    /// execution-liveness policy (Issue #204) before it initializes storage
+    /// or claims either ownership plane: a zero hard deadline would admit an
+    /// execution that can never live, and a zero idle window would fire at
+    /// every observation. The same untouched tool-runtime/capability bundle
+    /// can immediately build a valid runtime afterwards.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn invalid_tool_deadline_policy_fails_before_runtime_ownership_transfer() {
+        struct Fixture {
+            tool_runtime: crate::tools::runtime::ConversationToolRuntime,
+            capability: crate::capabilities::CapabilityCoordinator,
+            resources: Arc<crate::runtime::RuntimeResourceSnapshot>,
+            resource_loader: Arc<dyn crate::runtime::RuntimeResourceLoader>,
+            _dir: tempfile::TempDir,
+        }
+
+        impl Fixture {
+            fn config(
+                &self,
+                tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy,
+            ) -> RuntimeConversationConfig {
+                RuntimeConversationConfig {
+                    agent_id: AgentId::new("agent-tool-deadline-construction"),
+                    model: scripted_session_model(Arc::new(FakeModel::new(Vec::new()))),
+                    approval_mode: ApprovalMode::Policy,
+                    model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+                    tool_deadline_policy,
+                    context: ConversationContextConfig {
+                        policy: crate::context::SessionContextPolicy {
+                            reserve_tokens: 0,
+                            keep_recent_tokens: 0,
+                            summary_output_cap: None,
+                        },
+                        estimator: Arc::new(DefaultTokenEstimator),
+                        status_engine: AgentStatusEngine::default(),
+                    },
+                    tool_runtime: self.tool_runtime.clone(),
+                    capability: self.capability.clone(),
+                    resources: self.resources.clone(),
+                    resource_loader: self.resource_loader.clone(),
+                    clock: None,
+                    initial_messages: Vec::new(),
+                    subagents: None,
+                    workflow_output: None,
+                }
+            }
+        }
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let conversation_id = ConversationId::new("conv-tool-deadline-construction");
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+            conversation_id.clone(),
+            &workspace,
+            dir.path().join("artifacts"),
+        )
+        .expect("tool runtime");
+        let capability = crate::capabilities::CapabilityCoordinator::new(
+            crate::capabilities::CapabilityCoordinatorConfig {
+                conversation_id,
+                workspace: tool_runtime.workspace().clone(),
+                base_tool_registry: Arc::new(ToolRegistry::new()),
+                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
+                mcp_servers: std::collections::BTreeMap::new(),
+                base_environment: tool_runtime.environment().clone(),
+                environment_store_root: dir.path().join("skill-env"),
+            },
+        )
+        .expect("capability coordinator");
+        let candidate = capability.prepare_candidate().await.expect("candidate");
+        capability.commit(candidate).expect("candidate commit");
+        let fixture = Fixture {
+            resources: test_resources(&capability),
+            resource_loader: test_resource_loader(&capability),
+            tool_runtime,
+            capability,
+            _dir: dir,
+        };
+
+        for tool_deadline_policy in [
+            crate::tools::deadline::ToolExecutionDeadlinePolicy::new(
+                std::time::Duration::ZERO,
+                None,
+            ),
+            crate::tools::deadline::ToolExecutionDeadlinePolicy::new(
+                std::time::Duration::from_secs(1),
+                Some(std::time::Duration::ZERO),
+            ),
+        ] {
+            assert!(matches!(
+                ConversationRuntime::new(fixture.config(tool_deadline_policy)),
+                Err(ConversationRuntimeError::InvalidToolDeadlinePolicy)
+            ));
+        }
+
+        let runtime = ConversationRuntime::new(
+            fixture.config(crate::tools::deadline::ToolExecutionDeadlinePolicy::default()),
+        )
+        .expect("valid construction can reuse both untouched ownership planes");
+        runtime.activate();
+        runtime
+            .shutdown()
+            .await
+            .expect("valid runtime admits no work and shuts down cleanly");
+    }
+
     /// Builds a conversation runtime over an existing artifacts directory
     /// (whose `conversation.sqlite` may already be populated), returning the
     /// construction result so recovery-gate tests can assert the typed error.
@@ -15164,6 +15604,7 @@ mod tests {
             model: scripted_session_model(adapter),
             approval_mode: ApprovalMode::Policy,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,

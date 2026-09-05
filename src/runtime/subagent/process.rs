@@ -104,6 +104,9 @@ pub struct SubagentSpawnPlan {
     /// The parent runtime's frozen model timeout policy, inherited by every
     /// child unchanged (Issue #138).
     pub model_timeout_policy: crate::model::ModelTimeoutPolicy,
+    /// The parent runtime's frozen tool execution-liveness policy, inherited
+    /// by every child unchanged (Issue #204).
+    pub tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy,
     /// The launch-scoped Agent Status configuration inherited by the child.
     pub agent_status: AgentStatusConfig,
     /// The session context policy inherited by the child.
@@ -161,6 +164,7 @@ impl SubagentSpawnPlan {
             resolved: resolved.clone(),
             approval_mode,
             model_timeout_policy: self.model_timeout_policy,
+            tool_deadline_policy: self.tool_deadline_policy,
             agent_status: self.agent_status.clone(),
             context: self.context,
             workspace_snapshot: workspace.snapshot().clone(),
@@ -1885,6 +1889,7 @@ mod tests {
             program: PathBuf::from("/nonexistent/rustx"),
             runtime_root,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             agent_status: AgentStatusConfig::default(),
             context: SessionContextPolicy {
                 reserve_tokens: 0,
@@ -2350,6 +2355,7 @@ mod tests {
             program: dir.path().join("no-such-rustx"),
             runtime_root: dir.path().join("runtime"),
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             agent_status: crate::context::AgentStatusConfig::default(),
             context: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
@@ -2384,6 +2390,7 @@ mod tests {
             },
             approval_mode: crate::runtime::ApprovalMode::Policy,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             agent_status: crate::context::AgentStatusConfig::default(),
             context: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,

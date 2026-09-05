@@ -28,10 +28,7 @@ use crate::runtime::process_runner::{
     RunnerChannelEofHook as ChannelEofHook, RunnerTerminalHold as TerminalHold,
 };
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
-use crate::tools::limits::{
-    BASH_TERMINATION_CONFIRMATION, DEFAULT_FOREGROUND_BASH_TIMEOUT,
-    FOREGROUND_TOOL_RESULT_PREVIEW_BYTES,
-};
+use crate::tools::limits::{BASH_TERMINATION_CONFIRMATION, FOREGROUND_TOOL_RESULT_PREVIEW_BYTES};
 use crate::tools::native::support::failed_result;
 use crate::tools::types::{
     ManagedOutputContinuation, ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus,
@@ -385,17 +382,17 @@ async fn run_bash(
         }
     };
     let command = input.command.as_str();
-    let explicit_timeout = input.explicit_timeout();
-    let timeout = match invocation.mode {
-        // Foreground: the omitted timeout uses the default foreground
-        // timeout; an explicit timeout overrides it.
-        ToolInvocationMode::Foreground => {
-            Some(explicit_timeout.unwrap_or(DEFAULT_FOREGROUND_BASH_TIMEOUT))
-        }
-        // Background: an omitted timeout means no implicit foreground
-        // timeout; an explicit timeout may still bound the command.
-        ToolInvocationMode::Background => explicit_timeout,
-    };
+    // The executor-local deadline exists only when the model explicitly
+    // requested one as tool business input. There is no implicit
+    // executor-owned default in either mode: the generic Agent Loop
+    // execution-liveness lifecycle owns the hard deadline of every admitted
+    // foreground call (Issue #204), and background executions are
+    // conversation-owned and unbounded unless the model bounds them. When
+    // the generic deadline wins, it cancels this executor through the
+    // context's cancellation view and this executor proves physical
+    // settlement (process-group kill, wait, reap) exactly as for any other
+    // cancellation.
+    let timeout = input.explicit_timeout();
 
     #[cfg(not(unix))]
     {
