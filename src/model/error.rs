@@ -25,6 +25,41 @@ pub enum ModelErrorKind {
     Cancelled,
     /// The requested capability or protocol is unsupported.
     Unsupported,
+    /// The model generated tool intent that cannot become a trustworthy
+    /// canonical [`ToolCall`](crate::tools::types::ToolCall).
+    ///
+    /// This is a *generation* defect, not a transport defect and not a Tool
+    /// schema rejection: the proposal never crossed `ToolCall` acceptance, so
+    /// nothing executed, nothing was settled, and nothing entered canonical
+    /// history. The Agent Loop owns the bounded corrective regeneration this
+    /// class authorizes; see [`MalformedToolProposalSource`] for the
+    /// provider-independent provenance carried alongside it.
+    MalformedToolProposal,
+}
+
+/// Why a model-emitted tool proposal was refused at `ToolCall` acceptance.
+///
+/// The variants are the broad provider-independent classes a reader needs to
+/// debug a regeneration. They deliberately carry no provider payload: the
+/// adapter that owned the provider protocol has already translated its own
+/// evidence into one of these, and [`ModelError::message`] carries the
+/// bounded human-readable detail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MalformedToolProposalSource {
+    /// The provider itself declared the function/tool call malformed.
+    ProviderDeclared,
+    /// The assembled proposal is structurally unusable: a broken tool
+    /// envelope, an unusable tool identity, or an argument representation
+    /// that is not one complete JSON value.
+    AdapterStructural,
+    /// The provider stream ended without ever delivering the parts one
+    /// structurally valid invocation requires, such as a correlation
+    /// identity or a function name.
+    StreamAssembly,
+    /// Reserved provider tool-protocol markup leaked into ordinary
+    /// reasoning/content while the generation produced no structured call.
+    ReservedProtocolLeak,
 }
 
 /// The retry disposition of one normalized model failure.
@@ -104,16 +139,97 @@ pub struct ModelError {
     /// they never re-read [`Self::message`] looking for numbers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_overflow: Option<ContextOverflowReport>,
+    /// The provider-independent provenance of a
+    /// [`ModelErrorKind::MalformedToolProposal`] rejection.
+    ///
+    /// Present for exactly that class and absent for every other one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub malformed_tool_proposal: Option<MalformedToolProposalSource>,
+}
+
+/// The byte bound of a [`ModelErrorKind::MalformedToolProposal`] diagnostic.
+///
+/// The evidence that refuses a tool proposal is provider/model-derived text:
+/// a leaked protocol region, a truncated argument representation, an
+/// undeclared tool name the model invented. None of it is size-bounded by
+/// the provider, and all of it crosses into provider-independent runtime
+/// semantics — the corrective prompt of a regeneration, the
+/// `ModelRequestFailed` fact in the durable Event Journal, and the attempt's
+/// terminal diagnostics. The bound is therefore enforced where the class is
+/// constructed, not at any one consumer, so provider output can never author
+/// an arbitrarily large durable diagnostic.
+///
+/// The bound covers the whole stored message, truncation marker included.
+pub const MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES: usize = 512;
+
+/// The marker appended to a malformed diagnostic that had to be shortened.
+/// It is part of the bound, never an addition to it.
+const MALFORMED_TOOL_PROPOSAL_TRUNCATION_MARKER: &str = "\u{2026}[truncated]";
+
+/// Bounds one malformed-proposal diagnostic to
+/// [`MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES`] without ever splitting a
+/// Unicode scalar value.
+///
+/// This is the smallest helper the invariant needs and it is owned by the
+/// model layer itself: the model plane must not reach into the runtime
+/// subagent or tool modules for a primitive, which would point the
+/// dependency the wrong way.
+fn bound_malformed_message(mut message: String) -> String {
+    if message.len() <= MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES {
+        return message;
+    }
+    let mut end =
+        MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES - MALFORMED_TOOL_PROPOSAL_TRUNCATION_MARKER.len();
+    while !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    message.truncate(end);
+    message.push_str(MALFORMED_TOOL_PROPOSAL_TRUNCATION_MARKER);
+    message
 }
 
 impl ModelError {
+    /// Builds the normalized failure of one refused tool proposal.
+    ///
+    /// This is the only constructor of [`ModelErrorKind::MalformedToolProposal`],
+    /// so the class and its provenance can never disagree. The disposition is
+    /// deliberately [`ModelRetryDisposition::Never`]: a malformed generation
+    /// is not a transient transport failure, and the bounded corrective
+    /// regeneration it authorizes is a separate Agent-Loop budget keyed on
+    /// the error class.
+    ///
+    /// The diagnostic is bounded **here**, where adapter evidence becomes
+    /// provider-independent runtime semantics, so every downstream surface —
+    /// corrective prompt, Event Journal, terminal diagnostics — inherits one
+    /// bound from one owner. See
+    /// [`MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES`].
+    #[must_use]
+    pub fn malformed_tool_proposal(
+        source: MalformedToolProposalSource,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: ModelErrorKind::MalformedToolProposal,
+            message: bound_malformed_message(message.into()),
+            retry_disposition: ModelRetryDisposition::Never,
+            retry_after_ms: None,
+            provider_code: None,
+            context_overflow: None,
+            malformed_tool_proposal: Some(source),
+        }
+    }
+
     /// Completes one adapter-produced error at the model boundary.
     ///
     /// A [`ModelErrorKind::ContextWindowExceeded`] error gains the typed
-    /// measurements recovered from the provider's own diagnostic; every
-    /// other class is returned unchanged. This is the last point at which a
-    /// provider message is read for numbers — every consumer above the
-    /// model layer reads [`Self::context_overflow`].
+    /// measurements recovered from the provider's own diagnostic; a
+    /// [`ModelErrorKind::MalformedToolProposal`] error is re-bounded so an
+    /// error built literally rather than through
+    /// [`Self::malformed_tool_proposal`] still cannot carry unbounded
+    /// provider text past normalization; every other class is returned
+    /// unchanged. This is the last point at which a provider message is read
+    /// for numbers — every consumer above the model layer reads
+    /// [`Self::context_overflow`].
     #[must_use]
     pub(crate) fn normalized(mut self) -> Self {
         if matches!(self.kind, ModelErrorKind::ContextWindowExceeded)
@@ -121,6 +237,9 @@ impl ModelError {
         {
             let report = context_overflow_report(&self.message);
             self.context_overflow = (!report.is_empty()).then_some(report);
+        }
+        if matches!(self.kind, ModelErrorKind::MalformedToolProposal) {
+            self.message = bound_malformed_message(self.message);
         }
         self
     }
@@ -310,8 +429,8 @@ fn last_number(text: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ModelError, ModelErrorKind, ModelRetryDisposition, context_overflow_report,
-        is_context_window_error,
+        MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES, MalformedToolProposalSource, ModelError,
+        ModelErrorKind, ModelRetryDisposition, context_overflow_report, is_context_window_error,
     };
 
     /// Model errors round-trip with stable kind discriminators.
@@ -324,6 +443,7 @@ mod tests {
             retry_after_ms: Some(1_500),
             provider_code: Some("rate_limit_exceeded".to_owned()),
             context_overflow: None,
+            malformed_tool_proposal: None,
         };
         let json = serde_json::to_string(&error).expect("serialize error");
         assert!(json.contains("\"rate_limit\""));
@@ -347,11 +467,137 @@ mod tests {
             ),
             (ModelErrorKind::Cancelled, "cancelled"),
             (ModelErrorKind::Unsupported, "unsupported"),
+            (
+                ModelErrorKind::MalformedToolProposal,
+                "malformed_tool_proposal",
+            ),
         ];
         for (kind, expected) in cases {
             let value = serde_json::to_value(kind).expect("serialize kind");
             assert_eq!(value, expected);
         }
+    }
+
+    /// A refused tool proposal is always non-retryable, always carries its
+    /// provenance, and round-trips with both facts intact.
+    #[test]
+    fn malformed_tool_proposal_carries_its_provenance() {
+        for source in [
+            MalformedToolProposalSource::ProviderDeclared,
+            MalformedToolProposalSource::AdapterStructural,
+            MalformedToolProposalSource::StreamAssembly,
+            MalformedToolProposalSource::ReservedProtocolLeak,
+        ] {
+            let error = ModelError::malformed_tool_proposal(source, "refused");
+            assert_eq!(error.kind, ModelErrorKind::MalformedToolProposal);
+            assert_eq!(error.retry_disposition, ModelRetryDisposition::Never);
+            assert_eq!(error.malformed_tool_proposal, Some(source));
+            let json = serde_json::to_string(&error).expect("serialize error");
+            assert!(json.contains("\"malformed_tool_proposal\""));
+            let decoded: ModelError = serde_json::from_str(&json).expect("deserialize error");
+            assert_eq!(decoded, error);
+        }
+    }
+
+    /// Provider/model-derived evidence cannot author an unbounded runtime
+    /// diagnostic. The bound is enforced at construction — before the class
+    /// crosses into the corrective prompt, the Event Journal, or terminal
+    /// diagnostics — and it covers the truncation marker rather than being
+    /// exceeded by it. Class, provenance, and disposition are untouched, and
+    /// the bounded error still round-trips.
+    #[test]
+    fn a_malformed_diagnostic_is_bounded_at_construction() {
+        let oversized = "provider evidence ".repeat(4_096);
+        assert!(oversized.len() > MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES);
+        let error = ModelError::malformed_tool_proposal(
+            MalformedToolProposalSource::ReservedProtocolLeak,
+            oversized,
+        );
+        assert!(error.message.len() <= MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES);
+        assert!(error.message.ends_with("\u{2026}[truncated]"));
+        assert_eq!(error.kind, ModelErrorKind::MalformedToolProposal);
+        assert_eq!(
+            error.malformed_tool_proposal,
+            Some(MalformedToolProposalSource::ReservedProtocolLeak)
+        );
+        assert_eq!(error.retry_disposition, ModelRetryDisposition::Never);
+        let json = serde_json::to_string(&error).expect("serialize error");
+        let decoded: ModelError = serde_json::from_str(&json).expect("deserialize error");
+        assert_eq!(decoded, error);
+    }
+
+    /// Truncation never splits a Unicode scalar value: a diagnostic made of
+    /// multi-byte characters is cut at a character boundary, so the stored
+    /// message is still valid UTF-8 and still within the bound.
+    #[test]
+    fn malformed_diagnostic_truncation_is_utf8_safe() {
+        for filler in ["\u{4f60}\u{597d}", "\u{1f600}", "e\u{301}"] {
+            let oversized = filler.repeat(MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES);
+            let error = ModelError::malformed_tool_proposal(
+                MalformedToolProposalSource::AdapterStructural,
+                oversized,
+            );
+            assert!(error.message.len() <= MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES);
+            // `String` cannot hold invalid UTF-8; re-decoding its bytes
+            // proves the cut landed on a real character boundary.
+            assert_eq!(
+                std::str::from_utf8(error.message.as_bytes()).expect("valid UTF-8"),
+                error.message
+            );
+        }
+    }
+
+    /// A diagnostic already within the bound is stored verbatim, with no
+    /// marker and no reallocation of meaning.
+    #[test]
+    fn a_short_malformed_diagnostic_is_unchanged() {
+        let error = ModelError::malformed_tool_proposal(
+            MalformedToolProposalSource::StreamAssembly,
+            "the model tool proposal carries no usable invocation id",
+        );
+        assert_eq!(
+            error.message,
+            "the model tool proposal carries no usable invocation id"
+        );
+    }
+
+    /// Normalization re-bounds the class as well, so an error assembled from
+    /// its public fields rather than through the constructor still cannot
+    /// carry unbounded provider text past the model boundary.
+    #[test]
+    fn normalization_re_bounds_a_literal_malformed_error() {
+        let error = ModelError {
+            kind: ModelErrorKind::MalformedToolProposal,
+            message: "x".repeat(MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES * 3),
+            retry_disposition: ModelRetryDisposition::Never,
+            retry_after_ms: None,
+            provider_code: None,
+            context_overflow: None,
+            malformed_tool_proposal: Some(MalformedToolProposalSource::ProviderDeclared),
+        }
+        .normalized();
+        assert!(error.message.len() <= MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES);
+        assert_eq!(
+            error.malformed_tool_proposal,
+            Some(MalformedToolProposalSource::ProviderDeclared)
+        );
+    }
+
+    /// Every other class leaves the provenance field absent on the wire, so a
+    /// reader can never mistake an unrelated failure for a refused proposal.
+    #[test]
+    fn other_error_classes_carry_no_malformed_provenance() {
+        let error = ModelError {
+            kind: ModelErrorKind::ProviderError,
+            message: "upstream unavailable".to_owned(),
+            retry_disposition: ModelRetryDisposition::Transient,
+            retry_after_ms: None,
+            provider_code: None,
+            context_overflow: None,
+            malformed_tool_proposal: None,
+        };
+        let value = serde_json::to_value(&error).expect("serialize error");
+        assert!(value.get("malformed_tool_proposal").is_none());
     }
 
     #[test]

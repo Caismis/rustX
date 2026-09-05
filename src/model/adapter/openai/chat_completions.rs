@@ -51,22 +51,24 @@ use crate::model::adapter::block_index::BlockAllocator;
 use crate::model::adapter::openai::client::build_client;
 use crate::model::adapter::openai::config::OpenAiAdapterConfig;
 use crate::model::adapter::openai::mapping::{
-    map_chat_finish_reason, normalize_chat_usage, normalize_error, resolve_tool,
-    stream_retry_disposition,
+    map_chat_finish_reason, normalize_chat_usage, normalize_error, stream_retry_disposition,
 };
+use crate::model::adapter::openai::qwen_xml::{self, QwenReservedEnvelope};
+use crate::model::adapter::proposal::{accept_tool_call_arguments, resolve_tool_identity};
 use crate::model::adapter::traits::{
     ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
 use crate::model::adapter::validation::{ValidatedTools, validate_request};
-use crate::model::catalog::{ChatReasoningReplay, ChatStreamUsage};
-use crate::model::error::{ModelError, ModelErrorKind, is_context_window_error};
+use crate::model::catalog::{ChatReasoningReplay, ChatStreamUsage, ChatToolProtocol};
+use crate::model::error::{
+    MalformedToolProposalSource, ModelError, ModelErrorKind, is_context_window_error,
+};
 use crate::model::event::ModelEvent;
 use crate::model::input::{ModelInputMessage, RequestOnlyModelContext};
 use crate::model::invocation::finalize_provider_request;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::ToolCallId;
-use crate::tools::types::{ToolCall, ToolCallStart};
 
 /// Adapter for the `OpenAI` Chat Completions protocol.
 pub struct OpenAiChatCompletionsAdapter {
@@ -110,7 +112,10 @@ impl ModelAdapter for OpenAiChatCompletionsAdapter {
             ChatPhase::Preparing {
                 client,
                 request: translated,
-                normalizer: ChatStreamNormalizer::new(validated),
+                normalizer: ChatStreamNormalizer::new(
+                    validated,
+                    request.invocation.compat.chat_tool_protocol,
+                ),
                 cancellation,
             },
             chat_phase_next,
@@ -272,6 +277,7 @@ fn cancelled_error() -> ModelError {
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
 }
 
@@ -521,6 +527,24 @@ struct ChatFunctionChunkWire {
     arguments: Option<String>,
 }
 
+/// Recognizes an actual in-band tool-protocol emission in generated output,
+/// for a model that declared the dialect.
+///
+/// Each dialect owns its own recognizer; the default `native` profile has
+/// none, so generated text is never inspected at all. A recognizer proves
+/// *emitted structure* rather than the co-occurrence of reserved tokens, so
+/// an assistant answer that quotes or discusses the exact reserved syntax
+/// stays an ordinary completion. It runs on the fully assembled output, so
+/// provider chunk boundaries carry no meaning.
+fn reserved_protocol_emission(protocol: ChatToolProtocol, output: &str) -> Option<&'static str> {
+    match protocol {
+        ChatToolProtocol::Native => None,
+        ChatToolProtocol::QwenXml => {
+            qwen_xml::tool_protocol_emission(output).map(QwenReservedEnvelope::shape)
+        }
+    }
+}
+
 /// Per-tool-call assembly state, keyed by the provider tool index.
 #[derive(Debug)]
 struct ToolAssembly {
@@ -535,6 +559,11 @@ struct ToolAssembly {
 #[derive(Debug)]
 struct ChatStreamNormalizer {
     tools: ValidatedTools,
+    /// The model's declared in-band tool protocol. It is the only evidence
+    /// this adapter uses to recognize reserved tool-protocol markup that
+    /// leaked into ordinary output; nothing is inferred from a provider name
+    /// or a base URL.
+    tool_protocol: ChatToolProtocol,
     blocks: BlockAllocator<ChatBlockKey>,
     tool_calls: BTreeMap<u32, ToolAssembly>,
     usage: Option<ModelUsage>,
@@ -546,9 +575,10 @@ struct ChatStreamNormalizer {
 }
 
 impl ChatStreamNormalizer {
-    fn new(tools: ValidatedTools) -> Self {
+    fn new(tools: ValidatedTools, tool_protocol: ChatToolProtocol) -> Self {
         Self {
             tools,
+            tool_protocol,
             blocks: BlockAllocator::new(),
             tool_calls: BTreeMap::new(),
             usage: None,
@@ -633,6 +663,7 @@ impl ChatStreamNormalizer {
                 retry_after_ms: None,
                 provider_code,
                 context_overflow: None,
+                malformed_tool_proposal: None,
             }
             .normalized());
         }
@@ -668,6 +699,21 @@ impl ChatStreamNormalizer {
                         "deprecated Chat Completions function_call finish semantics lack a canonical invocation id",
                     ));
                 }
+                // Some OpenAI-compatible services declare, as their own
+                // termination reason, that the model's function call could
+                // not be parsed. That is provider-declared malformed tool
+                // intent, and it never becomes an ordinary completion.
+                if reason.eq_ignore_ascii_case("malformed_function_call")
+                    || reason.eq_ignore_ascii_case("malformed_tool_call")
+                {
+                    return Err(ModelError::malformed_tool_proposal(
+                        MalformedToolProposalSource::ProviderDeclared,
+                        format!(
+                            "the provider terminated the generation with {reason:?}: \
+                             it declared the model's tool call malformed"
+                        ),
+                    ));
+                }
                 if is_context_window_error("", Some(reason)) {
                     return Err(ModelError {
                         kind: ModelErrorKind::ContextWindowExceeded,
@@ -678,6 +724,7 @@ impl ChatStreamNormalizer {
                         retry_after_ms: None,
                         provider_code: Some(reason.clone()),
                         context_overflow: None,
+                        malformed_tool_proposal: None,
                     });
                 }
                 if matches!(
@@ -700,6 +747,7 @@ impl ChatStreamNormalizer {
                         retry_after_ms: None,
                         provider_code: Some(reason.clone()),
                         context_overflow: None,
+                        malformed_tool_proposal: None,
                     });
                 }
                 self.finish_reason = Some(map_chat_finish_reason(Some(reason)));
@@ -974,7 +1022,12 @@ impl ChatStreamNormalizer {
                 assembly.arguments.clone(),
             )
         };
-        let tool_id = resolve_tool(&self.tools, &name)?;
+        // Identity resolution: the proposal becomes attributable, which is
+        // what licenses the canonical start event. This is not yet ToolCall
+        // acceptance — no executable call exists until the arguments are
+        // accepted at block end.
+        let start =
+            resolve_tool_identity(Some(call_id.as_str()), Some(name.as_str()), &self.tools)?;
         let assembly = self
             .tool_calls
             .get_mut(&index)
@@ -982,11 +1035,7 @@ impl ChatStreamNormalizer {
         assembly.started = true;
         events.push(ModelEvent::ToolCallStarted {
             block_index,
-            call: ToolCallStart {
-                id: call_id.clone(),
-                tool_id,
-                name,
-            },
+            call: start,
         });
         if !arguments.is_empty() {
             events.push(ModelEvent::ToolCallArgumentsDelta {
@@ -1059,12 +1108,8 @@ impl ChatStreamNormalizer {
             let Some(name) = &assembly.name else {
                 return Ok(());
             };
-            let tool_id = resolve_tool(&self.tools, name)?;
-            let start = ToolCallStart {
-                id: call_id.clone(),
-                tool_id,
-                name: name.clone(),
-            };
+            let start =
+                resolve_tool_identity(Some(call_id.as_str()), Some(name.as_str()), &self.tools)?;
             assembly.started = true;
             started_now = true;
             events.push(ModelEvent::ToolCallStarted {
@@ -1143,41 +1188,98 @@ impl ChatStreamNormalizer {
                 started: assembly.started,
             })
             .collect();
+        let assembled_call_count = assemblies.len();
         for assembly in assemblies {
-            let Some(call_id) = assembly.call_id else {
-                return Err(provider_error(
-                    "provider tool call ended without an invocation id".to_owned(),
-                ));
-            };
-            let Some(name) = assembly.name else {
-                return Err(provider_error(format!(
-                    "tool call {call_id} ended without a function name"
-                )));
-            };
-            let tool_id = resolve_tool(&self.tools, &name)?;
-            let arguments = serde_json::from_str(&assembly.arguments).map_err(|e| {
-                provider_error(format!(
-                    "malformed complete tool arguments for {name:?} ({call_id}): {e}"
-                ))
-            })?;
+            // The ToolCall acceptance linearization point: the complete
+            // argument text is parsed exactly once, and only on success does
+            // the full canonical ToolCall exist. Nothing is repaired to make
+            // a proposal fit.
+            let start = resolve_tool_identity(
+                assembly.call_id.as_ref().map(ToolCallId::as_str),
+                assembly.name.as_deref(),
+                &self.tools,
+            )?;
             events.push(ModelEvent::ToolCallCompleted {
                 block_index: assembly.block_index,
-                call: ToolCall {
-                    id: call_id,
-                    tool_id,
-                    name,
-                    arguments,
-                },
+                call: accept_tool_call_arguments(&start, &assembly.arguments)?,
             });
         }
         let finish_reason = self.finish_reason.take().ok_or_else(|| {
             provider_error("provider stream ended without a finish reason".to_owned())
         })?;
+        if assembled_call_count == 0
+            && let Some(residue) = self.reserved_protocol_residue(&finish_reason)
+        {
+            return Err(residue);
+        }
         events.push(ModelEvent::Completed {
             finish_reason,
             usage: self.usage.take(),
         });
         Ok(events)
+    }
+
+    /// The malformed-proposal failure of a generation that leaked reserved
+    /// in-band tool-protocol markup instead of emitting a structured call.
+    ///
+    /// This is the one piece of Qwen-shaped protocol knowledge in the
+    /// runtime, and it lives where every other Chat Completions dialect
+    /// difference lives. It is deliberately narrow, and every condition is
+    /// independent evidence:
+    ///
+    /// - the model must *declare* an in-band tool protocol through
+    ///   `compat.chatToolProtocol`; the default `native` profile never
+    ///   inspects output at all, and the dialect is never inferred from a
+    ///   model name, a provider name, or a hostname;
+    /// - tools must actually have been exposed to the model, so reserved
+    ///   markup is meaningful in this request;
+    /// - the generation must have produced no structured tool call;
+    /// - the provider must have terminated as a *complete normal*
+    ///   generation, so a truncated (`length`) or filtered stream is not
+    ///   reinterpreted;
+    /// - the output must contain an actual *emission* of the declared
+    ///   dialect — a correctly ordered, identifier-bearing reserved region
+    ///   that the generation's own output *is*, rather than material inside
+    ///   a document the generation is writing — and not merely the reserved
+    ///   tokens somewhere in text. [`qwen_xml`] owns that recognition,
+    ///   follows the dialect's reserved grammar rather than any
+    ///   pretty-printed newline layout, and documents why quoting or
+    ///   discussing the exact syntax is not an emission.
+    ///
+    /// Recognition proves a leak; it never reconstructs one. The leaked
+    /// region is not parsed back into a `ToolCall`, because a proposal this
+    /// runtime had to infer is exactly the invented model intent the
+    /// acceptance boundary exists to refuse.
+    fn reserved_protocol_residue(
+        &self,
+        finish_reason: &crate::model::finish::ModelFinishReason,
+    ) -> Option<ModelError> {
+        use crate::model::finish::ModelFinishReason;
+
+        if self.tool_protocol == ChatToolProtocol::Native || self.tools.is_empty() {
+            return None;
+        }
+        if !matches!(
+            finish_reason,
+            ModelFinishReason::Stop | ModelFinishReason::ToolCalls
+        ) {
+            return None;
+        }
+        let envelope = [
+            self.text_buffer.as_deref(),
+            self.reasoning_buffer.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .find_map(|output| reserved_protocol_emission(self.tool_protocol, output))?;
+        Some(ModelError::malformed_tool_proposal(
+            MalformedToolProposalSource::ReservedProtocolLeak,
+            format!(
+                "the model emitted the reserved {} tool-protocol region {envelope} into \
+                 ordinary output and produced no structured tool call",
+                self.tool_protocol.as_str(),
+            ),
+        ))
     }
 }
 
@@ -1189,6 +1291,7 @@ fn provider_error(message: String) -> ModelError {
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
 }
 
@@ -1282,6 +1385,7 @@ fn chat_stream_error(error: &serde_json::Value) -> ModelError {
         retry_after_ms: None,
         provider_code: provider_code.map(str::to_owned),
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
     .normalized()
 }
@@ -1332,6 +1436,7 @@ fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelE
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
+        malformed_tool_proposal: None,
     })?;
     let mut value = serde_json::to_value(&typed).map_err(|e| ModelError {
         kind: ModelErrorKind::InvalidRequest,
@@ -1340,6 +1445,7 @@ fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelE
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
+        malformed_tool_proposal: None,
     })?;
     let wire_messages = value
         .get_mut("messages")
@@ -1351,6 +1457,7 @@ fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelE
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
+            malformed_tool_proposal: None,
         })?;
     if wire_messages.len() != assistant_reasoning.len() {
         return Err(ModelError {
@@ -1360,6 +1467,7 @@ fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelE
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
+            malformed_tool_proposal: None,
         });
     }
     for (wire_message, reasoning) in wire_messages.iter_mut().zip(assistant_reasoning) {
@@ -1373,6 +1481,7 @@ fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelE
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
+            malformed_tool_proposal: None,
         })?;
         if let Some(field) = request
             .invocation
@@ -1651,6 +1760,7 @@ fn unsupported(message: impl Into<String>) -> ModelError {
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
 }
 
@@ -1662,6 +1772,7 @@ fn invalid_request(message: &str) -> ModelError {
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
 }
 
@@ -1671,6 +1782,7 @@ mod tests {
     use crate::message::content::TextBlock;
     use crate::message::types::ToolMessageBlock;
     use crate::model::adapter::validation::ValidatedTools;
+    use crate::model::catalog::ChatToolProtocol;
     use crate::model::error::{ModelErrorKind, ModelRetryDisposition};
     use crate::runtime::identity::{MessageId, ToolCallId, ToolId};
     use crate::runtime::types::CancellationReason;
@@ -1732,7 +1844,8 @@ mod tests {
 
     #[test]
     fn chat_base_response_status_uses_structured_retry_evidence() {
-        let mut normalizer = ChatStreamNormalizer::new(ValidatedTools::default());
+        let mut normalizer =
+            ChatStreamNormalizer::new(ValidatedTools::default(), ChatToolProtocol::Native);
         let error = normalizer
             .push(&json!({
                 "base_resp": {"status_code": 500, "status_msg": "upstream unavailable"}

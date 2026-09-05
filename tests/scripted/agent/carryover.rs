@@ -179,6 +179,7 @@ fn failed_partial_output() -> ModelEvent {
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
+            malformed_tool_proposal: None,
         },
     }
 }
@@ -199,6 +200,7 @@ fn transient_failure() -> ModelEvent {
             retry_after_ms: Some(0),
             provider_code: Some("rate_limit_error".to_owned()),
             context_overflow: None,
+            malformed_tool_proposal: None,
         },
     }
 }
@@ -1341,6 +1343,7 @@ async fn overflow_compaction_only_degrades_the_frozen_carryover_source() {
                     retry_after_ms: None,
                     provider_code: Some("context_length_exceeded".to_owned()),
                     context_overflow: None,
+                    malformed_tool_proposal: None,
                 },
             }),
         ],

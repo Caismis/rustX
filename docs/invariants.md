@@ -248,6 +248,113 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
   assembler has no caller-supplied terminal override. It rejects either
   mismatch before the Agent Loop can preflight, execute, or commit the turn.
 
+- **A model tool proposal is non-authoritative until ToolCall acceptance.**
+  There is exactly one acceptance point, owned by the provider adapters
+  (`src/model/adapter/proposal.rs`): a proposal becomes a canonical `ToolCall`
+  only when its correlation identity is present and usable, its tool identity
+  resolves to one declared `ToolId`, and its complete argument representation
+  parses as one JSON value. That is also the only point at which a canonical
+  `ModelEvent::ToolCall*` may be emitted. Before it, the proposal cannot
+  execute, cannot be settled, and cannot enter canonical history; after it,
+  the ordinary exactly-once Tool settlement contract applies unchanged.
+  Identity resolution and argument acceptance are two stages of that one
+  boundary: resolving a proposal's identity makes it attributable and is what
+  licenses `ModelEvent::ToolCallStarted` and argument streaming, while the
+  full canonical `ToolCall { id, tool_id, name, arguments }` exists only at
+  the argument-acceptance linearization point that `ToolCallCompleted`
+  carries. A started tool call is observability of a proposal in flight, not
+  yet an executable call. Acceptance never invents intent: no synthesized
+  invocation id, no invented or fuzzy-matched tool name, no repaired or
+  brace-completed JSON, no reconstruction of a call from reasoning text or
+  leaked protocol markup. A refused proposal fails
+  closed as `ModelErrorKind::MalformedToolProposal` with bounded typed
+  provenance (provider-declared, adapter-structural, stream-assembly, or
+  reserved-protocol leakage). Provider-specific evidence — including reserved
+  in-band tool markup recognized only for a model that explicitly declares
+  that dialect through `compat.chatToolProtocol` — stays inside the adapter
+  and is translated into that one provider-independent class; no provider
+  protocol token appears above the adapter. Reserved-markup recognition
+  proves an actual protocol *emission shape* — a correctly ordered,
+  identifier-bearing reserved region that the generation's own output is,
+  rather than material inside a document that generation is writing — and
+  never the mere co-occurrence of reserved tokens, so an assistant answer
+  that quotes or discusses the exact reserved syntax stays an ordinary
+  completion. That classification is a property of the output, not of its
+  layout: it must not change solely because ordinary explanatory prose and
+  the exact same quoted syntax are separated by a newline rather than a
+  space, and a raw newline is never the structural basis for treating a
+  region as emitted tool intent. An explicit quotation marker such as a
+  Markdown code fence is; ordinary line breaks are presentation.
+  Recognizing a leak never reconstructs it: leaked markup is refused, never
+  parsed back into a `ToolCall`.
+
+- **Structural proposal validity and Tool schema validity are different
+  boundaries.** A structurally valid canonical `ToolCall` whose parsed JSON
+  violates the declared Tool schema still crosses acceptance and settles
+  through the ordinary Tool path — preflight rejection, failed `ToolResult`,
+  next model turn may repair it. It is never model-generation recovery.
+  Conversely, a proposal that cannot cross acceptance never becomes a
+  `ToolCall`, so it can never be preflighted, executed, approved, or settled,
+  and it never requires a `ToolResult`.
+
+- **A malformed physical generation is noncanonical, and its recovery is
+  bounded at one.** A malformed proposal discards the whole physical
+  generation: no Assistant message representing it is committed, no orphan
+  canonical `ToolCall` or `ToolResult` exists, no provider continuation state
+  survives it, and it appears in no later request reconstruction. The Agent
+  Loop may regenerate the same logical model step exactly **once**. Two
+  semantic generations is therefore the hard maximum this mechanism can
+  cause; a second malformed generation terminates the attempt with an
+  explicit model failure rather than an ordinary completion. This budget is
+  keyed on the error class and is disjoint from the transient, overflow, and
+  Tool budgets, so the bounds compose additively and never multiply.
+  Cancellation observable before the regeneration begins wins over the
+  remaining budget.
+
+- **Malformed-proposal corrective context belongs to the corrective
+  generation, not to one actual request.** A malformed generation authorizes
+  one *corrective generation*; an actual provider request is one attempt to
+  realize that frozen semantic state. The bounded provider-independent
+  corrective hint is therefore created when the corrective generation is
+  authorized, carried by **every** actual request that realizes it — a
+  transient transport/rate-limit/timeout retry and a context-overflow
+  recovery inside that generation included — cleared the moment that
+  generation produces a canonical model outcome, and discarded with the rest
+  of the step's recovery state at the next logical-model-step boundary. It
+  never reaches the tool-result continuation that follows, and never reaches
+  a later logical step.
+
+- **Corrective context is noncanonical request-only state, which is not the
+  same as unpersisted state.** The corrective hint is *absent* from Message
+  Ledger canonical Assistant/User history, from later logical model steps,
+  and from any later model conversation reconstruction; it is never a durable
+  few-shot conversation message. It is nevertheless *present* in the durable
+  `RequestSnapshot` of every actual request that actually sent it, because a
+  Request Snapshot freezes the exact request-time `effective_system_prompt`.
+  That is deliberate: historical request reconstruction must reproduce the
+  exact request that was sent, so audit evidence and canonical history are
+  different surfaces with different contents. The malformed diagnostic
+  likewise survives as `ModelRequestFailed` in the Event Journal, which is
+  execution fact, not conversation history.
+
+- **Malformed-proposal diagnostics are bounded where the class is
+  constructed.** `ModelErrorKind::MalformedToolProposal` carries
+  provider/model-derived evidence, which no provider bounds. The bound is
+  enforced at construction and normalization in the model layer
+  (`MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES`), before the class crosses
+  from adapter evidence into provider-independent runtime semantics, so every
+  downstream surface — the corrective prompt, the durable Event Journal, the
+  attempt's terminal diagnostics — inherits one bound from one owner rather
+  than each consumer truncating for itself. Truncation is UTF-8 safe and its
+  marker counts against the same bound.
+
+- **An impossible canonical stream stays fail-closed.** The malformed-proposal
+  class describes a *model generation* the adapter refused to accept. It never
+  reclassifies a canonical-stream contract violation: the `ModelEventAssembler`
+  operates above acceptance, so its rejections — including the bidirectional
+  `ToolCalls` invariant above — remain `RuntimeError::ContractViolation` and
+  are not retryable. The two are different types and cannot be confused.
+
 - A logical primary model step may contain several actual provider requests.
   Context admission happens once and freezes the request semantics; every
   actual request then receives its own `RequestIdentity`, shared
@@ -261,9 +368,10 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
   contributors. Context overflow remains a distinct estimator-correction and
   compaction boundary that establishes a new post-compaction frozen state.
 
-- The one shared actual-request ordinal is collision-free across transient and
-  overflow recovery. There are at most three transient retries and one
-  overflow retry per logical step (at most five primary requests total).
+- The one shared actual-request ordinal is collision-free across transient,
+  overflow, and malformed-proposal recovery. There are at most three transient
+  retries, one overflow retry, and one malformed-proposal corrective
+  generation per logical step (at most six primary requests total).
   Transient backoff is 2, 4, and 8 seconds, or the adapter's capped
   `retry_after_ms` hint, using the runtime monotonic clock. No jitter or
   summarizer retry is part of this contract.
@@ -5434,7 +5542,10 @@ contracts and provider protocols. These invariants are frozen by M2:
 - **`compat` is bounded structural translation behaviour**, disjoint from
   `requestParams`. Chat Completions models must explicitly declare
   `chatReasoningReplay` as `reasoning`, `reasoning_content`, or `omit`; there
-  is no universal dialect default. `omit` is applied while translating
+  is no universal dialect default. `chatToolProtocol` declares the model's
+  in-band tool protocol and defaults to `native`, under which generated text
+  is never inspected for tool markup; reserved-markup recognition is opt-in
+  per model and is never inferred. `omit` is applied while translating
   canonical history, so unavailable or multiple historical reasoning blocks
   are ignored without inspecting provider continuation state. Nothing is
   inferred from a provider name or a base URL hostname.

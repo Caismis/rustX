@@ -625,6 +625,7 @@ async fn explicit_summary_mode_is_resolved_once_and_frozen_at_admission() {
                         retry_after_ms: None,
                         provider_code: None,
                         context_overflow: None,
+                        malformed_tool_proposal: None,
                     },
                 }),
             ],

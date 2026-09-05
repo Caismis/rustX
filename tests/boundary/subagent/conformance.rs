@@ -105,6 +105,7 @@ fn transient_failure(message: &str, retry_after_ms: Option<u64>) -> ModelEvent {
             retry_after_ms,
             provider_code: Some("rate_limit_error".to_owned()),
             context_overflow: None,
+            malformed_tool_proposal: None,
         },
     }
 }

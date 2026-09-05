@@ -30,7 +30,7 @@ pub use adapter::{
     ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
 pub use catalog::{
-    ChatMaxTokensField, ChatReasoningReplay, ChatStreamUsage, CredentialSource,
+    ChatMaxTokensField, ChatReasoningReplay, ChatStreamUsage, ChatToolProtocol, CredentialSource,
     CredentialSourceView, Modality, ModelCapabilities, ModelCatalog, ModelCatalogError,
     ModelCatalogView, ModelCompat, ModelDefinition, ModelId, ModelRef, ProviderId,
     ReasoningProfile, ReasoningProfileId, ResolvedModelCatalog, ResponsesStorageMode,
@@ -39,7 +39,10 @@ pub use deadline::{
     DEFAULT_RESPONSE_START_TIMEOUT, DEFAULT_STREAM_IDLE_TIMEOUT, ModelDeadlinePhase, ModelProgress,
     ModelRequestDeadline, ModelTimeoutPolicy,
 };
-pub use error::{ContextOverflowReport, ModelError, ModelErrorKind, ModelRetryDisposition};
+pub use error::{
+    ContextOverflowReport, MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES, MalformedToolProposalSource,
+    ModelError, ModelErrorKind, ModelRetryDisposition,
+};
 pub use event::ModelEvent;
 pub use finish::ModelFinishReason;
 pub use frozen::{

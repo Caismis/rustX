@@ -183,6 +183,7 @@ impl FakeModel {
                         retry_after_ms: None,
                         provider_code: None,
                         context_overflow: None,
+                        malformed_tool_proposal: None,
                     },
                 })]
             })
@@ -254,6 +255,7 @@ impl ModelAdapter for FakeModel {
                                         retry_after_ms: None,
                                         provider_code: None,
                                         context_overflow: None,
+                                        malformed_tool_proposal: None,
                                     },
                                 }),
                                 script,

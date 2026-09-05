@@ -469,6 +469,43 @@ impl ChatReasoningReplay {
     }
 }
 
+/// The in-band tool protocol a Chat Completions model speaks.
+///
+/// This is a real protocol difference between OpenAI-compatible services,
+/// not a provider wire value. Most services emit tool calls only through the
+/// structured `tool_calls` field. Some model families additionally have a
+/// *reserved in-band* tool syntax that the serving stack is supposed to parse
+/// out of the generated text; when that parse fails, the reserved markup
+/// leaks into ordinary content or reasoning and the request terminates as if
+/// the model had simply answered.
+///
+/// Declaring the dialect is what allows the adapter to recognize such a leak
+/// as malformed tool intent instead of guessing from arbitrary text. Nothing
+/// is ever inferred from a provider name or a base URL hostname.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatToolProtocol {
+    /// Tool calls exist only as structured `tool_calls`. Generated text is
+    /// never inspected for tool-protocol markup.
+    #[default]
+    Native,
+    /// The Qwen XML tool dialect (`<tool_call>`, `<function=…>`,
+    /// `<parameter=…>`), as served by vLLM and compatible stacks.
+    QwenXml,
+}
+
+impl ChatToolProtocol {
+    /// The human-readable dialect name used in runtime diagnostics. The
+    /// stable wire value is the serde representation, not this string.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::QwenXml => "Qwen XML",
+        }
+    }
+}
+
 /// The bounded structural protocol-translation metadata of one model.
 ///
 /// Every field here corresponds to a translation branch the current
@@ -487,6 +524,8 @@ pub struct ModelCompat {
     /// is required for catalog models using Chat Completions and is absent
     /// for models whose protocol does not use this dialect.
     pub chat_reasoning_replay: Option<ChatReasoningReplay>,
+    /// Chat Completions: the model's in-band tool protocol, if it has one.
+    pub chat_tool_protocol: ChatToolProtocol,
     /// Responses: the provider storage/continuation mode.
     pub responses_storage: ResponsesStorageMode,
     /// Bitset recording which compat fields were explicitly present in the
@@ -500,6 +539,7 @@ impl PartialEq for ModelCompat {
         self.chat_max_tokens_field == other.chat_max_tokens_field
             && self.chat_stream_usage == other.chat_stream_usage
             && self.chat_reasoning_replay == other.chat_reasoning_replay
+            && self.chat_tool_protocol == other.chat_tool_protocol
             && self.responses_storage == other.responses_storage
     }
 }
@@ -511,10 +551,12 @@ impl Serialize for ModelCompat {
         let chat_max_tokens_field_is_present = self.chat_max_tokens_field_is_explicit();
         let chat_stream_usage_is_present = self.chat_stream_usage_is_explicit();
         let chat_reasoning_replay_is_present = self.chat_reasoning_replay.is_some();
+        let chat_tool_protocol_is_present = self.chat_tool_protocol_is_explicit();
         let responses_storage_is_present = self.responses_storage_is_explicit();
         let field_count = usize::from(chat_max_tokens_field_is_present)
             + usize::from(chat_stream_usage_is_present)
             + usize::from(chat_reasoning_replay_is_present)
+            + usize::from(chat_tool_protocol_is_present)
             + usize::from(responses_storage_is_present);
         let mut state = serializer.serialize_struct("ModelCompat", field_count)?;
         if chat_max_tokens_field_is_present {
@@ -525,6 +567,9 @@ impl Serialize for ModelCompat {
         }
         if let Some(chat_reasoning_replay) = self.chat_reasoning_replay {
             state.serialize_field("chatReasoningReplay", &chat_reasoning_replay)?;
+        }
+        if chat_tool_protocol_is_present {
+            state.serialize_field("chatToolProtocol", &self.chat_tool_protocol)?;
         }
         if responses_storage_is_present {
             state.serialize_field("responsesStorage", &self.responses_storage)?;
@@ -545,17 +590,21 @@ impl<'de> Deserialize<'de> for ModelCompat {
             #[serde(default)]
             chat_reasoning_replay: Option<ChatReasoningReplay>,
             #[serde(default)]
+            chat_tool_protocol: Option<ChatToolProtocol>,
+            #[serde(default)]
             responses_storage: Option<ResponsesStorageMode>,
         }
         let document = Document::deserialize(deserializer)?;
         let explicit_fields = u8::from(document.chat_max_tokens_field.is_some())
             | (u8::from(document.chat_stream_usage.is_some()) << 1)
             | (u8::from(document.chat_reasoning_replay.is_some()) << 2)
-            | (u8::from(document.responses_storage.is_some()) << 3);
+            | (u8::from(document.responses_storage.is_some()) << 3)
+            | (u8::from(document.chat_tool_protocol.is_some()) << 4);
         Ok(Self {
             chat_max_tokens_field: document.chat_max_tokens_field.unwrap_or_default(),
             chat_stream_usage: document.chat_stream_usage.unwrap_or_default(),
             chat_reasoning_replay: document.chat_reasoning_replay,
+            chat_tool_protocol: document.chat_tool_protocol.unwrap_or_default(),
             responses_storage: document.responses_storage.unwrap_or_default(),
             explicit_fields,
         })
@@ -567,6 +616,7 @@ impl ModelCompat {
     const CHAT_STREAM_USAGE_EXPLICIT: u8 = 1 << 1;
     const CHAT_REASONING_REPLAY_EXPLICIT: u8 = 1 << 2;
     const RESPONSES_STORAGE_EXPLICIT: u8 = 1 << 3;
+    const CHAT_TOOL_PROTOCOL_EXPLICIT: u8 = 1 << 4;
 
     fn chat_max_tokens_field_is_explicit(self) -> bool {
         self.explicit_fields & Self::CHAT_MAX_TOKENS_EXPLICIT != 0
@@ -581,6 +631,11 @@ impl ModelCompat {
     fn chat_reasoning_replay_is_explicit(self) -> bool {
         self.explicit_fields & Self::CHAT_REASONING_REPLAY_EXPLICIT != 0
             || self.chat_reasoning_replay.is_some()
+    }
+
+    fn chat_tool_protocol_is_explicit(self) -> bool {
+        self.explicit_fields & Self::CHAT_TOOL_PROTOCOL_EXPLICIT != 0
+            || self.chat_tool_protocol != ChatToolProtocol::default()
     }
 
     fn responses_storage_is_explicit(self) -> bool {
@@ -1197,7 +1252,8 @@ fn validate_compat(
         ModelProtocol::OpenAiResponses
             if compat.chat_max_tokens_field_is_explicit()
                 || compat.chat_stream_usage_is_explicit()
-                || compat.chat_reasoning_replay_is_explicit() =>
+                || compat.chat_reasoning_replay_is_explicit()
+                || compat.chat_tool_protocol_is_explicit() =>
         {
             Some(format!(
                 "compat declares fields that do not apply to protocol {protocol:?}"
@@ -1207,6 +1263,7 @@ fn validate_compat(
             if compat.chat_max_tokens_field_is_explicit()
                 || compat.chat_stream_usage_is_explicit()
                 || compat.chat_reasoning_replay_is_explicit()
+                || compat.chat_tool_protocol_is_explicit()
                 || compat.responses_storage_is_explicit() =>
         {
             Some(format!(
@@ -1506,9 +1563,9 @@ pub struct ReasoningProfileView {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChatReasoningReplay, CredentialSource, CredentialSourceView, MapCredentialEnvironment,
-        ModelCatalog, ModelCatalogDocument, ModelCatalogError, ModelCompat, ModelRef, ProviderId,
-        ResolvedCredential,
+        ChatReasoningReplay, ChatToolProtocol, CredentialSource, CredentialSourceView,
+        MapCredentialEnvironment, ModelCatalog, ModelCatalogDocument, ModelCatalogError,
+        ModelCompat, ModelRef, ProviderId, ResolvedCredential,
     };
 
     fn catalog_json(provider_body: &str) -> String {
@@ -1960,6 +2017,74 @@ mod tests {
             assert_eq!(serialized["chatReasoningReplay"], wire);
             let decoded: ModelCompat = serde_json::from_value(serialized).expect("decode compat");
             assert_eq!(decoded, compat);
+        }
+    }
+
+    /// The in-band tool dialect is an explicit per-model declaration that
+    /// round-trips, and it defaults to `native` so no model is opted into
+    /// reserved-markup detection implicitly.
+    #[test]
+    fn chat_tool_protocol_is_explicit_and_round_trips() {
+        for (wire, expected) in [
+            ("native", ChatToolProtocol::Native),
+            ("qwen_xml", ChatToolProtocol::QwenXml),
+        ] {
+            let json = catalog_json(&format!(
+                r#"{{"baseUrl":"https://a.example","apiKey":"k","models":[
+                     {{"id":"m","protocol":"openai_chat_completions","contextWindow":1000,
+                      "maxOutputTokens":100,
+                      "capabilities":{{"inputModalities":["text"],"outputModalities":["text"],
+                                      "toolCalls":true,"reasoning":false}},
+                      "compat":{{"chatReasoningReplay":"omit","chatToolProtocol":"{wire}"}}}}]}}"#
+            ));
+            let catalog = ModelCatalog::from_jsonc_slice(json.as_bytes()).expect("valid catalog");
+            let compat = catalog
+                .model(&ModelRef::parse("p/m").expect("reference"))
+                .expect("model")
+                .compat;
+            assert_eq!(compat.chat_tool_protocol, expected);
+            let serialized = serde_json::to_value(compat).expect("serialize compat");
+            assert_eq!(serialized["chatToolProtocol"], wire);
+            let decoded: ModelCompat = serde_json::from_value(serialized).expect("decode compat");
+            assert_eq!(decoded, compat);
+        }
+    }
+
+    /// An undeclared dialect is `native`: reserved-markup detection is opt-in
+    /// per model and is never inferred from a provider or model name.
+    #[test]
+    fn chat_tool_protocol_defaults_to_native() {
+        let json = catalog_json(
+            r#"{"baseUrl":"https://a.example","apiKey":"k","models":[
+                 {"id":"Qwen/Qwen3","protocol":"openai_chat_completions","contextWindow":1000,
+                  "maxOutputTokens":100,
+                  "capabilities":{"inputModalities":["text"],"outputModalities":["text"],
+                                  "toolCalls":true,"reasoning":false},
+                  "compat":{"chatReasoningReplay":"reasoning"}}]}"#,
+        );
+        let catalog = ModelCatalog::from_jsonc_slice(json.as_bytes()).expect("valid catalog");
+        let compat = catalog
+            .model(&ModelRef::parse("p/Qwen/Qwen3").expect("reference"))
+            .expect("model")
+            .compat;
+        assert_eq!(compat.chat_tool_protocol, ChatToolProtocol::Native);
+        let serialized = serde_json::to_value(compat).expect("serialize compat");
+        assert!(serialized.get("chatToolProtocol").is_none());
+    }
+
+    #[test]
+    fn chat_tool_protocol_is_invalid_for_non_chat_protocols() {
+        for protocol in ["openai_responses", "anthropic_messages"] {
+            let json = catalog_json(&format!(
+                r#"{{"baseUrl":"https://a.example","apiKey":"k","models":[
+                     {{"id":"m","protocol":"{protocol}","contextWindow":1000,
+                      "maxOutputTokens":100,
+                      "capabilities":{{"inputModalities":["text"],"outputModalities":["text"],
+                                      "toolCalls":true,"reasoning":false}},
+                      "compat":{{"chatToolProtocol":"qwen_xml"}}}}]}}"#
+            ));
+            let error = ModelCatalog::from_jsonc_slice(json.as_bytes()).expect_err("must fail");
+            assert!(matches!(error, ModelCatalogError::InvalidCompat { .. }));
         }
     }
 

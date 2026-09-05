@@ -10,8 +10,8 @@ use crate::common::{
 use rustx::message::types::{ContentBlockIndex, MessageBlock};
 use rustx::model::finish::ModelFinishReason;
 use rustx::model::{
-    AnthropicAdapterConfig, AnthropicMessagesAdapter, ModelErrorKind, ModelEvent, ModelProtocol,
-    ModelRequest, ModelRetryDisposition, ModelUsage,
+    AnthropicAdapterConfig, AnthropicMessagesAdapter, MalformedToolProposalSource, ModelErrorKind,
+    ModelEvent, ModelProtocol, ModelRequest, ModelRetryDisposition, ModelUsage,
 };
 use rustx::runtime::continuation::{AnthropicContinuation, ProviderContinuationState};
 use rustx::runtime::identity::ToolCallId;
@@ -38,6 +38,32 @@ fn assert_terminal_failed(events: &[ModelEvent], kind: &ModelErrorKind) {
         panic!("expected Failed terminal, got {terminal:?}");
     };
     assert_eq!(&error.kind, kind, "unexpected error: {}", error.message);
+}
+
+/// Asserts the terminal is a refused tool proposal with the expected
+/// provider-independent provenance, and that no canonical tool call was
+/// produced by the same stream.
+fn assert_malformed_tool_proposal(events: &[ModelEvent], source: MalformedToolProposalSource) {
+    let terminal = events
+        .last()
+        .unwrap_or_else(|| panic!("expected a terminal event, got none"));
+    let ModelEvent::Failed { error } = terminal else {
+        panic!("expected Failed terminal, got {terminal:?}");
+    };
+    assert_eq!(
+        error.kind,
+        ModelErrorKind::MalformedToolProposal,
+        "unexpected error: {}",
+        error.message
+    );
+    assert_eq!(error.malformed_tool_proposal, Some(source));
+    assert_eq!(error.retry_disposition, ModelRetryDisposition::Never);
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, ModelEvent::ToolCallCompleted { .. })),
+        "a refused proposal never produces a canonical tool call"
+    );
 }
 
 fn anthropic_state_of(event: &ModelEvent) -> &AnthropicContinuation {
@@ -908,19 +934,17 @@ async fn server_tool_use_is_unsupported() {
     );
 }
 
-/// Malformed complete tool JSON terminates the stream with a failure.
+/// Malformed complete tool JSON is refused at `ToolCall` acceptance: the
+/// proposal never becomes a canonical call and the argument text is never
+/// repaired.
 #[tokio::test]
-async fn malformed_tool_json_fails() {
+async fn malformed_tool_json_is_a_malformed_proposal() {
     let server = crate::common::FixtureServer::start(|_attempt, _head| {
         sse_fixture("anthropic", "malformed_tool_json.sse")
     })
     .await;
     let events = collect_events(&adapter(&server), request_with_tools("Broken")).await;
-    let ModelEvent::Failed { error } = events.last().expect("terminal") else {
-        panic!("expected Failed");
-    };
-    assert_eq!(error.kind, ModelErrorKind::ProviderError);
-    assert_eq!(error.retry_disposition, ModelRetryDisposition::Never);
+    assert_malformed_tool_proposal(&events, MalformedToolProposalSource::AdapterStructural);
 }
 
 /// A successful HTTP response can still fail while its SSE body is being
@@ -1007,15 +1031,16 @@ async fn missing_stop_reason_fails() {
     assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
 }
 
-/// A model calling an unknown tool name fails with `InvalidRequest`.
+/// A tool identity that resolves to no declared tool cannot become a
+/// canonical call: it is refused rather than fuzzy-matched onto a neighbour.
 #[tokio::test]
-async fn unknown_tool_name_fails() {
+async fn unknown_tool_name_is_a_malformed_proposal() {
     let server = crate::common::FixtureServer::start(|_attempt, _head| {
         sse_fixture("anthropic", "unknown_tool_name.sse")
     })
     .await;
     let events = collect_events(&adapter(&server), request_with_tools("Call")).await;
-    assert_terminal_failed(&events, &ModelErrorKind::InvalidRequest);
+    assert_malformed_tool_proposal(&events, MalformedToolProposalSource::AdapterStructural);
 }
 
 /// HTTP error mapping for the direct Anthropic transport, including

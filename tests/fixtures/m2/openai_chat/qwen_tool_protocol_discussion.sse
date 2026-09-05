@@ -1,0 +1,14 @@
+data: {"id":"chatcmpl-qwen-prose","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"role":"assistant","content":"Qwen's tool-call syntax can look like:\n\n<tool_call>\n...\n</tool_call>\n\n"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-prose","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"content":"A parameter is encoded as <parameter=path>...</parameter>, and the function as <function=write_file>...</function> inside it.\n\n"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-prose","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"content":"Qwen uses <function=write_file>...</function> for function calls, and a real value written inline reads <parameter=path>notes.txt</parameter> in the body.\n\n"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-prose","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"content":"A complete call is written like this:\n\n```xml\n<tool_call>\n<function=write_file>\n<parameter=path>\nnotes.txt\n</parameter>\n</function>\n</tool_call>\n```\n\n"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-prose","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"content":"The compact form is the same call:\n\n```xml\n<tool_call><function=write_file><parameter=path>notes.txt</parameter></function></tool_call>\n```\n"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-prose","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+

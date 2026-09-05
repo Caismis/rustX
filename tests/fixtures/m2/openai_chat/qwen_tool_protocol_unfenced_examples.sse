@@ -1,0 +1,11 @@
+data: {"id":"chatcmpl-qwen-unfenced","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"role":"assistant","content":"The exact parameter syntax is:\n<parameter=pa"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-unfenced","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"content":"th>notes.txt</parameter>\n\nThe opening tag is:\n<parameter=path>\nThe closing tag is </parame"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-unfenced","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"content":"ter>.\n\nThe function form is:\n<function=write_file>...</function>\n\nThe complete compact example is:\n<tool_call><function=write_file><param"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-unfenced","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"content":"eter=path>notes.txt</parameter></function></tool_call>\n"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-unfenced","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]

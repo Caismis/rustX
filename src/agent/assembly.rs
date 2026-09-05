@@ -26,6 +26,14 @@
 //! Violations of the canonical contract are explicit
 //! [`RuntimeError::ContractViolation`] failures; impossible streams are
 //! never silently accepted.
+//!
+//! This assembler sits **above** the `ToolCall` acceptance boundary owned by
+//! the adapters (`src/model/adapter/proposal.rs`). Every tool call it sees is
+//! already canonical, so its rejections describe an impossible canonical
+//! stream — an internal contract defect — and never a malformed model
+//! generation. They stay fail-closed and are deliberately not the retryable
+//! `ModelErrorKind::MalformedToolProposal` class: the two are different types
+//! and cannot be confused.
 
 use std::collections::BTreeMap;
 
@@ -780,6 +788,7 @@ mod tests {
                     retry_after_ms: None,
                     provider_code: None,
                     context_overflow: None,
+                    malformed_tool_proposal: None,
                 },
             })
             .expect("failed terminal");
@@ -828,6 +837,7 @@ mod tests {
                     retry_after_ms: None,
                     provider_code: None,
                     context_overflow: None,
+                    malformed_tool_proposal: None,
                 },
             })
             .expect("legal rejected request");

@@ -29,6 +29,12 @@ impl ValidatedTools {
         self.by_name.keys().map(String::as_str)
     }
 
+    /// Whether the request exposed no tool to the model at all.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_name.is_empty()
+    }
+
     /// Resolves a model-facing tool name to its canonical [`ToolId`].
     #[must_use]
     pub fn resolve(&self, name: &str) -> Option<&ToolId> {
@@ -73,6 +79,7 @@ pub fn validate_request(
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
+            malformed_tool_proposal: None,
         });
     }
 
@@ -149,6 +156,7 @@ fn invalid_request(message: String) -> ModelError {
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
 }
 

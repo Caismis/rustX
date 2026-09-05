@@ -1,0 +1,6 @@
+data: {"id":"chatcmpl-malformed-fc","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant","content":"Writing the file now."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-malformed-fc","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"MALFORMED_FUNCTION_CALL"}]}
+
+data: [DONE]
+

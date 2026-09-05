@@ -2763,7 +2763,8 @@ Governing rules:
 - **Bounded compat.** `compat` configures only structural translation the
   adapters actually branch on — the legal Chat max-token spelling, whether
   streaming usage options are supported, whether previous assistant reasoning
-  is replayed as `reasoning`, `reasoning_content`, or omitted, and the
+  is replayed as `reasoning`, `reasoning_content`, or omitted, the model's
+  in-band tool protocol (`chatToolProtocol`, default `native`), and the
   Responses storage / continuation mode. For `openai_chat_completions`,
   `chatReasoningReplay` is required and has no universal default; it is a
   provider/model wire contract, not a reasoning-generation switch. It is not
@@ -2785,6 +2786,131 @@ before canonical identity/start, while Anthropic reports Liveness for its
 defined `Ping` heartbeat. Unknown provider events remain neither. Progress is
 consumed by deadline state, never by assembly, publication, history, or the
 durable Event Journal.
+
+#### The ToolCall acceptance boundary (Issue #201)
+
+Model tool intent is non-authoritative wire state until it crosses one
+explicit acceptance point:
+
+```text
+provider/model stream
+    -> provider-specific proposal assembly   (adapter, protocol-aware)
+    -> proposal identity resolution          (src/model/adapter/proposal.rs)
+        -> ModelEvent::ToolCallStarted, argument streaming
+    -> complete argument validation          (same module)
+    -> ToolCall ACCEPTANCE  <- the one linearization point
+        -> canonical ToolCall in ModelEvent::ToolCallCompleted
+    -> Agent Loop Tool path                  (preflight, approval, execution,
+                                              exactly-once ToolResult)
+```
+
+Every adapter assembles a proposal in its own protocol terms — provider
+envelopes, chunk indexes, snapshot merges, block ids, lossless wire
+normalization such as retaining an already-established streamed identity when
+later continuation deltas omit it — and then presents the assembled proposal
+to the shared functions exactly once.
+
+The two stages are deliberately not the same event. **Identity resolution**
+establishes that a proposal is attributable — a usable correlation identity
+and a tool identity that resolves to one declared `ToolId` — and that is what
+licenses the canonical `ModelEvent::ToolCallStarted` and its argument deltas.
+`ToolCallStarted` is a canonical normalized model-stream event of the
+adapter→kernel protocol, but it carries a `ToolCallStart`, not a `ToolCall`:
+nothing is executable yet. **Argument acceptance** is the acceptance
+linearization point; the complete argument representation is parsed exactly
+once, and only on success does the full canonical
+`ToolCall { id, tool_id, name, arguments }` exist, carried by
+`ToolCallCompleted`. There is therefore exactly one unambiguous point at
+which an executable canonical `ToolCall` comes into being.
+
+Neither stage invents intent, and neither performs Tool schema validation,
+which belongs to Tool preflight after the canonical call exists.
+
+Everything a provider can do to make a proposal untrustworthy is recognized
+below this line and normalized above it into one class,
+`ModelErrorKind::MalformedToolProposal`, with typed provider-independent
+provenance: `ProviderDeclared` (the provider terminated declaring its own
+call malformed), `StreamAssembly` (the stream never delivered an identity),
+`AdapterStructural` (an undeclared tool name, or an argument representation
+that is not one complete JSON value), and `ReservedProtocolLeak` (reserved
+in-band tool markup leaked into ordinary output while no structured call was
+produced).
+
+Reserved-markup recognition is the only Qwen-shaped protocol knowledge in the
+runtime, and it lives in the Chat Completions adapter beside every other
+dialect difference (`src/model/adapter/openai/qwen_xml.rs`). It is opt-in and
+narrow: the model must declare the dialect through `compat.chatToolProtocol`,
+tools must actually have been exposed in that request, the generation must
+have produced no structured call, the provider must have terminated as a
+complete normal generation, and the output must contain an actual protocol
+*emission*. Under the default `native` profile generated text is never
+inspected at all. Nothing is inferred from a model name, a provider name, or
+a hostname.
+
+Recognizing an emission is deliberately not a substring test. The reserved
+bytes of the dialect are exactly what a correct answer contains when the user
+asks how the dialect works, so `contains(open) && contains(close)` would
+classify a good answer as malformed tool intent. The recognizer instead
+requires the structure a real vLLM/Qwen emission has and a discussion of it
+does not.
+
+That structure is the dialect's *reserved grammar*, never a pretty-printed
+layout. Upstream drives the dialect from reserved markers — `<tool_call>`,
+`<function=`, `<parameter=` and their closers — and matches parameter
+regions with a `re.DOTALL` value group, trimming at most one wrapping
+newline; newline placement is therefore template decoration and carries no
+protocol meaning. `<parameter=path>notes.txt</parameter>` inline, a fully
+compact `<tool_call><function=…><parameter=…>…</parameter></function></tool_call>`,
+and the pretty-printed emission are one and the same region, and all three
+are recognized. Recognition runs on the fully assembled generated output, so
+provider chunk boundaries cannot change the outcome either.
+
+What separates that structure from a discussion of it is *ownership*, not
+formatting. A generation that leaks the dialect is one the serving stack was
+supposed to consume whole: its output **is** the reserved region. A
+generation that explains the dialect is writing a document, and the reserved
+bytes are material that document introduces, quotes and discusses. So the
+scan walks the assembled output from its start and stays in the protocol
+only while everything behind it is reserved markup or the payload of an open
+reserved envelope; the first thing that is not — ordinary words outside every
+envelope, or a Markdown code fence — hands ownership to the document, and the
+scan ends there. Inside the protocol the region must still be real
+structure: an opener matched by its own closer, in order, with a payload that
+is a plausible function/parameter identifier rather than an illustrative
+ellipsis.
+
+Ownership is a property of the output, not of its layout, and it never
+begins again at a line break, so
+
+> `The exact parameter syntax is: <parameter=path>notes.txt</parameter>`
+
+and the same answer with that space replaced by a newline are one answer and
+classify identically. The invariant is explicit: **reserved-protocol
+classification must not change solely because ordinary explanatory prose and
+the exact same quoted syntax are separated by a newline rather than a space**,
+and more generally a raw newline is never the structural basis for treating a
+region as emitted tool intent. The one layout marker that does carry meaning
+is the code fence, because a fence is the author declaring the block quoted;
+lines otherwise exist for the scan only as the unit a fence is recognized on
+and as the place a pretty-printed emission puts its tags. The consequence is
+deliberate and conservative: reserved bytes produced after a generation has
+begun writing a document are not classified as a leak, because no structural
+evidence separates "here is the syntax:" from a leak that follows a sentence,
+and enumerating English phrasings would be a vocabulary rule rather than a
+grammar. The recognizer is one bounded forward pass with constant state: no
+backtracking, no materialized regions, no general XML parsing, and it prefers
+missing a speculative shape to reclassifying a correct answer. Recognition is
+one-directional — it proves a leak and produces one refused proposal; the
+leaked region is never parsed back into a `ToolCall`, because a call this
+runtime had to infer is precisely the invented model intent the acceptance
+boundary exists to refuse.
+
+Above the adapter the Agent Loop reacts to the class and never to the
+evidence. It owns the bounded one-regeneration recovery of that class
+(`docs/agent-loop.md`), and the acceptance boundary keeps the canonical
+`ModelEventAssembler` unchanged: the assembler validates a stream that has
+already crossed acceptance, so its rejections stay fail-closed
+`RuntimeError::ContractViolation` failures and are never retryable.
 
 #### Logical model steps and actual requests (Issue #134)
 
@@ -2809,8 +2935,13 @@ partial output is durable noncanonical audit evidence and cannot authorize Tool
 Plane execution; only a successful actual request can commit the canonical
 Assistant.
 
-The transient budget is three retries and the overflow budget is one, for an
-additive maximum of five primary provider requests per logical step. Backoff
+The transient budget is three retries, the overflow budget is one, and the
+malformed-tool-proposal budget is one corrective *generation*, for an additive
+maximum of six primary provider requests per logical step. A corrective
+generation may itself be realized by several actual requests when transport or
+overflow recovery intervenes; the bounded corrective context it owns is
+carried by all of them and is cleared only when that generation resolves. The three budgets are keyed on
+disjoint error classes, so none of them resets or multiplies another. Backoff
 uses the runtime-owned monotonic clock: 2, 4, and 8 seconds, overridden by an
 adapter-normalized `retry_after_ms` hint capped at 60 seconds. Provider
 adapters classify provider failures with `ModelRetryDisposition`; a runtime

@@ -237,6 +237,7 @@ pub fn finalize_provider_request(
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
+            malformed_tool_proposal: None,
         });
     };
     validate_request_params_layer(params, protocol, RequestParamsLayer::EffectiveRequest).map_err(
@@ -247,6 +248,7 @@ pub fn finalize_provider_request(
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
+            malformed_tool_proposal: None,
         },
     )?;
     overlay_shallow(&mut object, params);
@@ -1156,6 +1158,7 @@ pub fn validate_content_modalities(
                 retry_after_ms: None,
                 provider_code: None,
                 context_overflow: None,
+                malformed_tool_proposal: None,
             });
         }
     }

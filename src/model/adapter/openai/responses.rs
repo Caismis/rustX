@@ -21,9 +21,8 @@ use crate::message::types::{AssistantContentBlock, MessageBlock};
 use crate::model::adapter::block_index::BlockAllocator;
 use crate::model::adapter::openai::client::build_client;
 use crate::model::adapter::openai::config::OpenAiAdapterConfig;
-use crate::model::adapter::openai::mapping::{
-    normalize_error, resolve_tool, stream_retry_disposition,
-};
+use crate::model::adapter::openai::mapping::{normalize_error, stream_retry_disposition};
+use crate::model::adapter::proposal::{accept_tool_call, resolve_tool_identity};
 use crate::model::adapter::traits::{
     ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
@@ -38,7 +37,6 @@ use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage, UsageDetails}
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::continuation::{OpenAiResponsesContinuation, ProviderContinuationState};
 use crate::runtime::identity::ToolCallId;
-use crate::tools::types::{ToolCall, ToolCallStart};
 
 /// Adapter for the `OpenAI` Responses protocol.
 ///
@@ -266,6 +264,7 @@ fn cancelled_error() -> ModelError {
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
 }
 
@@ -820,22 +819,10 @@ impl ResponsesNormalizer {
                     .get("call_id")
                     .and_then(serde_json::Value::as_str)
                     .or_else(|| item.get("id").and_then(serde_json::Value::as_str));
-                let Some(call_id) = call_id.filter(|id| !id.is_empty()) else {
-                    return Err(provider_error(
-                        "provider function call lacks a stable invocation id".to_owned(),
-                    ));
-                };
-                let Some(name) = str_field(item, "name") else {
-                    return Err(provider_error(
-                        "provider function call lacks a function name".to_owned(),
-                    ));
-                };
-                let tool_id = resolve_tool(&self.tools, name)?;
-                let call = ToolCallStart {
-                    id: ToolCallId::new(call_id),
-                    tool_id,
-                    name: name.to_owned(),
-                };
+                // Identity resolution: the proposal becomes attributable and
+                // the canonical start event may be emitted. The executable
+                // ToolCall does not exist until argument acceptance.
+                let call = resolve_tool_identity(call_id, str_field(item, "name"), &self.tools)?;
                 let canonical_call_id = call.id.clone();
                 let item_arguments = item.get("arguments").and_then(serde_json::Value::as_str);
                 let (block_index, buffered_arguments, started_now) = {
@@ -1038,32 +1025,22 @@ impl ResponsesNormalizer {
                 "function call completed without a matching start".to_owned(),
             ));
         };
-        let call_id = assembly
-            .call_id
-            .clone()
-            .ok_or_else(|| provider_error("function call lacks an invocation id".to_owned()))?;
-        let name = assembly
-            .name
-            .clone()
-            .ok_or_else(|| provider_error("function call lacks a name".to_owned()))?;
-        let tool_id = resolve_tool(&self.tools, &name)?;
         let arguments = item
             .get("arguments")
             .and_then(serde_json::Value::as_str)
             .map_or_else(|| assembly.arguments.clone(), str::to_owned);
-        let arguments = serde_json::from_str(&arguments).map_err(|e| {
-            provider_error(format!(
-                "malformed complete tool arguments for {name:?} ({call_id}): {e}"
-            ))
-        })?;
+        // The ToolCall acceptance linearization point. The item arrived
+        // complete, so identity resolution and argument acceptance run back
+        // to back; the canonical ToolCall exists only once both succeed.
+        let call = accept_tool_call(
+            assembly.call_id.as_ref().map(ToolCallId::as_str),
+            assembly.name.as_deref(),
+            &arguments,
+            &self.tools,
+        )?;
         Ok(vec![ModelEvent::ToolCallCompleted {
             block_index: assembly.block_index,
-            call: ToolCall {
-                id: call_id,
-                tool_id,
-                name,
-                arguments,
-            },
+            call,
         }])
     }
 
@@ -1113,6 +1090,7 @@ impl ResponsesNormalizer {
                     retry_after_ms: None,
                     provider_code: Some(reason.to_owned()),
                     context_overflow: None,
+                    malformed_tool_proposal: None,
                 });
             }
             match reason {
@@ -1625,6 +1603,7 @@ fn provider_error(message: String) -> ModelError {
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
 }
 
@@ -1685,6 +1664,7 @@ fn responses_stream_error(event: &serde_json::Value) -> ModelError {
         retry_after_ms: None,
         provider_code: provider_code.map(str::to_owned),
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
     .normalized()
 }
@@ -1697,6 +1677,7 @@ fn invalid_request(message: &str) -> ModelError {
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
 }
 
@@ -1709,6 +1690,7 @@ fn unsupported(message: impl Into<String>) -> ModelError {
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
 }
 

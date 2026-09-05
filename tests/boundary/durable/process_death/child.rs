@@ -651,6 +651,7 @@ fn unresolved_output_turn() -> Vec<FakeStep> {
                 retry_after_ms: None,
                 provider_code: None,
                 context_overflow: None,
+                malformed_tool_proposal: None,
             },
         }),
     ]
@@ -670,6 +671,7 @@ fn retryable_unresolved_output_turn() -> Vec<FakeStep> {
                 retry_after_ms: None,
                 provider_code: None,
                 context_overflow: None,
+                malformed_tool_proposal: None,
             },
         }),
     ]

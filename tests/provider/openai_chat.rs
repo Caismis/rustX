@@ -10,7 +10,8 @@ use crate::common::{
 use rustx::message::types::{ContentBlockIndex, MessageBlock};
 use rustx::model::finish::ModelFinishReason;
 use rustx::model::{
-    ModelErrorKind, ModelEvent, ModelProtocol, ModelRequest, ModelUsage, OpenAiAdapterConfig,
+    ChatToolProtocol, MalformedToolProposalSource, ModelErrorKind, ModelEvent, ModelProtocol,
+    ModelRequest, ModelRetryDisposition, ModelUsage, OpenAiAdapterConfig,
     OpenAiChatCompletionsAdapter, UsageDetails,
 };
 use rustx::runtime::identity::{ToolCallId, ToolId};
@@ -26,6 +27,19 @@ fn request_with_tools(prompt: &str) -> ModelRequest {
         model_tool("list_directory", "tool-list"),
         model_tool("read_file", "tool-read"),
     ];
+    request
+}
+
+/// A request for a model that declares the Qwen in-band tool dialect.
+fn qwen_request(prompt: &str, expose_tools: bool) -> ModelRequest {
+    let mut request = simple_request(ModelProtocol::OpenAiChatCompletions, "Qwen/Qwen3", prompt);
+    request.invocation.compat.chat_tool_protocol = ChatToolProtocol::QwenXml;
+    if expose_tools {
+        request.tools = vec![
+            model_tool("list_directory", "tool-list"),
+            model_tool("write_file", "tool-write"),
+        ];
+    }
     request
 }
 
@@ -56,6 +70,64 @@ fn assert_terminal_failed(events: &[ModelEvent], kind: &ModelErrorKind) {
         panic!("expected Failed terminal, got {terminal:?}");
     };
     assert_eq!(&error.kind, kind, "unexpected error: {}", error.message);
+}
+
+/// Asserts the stream terminated as a refused tool proposal with the
+/// expected provider-independent provenance, that it did not complete
+/// normally, and that no canonical tool call crossed acceptance.
+fn assert_malformed_tool_proposal(events: &[ModelEvent], source: MalformedToolProposalSource) {
+    let terminal = events
+        .last()
+        .unwrap_or_else(|| panic!("expected a terminal event, got none"));
+    let ModelEvent::Failed { error } = terminal else {
+        panic!("expected Failed terminal, got {terminal:?}");
+    };
+    assert_eq!(
+        error.kind,
+        ModelErrorKind::MalformedToolProposal,
+        "unexpected error: {}",
+        error.message
+    );
+    assert_eq!(error.malformed_tool_proposal, Some(source));
+    assert_eq!(
+        error.retry_disposition,
+        ModelRetryDisposition::Never,
+        "a malformed proposal never joins the generic transient budget"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, ModelEvent::Completed { .. })),
+        "a malformed generation cannot also complete normally"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, ModelEvent::ToolCallCompleted { .. })),
+        "a refused proposal never produces a canonical tool call"
+    );
+}
+
+/// Asserts the stream settled as an ordinary assistant completion: no
+/// refusal, and a normal `Stop` terminal.
+fn assert_normal_completion(events: &[ModelEvent]) {
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, ModelEvent::Failed { .. })),
+        "expected an ordinary completion, got a failure: {events:?}"
+    );
+    assert!(
+        matches!(
+            events.last(),
+            Some(ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                ..
+            })
+        ),
+        "unexpected terminal: {:?}",
+        events.last()
+    );
 }
 
 /// Plain text streams into one text block with exact fragments, usage, and a
@@ -763,43 +835,273 @@ async fn interrupted_stream_fails() {
     );
 }
 
-/// Malformed complete tool JSON terminates the stream with a failure; it is
-/// never executed and never partially completed.
+/// Argument text that is truncated before `ToolCall` acceptance is refused:
+/// the proposal never becomes a canonical call, so nothing can be
+/// preflighted, executed, or settled from it. No brace is appended.
 #[tokio::test]
-async fn malformed_tool_arguments_fail() {
+async fn truncated_tool_arguments_are_a_malformed_proposal() {
     let server = crate::common::FixtureServer::start(|_attempt, _head| {
         sse_fixture("openai_chat", "malformed_tool_arguments.sse")
     })
     .await;
     let events = collect_events(&adapter(&server), request_with_tools("Broken call")).await;
-    assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
-    assert!(
-        events
-            .iter()
-            .all(|event| !matches!(event, ModelEvent::ToolCallCompleted { .. }))
-    );
+    assert_malformed_tool_proposal(&events, MalformedToolProposalSource::AdapterStructural);
 }
 
-/// A tool call without a provider invocation id fails explicitly.
+/// A stream that ends without ever delivering a correlation identity is a
+/// stream-assembly refusal; no invocation id is fabricated.
 #[tokio::test]
-async fn tool_call_without_id_fails() {
+async fn tool_call_without_id_is_a_malformed_proposal() {
     let server = crate::common::FixtureServer::start(|_attempt, _head| {
         sse_fixture("openai_chat", "tool_call_without_id.sse")
     })
     .await;
     let events = collect_events(&adapter(&server), request_with_tools("Call")).await;
-    assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
+    assert_malformed_tool_proposal(&events, MalformedToolProposalSource::StreamAssembly);
 }
 
-/// A model calling an unknown tool name fails with `InvalidRequest`.
+/// A stream that ends without ever delivering a tool identity is likewise a
+/// stream-assembly refusal; no function name is invented.
 #[tokio::test]
-async fn unknown_tool_name_fails() {
+async fn tool_call_without_name_is_a_malformed_proposal() {
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "tool_call_without_name.sse")
+    })
+    .await;
+    let events = collect_events(&adapter(&server), request_with_tools("Call")).await;
+    assert_malformed_tool_proposal(&events, MalformedToolProposalSource::StreamAssembly);
+}
+
+/// A tool identity that resolves to no declared tool cannot become a
+/// canonical call: it is refused rather than fuzzy-matched onto a neighbour.
+#[tokio::test]
+async fn unknown_tool_name_is_a_malformed_proposal() {
     let server = crate::common::FixtureServer::start(|_attempt, _head| {
         sse_fixture("openai_chat", "unknown_tool_name.sse")
     })
     .await;
     let events = collect_events(&adapter(&server), request_with_tools("Call")).await;
-    assert_terminal_failed(&events, &ModelErrorKind::InvalidRequest);
+    assert_malformed_tool_proposal(&events, MalformedToolProposalSource::AdapterStructural);
+}
+
+/// A provider that declares the model's function call malformed as its own
+/// termination reason never settles as an ordinary completion.
+#[tokio::test]
+async fn provider_declared_malformed_call_is_a_malformed_proposal() {
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "malformed_function_call_finish.sse")
+    })
+    .await;
+    let events = collect_events(&adapter(&server), request_with_tools("Write")).await;
+    assert_malformed_tool_proposal(&events, MalformedToolProposalSource::ProviderDeclared);
+}
+
+/// The observed vLLM/Qwen class: tools are exposed, reserved Qwen tool
+/// markup leaks into content, no structured call is produced, and the
+/// provider stops normally. That cannot be an ordinary assistant completion.
+#[tokio::test]
+async fn qwen_reserved_protocol_leak_is_a_malformed_proposal() {
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "qwen_tool_protocol_leak.sse")
+    })
+    .await;
+    let events = collect_events(&adapter(&server), qwen_request("Write the note", true)).await;
+    assert_malformed_tool_proposal(&events, MalformedToolProposalSource::ReservedProtocolLeak);
+}
+
+/// The complete real vLLM/Qwen emission contract — the nested
+/// `<tool_call>` / `<function=…>` / `<parameter=…>` region — surviving into
+/// `content` is likewise a refused proposal, not an assistant answer.
+#[tokio::test]
+async fn a_complete_qwen_emission_is_a_malformed_proposal() {
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "qwen_tool_protocol_full_leak.sse")
+    })
+    .await;
+    let events = collect_events(&adapter(&server), qwen_request("Write the note", true)).await;
+    assert_malformed_tool_proposal(&events, MalformedToolProposalSource::ReservedProtocolLeak);
+}
+
+/// Layout is not protocol. The upstream Qwen3 grammar matches parameter
+/// regions with a `re.DOTALL` value group and trims at most one wrapping
+/// newline, so `<parameter=path>notes.txt</parameter>` on a single line is
+/// the same residual region as the pretty-printed one — and upstream's own
+/// parser fixtures use exactly this inline shape. The fixture splits the
+/// region across provider chunks *inside* a reserved tag, so recognition can
+/// only come from the assembled output.
+#[tokio::test]
+async fn an_inline_qwen_residual_region_is_a_malformed_proposal() {
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "qwen_tool_protocol_inline_leak.sse")
+    })
+    .await;
+    let events = collect_events(&adapter(&server), qwen_request("Write the note", true)).await;
+    assert_malformed_tool_proposal(&events, MalformedToolProposalSource::ReservedProtocolLeak);
+}
+
+/// The whole envelope emitted compactly — `<tool_call>`, `<function=…>` and
+/// `<parameter=…>` nested on one line — is the same leak as the
+/// pretty-printed emission, and likewise arrives split mid-tag across
+/// provider chunks.
+#[tokio::test]
+async fn a_compact_qwen_emission_is_a_malformed_proposal() {
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "qwen_tool_protocol_compact_leak.sse")
+    })
+    .await;
+    let events = collect_events(&adapter(&server), qwen_request("Write the note", true)).await;
+    assert_malformed_tool_proposal(&events, MalformedToolProposalSource::ReservedProtocolLeak);
+}
+
+/// A parameterless call leaks a bare `<function=…></function>` region with
+/// no wrapping `<tool_call>` at all — upstream enters a tool call on the
+/// bare opener, so the residue is an emission and not decorative text.
+#[tokio::test]
+async fn a_bare_qwen_function_region_is_a_malformed_proposal() {
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "qwen_tool_protocol_function_residue.sse")
+    })
+    .await;
+    let events = collect_events(&adapter(&server), qwen_request("List the directory", true)).await;
+    assert_malformed_tool_proposal(&events, MalformedToolProposalSource::ReservedProtocolLeak);
+}
+
+/// The detector is not a substring rule: identical reserved *bytes* are an
+/// ordinary completion for a model that declares no in-band tool protocol.
+#[tokio::test]
+async fn reserved_bytes_under_the_native_profile_complete_normally() {
+    for fixture in [
+        "qwen_tool_protocol_leak.sse",
+        "qwen_tool_protocol_compact_leak.sse",
+        "qwen_tool_protocol_full_leak.sse",
+        "qwen_tool_protocol_function_residue.sse",
+    ] {
+        let server = crate::common::FixtureServer::start(move |_attempt, _head| {
+            sse_fixture("openai_chat", fixture)
+        })
+        .await;
+        let events = collect_events(&adapter(&server), request_with_tools("Write the note")).await;
+        assert_normal_completion(&events);
+    }
+}
+
+/// The false-positive boundary this suite exists to hold.
+///
+/// Every precondition of the detector is satisfied — the Qwen dialect is
+/// declared, tools are exposed, the provider stops normally, and no
+/// structured call is produced — and the assistant writes the **exact**
+/// reserved syntax, not a softened variant: `<tool_call>…</tool_call>` as a
+/// standalone illustration, `<parameter=path>…</parameter>` and
+/// `<function=write_file>…</function>` inline in a sentence, an inline
+/// `<parameter=path>notes.txt</parameter>` carrying a *real* value rather
+/// than an ellipsis, and complete fenced examples of the whole envelope in
+/// both the pretty-printed and the compact layout.
+///
+/// The inline forms are the ones that matter now that recognition follows
+/// the reserved grammar rather than a line layout: the identical bytes are a
+/// leak when the generation's own output is that region, and the document's
+/// material once the generation has begun writing one.
+///
+/// A `contains(open) && contains(close)` rule classifies all three as
+/// malformed tool intent. They are a correct answer to a question about the
+/// dialect, and must stay an ordinary completion.
+#[tokio::test]
+async fn exact_reserved_syntax_discussed_in_prose_completes_normally() {
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "qwen_tool_protocol_discussion.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        qwen_request("Explain the Qwen tool syntax", true),
+    )
+    .await;
+    assert_normal_completion(&events);
+    let text: String = events
+        .iter()
+        .filter_map(|event| match event {
+            ModelEvent::TextDelta { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    // The fixture really does carry the reserved tokens a naive rule keys
+    // on, so this test cannot pass by accident.
+    assert!(text.contains("<tool_call>") && text.contains("</tool_call>"));
+    assert!(text.contains("<parameter=path>") && text.contains("</parameter>"));
+    assert!(text.contains("<function=write_file>") && text.contains("</function>"));
+    // The exact inline and compact shapes a layout-based recognizer would
+    // have called prose for the wrong reason, and a grammar-based one must
+    // still exclude because words or a fence surround them.
+    assert!(text.contains("<parameter=path>notes.txt</parameter>"));
+    assert!(text.contains(
+        "<tool_call><function=write_file><parameter=path>notes.txt</parameter></function>\
+         </tool_call>"
+    ));
+}
+
+/// The same answer with the examples on their own lines rather than inside
+/// the sentence, and with no code fence anywhere.
+///
+/// This is the layout-independence invariant at the adapter boundary:
+/// classification must not change because ordinary explanatory prose and the
+/// exact same quoted syntax are separated by a newline rather than a space.
+/// The fixture carries every shape that separation can take — an inline
+/// residual on the next line, an opener whose closer only arrives inside a
+/// later sentence, a function form, and the whole compact envelope — and
+/// splits provider chunks inside reserved tags so nothing can be decided
+/// from chunk framing either.
+#[tokio::test]
+async fn reserved_syntax_introduced_across_a_line_break_completes_normally() {
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "qwen_tool_protocol_unfenced_examples.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        qwen_request("Explain the Qwen tool syntax", true),
+    )
+    .await;
+    assert_normal_completion(&events);
+    let text: String = events
+        .iter()
+        .filter_map(|event| match event {
+            ModelEvent::TextDelta { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    // No fence anywhere: the exclusion cannot be coming from quotation.
+    assert!(!text.contains("```"));
+    // Each required shape really is present, on its own line, introduced by
+    // the line above it.
+    for example in [
+        "is:\n<parameter=path>notes.txt</parameter>",
+        "is:\n<parameter=path>\nThe closing tag is </parameter>.",
+        "is:\n<function=write_file>...</function>",
+        "is:\n<tool_call><function=write_file><parameter=path>notes.txt</parameter>\
+         </function></tool_call>",
+    ] {
+        assert!(text.contains(example), "fixture lost {example:?}");
+    }
+}
+
+/// Reserved markup is only meaningful when tools were actually exposed. A
+/// tool-free request keeps its ordinary completion even under the Qwen
+/// profile.
+#[tokio::test]
+async fn reserved_markup_without_exposed_tools_completes_normally() {
+    for fixture in [
+        "qwen_tool_protocol_leak.sse",
+        "qwen_tool_protocol_compact_leak.sse",
+        "qwen_tool_protocol_full_leak.sse",
+        "qwen_tool_protocol_function_residue.sse",
+    ] {
+        let server = crate::common::FixtureServer::start(move |_attempt, _head| {
+            sse_fixture("openai_chat", fixture)
+        })
+        .await;
+        let events = collect_events(&adapter(&server), qwen_request("Write the note", false)).await;
+        assert_normal_completion(&events);
+    }
 }
 
 /// HTTP error mapping: authentication, rate limit with Retry-After, invalid

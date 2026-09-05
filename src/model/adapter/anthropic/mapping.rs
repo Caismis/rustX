@@ -13,7 +13,6 @@ use crate::model::input::{ModelInputMessage, RequestOnlyModelContext};
 use crate::model::invocation::finalize_provider_request;
 use crate::model::types::{ModelProtocol, ModelUsage, UsageDetails};
 use crate::runtime::continuation::{AnthropicContinuation, ProviderContinuationState};
-use crate::runtime::identity::ToolId;
 
 use super::wire::WireUsage;
 
@@ -142,6 +141,7 @@ pub(crate) fn normalize_http_error(
         retry_after_ms,
         provider_code,
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
     .normalized()
 }
@@ -180,7 +180,10 @@ fn http_retry_disposition(
         | ModelErrorKind::Unsupported
         | ModelErrorKind::ContextWindowExceeded
         | ModelErrorKind::Cancelled
-        | ModelErrorKind::Transport => ModelRetryDisposition::Never,
+        | ModelErrorKind::Transport
+        // A malformed tool proposal is a generation defect with its own
+        // bounded Agent-Loop recovery; it never joins the transient budget.
+        | ModelErrorKind::MalformedToolProposal => ModelRetryDisposition::Never,
     }
 }
 
@@ -337,6 +340,7 @@ pub(crate) fn translate_request(
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
+            malformed_tool_proposal: None,
         });
     }
     let tools = translate_tools(&request.tools);
@@ -356,6 +360,7 @@ pub(crate) fn translate_request(
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
+        malformed_tool_proposal: None,
     })?;
     finalize_provider_request(
         value,
@@ -464,6 +469,7 @@ fn translate_messages(
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
+            malformed_tool_proposal: None,
         });
     }
     Ok((system, messages))
@@ -542,7 +548,16 @@ fn translate_assistant_content(
                 content.push(state.opaque.clone());
             }
             AssistantContentBlock::ToolCall(call) => {
-                let _ = resolve_tool(tools, &call.name)?;
+                // Request-side history integrity: a canonical call replayed
+                // into a request whose tool surface no longer declares it is
+                // an invalid request, not a malformed model generation.
+                if tools.resolve(&call.name).is_none() {
+                    return Err(invalid_request(&format!(
+                        "canonical history replays the tool name {:?}, which this request does \
+                         not declare",
+                        call.name
+                    )));
+                }
                 content.push(serde_json::json!({
                     "type": "tool_use",
                     "id": call.id,
@@ -625,6 +640,7 @@ fn invalid_request(message: &str) -> ModelError {
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
 }
 
@@ -636,15 +652,8 @@ fn unsupported(message: &str) -> ModelError {
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
-}
-
-/// Tool name resolution kept available to the messages module.
-pub(crate) fn resolve_tool(tools: &ValidatedTools, name: &str) -> Result<ToolId, ModelError> {
-    tools
-        .resolve(name)
-        .cloned()
-        .ok_or_else(|| invalid_request(&format!("model called unknown tool name {name:?}")))
 }
 
 #[cfg(test)]
