@@ -157,16 +157,21 @@ fn tool_result_round_trip() {
     let _ = round_trip(&block);
 }
 
-/// Fixture D-interrupted: interrupted/unknown tool execution stays a
-/// distinct status and round-trips.
+/// Fixture D-outcome-unknown: a tool execution whose outcome could not be
+/// established stays a distinct status and round-trips.
 #[test]
-fn tool_interrupted_round_trip() {
+fn tool_outcome_unknown_round_trip() {
     let block: MessageBlock =
-        serde_json::from_str(&read_fixture("d_tool_interrupted.json")).expect("parse fixture");
+        serde_json::from_str(&read_fixture("d_tool_outcome_unknown.json")).expect("parse fixture");
     let MessageBlock::Tool(tool) = &block else {
-        panic!("fixture D-interrupted must deserialize as a Tool message");
+        panic!("fixture D-outcome-unknown must deserialize as a Tool message");
     };
-    assert_eq!(tool.result.status, ToolExecutionStatus::Interrupted);
+    assert_eq!(
+        tool.result.status,
+        ToolExecutionStatus::OutcomeUnknown {
+            detail: "execution started, then the runtime restarted before a durable outcome was committed".to_owned(),
+        }
+    );
     assert_eq!(tool.result.duration_ms, 0);
     assert_eq!(tool.result.exit_code, None);
     let _ = round_trip(&block);
@@ -371,7 +376,7 @@ fn attempt_completed_envelope_round_trip() {
 }
 
 /// Programmatic variants not covered by fixtures also round-trip: a
-/// cancelled attempt and an interrupted tool result inside an envelope.
+/// cancelled attempt and an outcome-unknown tool result inside an envelope.
 #[test]
 fn additional_event_variants_round_trip() {
     use rustx::runtime::identity::{AttemptId, ConversationId, EventId};
@@ -397,11 +402,13 @@ fn additional_event_variants_round_trip() {
             .expect("deserialize");
     assert_eq!(decoded, cancelled);
 
-    let interrupted = RuntimeEvent::ToolExecutionCompleted {
+    let outcome_unknown = RuntimeEvent::ToolExecutionCompleted {
         tool_call_id: rustx::runtime::identity::ToolCallId::new("call_07"),
         tool_id: rustx::runtime::identity::ToolId::new("tool-bash"),
         result: ToolExecutionResult {
-            status: ToolExecutionStatus::Interrupted,
+            status: ToolExecutionStatus::OutcomeUnknown {
+                detail: "execution started, then the runtime restarted before a durable outcome was committed".to_owned(),
+            },
             content: Vec::new(),
             duration_ms: 0,
             exit_code: None,
@@ -411,9 +418,9 @@ fn additional_event_variants_round_trip() {
         },
     };
     let decoded: RuntimeEvent =
-        serde_json::from_str(&serde_json::to_string(&interrupted).expect("serialize"))
+        serde_json::from_str(&serde_json::to_string(&outcome_unknown).expect("serialize"))
             .expect("deserialize");
-    assert_eq!(decoded, interrupted);
+    assert_eq!(decoded, outcome_unknown);
 
     let compaction = RuntimeEvent::CompactionCompleted {
         generation: 3,

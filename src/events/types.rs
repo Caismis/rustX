@@ -768,12 +768,12 @@ pub enum BackgroundTerminalState {
     /// external outcome is **unknown** (Issue #12, M9a).
     ///
     /// This is deliberately distinct from [`BackgroundTerminalState::Failed`],
-    /// exactly as [`ToolExecutionStatus::Interrupted`] is distinct from
+    /// exactly as [`ToolExecutionStatus::OutcomeUnknown`] is distinct from
     /// `Failed`: recovery never converts an unknown outcome into a known
     /// failure, and it never re-launches the execution.
     ///
-    /// [`ToolExecutionStatus::Interrupted`]: crate::tools::types::ToolExecutionStatus::Interrupted
-    Interrupted,
+    /// [`ToolExecutionStatus::OutcomeUnknown`]: crate::tools::types::ToolExecutionStatus::OutcomeUnknown
+    OutcomeUnknown,
 }
 
 /// The normalized failure of an attempt.
