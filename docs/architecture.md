@@ -5243,6 +5243,39 @@ later cancellation is in-flight cancellation. The registry retains no
 `tokio::process::Child`; rollback and the committed driver are the only
 physical teardown owners at their respective phases.
 
+##### Whole-lifecycle execution deadline (Issue #191)
+
+The named definition may admit one optional `timeoutMs` value, in positive
+milliseconds, with a rustX-owned maximum of 86,400,000 milliseconds (24
+hours). Configuration admission validates the value without clamping it;
+absence means that the definition has no whole-lifecycle deadline. The
+validated `SubagentExecutionDeadline` is part of the definition digest and
+the resolved launch specification, so a resource-generation reload cannot
+change a launch that already froze an older definition.
+
+The `SubagentRegistry` is the sole deadline authority. It samples the
+runtime-owned monotonic clock only after the durable
+`SubagentOwnershipCommitted` event succeeds, creates one deadline task owned
+by that record, and aborts that task when cancellation intent or terminal
+candidate authority commits. The task calls the same registry cancellation
+method as explicit cancellation; it never sends a driver command directly or
+creates a terminal result. Under the registry mutex, the first
+`Running -> Cancelling` transition owns the typed
+`SubagentExecutionDeadlineExceeded` reason. A terminal candidate instead
+commits `PublishingTerminal` under that mutex, so a late deadline or explicit
+cancellation is a no-op. There is no `TimedOut` lifecycle state and no second
+terminal publisher.
+
+The existing process driver remains responsible for the typed Cancel frame,
+escalation, reaping, retained-anchor containment, and workspace/worktree
+settlement before physical child settlement. The registry then uses the
+ordinary terminal publication path, releasing capacity once and exposing the
+deadline-specific cancellation reason to the parent. Model request,
+stream-idle, tool, and max-step policies remain independent child policies;
+the Agent Loop, provider adapters, and process driver do not gain separate
+deadline authorities. The model-facing `subagent` and `execution` schemas
+also remain free of deadline or deadline-control parameters.
+
 #### Live activity observation (Issue #178)
 
 A subagent has one lifecycle authority, one durable execution history, and
@@ -5267,7 +5300,7 @@ child dispatcher        two delivery classes on two independent
         |               stream; publishing can never block the child Agent
         |               Loop or crowd out a terminal Result
         v
-Subagent IPC v11        reliable control frames on the fd 0 stream,
+Subagent IPC v13        reliable control frames on the fd 0 stream,
         |               disposable Activity frames
         |               (kind 107) on the fd 1 stream — independent
         |               backpressure domains, so a stalled observation
@@ -6075,7 +6108,7 @@ order, so two units with outstanding offers cannot open each other's gates.
 The control read half remains the parent-liveness authority, and its EOF is
 what `ChildPreparation` observes during composition. Channels are bounded,
 there is no listener and no network service. The subagent IPC version is
-**11**: its typed `Cancel` frame carries the parent registry's semantic
+**13**: its typed `Cancel` frame carries the parent registry's semantic
 `CancellationReason` (with an absent reason only for pre-ownership
 preparation cancellation, where no child attempt exists), the child→parent
 `Activity` frame (kind 107) carries the Issue #178 live activity projection
@@ -6254,7 +6287,7 @@ Representative current runtime/project configuration:
 
 ```jsonc
 {
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "agentId": "agent-default",
   "model": {
     "model": "gateway/reasoner",

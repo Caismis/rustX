@@ -73,11 +73,13 @@ use super::workspace::WorkspaceSnapshot;
 /// control frames and root-provider availability state; version 11 adds the
 /// root publication-admission handshake. Version 12 separates the child's
 /// logical project workspace from the physical Git worktree root owned by
-/// the parent. HITL traffic remains on fd 0 and never uses the disposable
-/// activity lane.
+/// the parent. Version 13 carries the definition-level whole-lifecycle
+/// execution deadline inside the frozen resolved launch specification (Issue
+/// #191). HITL traffic remains on fd 0 and never uses the disposable activity
+/// lane.
 /// There is no compatibility decoding: a peer that does not speak exactly
 /// this version exits before composing anything.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 12;
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 13;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -125,8 +127,9 @@ const KIND_ACTIVITY: u8 = 107;
 ///
 /// [`SubagentChildSpec::resolved`] is the complete frozen result of
 /// parent-side resolution against the invoking attempt's runtime resource
-/// generation: the named-agent identity and its definition digest, the child
-/// instruction document, the completely resolved model invocation, the exact
+/// generation: the named-agent identity and its definition digest, the
+/// optional whole-lifecycle execution deadline, the child instruction
+/// document, the completely resolved model invocation, the exact
 /// source-qualified capability identities with their exact admitted
 /// `ToolDefinition`s, the exact Skill version identities with their
 /// model-visible metadata, and the exact project instruction chain. The
@@ -752,6 +755,7 @@ mod tests {
             agent: SubagentName::parse("explore").expect("name"),
             definition_digest: serde_json::from_value(serde_json::json!("sha256:abc"))
                 .expect("digest"),
+            execution_deadline: None,
             workspace_policy: crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
             instructions: "instructions".to_owned(),
             model: crate::model::frozen::test_frozen_model_spec(

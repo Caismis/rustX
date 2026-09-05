@@ -943,6 +943,9 @@ fn load_subagent_catalog(
                 instructions,
                 instructions_source,
                 agent.model.clone(),
+                agent
+                    .execution_deadline()
+                    .map_err(RuntimeResourceLoadError::new)?,
                 agent.tools.selectors(),
                 agent.skills.clone(),
                 SubagentProjectInstructionPolicy {
@@ -1257,6 +1260,7 @@ impl LocalConversationCore {
                 agent_id: runtime_config.agent_id.clone(),
                 mailbox: tool_runtime.mailbox(),
                 clock: Arc::new(crate::runtime::types::SystemClock),
+                monotonic_clock: Arc::new(crate::runtime::SystemMonotonicClock::new()),
                 spawn: crate::runtime::subagent::SubagentSpawnPlan {
                     program: match dependencies.child_program.clone() {
                         Some(program) => program,
@@ -2671,6 +2675,7 @@ mod subagent_child_tests {
                 agent: SubagentName::parse("explore").expect("canonical name"),
                 definition_digest: serde_json::from_value(serde_json::json!("sha256:frozen"))
                     .expect("digest"),
+                execution_deadline: None,
                 workspace_policy:
                     crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
                 instructions: "frozen child instructions".to_owned(),
@@ -3804,7 +3809,7 @@ mod composition_tests {
         let echo_call_count_file = root.path().join("echo-call-count");
         let executable = std::env::current_exe().expect("test executable");
         let config_document = serde_json::json!({
-            "schemaVersion": 5,
+            "schemaVersion": 6,
             "agentId": "agent-parent",
             "model": {"model": "scripted/scripted"},
             "context": {"reserveTokens": 0, "keepRecentTokens": 0},

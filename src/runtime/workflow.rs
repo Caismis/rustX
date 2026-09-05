@@ -2581,6 +2581,7 @@ mod tests {
             agent_id: AgentId::new("workflow-test-parent"),
             mailbox,
             clock: Arc::new(SystemClock),
+            monotonic_clock: Arc::new(crate::runtime::ManualMonotonicClock::new()),
             spawn: SubagentSpawnPlan {
                 program: std::path::PathBuf::from("/nonexistent/rustx"),
                 runtime_root: runtime_root.clone(),
@@ -2639,6 +2640,7 @@ mod tests {
             instructions.to_owned(),
             plane.dir.path().join("reviewer.md"),
             Some(model.clone()),
+            None,
             Vec::new(),
             Vec::new(),
             SubagentProjectInstructionPolicy {

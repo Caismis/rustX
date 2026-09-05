@@ -4,7 +4,7 @@
 // `models.jsonc` is the provider/model catalog; this file selects the model
 // and defines the current runtime's policies and admitted resources.
 {
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "agentId": "default-agent",
 
   // The default model/session policy. The model catalog supplies the provider
@@ -149,6 +149,9 @@
       "navigator": {
         "description": "Read-only repository navigation and evidence gathering.",
         "instructionsFile": ".agents/subagents/navigator/instructions.md",
+        // Optional whole-child wall-clock limit, in milliseconds. It covers
+        // the complete owned lifecycle (model, tools, and settlement).
+        "timeoutMs": 3600000,
         "tools": {
           "builtin": ["read", "glob", "grep"],
         },

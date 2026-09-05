@@ -50,6 +50,7 @@ fn resolved(agent: &str) -> ResolvedSubagentSpec {
             "sha256:0000000000000000000000000000000000000000000000000000000000000000"
         ))
         .expect("digest"),
+        execution_deadline: None,
         workspace_policy: rustx::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
         instructions: "instructions".to_owned(),
         model: crate::model::frozen::test_frozen_model_spec(

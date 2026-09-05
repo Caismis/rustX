@@ -1621,6 +1621,17 @@ second authority:
   selector resolves to anything outside the invoking generation's authorized
   available capabilities, and no per-call argument can widen a definition:
   the model-facing contract is exactly `{agent, task, context?}`.
+- **A named definition's optional `timeoutMs` is a validated static policy.**
+  The value is a positive integer number of milliseconds, bounded at
+  86,400,000 (24 hours); absence means no whole-lifecycle deadline, and zero,
+  malformed, or above-maximum values reject configuration admission without
+  clamping. The typed `SubagentExecutionDeadline` participates in the
+  versioned definition digest and is copied into `ResolvedSubagentSpec`, so
+  an admitted generation freezes the policy for every launch. It covers the
+  owned child lifecycle, including model, tools, and physical/workspace
+  settlement; it is separate from model request/stream-idle and tool timeout
+  policies. The model-facing `subagent` and `execution` schemas expose no
+  deadline or deadline-control parameter.
 - **Optionality belongs to source availability, never to a selection.** A
   configured source that is unavailable in this generation keeps the runtime
   healthy and blocks only the agents that explicitly require it
@@ -1674,7 +1685,7 @@ second authority:
   `execution` have no child-plane implementation at all.
 - **Committed child identity is `(agent, definition_digest)`.**
   `SubagentDefinitionDigest` is SHA-256 over a rustX-owned versioned
-  canonical framing (`rustx-subagent-definition-v2`) of the normalized
+  canonical framing (`rustx-subagent-definition-v3`) of the normalized
   semantic definition — never raw JSONC bytes — so comments, whitespace, key
   order, and selector listing order cannot change it while every semantic
   change does. It is the identity of the **named definition itself**, not of
@@ -1960,7 +1971,7 @@ second authority:
   either `UnixStream`; there is no listener and no network service.
 - **Anchor acknowledgements route by exact typed identity.** Two units with
   outstanding offers cannot open each other's start gates.
-- **The subagent IPC version is 11 and there is no compatibility decoding.** A
+- **The subagent IPC version is 13 and there is no compatibility decoding.** A
   peer that does not speak exactly this version exits before composing
   anything. The typed `Cancel` payload carries the parent registry's semantic
   `CancellationReason`; only pre-ownership preparation cancellation uses an
@@ -1974,8 +1985,10 @@ second authority:
   exact `InteractionRef` from the root host's synchronized control-attachment
   frontier before the child commits its requested fact. Version 12 replaces
   the conflated workspace path with explicit logical-child and physical-
-  worktree facts. HITL traffic is never a control acknowledgement and never
-  uses the disposable observation lane.
+  worktree facts. Version 13 carries the frozen definition-level
+  whole-lifecycle execution deadline in `ResolvedSubagentSpec`; only the
+  parent registry enforces it after ownership commits. HITL traffic is never
+  a control acknowledgement and never uses the disposable observation lane.
 
 ## Issues #146, #187, and #189: deterministic, scope-preserving worktree isolation
 
@@ -2154,10 +2167,24 @@ the launch-boundary policy inheritance.
   through the typed `SubagentChildSpec` and applies it independently to
   response-start deadlines, stream-idle deadlines, and child model-backed
   summarization during compaction. No parent watchdog wraps child provider
-  requests. A child deadline timeout is an ordinary transient model failure
+  requests. A model request timeout is an ordinary transient model failure
   that enters the child's generic retry when budget permits; a child
   summarizer timeout follows Issue #135 semantics and is never converted
   into generic primary-model retry.
+- **The whole-lifecycle execution deadline is parent-owned cancellation.**
+  After `SubagentOwnershipCommitted` and the `Running` record exist, the
+  `SubagentRegistry` samples the runtime monotonic clock and owns one
+  record-scoped deadline task. Expiry calls the same cancellation method as
+  explicit cancellation. The registry mutex transition `Running ->
+  Cancelling` is the cancellation linearization point: the first source owns
+  the typed `CancellationReason`, and later sources cannot overwrite it.
+  Physical driver cancellation, escalation, child reap, retained-anchor and
+  workspace/worktree settlement remain unchanged. A terminal candidate
+  instead commits `PublishingTerminal` under that same mutex, so success or
+  another terminal state that wins there makes deadline expiry a no-op. There
+  is no `TimedOut` lifecycle state, no second terminal publisher, no fresh
+  deadline for a recovered terminal record, and no independent Agent Loop,
+  provider, or process-driver deadline authority.
 - **A named child is an ordinary conversation runtime.** Named-definition
   resolution freezes the full `ResolvedSubagentSpec` before launch, and the
   child-owned preparation/materialization boundary supplies the exact

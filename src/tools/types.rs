@@ -811,6 +811,9 @@ impl ToolExecutionStatus {
                     CancellationReason::UserRequested => "user_requested",
                     CancellationReason::RuntimeShutdown => "runtime_shutdown",
                     CancellationReason::ParentCancelled => "parent_cancelled",
+                    CancellationReason::SubagentExecutionDeadlineExceeded => {
+                        "subagent_execution_deadline_exceeded"
+                    }
                 };
                 let phase = match phase {
                     ToolCancellationPhase::BeforeStart => {
@@ -1060,6 +1063,10 @@ mod tests {
             (CancellationReason::UserRequested, "user_requested"),
             (CancellationReason::RuntimeShutdown, "runtime_shutdown"),
             (CancellationReason::ParentCancelled, "parent_cancelled"),
+            (
+                CancellationReason::SubagentExecutionDeadlineExceeded,
+                "subagent_execution_deadline_exceeded",
+            ),
         ] {
             for phase in [
                 ToolCancellationPhase::BeforeStart,
@@ -1080,7 +1087,9 @@ mod tests {
                 }
                 if matches!(
                     reason,
-                    CancellationReason::RuntimeShutdown | CancellationReason::ParentCancelled
+                    CancellationReason::RuntimeShutdown
+                        | CancellationReason::ParentCancelled
+                        | CancellationReason::SubagentExecutionDeadlineExceeded
                 ) {
                     assert!(!text.contains("user requested"));
                 }

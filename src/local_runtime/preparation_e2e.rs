@@ -152,6 +152,7 @@ impl Lab {
             agent_id: AgentId::new("agent-parent"),
             mailbox,
             clock: Arc::new(crate::runtime::types::SystemClock),
+            monotonic_clock: Arc::new(crate::runtime::ManualMonotonicClock::new()),
             spawn: crate::runtime::subagent::SubagentSpawnPlan {
                 program: wrapper,
                 runtime_root: runtime_root.clone(),
@@ -200,6 +201,7 @@ impl Lab {
                     "sha256:0000000000000000000000000000000000000000000000000000000000000000"
                 ))
                 .expect("digest"),
+                execution_deadline: None,
                 workspace_policy:
                     crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
                 instructions: "frozen child instructions".to_owned(),

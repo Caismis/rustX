@@ -66,6 +66,15 @@ to publish, and only then does the candidate commit. A definition that names
 an unknown capability, model, or Skill therefore rejects the whole candidate,
 and the previous complete generation stays authoritative in every half.
 
+`SubagentDocument.timeoutMs` is an optional, definition-level positive
+millisecond value. Admission rejects zero, malformed values, and values above
+the rustX-owned 86,400,000 millisecond (24 hour) maximum; it never clamps an
+invalid value. The validated `SubagentExecutionDeadline` is part of the
+definition's semantic digest and is copied into `ResolvedSubagentSpec`, so an
+attempt keeps the deadline of the immutable generation it admitted even if a
+later reload changes the current configuration. The model-facing `subagent`
+call has no deadline field and cannot set or extend it.
+
 The capability-source availability carried alongside the catalog is what lets
 resolution distinguish two different facts:
 
@@ -86,7 +95,8 @@ generation, so a reload that commits a newer generation cannot be observed by
 an in-flight attempt. A reload additionally refuses while an attempt is live.
 
 A resolved specification freezes everything the child needs: the
-`(agent, definition_digest)` identity, the instruction document, the
+`(agent, definition_digest)` identity, the optional whole-lifecycle execution
+deadline, the instruction document, the
 completely resolved model invocation, the exact source-qualified capability
 identities across Builtin/MCP (managed Python packages included, under their
 synthesized `python:<folder>` server identities) together with the exact
@@ -145,8 +155,9 @@ nominal:
 
 `SubagentDefinitionDigest` is the identity of the **named definition
 itself** — the normalized semantics configuration declares for that agent
-(name, description, instruction document, explicit model reference, selector
-set, Skill selector set, project-instruction policy). It is deliberately
+(name, description, instruction document, explicit model reference,
+whole-lifecycle execution deadline, selector set, Skill selector set,
+project-instruction policy). It is deliberately
 *not* a digest of the full effective child runtime.
 
 Everything the invoking generation contributes at resolution time —

@@ -60,6 +60,7 @@ pub(crate) fn subagent_plane_for(conversation: &str) -> SubagentPlane {
         agent_id: AgentId::new("agent-parent-162"),
         mailbox,
         clock: Arc::new(SystemClock),
+        monotonic_clock: Arc::new(rustx::runtime::ManualMonotonicClock::new()),
         spawn: SubagentSpawnPlan {
             program: std::path::PathBuf::from("/nonexistent/rustx"),
             runtime_root: runtime_root.clone(),

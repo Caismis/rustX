@@ -25,6 +25,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -49,6 +50,15 @@ pub const MAX_SUBAGENT_INSTRUCTIONS_BYTES: usize = 64 * 1024;
 /// The maximum number of explicit project-instruction files one definition
 /// may name.
 pub const MAX_SUBAGENT_PROJECT_FILES: usize = 8;
+
+/// The maximum whole-lifecycle wall-clock execution deadline one named
+/// subagent may hold.
+///
+/// Twenty-four hours is deliberately a rustX-owned bound: it is long enough
+/// for a legitimate repository task, while bounding how long one child can
+/// retain a process, a conversation capacity slot, and any workspace lease.
+/// This is one domain field, not a generic timeout policy framework.
+pub const MAX_SUBAGENT_EXECUTION_DEADLINE_MS: u64 = 24 * 60 * 60 * 1000;
 
 /// The canonical typed name of one admitted subagent definition.
 ///
@@ -232,7 +242,7 @@ pub struct SubagentDefinitionDigest(String);
 /// It is part of the hashed preimage: a later milestone that admits a new
 /// behavior-affecting field bumps this constant, so two framings can never
 /// collide into the same digest.
-pub const SUBAGENT_DEFINITION_DIGEST_VERSION: &str = "rustx-subagent-definition-v2";
+pub const SUBAGENT_DEFINITION_DIGEST_VERSION: &str = "rustx-subagent-definition-v3";
 
 impl SubagentDefinitionDigest {
     /// The stable textual form `sha256:<64 lowercase hex characters>`.
@@ -248,6 +258,92 @@ impl core::fmt::Display for SubagentDefinitionDigest {
     }
 }
 
+/// A validated definition-level whole-lifecycle execution deadline.
+///
+/// Configuration uses milliseconds at the JSONC boundary, but runtime code
+/// receives this typed value only after positivity and the rustX-owned maximum
+/// have been checked. Absolute firing time is derived from the runtime's
+/// monotonic clock only after ownership commits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SubagentExecutionDeadline(u64);
+
+impl SubagentExecutionDeadline {
+    /// Builds a deadline from a positive, bounded millisecond value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an explicit validation error for zero or a value above the
+    /// rustX-owned maximum.
+    pub fn from_millis(millis: u64) -> Result<Self, SubagentExecutionDeadlineError> {
+        if millis == 0 {
+            return Err(SubagentExecutionDeadlineError::Zero);
+        }
+        if millis > MAX_SUBAGENT_EXECUTION_DEADLINE_MS {
+            return Err(SubagentExecutionDeadlineError::ExceedsMaximum { millis });
+        }
+        Ok(Self(millis))
+    }
+
+    /// The validated duration in milliseconds.
+    #[must_use]
+    pub const fn as_millis(self) -> u64 {
+        self.0
+    }
+
+    /// The validated standard-library duration.
+    #[must_use]
+    pub const fn as_duration(self) -> Duration {
+        Duration::from_millis(self.0)
+    }
+}
+
+impl TryFrom<u64> for SubagentExecutionDeadline {
+    type Error = SubagentExecutionDeadlineError;
+
+    fn try_from(millis: u64) -> Result<Self, Self::Error> {
+        Self::from_millis(millis)
+    }
+}
+
+impl Serialize for SubagentExecutionDeadline {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u64(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for SubagentExecutionDeadline {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let millis = u64::deserialize(deserializer)?;
+        Self::from_millis(millis).map_err(serde::de::Error::custom)
+    }
+}
+
+/// A definition-level execution deadline validation failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubagentExecutionDeadlineError {
+    /// A present deadline must be positive.
+    Zero,
+    /// The deadline is above [`MAX_SUBAGENT_EXECUTION_DEADLINE_MS`].
+    ExceedsMaximum {
+        /// The offending millisecond value.
+        millis: u64,
+    },
+}
+
+impl core::fmt::Display for SubagentExecutionDeadlineError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Zero => formatter.write_str("must be positive when present"),
+            Self::ExceedsMaximum { millis } => write!(
+                formatter,
+                "must not exceed {MAX_SUBAGENT_EXECUTION_DEADLINE_MS} milliseconds (found {millis})"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SubagentExecutionDeadlineError {}
+
 /// One immutable named subagent definition of a runtime resource generation.
 ///
 /// Everything a child's behavior depends on is already resolved here except
@@ -261,6 +357,7 @@ pub struct SubagentDefinition {
     instructions: String,
     instructions_source: PathBuf,
     model: Option<ModelRef>,
+    execution_deadline: Option<SubagentExecutionDeadline>,
     tools: Vec<SubagentToolSelector>,
     skills: Vec<String>,
     project_instructions: SubagentProjectInstructionPolicy,
@@ -288,6 +385,7 @@ impl SubagentDefinition {
         instructions: String,
         instructions_source: PathBuf,
         model: Option<ModelRef>,
+        execution_deadline: Option<SubagentExecutionDeadline>,
         tools: Vec<SubagentToolSelector>,
         skills: Vec<String>,
         project_instructions: SubagentProjectInstructionPolicy,
@@ -359,6 +457,7 @@ impl SubagentDefinition {
             &description,
             &instructions,
             model.as_ref(),
+            execution_deadline,
             &tools,
             &skills,
             &project_instructions,
@@ -370,6 +469,7 @@ impl SubagentDefinition {
             instructions,
             instructions_source,
             model,
+            execution_deadline,
             tools,
             skills,
             project_instructions,
@@ -406,6 +506,13 @@ impl SubagentDefinition {
     #[must_use]
     pub const fn model(&self) -> Option<&ModelRef> {
         self.model.as_ref()
+    }
+
+    /// The optional whole-lifecycle execution deadline frozen in this
+    /// definition.
+    #[must_use]
+    pub const fn execution_deadline(&self) -> Option<SubagentExecutionDeadline> {
+        self.execution_deadline
     }
 
     /// The canonically ordered typed Tool selectors.
@@ -699,6 +806,7 @@ fn compute_digest(
     description: &str,
     instructions: &str,
     model: Option<&ModelRef>,
+    execution_deadline: Option<SubagentExecutionDeadline>,
     tools: &[SubagentToolSelector],
     skills: &[String],
     project_instructions: &SubagentProjectInstructionPolicy,
@@ -716,6 +824,14 @@ fn compute_digest(
         // happens to use is not the same definition as one that inherits.
         None => field(&mut hasher, "model", "\u{0}inherit"),
         Some(model) => field(&mut hasher, "model", &format!("explicit:{model}")),
+    }
+    match execution_deadline {
+        None => field(&mut hasher, "execution_deadline", "\u{0}absent"),
+        Some(deadline) => field(
+            &mut hasher,
+            "execution_deadline",
+            &format!("millis:{}", deadline.as_millis()),
+        ),
     }
     count(&mut hasher, "tools", tools.len());
     for selector in tools {
@@ -773,9 +889,12 @@ fn count(hasher: &mut Sha256, key: &str, value: usize) {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::{
-        SubagentCatalog, SubagentDefinition, SubagentDefinitionError, SubagentName,
-        SubagentNameError, SubagentProjectInstructionPolicy, SubagentToolSelector,
+        MAX_SUBAGENT_EXECUTION_DEADLINE_MS, SubagentCatalog, SubagentDefinition,
+        SubagentDefinitionError, SubagentExecutionDeadline, SubagentExecutionDeadlineError,
+        SubagentName, SubagentNameError, SubagentProjectInstructionPolicy, SubagentToolSelector,
     };
     use crate::runtime::identity::McpServerId;
     use crate::runtime::resources::ProjectContextFile;
@@ -798,6 +917,7 @@ mod tests {
             "a description".to_owned(),
             "instructions".to_owned(),
             std::path::PathBuf::from("/w/.agents/subagents/explore/instructions.md"),
+            None,
             None,
             tools,
             skills,
@@ -943,6 +1063,7 @@ mod tests {
             "instructions".to_owned(),
             std::path::PathBuf::from("/w/.agents/subagents/explore/instructions.md"),
             None,
+            None,
             Vec::new(),
             Vec::new(),
             SubagentProjectInstructionPolicy {
@@ -957,6 +1078,7 @@ mod tests {
             "a description".to_owned(),
             "instructions".to_owned(),
             std::path::PathBuf::from("/w/.agents/subagents/explore/instructions.md"),
+            None,
             None,
             Vec::new(),
             Vec::new(),
@@ -976,6 +1098,7 @@ mod tests {
             "instructions".to_owned(),
             std::path::PathBuf::from("/w/.agents/subagents/explore/instructions.md"),
             None,
+            None,
             Vec::new(),
             Vec::new(),
             SubagentProjectInstructionPolicy {
@@ -994,6 +1117,7 @@ mod tests {
             "different instructions".to_owned(),
             std::path::PathBuf::from("/w/.agents/subagents/explore/instructions.md"),
             None,
+            None,
             Vec::new(),
             Vec::new(),
             policy(),
@@ -1005,6 +1129,7 @@ mod tests {
             "a description".to_owned(),
             "instructions".to_owned(),
             std::path::PathBuf::from("/w/.agents/subagents/explore/instructions.md"),
+            None,
             None,
             Vec::new(),
             Vec::new(),
@@ -1036,6 +1161,7 @@ mod tests {
             "instructions".to_owned(),
             std::path::PathBuf::from("/w/a.md"),
             None,
+            None,
             Vec::new(),
             Vec::new(),
             policy(),
@@ -1048,6 +1174,7 @@ mod tests {
             "instructions".to_owned(),
             std::path::PathBuf::from("/elsewhere/b.md"),
             None,
+            None,
             Vec::new(),
             Vec::new(),
             policy(),
@@ -1058,6 +1185,48 @@ mod tests {
             here.digest(),
             there.digest(),
             "the instruction content is the semantic identity; its host location is not"
+        );
+    }
+
+    #[test]
+    fn execution_deadline_is_typed_bounded_and_part_of_definition_semantics() {
+        assert_eq!(
+            SubagentExecutionDeadline::from_millis(0),
+            Err(SubagentExecutionDeadlineError::Zero)
+        );
+        assert!(matches!(
+            SubagentExecutionDeadline::from_millis(MAX_SUBAGENT_EXECUTION_DEADLINE_MS + 1),
+            Err(SubagentExecutionDeadlineError::ExceedsMaximum { .. })
+        ));
+        let deadline = SubagentExecutionDeadline::from_millis(30_000).expect("valid deadline");
+        assert_eq!(deadline.as_millis(), 30_000);
+        assert_eq!(deadline.as_duration(), Duration::from_secs(30));
+        assert_eq!(
+            serde_json::to_value(deadline).expect("serialize deadline"),
+            serde_json::json!(30_000)
+        );
+        assert!(serde_json::from_str::<SubagentExecutionDeadline>("0").is_err());
+        assert!(serde_json::from_str::<SubagentExecutionDeadline>("\"30s\"").is_err());
+
+        let without_deadline = definition("explore", Vec::new(), Vec::new()).expect("definition");
+        let with_deadline = SubagentDefinition::new(
+            SubagentName::parse("explore").expect("name"),
+            "a description".to_owned(),
+            "instructions".to_owned(),
+            std::path::PathBuf::from("/w/.agents/subagents/explore/instructions.md"),
+            None,
+            Some(deadline),
+            Vec::new(),
+            Vec::new(),
+            policy(),
+            SubagentWorkspacePolicy::SharedWorkspace,
+        )
+        .expect("definition");
+        assert_eq!(with_deadline.execution_deadline(), Some(deadline));
+        assert_ne!(
+            without_deadline.digest(),
+            with_deadline.digest(),
+            "the frozen deadline changes definition identity"
         );
     }
 
