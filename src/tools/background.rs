@@ -106,16 +106,24 @@
 //! # Cancellation-vs-completion race
 //!
 //! The first registry transition that commits either terminal completion or
-//! cancellation intent wins the race. If completion
-//! (`Succeeded`/`Failed`/`Cancelled`) commits first, a later cancel is an
-//! idempotent no-op returning the terminal snapshot. If cancellation
-//! intent commits first (`Starting`/`Running` → `Cancelling`), cancellation
-//! owns settlement: the cancellation reason is retained for final
-//! settlement, and a later normal executor return cannot overwrite the
-//! cancellation winner with `Succeeded` — the stored terminal result is
-//! canonicalized to `Cancelled` with the retained reason. Only an explicit
-//! runtime/process-control failure after cancellation intent settles as
-//! `Failed`.
+//! cancellation intent wins the race. If completion (any terminal state)
+//! commits first, a later cancel is an idempotent no-op returning the
+//! terminal snapshot. If cancellation intent commits first
+//! (`Starting`/`Running` → `Cancelling`), cancellation owns settlement: the
+//! cancellation reason is retained for final settlement, and a later normal
+//! executor return cannot overwrite the cancellation winner with
+//! `Succeeded` — the stored terminal result is canonicalized to `Cancelled`
+//! with the retained reason.
+//!
+//! A cancellation **request** is not a confirmed cancellation, though: the
+//! registry never claims a stronger external outcome than the executor
+//! proved. Executor-proven terminal facts survive the cancellation winner
+//! under their own truthful lifecycle states — a known failure settles as
+//! `Failed`, a proven deadline settlement as `TimedOut`, and an executor
+//! [`ToolExecutionStatus::OutcomeUnknown`] (for example an unconfirmed
+//! remote termination after the cancellation request) settles as
+//! `OutcomeUnknown`, never rewritten to `Cancelled` and never collapsed
+//! into `Failed`.
 //!
 //! # Terminal inbound publication
 //!
@@ -222,13 +230,22 @@ const BACKGROUND_CANCEL_REASON: CancellationReason = CancellationReason::UserReq
 /// ```text
 /// Starting  → Running
 /// Starting  → Cancelling
-/// Starting  → Succeeded / Failed
+/// Starting  → Succeeded / Failed / TimedOut / OutcomeUnknown
 /// Running   → Cancelling
-/// Running   → Succeeded / Failed
+/// Running   → Succeeded / Failed / TimedOut / OutcomeUnknown
 /// Running   → PublishingTerminal
-/// Cancelling → Cancelled
-/// PublishingTerminal → Succeeded / Failed / Cancelled
+/// Cancelling → Cancelled / Failed / TimedOut / OutcomeUnknown
+/// PublishingTerminal → Succeeded / Failed / Cancelled / TimedOut / OutcomeUnknown
 /// ```
+///
+/// The terminal vocabulary claims only facts the executor proved: `Failed`
+/// is a *known* failure, `TimedOut` is a proven deadline settlement, and
+/// `OutcomeUnknown` means the executor could not prove the external outcome
+/// at all. A terminal lifecycle never claims a stronger external outcome
+/// than the canonical [`ToolExecutionStatus`] of the stored result proves —
+/// in particular an unknown outcome is never labelled `Failed`, and a
+/// cancellation request that could not be confirmed physically never
+/// becomes `Cancelled`.
 ///
 /// [`BackgroundLifecycle::PublishingTerminal`] is the honest non-terminal
 /// state in which the executor has returned its terminal candidate and the
@@ -252,10 +269,22 @@ pub enum BackgroundLifecycle {
     PublishingTerminal,
     /// The execution succeeded.
     Succeeded,
-    /// The execution failed.
+    /// The execution reached a known failure: the executor proved a failed
+    /// terminal outcome. `Failed` never means "anything that is not success
+    /// or cancelled" — an unproven outcome is [`Self::OutcomeUnknown`].
     Failed,
-    /// The execution was cancelled through the cancellation path.
+    /// The execution was cancelled through the cancellation path and the
+    /// cancellation winner owns settlement.
     Cancelled,
+    /// The execution's deadline expired and the executor proved the
+    /// terminal settlement (see [`ToolExecutionStatus::TimedOut`]).
+    TimedOut,
+    /// The executor returned without being able to prove the external
+    /// outcome (see [`ToolExecutionStatus::OutcomeUnknown`]). This is a
+    /// first-class terminal state: the execution is settled as far as this
+    /// runtime is concerned, but its external outcome is genuinely unknown
+    /// and is never collapsed into [`Self::Failed`].
+    OutcomeUnknown,
 }
 
 /// The read-only observation seam of the background registry.
@@ -312,7 +341,14 @@ impl BackgroundLifecycle {
     /// Whether this state is terminal (absorbing).
     #[must_use]
     pub fn is_terminal(self) -> bool {
-        matches!(self, Self::Succeeded | Self::Failed | Self::Cancelled)
+        matches!(
+            self,
+            Self::Succeeded
+                | Self::Failed
+                | Self::Cancelled
+                | Self::TimedOut
+                | Self::OutcomeUnknown
+        )
     }
 
     /// Whether this state is active (non-terminal).
@@ -332,6 +368,8 @@ impl BackgroundLifecycle {
             Self::Succeeded => "succeeded",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
+            Self::TimedOut => "timed_out",
+            Self::OutcomeUnknown => "outcome_unknown",
         }
     }
 }
@@ -1246,7 +1284,9 @@ impl ConversationBackgroundRegistry {
                 | BackgroundLifecycle::PublishingTerminal
                 | BackgroundLifecycle::Succeeded
                 | BackgroundLifecycle::Failed
-                | BackgroundLifecycle::Cancelled => {}
+                | BackgroundLifecycle::Cancelled
+                | BackgroundLifecycle::TimedOut
+                | BackgroundLifecycle::OutcomeUnknown => {}
             }
         }
         Self::observe_record(&state, index);
@@ -1344,8 +1384,13 @@ impl ConversationBackgroundRegistry {
     /// later normal executor return cannot contradict the registry winner:
     /// the stored terminal result is canonicalized to `Cancelled` with the
     /// retained cancellation reason, preserving useful bounded result data
-    /// and artifacts where present. Only an explicit runtime/process-control
-    /// failure after cancellation intent settles as `Failed`.
+    /// and artifacts where present. Executor-proven facts survive the
+    /// cancellation winner under their own truthful terminal states: a known
+    /// failure settles as `Failed`, a proven deadline settlement as
+    /// `TimedOut`, and an unproven external outcome as `OutcomeUnknown` —
+    /// a cancellation request is not a confirmed cancellation, so an
+    /// executor's `OutcomeUnknown` is never rewritten to `Cancelled` and
+    /// never collapsed into `Failed`.
     ///
     /// This is durable publication attempt #1 of the production settlement
     /// continuation; [`ConversationBackgroundRegistry::settle_terminal`]
@@ -1376,63 +1421,12 @@ impl ConversationBackgroundRegistry {
             if record.lifecycle.is_terminal() {
                 return;
             }
-            match record.lifecycle {
-                BackgroundLifecycle::Starting | BackgroundLifecycle::Running => {
-                    match result.status {
-                        ToolExecutionStatus::Success => {
-                            (BackgroundLifecycle::Succeeded, result.clone())
-                        }
-                        ToolExecutionStatus::Cancelled { reason, .. } => {
-                            // `mark_running` crossed the detached runner's
-                            // start frontier before the executor was called.
-                            // Do not trust a provisional executor-provided
-                            // phase; the registry owns the canonical phase.
-                            let mut canonical = result.clone();
-                            canonical.status = ToolExecutionStatus::Cancelled {
-                                reason,
-                                phase: ToolCancellationPhase::DuringExecution,
-                            };
-                            (BackgroundLifecycle::Cancelled, canonical)
-                        }
-                        ToolExecutionStatus::Denied { .. }
-                        | ToolExecutionStatus::Failed { .. }
-                        | ToolExecutionStatus::TimedOut
-                        | ToolExecutionStatus::OutcomeUnknown { .. } => {
-                            (BackgroundLifecycle::Failed, result.clone())
-                        }
-                    }
-                }
-                BackgroundLifecycle::Cancelling => {
-                    // Cancellation intent already owns settlement. A normal
-                    // executor return must not overwrite the cancellation
-                    // winner; only an explicit runtime/process-control failure
-                    // is represented as Failed.
-                    if matches!(
-                        result.status,
-                        ToolExecutionStatus::Denied { .. } | ToolExecutionStatus::Failed { .. }
-                    ) {
-                        (BackgroundLifecycle::Failed, result.clone())
-                    } else if matches!(result.status, ToolExecutionStatus::OutcomeUnknown { .. }) {
-                        // The executor could not prove the external outcome
-                        // after the cancellation request (for example an
-                        // unconfirmed remote termination). A cancellation
-                        // request is not a confirmed cancellation result, so
-                        // the honest unknown survives the cancellation winner.
-                        (BackgroundLifecycle::Failed, result.clone())
-                    } else {
-                        let mut canonical = result.clone();
-                        canonical.status = ToolExecutionStatus::Cancelled {
-                            reason: record.cancel_reason.unwrap_or(BACKGROUND_CANCEL_REASON),
-                            phase: ToolCancellationPhase::DuringExecution,
-                        };
-                        (BackgroundLifecycle::Cancelled, canonical)
-                    }
-                }
-                BackgroundLifecycle::PublishingTerminal
-                | BackgroundLifecycle::Succeeded
-                | BackgroundLifecycle::Failed
-                | BackgroundLifecycle::Cancelled => return,
-            }
+            let Some(candidate) =
+                terminal_candidate(record.lifecycle, record.cancel_reason, result)
+            else {
+                return;
+            };
+            candidate
         };
         let (settled, stored) = candidate;
         // The registry retains the terminal candidate before publication, so
@@ -2057,6 +2051,82 @@ fn terminal_inbound_message(
     }
 }
 
+/// Computes the terminal settlement candidate of one returned executor.
+///
+/// The lifecycle never claims a stronger external outcome than the canonical
+/// [`ToolExecutionStatus`] proves: a known failure settles as `Failed`, a
+/// proven deadline settlement as `TimedOut`, and an unproven external
+/// outcome as `OutcomeUnknown`. Under the `Cancelling` winner a normal
+/// executor return is canonicalized to `Cancelled` with the retained
+/// reason, but executor-proven facts — failure, timeout, and the honest
+/// unknown — survive under their own truthful terminal states: a
+/// cancellation request is not a confirmed cancellation.
+///
+/// Returns `None` when the record cannot transition (already terminal or
+/// `PublishingTerminal`).
+fn terminal_candidate(
+    lifecycle: BackgroundLifecycle,
+    cancel_reason: Option<CancellationReason>,
+    result: &ToolExecutionResult,
+) -> Option<(BackgroundLifecycle, ToolExecutionResult)> {
+    Some(match lifecycle {
+        BackgroundLifecycle::Starting | BackgroundLifecycle::Running => match result.status {
+            ToolExecutionStatus::Success => (BackgroundLifecycle::Succeeded, result.clone()),
+            ToolExecutionStatus::Cancelled { reason, .. } => {
+                // `mark_running` crossed the detached runner's start
+                // frontier before the executor was called. Do not trust a
+                // provisional executor-provided phase; the registry owns
+                // the canonical phase.
+                let mut canonical = result.clone();
+                canonical.status = ToolExecutionStatus::Cancelled {
+                    reason,
+                    phase: ToolCancellationPhase::DuringExecution,
+                };
+                (BackgroundLifecycle::Cancelled, canonical)
+            }
+            ToolExecutionStatus::Denied { .. } | ToolExecutionStatus::Failed { .. } => {
+                (BackgroundLifecycle::Failed, result.clone())
+            }
+            ToolExecutionStatus::TimedOut => (BackgroundLifecycle::TimedOut, result.clone()),
+            ToolExecutionStatus::OutcomeUnknown { .. } => {
+                (BackgroundLifecycle::OutcomeUnknown, result.clone())
+            }
+        },
+        BackgroundLifecycle::Cancelling => match result.status {
+            ToolExecutionStatus::Denied { .. } | ToolExecutionStatus::Failed { .. } => {
+                (BackgroundLifecycle::Failed, result.clone())
+            }
+            ToolExecutionStatus::TimedOut => {
+                // The executor proved the deadline settlement; the
+                // cancellation request did not manufacture it.
+                (BackgroundLifecycle::TimedOut, result.clone())
+            }
+            ToolExecutionStatus::OutcomeUnknown { .. } => {
+                // The executor could not prove the external outcome after
+                // the cancellation request (for example an unconfirmed
+                // remote termination). A cancellation request is not a
+                // confirmed cancellation result, so the honest unknown
+                // survives the cancellation winner.
+                (BackgroundLifecycle::OutcomeUnknown, result.clone())
+            }
+            ToolExecutionStatus::Success | ToolExecutionStatus::Cancelled { .. } => {
+                let mut canonical = result.clone();
+                canonical.status = ToolExecutionStatus::Cancelled {
+                    reason: cancel_reason.unwrap_or(BACKGROUND_CANCEL_REASON),
+                    phase: ToolCancellationPhase::DuringExecution,
+                };
+                (BackgroundLifecycle::Cancelled, canonical)
+            }
+        },
+        BackgroundLifecycle::PublishingTerminal
+        | BackgroundLifecycle::Succeeded
+        | BackgroundLifecycle::Failed
+        | BackgroundLifecycle::Cancelled
+        | BackgroundLifecycle::TimedOut
+        | BackgroundLifecycle::OutcomeUnknown => return None,
+    })
+}
+
 fn inbound_draft(notification: UserMessageBlock, correlation: String) -> InboundDraft {
     let timestamp = notification
         .timestamp
@@ -2087,6 +2157,8 @@ fn background_terminal_event(
             BackgroundLifecycle::Succeeded => BackgroundTerminalState::Succeeded,
             BackgroundLifecycle::Failed => BackgroundTerminalState::Failed,
             BackgroundLifecycle::Cancelled => BackgroundTerminalState::Cancelled,
+            BackgroundLifecycle::TimedOut => BackgroundTerminalState::TimedOut,
+            BackgroundLifecycle::OutcomeUnknown => BackgroundTerminalState::OutcomeUnknown,
             BackgroundLifecycle::Starting
             | BackgroundLifecycle::Running
             | BackgroundLifecycle::Cancelling
@@ -2978,6 +3050,140 @@ mod tests {
                 .expect("select")
                 .is_none()
         );
+    }
+
+    /// Outcome certainty (Issue #202): an executor that returns
+    /// `OutcomeUnknown` without a cancellation winner settles under the
+    /// truthful terminal lifecycle `OutcomeUnknown` — never `Failed` — and
+    /// the stored result keeps its unknown status.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn outcome_unknown_settles_as_outcome_unknown_not_failed() {
+        let fixture = registry("conv-bg-unknown");
+        let unknown = ToolExecutionResult {
+            status: ToolExecutionStatus::OutcomeUnknown {
+                detail: "remote termination could not be confirmed".to_owned(),
+            },
+            ..success()
+        };
+        let (executor, mut started, release) = IgnoreCancellationExecutor::new(unknown);
+        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+        let prepared = prepare(&fixture, &executor);
+        let outcome = fixture
+            .registry
+            .commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .expect("the commit returns an outcome");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
+            panic!("accepted");
+        };
+        await_test_started(&mut started, "runner started").await;
+        release.send_replace(true);
+        let terminal = wait_for_terminal(&fixture, &execution_id).await;
+        assert_eq!(
+            terminal.state,
+            BackgroundLifecycle::OutcomeUnknown,
+            "an unproven external outcome is a first-class terminal state"
+        );
+        assert_ne!(
+            terminal.state,
+            BackgroundLifecycle::Failed,
+            "an unknown outcome is never labelled failed"
+        );
+        assert!(matches!(
+            terminal.result.expect("terminal result").status,
+            ToolExecutionStatus::OutcomeUnknown { .. }
+        ));
+    }
+
+    /// Outcome certainty (Issue #202): a proven deadline settlement settles
+    /// under `TimedOut`, not under the generic `Failed`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn timed_out_settles_as_timed_out_not_failed() {
+        let fixture = registry("conv-bg-timed-out");
+        let timed_out = ToolExecutionResult {
+            status: ToolExecutionStatus::TimedOut,
+            ..success()
+        };
+        let (executor, mut started, release) = IgnoreCancellationExecutor::new(timed_out);
+        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+        let prepared = prepare(&fixture, &executor);
+        let outcome = fixture
+            .registry
+            .commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .expect("the commit returns an outcome");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
+            panic!("accepted");
+        };
+        await_test_started(&mut started, "runner started").await;
+        release.send_replace(true);
+        let terminal = wait_for_terminal(&fixture, &execution_id).await;
+        assert_eq!(terminal.state, BackgroundLifecycle::TimedOut);
+        assert!(matches!(
+            terminal.result.expect("terminal result").status,
+            ToolExecutionStatus::TimedOut
+        ));
+    }
+
+    /// Cancellation winner + unconfirmed external cancellation (Issue #202):
+    /// cancellation intent commits while the executor runs, and the executor
+    /// then reports `OutcomeUnknown` because remote termination could not be
+    /// confirmed. The unknown outcome survives the cancellation winner: the
+    /// lifecycle is neither rewritten to `Cancelled` (a cancellation request
+    /// is not a confirmed cancellation) nor collapsed into `Failed`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancellation_winner_preserves_an_unconfirmed_outcome_unknown() {
+        let fixture = registry("conv-bg-cancel-unknown");
+        let unknown = ToolExecutionResult {
+            status: ToolExecutionStatus::OutcomeUnknown {
+                detail: "cancellation was requested after dispatch, but remote termination could not be confirmed"
+                    .to_owned(),
+            },
+            ..success()
+        };
+        let (executor, mut started, release) = IgnoreCancellationExecutor::new(unknown);
+        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+        let prepared = prepare(&fixture, &executor);
+        let outcome = fixture
+            .registry
+            .commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .expect("the commit returns an outcome");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
+            panic!("accepted");
+        };
+        await_test_started(&mut started, "runner started").await;
+        // Cancellation intent wins in the registry while the executor runs.
+        let cancelling = fixture.registry.cancel(&execution_id).expect("cancel");
+        assert_eq!(cancelling.state, BackgroundLifecycle::Cancelling);
+        // The executor cannot prove the remote termination.
+        release.send_replace(true);
+        let terminal = wait_for_terminal(&fixture, &execution_id).await;
+        assert_eq!(
+            terminal.state,
+            BackgroundLifecycle::OutcomeUnknown,
+            "an unproven cancellation survives as the honest unknown"
+        );
+        assert_ne!(
+            terminal.state,
+            BackgroundLifecycle::Cancelled,
+            "a cancellation request is not a confirmed cancellation"
+        );
+        assert_ne!(
+            terminal.state,
+            BackgroundLifecycle::Failed,
+            "an unknown outcome is never labelled failed"
+        );
+        assert!(matches!(
+            terminal.result.expect("terminal result").status,
+            ToolExecutionStatus::OutcomeUnknown { .. }
+        ));
     }
 
     /// A test observer collecting every published snapshot in order, so a

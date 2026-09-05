@@ -763,9 +763,16 @@ pub enum BackgroundTerminalState {
     Failed,
     /// Cancellation intent won settlement.
     Cancelled,
-    /// The owning process restarted while the execution was non-terminal:
-    /// the detached task/process did not survive the restart and its actual
-    /// external outcome is **unknown** (Issue #12, M9a).
+    /// The execution's deadline expired and the executor proved the
+    /// terminal settlement, exactly as
+    /// [`ToolExecutionStatus::TimedOut`](crate::tools::types::ToolExecutionStatus::TimedOut)
+    /// requires.
+    TimedOut,
+    /// The execution's actual external outcome is **unknown**: either the
+    /// executor returned without proving it (for example an unconfirmed
+    /// remote termination), or the owning process restarted while the
+    /// execution was non-terminal and the detached task/process did not
+    /// survive the restart (Issue #12, M9a). Nothing is relaunched.
     ///
     /// This is deliberately distinct from [`BackgroundTerminalState::Failed`],
     /// exactly as [`ToolExecutionStatus::OutcomeUnknown`] is distinct from
