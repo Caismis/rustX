@@ -1592,6 +1592,105 @@ attempt ownership, exactly-once structural batch settlement, and the
 no-follow-up-model-turn terminal behavior; it does not introduce a second
 foreground lifecycle or a background execution redesign.
 
+#### 7.1.2 Execution liveness deadlines (Issue #204)
+
+Every started foreground execution is bounded by the generic lifecycle's
+`ToolExecutionDeadlinePolicy`, frozen at attempt admission and never visible
+to executors as a mutable runtime handle. The policy owns two deadlines per
+started call, both measured from the call's executor-start frontier:
+
+- the **hard deadline** — the immutable total execution lifetime. Progress
+  never extends it.
+- the **idle-liveness deadline** — present only when the policy configures
+  an idle window **and** the admitted executor declared
+  `ToolProgressCapability::Meaningful` at invocation resolution (the
+  capability is frozen into the prepared invocation, so a running call's
+  liveness contract never changes). Every executor progress report through
+  the existing `ProgressReporter` seam starts a fresh window. Executors that
+  cannot produce honest progress declare `ToolProgressCapability::None`,
+  run under the hard deadline only, and never fabricate heartbeat reports.
+
+The lifecycle of one started call is:
+
+```text
+Started (executor-start frontier; ToolExecutionStarted)
+  -> Running
+       |-- physical completion won --------------> executor's terminal result
+       |-- hard deadline fired (intent) ----------.
+       |-- idle deadline fired (intent) ----------+--> request physical
+       |-- attempt cancellation (intent) --------'    cancellation of exactly
+                                                     this call's signal
+                                                     -> await the executor's
+                                                        settlement authority
+                                                        (the handle's
+                                                        independent
+                                                        cancellation/
+                                                        settlement control
+                                                        plane)
+```
+
+The `ToolExecutor` boundary splits one started execution into two planes:
+`start` returns a `ToolExecutionHandle { completion, settlement }` — the
+physical completion plane plus the independent cancellation/settlement
+control plane, both executor-owned. One biased `select!` in `run_foreground`
+is the single winner-arbitration point with the contractual readiness order
+attempt cancellation > hard deadline > idle deadline > physical completion;
+the winner freezes provenance. While no intent has won, the lifecycle drives
+`completion`. Once a deadline/cancellation intent wins, the lifecycle awaits
+ONLY the executor's settlement authority — the normal settlement mechanism,
+awaited without a timeout of its own — and never polls `completion` again.
+Cancellation *intent* (the deadline or attempt winner) belongs to the
+lifecycle; physical cancellation is executor-owned: the intent is delivered
+through the execution's `ExecutionCancellation`, and the executor's
+settlement plane resolves only after it observed the request and ran its
+physical cancellation path to its end, returning typed `ToolSettlement`
+evidence: `Confirmed(result)` for proven physical terminality, or
+`Unconfirmed { detail }` when the executor consumed its local operation
+ownership but terminality past the external-effect frontier cannot be
+proven. The settled evidence selects the canonical status under the Issue
+#202 outcome-certainty contract:
+
+- executor-proven cancellation settlement after a **deadline** winner →
+  `TimedOut` (proven terminal because the deadline expired);
+- executor-proven cancellation settlement after an **attempt-cancellation**
+  winner → `Cancelled { reason, DuringExecution }` with the attempt's
+  absorbing reason;
+- **`Unconfirmed` settlement evidence** → `OutcomeUnknown`: the call crossed
+  the external-effect frontier and terminality cannot be proven — a deadline
+  can never manufacture `TimedOut` from it;
+- any executor-proven normal outcome (`Success`/`Failed`) that won the
+  physical race survives untouched;
+- **settlement control-plane guard expiry** → `OutcomeUnknown`:
+  `TOOL_SETTLEMENT_CONTROL_GUARD` exists ONLY as protection against a broken
+  executor whose settlement plane never returns after observing the
+  cancellation request. Its expiry is a settlement control-plane failure (an
+  executor settlement-contract violation), never settlement evidence — it
+  never implies the physical operation stopped — so the lifecycle never
+  reports `TimedOut` it cannot prove.
+
+`OutcomeUnknown` therefore comes only from explicit `Unconfirmed` evidence
+or from the guard — never from "the execution future did not return", and
+never from dropping a future. Dropping the completion plane after the
+settlement transition abandons nothing: with
+`ToolExecutionHandle::settled_by_operation` the operation's ownership moved
+to the settlement plane, and in any conforming executor the completion
+future is by then an empty poller shell. The committed terminal result is
+absorbing: the closed call slot guarantees that no late physical completion,
+no residual executor-owned physical cleanup, and no repeated intent can
+publish a second result, a post-terminal progress/cancellation/settlement
+fact, or rewrite canonical history — the call's slot never reopens.
+
+A deadline cancels only its own call's child signal: batch siblings settle
+exactly once each and the batch commits in canonical model call order.
+Per started call the Event Journal records, in order:
+`ToolExecutionStarted`, the retained `ToolExecutionProgress` facts,
+`ToolExecutionDeadlineFired { kind }` when a deadline fired,
+`ToolExecutionCancellationRequested { cause }` and
+`ToolExecutionSettlementObserved { certainty }` when a non-physical winner
+drove the settlement phase, and the terminal `ToolExecutionCompleted` last.
+The journal is observational evidence, and the canonical ToolResult remains
+the only outcome authority.
+
 ### 7.2 Runtime drain composition (M9c)
 
 The Agent Loop remains the owner of foreground tool-batch structure and the
@@ -1620,6 +1719,17 @@ siblings receive the shared signal, settle through their native executor
 contract, and retain one result slot each. Canonical tool messages still
 commit in model-call order; the runtime does not add a second tool state
 machine.
+
+Drain waits for the attempt's *canonical* settlement of each started
+foreground execution, and that settlement now awaits the executor's
+settlement authority (§7.1.2): a `Confirmed` report, an `Unconfirmed`
+report, or the settlement control-plane guard. After an
+`Unconfirmed`/`OutcomeUnknown` settlement the executor's local operation
+ownership is consumed — for `settled_by_operation` the settlement plane
+drove the operation to its end — and any residual external or physical
+ownership is the executor's bounded contract responsibility, sealed from
+canonical history by the closed call slot: it can never publish a canonical
+fact after drain returns.
 
 Background dispatch ownership is separate from the attempt. Once the
 registry's prepared-to-committed boundary wins, attempt cancellation does not

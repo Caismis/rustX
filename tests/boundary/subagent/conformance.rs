@@ -92,6 +92,16 @@ fn inherited_policy() -> ModelTimeoutPolicy {
     )
 }
 
+/// The frozen tool execution-liveness policy the parent plane hands to every
+/// child (Issue #204). The values are deliberately distinctive (not the
+/// defaults) so a child that ignores the inherited policy is observable.
+fn inherited_tool_deadline_policy() -> rustx::tools::deadline::ToolExecutionDeadlinePolicy {
+    rustx::tools::deadline::ToolExecutionDeadlinePolicy {
+        hard_deadline: Duration::from_secs(42),
+        idle_liveness: Some(Duration::from_secs(2)),
+    }
+}
+
 /// One transient provider failure, optionally with a provider retry hint.
 /// A hint of `Some(0)` collapses the backoff wait (the captured deadline is
 /// "now"), so retry-to-completion tests need no clock advancement while the
@@ -228,6 +238,7 @@ async fn child_fixture_at(
             model: support::model::scripted_session_model(adapter),
             approval_mode: rustx::runtime::ApprovalMode::Policy,
             model_timeout_policy: inherited_policy(),
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
                 policy: rustx::context::SessionContextPolicy {
                     reserve_tokens: 0,
@@ -287,8 +298,9 @@ fn test_spawn_plan(runtime_root: &std::path::Path) -> SubagentSpawnPlan {
     SubagentSpawnPlan {
         program: std::path::PathBuf::from("/nonexistent/rustx"),
         runtime_root: runtime_root.to_path_buf(),
-        // The frozen policy every child launch inherits (Issue #138).
+        // The frozen policies every child launch inherits (Issues #138/#204).
         model_timeout_policy: inherited_policy(),
+        tool_deadline_policy: inherited_tool_deadline_policy(),
         agent_status: rustx::context::AgentStatusConfig::default(),
         context: rustx::context::SessionContextPolicy {
             reserve_tokens: 0,
@@ -501,6 +513,7 @@ async fn compose_parent_runtime_plane(
         model: support::model::scripted_session_model(adapter),
         approval_mode: rustx::runtime::ApprovalMode::Policy,
         model_timeout_policy: inherited_policy(),
+        tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
             policy: rustx::context::SessionContextPolicy {
                 reserve_tokens: 0,
@@ -1016,6 +1029,16 @@ async fn the_child_spec_carries_the_frozen_timeout_policy() {
     assert_ne!(
         spec.model_timeout_policy,
         ModelTimeoutPolicy::default(),
+        "the test policy is distinctive: a default-policy regression is observable"
+    );
+    assert_eq!(
+        spec.tool_deadline_policy,
+        inherited_tool_deadline_policy(),
+        "the frozen Issue #204 execution-liveness policy crosses the child spec"
+    );
+    assert_ne!(
+        spec.tool_deadline_policy,
+        rustx::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         "the test policy is distinctive: a default-policy regression is observable"
     );
 }

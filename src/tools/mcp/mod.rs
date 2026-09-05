@@ -77,6 +77,7 @@ use crate::runtime::identity::{McpServerId, ToolId};
 use crate::runtime::interactive_process::{InteractiveProcessSpec, SupervisedInteractiveProcess};
 use crate::runtime::types::LifecycleAdmission;
 use crate::tools::artifacts::ArtifactStore;
+use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{
     FOREGROUND_TOOL_RESULT_PREVIEW_BYTES, MAX_MODEL_TOOL_RESULT_BYTES, bound_tool_progress,
@@ -2039,27 +2040,42 @@ impl McpToolExecutor {
 }
 
 impl ToolExecutor for McpToolExecutor {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
-    ) -> futures_util::future::BoxFuture<'a, ToolExecutionResult> {
-        Box::pin(async move {
-            let lease = self
-                .binding
-                .as_ref()
-                .and_then(McpRuntimeBinding::acquire_lease);
-            if self.binding.is_some() && lease.is_none() {
-                return failed_mcp(
-                    "MCP server runtime generation is physically retired",
-                    &context,
-                    Instant::now(),
-                );
-            }
-            self.runtime
-                .call(&self.remote_name, invocation.arguments, &context)
-                .await
-        })
+    ) -> crate::tools::executor::ToolExecutionHandle<'a> {
+        // The cancel-notification path stays inside the operation future: on
+        // cancellation the executor sends `notifications/cancelled` and
+        // returns its honest `OutcomeUnknown`, which `settled_by_operation`
+        // surfaces as unconfirmed settlement evidence.
+        let cancellation = context.cancellation.clone();
+        crate::tools::executor::ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                let lease = self
+                    .binding
+                    .as_ref()
+                    .and_then(McpRuntimeBinding::acquire_lease);
+                if self.binding.is_some() && lease.is_none() {
+                    return failed_mcp(
+                        "MCP server runtime generation is physically retired",
+                        &context,
+                        Instant::now(),
+                    );
+                }
+                self.runtime
+                    .call(&self.remote_name, invocation.arguments, &context)
+                    .await
+            }),
+            cancellation,
+        )
+    }
+
+    // The executor forwards genuine remote MCP progress notifications to
+    // `context.progress.report(...)`, so a configured idle-liveness window
+    // is honestly informed.
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::Meaningful
     }
 }
 

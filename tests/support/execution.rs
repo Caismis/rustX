@@ -65,6 +65,7 @@ pub(crate) fn subagent_plane_for(conversation: &str) -> SubagentPlane {
             program: std::path::PathBuf::from("/nonexistent/rustx"),
             runtime_root: runtime_root.clone(),
             model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             agent_status: rustx::context::AgentStatusConfig::default(),
             context: rustx::context::SessionContextPolicy {
                 reserve_tokens: 0,
@@ -186,7 +187,10 @@ pub(crate) async fn run_execution(
         fixture.runtime.tool_output(),
         fixture.runtime.environment(),
     );
-    executor.execute(prepared.invocation, context).await
+    executor
+        .start(prepared.invocation, context)
+        .completion
+        .await
 }
 
 /// The single JSON content block of a successful structured result.

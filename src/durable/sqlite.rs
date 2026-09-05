@@ -6008,6 +6008,11 @@ fn runtime_event_dependency_name(event: &RuntimeEvent) -> &'static str {
     match event {
         RuntimeEvent::ToolExecutionStarted { .. } => "ToolExecutionStarted",
         RuntimeEvent::ToolExecutionProgress { .. } => "ToolExecutionProgress",
+        RuntimeEvent::ToolExecutionDeadlineFired { .. } => "ToolExecutionDeadlineFired",
+        RuntimeEvent::ToolExecutionCancellationRequested { .. } => {
+            "ToolExecutionCancellationRequested"
+        }
+        RuntimeEvent::ToolExecutionSettlementObserved { .. } => "ToolExecutionSettlementObserved",
         RuntimeEvent::ToolExecutionCompleted { .. } => "ToolExecutionCompleted",
         RuntimeEvent::ToolExecutionFailed { .. } => "ToolExecutionFailed",
         RuntimeEvent::ToolMessageCommitted { .. } => "ToolMessageCommitted",
@@ -6593,6 +6598,21 @@ fn validate_event_reference(
             tool_id,
         }
         | RuntimeEvent::ToolExecutionProgress {
+            tool_call_id,
+            tool_id,
+            ..
+        }
+        | RuntimeEvent::ToolExecutionDeadlineFired {
+            tool_call_id,
+            tool_id,
+            ..
+        }
+        | RuntimeEvent::ToolExecutionCancellationRequested {
+            tool_call_id,
+            tool_id,
+            ..
+        }
+        | RuntimeEvent::ToolExecutionSettlementObserved {
             tool_call_id,
             tool_id,
             ..

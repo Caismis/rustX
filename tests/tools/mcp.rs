@@ -96,7 +96,7 @@ mod unix_tests {
         .expect("tool runtime");
         let progress = RecordingProgress::default();
         let initial_epoch = runtime.change_epoch();
-        let result = rustx::tools::executor::ToolExecutor::execute(
+        let result = rustx::tools::executor::ToolExecutor::start(
             executor.as_ref(),
             rustx::tools::types::ToolInvocation {
                 call_id: rustx::runtime::identity::ToolCallId::new("call"),
@@ -119,6 +119,7 @@ mod unix_tests {
                 runtime_bundle.environment(),
             ),
         )
+        .completion
         .await;
         assert!(matches!(
             result.status,
@@ -152,7 +153,7 @@ mod unix_tests {
         let slow_executor = definitions[slow_index].1.clone();
         let slow_progress = RecordingProgress::default();
         let slow_cancellation = rustx::runtime::CancellationSignal::new();
-        let slow_future = rustx::tools::executor::ToolExecutor::execute(
+        let slow_future = rustx::tools::executor::ToolExecutor::start(
             slow_executor.as_ref(),
             rustx::tools::types::ToolInvocation {
                 call_id: rustx::runtime::identity::ToolCallId::new("slow-call"),
@@ -174,7 +175,8 @@ mod unix_tests {
                 runtime_bundle.tool_output(),
                 runtime_bundle.environment(),
             ),
-        );
+        )
+        .completion;
         tokio::pin!(slow_future);
         tokio::select! {
             () = slow_progress.notified.notified() => {}
@@ -300,7 +302,7 @@ mod unix_tests {
             )
             .expect("tool runtime");
             let progress = NoProgress;
-            let result = rustx::tools::executor::ToolExecutor::execute(
+            let result = rustx::tools::executor::ToolExecutor::start(
                 executor.as_ref(),
                 rustx::tools::types::ToolInvocation {
                     call_id: rustx::runtime::identity::ToolCallId::new(format!(
@@ -325,6 +327,7 @@ mod unix_tests {
                     tool_runtime.environment(),
                 ),
             )
+            .completion
             .await;
             runtime.close().await.expect("MCP close");
             (directory, artifacts, result)
@@ -601,7 +604,7 @@ mod unix_tests {
         )
         .expect("tool runtime");
         let progress = NoProgress;
-        let result = rustx::tools::executor::ToolExecutor::execute(
+        let result = rustx::tools::executor::ToolExecutor::start(
             executor.as_ref(),
             rustx::tools::types::ToolInvocation {
                 call_id: rustx::runtime::identity::ToolCallId::new("http-call"),
@@ -626,6 +629,7 @@ mod unix_tests {
                 runtime_bundle.environment(),
             ),
         )
+        .completion
         .await;
         assert!(matches!(
             result.status,
@@ -657,7 +661,7 @@ mod unix_tests {
             .map(|(_, executor)| executor.clone())
             .expect("HTTP slow executor");
         let slow_cancellation = rustx::runtime::CancellationSignal::new();
-        let slow_future = rustx::tools::executor::ToolExecutor::execute(
+        let slow_future = rustx::tools::executor::ToolExecutor::start(
             slow_executor.as_ref(),
             rustx::tools::types::ToolInvocation {
                 call_id: rustx::runtime::identity::ToolCallId::new("http-slow"),
@@ -681,7 +685,8 @@ mod unix_tests {
                 runtime_bundle.tool_output(),
                 runtime_bundle.environment(),
             ),
-        );
+        )
+        .completion;
         tokio::pin!(slow_future);
         tokio::select! {
             () = slow_started.notified() => {}
@@ -996,7 +1001,7 @@ mod unix_tests {
         )
         .expect("tool runtime");
         let progress = NoProgress;
-        rustx::tools::executor::ToolExecutor::execute(
+        rustx::tools::executor::ToolExecutor::start(
             executor,
             rustx::tools::types::ToolInvocation {
                 call_id: rustx::runtime::identity::ToolCallId::new(call_id),
@@ -1019,6 +1024,7 @@ mod unix_tests {
                 bundle.environment(),
             ),
         )
+        .completion
         .await
     }
 

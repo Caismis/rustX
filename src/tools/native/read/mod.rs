@@ -18,10 +18,10 @@ mod input;
 #[cfg(test)]
 mod testdata;
 
-use futures_util::future::BoxFuture;
 use std::fmt::Write as _;
 
-use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
+use crate::tools::deadline::ToolProgressCapability;
+use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::limits::{MAX_READ_LINES, NATIVE_FILE_TOOL_MAX_BYTES};
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::support::{
@@ -60,12 +60,20 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
 pub struct ReadTool;
 
 impl ToolExecutor for ReadTool {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
-    ) -> BoxFuture<'a, ToolExecutionResult> {
-        Box::pin(async move { run_read(&invocation, &context).await })
+    ) -> ToolExecutionHandle<'a> {
+        let cancellation = context.cancellation.clone();
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move { run_read(&invocation, &context).await }),
+            cancellation,
+        )
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 
@@ -433,7 +441,7 @@ mod tests {
         };
 
         let (invocation, execution) = context("read-skill-call", &location);
-        let result = ReadTool.execute(invocation, execution).await;
+        let result = ReadTool.start(invocation, execution).completion.await;
         assert_eq!(result.status, ToolExecutionStatus::Success);
         let Some(ToolResultContent::Text(text)) = result.content.first() else {
             panic!("Read returned unexpected content: {result:?}");
@@ -446,7 +454,7 @@ mod tests {
         )
         .expect("edit known SKILL.md body");
         let (invocation, execution) = context("read-skill-current", &location);
-        let current = ReadTool.execute(invocation, execution).await;
+        let current = ReadTool.start(invocation, execution).completion.await;
         assert_eq!(current.status, ToolExecutionStatus::Success);
         let Some(ToolResultContent::Text(current_text)) = current.content.first() else {
             panic!("Read returned unexpected current content: {current:?}");
@@ -464,14 +472,14 @@ mod tests {
 
         std::fs::remove_file(skill.join("SKILL.md")).expect("remove known SKILL.md");
         let (invocation, execution) = context("read-skill-removed", &location);
-        let removed = ReadTool.execute(invocation, execution).await;
+        let removed = ReadTool.start(invocation, execution).completion.await;
         assert!(matches!(removed.status, ToolExecutionStatus::Failed { .. }));
 
         // The Skill's own relative reference, resolved against the package
         // directory the location names.
         let asset = skill.join("assets/checklist.md");
         let (invocation, execution) = context("read-skill-asset", &asset.to_string_lossy());
-        let asset_result = ReadTool.execute(invocation, execution).await;
+        let asset_result = ReadTool.start(invocation, execution).completion.await;
         assert_eq!(asset_result.status, ToolExecutionStatus::Success);
         let Some(ToolResultContent::Text(text)) = asset_result.content.first() else {
             panic!("Read returned unexpected content: {asset_result:?}");
@@ -484,7 +492,7 @@ mod tests {
             "read-skill-missing",
             ".agents/skills/release-guide/SKILL.md",
         );
-        let missing_result = ReadTool.execute(invocation, execution).await;
+        let missing_result = ReadTool.start(invocation, execution).completion.await;
         assert!(matches!(
             missing_result.status,
             ToolExecutionStatus::Failed { .. }
@@ -616,7 +624,7 @@ mod tests {
                 todos: None,
                 subagent: None,
             };
-            ReadTool.execute(invocation, context)
+            ReadTool.start(invocation, context).completion
         }
 
         /// Writes `bytes` into the workspace and returns its absolute host

@@ -42,15 +42,14 @@
 //! mapping. All lifecycle, durability, and supervision semantics live in
 //! the registry; all configuration semantics live in the catalog/resolver.
 
-use futures_util::future::BoxFuture;
-
 use crate::runtime::subagent::catalog::{SubagentCatalog, SubagentName};
 use crate::runtime::subagent::resolver::render_agent_routing;
 use crate::runtime::subagent::{
     SubagentAccepted, SubagentRegistry, SubagentStartError, SubagentStartOutcome,
     SubagentStartSpec, SubagentTerminalMode,
 };
-use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
+use crate::tools::deadline::ToolProgressCapability;
+use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
 use crate::tools::types::{
     ToolCancellationPhase, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
@@ -195,61 +194,87 @@ struct SubagentExecutor {
 }
 
 impl ToolExecutor for SubagentExecutor {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
-    ) -> BoxFuture<'a, ToolExecutionResult> {
-        Box::pin(async move {
-            let input = match SubagentInput::parse(&invocation.arguments) {
-                Ok(input) => input,
-                Err(error) => return failed_result(error),
-            };
-            // Without an attempt-scoped view there is no generation to
-            // resolve against, and guessing one would be exactly the
-            // tearing this seam exists to prevent.
-            let Some(subagent_context) = context.subagent_context() else {
-                return failed_result(
-                    "the subagent capability is not available outside an agent attempt",
-                );
-            };
-            let agent = match SubagentName::parse(&input.agent) {
-                Ok(agent) => agent,
-                Err(error) => {
-                    return failed_result(format!(
-                        "invalid subagent name {:?}: {error}. {}",
-                        input.agent,
-                        subagent_context.routing_description()
-                    ));
-                }
-            };
-            let resolved = match subagent_context.resolve(&agent) {
-                Ok(resolved) => resolved,
-                Err(error) => return failed_result(error.to_string()),
-            };
-            let spec = SubagentStartSpec {
-                resolved,
-                approval_mode: subagent_context.approval_mode(),
-                task: input.task,
-                context: input.context,
-                tool_call_id: invocation.call_id.clone(),
-                terminal: SubagentTerminalMode::Normal,
-            };
-            // One attempt-derived cancellation authority owns the whole
-            // pre-commit lifecycle: preparation (identity, spawn, startup
-            // handshake, child external capability composition) AND the
-            // commit decision. There is no second, unrelated cancellation
-            // model for the same staged lifecycle.
-            let child_cancellation = context.cancellation.child_signal();
-            let prepared = match self.subagents.prepare(&spec, &child_cancellation).await {
-                Ok(prepared) => prepared,
-                Err(SubagentStartError::Cancelled) => {
-                    // The attempt cancellation won while the child was
-                    // still staging: nothing was published, every staged
-                    // physical resource settled before the error returned,
-                    // and the tool result is the absorbing cancellation
-                    // outcome.
-                    return ToolExecutionResult {
+    ) -> ToolExecutionHandle<'a> {
+        // The Issue #191 staged-lifecycle settlement machinery stays inside
+        // the operation future: the settlement plane drives that same
+        // operation to its proven terminal end.
+        let cancellation = context.cancellation.clone();
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                let input = match SubagentInput::parse(&invocation.arguments) {
+                    Ok(input) => input,
+                    Err(error) => return failed_result(error),
+                };
+                // Without an attempt-scoped view there is no generation to
+                // resolve against, and guessing one would be exactly the
+                // tearing this seam exists to prevent.
+                let Some(subagent_context) = context.subagent_context() else {
+                    return failed_result(
+                        "the subagent capability is not available outside an agent attempt",
+                    );
+                };
+                let agent = match SubagentName::parse(&input.agent) {
+                    Ok(agent) => agent,
+                    Err(error) => {
+                        return failed_result(format!(
+                            "invalid subagent name {:?}: {error}. {}",
+                            input.agent,
+                            subagent_context.routing_description()
+                        ));
+                    }
+                };
+                let resolved = match subagent_context.resolve(&agent) {
+                    Ok(resolved) => resolved,
+                    Err(error) => return failed_result(error.to_string()),
+                };
+                let spec = SubagentStartSpec {
+                    resolved,
+                    approval_mode: subagent_context.approval_mode(),
+                    task: input.task,
+                    context: input.context,
+                    tool_call_id: invocation.call_id.clone(),
+                    terminal: SubagentTerminalMode::Normal,
+                };
+                // One attempt-derived cancellation authority owns the whole
+                // pre-commit lifecycle: preparation (identity, spawn, startup
+                // handshake, child external capability composition) AND the
+                // commit decision. There is no second, unrelated cancellation
+                // model for the same staged lifecycle.
+                let child_cancellation = context.cancellation.child_signal();
+                let prepared = match self.subagents.prepare(&spec, &child_cancellation).await {
+                    Ok(prepared) => prepared,
+                    Err(SubagentStartError::Cancelled) => {
+                        // The attempt cancellation won while the child was
+                        // still staging: nothing was published, every staged
+                        // physical resource settled before the error returned,
+                        // and the tool result is the absorbing cancellation
+                        // outcome.
+                        return ToolExecutionResult {
+                            status: ToolExecutionStatus::Cancelled {
+                                reason: context.cancellation.reason(),
+                                phase: ToolCancellationPhase::DuringExecution,
+                            },
+                            content: Vec::new(),
+                            duration_ms: 0,
+                            exit_code: None,
+                            artifacts: Vec::new(),
+                            truncation: None,
+                            managed_output: None,
+                        };
+                    }
+                    Err(error) => return start_failure_result(&error),
+                };
+                match self.subagents.commit(prepared, &child_cancellation).await {
+                    Ok(SubagentStartOutcome::Accepted(accepted)) => accepted_result(accepted),
+                    // The attempt cancellation won the race against the
+                    // ownership commit: nothing was published, the staged child
+                    // is already torn down, and the tool result is the
+                    // absorbing cancellation outcome.
+                    Ok(SubagentStartOutcome::RolledBack) => ToolExecutionResult {
                         status: ToolExecutionStatus::Cancelled {
                             reason: context.cancellation.reason(),
                             phase: ToolCancellationPhase::DuringExecution,
@@ -260,34 +285,21 @@ impl ToolExecutor for SubagentExecutor {
                         artifacts: Vec::new(),
                         truncation: None,
                         managed_output: None,
-                    };
-                }
-                Err(error) => return start_failure_result(&error),
-            };
-            match self.subagents.commit(prepared, &child_cancellation).await {
-                Ok(SubagentStartOutcome::Accepted(accepted)) => accepted_result(accepted),
-                // The attempt cancellation won the race against the
-                // ownership commit: nothing was published, the staged child
-                // is already torn down, and the tool result is the
-                // absorbing cancellation outcome.
-                Ok(SubagentStartOutcome::RolledBack) => ToolExecutionResult {
-                    status: ToolExecutionStatus::Cancelled {
-                        reason: context.cancellation.reason(),
-                        phase: ToolCancellationPhase::DuringExecution,
                     },
-                    content: Vec::new(),
-                    duration_ms: 0,
-                    exit_code: None,
-                    artifacts: Vec::new(),
-                    truncation: None,
-                    managed_output: None,
-                },
-                Err(SubagentStartError::ConversationInactive) => {
-                    failed_result("the conversation is shutting down")
+                    Err(SubagentStartError::ConversationInactive) => {
+                        failed_result("the conversation is shutting down")
+                    }
+                    Err(error) => start_failure_result(&error),
                 }
-                Err(error) => start_failure_result(&error),
-            }
-        })
+            }),
+            cancellation,
+        )
+    }
+
+    // Dispatch only: the executor returns `Accepted` immediately after the
+    // ownership commit, so it has no progress protocol of its own.
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 
@@ -548,6 +560,8 @@ mod tests {
                 program: std::path::PathBuf::from("/nonexistent/rustx"),
                 runtime_root: runtime_root.clone(),
                 model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+                tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
+                ),
                 agent_status: crate::context::AgentStatusConfig::default(),
                 context: SessionContextPolicy {
                     reserve_tokens: 0,
@@ -681,7 +695,7 @@ mod tests {
             subagents: plane.subagents.clone(),
         };
         let result = executor
-            .execute(
+            .start(
                 ToolInvocation {
                     call_id: crate::runtime::identity::ToolCallId::new("call-1"),
                     tool_id: crate::runtime::identity::ToolId::new("tool-subagent"),
@@ -694,6 +708,7 @@ mod tests {
                 },
                 context,
             )
+            .completion
             .await;
 
         let ToolExecutionStatus::Failed { error } = &result.status else {

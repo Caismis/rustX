@@ -1057,7 +1057,10 @@ pub async fn run_tool_with_cancellation(
         fixture.runtime.tool_output(),
         fixture.runtime.environment(),
     );
-    executor.execute(prepared.invocation, context).await
+    executor
+        .start(prepared.invocation, context)
+        .completion
+        .await
 }
 
 /// Executes one preflighted native tool call against a fixture.
@@ -1100,7 +1103,10 @@ pub async fn run_tool(
         fixture.runtime.tool_output(),
         fixture.runtime.environment(),
     );
-    executor.execute(prepared.invocation, context).await
+    executor
+        .start(prepared.invocation, context)
+        .completion
+        .await
 }
 
 /// One canonical compiled model-facing tool definition used by adapter

@@ -997,6 +997,8 @@ mod tests {
                 model: scripted_session_model(adapter),
                 approval_mode: crate::runtime::ApprovalMode::Policy,
                 model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+                tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
+                ),
                 context: ConversationContextConfig {
                     policy: SessionContextPolicy {
                         reserve_tokens: 0,
@@ -1415,6 +1417,7 @@ mod tests {
             },
             approval_mode: crate::runtime::ApprovalMode::Policy,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             agent_status: crate::context::AgentStatusConfig::default(),
             context: SessionContextPolicy {
                 reserve_tokens: 0,

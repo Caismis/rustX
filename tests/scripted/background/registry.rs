@@ -32,12 +32,15 @@ use rustx::runtime::identity::{
 };
 use rustx::runtime::inbound::ConversationInboundMailbox;
 use rustx::runtime::types::CancellationReason;
+use rustx::tools::ToolProgressCapability;
 use rustx::tools::artifacts::ArtifactStore;
 use rustx::tools::background::{
     BackgroundDispatchOutcome, BackgroundExecutionSnapshot, BackgroundLifecycle,
     BackgroundResources, ConversationBackgroundRegistry,
 };
-use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
+use rustx::tools::executor::{
+    ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistry,
+};
 use rustx::tools::runtime::ConversationToolRuntime;
 use rustx::tools::types::{
     ToolCall, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
@@ -115,11 +118,11 @@ impl ControlledExecutor {
 }
 
 impl ToolExecutor for ControlledExecutor {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
-    ) -> futures_util::future::BoxFuture<'a, ToolExecutionResult> {
+    ) -> ToolExecutionHandle<'a> {
         let _ = invocation;
         let started = self.started.clone();
         let mut release = self
@@ -128,35 +131,43 @@ impl ToolExecutor for ControlledExecutor {
             .map(tokio::sync::watch::Sender::subscribe);
         let result = self.result.clone();
         let progress = self.progress.clone();
-        Box::pin(async move {
-            started.send_replace(true);
-            for item in progress {
-                context.progress.report(item);
-            }
-            if let Some(release) = release.as_mut() {
-                tokio::select! {
-                    biased;
-                    () = context.cancellation.cancelled() => {
-                        return ToolExecutionResult {
-                            status: ToolExecutionStatus::Cancelled {
-                                reason: CancellationReason::UserRequested,
-                                phase: rustx::tools::types::ToolCancellationPhase::DuringExecution,
-                            },
-                            content: Vec::new(),
-                            duration_ms: 0,
-                            exit_code: None,
-                            artifacts: Vec::new(),
-                            truncation: None,
-                            managed_output: None,
-                        };
-                    }
-                    released = release.wait_for(|released| *released) => {
-                        released.expect("controlled executor release channel stays open");
+        let cancellation = context.cancellation.clone();
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                started.send_replace(true);
+                for item in progress {
+                    context.progress.report(item);
+                }
+                if let Some(release) = release.as_mut() {
+                    tokio::select! {
+                        biased;
+                        () = context.cancellation.cancelled() => {
+                            return ToolExecutionResult {
+                                status: ToolExecutionStatus::Cancelled {
+                                    reason: CancellationReason::UserRequested,
+                                    phase: rustx::tools::types::ToolCancellationPhase::DuringExecution,
+                                },
+                                content: Vec::new(),
+                                duration_ms: 0,
+                                exit_code: None,
+                                artifacts: Vec::new(),
+                                truncation: None,
+                                managed_output: None,
+                            };
+                        }
+                        released = release.wait_for(|released| *released) => {
+                            released.expect("controlled executor release channel stays open");
+                        }
                     }
                 }
-            }
-            result
-        })
+                result
+            }),
+            cancellation,
+        )
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 

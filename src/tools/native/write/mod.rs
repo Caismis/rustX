@@ -8,9 +8,8 @@
 
 mod input;
 
-use futures_util::future::BoxFuture;
-
-use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
+use crate::tools::deadline::ToolProgressCapability;
+use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::support::{
     atomic_commit, failed_result, interpret_path, prepare_mutation_target, success_text,
@@ -48,12 +47,20 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
 pub struct WriteTool;
 
 impl ToolExecutor for WriteTool {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
-    ) -> BoxFuture<'a, ToolExecutionResult> {
-        Box::pin(async move { run_write(&invocation, &context) })
+    ) -> ToolExecutionHandle<'a> {
+        let cancellation = context.cancellation.clone();
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move { run_write(&invocation, &context) }),
+            cancellation,
+        )
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 

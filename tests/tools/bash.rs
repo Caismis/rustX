@@ -1164,7 +1164,10 @@ async fn model_selectable_bash_foreground_selection_reaches_the_executor_strippe
         fixture.runtime.tool_output(),
         fixture.runtime.environment(),
     );
-    let result = executor.execute(prepared.invocation, context).await;
+    let result = executor
+        .start(prepared.invocation, context)
+        .completion
+        .await;
     assert_eq!(result.status, ToolExecutionStatus::Success);
     assert_eq!(json_content(&result)["exit_code"], 0);
     assert!(

@@ -33,6 +33,7 @@ use crate::runtime::cancellation::ExecutionCancellation;
 use crate::runtime::identity::{ConversationId, ToolExecutionId, ToolId};
 use crate::runtime::interaction::QuestionnaireRequester;
 use crate::tools::artifacts::ArtifactStore;
+use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::managed_output::ManagedToolOutput;
 use crate::tools::schema::{
@@ -42,7 +43,7 @@ use crate::tools::schema::{
 use crate::tools::todo::TodoWriter;
 use crate::tools::types::{
     ModelToolDefinition, ToolApprovalPolicy, ToolCall, ToolConcurrencyPolicy, ToolDefinition,
-    ToolExecutionResult, ToolInvocation, ToolOrigin, ToolProgress,
+    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolProgress,
 };
 use crate::tools::workspace::Workspace;
 
@@ -256,19 +257,164 @@ impl<'a> ToolExecutionContext<'a> {
 /// An executor must settle after cancellation: when the [`ExecutionCancellation`]
 /// in its context fires, a cancellable executor physically settles its
 /// external work (for example by terminating an owned process group) and
-/// returns a normalized cancelled result instead of abandoning work.
+/// reports that physical settlement through the returned handle's
+/// independent cancellation/settlement control plane (Issue #204) instead of
+/// abandoning work.
 ///
 /// [`ToolExecutionStatus::Failed`]: crate::tools::types::ToolExecutionStatus::Failed
 pub trait ToolExecutor: Send + Sync {
-    /// Executes one canonical invocation.
+    /// Starts one canonical invocation.
     ///
-    /// The returned future is owned by the executor: implementations clone
+    /// The returned [`ToolExecutionHandle`] splits the execution into its
+    /// physical completion plane and its independent cancellation/settlement
+    /// control plane; both are owned by the executor: implementations clone
     /// or capture the data they need and never borrow past the call.
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
-    ) -> BoxFuture<'a, ToolExecutionResult>;
+    ) -> ToolExecutionHandle<'a>;
+
+    /// Whether this executor can emit meaningful progress evidence for one
+    /// execution (Issue #204).
+    ///
+    /// The declaration is honest executor-owned state: `Meaningful` only when
+    /// the executor genuinely reports semantically meaningful liveness
+    /// progress through the execution's [`ProgressReporter`] — never merely
+    /// because the parameter exists, and never backed by fabricated
+    /// heartbeats. The Agent Loop freezes the declared capability into the
+    /// admitted invocation at preflight and uses it to gate the configured
+    /// idle-liveness watchdog; the hard deadline applies regardless.
+    fn progress_capability(&self) -> ToolProgressCapability;
+}
+
+/// The typed settlement evidence of an executor's cancellation/settlement
+/// control plane (Issue #204).
+///
+/// The settlement plane is the executor's own authority over what physical
+/// cancellation achieved: it resolves only after the executor observed the
+/// cancellation request delivered through its context's
+/// [`ExecutionCancellation`] and ran its physical cancellation path to its
+/// end. It never means "the owning lifecycle stopped waiting" — that is the
+/// lifecycle's guard against a broken executor, and it is never settlement
+/// evidence.
+pub enum ToolSettlement {
+    /// The executor proved its physical operation terminal; the carried
+    /// result is that proven terminal outcome (for example Bash's killed and
+    /// reaped process tree reported as `Cancelled`).
+    Confirmed(ToolExecutionResult),
+    /// Cancellation was physically propagated and the executor consumed its
+    /// local operation ownership — no detached rustX-owned task or process
+    /// remains — but terminality past the external-effect frontier cannot be
+    /// proven (for example a dispatched remote MCP call). Never means "we
+    /// stopped waiting".
+    Unconfirmed {
+        /// The executor's own description of the unprovable frontier.
+        detail: String,
+    },
+}
+
+/// One started tool execution: the physical completion plane plus the
+/// independent cancellation/settlement control plane (Issue #204).
+///
+/// The owning lifecycle drives `completion` while no cancellation/deadline
+/// intent has won its arbitration. Once intent wins, the lifecycle awaits
+/// ONLY the `settlement` plane; it never again polls `completion`. Dropping
+/// `completion` after that transition abandons nothing: with
+/// [`ToolExecutionHandle::settled_by_operation`] the operation's ownership
+/// moved to the settlement plane, and in any conforming executor the
+/// completion future is by then an empty poller shell — dropping it is never
+/// "cleanup by destructor".
+///
+/// A settlement future must resolve after cancellation is observed:
+/// [`ToolSettlement::Confirmed`] requires the executor to have actually
+/// proven physical terminality; [`ToolSettlement::Unconfirmed`] requires the
+/// executor to have consumed/reclaimed its local operation ownership while
+/// external terminality stays unprovable.
+pub struct ToolExecutionHandle<'a> {
+    /// The physical completion of the operation: the executor's terminal
+    /// result when the operation runs to its natural end.
+    pub completion: BoxFuture<'a, ToolExecutionResult>,
+    /// The settlement authority of the execution: resolves after observed
+    /// cancellation with the executor's typed certainty about physical
+    /// terminality.
+    pub settlement: BoxFuture<'a, ToolSettlement>,
+}
+
+impl<'a> ToolExecutionHandle<'a> {
+    /// A handle whose settlement authority is genuinely independent of the
+    /// physical operation future.
+    ///
+    /// An executor implementing `new` whose `settlement` reports without
+    /// consuming the physical operation must document how its residual
+    /// physical ownership is bounded and that it can never publish canonical
+    /// state (canonical authority is the Agent Loop's call slot anyway).
+    #[must_use]
+    pub fn new(
+        completion: BoxFuture<'a, ToolExecutionResult>,
+        settlement: BoxFuture<'a, ToolSettlement>,
+    ) -> Self {
+        Self {
+            completion,
+            settlement,
+        }
+    }
+
+    /// The standard cooperative pattern for executors whose physical
+    /// operation provably settles itself once it observes cancellation
+    /// (Bash's kill+wait+reap ladder, the subagent Issue #191 machinery,
+    /// native in-process tools, MCP's cancel-notification path).
+    ///
+    /// The operation lives in one shared ownership slot: the completion
+    /// plane drives it before cancellation; once cancellation is observed,
+    /// the settlement plane takes exclusive ownership and drives the same
+    /// operation to its terminal end. An executor-honest
+    /// [`ToolExecutionStatus::OutcomeUnknown`] result *is* unconfirmed
+    /// settlement evidence: the executor ran its cancellation path to its
+    /// end and still cannot prove terminality past the effect frontier.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the operation slot lock is poisoned, or if the settlement
+    /// plane is awaited after the operation has already left the shared
+    /// ownership slot (a lifecycle-contract violation by the caller).
+    #[must_use]
+    pub fn settled_by_operation(
+        operation: BoxFuture<'a, ToolExecutionResult>,
+        cancellation: ExecutionCancellation,
+    ) -> Self {
+        let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(operation)));
+        let completion_slot = std::sync::Arc::clone(&slot);
+        let completion: BoxFuture<'a, ToolExecutionResult> =
+            Box::pin(futures_util::future::poll_fn(move |cx| {
+                let mut guard = completion_slot.lock().expect("operation slot lock");
+                match guard.as_mut() {
+                    Some(operation) => operation.as_mut().poll(cx),
+                    // The settlement plane owns the operation now; the
+                    // owning lifecycle never polls this plane again after
+                    // cancellation won arbitration.
+                    None => std::task::Poll::Pending,
+                }
+            }));
+        let settlement: BoxFuture<'a, ToolSettlement> = Box::pin(async move {
+            cancellation.cancelled().await;
+            let operation =
+                slot.lock().expect("operation slot lock").take().expect(
+                    "the settlement plane is awaited only while the operation is still owned",
+                );
+            let result = operation.await;
+            match result.status {
+                ToolExecutionStatus::OutcomeUnknown { detail } => {
+                    ToolSettlement::Unconfirmed { detail }
+                }
+                _ => ToolSettlement::Confirmed(result),
+            }
+        });
+        Self {
+            completion,
+            settlement,
+        }
+    }
 }
 
 /// A registration or resolution failure of the tool registry.
@@ -394,6 +540,10 @@ pub struct PreparedInvocation {
     /// `invocation`, so no second stored identity can disagree with the
     /// registry.
     pub origin: ToolOrigin,
+    /// The executor's declared progress capability (Issue #204), frozen at
+    /// invocation resolution so a running call's effective idle-liveness
+    /// contract can never change mid-execution.
+    pub progress_capability: ToolProgressCapability,
 }
 
 /// The immutable validating tool registry of one attempt's capability set.
@@ -787,6 +937,11 @@ impl ToolRegistry {
             concurrency: entry.definition.concurrency_policy,
             approval: entry.definition.approval_policy,
             origin: entry.definition.origin.clone(),
+            // The executor's declared progress capability is captured here,
+            // at invocation resolution, so the admitted call's effective
+            // idle-liveness contract is frozen even if a later registry
+            // generation would declare otherwise.
+            progress_capability: entry.executor.progress_capability(),
         }))
     }
 
@@ -845,6 +1000,7 @@ mod tests {
     };
     use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
     use crate::tools::artifacts::ArtifactStore;
+    use crate::tools::deadline::ToolProgressCapability;
     use crate::tools::environment::ToolEnvironment;
     use crate::tools::types::{
         ToolCall, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
@@ -853,7 +1009,7 @@ mod tests {
     };
     use crate::tools::workspace::Workspace;
     use futures_util::FutureExt;
-    use futures_util::future::{BoxFuture, ready};
+    use futures_util::future::ready;
     use serde_json::json;
     use std::sync::{Arc, Mutex};
 
@@ -903,12 +1059,19 @@ mod tests {
     }
 
     impl super::ToolExecutor for StubExecutor {
-        fn execute<'a>(
+        fn start<'a>(
             &'a self,
             _invocation: ToolInvocation,
-            _context: super::ToolExecutionContext<'a>,
-        ) -> BoxFuture<'a, ToolExecutionResult> {
-            Box::pin(ready(self.result.clone()))
+            context: super::ToolExecutionContext<'a>,
+        ) -> super::ToolExecutionHandle<'a> {
+            super::ToolExecutionHandle::settled_by_operation(
+                Box::pin(ready(self.result.clone())),
+                context.cancellation.clone(),
+            )
+        }
+
+        fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+            crate::tools::deadline::ToolProgressCapability::None
         }
     }
 
@@ -1536,7 +1699,7 @@ mod tests {
 
     /// An execution context can be constructed for a registered tool; the
     /// executor receives the stripped invocation verbatim. This drives
-    /// [`ToolExecutor::execute`] directly through the registry.
+    /// [`ToolExecutor::start`] directly through the registry.
     ///
     #[test]
     fn executor_receives_no_synthetic_runtime_fields() {
@@ -1549,24 +1712,31 @@ mod tests {
             received: Arc<Mutex<Vec<serde_json::Value>>>,
         }
         impl ToolExecutor for CaptureExecutor {
-            fn execute<'a>(
+            fn start<'a>(
                 &'a self,
                 invocation: ToolInvocation,
-                _context: ToolExecutionContext<'a>,
-            ) -> BoxFuture<'a, ToolExecutionResult> {
+                context: ToolExecutionContext<'a>,
+            ) -> super::ToolExecutionHandle<'a> {
                 self.received
                     .lock()
                     .expect("lock")
                     .push(invocation.arguments.clone());
-                Box::pin(ready(ToolExecutionResult {
-                    status: ToolExecutionStatus::Success,
-                    content: Vec::new(),
-                    duration_ms: 0,
-                    exit_code: None,
-                    artifacts: Vec::new(),
-                    truncation: None,
-                    managed_output: None,
-                }))
+                super::ToolExecutionHandle::settled_by_operation(
+                    Box::pin(ready(ToolExecutionResult {
+                        status: ToolExecutionStatus::Success,
+                        content: Vec::new(),
+                        duration_ms: 0,
+                        exit_code: None,
+                        artifacts: Vec::new(),
+                        truncation: None,
+                        managed_output: None,
+                    })),
+                    context.cancellation.clone(),
+                )
+            }
+
+            fn progress_capability(&self) -> ToolProgressCapability {
+                ToolProgressCapability::None
             }
         }
         let dir = tempfile::tempdir().expect("temp dir");
@@ -1581,9 +1751,7 @@ mod tests {
                     ToolConcurrencyPolicy::Sequential,
                     json!({"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"], "additionalProperties": false}),
                 ),
-                Arc::new(CaptureExecutor {
-                    received: received.clone(),
-                }),
+                Arc::new(CaptureExecutor { received: received.clone() }),
             )
             .expect("register");
         let outcome = registry
@@ -1625,10 +1793,11 @@ mod tests {
             subagent: None,
         };
         let executor = registry.executor(&prepared.invocation.tool_id);
-        let _result = executor
-            .execute(prepared.invocation.clone(), context)
+        let handle = executor.start(prepared.invocation.clone(), context);
+        let _result = handle
+            .completion
             .now_or_never()
-            .expect("stub executors resolve immediately");
+            .expect("stub executors resolve");
         assert_eq!(
             *received.lock().expect("lock"),
             vec![json!({"path": "a.txt"})],

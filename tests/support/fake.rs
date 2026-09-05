@@ -15,7 +15,6 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use futures_util::future::BoxFuture;
 use futures_util::stream::unfold;
 use rustx::model::{
     ModelAdapter, ModelError, ModelErrorKind, ModelEvent, ModelProtocol, ModelRequest,
@@ -23,7 +22,10 @@ use rustx::model::{
 };
 use rustx::runtime::CancellationSignal;
 use rustx::runtime::identity::ToolCallId;
-use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
+use rustx::tools::ToolProgressCapability;
+use rustx::tools::executor::{
+    ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistry,
+};
 use rustx::tools::types::{
     ToolCall, ToolDefinition, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
 };
@@ -283,8 +285,9 @@ impl ModelAdapter for FakeModel {
 /// A scripted deterministic tool executor.
 ///
 /// Every call receives the same fixed result (recorded verbatim by the
-/// loop). When constructed as a parking tool, `execute` waits until the
-/// test releases it or until the invocation's cancellation signal fires —
+/// loop). When constructed as a parking tool, the started execution waits
+/// until the test releases it or until the invocation's cancellation signal
+/// fires —
 /// a parking tool always settles: on cancellation it returns a normalized
 /// cancelled result (the loop normalizes the reason to the attempt's), so
 /// the committed tool-result batch stays structurally complete.
@@ -435,11 +438,11 @@ impl FakeTool {
 }
 
 impl ToolExecutor for FakeTool {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
-    ) -> BoxFuture<'a, ToolExecutionResult> {
+    ) -> ToolExecutionHandle<'a> {
         self.calls
             .send_modify(|calls| calls.push(invocation.clone()));
         let started = self.started.clone();
@@ -449,55 +452,63 @@ impl ToolExecutor for FakeTool {
         let progress_reports = self.progress_reports;
         let phase_gates = self.phase_gates.clone();
         let phase_reports = self.phase_reports.clone();
-        Box::pin(async move {
-            started.send_replace(true);
-            for index in 0..progress_reports {
-                context.progress.report(rustx::tools::types::ToolProgress {
-                    message: Some(format!("progress {index}")),
-                    completed: None,
-                    total: None,
-                });
-            }
-            let outcome = 'outcome: {
-                // Phased mode: park on each gate; a release reports the
-                // phase's progress and the loop parks on the next gate.
-                for (index, gate) in phase_gates.iter().enumerate() {
-                    let mut gate_receiver = gate.subscribe();
-                    tokio::select! {
-                        biased;
-                        () = context.cancellation.cancelled() => {
-                            break 'outcome cancelled_execution_result();
-                        }
-                        released = gate_receiver.wait_for(|released| *released) => {
-                            released.expect("fake tool phase gate stays open");
-                        }
-                    }
-                    if let Some(report) = phase_reports.get(index) {
-                        context.progress.report(rustx::tools::types::ToolProgress {
-                            message: Some(report.clone()),
-                            completed: None,
-                            total: None,
-                        });
-                    }
+        let cancellation = context.cancellation.clone();
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                started.send_replace(true);
+                for index in 0..progress_reports {
+                    context.progress.report(rustx::tools::types::ToolProgress {
+                        message: Some(format!("progress {index}")),
+                        completed: None,
+                        total: None,
+                    });
                 }
-                if let Some(release) = release.as_mut() {
-                    tokio::select! {
-                        biased;
-                        () = context.cancellation.cancelled() => {
-                            cancelled_execution_result()
+                let outcome = 'outcome: {
+                    // Phased mode: park on each gate; a release reports the
+                    // phase's progress and the loop parks on the next gate.
+                    for (index, gate) in phase_gates.iter().enumerate() {
+                        let mut gate_receiver = gate.subscribe();
+                        tokio::select! {
+                            biased;
+                            () = context.cancellation.cancelled() => {
+                                break 'outcome cancelled_execution_result();
+                            }
+                            released = gate_receiver.wait_for(|released| *released) => {
+                                released.expect("fake tool phase gate stays open");
+                            }
                         }
-                        released = release.wait_for(|released| *released) => {
-                            released.expect("fake tool release channel stays open");
-                            result
-                        },
+                        if let Some(report) = phase_reports.get(index) {
+                            context.progress.report(rustx::tools::types::ToolProgress {
+                                message: Some(report.clone()),
+                                completed: None,
+                                total: None,
+                            });
+                        }
                     }
-                } else {
-                    result
-                }
-            };
-            completed.send_modify(|order| order.push(invocation.tool_name.clone()));
-            outcome
-        })
+                    if let Some(release) = release.as_mut() {
+                        tokio::select! {
+                            biased;
+                            () = context.cancellation.cancelled() => {
+                                cancelled_execution_result()
+                            }
+                            released = release.wait_for(|released| *released) => {
+                                released.expect("fake tool release channel stays open");
+                                result
+                            },
+                        }
+                    } else {
+                        result
+                    }
+                };
+                completed.send_modify(|order| order.push(invocation.tool_name.clone()));
+                outcome
+            }),
+            cancellation,
+        )
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 

@@ -43,10 +43,9 @@ mod input;
 
 use core::fmt::Write as _;
 
-use futures_util::future::BoxFuture;
-
 use crate::message::content::TextBlock;
-use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
+use crate::tools::deadline::ToolProgressCapability;
+use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
 use crate::tools::native::support::failed_result;
 use crate::tools::todo::{
@@ -111,24 +110,32 @@ fn definition() -> ToolDefinition {
 struct TodoExecutor;
 
 impl ToolExecutor for TodoExecutor {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
-    ) -> BoxFuture<'a, ToolExecutionResult> {
-        Box::pin(async move {
-            let Some(todos) = context.todos().cloned() else {
-                // Not a rejection of the arguments: this dispatch has no
-                // batch to publish a list, so there is no list to act on.
-                // Failing here is what keeps an unowned mutation from
-                // becoming some other batch's committed snapshot.
-                return failed_result(TodoMutationError::BatchClosed.to_string());
-            };
-            match TodoInput::parse(&invocation.arguments) {
-                Ok(input) => Self::dispatch(&todos, input),
-                Err(error) => failed_result(error),
-            }
-        })
+    ) -> ToolExecutionHandle<'a> {
+        let cancellation = context.cancellation.clone();
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                let Some(todos) = context.todos().cloned() else {
+                    // Not a rejection of the arguments: this dispatch has no
+                    // batch to publish a list, so there is no list to act on.
+                    // Failing here is what keeps an unowned mutation from
+                    // becoming some other batch's committed snapshot.
+                    return failed_result(TodoMutationError::BatchClosed.to_string());
+                };
+                match TodoInput::parse(&invocation.arguments) {
+                    Ok(input) => Self::dispatch(&todos, input),
+                    Err(error) => failed_result(error),
+                }
+            }),
+            cancellation,
+        )
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 

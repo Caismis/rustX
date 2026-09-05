@@ -67,6 +67,13 @@ pub struct CurrentRuntimeConfig {
     /// input or historical request state.
     #[serde(default)]
     pub model_timeout_policy: ModelTimeoutPolicyDocument,
+    /// The finite runtime-owned execution-liveness deadline policy of
+    /// foreground Tool executions (Issue #204): one generic hard deadline,
+    /// plus an optional idle-liveness window refreshed by executor progress.
+    /// This is current launch state, never model input, executor-visible
+    /// data, or historical execution state.
+    #[serde(default)]
+    pub tool_deadline_policy: ToolDeadlinePolicyDocument,
     /// The ecosystem-compatible named MCP server map, keyed by server
     /// identity exactly as mainstream MCP clients spell it.
     #[serde(default)]
@@ -367,6 +374,64 @@ impl ModelTimeoutPolicyDocument {
     }
 }
 
+/// The current-runtime document of the tool execution-liveness deadline
+/// policy (Issue #204).
+///
+/// Milliseconds keep the configuration human-readable while the runtime
+/// receives a typed
+/// [`ToolExecutionDeadlinePolicy`](crate::tools::deadline::ToolExecutionDeadlinePolicy)
+/// containing only finite [`Duration`] values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+pub struct ToolDeadlinePolicyDocument {
+    /// The total maximum execution lifetime of one admitted foreground Tool
+    /// call, measured from its executor-start frontier. Progress never
+    /// extends it.
+    pub hard_deadline_ms: u64,
+    /// The optional idle-liveness window: the maximum time one started
+    /// execution may go without meaningful executor progress evidence.
+    /// Omitted means no idle watchdog. The window applies only to
+    /// executions whose executor declares meaningful progress capability;
+    /// all other executions run under the hard deadline only.
+    pub idle_liveness_ms: Option<u64>,
+}
+
+impl Default for ToolDeadlinePolicyDocument {
+    fn default() -> Self {
+        Self {
+            hard_deadline_ms: u64::try_from(
+                crate::tools::deadline::DEFAULT_TOOL_HARD_DEADLINE.as_millis(),
+            )
+            .expect("the default tool hard deadline fits in milliseconds"),
+            idle_liveness_ms: None,
+        }
+    }
+}
+
+impl ToolDeadlinePolicyDocument {
+    /// Converts the current-runtime document to the runtime policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the hard deadline or a configured idle-liveness
+    /// window is zero.
+    #[must_use = "the validated policy must be used by runtime composition"]
+    pub fn to_policy(self) -> Result<crate::tools::deadline::ToolExecutionDeadlinePolicy, String> {
+        if self.hard_deadline_ms == 0 {
+            return Err("toolDeadlinePolicy.hardDeadlineMs must be positive".to_owned());
+        }
+        if let Some(idle) = self.idle_liveness_ms
+            && idle == 0
+        {
+            return Err("toolDeadlinePolicy.idleLivenessMs must be positive".to_owned());
+        }
+        Ok(crate::tools::deadline::ToolExecutionDeadlinePolicy::new(
+            Duration::from_millis(self.hard_deadline_ms),
+            self.idle_liveness_ms.map(Duration::from_millis),
+        ))
+    }
+}
+
 const fn default_schema_version() -> u32 {
     CURRENT_RUNTIME_SCHEMA_VERSION
 }
@@ -594,6 +659,26 @@ impl CurrentRuntimeConfig {
     /// zero.
     pub fn timeout_policy(&self) -> Result<ModelTimeoutPolicy, CurrentRuntimeConfigError> {
         self.model_timeout_policy
+            .to_policy()
+            .map_err(|detail| CurrentRuntimeConfigError::Invalid { detail })
+    }
+
+    /// The validated finite tool execution-liveness deadline policy for this
+    /// runtime (Issue #204).
+    ///
+    /// The policy is copied into the frozen execution policy of each admitted
+    /// attempt. It is not placed in a model request, a tool executor context,
+    /// canonical history, or any durable state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CurrentRuntimeConfigError::Invalid`] when the hard deadline
+    /// or a configured idle-liveness window is zero.
+    pub fn tool_deadline_policy(
+        &self,
+    ) -> Result<crate::tools::deadline::ToolExecutionDeadlinePolicy, CurrentRuntimeConfigError>
+    {
+        self.tool_deadline_policy
             .to_policy()
             .map_err(|detail| CurrentRuntimeConfigError::Invalid { detail })
     }
@@ -1306,6 +1391,104 @@ mod tests {
         assert_eq!(
             later.stream_idle_timeout,
             std::time::Duration::from_millis(17)
+        );
+    }
+
+    /// The tool execution-liveness deadline policy (Issue #204) is current
+    /// runtime state and accepts finite millisecond values without entering
+    /// executor-visible or durable state.
+    #[test]
+    fn tool_deadline_policy_is_configurable() {
+        let json = MINIMAL.replace(
+            r#""agentId": "agent-a""#,
+            r#""agentId": "agent-a", "toolDeadlinePolicy": {"hardDeadlineMs": 7000, "idleLivenessMs": 1500}"#,
+        );
+        let config = CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect("valid");
+        let policy = config
+            .tool_deadline_policy()
+            .expect("finite deadline policy");
+        assert_eq!(policy.hard_deadline, std::time::Duration::from_secs(7));
+        assert_eq!(
+            policy.idle_liveness,
+            Some(std::time::Duration::from_millis(1500))
+        );
+    }
+
+    /// An omitted tool deadline policy (Issue #204) resolves to the default
+    /// finite hard deadline without an idle watchdog.
+    #[test]
+    fn tool_deadline_policy_defaults_when_omitted() {
+        let config = CurrentRuntimeConfig::from_jsonc_slice(MINIMAL.as_bytes()).expect("valid");
+        let policy = config
+            .tool_deadline_policy()
+            .expect("default deadline policy");
+        assert_eq!(
+            policy,
+            crate::tools::deadline::ToolExecutionDeadlinePolicy::default()
+        );
+        assert_eq!(
+            policy.hard_deadline,
+            crate::tools::deadline::DEFAULT_TOOL_HARD_DEADLINE
+        );
+        assert_eq!(policy.idle_liveness, None);
+    }
+
+    /// A zero hard deadline is rejected at the policy boundary (Issue #204)
+    /// rather than admitting an execution that can never make progress.
+    #[test]
+    fn zero_tool_hard_deadline_is_rejected() {
+        let json = MINIMAL.replace(
+            r#""agentId": "agent-a""#,
+            r#""agentId": "agent-a", "toolDeadlinePolicy": {"hardDeadlineMs": 0, "idleLivenessMs": 1500}"#,
+        );
+        let config = CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect("valid");
+        let error = config
+            .tool_deadline_policy()
+            .expect_err("zero hard deadline must fail");
+        assert!(matches!(error, CurrentRuntimeConfigError::Invalid { .. }));
+        assert!(error.to_string().contains("hardDeadlineMs"));
+    }
+
+    /// A zero idle-liveness window is rejected at the policy boundary
+    /// (Issue #204): it would fire at every observation.
+    #[test]
+    fn zero_tool_idle_liveness_is_rejected() {
+        let json = MINIMAL.replace(
+            r#""agentId": "agent-a""#,
+            r#""agentId": "agent-a", "toolDeadlinePolicy": {"hardDeadlineMs": 7000, "idleLivenessMs": 0}"#,
+        );
+        let config = CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect("valid");
+        let error = config
+            .tool_deadline_policy()
+            .expect_err("zero idle liveness must fail");
+        assert!(matches!(error, CurrentRuntimeConfigError::Invalid { .. }));
+        assert!(error.to_string().contains("idleLivenessMs"));
+    }
+
+    /// A policy read for one admission stays frozen when current
+    /// configuration is edited (Issue #204); a later admission reads the new
+    /// values.
+    #[test]
+    fn tool_deadline_policy_changes_apply_only_to_later_admissions() {
+        let json = MINIMAL.replace(
+            r#""agentId": "agent-a""#,
+            r#""agentId": "agent-a", "toolDeadlinePolicy": {"hardDeadlineMs": 7000, "idleLivenessMs": 1500}"#,
+        );
+        let mut config = CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect("valid");
+        let admitted = config.tool_deadline_policy().expect("initial policy");
+        config.tool_deadline_policy.hard_deadline_ms = 13000;
+        config.tool_deadline_policy.idle_liveness_ms = Some(2500);
+        let later = config.tool_deadline_policy().expect("later policy");
+
+        assert_eq!(admitted.hard_deadline, std::time::Duration::from_secs(7));
+        assert_eq!(
+            admitted.idle_liveness,
+            Some(std::time::Duration::from_millis(1500))
+        );
+        assert_eq!(later.hard_deadline, std::time::Duration::from_secs(13));
+        assert_eq!(
+            later.idle_liveness,
+            Some(std::time::Duration::from_millis(2500))
         );
     }
 

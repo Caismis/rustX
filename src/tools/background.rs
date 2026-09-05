@@ -1925,7 +1925,11 @@ impl ConversationBackgroundRegistry {
                 // is structural rather than a policy decision.
                 subagent: None,
             };
-            let result = executor.execute(invocation, context).await;
+            // The background plane awaits the executor's own terminal
+            // return: no deadline, no settlement-plane use. The settlement
+            // future is dropped unpolled, which is safe by construction —
+            // the completion plane drove the operation.
+            let result = executor.start(invocation, context).completion.await;
             registry.settle_terminal(&execution_id, &result);
         })
     }
@@ -2380,7 +2384,6 @@ pub(crate) mod test_sync {
 mod tests {
     use std::sync::Arc;
 
-    use futures_util::future::BoxFuture;
     use tokio::sync::watch;
 
     use super::test_sync::CommitBoundaryHook;
@@ -2395,6 +2398,7 @@ mod tests {
     use crate::runtime::inbound::ConversationInboundMailbox;
     use crate::runtime::types::CancellationReason;
     use crate::tools::artifacts::ArtifactStore;
+    use crate::tools::deadline::ToolProgressCapability;
     use crate::tools::environment::ToolEnvironment;
     use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
     use crate::tools::types::{
@@ -2693,22 +2697,29 @@ mod tests {
     }
 
     impl ToolExecutor for IgnoreCancellationExecutor {
-        fn execute<'a>(
+        fn start<'a>(
             &'a self,
             _invocation: ToolInvocation,
-            _context: ToolExecutionContext<'a>,
-        ) -> BoxFuture<'a, ToolExecutionResult> {
+            context: ToolExecutionContext<'a>,
+        ) -> crate::tools::executor::ToolExecutionHandle<'a> {
             let started = self.started.clone();
             let mut release = self.release.subscribe();
             let result = self.result.clone();
-            Box::pin(async move {
-                started.send_replace(true);
-                release
-                    .wait_for(|released| *released)
-                    .await
-                    .expect("release channel stays open");
-                result
-            })
+            crate::tools::executor::ToolExecutionHandle::settled_by_operation(
+                Box::pin(async move {
+                    started.send_replace(true);
+                    release
+                        .wait_for(|released| *released)
+                        .await
+                        .expect("release channel stays open");
+                    result
+                }),
+                context.cancellation.clone(),
+            )
+        }
+
+        fn progress_capability(&self) -> ToolProgressCapability {
+            ToolProgressCapability::None
         }
     }
 
@@ -3631,18 +3642,25 @@ mod tests {
     async fn oversized_multibyte_progress_cannot_panic_or_strand() {
         struct ProgressThenDone;
         impl ToolExecutor for ProgressThenDone {
-            fn execute<'a>(
+            fn start<'a>(
                 &'a self,
                 _invocation: ToolInvocation,
                 context: ToolExecutionContext<'a>,
-            ) -> BoxFuture<'a, ToolExecutionResult> {
+            ) -> crate::tools::executor::ToolExecutionHandle<'a> {
                 let message = format!("{}😀", "x".repeat(1024));
                 context.progress.report(ToolProgress {
                     message: Some(message),
                     completed: Some(1.0),
                     total: Some(2.0),
                 });
-                Box::pin(async move { success() })
+                crate::tools::executor::ToolExecutionHandle::settled_by_operation(
+                    Box::pin(async move { success() }),
+                    context.cancellation.clone(),
+                )
+            }
+
+            fn progress_capability(&self) -> ToolProgressCapability {
+                ToolProgressCapability::None
             }
         }
         let sink = Arc::new(RecordingEventSink::new());
@@ -3808,14 +3826,21 @@ mod tests {
     struct EnvironmentRecordingExecutor(Arc<std::sync::Mutex<Vec<(String, String)>>>);
 
     impl ToolExecutor for EnvironmentRecordingExecutor {
-        fn execute<'a>(
+        fn start<'a>(
             &'a self,
             _invocation: ToolInvocation,
             context: ToolExecutionContext<'a>,
-        ) -> BoxFuture<'a, ToolExecutionResult> {
+        ) -> crate::tools::executor::ToolExecutionHandle<'a> {
             *self.0.lock().expect("record environment") =
                 context.environment.authorized_entries().to_vec();
-            Box::pin(async move { success() })
+            crate::tools::executor::ToolExecutionHandle::settled_by_operation(
+                Box::pin(async move { success() }),
+                context.cancellation.clone(),
+            )
+        }
+
+        fn progress_capability(&self) -> ToolProgressCapability {
+            ToolProgressCapability::None
         }
     }
 
@@ -3823,13 +3848,20 @@ mod tests {
     struct InstantExecutor(ToolExecutionResult);
 
     impl ToolExecutor for InstantExecutor {
-        fn execute<'a>(
+        fn start<'a>(
             &'a self,
             _invocation: ToolInvocation,
-            _context: ToolExecutionContext<'a>,
-        ) -> BoxFuture<'a, ToolExecutionResult> {
+            context: ToolExecutionContext<'a>,
+        ) -> crate::tools::executor::ToolExecutionHandle<'a> {
             let result = self.0.clone();
-            Box::pin(async move { result })
+            crate::tools::executor::ToolExecutionHandle::settled_by_operation(
+                Box::pin(async move { result }),
+                context.cancellation.clone(),
+            )
+        }
+
+        fn progress_capability(&self) -> ToolProgressCapability {
+            ToolProgressCapability::None
         }
     }
 
@@ -4059,7 +4091,7 @@ mod tests {
             arguments: serde_json::json!({"path": output_path}),
         };
         let read = crate::tools::native::ReadTool
-            .execute(
+            .start(
                 read_invocation,
                 ToolExecutionContext {
                     conversation_id: fixture.registry.conversation_id(),
@@ -4078,6 +4110,7 @@ mod tests {
                     subagent: None,
                 },
             )
+            .completion
             .await;
         assert_eq!(read.status, ToolExecutionStatus::Success);
         let read_text = match &read.content[0] {
@@ -4102,7 +4135,7 @@ mod tests {
             }),
         };
         let grep = crate::tools::native::GrepTool
-            .execute(
+            .start(
                 grep_invocation,
                 ToolExecutionContext {
                     conversation_id: fixture.registry.conversation_id(),
@@ -4121,6 +4154,7 @@ mod tests {
                     subagent: None,
                 },
             )
+            .completion
             .await;
         assert_eq!(grep.status, ToolExecutionStatus::Success);
         let grep_text = match &grep.content[0] {

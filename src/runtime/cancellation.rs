@@ -194,6 +194,35 @@ impl ExecutionCancellation {
         self.signal.child()
     }
 
+    /// Derives one per-execution child view together with its owner-side
+    /// trigger (Issue #204).
+    ///
+    /// The returned view observes exactly what this view observes — the same
+    /// live cause authority and interaction-failure marker — behind a child
+    /// signal, so owner cancellation still propagates into the execution. The
+    /// returned trigger lets the owning lifecycle cancel *this one*
+    /// execution without touching the owner's signal or its cause, which is
+    /// how a generic execution-deadline winner requests physical
+    /// cancellation of exactly the admitted call it owns. The trigger is
+    /// never exposed to executors.
+    ///
+    /// While a deadline-triggered cancellation is in flight, the view's
+    /// `reason()` still reads the owner's authority (which has not been
+    /// cancelled); the lifecycle that fired the trigger owns the canonical
+    /// deadline classification (`TimedOut`/`OutcomeUnknown`) at settlement
+    /// and never lets the executor's provisional cancellation reason leak
+    /// into canonical history through this path.
+    #[must_use]
+    pub(crate) fn child_execution(&self) -> (CancellationSignal, ExecutionCancellation) {
+        let signal = self.signal.child();
+        let view = Self {
+            signal: signal.clone(),
+            cause: Arc::clone(&self.cause),
+            interaction_failure: self.interaction_failure.clone(),
+        };
+        (signal, view)
+    }
+
     /// Marks the owning attempt as unable to continue because its semantic
     /// interaction control path failed. This does not request cancellation or
     /// choose an interaction outcome.
