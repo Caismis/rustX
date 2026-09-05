@@ -1788,23 +1788,13 @@ impl McpServerRuntime {
                 biased;
                 response = &mut handle.rx => break Some(response),
                 () = context.cancellation.cancelled() => {
-                    let cancelled = handle.cancel(Some("rustX execution cancellation".to_owned())).await;
+                    let cancelled = handle
+                        .cancel(Some("rustX execution cancellation".to_owned()))
+                        .await
+                        .map_err(|error| bound_error(&error.to_string()));
                     drop(progress);
-                    // The request was already dispatched, so the call crossed
-                    // the external-effect frontier. An accepted cancellation
-                    // notification proves only that the request reached the
-                    // peer, never that the remote operation terminated; a
-                    // failed cancellation request proves even less. Either
-                    // way the final external outcome is unknown.
-                    let detail = match cancelled {
-                        Ok(()) => "cancellation was requested after dispatch, but remote termination could not be confirmed".to_owned(),
-                        Err(error) => format!(
-                            "cancellation was requested after dispatch and the cancellation request itself failed: {}",
-                            bound_error(&error.to_string())
-                        ),
-                    };
                     return mcp_empty_terminal(
-                        ToolExecutionStatus::OutcomeUnknown { detail },
+                        post_dispatch_cancellation_status(cancelled),
                         context,
                         started,
                     );
@@ -2700,6 +2690,26 @@ fn failed_mcp(
     )
 }
 
+/// The terminal status of a post-dispatch cancellation attempt.
+///
+/// The request was already dispatched, so the call crossed the
+/// external-effect frontier. An accepted cancellation notification proves
+/// only that the request reached the peer, never that the remote operation
+/// terminated; a failed cancellation request proves even less. Either way
+/// the final external outcome is unknown — never `Cancelled`, never
+/// `Failed`.
+fn post_dispatch_cancellation_status(cancelled: Result<(), String>) -> ToolExecutionStatus {
+    let detail = match cancelled {
+        Ok(()) => "cancellation was requested after dispatch, but remote termination could not be confirmed".to_owned(),
+        Err(error) => format!(
+            "cancellation was requested after dispatch and the cancellation request itself failed: {error}"
+        ),
+    };
+    ToolExecutionStatus::OutcomeUnknown {
+        detail: bound_error(&detail),
+    }
+}
+
 /// Retains the dispatch-owned background locator for MCP outcomes that do
 /// not carry a remote `CallToolResult` (unknown outcomes after dispatch or
 /// a local protocol error). A healthy preallocated empty file is a complete
@@ -2791,7 +2801,10 @@ mod tests {
     use base64::Engine as _;
     use rmcp::model::{CallToolResult, ContentBlock};
 
-    use super::{McpServerId, mcp_empty_terminal, mcp_tool_id, translate_result};
+    use super::{
+        McpServerId, mcp_empty_terminal, mcp_tool_id, post_dispatch_cancellation_status,
+        translate_result,
+    };
     use crate::runtime::identity::{ConversationId, ToolExecutionId};
     use crate::runtime::types::CancellationReason;
     use crate::runtime::{CancellationSignal, ExecutionCancellation};
@@ -3352,6 +3365,37 @@ mod tests {
             result.managed_output,
             Some(ManagedOutputContinuation::Partial { .. })
         ));
+    }
+
+    /// Issue #202: the post-dispatch cancellation mapping is deterministic
+    /// for both cancellation-request outcomes — an accepted request and a
+    /// failed request both settle as `OutcomeUnknown` with a bounded detail,
+    /// because neither proves the remote operation terminated.
+    #[test]
+    fn post_dispatch_cancellation_is_outcome_unknown_whether_the_request_succeeded_or_failed() {
+        let accepted = post_dispatch_cancellation_status(Ok(()));
+        let ToolExecutionStatus::OutcomeUnknown { detail } = &accepted else {
+            panic!("an accepted cancel request is OutcomeUnknown: {accepted:?}");
+        };
+        assert!(
+            detail.contains("remote termination could not be confirmed"),
+            "the accepted-request detail names the unproven termination: {detail}"
+        );
+
+        let huge_error = "x".repeat(64 * 1024);
+        let failed = post_dispatch_cancellation_status(Err(huge_error));
+        let ToolExecutionStatus::OutcomeUnknown { detail } = &failed else {
+            panic!("a failed cancel request is OutcomeUnknown: {failed:?}");
+        };
+        assert!(
+            detail.contains("the cancellation request itself failed"),
+            "the failed-request detail names the failed request: {detail}"
+        );
+        assert!(
+            detail.len() <= 1024 + 128,
+            "the detail stays bounded far below the 64KiB input: {} bytes",
+            detail.len()
+        );
     }
 
     #[test]
