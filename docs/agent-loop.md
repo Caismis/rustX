@@ -85,17 +85,18 @@ recovery class:
 
 ```text
 logical model step
-  physical generation #1 -> malformed tool proposal
+  semantic generation #1 -> malformed tool proposal
       discard the whole noncanonical generation
       settle its publication as audit evidence
-      attach one bounded ephemeral corrective hint
-  physical generation #2
+      authorize ONE corrective generation and own its corrective hint
+  semantic generation #2 (the corrective generation)
+      realized by one or more actual requests, all carrying the hint
       valid       -> continue normally
       malformed   -> explicit terminal model-generation failure
 ```
 
-The budget is **one** corrective regeneration per logical model step, so this
-mechanism alone can never cause more than two physical generations, and a
+The budget is **one** corrective generation per logical model step, so this
+mechanism alone can never cause more than two semantic generations, and a
 third malformed-proposal regeneration for the same step is not representable.
 
 The budget is separate from every other one and is keyed on the error class,
@@ -104,18 +105,60 @@ by the transient budget, the overflow budget, or anything on the Tool side:
 the bounds compose additively, never multiplicatively. A transient retry
 between two malformed generations does not restore the spent regeneration.
 
-The regeneration is an ordinary actual request of the same logical step. It
-replays the frozen state through the same stage/finalize, cancellation-vs-start
-arbitration, durable start, and adapter frontier as every other request, so
-cancellation observable before it begins wins over the remaining budget and no
-further provider request starts.
+The corrective generation is realized by ordinary actual requests of the same
+logical step. Each replays the frozen state through the same stage/finalize,
+cancellation-vs-start arbitration, durable start, and adapter frontier as
+every other request, so cancellation observable before one begins wins over
+the remaining budget and no further provider request starts.
 
-The corrective hint is bounded, provider-independent request-only context: it
-states that the previous generation produced no structurally valid tool call
-and that the step should be regenerated, plus the bounded adapter reason. It is
-consumed by exactly the regenerated request. It is never committed, persisted,
-replayed, or used as a few-shot example, and it never carries the malformed
-output itself.
+##### The lifetime of the corrective hint
+
+The hint is bounded, provider-independent, noncanonical request-only context:
+it states that the previous generation produced no structurally valid tool
+call and that the step should be regenerated, plus the bounded adapter reason
+(bounded by the model layer at construction — see
+`MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES`). It never carries the malformed
+output itself, and it is never a durable few-shot conversation message.
+
+Its owner is the **corrective generation**, not any one request:
+
+```text
+created   when a malformed generation is observed and the step's budget
+          still allows a corrective generation
+carried   by EVERY actual request that tries to realize that corrective
+          generation — the first one, a transient/rate-limit/timeout retry
+          of it, a post-compaction retry of it
+cleared   when that corrective generation reaches a canonical model outcome
+discarded with the rest of the step's recovery state at the next logical
+          model step boundary
+```
+
+The distinction matters because an actual request can fail before producing
+any generation at all. A hint consumed at request construction would vanish on
+the first transport failure, and the retry would ask the model to regenerate
+the step without saying why the previous answer was discarded. The Agent Loop
+therefore keeps the hint and the spent budget together as semantic state of
+the logical step, and request construction only *borrows* the hint.
+
+##### Canonical history is not durable request audit
+
+These are different surfaces and the corrective hint sits in exactly one of
+them:
+
+```text
+Message Ledger canonical history   ->  NEVER contains the corrective hint
+later logical model steps          ->  NEVER contain the corrective hint
+RequestSnapshot / request audit    ->  DOES contain it, for every actual
+                                       request that actually sent it
+```
+
+Request Snapshots freeze the exact request-time `effective_system_prompt`, so
+an actual request that carried the corrective hint reconstructs historically
+with it, byte for byte. That is correct and deliberate: audit evidence must
+reproduce the request that was really sent, and hiding the hint would make
+historical reconstruction a lie. It does not make the hint conversation
+history — no Assistant or User message contains it, and no later model step
+sees it as context.
 
 Nothing from the discarded generation survives. Its assembler, provisional
 Assistant identity, provisional content, and any provider continuation state
@@ -123,7 +166,9 @@ are dropped with the failed invocation, so no malformed Assistant message,
 orphan canonical `ToolCall`, `ToolResult`, or provider continuation fragment
 can reach canonical history or a later request reconstruction. The bounded
 diagnostic survives as `ModelRequestFailed` in the Event Journal, which is
-execution fact, not conversation history.
+execution fact, not conversation history, and is bounded where the malformed
+class is constructed so provider output cannot author an arbitrarily large
+durable diagnostic.
 
 Tool schema rejection is deliberately outside this mechanism. A structurally
 valid canonical `ToolCall` whose JSON violates a declared Tool schema has

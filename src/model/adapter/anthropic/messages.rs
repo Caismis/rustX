@@ -19,7 +19,7 @@ use reqwest::header::HeaderValue;
 
 use crate::message::types::ContentBlockIndex;
 use crate::model::adapter::block_index::BlockAllocator;
-use crate::model::adapter::proposal::{accept_tool_arguments, accept_tool_identity};
+use crate::model::adapter::proposal::{accept_tool_call_arguments, resolve_tool_identity};
 use crate::model::adapter::traits::{
     ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
@@ -732,8 +732,10 @@ impl AnthropicStreamNormalizer {
         block: &super::wire::WireContentBlock,
     ) -> Result<Vec<ModelEvent>, ModelError> {
         let canonical_index = self.blocks.allocate(AnthropicBlockKey::Provider(index));
-        // ToolCall acceptance: identity crosses the boundary here.
-        let call = accept_tool_identity(block.id.as_deref(), block.name.as_deref(), &self.tools)?;
+        // Identity resolution: the proposal becomes attributable and the
+        // canonical start event may be emitted. The executable ToolCall does
+        // not exist until argument acceptance at block stop.
+        let call = resolve_tool_identity(block.id.as_deref(), block.name.as_deref(), &self.tools)?;
         let call_id = call.id.clone();
         let tool_id = call.tool_id.clone();
         let name = call.name.clone();
@@ -985,9 +987,10 @@ impl AnthropicStreamNormalizer {
                 if *completed {
                     return Ok(Vec::new());
                 }
-                // ToolCall acceptance completes here: the complete JSON is
-                // parsed exactly once, at block stop, and is never repaired.
-                let call = accept_tool_arguments(
+                // The ToolCall acceptance linearization point: the complete
+                // JSON is parsed exactly once, at block stop, and is never
+                // repaired. The canonical ToolCall exists only from here.
+                let call = accept_tool_call_arguments(
                     &ToolCallStart {
                         id: call_id.clone(),
                         tool_id: tool_id.clone(),

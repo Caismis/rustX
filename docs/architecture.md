@@ -2795,9 +2795,11 @@ explicit acceptance point:
 ```text
 provider/model stream
     -> provider-specific proposal assembly   (adapter, protocol-aware)
-    -> structural proposal validation        (src/model/adapter/proposal.rs)
-    -> ToolCall acceptance                   (same module)
-    -> canonical ToolCall                    (ModelEvent::ToolCall*)
+    -> proposal identity resolution          (src/model/adapter/proposal.rs)
+        -> ModelEvent::ToolCallStarted, argument streaming
+    -> complete argument validation          (same module)
+    -> ToolCall ACCEPTANCE  <- the one linearization point
+        -> canonical ToolCall in ModelEvent::ToolCallCompleted
     -> Agent Loop Tool path                  (preflight, approval, execution,
                                               exactly-once ToolResult)
 ```
@@ -2806,12 +2808,23 @@ Every adapter assembles a proposal in its own protocol terms — provider
 envelopes, chunk indexes, snapshot merges, block ids, lossless wire
 normalization such as retaining an already-established streamed identity when
 later continuation deltas omit it — and then presents the assembled proposal
-to the shared acceptance functions exactly once. Acceptance validates only
-structural trustworthiness: a usable correlation identity, a tool identity
-that resolves to one declared `ToolId`, and a complete argument
-representation that parses as one JSON value. It never invents intent, and it
-deliberately does not perform Tool schema validation, which belongs to Tool
-preflight after the canonical call exists.
+to the shared functions exactly once.
+
+The two stages are deliberately not the same event. **Identity resolution**
+establishes that a proposal is attributable — a usable correlation identity
+and a tool identity that resolves to one declared `ToolId` — and that is what
+licenses the canonical `ModelEvent::ToolCallStarted` and its argument deltas.
+`ToolCallStarted` is a canonical normalized model-stream event of the
+adapter→kernel protocol, but it carries a `ToolCallStart`, not a `ToolCall`:
+nothing is executable yet. **Argument acceptance** is the acceptance
+linearization point; the complete argument representation is parsed exactly
+once, and only on success does the full canonical
+`ToolCall { id, tool_id, name, arguments }` exist, carried by
+`ToolCallCompleted`. There is therefore exactly one unambiguous point at
+which an executable canonical `ToolCall` comes into being.
+
+Neither stage invents intent, and neither performs Tool schema validation,
+which belongs to Tool preflight after the canonical call exists.
 
 Everything a provider can do to make a proposal untrustworthy is recognized
 below this line and normalized above it into one class,
@@ -2825,14 +2838,28 @@ produced).
 
 Reserved-markup recognition is the only Qwen-shaped protocol knowledge in the
 runtime, and it lives in the Chat Completions adapter beside every other
-dialect difference. It is opt-in and narrow: the model must declare the
-dialect through `compat.chatToolProtocol`, tools must actually have been
-exposed in that request, the generation must have produced no structured
-call, the provider must have terminated as a complete normal generation, and
-the output must contain a reserved envelope that cannot occur in well-formed
-markup. Under the default `native` profile generated text is never inspected
-at all, so a legitimate answer discussing tool or XML syntax remains an
-ordinary completion. Nothing is inferred from a provider name or a hostname.
+dialect difference (`src/model/adapter/openai/qwen_xml.rs`). It is opt-in and
+narrow: the model must declare the dialect through `compat.chatToolProtocol`,
+tools must actually have been exposed in that request, the generation must
+have produced no structured call, the provider must have terminated as a
+complete normal generation, and the output must contain an actual protocol
+*emission*. Under the default `native` profile generated text is never
+inspected at all. Nothing is inferred from a model name, a provider name, or
+a hostname.
+
+Recognizing an emission is deliberately not a substring test. The reserved
+bytes of the dialect are exactly what a correct answer contains when the user
+asks how the dialect works, so `contains(open) && contains(close)` would
+classify a good answer as malformed tool intent. The recognizer instead
+requires the shape a real vLLM/Qwen emission has and a discussion of it does
+not: each reserved tag must own its whole line rather than sit inside a
+sentence, tags inside a fenced code block are quoted syntax rather than
+emitted output, an opener must be matched by its own closer in order, and the
+opener's payload must be a plausible function/parameter identifier rather than
+an illustrative ellipsis. Recognition is one-directional — it proves a leak
+and produces one refused proposal; the leaked region is never parsed back
+into a `ToolCall`, because a call this runtime had to infer is precisely the
+invented model intent the acceptance boundary exists to refuse.
 
 Above the adapter the Agent Loop reacts to the class and never to the
 evidence. It owns the bounded one-regeneration recovery of that class
@@ -2865,8 +2892,11 @@ Plane execution; only a successful actual request can commit the canonical
 Assistant.
 
 The transient budget is three retries, the overflow budget is one, and the
-malformed-tool-proposal regeneration budget is one, for an additive maximum of
-six primary provider requests per logical step. The three budgets are keyed on
+malformed-tool-proposal budget is one corrective *generation*, for an additive
+maximum of six primary provider requests per logical step. A corrective
+generation may itself be realized by several actual requests when transport or
+overflow recovery intervenes; the bounded corrective context it owns is
+carried by all of them and is cleared only when that generation resolves. The three budgets are keyed on
 disjoint error classes, so none of them resets or multiplies another. Backoff
 uses the runtime-owned monotonic clock: 2, 4, and 8 seconds, overridden by an
 adapter-normalized `retry_after_ms` hint capped at 60 seconds. Provider

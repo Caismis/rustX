@@ -53,7 +53,8 @@ use crate::model::adapter::openai::config::OpenAiAdapterConfig;
 use crate::model::adapter::openai::mapping::{
     map_chat_finish_reason, normalize_chat_usage, normalize_error, stream_retry_disposition,
 };
-use crate::model::adapter::proposal::{accept_tool_arguments, accept_tool_identity};
+use crate::model::adapter::openai::qwen_xml::{self, QwenReservedEnvelope};
+use crate::model::adapter::proposal::{accept_tool_call_arguments, resolve_tool_identity};
 use crate::model::adapter::traits::{
     ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
@@ -526,48 +527,20 @@ struct ChatFunctionChunkWire {
     arguments: Option<String>,
 }
 
-/// One reserved in-band tool-protocol envelope.
+/// Recognizes an actual in-band tool-protocol emission in generated output,
+/// for a model that declared the dialect.
 ///
-/// `open` is a token that cannot occur in well-formed markup, and `close` is
-/// the closer that must accompany it. Requiring both keeps prose that merely
-/// mentions a tag (`<parameter>`, `</parameter>`) out of the detector.
-#[derive(Debug, Clone, Copy)]
-struct ReservedEnvelope {
-    open: &'static str,
-    close: &'static str,
-}
-
-impl ReservedEnvelope {
-    /// Whether this complete reserved envelope appears in generated output.
-    fn appears_in(self, output: &str) -> bool {
-        output.contains(self.open) && output.contains(self.close)
-    }
-}
-
-/// The Qwen XML tool dialect's reserved envelopes. `<function=` and
-/// `<parameter=` are not well-formed markup at all, so their presence with a
-/// matching closer is protocol emission rather than prose.
-const QWEN_XML_RESERVED_ENVELOPES: &[ReservedEnvelope] = &[
-    ReservedEnvelope {
-        open: "<tool_call>",
-        close: "</tool_call>",
-    },
-    ReservedEnvelope {
-        open: "<function=",
-        close: "</function>",
-    },
-    ReservedEnvelope {
-        open: "<parameter=",
-        close: "</parameter>",
-    },
-];
-
-/// The reserved envelopes of one declared dialect. The default `native`
-/// profile has none, so generated text is never inspected.
-const fn reserved_envelopes(protocol: ChatToolProtocol) -> &'static [ReservedEnvelope] {
+/// Each dialect owns its own recognizer; the default `native` profile has
+/// none, so generated text is never inspected at all. A recognizer proves an
+/// *emission shape* rather than the co-occurrence of reserved tokens, so an
+/// assistant answer that quotes or discusses the exact reserved syntax stays
+/// an ordinary completion.
+fn reserved_protocol_emission(protocol: ChatToolProtocol, output: &str) -> Option<&'static str> {
     match protocol {
-        ChatToolProtocol::Native => &[],
-        ChatToolProtocol::QwenXml => QWEN_XML_RESERVED_ENVELOPES,
+        ChatToolProtocol::Native => None,
+        ChatToolProtocol::QwenXml => {
+            qwen_xml::tool_protocol_emission(output).map(QwenReservedEnvelope::shape)
+        }
     }
 }
 
@@ -1048,9 +1021,12 @@ impl ChatStreamNormalizer {
                 assembly.arguments.clone(),
             )
         };
-        // ToolCall acceptance: identity crosses the boundary here, which is
-        // also when the canonical start event may be emitted.
-        let start = accept_tool_identity(Some(call_id.as_str()), Some(name.as_str()), &self.tools)?;
+        // Identity resolution: the proposal becomes attributable, which is
+        // what licenses the canonical start event. This is not yet ToolCall
+        // acceptance — no executable call exists until the arguments are
+        // accepted at block end.
+        let start =
+            resolve_tool_identity(Some(call_id.as_str()), Some(name.as_str()), &self.tools)?;
         let assembly = self
             .tool_calls
             .get_mut(&index)
@@ -1132,7 +1108,7 @@ impl ChatStreamNormalizer {
                 return Ok(());
             };
             let start =
-                accept_tool_identity(Some(call_id.as_str()), Some(name.as_str()), &self.tools)?;
+                resolve_tool_identity(Some(call_id.as_str()), Some(name.as_str()), &self.tools)?;
             assembly.started = true;
             started_now = true;
             events.push(ModelEvent::ToolCallStarted {
@@ -1213,17 +1189,18 @@ impl ChatStreamNormalizer {
             .collect();
         let assembled_call_count = assemblies.len();
         for assembly in assemblies {
-            // ToolCall acceptance completes here: the complete argument text
-            // is parsed exactly once and the canonical call either exists or
-            // the proposal is refused. Nothing is repaired to make it fit.
-            let start = accept_tool_identity(
+            // The ToolCall acceptance linearization point: the complete
+            // argument text is parsed exactly once, and only on success does
+            // the full canonical ToolCall exist. Nothing is repaired to make
+            // a proposal fit.
+            let start = resolve_tool_identity(
                 assembly.call_id.as_ref().map(ToolCallId::as_str),
                 assembly.name.as_deref(),
                 &self.tools,
             )?;
             events.push(ModelEvent::ToolCallCompleted {
                 block_index: assembly.block_index,
-                call: accept_tool_arguments(&start, &assembly.arguments)?,
+                call: accept_tool_call_arguments(&start, &assembly.arguments)?,
             });
         }
         let finish_reason = self.finish_reason.take().ok_or_else(|| {
@@ -1246,30 +1223,36 @@ impl ChatStreamNormalizer {
     ///
     /// This is the one piece of Qwen-shaped protocol knowledge in the
     /// runtime, and it lives where every other Chat Completions dialect
-    /// difference lives. It is deliberately narrow:
+    /// difference lives. It is deliberately narrow, and every condition is
+    /// independent evidence:
     ///
     /// - the model must *declare* an in-band tool protocol through
     ///   `compat.chatToolProtocol`; the default `native` profile never
-    ///   inspects output at all;
+    ///   inspects output at all, and the dialect is never inferred from a
+    ///   model name, a provider name, or a hostname;
     /// - tools must actually have been exposed to the model, so reserved
     ///   markup is meaningful in this request;
     /// - the generation must have produced no structured tool call;
     /// - the provider must have terminated as a *complete normal*
     ///   generation, so a truncated (`length`) or filtered stream is not
     ///   reinterpreted;
-    /// - the output must carry a reserved envelope token of the declared
-    ///   protocol, not merely a word that resembles one.
+    /// - the output must contain an actual *emission* of the declared
+    ///   dialect — a standalone, correctly ordered, identifier-bearing
+    ///   reserved region — and not merely the reserved tokens somewhere in
+    ///   text. [`qwen_xml`] owns that recognition and documents why quoting
+    ///   or discussing the exact syntax is not an emission.
     ///
-    /// Text that discusses XML or tool syntax under a model with no declared
-    /// in-band protocol therefore stays an ordinary assistant completion.
+    /// Recognition proves a leak; it never reconstructs one. The leaked
+    /// region is not parsed back into a `ToolCall`, because a proposal this
+    /// runtime had to infer is exactly the invented model intent the
+    /// acceptance boundary exists to refuse.
     fn reserved_protocol_residue(
         &self,
         finish_reason: &crate::model::finish::ModelFinishReason,
     ) -> Option<ModelError> {
         use crate::model::finish::ModelFinishReason;
 
-        let envelopes = reserved_envelopes(self.tool_protocol);
-        if envelopes.is_empty() || self.tools.is_empty() {
+        if self.tool_protocol == ChatToolProtocol::Native || self.tools.is_empty() {
             return None;
         }
         if !matches!(
@@ -1284,20 +1267,13 @@ impl ChatStreamNormalizer {
         ]
         .into_iter()
         .flatten()
-        .find_map(|output| {
-            envelopes
-                .iter()
-                .find(|envelope| envelope.appears_in(output))
-                .copied()
-        })?;
+        .find_map(|output| reserved_protocol_emission(self.tool_protocol, output))?;
         Some(ModelError::malformed_tool_proposal(
             MalformedToolProposalSource::ReservedProtocolLeak,
             format!(
-                "the model leaked the reserved {} tool-protocol envelope {}…{} \
-                 into ordinary output and produced no structured tool call",
+                "the model emitted the reserved {} tool-protocol region {envelope} into \
+                 ordinary output and produced no structured tool call",
                 self.tool_protocol.as_str(),
-                envelope.open,
-                envelope.close,
             ),
         ))
     }

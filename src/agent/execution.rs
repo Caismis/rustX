@@ -161,15 +161,21 @@ pub const MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN: u32 = 1;
 pub const MAX_TRANSIENT_MODEL_RETRIES_PER_LOGICAL_STEP: u32 = 3;
 
 /// The bounded malformed-tool-proposal recovery budget of one logical model
-/// step.
+/// step, counted in **semantic generations**.
 ///
 /// A physical generation whose tool intent could not cross `ToolCall`
 /// acceptance is noncanonical: nothing executed, nothing settled, and
 /// nothing entered canonical history. The step may be regenerated **once**
-/// with bounded ephemeral corrective context; a second malformed generation
-/// terminates the attempt with an explicit model-generation failure. The
-/// maximum number of physical generations caused solely by this mechanism is
-/// therefore two.
+/// with bounded corrective context; a second malformed generation terminates
+/// the attempt with an explicit model-generation failure. The maximum number
+/// of semantic generations caused solely by this mechanism is therefore two.
+///
+/// This counts generations, not requests. One corrective generation may be
+/// realized by several actual provider requests when a transport failure or
+/// a context overflow interrupts it; those are attempts at the same frozen
+/// semantic state and consume the transient and overflow budgets, never this
+/// one. The step-owned `MalformedProposalRecovery` state owns that
+/// distinction.
 ///
 /// This budget is deliberately separate from — and never resets — the
 /// transient transport budget, the context-overflow recovery budget, or any
@@ -177,9 +183,6 @@ pub const MAX_TRANSIENT_MODEL_RETRIES_PER_LOGICAL_STEP: u32 = 3;
 /// [`ModelErrorKind::MalformedToolProposal`], which no other recovery path
 /// accepts.
 pub const MAX_MALFORMED_TOOL_PROPOSAL_REGENERATIONS_PER_LOGICAL_STEP: u32 = 1;
-
-/// The bound on the ephemeral corrective reason carried into a regeneration.
-const MAX_MALFORMED_TOOL_PROPOSAL_FEEDBACK_BYTES: usize = 512;
 
 /// The upper bound for an adapter-provided retry delay.
 pub const MAX_MODEL_RETRY_DELAY_MS: u64 = 60_000;
@@ -430,11 +433,19 @@ pub struct AgentExecution<'a> {
     /// schema rejection. This is request-only context, never canonical
     /// conversation history.
     workflow_output_feedback: Option<String>,
-    /// Bounded ephemeral corrective context for exactly one malformed-tool-
-    /// proposal regeneration. It is consumed by the regenerated request and
-    /// is never committed, persisted, or replayed: the discarded malformed
-    /// generation itself never appears here or anywhere else.
-    malformed_tool_proposal_feedback: Option<String>,
+    /// The malformed-proposal recovery state of the current logical model
+    /// step: its spent regeneration budget and, while a corrective
+    /// generation is pending, the one bounded corrective hint every actual
+    /// request of that generation carries.
+    ///
+    /// This is noncanonical request-only state. It is frozen into the exact
+    /// `RequestSnapshot` of every actual request that used it — durable
+    /// audit evidence, so a historical request stays byte-for-byte
+    /// reconstructible — but it never enters canonical Assistant/User
+    /// history and never survives the corrective generation as semantic
+    /// context. The discarded malformed generation itself is never stored
+    /// here at all.
+    malformed_proposal_recovery: MalformedProposalRecovery,
     /// The transient accepted context for the current admitted logical model
     /// step. It is retained across every actual-request retry and discarded
     /// only when the next logical step begins.
@@ -828,6 +839,78 @@ enum LogicalModelStepState {
     CanonicalAccepted,
 }
 
+/// The malformed-proposal recovery state of one logical model step.
+///
+/// The distinction this type exists to make explicit is **semantic
+/// generation** versus **actual request**. A malformed generation authorizes
+/// one *corrective generation*; an actual provider request is merely one
+/// attempt to realize it. A transport failure, a rate limit, a timeout, or a
+/// context-overflow recovery inside that corrective generation produces
+/// another actual request of the *same* semantic generation, so the
+/// corrective hint belongs to the generation and must survive every one of
+/// them.
+///
+/// Lifetime, exactly:
+///
+/// - **created** by [`Self::authorize`], when a malformed generation is
+///   observed and the step's budget still allows a corrective generation;
+/// - **carried** by every actual request built while it is pending —
+///   [`Self::pending_hint`] borrows, it never takes, so no request
+///   construction can consume it;
+/// - **cleared** by [`Self::resolve`], the moment the corrective generation
+///   produces a canonical model outcome;
+/// - **discarded** by [`Self::reset`] at every logical-model-step boundary,
+///   together with the spent budget, so it can never reach a later step.
+///
+/// The budget lives here too, for the same reason: it is semantic state of
+/// the step, not of any one request.
+#[derive(Debug, Default)]
+struct MalformedProposalRecovery {
+    /// Corrective generations already authorized in this logical step.
+    regenerations: u32,
+    /// The bounded corrective hint owned by the corrective generation that
+    /// has not yet resolved.
+    pending_hint: Option<String>,
+}
+
+impl MalformedProposalRecovery {
+    /// Authorizes the corrective generation of one malformed generation, if
+    /// the step's budget still allows it, and takes ownership of its hint.
+    ///
+    /// The hint is already bounded: it is the diagnostic of a
+    /// [`ModelErrorKind::MalformedToolProposal`], which the model layer
+    /// bounds at construction (see
+    /// [`crate::model::MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES`]). There is
+    /// one owner of that bound, and it is not this loop.
+    fn authorize(&mut self, hint: String) -> bool {
+        if self.regenerations >= MAX_MALFORMED_TOOL_PROPOSAL_REGENERATIONS_PER_LOGICAL_STEP {
+            return false;
+        }
+        self.regenerations += 1;
+        self.pending_hint = Some(hint);
+        true
+    }
+
+    /// The corrective hint every actual request realizing the pending
+    /// corrective generation must carry.
+    fn pending_hint(&self) -> Option<&str> {
+        self.pending_hint.as_deref()
+    }
+
+    /// The pending corrective generation reached a canonical model outcome.
+    /// Its hint has served its purpose and must not reach the tool-result
+    /// continuation that follows.
+    fn resolve(&mut self) {
+        self.pending_hint = None;
+    }
+
+    /// A new logical model step begins: neither the spent budget nor an
+    /// unresolved hint belongs to it.
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TerminalCommitState {
     Ready,
@@ -1051,7 +1134,7 @@ impl<'a> AgentExecution<'a> {
             subagent_context: runtime_policy.subagent_context,
             workflow_output: runtime_policy.workflow_output,
             workflow_output_feedback: None,
-            malformed_tool_proposal_feedback: None,
+            malformed_proposal_recovery: MalformedProposalRecovery::default(),
             accepted_context: None,
             frozen_agent_status: None,
             frozen_carryover: None,
@@ -1395,6 +1478,10 @@ impl<'a> AgentExecution<'a> {
         self.frozen_agent_status = None;
         self.frozen_carryover = None;
         self.last_started_request = None;
+        // The malformed-proposal budget and any unresolved corrective hint
+        // are semantic state of the step that just ended, so neither may
+        // cross this boundary.
+        self.malformed_proposal_recovery.reset();
         self.logical_model_step = LogicalModelStepState::NotStarted;
         self.terminal_commit_state = TerminalCommitState::Ready;
         self.terminal_carryover_decision = TerminalCarryoverDecision::Undecided;
@@ -1410,7 +1497,6 @@ impl<'a> AgentExecution<'a> {
         let mut next_request_ordinal = 0_u32;
         let mut transient_retries = 0_u32;
         let mut overflow_retries = 0_u32;
-        let mut malformed_proposal_regenerations = 0_u32;
         let prepared = match self.prepare_model_turn(next_request_ordinal).await {
             Ok(prepared) => prepared,
             Err(terminal) => return Some(terminal),
@@ -1432,6 +1518,11 @@ impl<'a> AgentExecution<'a> {
             } = invocation;
             match terminal {
                 StreamTerminal::Completed => {
+                    // The semantic generation boundary. This stream produced
+                    // a canonical model outcome, so a corrective generation —
+                    // if this was one — has resolved and its hint must not
+                    // reach the tool-result continuation that follows.
+                    self.malformed_proposal_recovery.resolve();
                     return self.complete_turn(message_id, assembler).await;
                 }
                 StreamTerminal::Failed { error } => {
@@ -1448,19 +1539,22 @@ impl<'a> AgentExecution<'a> {
                     // A malformed tool proposal is a model-generation
                     // defect, not a transport defect: the physical
                     // generation is discarded whole and the same logical
-                    // step is regenerated once with bounded ephemeral
-                    // corrective context. Its budget is its own, so it can
-                    // neither reset nor be reset by the transient and
-                    // overflow budgets tracked alongside it.
+                    // step gets one corrective *generation*, carrying
+                    // bounded corrective context. The budget and that
+                    // context are owned together by the logical step
+                    // (`MalformedProposalRecovery`), so they can neither
+                    // reset nor be reset by the transient and overflow
+                    // budgets tracked alongside them — and an actual-request
+                    // retry inside the corrective generation is not a second
+                    // authorization.
                     if error.kind == ModelErrorKind::MalformedToolProposal
-                        && malformed_proposal_regenerations
-                            < MAX_MALFORMED_TOOL_PROPOSAL_REGENERATIONS_PER_LOGICAL_STEP
+                        && self
+                            .malformed_proposal_recovery
+                            .authorize(error.message.clone())
                     {
-                        malformed_proposal_regenerations += 1;
                         let retry_number = next_request_ordinal;
                         match self
                             .regenerate_after_malformed_tool_proposal(
-                                &error,
                                 &failed_request_id,
                                 retry_number,
                                 &mut next_request_ordinal,
@@ -3396,7 +3490,8 @@ impl<'a> AgentExecution<'a> {
         self.consume_invocation(started).await
     }
 
-    /// The bounded corrective regeneration of one malformed tool proposal.
+    /// The first actual request of the corrective generation authorized by
+    /// one malformed tool proposal.
     ///
     /// The failed physical generation is noncanonical and is discarded
     /// whole: its assembler, its provisional Assistant identity, its
@@ -3404,19 +3499,24 @@ impl<'a> AgentExecution<'a> {
     /// are dropped with the failed [`ModelInvocation`], so no malformed
     /// Assistant message, orphan canonical `ToolCall`, `ToolResult`, or
     /// provider continuation fragment can survive into the next request. The
-    /// only thing that crosses into the regeneration is one bounded
-    /// provider-independent corrective hint, carried as request-only
-    /// context.
+    /// only thing that crosses into the corrective generation is one bounded
+    /// provider-independent corrective hint, already installed on the
+    /// step-owned [`MalformedProposalRecovery`] by the caller.
     ///
-    /// The regeneration is another actual request of the *same* logical
-    /// step: it reuses the frozen accepted context, freezes its own Request
-    /// Snapshot, and passes through the same cancellation-vs-start
-    /// arbitration as every other model request. Cancellation observable
-    /// before it begins wins, so a remaining budget never authorizes another
-    /// provider request after cancellation.
+    /// This is one actual request of the *same* logical step, not a new
+    /// semantic decision: it reuses the frozen accepted context, freezes its
+    /// own Request Snapshot, and passes through the same
+    /// cancellation-vs-start arbitration as every other model request.
+    /// Cancellation observable before it begins wins, so a remaining budget
+    /// never authorizes another provider request after cancellation.
+    ///
+    /// If this request fails transiently, or overflows the context window,
+    /// the ordinary recovery paths produce further actual requests of this
+    /// same corrective generation. They do not re-enter this function and
+    /// they do not touch the recovery state, so each of them carries the
+    /// identical corrective hint.
     async fn regenerate_after_malformed_tool_proposal(
         &mut self,
-        error: &ModelError,
         failed_request_id: &RequestId,
         retry_number: u32,
         next_request_ordinal: &mut u32,
@@ -3432,10 +3532,6 @@ impl<'a> AgentExecution<'a> {
                 failure: AttemptFailure::Runtime { error },
             });
         }
-        self.malformed_tool_proposal_feedback = Some(crate::runtime::subagent::bound_utf8(
-            error.message.clone(),
-            MAX_MALFORMED_TOOL_PROPOSAL_FEEDBACK_BYTES,
-        ));
         if self.cancellation.is_cancelled() {
             return Err(self.cancelled_terminal());
         }
@@ -4788,11 +4884,14 @@ impl<'a> AgentExecution<'a> {
             effective_system_prompt.push_str("[runtime Workflow output feedback]\n");
             effective_system_prompt.push_str(&feedback);
         }
-        // The one corrective hint of a malformed-tool-proposal regeneration.
-        // It is request-only, provider-independent, and consumed exactly
-        // once, so the regenerated request carries it and nothing after it
-        // does.
-        if let Some(feedback) = self.malformed_tool_proposal_feedback.take() {
+        // The corrective hint of the pending malformed-proposal corrective
+        // generation. It is *borrowed*, never taken: building a request is
+        // not the lifetime boundary of this state. Every actual request that
+        // realizes the corrective generation — the first one, a transient
+        // retry of it, a post-compaction retry of it — must carry the same
+        // hint, and the state is cleared only when that generation resolves
+        // or the logical step ends.
+        if let Some(feedback) = self.malformed_proposal_recovery.pending_hint() {
             if !effective_system_prompt.is_empty() {
                 effective_system_prompt.push('\n');
             }
@@ -4804,7 +4903,7 @@ impl<'a> AgentExecution<'a> {
                  arguments; otherwise answer without calling a tool.",
             );
             effective_system_prompt.push_str("\nReason: ");
-            effective_system_prompt.push_str(&feedback);
+            effective_system_prompt.push_str(feedback);
         }
         ModelRequest {
             invocation: primary.invocation_config(),

@@ -40,8 +40,8 @@ pub use deadline::{
     ModelRequestDeadline, ModelTimeoutPolicy,
 };
 pub use error::{
-    ContextOverflowReport, MalformedToolProposalSource, ModelError, ModelErrorKind,
-    ModelRetryDisposition,
+    ContextOverflowReport, MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES, MalformedToolProposalSource,
+    ModelError, ModelErrorKind, ModelRetryDisposition,
 };
 pub use event::ModelEvent;
 pub use finish::ModelFinishReason;

@@ -108,6 +108,28 @@ fn assert_malformed_tool_proposal(events: &[ModelEvent], source: MalformedToolPr
     );
 }
 
+/// Asserts the stream settled as an ordinary assistant completion: no
+/// refusal, and a normal `Stop` terminal.
+fn assert_normal_completion(events: &[ModelEvent]) {
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, ModelEvent::Failed { .. })),
+        "expected an ordinary completion, got a failure: {events:?}"
+    );
+    assert!(
+        matches!(
+            events.last(),
+            Some(ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                ..
+            })
+        ),
+        "unexpected terminal: {:?}",
+        events.last()
+    );
+}
+
 /// Plain text streams into one text block with exact fragments, usage, and a
 /// Stop completion.
 #[tokio::test]
@@ -887,33 +909,46 @@ async fn qwen_reserved_protocol_leak_is_a_malformed_proposal() {
     assert_malformed_tool_proposal(&events, MalformedToolProposalSource::ReservedProtocolLeak);
 }
 
-/// The detector is not a substring rule. The identical reserved envelope is
-/// an ordinary completion for a model that declares no in-band tool
-/// protocol, and prose that merely names the tags is an ordinary completion
-/// even for a model that does.
+/// The complete real vLLM/Qwen emission contract — the nested
+/// `<tool_call>` / `<function=…>` / `<parameter=…>` region — surviving into
+/// `content` is likewise a refused proposal, not an assistant answer.
 #[tokio::test]
-async fn reserved_markup_without_protocol_evidence_completes_normally() {
-    // 1. Same bytes, default `native` profile: generated text is never
-    //    inspected, so this stays a normal assistant turn.
+async fn a_complete_qwen_emission_is_a_malformed_proposal() {
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "qwen_tool_protocol_full_leak.sse")
+    })
+    .await;
+    let events = collect_events(&adapter(&server), qwen_request("Write the note", true)).await;
+    assert_malformed_tool_proposal(&events, MalformedToolProposalSource::ReservedProtocolLeak);
+}
+
+/// The detector is not a substring rule: identical reserved *bytes* are an
+/// ordinary completion for a model that declares no in-band tool protocol.
+#[tokio::test]
+async fn reserved_bytes_under_the_native_profile_complete_normally() {
     let server = crate::common::FixtureServer::start(|_attempt, _head| {
         sse_fixture("openai_chat", "qwen_tool_protocol_leak.sse")
     })
     .await;
     let events = collect_events(&adapter(&server), request_with_tools("Write the note")).await;
-    assert!(
-        matches!(
-            events.last(),
-            Some(ModelEvent::Completed {
-                finish_reason: ModelFinishReason::Stop,
-                ..
-            })
-        ),
-        "unexpected terminal: {:?}",
-        events.last()
-    );
+    assert_normal_completion(&events);
+}
 
-    // 2. Qwen profile, but the assistant is *discussing* the syntax: the
-    //    reserved openers (`<parameter=`) never appear, so nothing matches.
+/// The false-positive boundary this suite exists to hold.
+///
+/// Every precondition of the detector is satisfied — the Qwen dialect is
+/// declared, tools are exposed, the provider stops normally, and no
+/// structured call is produced — and the assistant writes the **exact**
+/// reserved syntax, not a softened variant: `<tool_call>…</tool_call>` as a
+/// standalone illustration, `<parameter=path>…</parameter>` and
+/// `<function=write_file>…</function>` inline in a sentence, and a complete
+/// fenced example of the whole envelope.
+///
+/// A `contains(open) && contains(close)` rule classifies all three as
+/// malformed tool intent. They are a correct answer to a question about the
+/// dialect, and must stay an ordinary completion.
+#[tokio::test]
+async fn exact_reserved_syntax_discussed_in_prose_completes_normally() {
     let server = crate::common::FixtureServer::start(|_attempt, _head| {
         sse_fixture("openai_chat", "qwen_tool_protocol_discussion.sse")
     })
@@ -923,17 +958,19 @@ async fn reserved_markup_without_protocol_evidence_completes_normally() {
         qwen_request("Explain the Qwen tool syntax", true),
     )
     .await;
-    assert!(
-        matches!(
-            events.last(),
-            Some(ModelEvent::Completed {
-                finish_reason: ModelFinishReason::Stop,
-                ..
-            })
-        ),
-        "legitimate protocol discussion must remain a normal completion: {:?}",
-        events.last()
-    );
+    assert_normal_completion(&events);
+    let text: String = events
+        .iter()
+        .filter_map(|event| match event {
+            ModelEvent::TextDelta { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    // The fixture really does carry the reserved tokens a naive rule keys
+    // on, so this test cannot pass by accident.
+    assert!(text.contains("<tool_call>") && text.contains("</tool_call>"));
+    assert!(text.contains("<parameter=path>") && text.contains("</parameter>"));
+    assert!(text.contains("<function=write_file>") && text.contains("</function>"));
 }
 
 /// Reserved markup is only meaningful when tools were actually exposed. A
@@ -946,13 +983,7 @@ async fn reserved_markup_without_exposed_tools_completes_normally() {
     })
     .await;
     let events = collect_events(&adapter(&server), qwen_request("Write the note", false)).await;
-    assert!(matches!(
-        events.last(),
-        Some(ModelEvent::Completed {
-            finish_reason: ModelFinishReason::Stop,
-            ..
-        })
-    ));
+    assert_normal_completion(&events);
 }
 
 /// HTTP error mapping: authentication, rate limit with Retry-After, invalid

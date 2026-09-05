@@ -22,7 +22,7 @@ use crate::model::adapter::block_index::BlockAllocator;
 use crate::model::adapter::openai::client::build_client;
 use crate::model::adapter::openai::config::OpenAiAdapterConfig;
 use crate::model::adapter::openai::mapping::{normalize_error, stream_retry_disposition};
-use crate::model::adapter::proposal::{accept_tool_call, accept_tool_identity};
+use crate::model::adapter::proposal::{accept_tool_call, resolve_tool_identity};
 use crate::model::adapter::traits::{
     ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
@@ -819,8 +819,10 @@ impl ResponsesNormalizer {
                     .get("call_id")
                     .and_then(serde_json::Value::as_str)
                     .or_else(|| item.get("id").and_then(serde_json::Value::as_str));
-                // ToolCall acceptance: identity crosses the boundary here.
-                let call = accept_tool_identity(call_id, str_field(item, "name"), &self.tools)?;
+                // Identity resolution: the proposal becomes attributable and
+                // the canonical start event may be emitted. The executable
+                // ToolCall does not exist until argument acceptance.
+                let call = resolve_tool_identity(call_id, str_field(item, "name"), &self.tools)?;
                 let canonical_call_id = call.id.clone();
                 let item_arguments = item.get("arguments").and_then(serde_json::Value::as_str);
                 let (block_index, buffered_arguments, started_now) = {
@@ -1027,8 +1029,9 @@ impl ResponsesNormalizer {
             .get("arguments")
             .and_then(serde_json::Value::as_str)
             .map_or_else(|| assembly.arguments.clone(), str::to_owned);
-        // ToolCall acceptance completes here: identity, tool resolution, and
-        // the complete argument representation are validated as one unit.
+        // The ToolCall acceptance linearization point. The item arrived
+        // complete, so identity resolution and argument acceptance run back
+        // to back; the canonical ToolCall exists only once both succeed.
         let call = accept_tool_call(
             assembly.call_id.as_ref().map(ToolCallId::as_str),
             assembly.name.as_deref(),

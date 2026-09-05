@@ -1,0 +1,12 @@
+data: {"id":"chatcmpl-qwen-full-leak","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"role":"assistant","reasoning":"The user wants the file written. I will call the tool."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-full-leak","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"content":"<tool_call>\n<function=write_file>\n"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-full-leak","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"content":"<parameter=path>\nnotes.txt\n</parameter>\n"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-full-leak","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"content":"</function>\n</tool_call>\n"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-full-leak","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+

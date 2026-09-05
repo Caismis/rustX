@@ -8,37 +8,53 @@
 //! ```text
 //! provider/model stream
 //!     -> provider-specific proposal assembly   (adapter, protocol-aware)
-//!     -> structural proposal validation        (this module)
-//!     -> `ToolCall` acceptance                   (this module)
-//!     -> canonical `ToolCall`                    (`ModelEvent::ToolCall*`)
+//!     -> proposal identity resolution          (this module)
+//!         -> `ModelEvent::ToolCallStarted`, argument streaming
+//!     -> complete argument validation          (this module)
+//!     -> `ToolCall` ACCEPTANCE  <- linearization point
+//!         -> canonical `ToolCall` in `ModelEvent::ToolCallCompleted`
 //! ```
 //!
-//! Before acceptance a proposal cannot execute, cannot be settled, and
-//! cannot enter canonical history. After acceptance the canonical
-//! [`ToolCall`] exists and the ordinary exactly-once Tool settlement
-//! contract applies unchanged — including Tool preflight/schema rejection,
-//! which is deliberately **not** performed here.
+//! # There is exactly one acceptance point
 //!
-//! Acceptance validates only what makes an invocation structurally
-//! trustworthy:
+//! The two stages are deliberately not the same event, and only the second
+//! is acceptance.
 //!
-//! - a usable correlation identity (the provider's call id);
-//! - a usable tool identity (a declared name resolving to one [`ToolId`]);
-//! - an argument representation that is one complete JSON value.
+//! [`resolve_tool_identity`] establishes that a proposal is *attributable*:
+//! it has a usable correlation identity and a tool identity that resolves to
+//! one declared [`ToolId`]. That is what makes it legal to emit the
+//! canonical [`ModelEvent::ToolCallStarted`] and stream argument deltas —
+//! observability of a proposal in flight. It is **not** acceptance: the
+//! resulting [`ToolCallStart`] carries no arguments, so no executable
+//! [`ToolCall`] exists yet and nothing may be preflighted, approved, or run
+//! from it.
 //!
-//! Nothing is ever invented to make a proposal acceptable: no synthesized
-//! id, no guessed name, no fuzzy tool matching, no repaired JSON. A
-//! proposal that fails any check is refused as
+//! [`accept_tool_call_arguments`] is the acceptance linearization point. The
+//! complete argument representation is parsed exactly once, and only on
+//! success does the full canonical
+//! `ToolCall { id, tool_id, name, arguments }` exist. Everything downstream
+//! of that value — Tool preflight, approval, execution, exactly-once
+//! `ToolResult` settlement — begins here, including Tool schema rejection,
+//! which is deliberately **not** performed in this module.
+//!
+//! # Nothing is invented
+//!
+//! Neither stage repairs a proposal to make it fit: no synthesized
+//! invocation id, no guessed or fuzzy-matched tool name, no repaired or
+//! brace-completed JSON, no reconstruction of a call from reasoning text or
+//! leaked protocol markup. A proposal that fails either stage is refused as
 //! [`ModelErrorKind::MalformedToolProposal`](crate::model::error::ModelErrorKind::MalformedToolProposal)
 //! with provider-independent provenance, and the Agent Loop owns the single
 //! bounded corrective regeneration that class authorizes.
+//!
+//! [`ModelEvent::ToolCallStarted`]: crate::model::event::ModelEvent::ToolCallStarted
 
 use crate::model::adapter::validation::ValidatedTools;
 use crate::model::error::{MalformedToolProposalSource, ModelError};
 use crate::runtime::identity::ToolCallId;
 use crate::tools::types::{ToolCall, ToolCallStart};
 
-/// Accepts the identity half of one tool proposal.
+/// Resolves the identity of one tool proposal, making it attributable.
 ///
 /// The correlation identity and the tool identity must both be present and
 /// usable: a missing one is a stream that never delivered a complete
@@ -46,14 +62,19 @@ use crate::tools::types::{ToolCall, ToolCallStart};
 /// this runtime cannot execute. Adapters call this as soon as a proposal's
 /// identity is known, which is also when the canonical
 /// [`ModelEvent::ToolCallStarted`](crate::model::event::ModelEvent::ToolCallStarted)
-/// may be emitted.
+/// may be emitted and argument deltas may stream.
+///
+/// This is **not** `ToolCall` acceptance. The returned [`ToolCallStart`] is
+/// a resolved identity with no arguments; the executable canonical
+/// [`ToolCall`] does not exist until [`accept_tool_call_arguments`]
+/// succeeds.
 ///
 /// # Errors
 ///
 /// Returns a [`MalformedToolProposalSource::StreamAssembly`] failure for a
 /// missing identity and a [`MalformedToolProposalSource::AdapterStructural`]
 /// failure for an unusable one.
-pub(crate) fn accept_tool_identity(
+pub(crate) fn resolve_tool_identity(
     call_id: Option<&str>,
     name: Option<&str>,
     tools: &ValidatedTools,
@@ -83,16 +104,20 @@ pub(crate) fn accept_tool_identity(
     })
 }
 
-/// Completes acceptance of a proposal whose identity was already accepted.
+/// The `ToolCall` acceptance linearization point.
 ///
-/// The complete argument text is parsed exactly once, here. A truncated or
-/// otherwise unparseable representation is refused rather than repaired.
+/// The complete argument text of a proposal whose identity is already
+/// resolved is parsed exactly once, here. A truncated or otherwise
+/// unparseable representation is refused rather than repaired. On success
+/// the full canonical `ToolCall { id, tool_id, name, arguments }` exists for
+/// the first time, and the ordinary Tool contract — preflight, approval,
+/// execution, exactly-once settlement — applies to it unchanged.
 ///
 /// # Errors
 ///
 /// Returns a [`MalformedToolProposalSource::AdapterStructural`] failure when
 /// the argument text is not one complete JSON value.
-pub(crate) fn accept_tool_arguments(
+pub(crate) fn accept_tool_call_arguments(
     start: &ToolCallStart,
     arguments: &str,
 ) -> Result<ToolCall, ModelError> {
@@ -113,25 +138,26 @@ pub(crate) fn accept_tool_arguments(
     })
 }
 
-/// Accepts one fully assembled tool proposal as a canonical [`ToolCall`].
+/// Runs both stages for a proposal that was assembled complete, so identity
+/// resolution and `ToolCall` acceptance happen back to back.
 ///
 /// # Errors
 ///
-/// Returns the malformed-proposal failure of whichever structural check
-/// refused the proposal.
+/// Returns the malformed-proposal failure of whichever stage refused the
+/// proposal.
 pub(crate) fn accept_tool_call(
     call_id: Option<&str>,
     name: Option<&str>,
     arguments: &str,
     tools: &ValidatedTools,
 ) -> Result<ToolCall, ModelError> {
-    let start = accept_tool_identity(call_id, name, tools)?;
-    accept_tool_arguments(&start, arguments)
+    let start = resolve_tool_identity(call_id, name, tools)?;
+    accept_tool_call_arguments(&start, arguments)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{accept_tool_arguments, accept_tool_call, accept_tool_identity};
+    use super::{accept_tool_call, accept_tool_call_arguments, resolve_tool_identity};
     use crate::model::adapter::validation::{ValidatedTools, validate_request};
     use crate::model::error::{MalformedToolProposalSource, ModelErrorKind};
     use crate::model::types::{ModelProtocol, ModelRequest};
@@ -183,7 +209,7 @@ mod tests {
     #[test]
     fn a_missing_invocation_id_is_refused() {
         for id in [None, Some("")] {
-            let error = accept_tool_identity(id, Some("write_file"), &tools())
+            let error = resolve_tool_identity(id, Some("write_file"), &tools())
                 .expect_err("acceptance must fail");
             assert_eq!(error.kind, ModelErrorKind::MalformedToolProposal);
             assert_eq!(
@@ -198,7 +224,7 @@ mod tests {
     fn a_missing_tool_name_is_refused() {
         for name in [None, Some("")] {
             let error =
-                accept_tool_identity(Some("call_1"), name, &tools()).expect_err("must fail");
+                resolve_tool_identity(Some("call_1"), name, &tools()).expect_err("must fail");
             assert_eq!(
                 error.malformed_tool_proposal,
                 Some(MalformedToolProposalSource::StreamAssembly)
@@ -210,7 +236,7 @@ mod tests {
     /// declared tool.
     #[test]
     fn an_unknown_tool_name_is_refused_without_fuzzy_matching() {
-        let error = accept_tool_identity(Some("call_1"), Some("write_fil"), &tools())
+        let error = resolve_tool_identity(Some("call_1"), Some("write_fil"), &tools())
             .expect_err("must fail");
         assert_eq!(error.kind, ModelErrorKind::MalformedToolProposal);
         assert_eq!(
@@ -224,9 +250,9 @@ mod tests {
     #[test]
     fn truncated_arguments_are_refused_without_repair() {
         let start =
-            accept_tool_identity(Some("call_1"), Some("write_file"), &tools()).expect("identity");
+            resolve_tool_identity(Some("call_1"), Some("write_file"), &tools()).expect("identity");
         for arguments in ["", "{\"path\":\"a.txt\"", "{\"path\":"] {
-            let error = accept_tool_arguments(&start, arguments).expect_err("must fail");
+            let error = accept_tool_call_arguments(&start, arguments).expect_err("must fail");
             assert_eq!(error.kind, ModelErrorKind::MalformedToolProposal);
             assert_eq!(
                 error.malformed_tool_proposal,
