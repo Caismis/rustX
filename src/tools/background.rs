@@ -2132,10 +2132,15 @@ fn terminal_candidate(
             }
             ToolExecutionStatus::Cancelled { .. } => {
                 // The executor proved physical cancellation settlement;
-                // the registry owns the canonical reason and phase.
+                // the registry owns the canonical reason and phase. The
+                // `Starting|Running -> Cancelling` transition always commits
+                // the reason, so a missing reason here is a broken internal
+                // invariant, never a recoverable condition.
+                let reason = cancel_reason
+                    .expect("Cancelling background execution must retain its cancellation reason");
                 let mut canonical = result.clone();
                 canonical.status = ToolExecutionStatus::Cancelled {
-                    reason: cancel_reason.unwrap_or(BACKGROUND_CANCEL_REASON),
+                    reason,
                     phase: ToolCancellationPhase::DuringExecution,
                 };
                 (BackgroundLifecycle::Cancelled, canonical)
