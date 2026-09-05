@@ -270,7 +270,18 @@ pub enum RuntimeClientSessionRequest {
 /// resource lifecycle, including unresolved-preservation projection and the
 /// pending partial-settlement outcome. There is no compatibility decoding of
 /// version 14.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 15;
+///
+/// Version 16 carries Issue #202's explicit tool outcome certainty: the
+/// canonical `ToolExecutionStatus` replaces `interrupted` with
+/// `outcome_unknown` (carrying a bounded producer-owned `detail`), and the
+/// background terminal state `interrupted` becomes `outcome_unknown`.
+/// `timed_out` now means the deadline expired *and* terminal settlement was
+/// proven, and every non-success status carries model-facing feedback. The
+/// background lifecycle stops collapsing outcomes it cannot prove: its
+/// terminal vocabulary gains `timed_out` and `outcome_unknown`, so an
+/// execution whose external outcome is unknown is never observed as
+/// `failed`. There is no compatibility decoding of version 15.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 16;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1230,7 +1241,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 15);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 16);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

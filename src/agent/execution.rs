@@ -4773,9 +4773,23 @@ impl<'a> AgentExecution<'a> {
         };
         match winner {
             ToolSettlementWinner::Cancellation(reason) => {
-                result.status = ToolExecutionStatus::Cancelled {
-                    reason,
-                    phase: ToolCancellationPhase::DuringExecution,
+                result.status = match result.status {
+                    // The executor proved physical cancellation settlement
+                    // (for example a killed and reaped local process tree);
+                    // the attempt cancellation authority owns the canonical
+                    // reason and phase.
+                    ToolExecutionStatus::Cancelled { .. } => ToolExecutionStatus::Cancelled {
+                        reason,
+                        phase: ToolCancellationPhase::DuringExecution,
+                    },
+                    // A cancellation *request* is not a confirmed
+                    // cancellation result. Whatever the executor itself
+                    // settled is authoritative: a known completion that won
+                    // the physical race, a proven terminal timeout, or an
+                    // honest `OutcomeUnknown` (for example an unconfirmed
+                    // remote termination) must not be overwritten by the
+                    // request.
+                    settled => settled,
                 };
             }
             ToolSettlementWinner::Physical => {

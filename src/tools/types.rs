@@ -183,7 +183,7 @@ pub enum ToolInvocationMode {
 ///
 /// `Never` is the safe default. After a crash the runtime must never blindly
 /// replay a tool whose external completion state is unknown: it records an
-/// interrupted/unknown result and lets the model decide the next action.
+/// `OutcomeUnknown` result and lets the model decide the next action.
 /// Automatic replay is allowed only for tools that explicitly declare
 /// themselves idempotent. `Idempotent` is metadata for the future #12
 /// recovery policy, not permission to invent replay behavior in M8.
@@ -273,7 +273,7 @@ pub struct ToolInvocation {
 /// keeping one source of truth for tool results.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolExecutionResult {
-    /// Typed execution status, including interrupted/unknown outcomes.
+    /// Typed execution status, including unknown external outcomes.
     pub status: ToolExecutionStatus,
     /// Tool-owned result content.
     ///
@@ -714,23 +714,34 @@ pub enum ToolCancellationPhase {
     /// start frontier was never crossed.
     BeforeStart,
     /// The owner's executor start frontier was crossed and cancellation won
-    /// before normal completion. This does not promise rollback or absence of
-    /// side effects.
+    /// before normal completion with proven terminal settlement. This does
+    /// not promise rollback or absence of side effects. A cancellation that
+    /// cannot be proven settled is not `Cancelled` at all: it is
+    /// [`ToolExecutionStatus::OutcomeUnknown`].
     DuringExecution,
 }
 
 /// Typed execution status of a tool call.
 ///
-/// Success and failure are not the only states: policy denial, cancellation,
-/// timeout, and interrupted execution (the runtime restarted while the call
-/// was in flight, so the actual external outcome is unknown) are distinct and
-/// must never be silently collapsed into success or generic error.
+/// The terminal vocabulary is explicit about **outcome certainty**: a
+/// terminal status may claim only facts the owning runtime/executor can
+/// prove. `Success`, `Failed`, `Denied`, `Cancelled`, and `TimedOut` are
+/// confirmed terminal outcomes; `OutcomeUnknown` means an admitted call
+/// crossed the external-effect frontier but rustX cannot prove its final
+/// external result. An unknown outcome is never silently collapsed into
+/// success, generic failure, confirmed timeout, or confirmed cancellation,
+/// and every non-success status produces bounded model-facing feedback
+/// through [`Self::feedback_text`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolExecutionStatus {
-    /// The tool completed successfully.
+    /// The tool completed successfully and the outcome is known.
     Success,
-    /// The tool failed with an error message.
+    /// The tool reached a known failed terminal outcome.
+    ///
+    /// This is never used merely because communication with an external
+    /// executor failed after dispatch while the external operation could
+    /// still have succeeded; that situation is [`Self::OutcomeUnknown`].
     Failed {
         /// Human-readable error message.
         error: String,
@@ -741,7 +752,15 @@ pub enum ToolExecutionStatus {
         /// The policy or human-readable approval reason.
         reason: String,
     },
-    /// The execution was cancelled.
+    /// The execution's cancellation settlement is established.
+    ///
+    /// Cancellation is an authoritative terminal outcome only when rustX can
+    /// prove the execution's cancellation settlement: pre-start
+    /// ([`ToolCancellationPhase::BeforeStart`]) or proven stopped after start
+    /// ([`ToolCancellationPhase::DuringExecution`]). A cancellation *request*
+    /// is not a confirmed cancellation result: when the call crossed the
+    /// external-effect frontier and final settlement cannot be proven, the
+    /// status is [`Self::OutcomeUnknown`].
     Cancelled {
         /// Why the execution was cancelled.
         reason: CancellationReason,
@@ -749,20 +768,42 @@ pub enum ToolExecutionStatus {
         /// was already in flight.
         phase: ToolCancellationPhase,
     },
-    /// The execution exceeded its time budget.
+    /// The execution deadline expired and the owning runtime/executor
+    /// established terminal settlement for the execution: it was stopped and
+    /// proven unable to continue (for example, a local process tree that was
+    /// killed, waited/reaped, and proven terminal).
+    ///
+    /// `TimedOut` means more than "rustX stopped awaiting the operation". A
+    /// deadline expiry whose termination cannot be confirmed (for example a
+    /// remote call whose cancellation is unconfirmed) is
+    /// [`Self::OutcomeUnknown`], never `TimedOut`.
     TimedOut,
-    /// The execution was interrupted (for example by a runtime restart) and
-    /// the actual external outcome is unknown.
-    Interrupted,
+    /// The admitted call crossed the external-effect frontier, but rustX
+    /// cannot prove its final external outcome: a runtime restart before the
+    /// durable outcome commit, transport loss after dispatch, or a
+    /// cancellation/deadline whose remote termination could not be
+    /// confirmed. The operation may have partially or fully completed.
+    OutcomeUnknown {
+        /// A producer-owned diagnostic describing why certainty is
+        /// unavailable. It is rendered into the bounded model-facing
+        /// projection and is never parsed to decide semantics; the typed
+        /// variant itself is the certainty claim.
+        detail: String,
+    },
 }
 
 impl ToolExecutionStatus {
     /// Renders the status detail consumed by the canonical result projection.
-    /// The typed status remains authoritative; this helper does not enforce
-    /// the model-result byte budget and is never called by a provider adapter.
+    ///
+    /// Every terminal non-success status produces non-empty feedback: the
+    /// model never sees an empty tool result for a failed, denied, cancelled,
+    /// timed-out, or unknown-outcome execution. The typed status remains
+    /// authoritative; this helper does not enforce the model-result byte
+    /// budget and is never called by a provider adapter.
     #[must_use]
     pub(crate) fn feedback_text(&self) -> Option<String> {
         match self {
+            Self::Success => None,
             Self::Failed { error } => Some(format!("Tool call failed: {error}")),
             Self::Denied { reason } => Some(format!("Denied: {reason}")),
             Self::Cancelled { reason, phase } => {
@@ -776,14 +817,20 @@ impl ToolExecutionStatus {
                         "rustX did not start execution of this tool call."
                     }
                     ToolCancellationPhase::DuringExecution => {
-                        "Execution had already started, but cancellation occurred before normal completion. Partial side effects may have occurred."
+                        "Execution had already started and cancellation was confirmed before normal completion. Partial side effects may have occurred before the execution was stopped."
                     }
                 };
                 Some(format!(
                     "Tool call was cancelled (reason: {reason}). {phase}"
                 ))
             }
-            Self::Success | Self::TimedOut | Self::Interrupted => None,
+            Self::TimedOut => Some(
+                "Tool call timed out: the execution deadline expired and rustX established terminal settlement; the execution was stopped and proven unable to continue."
+                    .to_owned(),
+            ),
+            Self::OutcomeUnknown { detail } => Some(format!(
+                "The tool execution started, but rustX could not establish its final external outcome ({detail}). The operation may have partially or fully completed; inspect the relevant state before repeating any side-effecting call, because blind repetition may duplicate work."
+            )),
         }
     }
 }
@@ -965,11 +1012,14 @@ mod tests {
         );
     }
 
-    /// Interrupted/unknown execution is a distinct, round-trippable status.
+    /// Unknown external outcome is a distinct, round-trippable status with a
+    /// stable wire discriminator.
     #[test]
-    fn interrupted_result_round_trip() {
+    fn outcome_unknown_result_round_trip() {
         let result = ToolExecutionResult {
-            status: ToolExecutionStatus::Interrupted,
+            status: ToolExecutionStatus::OutcomeUnknown {
+                detail: "the runtime restarted before a durable outcome was committed".to_owned(),
+            },
             content: Vec::new(),
             duration_ms: 0,
             exit_code: None,
@@ -983,7 +1033,8 @@ mod tests {
         let json = serde_json::to_string(&result).expect("serialize result");
         let decoded: ToolExecutionResult = serde_json::from_str(&json).expect("deserialize result");
         assert_eq!(decoded, result);
-        assert_eq!(decoded.status, ToolExecutionStatus::Interrupted);
+        let value = serde_json::to_value(&result.status).expect("status value");
+        assert_eq!(value["type"], "outcome_unknown");
     }
 
     /// Execution statuses serialize with stable explicit discriminators.
@@ -1150,5 +1201,89 @@ mod tests {
         assert!(text.contains("Complete output: /tmp/rustx/results/result_8.txt"));
         assert!(text.contains("Read or Grep"));
         assert_eq!(result.status, status, "typed status remains authoritative");
+    }
+
+    /// Issue #202: every terminal non-success status produces non-empty,
+    /// bounded model-facing feedback, even with no tool-owned content.
+    #[test]
+    fn every_non_success_status_projects_non_empty_bounded_feedback() {
+        use crate::runtime::types::CancellationReason;
+        let statuses = [
+            ToolExecutionStatus::Failed {
+                error: "boom".to_owned(),
+            },
+            ToolExecutionStatus::Denied {
+                reason: "approval rejected".to_owned(),
+            },
+            ToolExecutionStatus::Cancelled {
+                reason: CancellationReason::UserRequested,
+                phase: ToolCancellationPhase::BeforeStart,
+            },
+            ToolExecutionStatus::Cancelled {
+                reason: CancellationReason::RuntimeShutdown,
+                phase: ToolCancellationPhase::DuringExecution,
+            },
+            ToolExecutionStatus::TimedOut,
+            ToolExecutionStatus::OutcomeUnknown {
+                detail: "transport closed after dispatch".to_owned(),
+            },
+        ];
+        for status in statuses {
+            let result = ToolExecutionResult {
+                status: status.clone(),
+                content: Vec::new(),
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                managed_output: None,
+            };
+            let projection = result.model_facing_projection();
+            assert!(
+                !projection.is_empty(),
+                "non-success status must project model-facing feedback: {status:?}"
+            );
+            assert!(
+                projection.byte_len() <= crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES,
+                "projection stays bounded: {status:?}"
+            );
+            assert!(
+                status.feedback_text().is_some(),
+                "non-success status has typed feedback: {status:?}"
+            );
+        }
+        assert!(ToolExecutionStatus::Success.feedback_text().is_none());
+    }
+
+    /// Issue #202: the unknown-outcome diagnostic states that execution
+    /// started, that the final outcome is unconfirmed, and that side effects
+    /// may have partially or fully occurred — never implying success,
+    /// confirmed failure, confirmed timeout, or confirmed cancellation.
+    #[test]
+    fn outcome_unknown_feedback_states_uncertainty_and_possible_side_effects() {
+        let status = ToolExecutionStatus::OutcomeUnknown {
+            detail: "the runtime restarted while the call was in flight".to_owned(),
+        };
+        let text = status.feedback_text().expect("unknown outcome feedback");
+        assert!(text.contains("execution started"));
+        assert!(text.contains("could not establish its final external outcome"));
+        assert!(text.contains("the runtime restarted while the call was in flight"));
+        assert!(text.contains("may have partially or fully completed"));
+        assert!(text.contains("inspect the relevant state"));
+        assert!(!text.contains("failed"));
+        assert!(!text.contains("timed out"));
+        assert!(!text.contains("cancelled"));
+    }
+
+    /// Issue #202: `TimedOut` feedback communicates a confirmed terminal
+    /// settlement, never a mere local deadline expiry.
+    #[test]
+    fn timed_out_feedback_states_confirmed_terminal_settlement() {
+        let text = ToolExecutionStatus::TimedOut
+            .feedback_text()
+            .expect("timed out feedback");
+        assert!(text.contains("deadline expired"));
+        assert!(text.contains("terminal settlement"));
+        assert!(text.contains("proven unable to continue"));
     }
 }

@@ -16,15 +16,16 @@
  * chosen by {@link cardBackground} and filled by the app shell, the one layer
  * that knows the terminal width. It restates the lifecycle rather than
  * carrying it: three bands cannot express six settlements, so the status
- * words below are what actually say `denied`, `timed out`, or `interrupted`.
+ * words below are what actually say `denied`, `timed out`, or `outcome
+ * unknown`.
  *
  * The same `ToolCallId` produces the same card through all three states; the
  * card is not three records that happen to be adjacent.
  *
  * Every status word, glyph, duration, and exit code below comes from a
  * runtime-published field. Nothing is read out of the output text: an
- * interrupted call whose stdout says `ok` is still reported as interrupted,
- * and a call with no output is never reported as cancelled.
+ * outcome-unknown call whose stdout says `ok` is still reported as outcome
+ * unknown, and a call with no output is never reported as cancelled.
  *
  * The specialized renderer chosen by tool identity formats the *arguments*
  * and the *result body* and nothing else, so it cannot reach the status line.
@@ -360,11 +361,12 @@ function resultBody(
     renderer.renderResult?.(result, args);
   const body = specialized ?? genericResultLines(result);
 
-  // A failure or denial reason is runtime-published prose, shown whatever the
-  // renderer decided about the body, and shown *here* rather than in the
-  // status header. The header states the settlement the runtime published —
-  // `failed`, `denied` — and this band carries the explanation, bounded. Prose
-  // of unbounded length has no business in an always-visible, never-collapsed
+  // A failure or denial reason, or an outcome-unknown detail, is
+  // runtime-published prose, shown whatever the renderer decided about the
+  // body, and shown *here* rather than in the status header. The header states
+  // the settlement the runtime published — `failed`, `denied`, `outcome
+  // unknown` — and this band carries the explanation, bounded. Prose of
+  // unbounded length has no business in an always-visible, never-collapsed
   // header, and putting it in both places reported one fact twice.
   const reason: string[] = [];
   if (result.status.type === "failed") {
@@ -372,6 +374,11 @@ function resultBody(
   }
   if (result.status.type === "denied") {
     reason.push(...toLines(result.status.reason).map((line) => role.warning(line)));
+  }
+  if (result.status.type === "outcome_unknown") {
+    reason.push(
+      ...toLines(result.status.detail).map((line) => role.warning(line)),
+    );
   }
   // Verbatim tool output reads as output, not as answer: one colour for the
   // whole body, the way Pi draws it. The band is applied here rather than in
@@ -436,8 +443,8 @@ function settledGlyph(result: ToolExecutionResult): string {
       return role.warning("⊗");
     case "timed_out":
       return role.warning("⧖");
-    case "interrupted":
-      return role.warning("!");
+    case "outcome_unknown":
+      return role.warning("?");
     default:
       return role.meta("·");
   }
@@ -478,12 +485,12 @@ function settledParts(result: ToolExecutionResult): string[] {
 /**
  * The runtime's own settlement, spelled out. Never softened.
  *
- * The header names the settlement and nothing else. `failed` and `denied`
- * both carry runtime-published prose, and prose belongs in the bounded reason
- * band below — restating it here would put an unbounded, uncollapsible string
- * in the header and report the same fact twice. `cancelled` keeps its reason
- * because a `CancellationReason` and `ToolCancellationPhase` are small typed
- * enums, not prose.
+ * The header names the settlement and nothing else. `failed`, `denied`, and
+ * `outcome_unknown` all carry runtime-published prose, and prose belongs in
+ * the bounded reason band below — restating it here would put an unbounded,
+ * uncollapsible string in the header and report the same fact twice.
+ * `cancelled` keeps its reason because a `CancellationReason` and
+ * `ToolCancellationPhase` are small typed enums, not prose.
  */
 export function statusLabel(result: ToolExecutionResult): string {
   switch (result.status.type) {
@@ -499,10 +506,12 @@ export function statusLabel(result: ToolExecutionResult): string {
       );
     case "timed_out":
       return role.warning("timed out");
-    case "interrupted":
-      // Interrupted means the outcome is genuinely unknown. It is not a quiet
-      // success and it is not a failure.
-      return role.warning("interrupted (outcome unknown)");
+    case "outcome_unknown":
+      // The outcome is genuinely unknown: the execution crossed the
+      // external-effect frontier, but the runtime could not establish the
+      // final external outcome. It is not a quiet success and it is not a
+      // known failure, so it never wears the `failed` word or glyph.
+      return role.warning("outcome unknown");
     default:
       return role.meta("settled");
   }

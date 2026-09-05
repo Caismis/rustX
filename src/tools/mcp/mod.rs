@@ -87,9 +87,8 @@ use crate::tools::output::{
     continuation_for_capture, truncation_for_capture,
 };
 use crate::tools::types::{
-    ManagedOutputContinuation, ToolCancellationPhase, ToolDefinition, ToolExecutionResult,
-    ToolExecutionStatus, ToolInvocation, ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy,
-    ToolResultContent,
+    ManagedOutputContinuation, ToolDefinition, ToolExecutionResult, ToolExecutionStatus,
+    ToolInvocation, ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy, ToolResultContent,
 };
 use crate::tools::workspace::Workspace;
 
@@ -1721,20 +1720,29 @@ impl McpServerRuntime {
         }
     }
 
-    /// The failed tool result for a confirmed protocol violation, when the
-    /// observation seam recorded one. Also poisons the generation (see
-    /// [`Self::poison_after_protocol_violation`]).
+    /// The failed tool result for a confirmed protocol violation observed
+    /// **before dispatch**, when the observation seam recorded one. Also
+    /// poisons the generation (see [`Self::poison_after_protocol_violation`]).
     async fn protocol_violation_failure(
         &self,
         context: &ToolExecutionContext<'_>,
         started: Instant,
     ) -> Option<ToolExecutionResult> {
+        let violation = self.poisoned_protocol_violation().await?;
+        Some(failed_mcp(&violation, context, started))
+    }
+
+    /// Poisons the generation after a confirmed peer protocol violation and
+    /// returns the bounded call diagnostic, when the observation seam
+    /// recorded one. Call sites choose the terminal status: a violation
+    /// observed before dispatch is a known `Failed`; one observed after
+    /// dispatch leaves the external outcome unknown.
+    async fn poisoned_protocol_violation(&self) -> Option<String> {
         let violation = self.protocol_violation.violation()?;
         self.poison_after_protocol_violation().await;
-        Some(failed_mcp(
-            &protocol_violation_call_diagnostic(&self.server_id, &violation),
-            context,
-            started,
+        Some(protocol_violation_call_diagnostic(
+            &self.server_id,
+            &violation,
         ))
     }
 
@@ -1780,26 +1788,16 @@ impl McpServerRuntime {
                 biased;
                 response = &mut handle.rx => break Some(response),
                 () = context.cancellation.cancelled() => {
-                    let cancelled = handle.cancel(Some("rustX execution cancellation".to_owned())).await;
+                    let cancelled = handle
+                        .cancel(Some("rustX execution cancellation".to_owned()))
+                        .await
+                        .map_err(|error| bound_error(&error.to_string()));
                     drop(progress);
-                    return match cancelled {
-                        Ok(()) => mcp_empty_terminal(
-                            ToolExecutionStatus::Cancelled {
-                                reason: context.cancellation.reason(),
-                                phase: ToolCancellationPhase::DuringExecution,
-                            },
-                            context,
-                            started,
-                        ),
-                        Err(error) => failed_mcp(
-                            &format!(
-                                "MCP cancellation failed: {}",
-                                bound_error(&error.to_string())
-                            ),
-                            context,
-                            started,
-                        ),
-                    };
+                    return mcp_empty_terminal(
+                        post_dispatch_cancellation_status(cancelled),
+                        context,
+                        started,
+                    );
                 }
                 progress_item = progress.next() => {
                     if let Some(progress_item) = progress_item {
@@ -1836,10 +1834,25 @@ impl McpServerRuntime {
                 // violation, so a violation surfaced mid-call lands here as
                 // a transport close. It is a protocol failure, not an
                 // anonymous disconnect — and the generation is poisoned.
-                if let Some(failure) = self.protocol_violation_failure(context, started).await {
-                    return failure;
+                if let Some(diagnostic) = self.poisoned_protocol_violation().await {
+                    return mcp_empty_terminal(
+                        ToolExecutionStatus::OutcomeUnknown {
+                            detail: bound_error(&diagnostic),
+                        },
+                        context,
+                        started,
+                    );
                 }
-                return failed_mcp("MCP transport closed during tools/call", context, started);
+                // The transport closed after dispatch without a response:
+                // the remote operation may have partially or fully completed.
+                return mcp_empty_terminal(
+                    ToolExecutionStatus::OutcomeUnknown {
+                        detail: "MCP transport closed during tools/call without a response"
+                            .to_owned(),
+                    },
+                    context,
+                    started,
+                );
             }
         };
         translate_result(response, context, started)
@@ -2677,8 +2690,28 @@ fn failed_mcp(
     )
 }
 
+/// The terminal status of a post-dispatch cancellation attempt.
+///
+/// The request was already dispatched, so the call crossed the
+/// external-effect frontier. An accepted cancellation notification proves
+/// only that the request reached the peer, never that the remote operation
+/// terminated; a failed cancellation request proves even less. Either way
+/// the final external outcome is unknown — never `Cancelled`, never
+/// `Failed`.
+fn post_dispatch_cancellation_status(cancelled: Result<(), String>) -> ToolExecutionStatus {
+    let detail = match cancelled {
+        Ok(()) => "cancellation was requested after dispatch, but remote termination could not be confirmed".to_owned(),
+        Err(error) => format!(
+            "cancellation was requested after dispatch and the cancellation request itself failed: {error}"
+        ),
+    };
+    ToolExecutionStatus::OutcomeUnknown {
+        detail: bound_error(&detail),
+    }
+}
+
 /// Retains the dispatch-owned background locator for MCP outcomes that do
-/// not carry a remote `CallToolResult` (cancellation, transport failure, or
+/// not carry a remote `CallToolResult` (unknown outcomes after dispatch or
 /// a local protocol error). A healthy preallocated empty file is a complete
 /// record of a call that produced no logical result; a sink-open failure is
 /// explicitly Partial.
@@ -2717,16 +2750,20 @@ fn mcp_empty_terminal(
         }
         Err(error) => {
             let diagnostic = format!("cannot open the background MCP result output: {error}");
-            let error = match status {
-                ToolExecutionStatus::Failed { error } => {
-                    format!("{error}; MCP result output storage failed: {diagnostic}")
-                }
-                _ => format!("MCP result output storage failed: {diagnostic}"),
+            // An output-storage failure never rewrites execution-outcome
+            // certainty: a known failure gains the storage diagnostic, while
+            // any other status keeps its own certainty claim and reports the
+            // storage failure only through the managed-output continuation.
+            let status = match status {
+                ToolExecutionStatus::Failed { error } => ToolExecutionStatus::Failed {
+                    error: bound_error(&format!(
+                        "{error}; MCP result output storage failed: {diagnostic}"
+                    )),
+                },
+                status => status,
             };
             ToolExecutionResult {
-                status: ToolExecutionStatus::Failed {
-                    error: bound_error(&error),
-                },
+                status,
                 content: Vec::new(),
                 duration_ms: duration_ms(started),
                 exit_code: None,
@@ -2764,7 +2801,10 @@ mod tests {
     use base64::Engine as _;
     use rmcp::model::{CallToolResult, ContentBlock};
 
-    use super::{McpServerId, mcp_empty_terminal, mcp_tool_id, translate_result};
+    use super::{
+        McpServerId, mcp_empty_terminal, mcp_tool_id, post_dispatch_cancellation_status,
+        translate_result,
+    };
     use crate::runtime::identity::{ConversationId, ToolExecutionId};
     use crate::runtime::types::CancellationReason;
     use crate::runtime::{CancellationSignal, ExecutionCancellation};
@@ -3252,6 +3292,109 @@ mod tests {
                 .expect("results directory")
                 .count(),
             0
+        );
+    }
+
+    /// Issue #202: an output-sink-open failure never rewrites execution
+    /// outcome certainty. A non-`Failed` terminal status keeps its own
+    /// certainty claim; the storage failure is reported only through the
+    /// managed-output continuation as explicitly Partial.
+    #[test]
+    fn background_mcp_sink_open_failure_preserves_outcome_certainty() {
+        let (_directory, runtime) = runtime("mcp-background-sink-open");
+        let execution_id = ToolExecutionId::background(12);
+        let advertised = runtime
+            .tool_output()
+            .allocate_background_output(&execution_id)
+            .expect("dispatch output");
+        runtime.tool_output().set_force_open_failures(true);
+        let progress = NoProgress;
+        let result = mcp_empty_terminal(
+            ToolExecutionStatus::OutcomeUnknown {
+                detail: "MCP transport closed during tools/call without a response".to_owned(),
+            },
+            &context(&runtime, Some(&execution_id), &progress),
+            Instant::now(),
+        );
+        assert!(
+            matches!(result.status, ToolExecutionStatus::OutcomeUnknown { .. }),
+            "a storage failure must not rewrite the outcome status: {:?}",
+            result.status
+        );
+        let Some(ManagedOutputContinuation::Partial {
+            locator,
+            diagnostic,
+        }) = &result.managed_output
+        else {
+            panic!("a sink-open failure is honestly Partial: {result:?}");
+        };
+        assert_eq!(*locator, advertised);
+        assert!(
+            diagnostic.contains("cannot open the background MCP result output"),
+            "the continuation names the storage failure: {diagnostic}"
+        );
+    }
+
+    /// Issue #202: with the same sink-open failure, a known `Failed` status
+    /// stays `Failed` and gains the storage diagnostic appended.
+    #[test]
+    fn background_mcp_sink_open_failure_appends_the_diagnostic_to_a_known_failure() {
+        let (_directory, runtime) = runtime("mcp-background-sink-open-failed");
+        let execution_id = ToolExecutionId::background(13);
+        runtime
+            .tool_output()
+            .allocate_background_output(&execution_id)
+            .expect("dispatch output");
+        runtime.tool_output().set_force_open_failures(true);
+        let progress = NoProgress;
+        let result = mcp_empty_terminal(
+            ToolExecutionStatus::Failed {
+                error: "peer said no".to_owned(),
+            },
+            &context(&runtime, Some(&execution_id), &progress),
+            Instant::now(),
+        );
+        let ToolExecutionStatus::Failed { error } = &result.status else {
+            panic!("a known failure stays Failed: {result:?}");
+        };
+        assert!(
+            error.contains("peer said no") && error.contains("MCP result output storage failed"),
+            "the failure gains the storage diagnostic: {error}"
+        );
+        assert!(matches!(
+            result.managed_output,
+            Some(ManagedOutputContinuation::Partial { .. })
+        ));
+    }
+
+    /// Issue #202: the post-dispatch cancellation mapping is deterministic
+    /// for both cancellation-request outcomes — an accepted request and a
+    /// failed request both settle as `OutcomeUnknown` with a bounded detail,
+    /// because neither proves the remote operation terminated.
+    #[test]
+    fn post_dispatch_cancellation_is_outcome_unknown_whether_the_request_succeeded_or_failed() {
+        let accepted = post_dispatch_cancellation_status(Ok(()));
+        let ToolExecutionStatus::OutcomeUnknown { detail } = &accepted else {
+            panic!("an accepted cancel request is OutcomeUnknown: {accepted:?}");
+        };
+        assert!(
+            detail.contains("remote termination could not be confirmed"),
+            "the accepted-request detail names the unproven termination: {detail}"
+        );
+
+        let huge_error = "x".repeat(64 * 1024);
+        let failed = post_dispatch_cancellation_status(Err(huge_error));
+        let ToolExecutionStatus::OutcomeUnknown { detail } = &failed else {
+            panic!("a failed cancel request is OutcomeUnknown: {failed:?}");
+        };
+        assert!(
+            detail.contains("the cancellation request itself failed"),
+            "the failed-request detail names the failed request: {detail}"
+        );
+        assert!(
+            detail.len() <= 1024 + 128,
+            "the detail stays bounded far below the 64KiB input: {} bytes",
+            detail.len()
         );
     }
 

@@ -4349,6 +4349,98 @@ mod tests {
         assert_eq!(decoded, snapshot);
     }
 
+    /// The Runtime Client projection carries the canonical `OutcomeUnknown`
+    /// result verbatim — bounded `detail` included — and preserves it through
+    /// its wire round trip, never flattening it into a known `failed`.
+    #[test]
+    fn issue202_outcome_unknown_flows_through_projection_unchanged() {
+        let mut projection = projection();
+        apply_event(
+            &mut projection,
+            RuntimeEvent::AttemptStarted {
+                attempt_id: attempt(),
+            },
+        );
+        let call = ToolCall {
+            id: ToolCallId::new("call_outcome_unknown"),
+            tool_id: ToolId::new("tool-outcome-unknown"),
+            name: "outcome_unknown".to_owned(),
+            arguments: serde_json::json!({"value": 1}),
+        };
+        apply_frame(
+            &mut projection,
+            0,
+            PublicationPayload::ProposedToolCallStarted {
+                block_index: ContentBlockIndex::new(0),
+                call: ToolCallStart {
+                    id: call.id.clone(),
+                    tool_id: call.tool_id.clone(),
+                    name: call.name.clone(),
+                },
+            },
+        );
+        apply_frame(
+            &mut projection,
+            1,
+            PublicationPayload::ProposedToolCallArgumentsSuffix {
+                block_index: ContentBlockIndex::new(0),
+                call_id: call.id.clone(),
+                suffix: serde_json::to_string(&call.arguments).expect("arguments JSON"),
+            },
+        );
+        apply_frame(
+            &mut projection,
+            2,
+            PublicationPayload::ProposedToolCallCompleted {
+                block_index: ContentBlockIndex::new(0),
+                call: call.clone(),
+            },
+        );
+        apply_event(
+            &mut projection,
+            RuntimeEvent::ToolExecutionStarted {
+                tool_call_id: call.id.clone(),
+                tool_id: call.tool_id.clone(),
+            },
+        );
+        let result = ToolExecutionResult {
+            status: ToolExecutionStatus::OutcomeUnknown {
+                detail: "executor lost contact after dispatch".to_owned(),
+            },
+            content: Vec::new(),
+            duration_ms: 3,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            managed_output: None,
+        };
+        apply_event(
+            &mut projection,
+            RuntimeEvent::ToolExecutionCompleted {
+                tool_call_id: call.id.clone(),
+                tool_id: call.tool_id.clone(),
+                result: result.clone(),
+            },
+        );
+
+        let (snapshot, _) = projection.snapshot().expect("snapshot");
+        let foreground = &snapshot.attempt.as_ref().expect("attempt view").foreground;
+        let ForegroundToolState::Settled {
+            result: projected, ..
+        } = &foreground[0].state
+        else {
+            panic!("the outcome-unknown call must be settled");
+        };
+        assert_eq!(projected, &result);
+        let encoded = serde_json::to_value(&snapshot).expect("snapshot JSON");
+        let status = &encoded["attempt"]["foreground"][0]["state"]["result"]["status"];
+        assert_eq!(status["type"], "outcome_unknown");
+        assert_eq!(status["detail"], "executor lost contact after dispatch");
+        let decoded: crate::runtime_client::snapshot::RuntimeClientSnapshot =
+            serde_json::from_value(encoded).expect("snapshot round trip");
+        assert_eq!(decoded, snapshot);
+    }
+
     /// A canonical `ToolMessage` settles an accepted call that never emitted a
     /// live execution lifecycle event. The commit publishes exactly one
     /// equivalent client settlement and preserves it against late raw facts.
@@ -5044,6 +5136,88 @@ mod tests {
         assert_eq!(snapshot.background[0].state, BackgroundLifecycle::Succeeded);
         assert!(snapshot.background[0].result.is_some());
         assert_eq!(snapshot.background[1].execution_id.as_str(), "exec_2");
+    }
+
+    /// Issue #202: the projection carries the honest background terminal
+    /// lifecycle vocabulary verbatim. `OutcomeUnknown` and `TimedOut` are
+    /// first-class terminal states and are never collapsed into `Failed`,
+    /// in neither the folded view nor the published event, on or off the
+    /// wire.
+    #[test]
+    fn issue202_background_terminal_states_project_verbatim() {
+        use crate::tools::background::{BackgroundExecutionSnapshot, BackgroundLifecycle};
+        let mut projection = projection();
+        let outcome_unknown_result = ToolExecutionResult {
+            status: ToolExecutionStatus::OutcomeUnknown {
+                detail: "cancellation raced the executor after dispatch".to_owned(),
+            },
+            ..success_result()
+        };
+        projection.apply(ConversationObservation::Background(
+            BackgroundExecutionSnapshot {
+                execution_id: crate::runtime::identity::ToolExecutionId::new("exec_unknown"),
+                tool_id: ToolId::new("tool-bg"),
+                tool_name: "bg".to_owned(),
+                state: BackgroundLifecycle::OutcomeUnknown,
+                progress: None,
+                result: Some(outcome_unknown_result),
+            },
+        ));
+        projection.apply(ConversationObservation::Background(
+            BackgroundExecutionSnapshot {
+                execution_id: crate::runtime::identity::ToolExecutionId::new("exec_timed_out"),
+                tool_id: ToolId::new("tool-bg"),
+                tool_name: "bg".to_owned(),
+                state: BackgroundLifecycle::TimedOut,
+                progress: None,
+                result: Some(ToolExecutionResult {
+                    status: ToolExecutionStatus::TimedOut,
+                    ..success_result()
+                }),
+            },
+        ));
+
+        // The folded view keeps the typed terminal states verbatim.
+        let (snapshot, _) = projection.snapshot().expect("snapshot");
+        assert_eq!(snapshot.background.len(), 2);
+        assert_eq!(
+            snapshot.background[0].state,
+            BackgroundLifecycle::OutcomeUnknown
+        );
+        assert_eq!(snapshot.background[1].state, BackgroundLifecycle::TimedOut);
+
+        // The published events carry the same verbatim states.
+        let events = collect(&mut projection, RuntimeClientCursor::new(0));
+        let [unknown_event, timed_out_event] = events.as_slice() else {
+            panic!("two BackgroundExecutionUpdated events: {events:?}");
+        };
+        let RuntimeClientEvent::BackgroundExecutionUpdated {
+            execution: unknown_view,
+        } = &unknown_event.event
+        else {
+            panic!(
+                "a BackgroundExecutionUpdated event: {:?}",
+                unknown_event.event
+            );
+        };
+        let RuntimeClientEvent::BackgroundExecutionUpdated {
+            execution: timed_out_view,
+        } = &timed_out_event.event
+        else {
+            panic!(
+                "a BackgroundExecutionUpdated event: {:?}",
+                timed_out_event.event
+            );
+        };
+        assert_eq!(unknown_view.state, BackgroundLifecycle::OutcomeUnknown);
+        assert_eq!(timed_out_view.state, BackgroundLifecycle::TimedOut);
+
+        // On the wire the states serialize as their typed snake_case names,
+        // never "failed".
+        let unknown_json = serde_json::to_value(unknown_view).expect("execution JSON");
+        assert_eq!(unknown_json["state"], "outcome_unknown");
+        let timed_out_json = serde_json::to_value(timed_out_view).expect("execution JSON");
+        assert_eq!(timed_out_json["state"], "timed_out");
     }
 
     /// Issue #178: a subagent registry snapshot folds into the whole-view

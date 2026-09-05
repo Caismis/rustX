@@ -1259,13 +1259,13 @@ fn a_durable_attempt_terminal_is_never_created_twice() {
 // ---------------------------------------------------------------------------
 
 /// A foreground tool whose external start committed and whose outcome is
-/// unknown becomes a typed `Interrupted` canonical result — never a silent
+/// unknown becomes a typed `OutcomeUnknown` canonical result — never a silent
 /// re-execution, never an invented success, never an ordinary `Failed`.
 ///
 /// The structurally incomplete tool turn is completed, so the conversation is
 /// not left permanently unable to form a valid later model request.
 #[test]
-fn started_tool_with_unknown_outcome_becomes_interrupted_and_is_never_replayed() {
+fn started_tool_with_unknown_outcome_becomes_outcome_unknown_and_is_never_replayed() {
     let durable = Durable::new();
     let attempt = AttemptId::for_conversation(&conversation_id(), 0);
     {
@@ -1341,12 +1341,35 @@ fn started_tool_with_unknown_outcome_becomes_interrupted_and_is_never_replayed()
         .expect("the missing sibling is canonical after recovery");
     assert_eq!(
         repaired.result.status,
-        ToolExecutionStatus::Interrupted,
+        ToolExecutionStatus::OutcomeUnknown {
+            detail: "execution started, then the runtime restarted before a durable outcome was committed".to_owned(),
+        },
         "unknown is preserved as unknown"
     );
     assert!(
         repaired.result.content.is_empty(),
         "recovery never invents output that was never durably known"
+    );
+    // Issue #202: the typed status carries the semantics and the content
+    // stays empty, but the crash-recovered unknown outcome must still reach
+    // the next model-facing turn as text — never as an empty tool result.
+    let projection = repaired.result.model_facing_projection();
+    assert!(
+        !projection.is_empty(),
+        "the repaired unknown outcome is visible to the model"
+    );
+    assert!(
+        projection.byte_len() <= rustx::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES,
+        "the model-facing repair stays within the tool-result byte budget"
+    );
+    let projection_text = projection.as_text();
+    assert!(
+        projection_text.contains("could not establish its final external outcome"),
+        "the projection communicates that the final external outcome is unknown"
+    );
+    assert!(
+        projection_text.contains("may have partially or fully completed"),
+        "the projection warns that side effects may have occurred"
     );
     // The turn is structurally complete again: every issued call owns exactly
     // one committed result.
@@ -1454,7 +1477,7 @@ fn known_request_with_unknown_tool_outcome_stays_indeterminate() {
     assert_eq!(
         report.reconciliation().repaired_tool_results,
         vec![ToolCallId::new("call-1")],
-        "the unknown call is repaired as interrupted"
+        "the unknown call is repaired as outcome-unknown"
     );
     let canonical = store.load_canonical().expect("canonical");
     let repaired = canonical
@@ -1466,7 +1489,10 @@ fn known_request_with_unknown_tool_outcome_stays_indeterminate() {
             _ => None,
         })
         .expect("the repair result");
-    assert_eq!(repaired.status, ToolExecutionStatus::Interrupted);
+    assert!(matches!(
+        repaired.status,
+        ToolExecutionStatus::OutcomeUnknown { .. }
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -1566,7 +1592,12 @@ fn mixed_sibling_batch_is_recovered_only_from_durable_evidence() {
     assert_eq!(
         results,
         vec![
-            (ToolCallId::new("call-a"), ToolExecutionStatus::Interrupted),
+            (
+                ToolCallId::new("call-a"),
+                ToolExecutionStatus::OutcomeUnknown {
+                    detail: "execution started, then the runtime restarted before a durable outcome was committed".to_owned(),
+                }
+            ),
             (ToolCallId::new("call-b"), ToolExecutionStatus::Success),
             (
                 ToolCallId::new("call-c"),
@@ -1777,7 +1808,7 @@ fn known_foreground_tool_result_is_recovered_verbatim_and_never_replayed() {
 ///
 /// ```text
 /// prefix 1: AttemptStarted, Assistant ToolCall canonical, ToolExecutionStarted, CRASH #1
-/// repair committed: ToolMessage(Interrupted) + ToolMessageCommitted   (no attempt terminal)
+/// repair committed: ToolMessage(OutcomeUnknown) + ToolMessageCommitted   (no attempt terminal)
 /// CRASH #2
 /// ```
 ///
@@ -1852,7 +1883,9 @@ fn second_crash_after_tool_repair_preserves_external_start_evidence() {
             "assistant-1",
             "call-1",
             ToolExecutionResult {
-                status: ToolExecutionStatus::Interrupted,
+                status: ToolExecutionStatus::OutcomeUnknown {
+                    detail: "execution started, then the runtime restarted before a durable outcome was committed".to_owned(),
+                },
                 content: Vec::new(),
                 duration_ms: 0,
                 exit_code: None,
@@ -1876,7 +1909,7 @@ fn second_crash_after_tool_repair_preserves_external_start_evidence() {
             attempt_id: attempt.clone(),
             model_request: None,
             // The call identity was released with its repair evidence: the
-            // committed canonical `Interrupted` result means the per-call
+            // committed canonical `OutcomeUnknown` result means the per-call
             // repair entry is gone. The attempt's external summary still
             // proves the execution started and its outcome stayed unknown,
             // which is what keeps the class indeterminate.
@@ -1929,8 +1962,10 @@ fn second_crash_after_tool_repair_preserves_external_start_evidence() {
         .expect("the repair result");
     assert_eq!(
         repaired.status,
-        ToolExecutionStatus::Interrupted,
-        "the unknown external outcome stays represented as interrupted"
+        ToolExecutionStatus::OutcomeUnknown {
+            detail: "execution started, then the runtime restarted before a durable outcome was committed".to_owned(),
+        },
+        "the unknown external outcome stays represented as outcome-unknown"
     );
 
     // Repeated restart after the terminal is fully idempotent.
@@ -2203,8 +2238,10 @@ fn historical_attempt_tool_evidence_never_aliases_the_unsettled_attempt() {
         .expect("the Class-D repair result");
     assert_eq!(
         repaired.status,
-        ToolExecutionStatus::Interrupted,
-        "the historical unknown outcome stays interrupted, never invented"
+        ToolExecutionStatus::OutcomeUnknown {
+            detail: "execution started, then the runtime restarted before a durable outcome was committed".to_owned(),
+        },
+        "the historical unknown outcome stays outcome-unknown, never invented"
     );
     assert_eq!(
         terminal_count(&all_events(&store), &current),
@@ -2235,8 +2272,8 @@ fn commit_background_ownership(store: &SqliteConversationStore, execution: &Tool
 
 /// A background execution that was durably owned and never settled does not
 /// survive the process. Recovery neither assumes it is alive nor relaunches
-/// it: it commits the strongest honest terminal — `Interrupted`, not `Failed`
-/// — together with exactly one model-visible terminal notification.
+/// it: it commits the strongest honest terminal — `OutcomeUnknown`, not
+/// `Failed` — together with exactly one model-visible terminal notification.
 #[test]
 fn nonterminal_background_work_is_terminalized_exactly_once_and_never_relaunched() {
     let durable = Durable::new();
@@ -2278,8 +2315,8 @@ fn nonterminal_background_work_is_terminalized_exactly_once_and_never_relaunched
         .collect();
     assert_eq!(
         published,
-        vec![BackgroundTerminalState::Interrupted],
-        "unknown is published as interrupted, never as a known failure"
+        vec![BackgroundTerminalState::OutcomeUnknown],
+        "unknown is published as outcome-unknown, never as a known failure"
     );
     let pending = store.load_pending().expect("pending");
     assert_eq!(pending.len(), 1, "exactly one terminal notification");
@@ -2798,7 +2835,7 @@ fn a_long_settled_attempt_retains_bounded_repair_evidence() {
 /// First reconstruction: the class is indeterminate (never "known results
 /// elsewhere hide one unknown started side effect"), and the repair map holds
 /// exactly the unresolved structurally relevant call B. After B's recovery
-/// `Interrupted` repair and a second crash before the attempt terminal, the
+/// `OutcomeUnknown` repair and a second crash before the attempt terminal, the
 /// repair map is empty — yet the attempt summary still classifies as
 /// external-start + unknown until the attempt terminal commits.
 #[test]
@@ -2916,7 +2953,7 @@ fn a_mixed_unresolved_batch_keeps_unknown_dominance_after_repair() {
         "the unknown outcome blocks automatic continuation"
     );
 
-    // Recovery #1: commit B's repair (Interrupted) but crash before the
+    // Recovery #1: commit B's repair (OutcomeUnknown) but crash before the
     // attempt terminal — the exact "repair committed, terminal absent"
     // prefix, this time with A already settled.
     commit_recovery_tool_repair(
@@ -2924,7 +2961,9 @@ fn a_mixed_unresolved_batch_keeps_unknown_dominance_after_repair() {
         "assistant-1",
         "call-b",
         ToolExecutionResult {
-            status: ToolExecutionStatus::Interrupted,
+            status: ToolExecutionStatus::OutcomeUnknown {
+                detail: "execution started, then the runtime restarted before a durable outcome was committed".to_owned(),
+            },
             content: Vec::new(),
             duration_ms: 0,
             exit_code: None,
@@ -2949,7 +2988,7 @@ fn a_mixed_unresolved_batch_keeps_unknown_dominance_after_repair() {
             // summary still knows the external outcome stayed unknown.
             tool_calls: Vec::new(),
         },
-        "the committed Interrupted repair never resolves the old unknown outcome"
+        "the committed OutcomeUnknown repair never resolves the old unknown outcome"
     );
     assert_ne!(
         plan.attempt_class(),

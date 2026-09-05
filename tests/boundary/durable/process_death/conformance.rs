@@ -1368,7 +1368,7 @@ fn kill_before_tool_execution_start_authorizes_nothing() {
 
 /// Killed after the execution start commit, the external outcome is unknown
 /// and stays unknown: continuation is blocked, the repaired result is
-/// `Interrupted`, and nothing is inferred from workspace state.
+/// `OutcomeUnknown`, and nothing is inferred from workspace state.
 #[test]
 fn started_tool_with_unknown_outcome_stays_unknown() {
     let lab = Lab::new();
@@ -1395,7 +1395,10 @@ fn started_tool_with_unknown_outcome_stays_unknown() {
     let canonical = durable.canonical();
     let results = tool_results(&canonical);
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].1, ToolExecutionStatus::Interrupted);
+    assert!(matches!(
+        &results[0].1,
+        ToolExecutionStatus::OutcomeUnknown { .. }
+    ));
     assert!(
         !format!("{canonical:?}").contains("R1 note body"),
         "an unknown outcome is never reconstructed from workspace state"
@@ -3223,7 +3226,9 @@ fn approval_settlement_and_the_tool_start_boundary_compose() {
     assert_eq!(report.resume(), ResumeDisposition::BlockedIndeterminate);
     assert_eq!(
         tool_results(&durable.canonical())[0].1,
-        ToolExecutionStatus::Interrupted
+        ToolExecutionStatus::OutcomeUnknown {
+            detail: "execution started, then the runtime restarted before a durable outcome was committed".to_owned(),
+        }
     );
     assert_eq!(
         durable.count_events(|event| matches!(event, RuntimeEvent::InteractionSettled { .. })),

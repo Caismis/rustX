@@ -261,13 +261,15 @@ fn render_tool(tool: &ToolMessageBlock, parts: &mut Vec<String>) {
         ToolExecutionStatus::Success => "success".to_owned(),
         ToolExecutionStatus::Failed { error } => format!("failed: {error}"),
         ToolExecutionStatus::Denied { reason } => format!("denied: {reason}"),
-        ToolExecutionStatus::Cancelled { .. } => tool
-            .result
-            .status
+        // Cancelled, TimedOut, and OutcomeUnknown keep their full typed
+        // model-facing feedback so the semantic distinction between a
+        // confirmed terminal settlement and an unknown external outcome
+        // survives summarization.
+        status @ (ToolExecutionStatus::Cancelled { .. }
+        | ToolExecutionStatus::TimedOut
+        | ToolExecutionStatus::OutcomeUnknown { .. }) => status
             .feedback_text()
-            .expect("cancelled status has model-facing text"),
-        ToolExecutionStatus::TimedOut => "timed out".to_owned(),
-        ToolExecutionStatus::Interrupted => "interrupted".to_owned(),
+            .expect("non-success status has model-facing text"),
     };
     parts.push(format!(
         "[Tool result {} ({status})]: {}",
@@ -763,6 +765,52 @@ mod tests {
                 assert!(rendered.contains(reason_label));
                 assert!(rendered.contains(required));
             }
+        }
+    }
+
+    /// Issue #202: a proven terminal timeout and an admitted unknown outcome
+    /// keep their distinct typed feedback in the summary request — the
+    /// unknown outcome never collapses into generic failure wording.
+    #[test]
+    fn issue202_rendered_transcript_distinguishes_timeout_from_unknown_outcome() {
+        for (status, required) in [
+            (
+                ToolExecutionStatus::TimedOut,
+                "established terminal settlement",
+            ),
+            (
+                ToolExecutionStatus::OutcomeUnknown {
+                    detail: "the runtime restarted before a durable outcome was committed"
+                        .to_owned(),
+                },
+                "could not establish its final external outcome",
+            ),
+        ] {
+            let request = SummaryRequest {
+                retired: vec![MessageBlock::Tool(ToolMessageBlock {
+                    id: MessageId::new("tool-unknown"),
+                    tool_call_id: ToolCallId::new("call-unknown"),
+                    tool_id: ToolId::new("tool-unknown"),
+                    result: ToolExecutionResult {
+                        status,
+                        content: Vec::new(),
+                        duration_ms: 0,
+                        exit_code: None,
+                        artifacts: Vec::new(),
+                        truncation: None,
+                        managed_output: None,
+                    },
+                })],
+            };
+            let rendered = request.render_transcript();
+            assert!(
+                rendered.contains(required),
+                "the summary preserves the typed status distinction: {rendered}"
+            );
+            assert!(
+                !rendered.contains("failed:"),
+                "an unknown outcome is not reported as a failure: {rendered}"
+            );
         }
     }
 

@@ -154,7 +154,9 @@ export function renderBackground(
         ? toLines(result.status.error).map((line) => role.error(line))
         : result.status.type === "denied"
           ? toLines(result.status.reason).map((line) => role.warning(line))
-          : [];
+          : result.status.type === "outcome_unknown"
+            ? toLines(result.status.detail).map((line) => role.warning(line))
+            : [];
     for (const line of preview(reason, context, "reason line")) {
       lines.push(`  ${line}`);
     }

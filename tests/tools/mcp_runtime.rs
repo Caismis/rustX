@@ -1129,21 +1129,21 @@ mod unix_tests {
         );
     }
 
-    /// A structurally invalid MCP message emitted mid-`tools/call` fails
-    /// the in-flight call with a bounded protocol diagnostic — never a
-    /// success, even though rmcp's framing would have continued — and
-    /// poisons the connection generation: subsequent calls are rejected
-    /// with the same protocol fact instead of being served by a transport
-    /// that already violated the protocol. Physical settlement still goes
-    /// through the ordinary runtime close.
+    /// A structurally invalid MCP message emitted mid-`tools/call` leaves the
+    /// in-flight call's external outcome unknown — never a success and never
+    /// a confirmed failure, because the dispatched call may have partially or
+    /// fully completed — and poisons the connection generation: subsequent
+    /// calls are rejected with the same protocol fact instead of being served
+    /// by a transport that already violated the protocol. Physical settlement
+    /// still goes through the ordinary runtime close.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn protocol_invalid_output_during_a_call_fails_and_poisons_the_generation() {
+    async fn protocol_invalid_output_during_a_call_is_outcome_unknown_and_poisons_the_generation() {
         if rustx::tools::mcp::fixture::raw::serve_if_raw_fixture_mode().await {
             return;
         }
         let workspace_dir = tempfile::tempdir().expect("workspace");
         let runtime = connect_raw_fixture(
-            "mcp_runtime::unix_tests::protocol_invalid_output_during_a_call_fails_and_poisons_the_generation",
+            "mcp_runtime::unix_tests::protocol_invalid_output_during_a_call_is_outcome_unknown_and_poisons_the_generation",
             rustx::tools::mcp::fixture::raw::CORRUPTION_INVALID,
             rustx::tools::mcp::fixture::raw::INVALID_PHASE_CALL,
             &workspace_dir,
@@ -1152,15 +1152,16 @@ mod unix_tests {
         .expect("the handshake and discovery are clean in the call-phase fixture");
         let (definition, executor) = raw_echo(&runtime).await;
         let result = execute_raw(&definition, executor.as_ref(), &workspace_dir, "raw-echo").await;
-        let rustx::tools::types::ToolExecutionStatus::Failed { error } = &result.status else {
+        let rustx::tools::types::ToolExecutionStatus::OutcomeUnknown { detail } = &result.status
+        else {
             panic!(
-                "a call crossed by a protocol violation must not succeed: {:?}",
+                "a call crossed by a protocol violation after dispatch has an unknown outcome: {:?}",
                 result.status
             );
         };
         assert!(
-            error.contains("MCP protocol violation") && error.contains("raw-fixture"),
-            "the call failure is the bounded protocol diagnostic: {error}"
+            detail.contains("MCP protocol violation") && detail.contains("raw-fixture"),
+            "the unknown outcome carries the bounded protocol diagnostic: {detail}"
         );
         // The generation is poisoned: a later call is rejected with the
         // same protocol fact instead of being treated as healthy.

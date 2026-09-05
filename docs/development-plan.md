@@ -900,9 +900,12 @@ is auto-admitted headlessly; a crash after the adoption commit leaves the
 `UserMessage` canonical exactly once; a committed request start with an unknown
 outcome reconstructs exactly, classifies as indeterminate, and resends nothing
 (proven at the real provider boundary against the #47 emulator); an
-interrupted foreground tool becomes a typed `Interrupted` canonical result in
-one atomic sibling batch; non-terminal background work is terminalized as
-`Interrupted` with exactly one model-visible notification; durable terminals
+interrupted foreground tool becomes a typed canonical unknown-outcome result
+(`ToolExecutionStatus::Interrupted` at delivery, renamed `OutcomeUnknown` by
+Issue #202) in one atomic sibling batch; non-terminal background work is
+terminalized as unknown-outcome (`BackgroundTerminalState::Interrupted` at
+delivery, renamed `OutcomeUnknown` by Issue #202) with exactly one
+model-visible notification; durable terminals
 and repeated restarts are idempotent; and recovered identity allocators never
 collide with durable history.
 

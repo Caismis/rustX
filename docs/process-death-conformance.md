@@ -177,7 +177,7 @@ that an accepted later retry suppresses earlier failed-generation audits.
 | Boundary | Durable before kill | Repaired canonical result | Resume | Test |
 | --- | --- | --- | --- | --- |
 | `before:event:tool_execution_started` | canonical Assistant with the call | `Cancelled { ParentCancelled }` | `PendingInboundOnly` | `kill_before_tool_execution_start_authorizes_nothing` |
-| `after:event:tool_execution_started` | start committed, outcome unknown | `Interrupted` — never inferred from workspace state | `BlockedIndeterminate` | `started_tool_with_unknown_outcome_stays_unknown` |
+| `after:event:tool_execution_started` | start committed, outcome unknown | `OutcomeUnknown` — never inferred from workspace state | `BlockedIndeterminate` | `started_tool_with_unknown_outcome_stays_unknown` |
 | `after:event:tool_execution_completed` | outcome durably known, no canonical settlement | the exact durable result, by value | `PendingInboundOnly` | `known_tool_outcome_is_preserved_into_the_canonical_slot` |
 | `after:append_canonical_batch` | canonical `ToolResult` | none — nothing to repair | `PendingInboundOnly` | `tool_result_batch_commit_is_atomic` |
 

@@ -5,7 +5,8 @@
   "tool_id": "tool-bash",
   "result": {
     "status": {
-      "type": "interrupted"
+      "type": "outcome_unknown",
+      "detail": "execution started, then the runtime restarted before a durable outcome was committed"
     },
     "content": [],
     "duration_ms": 0

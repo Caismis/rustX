@@ -9,8 +9,9 @@
  * A renderer receives facts that are already authoritative — the runtime's
  * published arguments and its normalized result — and decides how to *show*
  * them. Whether a call is running, succeeded, was denied, cancelled, timed
- * out, or was interrupted is decided before a renderer is ever consulted, in
- * Rust, and is rendered by the card shell in {@link ./tool-card.ts}. No
+ * out, or settled with an unknown outcome is decided before a renderer is
+ * ever consulted, in Rust, and is rendered by the card shell in
+ * {@link ./tool-card.ts}. No
  * function here receives the lifecycle, so none of them can express an
  * opinion about it.
  *
