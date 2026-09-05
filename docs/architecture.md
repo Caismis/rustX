@@ -668,7 +668,7 @@ identity watermark these facts carry and nothing else: it reconstructs no
 waiter, republishes no prompt, and never converts an old approval into
 permission to run the tool it referred to. A call whose `ToolExecutionStarted`
 is absent is simply a call that never started, and recovery settles it with
-the ordinary cancelled/interrupted canonical result slot. After a restart the
+the ordinary pre-start cancelled canonical result slot. After a restart the
 historical identity is durably spent in both directions, so a current runtime
 that wants the same tool must reach a **new** live approval under a new
 identity.
@@ -3571,7 +3571,14 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
-The current Runtime Client protocol is version 15. It adds the explicit
+The current Runtime Client protocol is version 16. It carries Issue #202's
+explicit tool outcome certainty: the canonical `ToolExecutionStatus`
+replaces `interrupted` with `outcome_unknown` (a bounded producer-owned
+`detail` accompanies it and is never parsed for semantics), the background
+terminal state `interrupted` becomes `outcome_unknown`, `timed_out` now
+claims proven terminal settlement rather than mere deadline expiry, and
+every terminal non-success status carries bounded model-facing feedback
+through the canonical projection. Version 15 added the explicit
 retained-workspace disposal resource lifecycle, including the
 `PreservedUnresolved` state and pending partial-settlement outcome.
 
@@ -7330,7 +7337,7 @@ Per plane:
   evidence are separate axes with separate owners. Each unanswered call on
   the current Surface is answered from durable evidence only: a durably
   known outcome is used verbatim; a started call with no outcome becomes
-  `ToolExecutionStatus::Interrupted`; a call with no start evidence at all
+  `ToolExecutionStatus::OutcomeUnknown`; a call with no start evidence at all
   becomes `ToolExecutionStatus::Cancelled { reason: ParentCancelled,
   phase: BeforeStart }` because nothing external happened.
   A committed canonical `ToolResult` releases the call's detailed per-call
@@ -7347,7 +7354,7 @@ Per plane:
   sibling batch is ever observable.
 - **Background.** A committed async background execution survives the starting
   *attempt*, not the *process*. A durably owned, never-published execution is
-  terminalized as `BackgroundTerminalState::Interrupted` — never `Failed`,
+  terminalized as `BackgroundTerminalState::OutcomeUnknown` — never `Failed`,
   never relaunched — and its model-visible notification is published through
   the one Pending Inbound authority in the same atomic transition as the
   `BackgroundTerminalPublished` fact.
@@ -7600,7 +7607,7 @@ Class B.
 engine, no retry framework, no configurable recovery strategy, and no
 user-selectable replay mode. The rule is unconditional in this slice: an
 ambiguous tool/process side effect is never automatically replayed. The safe
-default is to commit an interrupted/unknown tool result and let the model
+default is to commit an `OutcomeUnknown` tool result and let the model
 decide what to do next.
 
 ## 8. Compatibility policy

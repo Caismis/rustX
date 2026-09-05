@@ -425,8 +425,12 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
   `ToolCancellationPhase`: `BeforeStart` means the slot was canonical but
   the executor future/physical operation was never started, while
   `DuringExecution` means the frontier was crossed and cancellation won
-  before normal completion. `DuringExecution` does not promise rollback or
-  absence of side effects. `CancellationReason` and phase are independent,
+  before normal completion with proven terminal settlement. `DuringExecution`
+  does not promise rollback or absence of side effects. A cancellation
+  request is not a confirmed cancellation result: when the frontier was
+  crossed but settlement cannot be proven (for example an unconfirmed remote
+  cancellation), the status is `OutcomeUnknown`, not `Cancelled` (see Tool
+  outcome certainty, Issue #202). `CancellationReason` and phase are independent,
   so every supported reason can occur in either phase. Pre-tool cancellation
   fills an unstarted slot with `BeforeStart`; a started foreground
   `run_foreground` cancellation is normalized to `DuringExecution`. Physical
@@ -830,7 +834,7 @@ dimension: it takes the attempt identity watermark these facts carry and
 nothing else, reconstructs no waiter, republishes no prompt, and never treats
 an old approval as permission to execute. A call whose `ToolExecutionStarted`
 is absent is a call that never started, and it receives the ordinary
-cancelled/interrupted canonical result slot. After restart the historical
+cancelled pre-start (`BeforeStart`) canonical result slot. After restart the historical
 identity is durably spent in both directions, so current semantics must reach
 a new live approval under a new identity.
 
@@ -2945,15 +2949,68 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   ever reaches the agent loop.
 - Every valid committed tool-call batch settles structurally exactly once:
   each logical call receives exactly one attempt-facing result slot
-  (success, failure, cancellation, timeout, validation rejection, or
-  accepted background dispatch with its `ToolExecutionId`), committed in
-  model call order.
+  (success, failure, cancellation, timeout, unknown outcome, validation
+  rejection, or accepted background dispatch with its `ToolExecutionId`),
+  committed in model call order.
 - Foreground work is attempt-owned: observable attempt cancellation reaches
   cancellable native foreground work through the shared runtime
   `CancellationSignal` and physically settles it. Background ownership
   transfers exactly once at the dispatch commit linearization point: before
   it the attempt can roll the prepared dispatch back, after it only the
   conversation owns the execution.
+
+## Tool outcome certainty (Issue #202)
+
+- **A terminal Tool status may claim only facts the owning runtime/executor
+  can prove.** "rustX stopped waiting" is never "the external operation
+  definitely stopped". The terminal vocabulary is `Success`, `Failed`,
+  `Denied`, `Cancelled { reason, phase }`, `TimedOut`, and
+  `OutcomeUnknown { detail }` (serde discriminators snake_case); the first
+  five are confirmed terminal outcomes, while `OutcomeUnknown` is the
+  admitted unknown.
+- **`TimedOut` means proven settlement, not elapsed time.** The execution
+  deadline expired AND the owning runtime/executor established terminal
+  settlement (for example a local process tree killed, waited/reaped, and
+  proven unable to continue). A deadline expiry without proven settlement is
+  `OutcomeUnknown`, never `TimedOut`. Generic tool deadlines remain
+  unimplemented.
+- **A cancellation request is not a confirmed cancellation result.**
+  `Cancelled` requires established cancellation settlement: `BeforeStart`
+  (the call never started) or `DuringExecution` with proven terminal
+  settlement (partial side effects may still have occurred). Unconfirmed
+  post-dispatch cancellation — for example a remote MCP cancel accepted but
+  unconfirmed — is `OutcomeUnknown`.
+- **`OutcomeUnknown` is never silently converted.** An admitted ToolCall
+  crossed the external-effect frontier but rustX cannot prove the final
+  external outcome (runtime restart before the durable outcome commit,
+  transport loss after dispatch, unconfirmed remote cancellation/deadline).
+  The operation may have partially or fully completed. The status is never
+  rewritten into `Success`, `Failed`, `TimedOut`, or `Cancelled`, and its
+  bounded producer-owned `detail` string is rendered for the model but never
+  parsed for semantics.
+- **Recovery repairs ambiguity exactly once and never replays it.** A
+  durable `ToolExecutionStarted` with no durable outcome makes recovery
+  repair the canonical ToolCall exactly once with `OutcomeUnknown`: no
+  re-execution, no invented success, and no automatic replay of ambiguous
+  external effects. The recovered result becomes canonical and reaches the
+  next model turn; repeated recovery is idempotent and never replaces an
+  already-committed terminal ToolResult or rewrites a known terminal status
+  into unknown.
+- **Producers own their certainty claims.** The bash executor produces
+  `TimedOut`/`Cancelled { DuringExecution }` only after its supervised
+  process tree is proven terminal; the MCP executor maps post-dispatch
+  transport loss and unconfirmed cancellation to `OutcomeUnknown`; the
+  background registry preserves an executor's `OutcomeUnknown` instead of
+  rewriting it to the cancellation winner.
+- **Every terminal non-success status produces non-empty, bounded,
+  provider-independent model-facing feedback** through
+  `ToolExecutionResult::model_facing_projection()` and the typed status
+  feedback. Provider adapters consume the canonical projection and never
+  manufacture their own timeout/unknown-outcome prose. `TimedOut` feedback
+  states the confirmed settlement; `OutcomeUnknown` feedback states that
+  dispatch happened, that the outcome is unconfirmed, that partial or full
+  side effects are possible, and that the relevant state should be inspected
+  and reconciled before retrying side-effecting calls.
 
 ## Background executions (M5)
 
@@ -2987,8 +3044,11 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   terminal snapshot; cancellation-intent-first owns settlement
   (`Cancelling -> Cancelled`) and canonicalizes the stored terminal result
   to `Cancelled` with the retained reason, so a normal executor return
-  (`Success`, `TimedOut`, `Interrupted`, executor-level `Cancelled`) can
-  never contradict the registry winner. Only an explicit
+  (`Success`, `TimedOut`, executor-level `Cancelled`) can
+  never contradict the registry winner. An executor `OutcomeUnknown` is the
+  one exception: a cancellation request is not a confirmed cancellation
+  result, so the registry preserves the executor's honest unknown instead of
+  rewriting it to the cancellation winner. Only an explicit
   runtime/process-control failure after cancellation intent settles as
   `Failed`.
 - Every successfully dispatched execution reaches exactly one terminal
@@ -4668,6 +4728,16 @@ semantic normalization boundary. The frozen invariants:
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
   explicit at attachment admission; the current protocol is the sole
   supported version, and every superseded version is rejected explicitly.
+- **Runtime Client protocol v16 introduces the Issue #202 explicit tool
+  outcome certainty projection.** The canonical `ToolExecutionStatus`
+  replaces `interrupted` with `outcome_unknown` (carrying a bounded
+  producer-owned `detail` that is never parsed for semantics), and the
+  background terminal state `interrupted` becomes `outcome_unknown`.
+  `timed_out` now claims proven terminal settlement, and every terminal
+  non-success status carries bounded model-facing feedback through the
+  canonical projection. There is no v15 -> v16 conversion and no legacy
+  `interrupted` decoding: a v15 client is rejected explicitly at
+  negotiation.
 - **Runtime Client protocol v15 exposes retained-workspace disposal as a
   separate resource lifecycle.** The request names only a terminal
   `SubagentId`; it never carries an arbitrary path or Git ref and is not
@@ -5283,7 +5353,7 @@ runtime supervision/quiescence contract.
 
 - an unresolved foreground tool call is never automatically replayed. A
   durably known outcome is committed verbatim; a started call with an unknown
-  outcome becomes `ToolExecutionStatus::Interrupted`; a call with no durable
+  outcome becomes `ToolExecutionStatus::OutcomeUnknown`; a call with no durable
   start evidence becomes `ToolExecutionStatus::Cancelled { reason:
   ParentCancelled, phase: BeforeStart }`. The missing siblings
   of one Assistant tool turn commit as **one** atomic batch in canonical
@@ -5300,7 +5370,7 @@ runtime supervision/quiescence contract.
   historical external-start knowledge needed for attempt classification is
   represented independently in bounded attempt-level state. A committed
   canonical `ToolResult` releases the detailed entry whatever the owning
-  attempt's terminal state — a recovery `Interrupted` repair commits the
+  attempt's terminal state — a recovery `OutcomeUnknown` repair commits the
   canonical representation that the old external outcome remains unknowable,
   so the attempt summary keeps an unknown outcome until the attempt
   terminalizes, and a fully settled historical call never regresses the
@@ -5317,7 +5387,7 @@ runtime supervision/quiescence contract.
   relaunches a shell command or MCP call (a managed Python tool's call
   included). A durably owned,
   unpublished execution is terminalized as
-  `BackgroundTerminalState::Interrupted` (never `Failed`), and its
+  `BackgroundTerminalState::OutcomeUnknown` (never `Failed`), and its
   model-visible notification is published through the one Pending Inbound
   authority in the same atomic transition as its `BackgroundTerminalPublished`
   fact. `BackgroundExecutionCommitted` commits **before** the detached runner's
