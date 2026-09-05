@@ -1254,6 +1254,10 @@ impl LocalConversationCore {
         // the same deadlines (Issue #138): the child inherits the policy
         // through its typed startup specification and applies it locally.
         let model_timeout_policy = runtime_config.timeout_policy()?;
+        // The frozen tool execution-liveness policy (Issue #204) follows the
+        // same inheritance: one generic policy for the parent runtime and
+        // every subagent child, carried through the typed child spec.
+        let tool_deadline_policy = runtime_config.tool_deadline_policy()?;
         let subagents = crate::runtime::subagent::SubagentRegistry::new(
             crate::runtime::subagent::SubagentRegistryConfig {
                 conversation_id: tool_runtime.conversation_id().clone(),
@@ -1277,6 +1281,7 @@ impl LocalConversationCore {
                     // `child_conversation_id` alone.
                     runtime_root: paths.runtime_root.clone(),
                     model_timeout_policy,
+                    tool_deadline_policy,
                     agent_status: runtime_config.agent_status.clone(),
                     context: runtime_config.context_policy(),
                 },
@@ -1443,6 +1448,7 @@ impl LocalConversationCore {
             model,
             approval_mode: runtime_config.approval_mode,
             model_timeout_policy,
+            tool_deadline_policy,
             context: ConversationContextConfig {
                 policy: runtime_config.context_policy(),
                 estimator: Arc::clone(&dependencies.estimator),
@@ -1706,6 +1712,7 @@ impl LocalConversationCore {
             model,
             approval_mode: spec.approval_mode,
             model_timeout_policy: spec.model_timeout_policy,
+            tool_deadline_policy: spec.tool_deadline_policy,
             context: ConversationContextConfig {
                 policy: spec.context,
                 estimator: Arc::clone(&dependencies.estimator),
@@ -2690,6 +2697,7 @@ mod subagent_child_tests {
             },
             approval_mode: crate::runtime::ApprovalMode::Policy,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             agent_status: crate::context::AgentStatusConfig::default(),
             context: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,

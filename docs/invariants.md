@@ -3098,8 +3098,9 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   deadline expired AND the owning runtime/executor established terminal
   settlement (for example a local process tree killed, waited/reaped, and
   proven unable to continue). A deadline expiry without proven settlement is
-  `OutcomeUnknown`, never `TimedOut`. Generic tool deadlines remain
-  unimplemented.
+  `OutcomeUnknown`, never `TimedOut`. The generic foreground deadlines that
+  produce this intent are owned by the Agent Loop lifecycle (see
+  "Tool execution liveness deadlines (Issue #204)" below).
 - **A cancellation request is not a confirmed cancellation result.**
   `Cancelled` requires established cancellation settlement: `BeforeStart`
   (the call never started) or `DuringExecution` with proven terminal
@@ -3149,6 +3150,63 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   dispatch happened, that the outcome is unconfirmed, that partial or full
   side effects are possible, and that the relevant state should be inspected
   and reconciled before retrying side-effecting calls.
+
+## Tool execution liveness deadlines (Issue #204)
+
+- **The Agent Loop's generic Tool lifecycle is the only generic deadline
+  owner.** One admitted foreground ToolCall is bounded by the runtime's
+  `ToolExecutionDeadlinePolicy`: an immutable **hard deadline** on total
+  execution lifetime and an optional **idle-liveness** window. Executors own
+  physical execution, cancellation propagation, progress evidence, and
+  settlement evidence; no executor independently owns a generic timeout, and
+  no executor can choose a conflicting canonical timeout status.
+- **The policy freezes at attempt admission.** The effective policy is
+  copied into the attempt's frozen execution authority together with the
+  model timeout policy; a running ToolCall can never observe a later
+  configuration value, and no executor receives a runtime-current
+  configuration handle. Subagent children inherit the parent's frozen policy
+  through their typed startup specification, exactly like the model timeout
+  policy (Issue #138).
+- **Both deadlines start at the executor-start frontier** of the call (the
+  lifecycle's clock read when the admitted invocation crosses into its
+  executor). Scheduling-barrier and approval time before that frontier is
+  attempt lifecycle, never execution lifetime.
+- **Progress refreshes idle liveness, never the hard deadline.** Executor
+  progress reports through the existing `ProgressReporter` seam are the only
+  liveness evidence; the lifecycle taps them into its idle watchdog.
+  Executors that cannot produce honest progress run under the hard deadline
+  only and must never fabricate heartbeat reports.
+- **Deadline expiration is cancellation intent, not settlement.** A deadline
+  winner cancels exactly that execution's child cancellation signal and the
+  lifecycle then awaits the executor's physical settlement; dropping an
+  executor future is never settlement, and the lifecycle never abandons
+  ownership because its deadline expired. Executor-proven settlement after a
+  deadline winner settles canonically as `TimedOut`; an executor's honest
+  `OutcomeUnknown` (post-effect-frontier, terminality unproven) and any
+  executor-proven normal outcome survive untouched.
+- **The winner arbitration is one explicit linearization point.** At equal
+  readiness the contractual order is: attempt cancellation > hard deadline >
+  idle deadline > physical completion. The winner freezes the settlement
+  provenance; the executor's awaited physical result then supplies the
+  evidence. There is exactly one terminal ToolResult per call.
+- **Bash keeps its strong physical settlement.** The native Bash tool's
+  explicit model-requested `timeout` remains tool-owned business input that
+  the executor settles physically (kill process group, wait, reap → proven
+  `TimedOut`). The removed implicit executor-local default is superseded by
+  the generic hard deadline: when it wins, Bash proves the same physical
+  settlement and the lifecycle classifies it `TimedOut`.
+- **A deadline never strands batch siblings.** A per-call deadline cancels
+  only its own execution; every accepted sibling call still settles exactly
+  once, and the batch commits in canonical model call order.
+- **Runtime drain waits for execution ownership, not for polling to stop.**
+  Drain cancels the attempt, the lifecycle requests physical cancellation and
+  awaits executor settlement, and the attempt returns only after every
+  admitted execution reached its accepted terminal contract.
+- **The Event Journal records the typed intent fact.** Per started call the
+  journal orders `ToolExecutionStarted`, retained `ToolExecutionProgress`
+  facts, `ToolExecutionDeadlineFired { kind }` when a deadline fired, and
+  the terminal `ToolExecutionCompleted` last. The journal is observational
+  evidence; the canonical ToolResult remains the only outcome authority.
 
 ## Background executions (M5)
 

@@ -727,6 +727,35 @@ inventing started or physical-completion events. Background execution uses
 the same canonical phase vocabulary, with its registry owning the detached
 runner frontier.
 
+Foreground execution liveness is owned by the same generic lifecycle, never
+by executors (Issue #204). One admitted foreground call runs under the
+attempt-frozen `ToolExecutionDeadlinePolicy`: a hard deadline on total
+execution lifetime and an optional idle-liveness window, both measured from
+the call's executor-start frontier (the clock read when the lifecycle admits
+the invocation to its executor). Executor progress reports through the
+existing `ProgressReporter` seam refresh the idle window only; the hard
+deadline never moves. The biased winner arbitration is one explicit
+linearization point — attempt cancellation > hard deadline > idle deadline >
+physical completion at equal readiness — and a deadline winner is
+cancellation intent, not settlement: the lifecycle cancels exactly that
+call's child cancellation signal and awaits the executor's physical
+settlement. The executor's evidence then selects the canonical status under
+the Issue #202 contract: proven terminal settlement after a deadline is
+`TimedOut`, unconfirmed post-frontier terminality stays `OutcomeUnknown`,
+and a proven normal outcome that won the physical race survives. The
+executor future is never dropped as a substitute for settlement, so runtime
+drain transitively waits for every admitted execution's accepted settlement,
+and a per-call deadline never strands its batch siblings. The durable typed
+intent fact is `ToolExecutionDeadlineFired { kind }`, ordered between the
+call's retained progress facts and its terminal `ToolExecutionCompleted`.
+
+The Bash tool's explicit model-requested `timeout` is tool-owned business
+input below this lifecycle: the executor settles it physically (process-group
+kill, wait, reap) and reports the proven `TimedOut` itself. There is no
+implicit executor-local default timeout — a foreground Bash invocation
+without an explicit timeout is bounded by the generic hard deadline, which
+drives the same proven physical settlement through cancellation.
+
 The real `ConversationRuntime::shutdown()` path is covered by a deterministic
 regression: it observes the Runtime Client pending event, linearizes
 `Running -> Draining`, requests cancellation through runtime-owned
@@ -6579,6 +6608,19 @@ policy and clock; neither creates an independent fallback. Direct runtime
 composition rejects a zero timeout with a typed construction
 error before ownership transfer. The policy is absent from model input,
 `RequestSnapshot`, canonical history, and durable schema.
+
+`toolDeadlinePolicy` (Issue #204) is current runtime execution policy for
+admitted foreground tool calls: `hardDeadlineMs` is the finite total
+execution lifetime (default 2 minutes), and the optional `idleLivenessMs`
+bounds how long a started call may go without executor progress. Both
+deadlines are measured from each call's executor-start frontier; progress
+refreshes only the idle window, never the hard deadline. Like the model
+timeout policy, `ConversationRuntime` owns the current value and each
+attempt admission freezes a copy into the attempt's execution authority;
+subagent children inherit it through their typed startup specification.
+Direct runtime composition rejects a zero value with a typed construction
+error before ownership transfer, and the policy is absent from model input,
+canonical history, and durable schema.
 
 `mcpServers` is an ecosystem-compatible named map keyed by MCP server
 identity: an entry is the same object an MCP server's own documentation

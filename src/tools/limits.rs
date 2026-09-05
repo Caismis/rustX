@@ -81,9 +81,6 @@ pub const BASH_TERM_GRACE: Duration = Duration::from_secs(2);
 /// same duration separately bounds capture only after process terminality.
 pub const BASH_TERMINATION_CONFIRMATION: Duration = Duration::from_secs(6);
 
-/// The default foreground Bash timeout when the model omits `timeout`.
-pub const DEFAULT_FOREGROUND_BASH_TIMEOUT: Duration = Duration::from_mins(2);
-
 /// Produces a deterministic bounded preview of `data`.
 ///
 /// When the data exceeds `limit` bytes, a head/tail scheme is used: the

@@ -129,6 +129,9 @@ use crate::runtime::interaction::{
 };
 use crate::runtime::types::{CancellationReason, RuntimeError};
 use crate::tools::background::BackgroundDispatchOutcome;
+use crate::tools::deadline::{
+    ToolDeadlineKind, ToolExecutionDeadlinePolicy, ToolExecutionLiveness,
+};
 use crate::tools::executor::{
     PreflightOutcome, PreparedInvocation, ProgressReporter, ToolExecutionContext, ToolRegistry,
 };
@@ -371,6 +374,11 @@ impl AgentExecutionResult {
 pub(crate) struct AgentExecutionRuntimePolicy {
     /// The timeout policy frozen for this admitted attempt or operation.
     pub(crate) model_timeout_policy: ModelTimeoutPolicy,
+    /// The tool execution-liveness policy frozen for this admitted attempt
+    /// or operation (Issue #204). It is copied here at admission: a running
+    /// `ToolCall` can never observe a later policy value, and no executor
+    /// ever receives a runtime-current configuration handle.
+    pub(crate) tool_deadline_policy: ToolExecutionDeadlinePolicy,
     /// The shared runtime monotonic clock.
     pub(crate) monotonic_clock: Arc<dyn MonotonicClock>,
     /// The attempt-scoped subagent resolution view (Issue #144): the
@@ -539,6 +547,10 @@ pub struct AgentExecution<'a> {
     /// admitted by this attempt, frozen once from the attempt's own model
     /// invocation. It is execution state, never model input.
     generation_policy: GenerationSafetyPolicy,
+    /// The frozen tool execution-liveness policy of this attempt (Issue
+    /// #204), copied at admission and owning the hard/idle deadlines of
+    /// every foreground call this attempt starts.
+    tool_deadline_policy: ToolExecutionDeadlinePolicy,
     /// The open, not-yet-settled publication stream of the in-flight model
     /// request. Exactly one stream is open at a time: a stream settles — as
     /// canonical, unaccepted, or incomplete — before the next one opens.
@@ -1253,6 +1265,7 @@ impl<'a> AgentExecution<'a> {
             publication_policy: CoalescePolicy::default(),
             monotonic_clock: runtime_policy.monotonic_clock,
             model_timeout_policy: runtime_policy.model_timeout_policy,
+            tool_deadline_policy: runtime_policy.tool_deadline_policy,
             publication: None,
             publication_settlement_failed: false,
             observer: None,
@@ -4262,7 +4275,7 @@ impl<'a> AgentExecution<'a> {
                     prepared: Some(prepared),
                     result: None,
                     executor_started: false,
-                    progress: Vec::new(),
+                    execution_facts: Vec::new(),
                 },
                 PreflightOutcome::Rejected {
                     tool_id,
@@ -4275,7 +4288,7 @@ impl<'a> AgentExecution<'a> {
                     prepared: None,
                     result: Some(failed_result(&error)),
                     executor_started: false,
-                    progress: Vec::new(),
+                    execution_facts: Vec::new(),
                 },
             })
             .collect();
@@ -4325,11 +4338,11 @@ impl<'a> AgentExecution<'a> {
                             .expect("unsettled slots are preflighted")
                             .invocation
                             .clone();
-                        let (_, result, progress) = self
+                        let (_, result, facts) = self
                             .run_single_call(index, invocation, todo_writer.clone())
                             .await;
                         slots[index].result = Some(result);
-                        slots[index].progress = progress;
+                        slots[index].execution_facts = facts;
                         if self.cancellation.interaction_failed() {
                             return Err(CanonicalCommitError::Interaction(
                                 InteractionFailure::ControlLost,
@@ -4397,9 +4410,9 @@ impl<'a> AgentExecution<'a> {
                             tokio::select! {
                                 biased;
                                 () = self.cancellation.cancelled() => break,
-                                Some((slot_index, result, progress)) = futures.next() => {
+                                Some((slot_index, result, facts)) = futures.next() => {
                                     slots[slot_index].result = Some(result);
-                                    slots[slot_index].progress = progress;
+                                    slots[slot_index].execution_facts = facts;
                                     remaining -= 1;
                                     if remaining == 0 {
                                         break;
@@ -4413,9 +4426,9 @@ impl<'a> AgentExecution<'a> {
                     // signal in their context and must settle their external
                     // work. The futures are awaited to completion, never
                     // dropped with external work abandoned.
-                    while let Some((slot_index, result, progress)) = futures.next().await {
+                    while let Some((slot_index, result, facts)) = futures.next().await {
                         slots[slot_index].result = Some(result);
-                        slots[slot_index].progress = progress;
+                        slots[slot_index].execution_facts = facts;
                     }
                     if self.cancellation.interaction_failed() {
                         return Err(CanonicalCommitError::Interaction(
@@ -4441,10 +4454,11 @@ impl<'a> AgentExecution<'a> {
                 }
             }
         }
-        // Canonical batch commit in original model call order. Progress
-        // facts precede their completion event; the completion events
-        // themselves are committed in canonical order regardless of physical
-        // completion order.
+        // Canonical batch commit in original model call order. Each call's
+        // retained execution facts (progress observations, then a deadline
+        // intent fact when one fired) precede their completion event; the
+        // completion events themselves are committed in canonical order
+        // regardless of physical completion order.
         //
         // The **structural settlement point of the whole batch** is the one
         // atomic `commit_tool_result_batch` call: either every logical call
@@ -4458,7 +4472,7 @@ impl<'a> AgentExecution<'a> {
         let mut result_slots = Vec::with_capacity(slots.len());
         for (batch_position, slot) in slots.iter().enumerate() {
             let result = slot.result.clone().expect("every call slot settles");
-            for event in &slot.progress {
+            for event in &slot.execution_facts {
                 self.emit(event.clone());
                 if let Some(error) = self.durable_failure_commit_error() {
                     return Err(error);
@@ -4855,14 +4869,14 @@ impl<'a> AgentExecution<'a> {
         invocation: ToolInvocation,
         todos: Option<crate::tools::todo::TodoWriter>,
     ) -> (usize, ToolExecutionResult, Vec<RuntimeEvent>) {
-        let (result, progress) = match invocation.mode {
+        let (result, facts) = match invocation.mode {
             ToolInvocationMode::Foreground => self.run_foreground(&invocation, todos).await,
             // A detached execution outlives this batch, so it is handed no
             // task-list authority: nothing it does can land in the snapshot
             // this batch is about to commit.
             ToolInvocationMode::Background => (self.dispatch_background(&invocation), Vec::new()),
         };
-        (call_index, result, progress)
+        (call_index, result, facts)
     }
 
     #[cfg(test)]
@@ -4901,17 +4915,52 @@ impl<'a> AgentExecution<'a> {
         }
     }
 
-    /// Runs one foreground invocation against attempt cancellation.
+    /// Runs one foreground invocation under the generic execution-liveness
+    /// lifecycle (Issue #204).
     ///
-    /// The execution receives an `ExecutionCancellation` view of the
+    /// The execution receives an `ExecutionCancellation` **child view** of the
     /// attempt's signal in its context. Native foreground work derives child
     /// signals from that view, so observable attempt cancellation physically
     /// reaches the subordinate operation without handing it cancellation
-    /// authority over the attempt. The winner of the physical-result/
-    /// cancellation arbitration freezes cancellation provenance: an attempt
-    /// cancellation winner uses its reason, while a physical-result winner
-    /// preserves an executor's cancellation reason and only normalizes its
-    /// phase.
+    /// authority over the attempt. The lifecycle additionally retains the
+    /// child view's owner-side trigger, so a deadline winner cancels exactly
+    /// this execution without touching attempt cancellation or its
+    /// provenance.
+    ///
+    /// # Deadlines and winner arbitration
+    ///
+    /// The lifecycle owns two deadlines from the policy frozen at attempt
+    /// admission, both measured from this call's executor-start frontier (the
+    /// monotonic clock read just before the executor future is created;
+    /// queueing, scheduling-barrier, and approval time before that frontier
+    /// is attempt lifecycle, never execution lifetime):
+    ///
+    /// - the **hard deadline** — the immutable total execution lifetime.
+    ///   Progress never extends it.
+    /// - the **idle-liveness deadline** — enabled only when the frozen policy
+    ///   carries an idle window, refreshed by every executor progress report
+    ///   tapped from the progress fanout. No executor ever fabricates
+    ///   heartbeat reports to satisfy it.
+    ///
+    /// The biased `select!` below is the one winner-arbitration point, with
+    /// the contractual readiness order: attempt cancellation first, then the
+    /// hard deadline, then the idle deadline, then physical completion. A
+    /// deadline winner is cancellation/liveness **intent**, never settlement
+    /// (Issue #202): the lifecycle cancels this execution's signal and then
+    /// awaits the executor future to its physical settlement. The future is
+    /// never dropped as a substitute for settlement, and the lifecycle never
+    /// abandons ownership because its deadline expired.
+    ///
+    /// The winner of the arbitration freezes provenance, and the executor's
+    /// settlement evidence then selects the canonical status: an
+    /// executor-proven cancellation settlement becomes `Cancelled` with the
+    /// attempt's reason (attempt winner) or `TimedOut` (deadline winner);
+    /// anything else the executor itself settled — a known completion that
+    /// won the physical race, an executor-proven timeout, or an honest
+    /// `OutcomeUnknown` when post-frontier terminality cannot be proven —
+    /// survives untouched. A physical-result winner preserves an executor's
+    /// cancellation reason and only normalizes its phase.
+    #[allow(clippy::too_many_lines)] // one linear settlement pipeline
     async fn run_foreground(
         &self,
         invocation: &ToolInvocation,
@@ -4920,20 +4969,46 @@ impl<'a> AgentExecution<'a> {
         let executor = self.tool_registry().executor(&invocation.tool_id);
         let buffer =
             ForegroundProgressBuffer::new(invocation.call_id.clone(), invocation.tool_id.clone());
+        // The executor-start frontier: the one clock reading both deadlines
+        // of this call are measured from.
+        let liveness = ToolExecutionLiveness::new(
+            self.tool_deadline_policy,
+            self.monotonic_clock.now_millis(),
+        );
+        // The per-call cancellation child: attempt cancellation still
+        // propagates into the execution, while a deadline winner cancels
+        // exactly this execution through the owner-side trigger.
+        let (deadline_trigger, execution_cancellation) =
+            self.cancellation.execution_cancellation().child_execution();
+        // The idle-liveness tap: the executor's progress reports are the
+        // only liveness evidence, observed through the existing progress
+        // seam. When the frozen policy has no idle window no tap exists at
+        // all — an executor that cannot produce honest progress participates
+        // in the hard deadline only.
+        let (liveness_sender, mut liveness_rx) =
+            tokio::sync::watch::channel(self.monotonic_clock.now_millis());
+        let liveness_tap =
+            self.tool_deadline_policy
+                .idle_liveness
+                .map(|_| ToolExecutionLivenessTap {
+                    clock: &*self.monotonic_clock,
+                    sender: liveness_sender,
+                });
         // The progress fanout (Issue #178): every report feeds the durable
         // buffer exactly as before AND, when an observer is installed, the
         // live observation seam as one disposable, latest-value observation
         // while the tool still executes. The durable commit path is
-        // untouched.
+        // untouched. The idle-liveness tap only refreshes the watchdog.
         let progress = ForegroundProgressFanout {
             buffer: &buffer,
             observer: self.observer,
             attempt_id: &self.request.attempt_id,
+            liveness: liveness_tap.as_ref(),
         };
         let context = ToolExecutionContext::new(
             &self.request.conversation_id,
             None,
-            self.cancellation.execution_cancellation(),
+            execution_cancellation.clone(),
             self.tool_runtime.workspace(),
             &progress,
             self.tool_runtime.artifacts(),
@@ -4942,7 +5017,7 @@ impl<'a> AgentExecution<'a> {
         );
         let context = match self.lifecycle.native_questionnaire_requester(
             self.request.attempt_id.clone(),
-            self.cancellation.execution_cancellation(),
+            execution_cancellation,
             self.turn,
         ) {
             Some(requester) => context.with_questionnaire_requester(requester),
@@ -4965,6 +5040,46 @@ impl<'a> AgentExecution<'a> {
         };
         let future = executor.execute(invocation.clone(), context);
         tokio::pin!(future);
+        let hard_wait = self
+            .monotonic_clock
+            .wait_until_millis(liveness.hard_deadline_millis());
+        // The idle watchdog: waits out the current progress window, and a
+        // refresh observation starts a fresh window. The window is measured
+        // from the *timestamp of the newest observed progress*, so a window
+        // that expires while an unconsumed refresh is pending recomputes
+        // from that refresh instead of firing — the cut is defined by
+        // observation time, never by poll scheduling. A dropped tap (the
+        // execution ended) parks the watchdog forever; the hard deadline and
+        // completion arms remain the bounds.
+        let idle_wait: futures_util::future::BoxFuture<'_, ()> =
+            match self.tool_deadline_policy.idle_liveness {
+                Some(idle) => Box::pin(async move {
+                    let idle_millis = u64::try_from(idle.as_millis()).unwrap_or(u64::MAX);
+                    let mut observed = *liveness_rx.borrow_and_update();
+                    loop {
+                        let window = observed.saturating_add(idle_millis);
+                        tokio::select! {
+                            biased;
+                            () = self.monotonic_clock.wait_until_millis(window) => {
+                                let latest = *liveness_rx.borrow_and_update();
+                                if latest == observed {
+                                    break;
+                                }
+                                observed = latest;
+                            },
+                            changed = liveness_rx.changed() => {
+                                match changed {
+                                    Ok(()) => {
+                                        observed = *liveness_rx.borrow_and_update();
+                                    }
+                                    Err(_) => std::future::pending::<()>().await,
+                                }
+                            }
+                        }
+                    }
+                }),
+                None => Box::pin(std::future::pending()),
+            };
         let (winner, mut result) = tokio::select! {
             biased;
             () = self.cancellation.cancelled() => {
@@ -4977,6 +5092,23 @@ impl<'a> AgentExecution<'a> {
                 self.park_after_tool_cancellation_settlement();
                 (ToolSettlementWinner::Cancellation(reason), future.as_mut().await)
             },
+            () = hard_wait => {
+                // Deadline expiration is cancellation intent, not proof of
+                // settlement: cancel exactly this execution and await the
+                // executor's physical settlement below.
+                deadline_trigger.cancel();
+                (
+                    ToolSettlementWinner::Deadline(ToolDeadlineKind::Hard),
+                    future.as_mut().await,
+                )
+            },
+            () = idle_wait => {
+                deadline_trigger.cancel();
+                (
+                    ToolSettlementWinner::Deadline(ToolDeadlineKind::Idle),
+                    future.as_mut().await,
+                )
+            },
             result = future.as_mut() => {
                 // This pause is after the select branch has won and before
                 // result normalization, so a cancellation requested here is
@@ -4986,6 +5118,7 @@ impl<'a> AgentExecution<'a> {
                 (ToolSettlementWinner::Physical, result)
             },
         };
+        let mut deadline_fired = None;
         match winner {
             ToolSettlementWinner::Cancellation(reason) => {
                 result.status = match result.status {
@@ -5007,6 +5140,23 @@ impl<'a> AgentExecution<'a> {
                     settled => settled,
                 };
             }
+            ToolSettlementWinner::Deadline(kind) => {
+                deadline_fired = Some(kind);
+                result.status = match result.status {
+                    // The executor proved physical settlement after the
+                    // deadline's cancellation intent (for example a killed
+                    // and reaped local process tree): the execution was
+                    // stopped and proven unable to continue because its
+                    // deadline expired, so the canonical outcome is the
+                    // proven timeout.
+                    ToolExecutionStatus::Cancelled { .. } => ToolExecutionStatus::TimedOut,
+                    // A deadline winner never manufactures certainty the
+                    // executor did not prove: a known completion or failure
+                    // that won the physical race, an executor-proven
+                    // timeout, and an honest `OutcomeUnknown` all survive.
+                    settled => settled,
+                };
+            }
             ToolSettlementWinner::Physical => {
                 if let ToolExecutionStatus::Cancelled { reason, .. } = &result.status {
                     // The executor was invoked after this slot crossed the
@@ -5021,8 +5171,18 @@ impl<'a> AgentExecution<'a> {
                 }
             }
         }
-        let progress_events = buffer.take();
-        (result, progress_events)
+        let mut events = buffer.take();
+        if let Some(kind) = deadline_fired {
+            // The intent fact lands after the retained progress evidence and
+            // before the terminal completion event, preserving the durable
+            // terminal-last ordering of this call's execution facts.
+            events.push(RuntimeEvent::ToolExecutionDeadlineFired {
+                tool_call_id: invocation.call_id.clone(),
+                tool_id: invocation.tool_id.clone(),
+                kind,
+            });
+        }
+        (result, events)
     }
 
     /// Dispatches one background invocation through the conversation-owned
@@ -5631,14 +5791,24 @@ struct CallSlot {
     /// The authoritative per-call executor-start frontier. Once true, this
     /// call can never receive a `BeforeStart` cancellation result.
     executor_started: bool,
-    progress: Vec<RuntimeEvent>,
+    /// The retained execution facts of the call (bounded progress
+    /// observations, then a deadline intent fact when a generic deadline
+    /// fired), committed ahead of the call's terminal completion event.
+    execution_facts: Vec<RuntimeEvent>,
 }
 
-/// The frozen winner of one foreground physical-result/cancellation race.
-/// The cancellation reason is captured with the winner so later requests
-/// cannot rewrite a physical result that already owns settlement authority.
+/// The frozen winner of one foreground execution arbitration.
+///
+/// The winner is the linearization point of the race between attempt
+/// cancellation, the execution's generic deadlines, and physical completion
+/// (Issue #204). The cancellation reason is captured with the winner so
+/// later requests cannot rewrite a physical result that already owns
+/// settlement authority; a deadline winner carries only its kind — the
+/// canonical status is selected from the executor's settlement evidence, and
+/// a deadline can never rewrite executor-proven outcomes.
 enum ToolSettlementWinner {
     Cancellation(CancellationReason),
+    Deadline(ToolDeadlineKind),
     Physical,
 }
 
@@ -5845,6 +6015,23 @@ struct ForegroundProgressFanout<'a> {
     observer: Option<&'a dyn AgentExecutionObserver>,
     /// The owning attempt.
     attempt_id: &'a AttemptId,
+    /// The idle-liveness tap of the invocation (Issue #204), present only
+    /// when the frozen policy enables the idle deadline.
+    liveness: Option<&'a ToolExecutionLivenessTap<'a>>,
+}
+
+/// The idle-liveness tap of one foreground invocation (Issue #204).
+///
+/// Every executor progress report is liveness evidence: the tap publishes
+/// the report's monotonic timestamp to the lifecycle's idle watchdog, which
+/// starts a fresh idle window from it. The tap never feeds the durable
+/// buffer and never manufactures reports — executors without honest progress
+/// simply have nothing to tap.
+struct ToolExecutionLivenessTap<'a> {
+    /// The runtime monotonic clock stamping each observation.
+    clock: &'a dyn MonotonicClock,
+    /// The latest progress observation of the owning execution.
+    sender: tokio::sync::watch::Sender<u64>,
 }
 
 impl ProgressReporter for ForegroundProgressFanout<'_> {
@@ -5861,6 +6048,9 @@ impl ProgressReporter for ForegroundProgressFanout<'_> {
                 &self.buffer.tool_id,
                 &bounded,
             );
+        }
+        if let Some(liveness) = self.liveness {
+            liveness.sender.send_replace(liveness.clock.now_millis());
         }
     }
 }

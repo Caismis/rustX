@@ -14,8 +14,10 @@ pub(super) struct BashInput {
     /// The command handed to one `/bin/bash -c` invocation.
     #[schemars(length(min = 1))]
     pub command: String,
-    /// The invocation deadline in seconds. A foreground invocation without
-    /// one uses the default foreground timeout.
+    /// The invocation deadline in seconds. When omitted, no executor-local
+    /// deadline applies: a foreground invocation is bounded by the generic
+    /// Agent Loop execution-liveness hard deadline (Issue #204), and a
+    /// background execution is conversation-owned and unbounded.
     #[schemars(range(min = 1))]
     pub timeout: Option<u64>,
 }
@@ -52,9 +54,7 @@ impl BashInput {
     /// contract is measured in **seconds**, and it is converted to the
     /// internal [`Duration`] representation here, at the tool boundary. The
     /// executor, the supervisor, and the whole process plane below it keep
-    /// working in [`Duration`] and never see the model-facing unit. The
-    /// mode-dependent default remains an execution-policy decision of the
-    /// executor.
+    /// working in [`Duration`] and never see the model-facing unit.
     pub(super) fn explicit_timeout(&self) -> Option<Duration> {
         self.timeout.map(Duration::from_secs)
     }

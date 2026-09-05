@@ -44,6 +44,7 @@ pub(crate) fn default_monotonic_clock() -> Arc<dyn rustx::runtime::MonotonicCloc
 pub(crate) fn default_execution_policy() -> crate::agent::execution::AgentExecutionRuntimePolicy {
     crate::agent::execution::AgentExecutionRuntimePolicy {
         model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
+        tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         monotonic_clock: default_monotonic_clock(),
         // A direct in-crate execution fixture owns no runtime resource
         // generation, so it hands out no subagent resolution authority.

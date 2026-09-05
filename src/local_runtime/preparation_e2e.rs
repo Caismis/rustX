@@ -157,6 +157,8 @@ impl Lab {
                 program: wrapper,
                 runtime_root: runtime_root.clone(),
                 model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+                tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
+                ),
                 agent_status: crate::context::AgentStatusConfig::default(),
                 context: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,

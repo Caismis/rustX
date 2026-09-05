@@ -100,6 +100,7 @@ fn try_config(
         model: support::model::scripted_session_model(model),
         approval_mode: rustx::runtime::ApprovalMode::Policy,
         model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
+        tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
             policy: rustx::context::SessionContextPolicy {
                 reserve_tokens: 0,
