@@ -2851,15 +2851,36 @@ Recognizing an emission is deliberately not a substring test. The reserved
 bytes of the dialect are exactly what a correct answer contains when the user
 asks how the dialect works, so `contains(open) && contains(close)` would
 classify a good answer as malformed tool intent. The recognizer instead
-requires the shape a real vLLM/Qwen emission has and a discussion of it does
-not: each reserved tag must own its whole line rather than sit inside a
-sentence, tags inside a fenced code block are quoted syntax rather than
-emitted output, an opener must be matched by its own closer in order, and the
-opener's payload must be a plausible function/parameter identifier rather than
-an illustrative ellipsis. Recognition is one-directional — it proves a leak
-and produces one refused proposal; the leaked region is never parsed back
-into a `ToolCall`, because a call this runtime had to infer is precisely the
-invented model intent the acceptance boundary exists to refuse.
+requires the structure a real vLLM/Qwen emission has and a discussion of it
+does not.
+
+That structure is the dialect's *reserved grammar*, never a pretty-printed
+layout. Upstream drives the dialect from reserved markers — `<tool_call>`,
+`<function=`, `<parameter=` and their closers — and matches parameter
+regions with a `re.DOTALL` value group, trimming at most one wrapping
+newline; newline placement is therefore template decoration and carries no
+protocol meaning. `<parameter=path>notes.txt</parameter>` inline, a fully
+compact `<tool_call><function=…><parameter=…>…</parameter></function></tool_call>`,
+and the pretty-printed emission are one and the same region, and all three
+are recognized. Recognition runs on the fully assembled generated output, so
+provider chunk boundaries cannot change the outcome either.
+
+What separates that structure from a discussion of it is context and
+nesting, not formatting: a reserved opener counts only where reserved markup
+or nothing precedes it rather than ordinary words, which is how an emission
+reaches its tags and how a sentence does not; tags inside a fenced code block
+are quoted syntax rather than emitted output; an opener must be matched by
+its own closer in order; and the opener's payload must be a plausible
+function/parameter identifier rather than an illustrative ellipsis. A line
+break is used only where it means what it means in natural language — the
+boundary of a sentence — and never as a protocol delimiter. The recognizer
+is one bounded forward pass with constant state: no backtracking, no
+materialized regions, no general XML parsing, and it prefers missing a
+speculative shape to reclassifying a correct answer. Recognition is
+one-directional — it proves a leak and produces one refused proposal; the
+leaked region is never parsed back into a `ToolCall`, because a call this
+runtime had to infer is precisely the invented model intent the acceptance
+boundary exists to refuse.
 
 Above the adapter the Agent Loop reacts to the class and never to the
 evidence. It owns the bounded one-regeneration recovery of that class

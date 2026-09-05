@@ -922,16 +922,53 @@ async fn a_complete_qwen_emission_is_a_malformed_proposal() {
     assert_malformed_tool_proposal(&events, MalformedToolProposalSource::ReservedProtocolLeak);
 }
 
+/// Layout is not protocol. The upstream Qwen3 grammar matches parameter
+/// regions with a `re.DOTALL` value group and trims at most one wrapping
+/// newline, so `<parameter=path>notes.txt</parameter>` on a single line is
+/// the same residual region as the pretty-printed one — and upstream's own
+/// parser fixtures use exactly this inline shape. The fixture splits the
+/// region across provider chunks *inside* a reserved tag, so recognition can
+/// only come from the assembled output.
+#[tokio::test]
+async fn an_inline_qwen_residual_region_is_a_malformed_proposal() {
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "qwen_tool_protocol_inline_leak.sse")
+    })
+    .await;
+    let events = collect_events(&adapter(&server), qwen_request("Write the note", true)).await;
+    assert_malformed_tool_proposal(&events, MalformedToolProposalSource::ReservedProtocolLeak);
+}
+
+/// The whole envelope emitted compactly — `<tool_call>`, `<function=…>` and
+/// `<parameter=…>` nested on one line — is the same leak as the
+/// pretty-printed emission, and likewise arrives split mid-tag across
+/// provider chunks.
+#[tokio::test]
+async fn a_compact_qwen_emission_is_a_malformed_proposal() {
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "qwen_tool_protocol_compact_leak.sse")
+    })
+    .await;
+    let events = collect_events(&adapter(&server), qwen_request("Write the note", true)).await;
+    assert_malformed_tool_proposal(&events, MalformedToolProposalSource::ReservedProtocolLeak);
+}
+
 /// The detector is not a substring rule: identical reserved *bytes* are an
 /// ordinary completion for a model that declares no in-band tool protocol.
 #[tokio::test]
 async fn reserved_bytes_under_the_native_profile_complete_normally() {
-    let server = crate::common::FixtureServer::start(|_attempt, _head| {
-        sse_fixture("openai_chat", "qwen_tool_protocol_leak.sse")
-    })
-    .await;
-    let events = collect_events(&adapter(&server), request_with_tools("Write the note")).await;
-    assert_normal_completion(&events);
+    for fixture in [
+        "qwen_tool_protocol_leak.sse",
+        "qwen_tool_protocol_compact_leak.sse",
+        "qwen_tool_protocol_full_leak.sse",
+    ] {
+        let server = crate::common::FixtureServer::start(move |_attempt, _head| {
+            sse_fixture("openai_chat", fixture)
+        })
+        .await;
+        let events = collect_events(&adapter(&server), request_with_tools("Write the note")).await;
+        assert_normal_completion(&events);
+    }
 }
 
 /// The false-positive boundary this suite exists to hold.
@@ -941,8 +978,15 @@ async fn reserved_bytes_under_the_native_profile_complete_normally() {
 /// structured call is produced — and the assistant writes the **exact**
 /// reserved syntax, not a softened variant: `<tool_call>…</tool_call>` as a
 /// standalone illustration, `<parameter=path>…</parameter>` and
-/// `<function=write_file>…</function>` inline in a sentence, and a complete
-/// fenced example of the whole envelope.
+/// `<function=write_file>…</function>` inline in a sentence, an inline
+/// `<parameter=path>notes.txt</parameter>` carrying a *real* value rather
+/// than an ellipsis, and complete fenced examples of the whole envelope in
+/// both the pretty-printed and the compact layout.
+///
+/// The inline forms are the ones that matter now that recognition follows
+/// the reserved grammar rather than a line layout: the identical bytes are a
+/// leak when they stand as emitted structure and prose when words introduce
+/// them.
 ///
 /// A `contains(open) && contains(close)` rule classifies all three as
 /// malformed tool intent. They are a correct answer to a question about the
@@ -971,6 +1015,14 @@ async fn exact_reserved_syntax_discussed_in_prose_completes_normally() {
     assert!(text.contains("<tool_call>") && text.contains("</tool_call>"));
     assert!(text.contains("<parameter=path>") && text.contains("</parameter>"));
     assert!(text.contains("<function=write_file>") && text.contains("</function>"));
+    // The exact inline and compact shapes a layout-based recognizer would
+    // have called prose for the wrong reason, and a grammar-based one must
+    // still exclude because words or a fence surround them.
+    assert!(text.contains("<parameter=path>notes.txt</parameter>"));
+    assert!(text.contains(
+        "<tool_call><function=write_file><parameter=path>notes.txt</parameter></function>\
+         </tool_call>"
+    ));
 }
 
 /// Reserved markup is only meaningful when tools were actually exposed. A
@@ -978,12 +1030,18 @@ async fn exact_reserved_syntax_discussed_in_prose_completes_normally() {
 /// profile.
 #[tokio::test]
 async fn reserved_markup_without_exposed_tools_completes_normally() {
-    let server = crate::common::FixtureServer::start(|_attempt, _head| {
-        sse_fixture("openai_chat", "qwen_tool_protocol_leak.sse")
-    })
-    .await;
-    let events = collect_events(&adapter(&server), qwen_request("Write the note", false)).await;
-    assert_normal_completion(&events);
+    for fixture in [
+        "qwen_tool_protocol_leak.sse",
+        "qwen_tool_protocol_compact_leak.sse",
+        "qwen_tool_protocol_full_leak.sse",
+    ] {
+        let server = crate::common::FixtureServer::start(move |_attempt, _head| {
+            sse_fixture("openai_chat", fixture)
+        })
+        .await;
+        let events = collect_events(&adapter(&server), qwen_request("Write the note", false)).await;
+        assert_normal_completion(&events);
+    }
 }
 
 /// HTTP error mapping: authentication, rate limit with Retry-After, invalid

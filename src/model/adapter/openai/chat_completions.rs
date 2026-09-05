@@ -531,10 +531,11 @@ struct ChatFunctionChunkWire {
 /// for a model that declared the dialect.
 ///
 /// Each dialect owns its own recognizer; the default `native` profile has
-/// none, so generated text is never inspected at all. A recognizer proves an
-/// *emission shape* rather than the co-occurrence of reserved tokens, so an
-/// assistant answer that quotes or discusses the exact reserved syntax stays
-/// an ordinary completion.
+/// none, so generated text is never inspected at all. A recognizer proves
+/// *emitted structure* rather than the co-occurrence of reserved tokens, so
+/// an assistant answer that quotes or discusses the exact reserved syntax
+/// stays an ordinary completion. It runs on the fully assembled output, so
+/// provider chunk boundaries carry no meaning.
 fn reserved_protocol_emission(protocol: ChatToolProtocol, output: &str) -> Option<&'static str> {
     match protocol {
         ChatToolProtocol::Native => None,
@@ -1237,10 +1238,13 @@ impl ChatStreamNormalizer {
     ///   generation, so a truncated (`length`) or filtered stream is not
     ///   reinterpreted;
     /// - the output must contain an actual *emission* of the declared
-    ///   dialect — a standalone, correctly ordered, identifier-bearing
-    ///   reserved region — and not merely the reserved tokens somewhere in
-    ///   text. [`qwen_xml`] owns that recognition and documents why quoting
-    ///   or discussing the exact syntax is not an emission.
+    ///   dialect — a correctly ordered, identifier-bearing reserved region
+    ///   standing as emitted structure rather than as material inside a
+    ///   sentence — and not merely the reserved tokens somewhere in text.
+    ///   [`qwen_xml`] owns that recognition, follows the dialect's reserved
+    ///   grammar rather than any pretty-printed newline layout, and
+    ///   documents why quoting or discussing the exact syntax is not an
+    ///   emission.
     ///
     /// Recognition proves a leak; it never reconstructs one. The leaked
     /// region is not parsed back into a `ToolCall`, because a proposal this

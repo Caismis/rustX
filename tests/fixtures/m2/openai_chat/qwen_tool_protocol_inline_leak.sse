@@ -1,0 +1,12 @@
+data: {"id":"chatcmpl-qwen-inline-leak","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"role":"assistant","reasoning":"The user wants the file written. I will call the tool."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-inline-leak","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"content":"<parameter=pa"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-inline-leak","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"content":"th>notes.txt</parame"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-inline-leak","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"content":"ter>"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-inline-leak","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+
