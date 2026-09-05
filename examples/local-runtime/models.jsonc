@@ -111,6 +111,15 @@
             // Whether the service accepts `stream_options.include_usage`:
             //   "supported" | "unsupported"
             "chatStreamUsage": "supported",
+
+            // The model's in-band tool protocol, if it has one:
+            //   "native"    tool calls exist only as structured tool_calls
+            //   "qwen_xml"  the Qwen XML dialect (<tool_call>, <function=…>,
+            //               <parameter=…>) served by vLLM and compatible stacks
+            // Declaring the dialect lets the adapter recognize reserved tool
+            // markup that leaked into ordinary output as malformed tool intent
+            // instead of accepting it as an answer. Default: "native".
+            "chatToolProtocol": "native",
           },
         },
 

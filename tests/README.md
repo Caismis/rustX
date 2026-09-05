@@ -83,7 +83,11 @@ invariant is a real process boundary.
   and ordinals, canonical Assistant commit rules, tool lifecycle and
   canonical result ordering, cancellation arbitration and structural
   settlement, transient retry with frozen replay, model deadlines,
-  unresolved-output carryover, publication interaction at the loop boundary.
+  unresolved-output carryover, publication interaction at the loop boundary,
+  and the Agent-Loop half of the malformed-tool-proposal boundary (bounded
+  one-regeneration recovery, canonical-history exclusion, budget composition).
+  Which *provider* evidence becomes a malformed proposal is owned by the
+  `provider` target instead.
 - `context/` — layered context ownership: `engine` (provider-independent
   projection, token accounting, compaction planning/span selection, driven
   through `ContextEngine` directly), `compaction_pipeline` (the shared
@@ -165,7 +169,7 @@ meaningful domain/boundary/dependency topology:
 
 | Target | Boundary | Suites |
 | --- | --- | --- |
-| `provider` | one adapter over the in-process `FixtureServer` | request serialization, protocol translation, stream parsing, normalized error mapping, capability/context translation at the adapter, opaque request params, opt-in live smoke |
+| `provider` | one adapter over the in-process `FixtureServer` | request serialization, protocol translation, stream parsing, normalized error mapping, ToolCall acceptance and malformed-tool-proposal classification, capability/context translation at the adapter, opaque request params, opt-in live smoke |
 | `conformance` | the external provider-emulator process | composed Agent Loop / lifecycle / Workflow conformance through the real runtime and a real provider boundary |
 | `durable` | file-backed SQLite | recovery classification, pending-inbound inbox, publication store contract, interaction audit store, transcript history |
 | `process` | the real `rustx` binary / local composition | stdio/JSONL transport over a spawned process, composition identity, capability startup isolation, sessions, runtime config, committed-example resource composition |

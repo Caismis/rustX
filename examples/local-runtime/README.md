@@ -118,6 +118,22 @@ Generation-time reasoning remains owned by the selected reasoning profile and
 its provider request parameters. In particular, the `off` profile does not
 implicitly select `omit`.
 
+`compat.chatToolProtocol` declares the model's *in-band* tool protocol, if it
+has one:
+
+| Value | Typical services | Behavior |
+| --- | --- | --- |
+| `native` (default) | OpenAI and most compatible services | Tool calls exist only as structured `tool_calls`; generated text is never inspected. |
+| `qwen_xml` | Qwen tool models served by vLLM and compatible stacks | The reserved `<tool_call>` / `<function=…>` / `<parameter=…>` envelope is recognized. |
+
+Some model families have a reserved tool syntax the serving stack is supposed
+to parse out of generated text. When that parse fails, the reserved markup
+leaks into ordinary content or reasoning and the request terminates as if the
+model had simply answered. Declaring the dialect is what lets the adapter
+report that as malformed tool intent instead of accepting it as an answer;
+like every other `compat` value, it is never inferred from a provider name,
+hostname, or model ID.
+
 The named `off` and `on` reasoning profiles likewise have no built-in meaning
 from their names. Their exact `enabled` state and provider-owned
 `requestParams` are the contract. The illustrative `reasoning_effort` value

@@ -25,6 +25,41 @@ pub enum ModelErrorKind {
     Cancelled,
     /// The requested capability or protocol is unsupported.
     Unsupported,
+    /// The model generated tool intent that cannot become a trustworthy
+    /// canonical [`ToolCall`](crate::tools::types::ToolCall).
+    ///
+    /// This is a *generation* defect, not a transport defect and not a Tool
+    /// schema rejection: the proposal never crossed `ToolCall` acceptance, so
+    /// nothing executed, nothing was settled, and nothing entered canonical
+    /// history. The Agent Loop owns the bounded corrective regeneration this
+    /// class authorizes; see [`MalformedToolProposalSource`] for the
+    /// provider-independent provenance carried alongside it.
+    MalformedToolProposal,
+}
+
+/// Why a model-emitted tool proposal was refused at `ToolCall` acceptance.
+///
+/// The variants are the broad provider-independent classes a reader needs to
+/// debug a regeneration. They deliberately carry no provider payload: the
+/// adapter that owned the provider protocol has already translated its own
+/// evidence into one of these, and [`ModelError::message`] carries the
+/// bounded human-readable detail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MalformedToolProposalSource {
+    /// The provider itself declared the function/tool call malformed.
+    ProviderDeclared,
+    /// The assembled proposal is structurally unusable: a broken tool
+    /// envelope, an unusable tool identity, or an argument representation
+    /// that is not one complete JSON value.
+    AdapterStructural,
+    /// The provider stream ended without ever delivering the parts one
+    /// structurally valid invocation requires, such as a correlation
+    /// identity or a function name.
+    StreamAssembly,
+    /// Reserved provider tool-protocol markup leaked into ordinary
+    /// reasoning/content while the generation produced no structured call.
+    ReservedProtocolLeak,
 }
 
 /// The retry disposition of one normalized model failure.
@@ -104,9 +139,39 @@ pub struct ModelError {
     /// they never re-read [`Self::message`] looking for numbers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_overflow: Option<ContextOverflowReport>,
+    /// The provider-independent provenance of a
+    /// [`ModelErrorKind::MalformedToolProposal`] rejection.
+    ///
+    /// Present for exactly that class and absent for every other one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub malformed_tool_proposal: Option<MalformedToolProposalSource>,
 }
 
 impl ModelError {
+    /// Builds the normalized failure of one refused tool proposal.
+    ///
+    /// This is the only constructor of [`ModelErrorKind::MalformedToolProposal`],
+    /// so the class and its provenance can never disagree. The disposition is
+    /// deliberately [`ModelRetryDisposition::Never`]: a malformed generation
+    /// is not a transient transport failure, and the bounded corrective
+    /// regeneration it authorizes is a separate Agent-Loop budget keyed on
+    /// the error class.
+    #[must_use]
+    pub fn malformed_tool_proposal(
+        source: MalformedToolProposalSource,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: ModelErrorKind::MalformedToolProposal,
+            message: message.into(),
+            retry_disposition: ModelRetryDisposition::Never,
+            retry_after_ms: None,
+            provider_code: None,
+            context_overflow: None,
+            malformed_tool_proposal: Some(source),
+        }
+    }
+
     /// Completes one adapter-produced error at the model boundary.
     ///
     /// A [`ModelErrorKind::ContextWindowExceeded`] error gains the typed
@@ -310,8 +375,8 @@ fn last_number(text: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ModelError, ModelErrorKind, ModelRetryDisposition, context_overflow_report,
-        is_context_window_error,
+        MalformedToolProposalSource, ModelError, ModelErrorKind, ModelRetryDisposition,
+        context_overflow_report, is_context_window_error,
     };
 
     /// Model errors round-trip with stable kind discriminators.
@@ -324,6 +389,7 @@ mod tests {
             retry_after_ms: Some(1_500),
             provider_code: Some("rate_limit_exceeded".to_owned()),
             context_overflow: None,
+            malformed_tool_proposal: None,
         };
         let json = serde_json::to_string(&error).expect("serialize error");
         assert!(json.contains("\"rate_limit\""));
@@ -347,11 +413,53 @@ mod tests {
             ),
             (ModelErrorKind::Cancelled, "cancelled"),
             (ModelErrorKind::Unsupported, "unsupported"),
+            (
+                ModelErrorKind::MalformedToolProposal,
+                "malformed_tool_proposal",
+            ),
         ];
         for (kind, expected) in cases {
             let value = serde_json::to_value(kind).expect("serialize kind");
             assert_eq!(value, expected);
         }
+    }
+
+    /// A refused tool proposal is always non-retryable, always carries its
+    /// provenance, and round-trips with both facts intact.
+    #[test]
+    fn malformed_tool_proposal_carries_its_provenance() {
+        for source in [
+            MalformedToolProposalSource::ProviderDeclared,
+            MalformedToolProposalSource::AdapterStructural,
+            MalformedToolProposalSource::StreamAssembly,
+            MalformedToolProposalSource::ReservedProtocolLeak,
+        ] {
+            let error = ModelError::malformed_tool_proposal(source, "refused");
+            assert_eq!(error.kind, ModelErrorKind::MalformedToolProposal);
+            assert_eq!(error.retry_disposition, ModelRetryDisposition::Never);
+            assert_eq!(error.malformed_tool_proposal, Some(source));
+            let json = serde_json::to_string(&error).expect("serialize error");
+            assert!(json.contains("\"malformed_tool_proposal\""));
+            let decoded: ModelError = serde_json::from_str(&json).expect("deserialize error");
+            assert_eq!(decoded, error);
+        }
+    }
+
+    /// Every other class leaves the provenance field absent on the wire, so a
+    /// reader can never mistake an unrelated failure for a refused proposal.
+    #[test]
+    fn other_error_classes_carry_no_malformed_provenance() {
+        let error = ModelError {
+            kind: ModelErrorKind::ProviderError,
+            message: "upstream unavailable".to_owned(),
+            retry_disposition: ModelRetryDisposition::Transient,
+            retry_after_ms: None,
+            provider_code: None,
+            context_overflow: None,
+            malformed_tool_proposal: None,
+        };
+        let value = serde_json::to_value(&error).expect("serialize error");
+        assert!(value.get("malformed_tool_proposal").is_none());
     }
 
     #[test]

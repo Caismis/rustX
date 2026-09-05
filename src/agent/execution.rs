@@ -160,6 +160,27 @@ pub const MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN: u32 = 1;
 /// model step.
 pub const MAX_TRANSIENT_MODEL_RETRIES_PER_LOGICAL_STEP: u32 = 3;
 
+/// The bounded malformed-tool-proposal recovery budget of one logical model
+/// step.
+///
+/// A physical generation whose tool intent could not cross `ToolCall`
+/// acceptance is noncanonical: nothing executed, nothing settled, and
+/// nothing entered canonical history. The step may be regenerated **once**
+/// with bounded ephemeral corrective context; a second malformed generation
+/// terminates the attempt with an explicit model-generation failure. The
+/// maximum number of physical generations caused solely by this mechanism is
+/// therefore two.
+///
+/// This budget is deliberately separate from — and never resets — the
+/// transient transport budget, the context-overflow recovery budget, or any
+/// Tool-side behaviour. It is keyed on
+/// [`ModelErrorKind::MalformedToolProposal`], which no other recovery path
+/// accepts.
+pub const MAX_MALFORMED_TOOL_PROPOSAL_REGENERATIONS_PER_LOGICAL_STEP: u32 = 1;
+
+/// The bound on the ephemeral corrective reason carried into a regeneration.
+const MAX_MALFORMED_TOOL_PROPOSAL_FEEDBACK_BYTES: usize = 512;
+
 /// The upper bound for an adapter-provided retry delay.
 pub const MAX_MODEL_RETRY_DELAY_MS: u64 = 60_000;
 
@@ -196,6 +217,7 @@ fn model_timeout_error(phase: ModelDeadlinePhase) -> ModelError {
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
 }
 
@@ -408,6 +430,11 @@ pub struct AgentExecution<'a> {
     /// schema rejection. This is request-only context, never canonical
     /// conversation history.
     workflow_output_feedback: Option<String>,
+    /// Bounded ephemeral corrective context for exactly one malformed-tool-
+    /// proposal regeneration. It is consumed by the regenerated request and
+    /// is never committed, persisted, or replayed: the discarded malformed
+    /// generation itself never appears here or anywhere else.
+    malformed_tool_proposal_feedback: Option<String>,
     /// The transient accepted context for the current admitted logical model
     /// step. It is retained across every actual-request retry and discarded
     /// only when the next logical step begins.
@@ -1024,6 +1051,7 @@ impl<'a> AgentExecution<'a> {
             subagent_context: runtime_policy.subagent_context,
             workflow_output: runtime_policy.workflow_output,
             workflow_output_feedback: None,
+            malformed_tool_proposal_feedback: None,
             accepted_context: None,
             frozen_agent_status: None,
             frozen_carryover: None,
@@ -1382,6 +1410,7 @@ impl<'a> AgentExecution<'a> {
         let mut next_request_ordinal = 0_u32;
         let mut transient_retries = 0_u32;
         let mut overflow_retries = 0_u32;
+        let mut malformed_proposal_regenerations = 0_u32;
         let prepared = match self.prepare_model_turn(next_request_ordinal).await {
             Ok(prepared) => prepared,
             Err(terminal) => return Some(terminal),
@@ -1415,6 +1444,36 @@ impl<'a> AgentExecution<'a> {
                             },
                         });
                     };
+
+                    // A malformed tool proposal is a model-generation
+                    // defect, not a transport defect: the physical
+                    // generation is discarded whole and the same logical
+                    // step is regenerated once with bounded ephemeral
+                    // corrective context. Its budget is its own, so it can
+                    // neither reset nor be reset by the transient and
+                    // overflow budgets tracked alongside it.
+                    if error.kind == ModelErrorKind::MalformedToolProposal
+                        && malformed_proposal_regenerations
+                            < MAX_MALFORMED_TOOL_PROPOSAL_REGENERATIONS_PER_LOGICAL_STEP
+                    {
+                        malformed_proposal_regenerations += 1;
+                        let retry_number = next_request_ordinal;
+                        match self
+                            .regenerate_after_malformed_tool_proposal(
+                                &error,
+                                &failed_request_id,
+                                retry_number,
+                                &mut next_request_ordinal,
+                            )
+                            .await
+                        {
+                            Ok(retry_invocation) => {
+                                invocation = retry_invocation;
+                                continue;
+                            }
+                            Err(terminal) => return Some(terminal),
+                        }
+                    }
 
                     // Context overflow has its own semantic recovery boundary:
                     // estimator correction, compaction, fit validation, then
@@ -3337,6 +3396,61 @@ impl<'a> AgentExecution<'a> {
         self.consume_invocation(started).await
     }
 
+    /// The bounded corrective regeneration of one malformed tool proposal.
+    ///
+    /// The failed physical generation is noncanonical and is discarded
+    /// whole: its assembler, its provisional Assistant identity, its
+    /// provisional content, and any provider continuation state it carried
+    /// are dropped with the failed [`ModelInvocation`], so no malformed
+    /// Assistant message, orphan canonical `ToolCall`, `ToolResult`, or
+    /// provider continuation fragment can survive into the next request. The
+    /// only thing that crosses into the regeneration is one bounded
+    /// provider-independent corrective hint, carried as request-only
+    /// context.
+    ///
+    /// The regeneration is another actual request of the *same* logical
+    /// step: it reuses the frozen accepted context, freezes its own Request
+    /// Snapshot, and passes through the same cancellation-vs-start
+    /// arbitration as every other model request. Cancellation observable
+    /// before it begins wins, so a remaining budget never authorizes another
+    /// provider request after cancellation.
+    async fn regenerate_after_malformed_tool_proposal(
+        &mut self,
+        error: &ModelError,
+        failed_request_id: &RequestId,
+        retry_number: u32,
+        next_request_ordinal: &mut u32,
+    ) -> Result<ModelInvocation, Terminal> {
+        if self.cancellation.is_cancelled() {
+            return Err(self.cancelled_terminal());
+        }
+        // The abandoned publication is a durable predecessor of this
+        // regeneration: the discarded generation's deltas settle into the
+        // publication audit, never into canonical history.
+        if let Err(error) = self.settle_publication_audit() {
+            return Err(Terminal::Failed {
+                failure: AttemptFailure::Runtime { error },
+            });
+        }
+        self.malformed_tool_proposal_feedback = Some(crate::runtime::subagent::bound_utf8(
+            error.message.clone(),
+            MAX_MALFORMED_TOOL_PROPOSAL_FEEDBACK_BYTES,
+        ));
+        if self.cancellation.is_cancelled() {
+            return Err(self.cancelled_terminal());
+        }
+        self.emit(RuntimeEvent::ModelRetryScheduled {
+            failed_request_id: failed_request_id.clone(),
+            retry_number,
+            retry_delay_ms: None,
+        });
+        if let Some(terminal) = self.durable_failure_terminal_from_state() {
+            return Err(terminal);
+        }
+        self.retry_frozen_model_turn(retry_number, next_request_ordinal)
+            .await
+    }
+
     /// The bounded compact-and-retry path after a context overflow.
     ///
     /// The compaction must retire the continuation-owning turn completely
@@ -4672,6 +4786,24 @@ impl<'a> AgentExecution<'a> {
                 effective_system_prompt.push('\n');
             }
             effective_system_prompt.push_str("[runtime Workflow output feedback]\n");
+            effective_system_prompt.push_str(&feedback);
+        }
+        // The one corrective hint of a malformed-tool-proposal regeneration.
+        // It is request-only, provider-independent, and consumed exactly
+        // once, so the regenerated request carries it and nothing after it
+        // does.
+        if let Some(feedback) = self.malformed_tool_proposal_feedback.take() {
+            if !effective_system_prompt.is_empty() {
+                effective_system_prompt.push('\n');
+            }
+            effective_system_prompt.push_str("[runtime tool-call feedback]\n");
+            effective_system_prompt.push_str(
+                "The previous response did not produce a structurally valid tool call \
+                 and was discarded. Regenerate this step: to call a tool, emit one \
+                 structured tool call with a declared tool name and complete JSON \
+                 arguments; otherwise answer without calling a tool.",
+            );
+            effective_system_prompt.push_str("\nReason: ");
             effective_system_prompt.push_str(&feedback);
         }
         ModelRequest {
@@ -6983,6 +7115,7 @@ mod tests {
                 retry_after_ms: None,
                 provider_code: Some("request_too_large".to_owned()),
                 context_overflow: None,
+                malformed_tool_proposal: None,
             },
         }]]));
         let tool_runtime = tool_runtime("conv-1");
@@ -8272,6 +8405,7 @@ mod tests {
                         retry_after_ms: None,
                         provider_code: None,
                         context_overflow: None,
+                        malformed_tool_proposal: None,
                     },
                 })
             }))
@@ -8449,6 +8583,7 @@ mod tests {
                 retry_after_ms: None,
                 provider_code: None,
                 context_overflow: None,
+                malformed_tool_proposal: None,
             },
         }]]));
         let mut request = request(&adapter);

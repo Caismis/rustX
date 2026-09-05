@@ -10,7 +10,8 @@ use crate::common::{
 use rustx::message::types::{ContentBlockIndex, MessageBlock};
 use rustx::model::finish::ModelFinishReason;
 use rustx::model::{
-    ModelErrorKind, ModelEvent, ModelProtocol, ModelRequest, ModelUsage, OpenAiAdapterConfig,
+    ChatToolProtocol, MalformedToolProposalSource, ModelErrorKind, ModelEvent, ModelProtocol,
+    ModelRequest, ModelRetryDisposition, ModelUsage, OpenAiAdapterConfig,
     OpenAiChatCompletionsAdapter, UsageDetails,
 };
 use rustx::runtime::identity::{ToolCallId, ToolId};
@@ -26,6 +27,19 @@ fn request_with_tools(prompt: &str) -> ModelRequest {
         model_tool("list_directory", "tool-list"),
         model_tool("read_file", "tool-read"),
     ];
+    request
+}
+
+/// A request for a model that declares the Qwen in-band tool dialect.
+fn qwen_request(prompt: &str, expose_tools: bool) -> ModelRequest {
+    let mut request = simple_request(ModelProtocol::OpenAiChatCompletions, "Qwen/Qwen3", prompt);
+    request.invocation.compat.chat_tool_protocol = ChatToolProtocol::QwenXml;
+    if expose_tools {
+        request.tools = vec![
+            model_tool("list_directory", "tool-list"),
+            model_tool("write_file", "tool-write"),
+        ];
+    }
     request
 }
 
@@ -56,6 +70,42 @@ fn assert_terminal_failed(events: &[ModelEvent], kind: &ModelErrorKind) {
         panic!("expected Failed terminal, got {terminal:?}");
     };
     assert_eq!(&error.kind, kind, "unexpected error: {}", error.message);
+}
+
+/// Asserts the stream terminated as a refused tool proposal with the
+/// expected provider-independent provenance, that it did not complete
+/// normally, and that no canonical tool call crossed acceptance.
+fn assert_malformed_tool_proposal(events: &[ModelEvent], source: MalformedToolProposalSource) {
+    let terminal = events
+        .last()
+        .unwrap_or_else(|| panic!("expected a terminal event, got none"));
+    let ModelEvent::Failed { error } = terminal else {
+        panic!("expected Failed terminal, got {terminal:?}");
+    };
+    assert_eq!(
+        error.kind,
+        ModelErrorKind::MalformedToolProposal,
+        "unexpected error: {}",
+        error.message
+    );
+    assert_eq!(error.malformed_tool_proposal, Some(source));
+    assert_eq!(
+        error.retry_disposition,
+        ModelRetryDisposition::Never,
+        "a malformed proposal never joins the generic transient budget"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, ModelEvent::Completed { .. })),
+        "a malformed generation cannot also complete normally"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, ModelEvent::ToolCallCompleted { .. })),
+        "a refused proposal never produces a canonical tool call"
+    );
 }
 
 /// Plain text streams into one text block with exact fragments, usage, and a
@@ -763,43 +813,146 @@ async fn interrupted_stream_fails() {
     );
 }
 
-/// Malformed complete tool JSON terminates the stream with a failure; it is
-/// never executed and never partially completed.
+/// Argument text that is truncated before `ToolCall` acceptance is refused:
+/// the proposal never becomes a canonical call, so nothing can be
+/// preflighted, executed, or settled from it. No brace is appended.
 #[tokio::test]
-async fn malformed_tool_arguments_fail() {
+async fn truncated_tool_arguments_are_a_malformed_proposal() {
     let server = crate::common::FixtureServer::start(|_attempt, _head| {
         sse_fixture("openai_chat", "malformed_tool_arguments.sse")
     })
     .await;
     let events = collect_events(&adapter(&server), request_with_tools("Broken call")).await;
-    assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
-    assert!(
-        events
-            .iter()
-            .all(|event| !matches!(event, ModelEvent::ToolCallCompleted { .. }))
-    );
+    assert_malformed_tool_proposal(&events, MalformedToolProposalSource::AdapterStructural);
 }
 
-/// A tool call without a provider invocation id fails explicitly.
+/// A stream that ends without ever delivering a correlation identity is a
+/// stream-assembly refusal; no invocation id is fabricated.
 #[tokio::test]
-async fn tool_call_without_id_fails() {
+async fn tool_call_without_id_is_a_malformed_proposal() {
     let server = crate::common::FixtureServer::start(|_attempt, _head| {
         sse_fixture("openai_chat", "tool_call_without_id.sse")
     })
     .await;
     let events = collect_events(&adapter(&server), request_with_tools("Call")).await;
-    assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
+    assert_malformed_tool_proposal(&events, MalformedToolProposalSource::StreamAssembly);
 }
 
-/// A model calling an unknown tool name fails with `InvalidRequest`.
+/// A stream that ends without ever delivering a tool identity is likewise a
+/// stream-assembly refusal; no function name is invented.
 #[tokio::test]
-async fn unknown_tool_name_fails() {
+async fn tool_call_without_name_is_a_malformed_proposal() {
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "tool_call_without_name.sse")
+    })
+    .await;
+    let events = collect_events(&adapter(&server), request_with_tools("Call")).await;
+    assert_malformed_tool_proposal(&events, MalformedToolProposalSource::StreamAssembly);
+}
+
+/// A tool identity that resolves to no declared tool cannot become a
+/// canonical call: it is refused rather than fuzzy-matched onto a neighbour.
+#[tokio::test]
+async fn unknown_tool_name_is_a_malformed_proposal() {
     let server = crate::common::FixtureServer::start(|_attempt, _head| {
         sse_fixture("openai_chat", "unknown_tool_name.sse")
     })
     .await;
     let events = collect_events(&adapter(&server), request_with_tools("Call")).await;
-    assert_terminal_failed(&events, &ModelErrorKind::InvalidRequest);
+    assert_malformed_tool_proposal(&events, MalformedToolProposalSource::AdapterStructural);
+}
+
+/// A provider that declares the model's function call malformed as its own
+/// termination reason never settles as an ordinary completion.
+#[tokio::test]
+async fn provider_declared_malformed_call_is_a_malformed_proposal() {
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "malformed_function_call_finish.sse")
+    })
+    .await;
+    let events = collect_events(&adapter(&server), request_with_tools("Write")).await;
+    assert_malformed_tool_proposal(&events, MalformedToolProposalSource::ProviderDeclared);
+}
+
+/// The observed vLLM/Qwen class: tools are exposed, reserved Qwen tool
+/// markup leaks into content, no structured call is produced, and the
+/// provider stops normally. That cannot be an ordinary assistant completion.
+#[tokio::test]
+async fn qwen_reserved_protocol_leak_is_a_malformed_proposal() {
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "qwen_tool_protocol_leak.sse")
+    })
+    .await;
+    let events = collect_events(&adapter(&server), qwen_request("Write the note", true)).await;
+    assert_malformed_tool_proposal(&events, MalformedToolProposalSource::ReservedProtocolLeak);
+}
+
+/// The detector is not a substring rule. The identical reserved envelope is
+/// an ordinary completion for a model that declares no in-band tool
+/// protocol, and prose that merely names the tags is an ordinary completion
+/// even for a model that does.
+#[tokio::test]
+async fn reserved_markup_without_protocol_evidence_completes_normally() {
+    // 1. Same bytes, default `native` profile: generated text is never
+    //    inspected, so this stays a normal assistant turn.
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "qwen_tool_protocol_leak.sse")
+    })
+    .await;
+    let events = collect_events(&adapter(&server), request_with_tools("Write the note")).await;
+    assert!(
+        matches!(
+            events.last(),
+            Some(ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                ..
+            })
+        ),
+        "unexpected terminal: {:?}",
+        events.last()
+    );
+
+    // 2. Qwen profile, but the assistant is *discussing* the syntax: the
+    //    reserved openers (`<parameter=`) never appear, so nothing matches.
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "qwen_tool_protocol_discussion.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        qwen_request("Explain the Qwen tool syntax", true),
+    )
+    .await;
+    assert!(
+        matches!(
+            events.last(),
+            Some(ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                ..
+            })
+        ),
+        "legitimate protocol discussion must remain a normal completion: {:?}",
+        events.last()
+    );
+}
+
+/// Reserved markup is only meaningful when tools were actually exposed. A
+/// tool-free request keeps its ordinary completion even under the Qwen
+/// profile.
+#[tokio::test]
+async fn reserved_markup_without_exposed_tools_completes_normally() {
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "qwen_tool_protocol_leak.sse")
+    })
+    .await;
+    let events = collect_events(&adapter(&server), qwen_request("Write the note", false)).await;
+    assert!(matches!(
+        events.last(),
+        Some(ModelEvent::Completed {
+            finish_reason: ModelFinishReason::Stop,
+            ..
+        })
+    ));
 }
 
 /// HTTP error mapping: authentication, rate limit with Retry-After, invalid

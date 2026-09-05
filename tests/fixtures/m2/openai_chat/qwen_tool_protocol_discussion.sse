@@ -1,0 +1,8 @@
+data: {"id":"chatcmpl-qwen-prose","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"role":"assistant","content":"In the Qwen XML dialect a call opens with a <parameter> tag "},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-prose","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"content":"and closes with the matching </parameter> tag."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-prose","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+

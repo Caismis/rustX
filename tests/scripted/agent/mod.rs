@@ -18,6 +18,7 @@ mod carryover;
 mod deadlines;
 mod execution;
 mod lifecycle;
+mod malformed_tool_proposal;
 mod publication;
 mod retry;
 mod status;

@@ -248,6 +248,59 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
   assembler has no caller-supplied terminal override. It rejects either
   mismatch before the Agent Loop can preflight, execute, or commit the turn.
 
+- **A model tool proposal is non-authoritative until ToolCall acceptance.**
+  There is exactly one acceptance point, owned by the provider adapters
+  (`src/model/adapter/proposal.rs`): a proposal becomes a canonical `ToolCall`
+  only when its correlation identity is present and usable, its tool identity
+  resolves to one declared `ToolId`, and its complete argument representation
+  parses as one JSON value. That is also the only point at which a canonical
+  `ModelEvent::ToolCall*` may be emitted. Before it, the proposal cannot
+  execute, cannot be settled, and cannot enter canonical history; after it,
+  the ordinary exactly-once Tool settlement contract applies unchanged.
+  Acceptance never invents intent: no synthesized invocation id, no invented
+  or fuzzy-matched tool name, no repaired or brace-completed JSON, no
+  reconstruction of a call from reasoning text. A refused proposal fails
+  closed as `ModelErrorKind::MalformedToolProposal` with bounded typed
+  provenance (provider-declared, adapter-structural, stream-assembly, or
+  reserved-protocol leakage). Provider-specific evidence — including reserved
+  in-band tool markup recognized only for a model that explicitly declares
+  that dialect through `compat.chatToolProtocol` — stays inside the adapter
+  and is translated into that one provider-independent class; no provider
+  protocol token appears above the adapter.
+
+- **Structural proposal validity and Tool schema validity are different
+  boundaries.** A structurally valid canonical `ToolCall` whose parsed JSON
+  violates the declared Tool schema still crosses acceptance and settles
+  through the ordinary Tool path — preflight rejection, failed `ToolResult`,
+  next model turn may repair it. It is never model-generation recovery.
+  Conversely, a proposal that cannot cross acceptance never becomes a
+  `ToolCall`, so it can never be preflighted, executed, approved, or settled,
+  and it never requires a `ToolResult`.
+
+- **A malformed physical generation is noncanonical, and its recovery is
+  bounded at one.** A malformed proposal discards the whole physical
+  generation: no Assistant message representing it is committed, no orphan
+  canonical `ToolCall` or `ToolResult` exists, no provider continuation state
+  survives it, and it appears in no later request reconstruction. The Agent
+  Loop may regenerate the same logical model step exactly **once**, carrying
+  one bounded ephemeral provider-independent corrective hint as request-only
+  context that is never committed, persisted, or replayed. Two physical
+  generations is therefore the hard maximum this mechanism can cause; a
+  second malformed generation terminates the attempt with an explicit model
+  failure rather than an ordinary completion. This budget is keyed on the
+  error class and is disjoint from the transient, overflow, and Tool budgets,
+  so the bounds compose additively and never multiply. Cancellation
+  observable before the regeneration begins wins over the remaining budget.
+  The diagnostic survives only as `ModelRequestFailed` in the Event Journal,
+  which is execution fact, not conversation history.
+
+- **An impossible canonical stream stays fail-closed.** The malformed-proposal
+  class describes a *model generation* the adapter refused to accept. It never
+  reclassifies a canonical-stream contract violation: the `ModelEventAssembler`
+  operates above acceptance, so its rejections — including the bidirectional
+  `ToolCalls` invariant above — remain `RuntimeError::ContractViolation` and
+  are not retryable. The two are different types and cannot be confused.
+
 - A logical primary model step may contain several actual provider requests.
   Context admission happens once and freezes the request semantics; every
   actual request then receives its own `RequestIdentity`, shared
@@ -261,9 +314,10 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
   contributors. Context overflow remains a distinct estimator-correction and
   compaction boundary that establishes a new post-compaction frozen state.
 
-- The one shared actual-request ordinal is collision-free across transient and
-  overflow recovery. There are at most three transient retries and one
-  overflow retry per logical step (at most five primary requests total).
+- The one shared actual-request ordinal is collision-free across transient,
+  overflow, and malformed-proposal recovery. There are at most three transient
+  retries, one overflow retry, and one malformed-proposal regeneration per
+  logical step (at most six primary requests total).
   Transient backoff is 2, 4, and 8 seconds, or the adapter's capped
   `retry_after_ms` hint, using the runtime monotonic clock. No jitter or
   summarizer retry is part of this contract.
@@ -5434,7 +5488,10 @@ contracts and provider protocols. These invariants are frozen by M2:
 - **`compat` is bounded structural translation behaviour**, disjoint from
   `requestParams`. Chat Completions models must explicitly declare
   `chatReasoningReplay` as `reasoning`, `reasoning_content`, or `omit`; there
-  is no universal dialect default. `omit` is applied while translating
+  is no universal dialect default. `chatToolProtocol` declares the model's
+  in-band tool protocol and defaults to `native`, under which generated text
+  is never inspected for tool markup; reserved-markup recognition is opt-in
+  per model and is never inferred. `omit` is applied while translating
   canonical history, so unavailable or multiple historical reasoning blocks
   are ignored without inspecting provider continuation state. Nothing is
   inferred from a provider name or a base URL hostname.

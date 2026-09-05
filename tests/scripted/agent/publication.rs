@@ -864,6 +864,7 @@ async fn failed_overflow_audit_blocks_the_retry_request() {
                     retry_after_ms: None,
                     provider_code: None,
                     context_overflow: None,
+                    malformed_tool_proposal: None,
                 },
             }),
         ],

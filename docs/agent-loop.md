@@ -1,4 +1,4 @@
-# Agent Loop (M3 + Issue #22 + Issue #55 + Issue #56 + Issue #130 + Issue #136 + Issue #137)
+# Agent Loop (M3 + Issue #22 + Issue #55 + Issue #56 + Issue #130 + Issue #136 + Issue #137 + Issue #201)
 
 This document describes the runtime boundary implemented by the M3
 deterministic agent loop, mirroring the M2 model-plane documentation in
@@ -75,6 +75,61 @@ bound is five. Default transient backoff is 2, 4, and 8 seconds, with an
 adapter-provided retry hint taking precedence and capped at 60 seconds. Both
 publication latency and retry deadlines use the runtime-owned monotonic clock;
 tests inject a manually advanced clock.
+
+#### Bounded malformed-tool-proposal regeneration (Issue #201)
+
+A physical generation whose tool intent could not cross ToolCall acceptance is
+a **model-generation** defect, not a transport defect. The adapter reports it
+as `ModelErrorKind::MalformedToolProposal`, and the loop treats it as its own
+recovery class:
+
+```text
+logical model step
+  physical generation #1 -> malformed tool proposal
+      discard the whole noncanonical generation
+      settle its publication as audit evidence
+      attach one bounded ephemeral corrective hint
+  physical generation #2
+      valid       -> continue normally
+      malformed   -> explicit terminal model-generation failure
+```
+
+The budget is **one** corrective regeneration per logical model step, so this
+mechanism alone can never cause more than two physical generations, and a
+third malformed-proposal regeneration for the same step is not representable.
+
+The budget is separate from every other one and is keyed on the error class,
+which no other recovery path accepts. It therefore neither resets nor is reset
+by the transient budget, the overflow budget, or anything on the Tool side:
+the bounds compose additively, never multiplicatively. A transient retry
+between two malformed generations does not restore the spent regeneration.
+
+The regeneration is an ordinary actual request of the same logical step. It
+replays the frozen state through the same stage/finalize, cancellation-vs-start
+arbitration, durable start, and adapter frontier as every other request, so
+cancellation observable before it begins wins over the remaining budget and no
+further provider request starts.
+
+The corrective hint is bounded, provider-independent request-only context: it
+states that the previous generation produced no structurally valid tool call
+and that the step should be regenerated, plus the bounded adapter reason. It is
+consumed by exactly the regenerated request. It is never committed, persisted,
+replayed, or used as a few-shot example, and it never carries the malformed
+output itself.
+
+Nothing from the discarded generation survives. Its assembler, provisional
+Assistant identity, provisional content, and any provider continuation state
+are dropped with the failed invocation, so no malformed Assistant message,
+orphan canonical `ToolCall`, `ToolResult`, or provider continuation fragment
+can reach canonical history or a later request reconstruction. The bounded
+diagnostic survives as `ModelRequestFailed` in the Event Journal, which is
+execution fact, not conversation history.
+
+Tool schema rejection is deliberately outside this mechanism. A structurally
+valid canonical `ToolCall` whose JSON violates a declared Tool schema has
+already crossed acceptance: it is preflighted, rejected, and settled as a
+failed `ToolResult` on the ordinary Tool path, and it consumes none of this
+budget.
 
 The Conversation Runtime owns the current `ModelTimeoutPolicy` and the shared
 `MonotonicClock`. Attempt admission freezes the policy and passes the same
@@ -199,6 +254,16 @@ and keep provider-specific buffering and identity state inside the adapter.
 They never execute tools, decide attempt outcomes, or emit `RuntimeEvent`
 values. Provider SDK and wire types terminate inside the adapter modules. The
 loop never branches on a provider protocol.
+
+Adapters also own the **ToolCall acceptance boundary** and every piece of
+provider-specific evidence that a tool proposal is malformed — a provider that
+declares its own call malformed, a stream that never delivered an identity, an
+argument representation that is not one complete JSON value, or reserved
+in-band tool markup leaking into ordinary output under a model that declares
+such a dialect. All of it is translated into exactly one provider-independent
+outcome, `ModelErrorKind::MalformedToolProposal`, carrying a bounded typed
+provenance. The Agent Loop reacts to that class and never to the evidence, so
+no provider protocol token appears above the adapter.
 
 ## 3. What tools own
 

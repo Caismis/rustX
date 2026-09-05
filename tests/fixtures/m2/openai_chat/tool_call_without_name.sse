@@ -1,0 +1,6 @@
+data: {"id":"chatcmpl-no-name","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_nameless","type":"function","function":{"arguments":"{\"path\":\"a.txt\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-no-name","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+

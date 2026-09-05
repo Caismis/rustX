@@ -2763,7 +2763,8 @@ Governing rules:
 - **Bounded compat.** `compat` configures only structural translation the
   adapters actually branch on — the legal Chat max-token spelling, whether
   streaming usage options are supported, whether previous assistant reasoning
-  is replayed as `reasoning`, `reasoning_content`, or omitted, and the
+  is replayed as `reasoning`, `reasoning_content`, or omitted, the model's
+  in-band tool protocol (`chatToolProtocol`, default `native`), and the
   Responses storage / continuation mode. For `openai_chat_completions`,
   `chatReasoningReplay` is required and has no universal default; it is a
   provider/model wire contract, not a reasoning-generation switch. It is not
@@ -2785,6 +2786,60 @@ before canonical identity/start, while Anthropic reports Liveness for its
 defined `Ping` heartbeat. Unknown provider events remain neither. Progress is
 consumed by deadline state, never by assembly, publication, history, or the
 durable Event Journal.
+
+#### The ToolCall acceptance boundary (Issue #201)
+
+Model tool intent is non-authoritative wire state until it crosses one
+explicit acceptance point:
+
+```text
+provider/model stream
+    -> provider-specific proposal assembly   (adapter, protocol-aware)
+    -> structural proposal validation        (src/model/adapter/proposal.rs)
+    -> ToolCall acceptance                   (same module)
+    -> canonical ToolCall                    (ModelEvent::ToolCall*)
+    -> Agent Loop Tool path                  (preflight, approval, execution,
+                                              exactly-once ToolResult)
+```
+
+Every adapter assembles a proposal in its own protocol terms — provider
+envelopes, chunk indexes, snapshot merges, block ids, lossless wire
+normalization such as retaining an already-established streamed identity when
+later continuation deltas omit it — and then presents the assembled proposal
+to the shared acceptance functions exactly once. Acceptance validates only
+structural trustworthiness: a usable correlation identity, a tool identity
+that resolves to one declared `ToolId`, and a complete argument
+representation that parses as one JSON value. It never invents intent, and it
+deliberately does not perform Tool schema validation, which belongs to Tool
+preflight after the canonical call exists.
+
+Everything a provider can do to make a proposal untrustworthy is recognized
+below this line and normalized above it into one class,
+`ModelErrorKind::MalformedToolProposal`, with typed provider-independent
+provenance: `ProviderDeclared` (the provider terminated declaring its own
+call malformed), `StreamAssembly` (the stream never delivered an identity),
+`AdapterStructural` (an undeclared tool name, or an argument representation
+that is not one complete JSON value), and `ReservedProtocolLeak` (reserved
+in-band tool markup leaked into ordinary output while no structured call was
+produced).
+
+Reserved-markup recognition is the only Qwen-shaped protocol knowledge in the
+runtime, and it lives in the Chat Completions adapter beside every other
+dialect difference. It is opt-in and narrow: the model must declare the
+dialect through `compat.chatToolProtocol`, tools must actually have been
+exposed in that request, the generation must have produced no structured
+call, the provider must have terminated as a complete normal generation, and
+the output must contain a reserved envelope that cannot occur in well-formed
+markup. Under the default `native` profile generated text is never inspected
+at all, so a legitimate answer discussing tool or XML syntax remains an
+ordinary completion. Nothing is inferred from a provider name or a hostname.
+
+Above the adapter the Agent Loop reacts to the class and never to the
+evidence. It owns the bounded one-regeneration recovery of that class
+(`docs/agent-loop.md`), and the acceptance boundary keeps the canonical
+`ModelEventAssembler` unchanged: the assembler validates a stream that has
+already crossed acceptance, so its rejections stay fail-closed
+`RuntimeError::ContractViolation` failures and are never retryable.
 
 #### Logical model steps and actual requests (Issue #134)
 
@@ -2809,8 +2864,10 @@ partial output is durable noncanonical audit evidence and cannot authorize Tool
 Plane execution; only a successful actual request can commit the canonical
 Assistant.
 
-The transient budget is three retries and the overflow budget is one, for an
-additive maximum of five primary provider requests per logical step. Backoff
+The transient budget is three retries, the overflow budget is one, and the
+malformed-tool-proposal regeneration budget is one, for an additive maximum of
+six primary provider requests per logical step. The three budgets are keyed on
+disjoint error classes, so none of them resets or multiplies another. Backoff
 uses the runtime-owned monotonic clock: 2, 4, and 8 seconds, overridden by an
 adapter-normalized `retry_after_ms` hint capped at 60 seconds. Provider
 adapters classify provider failures with `ModelRetryDisposition`; a runtime

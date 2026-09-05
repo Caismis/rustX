@@ -104,6 +104,7 @@ fn fail(kind: rustx::model::ModelErrorKind, message: &str) -> ModelEvent {
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
+            malformed_tool_proposal: None,
         },
     }
 }
@@ -123,6 +124,7 @@ fn overflow_error() -> rustx::model::ModelError {
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
 }
 

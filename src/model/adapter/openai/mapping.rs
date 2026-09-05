@@ -12,7 +12,6 @@ use crate::model::error::{
 };
 use crate::model::finish::ModelFinishReason;
 use crate::model::types::{ModelUsage, UsageDetails};
-use crate::runtime::identity::ToolId;
 
 use super::client::http_failure_of;
 
@@ -60,6 +59,7 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
                 retry_after_ms: None,
                 provider_code: None,
                 context_overflow: None,
+                malformed_tool_proposal: None,
             }
         }
         OpenAIError::ApiError(api_error) => {
@@ -93,6 +93,7 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
                 retry_after_ms: None,
                 provider_code,
                 context_overflow: None,
+                malformed_tool_proposal: None,
             }
             .normalized()
         }
@@ -103,6 +104,7 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
+            malformed_tool_proposal: None,
         },
         OpenAIError::StreamError(stream_error) => ModelError {
             kind: ModelErrorKind::ProviderError,
@@ -118,6 +120,7 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
+            malformed_tool_proposal: None,
         },
         OpenAIError::Boxed(boxed) => ModelError {
             kind: ModelErrorKind::ProviderError,
@@ -131,6 +134,7 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
+            malformed_tool_proposal: None,
         },
         OpenAIError::JSONDeserialize(_, content) => {
             if content == "[DONE]" {
@@ -141,6 +145,7 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
                     retry_after_ms: None,
                     provider_code: None,
                     context_overflow: None,
+                    malformed_tool_proposal: None,
                 }
             } else {
                 ModelError {
@@ -150,6 +155,7 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
                     retry_after_ms: None,
                     provider_code: None,
                     context_overflow: None,
+                    malformed_tool_proposal: None,
                 }
             }
         }
@@ -160,6 +166,7 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
             retry_after_ms: None,
             provider_code: None,
             context_overflow: None,
+            malformed_tool_proposal: None,
         },
     }
 }
@@ -176,6 +183,7 @@ fn context_or_invalid(message: &str, provider_code: Option<&str>) -> ModelError 
         retry_after_ms: None,
         provider_code: provider_code.map(str::to_owned),
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
     .normalized()
 }
@@ -196,6 +204,7 @@ fn context_window(failure: &super::client::HttpFailure) -> ModelError {
         retry_after_ms: failure.retry_after_ms,
         provider_code: failure.provider_code.clone(),
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
     .normalized()
 }
@@ -208,6 +217,7 @@ fn auth(failure: &super::client::HttpFailure) -> ModelError {
         retry_after_ms: failure.retry_after_ms,
         provider_code: failure.provider_code.clone(),
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
 }
 
@@ -219,6 +229,7 @@ fn invalid_or_unsupported(failure: &super::client::HttpFailure) -> ModelError {
         retry_after_ms: failure.retry_after_ms,
         provider_code: failure.provider_code.clone(),
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
 }
 
@@ -239,6 +250,7 @@ fn timeout(failure: &super::client::HttpFailure) -> ModelError {
         retry_after_ms: failure.retry_after_ms,
         provider_code: failure.provider_code.clone(),
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
 }
 
@@ -255,6 +267,7 @@ fn rate_limit(failure: &super::client::HttpFailure) -> ModelError {
         retry_after_ms: failure.retry_after_ms,
         provider_code: failure.provider_code.clone(),
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
 }
 
@@ -275,6 +288,7 @@ fn provider_error(failure: &super::client::HttpFailure) -> ModelError {
         retry_after_ms: failure.retry_after_ms,
         provider_code: failure.provider_code.clone(),
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
 }
 
@@ -370,7 +384,10 @@ fn sdk_status_disposition(
         | ModelErrorKind::Unsupported
         | ModelErrorKind::ContextWindowExceeded
         | ModelErrorKind::Cancelled
-        | ModelErrorKind::Transport => ModelRetryDisposition::Never,
+        | ModelErrorKind::Transport
+        // A malformed tool proposal is a generation defect with its own
+        // bounded Agent-Loop recovery; it never joins the transient budget.
+        | ModelErrorKind::MalformedToolProposal => ModelRetryDisposition::Never,
     }
 }
 
@@ -482,25 +499,6 @@ fn usage_details(
         cached_input_tokens: cached_input_tokens.map(u64::from),
     };
     (details.reasoning_tokens.is_some() || details.cached_input_tokens.is_some()).then_some(details)
-}
-
-/// Resolves a provider function name to the canonical tool identity, failing
-/// explicitly when the name is unknown.
-pub(crate) fn resolve_tool(
-    tools: &crate::model::adapter::validation::ValidatedTools,
-    name: &str,
-) -> Result<ToolId, ModelError> {
-    match tools.resolve(name) {
-        Some(tool_id) => Ok(tool_id.clone()),
-        None => Err(ModelError {
-            kind: ModelErrorKind::InvalidRequest,
-            message: format!("model called unknown tool name {name:?}"),
-            retry_disposition: crate::model::error::ModelRetryDisposition::Never,
-            retry_after_ms: None,
-            provider_code: None,
-            context_overflow: None,
-        }),
-    }
 }
 
 #[cfg(test)]

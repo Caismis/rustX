@@ -19,6 +19,7 @@ use reqwest::header::HeaderValue;
 
 use crate::message::types::ContentBlockIndex;
 use crate::model::adapter::block_index::BlockAllocator;
+use crate::model::adapter::proposal::{accept_tool_arguments, accept_tool_identity};
 use crate::model::adapter::traits::{
     ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
@@ -31,12 +32,12 @@ use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::continuation::{AnthropicContinuation, ProviderContinuationState};
 use crate::runtime::identity::{ToolCallId, ToolId};
-use crate::tools::types::{ToolCall, ToolCallStart};
+use crate::tools::types::ToolCallStart;
 
 use super::config::AnthropicAdapterConfig;
 use super::mapping::{
-    is_refusal, map_finish_reason, normalize_http_error, normalize_usage, resolve_tool,
-    stream_retry_disposition, translate_request,
+    is_refusal, map_finish_reason, normalize_http_error, normalize_usage, stream_retry_disposition,
+    translate_request,
 };
 use super::wire::{WireEvent, WireUsage, parse_event};
 
@@ -281,6 +282,7 @@ async fn open_stream(
                 retry_after_ms: None,
                 provider_code: None,
                 context_overflow: None,
+                malformed_tool_proposal: None,
             })
         }
     }
@@ -347,6 +349,7 @@ fn cancelled_error() -> ModelError {
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
 }
 
@@ -366,6 +369,7 @@ fn sse_failure(error: &eventsource_stream::EventStreamError<reqwest::Error>) -> 
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
 }
 
@@ -594,6 +598,7 @@ impl AnthropicStreamNormalizer {
                     retry_after_ms: None,
                     provider_code,
                     context_overflow: None,
+                    malformed_tool_proposal: None,
                 }
                 .normalized())
             }
@@ -727,23 +732,11 @@ impl AnthropicStreamNormalizer {
         block: &super::wire::WireContentBlock,
     ) -> Result<Vec<ModelEvent>, ModelError> {
         let canonical_index = self.blocks.allocate(AnthropicBlockKey::Provider(index));
-        let id = block
-            .id
-            .clone()
-            .filter(|id| !id.is_empty())
-            .ok_or_else(|| {
-                provider_error("provider tool_use block lacks an invocation id".to_owned())
-            })?;
-        let name = block.name.clone().ok_or_else(|| {
-            provider_error("provider tool_use block lacks a tool name".to_owned())
-        })?;
-        let tool_id = resolve_tool(&self.tools, &name)?;
-        let call_id = ToolCallId::new(id);
-        let call = ToolCallStart {
-            id: call_id.clone(),
-            tool_id: tool_id.clone(),
-            name: name.clone(),
-        };
+        // ToolCall acceptance: identity crosses the boundary here.
+        let call = accept_tool_identity(block.id.as_deref(), block.name.as_deref(), &self.tools)?;
+        let call_id = call.id.clone();
+        let tool_id = call.tool_id.clone();
+        let name = call.name.clone();
         let initial_input = block.input.clone().unwrap_or_else(|| serde_json::json!({}));
         let initial_input_complete = initial_input
             .as_object()
@@ -992,21 +985,20 @@ impl AnthropicStreamNormalizer {
                 if *completed {
                     return Ok(Vec::new());
                 }
-                // The complete JSON is parsed exactly once, at block stop.
-                let parsed = serde_json::from_str(argument_buffer).map_err(|e| {
-                    provider_error(format!(
-                        "malformed complete tool arguments for {name:?} ({call_id}): {e}"
-                    ))
-                })?;
-                *completed = true;
-                Ok(vec![ModelEvent::ToolCallCompleted {
-                    block_index: *canonical_index,
-                    call: ToolCall {
+                // ToolCall acceptance completes here: the complete JSON is
+                // parsed exactly once, at block stop, and is never repaired.
+                let call = accept_tool_arguments(
+                    &ToolCallStart {
                         id: call_id.clone(),
                         tool_id: tool_id.clone(),
                         name: name.clone(),
-                        arguments: parsed,
                     },
+                    argument_buffer,
+                )?;
+                *completed = true;
+                Ok(vec![ModelEvent::ToolCallCompleted {
+                    block_index: *canonical_index,
+                    call,
                 }])
             }
         }
@@ -1041,6 +1033,7 @@ impl AnthropicStreamNormalizer {
                 retry_after_ms: None,
                 provider_code: Some(stop_reason),
                 context_overflow: None,
+                malformed_tool_proposal: None,
             }));
         }
         let mut events = Vec::new();
@@ -1124,6 +1117,7 @@ fn provider_error(message: String) -> ModelError {
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
 }
 
@@ -1156,5 +1150,6 @@ fn unsupported(message: impl Into<String>) -> ModelError {
         retry_after_ms: None,
         provider_code: None,
         context_overflow: None,
+        malformed_tool_proposal: None,
     }
 }
