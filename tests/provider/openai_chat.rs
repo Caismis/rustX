@@ -953,6 +953,19 @@ async fn a_compact_qwen_emission_is_a_malformed_proposal() {
     assert_malformed_tool_proposal(&events, MalformedToolProposalSource::ReservedProtocolLeak);
 }
 
+/// A parameterless call leaks a bare `<function=…></function>` region with
+/// no wrapping `<tool_call>` at all — upstream enters a tool call on the
+/// bare opener, so the residue is an emission and not decorative text.
+#[tokio::test]
+async fn a_bare_qwen_function_region_is_a_malformed_proposal() {
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "qwen_tool_protocol_function_residue.sse")
+    })
+    .await;
+    let events = collect_events(&adapter(&server), qwen_request("List the directory", true)).await;
+    assert_malformed_tool_proposal(&events, MalformedToolProposalSource::ReservedProtocolLeak);
+}
+
 /// The detector is not a substring rule: identical reserved *bytes* are an
 /// ordinary completion for a model that declares no in-band tool protocol.
 #[tokio::test]
@@ -961,6 +974,7 @@ async fn reserved_bytes_under_the_native_profile_complete_normally() {
         "qwen_tool_protocol_leak.sse",
         "qwen_tool_protocol_compact_leak.sse",
         "qwen_tool_protocol_full_leak.sse",
+        "qwen_tool_protocol_function_residue.sse",
     ] {
         let server = crate::common::FixtureServer::start(move |_attempt, _head| {
             sse_fixture("openai_chat", fixture)
@@ -985,8 +999,8 @@ async fn reserved_bytes_under_the_native_profile_complete_normally() {
 ///
 /// The inline forms are the ones that matter now that recognition follows
 /// the reserved grammar rather than a line layout: the identical bytes are a
-/// leak when they stand as emitted structure and prose when words introduce
-/// them.
+/// leak when the generation's own output is that region, and the document's
+/// material once the generation has begun writing one.
 ///
 /// A `contains(open) && contains(close)` rule classifies all three as
 /// malformed tool intent. They are a correct answer to a question about the
@@ -1025,6 +1039,51 @@ async fn exact_reserved_syntax_discussed_in_prose_completes_normally() {
     ));
 }
 
+/// The same answer with the examples on their own lines rather than inside
+/// the sentence, and with no code fence anywhere.
+///
+/// This is the layout-independence invariant at the adapter boundary:
+/// classification must not change because ordinary explanatory prose and the
+/// exact same quoted syntax are separated by a newline rather than a space.
+/// The fixture carries every shape that separation can take — an inline
+/// residual on the next line, an opener whose closer only arrives inside a
+/// later sentence, a function form, and the whole compact envelope — and
+/// splits provider chunks inside reserved tags so nothing can be decided
+/// from chunk framing either.
+#[tokio::test]
+async fn reserved_syntax_introduced_across_a_line_break_completes_normally() {
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "qwen_tool_protocol_unfenced_examples.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        qwen_request("Explain the Qwen tool syntax", true),
+    )
+    .await;
+    assert_normal_completion(&events);
+    let text: String = events
+        .iter()
+        .filter_map(|event| match event {
+            ModelEvent::TextDelta { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    // No fence anywhere: the exclusion cannot be coming from quotation.
+    assert!(!text.contains("```"));
+    // Each required shape really is present, on its own line, introduced by
+    // the line above it.
+    for example in [
+        "is:\n<parameter=path>notes.txt</parameter>",
+        "is:\n<parameter=path>\nThe closing tag is </parameter>.",
+        "is:\n<function=write_file>...</function>",
+        "is:\n<tool_call><function=write_file><parameter=path>notes.txt</parameter>\
+         </function></tool_call>",
+    ] {
+        assert!(text.contains(example), "fixture lost {example:?}");
+    }
+}
+
 /// Reserved markup is only meaningful when tools were actually exposed. A
 /// tool-free request keeps its ordinary completion even under the Qwen
 /// profile.
@@ -1034,6 +1093,7 @@ async fn reserved_markup_without_exposed_tools_completes_normally() {
         "qwen_tool_protocol_leak.sse",
         "qwen_tool_protocol_compact_leak.sse",
         "qwen_tool_protocol_full_leak.sse",
+        "qwen_tool_protocol_function_residue.sse",
     ] {
         let server = crate::common::FixtureServer::start(move |_attempt, _head| {
             sse_fixture("openai_chat", fixture)

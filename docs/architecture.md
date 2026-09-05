@@ -2865,18 +2865,41 @@ and the pretty-printed emission are one and the same region, and all three
 are recognized. Recognition runs on the fully assembled generated output, so
 provider chunk boundaries cannot change the outcome either.
 
-What separates that structure from a discussion of it is context and
-nesting, not formatting: a reserved opener counts only where reserved markup
-or nothing precedes it rather than ordinary words, which is how an emission
-reaches its tags and how a sentence does not; tags inside a fenced code block
-are quoted syntax rather than emitted output; an opener must be matched by
-its own closer in order; and the opener's payload must be a plausible
-function/parameter identifier rather than an illustrative ellipsis. A line
-break is used only where it means what it means in natural language — the
-boundary of a sentence — and never as a protocol delimiter. The recognizer
-is one bounded forward pass with constant state: no backtracking, no
-materialized regions, no general XML parsing, and it prefers missing a
-speculative shape to reclassifying a correct answer. Recognition is
+What separates that structure from a discussion of it is *ownership*, not
+formatting. A generation that leaks the dialect is one the serving stack was
+supposed to consume whole: its output **is** the reserved region. A
+generation that explains the dialect is writing a document, and the reserved
+bytes are material that document introduces, quotes and discusses. So the
+scan walks the assembled output from its start and stays in the protocol
+only while everything behind it is reserved markup or the payload of an open
+reserved envelope; the first thing that is not — ordinary words outside every
+envelope, or a Markdown code fence — hands ownership to the document, and the
+scan ends there. Inside the protocol the region must still be real
+structure: an opener matched by its own closer, in order, with a payload that
+is a plausible function/parameter identifier rather than an illustrative
+ellipsis.
+
+Ownership is a property of the output, not of its layout, and it never
+begins again at a line break, so
+
+> `The exact parameter syntax is: <parameter=path>notes.txt</parameter>`
+
+and the same answer with that space replaced by a newline are one answer and
+classify identically. The invariant is explicit: **reserved-protocol
+classification must not change solely because ordinary explanatory prose and
+the exact same quoted syntax are separated by a newline rather than a space**,
+and more generally a raw newline is never the structural basis for treating a
+region as emitted tool intent. The one layout marker that does carry meaning
+is the code fence, because a fence is the author declaring the block quoted;
+lines otherwise exist for the scan only as the unit a fence is recognized on
+and as the place a pretty-printed emission puts its tags. The consequence is
+deliberate and conservative: reserved bytes produced after a generation has
+begun writing a document are not classified as a leak, because no structural
+evidence separates "here is the syntax:" from a leak that follows a sentence,
+and enumerating English phrasings would be a vocabulary rule rather than a
+grammar. The recognizer is one bounded forward pass with constant state: no
+backtracking, no materialized regions, no general XML parsing, and it prefers
+missing a speculative shape to reclassifying a correct answer. Recognition is
 one-directional — it proves a leak and produces one refused proposal; the
 leaked region is never parsed back into a `ToolCall`, because a call this
 runtime had to infer is precisely the invented model intent the acceptance

@@ -1,0 +1,11 @@
+data: {"id":"chatcmpl-qwen-function-residue","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"role":"assistant","reasoning":"The user wants the directory listed. I will call the tool."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-function-residue","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"content":"<function=list_dir"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-function-residue","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"content":"ectory></func"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-function-residue","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{"content":"tion>"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-qwen-function-residue","object":"chat.completion.chunk","created":1,"model":"Qwen/Qwen3","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]

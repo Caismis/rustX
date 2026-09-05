@@ -1239,12 +1239,12 @@ impl ChatStreamNormalizer {
     ///   reinterpreted;
     /// - the output must contain an actual *emission* of the declared
     ///   dialect — a correctly ordered, identifier-bearing reserved region
-    ///   standing as emitted structure rather than as material inside a
-    ///   sentence — and not merely the reserved tokens somewhere in text.
-    ///   [`qwen_xml`] owns that recognition, follows the dialect's reserved
-    ///   grammar rather than any pretty-printed newline layout, and
-    ///   documents why quoting or discussing the exact syntax is not an
-    ///   emission.
+    ///   that the generation's own output *is*, rather than material inside
+    ///   a document the generation is writing — and not merely the reserved
+    ///   tokens somewhere in text. [`qwen_xml`] owns that recognition,
+    ///   follows the dialect's reserved grammar rather than any
+    ///   pretty-printed newline layout, and documents why quoting or
+    ///   discussing the exact syntax is not an emission.
     ///
     /// Recognition proves a leak; it never reconstructs one. The leaked
     /// region is not parsed back into a `ToolCall`, because a proposal this

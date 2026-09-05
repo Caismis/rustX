@@ -31,12 +31,10 @@
 //!   and not decorative text.
 //!
 //! So recognition here follows the reserved grammar, never a pretty-printed
-//! layout. A line break is used only as the boundary of a *sentence*, which
-//! is what a line break means in natural language; it is never treated as a
-//! protocol delimiter, and every reserved region is recognized identically
-//! whether it arrives compact or pretty-printed, in one provider chunk or
-//! many. The scan runs on the fully assembled generated output, so chunk
-//! boundaries cannot matter.
+//! layout. Every reserved region is recognized identically whether it
+//! arrives compact or pretty-printed, in one provider chunk or many. The
+//! scan runs on the fully assembled generated output, so chunk boundaries
+//! cannot matter.
 //!
 //! # Why this is not a substring rule
 //!
@@ -54,24 +52,58 @@
 //! ```
 //!
 //! `contains(open) && contains(close)` cannot tell those apart, so it
-//! misclassifies a correct answer as malformed tool intent. This module
-//! instead recognizes the *emission structure*, using evidence a discussion
-//! of the syntax does not produce:
+//! misclassifies a correct answer as malformed tool intent.
 //!
-//! - **Reserved markup, not sentence material.** A reserved opener is
-//!   evidence only when what immediately precedes it within the sentence is
-//!   reserved markup rather than ordinary words. Prose introduces the tag
-//!   (`... is encoded as <parameter=path>`); an emission reaches it from the
-//!   envelope around it, or from nothing at all.
-//! - **Quotation is not emission.** Tags inside a fenced code block are
-//!   quoted syntax — how a model shows the reader what the dialect looks
-//!   like — and are skipped.
-//! - **Real envelope structure.** An opener must be matched by its own
-//!   closer, in order, and the opener's payload must be a plausible
-//!   function/parameter identifier. An illustrative `<function=...>` or a
-//!   `<tool_call>` wrapping a literal `...` is not a protocol region.
+//! # Ownership, not layout
 //!
-//! The recognizer is deliberately conservative: it would rather miss a
+//! What this module recognizes instead is *who owns the reserved bytes*.
+//!
+//! A generation that leaks the dialect is a generation the serving stack was
+//! supposed to consume whole: its output **is** the reserved region. A
+//! generation that explains the dialect is writing a document, and the
+//! reserved bytes appear inside that document as material it introduces,
+//! quotes, and talks about.
+//!
+//! So the scan walks the generated output from its start and stays in the
+//! protocol only while everything it has passed is reserved markup or the
+//! payload of an open reserved envelope. The first thing that is *not* —
+//! ordinary words outside any envelope, or a Markdown code fence — hands
+//! ownership to the document, and the scan stops. Reserved bytes after that
+//! point are the document's material: introduced, quoted, discussed.
+//!
+//! That ownership is a property of the output, not of its formatting. It
+//! does not begin again at a line break. A line break between explanatory
+//! prose and the syntax that prose introduces is presentation:
+//!
+//! ```text
+//! The exact parameter syntax is: <parameter=path>notes.txt</parameter>
+//! ```
+//!
+//! and
+//!
+//! ```text
+//! The exact parameter syntax is:
+//! <parameter=path>notes.txt</parameter>
+//! ```
+//!
+//! are the same answer, and classify the same way. Only an explicit
+//! structural marker carries meaning here, and the one this module honours
+//! is the code fence, because a fence is the author *declaring* the block
+//! quoted. Lines exist for the scan as the unit a fence is recognized on and
+//! as the place a pretty-printed emission puts its tags; they are never
+//! evidence that prose stopped.
+//!
+//! Within the protocol the region must still be real structure: an opener is
+//! matched by its own closer, in order, and the opener's payload must be a
+//! plausible function/parameter identifier, so an illustrative
+//! `<function=...>` or a `<tool_call>` wrapping a literal `...` is not a
+//! region.
+//!
+//! The consequence is deliberate. Reserved bytes a model produces after it
+//! has begun writing a document are not classified as a leak — there is no
+//! structural evidence that separates "here is the syntax:" from a leak
+//! following a sentence, and enumerating English phrasings would be a
+//! vocabulary rule, not a grammar. The recognizer would rather miss that
 //! speculative shape than reclassify a correct answer, and it is bounded to
 //! one forward pass with constant state — no backtracking, no materialized
 //! regions, no general XML parsing.
@@ -149,37 +181,56 @@ fn reserved_opener<'a>(rest: &'a str, prefix: &str) -> Option<&'a str> {
     is_reserved_name(&after[..close]).then(|| &after[close + '>'.len_utf8()..])
 }
 
-/// Whether a line opens or closes a Markdown code fence.
+/// Whether a line opens or closes a Markdown code fence. A fence is the one
+/// piece of layout that is an explicit declaration rather than presentation:
+/// the author is marking the block as quoted.
 fn is_code_fence(line: &str) -> bool {
     let line = line.trim_start();
     line.starts_with("```") || line.starts_with("~~~")
 }
 
-/// The bounded recognizer state: which reserved envelopes are open, and
-/// whether ordinary sentence text stands between the current sentence
-/// boundary and here.
+/// What one line of output settled about ownership.
+enum LineOutcome {
+    /// Everything so far is reserved markup or envelope payload, and no
+    /// region has closed yet. The scan continues into the next line with the
+    /// open envelopes it already has.
+    StillProtocol,
+    /// A reserved opener was matched by its own closer: a complete emitted
+    /// region.
+    Emission(QwenReservedEnvelope),
+    /// The generation is writing a document — ordinary words outside every
+    /// envelope, or an explicit code fence. Ownership has passed to the
+    /// document and cannot pass back.
+    Document,
+}
+
+/// The bounded recognizer state: which reserved envelopes are currently
+/// open.
+///
+/// There is no "was there prose recently" flag, because prose ownership is
+/// not something the scan re-decides. Once a line hands ownership to the
+/// document the scan is over; while it is still running, everything behind
+/// it is reserved markup or envelope payload by construction.
 #[derive(Debug, Default)]
 struct EmissionScan {
     function_open: bool,
     parameter_open: bool,
-    /// Set by ordinary words, cleared at a sentence boundary, and left
-    /// untouched by reserved markup. An opener preceded by words is a tag
-    /// quoted in a sentence; an opener preceded only by reserved markup (or
-    /// by nothing) is emitted structure.
-    words_precede: bool,
 }
 
 impl EmissionScan {
-    /// Consumes one line of unfenced output, carrying envelope state across
-    /// the call so a region may span lines or sit entirely within one.
-    ///
-    /// Returns the envelope as soon as a reserved opener is matched by its
-    /// own closer.
-    fn consume(&mut self, line: &str) -> Option<QwenReservedEnvelope> {
-        // A line break ends a sentence, so words on the previous line do not
-        // make the next line's markup a quotation. This is the only thing
-        // layout decides; the reserved grammar below never consults it.
-        self.words_precede = false;
+    /// Whether the scan currently stands inside a reserved envelope, where
+    /// ordinary characters are the envelope's payload rather than the
+    /// document's words.
+    const fn inside_envelope(&self) -> bool {
+        self.function_open || self.parameter_open
+    }
+
+    /// Consumes one line of output, carrying envelope state across the call
+    /// so a region may span lines or sit entirely within one.
+    fn consume_line(&mut self, line: &str) -> LineOutcome {
+        if is_code_fence(line) {
+            return LineOutcome::Document;
+        }
         let mut rest = line;
         while let Some(character) = rest.chars().next() {
             if let Some(tail) = rest
@@ -192,45 +243,37 @@ impl EmissionScan {
             if let Some(tail) = rest.strip_prefix(FUNCTION_CLOSE) {
                 rest = tail;
                 if std::mem::take(&mut self.function_open) {
-                    return Some(QwenReservedEnvelope::Function);
+                    return LineOutcome::Emission(QwenReservedEnvelope::Function);
                 }
                 continue;
             }
             if let Some(tail) = rest.strip_prefix(PARAMETER_CLOSE) {
                 rest = tail;
                 if std::mem::take(&mut self.parameter_open) {
-                    return Some(QwenReservedEnvelope::Parameter);
+                    return LineOutcome::Emission(QwenReservedEnvelope::Parameter);
                 }
                 continue;
             }
-            // An opener is structure only where words do not introduce it.
-            // Where they do, the tag is left to be consumed as the sentence
-            // material it is.
-            if !self.words_precede {
-                if let Some(tail) = reserved_opener(rest, FUNCTION_OPEN_PREFIX) {
-                    rest = tail;
-                    self.function_open = true;
-                    continue;
-                }
-                if let Some(tail) = reserved_opener(rest, PARAMETER_OPEN_PREFIX) {
-                    rest = tail;
-                    self.parameter_open = true;
-                    continue;
-                }
+            if let Some(tail) = reserved_opener(rest, FUNCTION_OPEN_PREFIX) {
+                rest = tail;
+                self.function_open = true;
+                continue;
+            }
+            if let Some(tail) = reserved_opener(rest, PARAMETER_OPEN_PREFIX) {
+                rest = tail;
+                self.parameter_open = true;
+                continue;
+            }
+            // Not reserved markup. Inside an envelope this is the payload
+            // upstream's `(.*?)` group would have captured; outside every
+            // envelope it is the document's own words, and the document owns
+            // everything from here on.
+            if !character.is_whitespace() && !self.inside_envelope() {
+                return LineOutcome::Document;
             }
             rest = &rest[character.len_utf8()..];
-            if !character.is_whitespace() {
-                self.words_precede = true;
-            }
         }
-        None
-    }
-
-    /// Forgets any open envelope. A region never straddles quoted syntax, so
-    /// a fence boundary cannot complete one.
-    fn reset_envelopes(&mut self) {
-        self.function_open = false;
-        self.parameter_open = false;
+        LineOutcome::StillProtocol
     }
 }
 
@@ -241,19 +284,12 @@ impl EmissionScan {
 /// scan is a single bounded forward pass with constant state: it never
 /// backtracks and never materializes the candidate regions.
 pub(crate) fn tool_protocol_emission(output: &str) -> Option<QwenReservedEnvelope> {
-    let mut inside_fence = false;
     let mut scan = EmissionScan::default();
     for line in output.lines() {
-        if is_code_fence(line) {
-            inside_fence = !inside_fence;
-            scan.reset_envelopes();
-            continue;
-        }
-        if inside_fence {
-            continue;
-        }
-        if let Some(envelope) = scan.consume(line) {
-            return Some(envelope);
+        match scan.consume_line(line) {
+            LineOutcome::Emission(envelope) => return Some(envelope),
+            LineOutcome::Document => return None,
+            LineOutcome::StillProtocol => {}
         }
     }
     None
@@ -300,12 +336,13 @@ mod tests {
     }
 
     /// A parameterless call still leaks a complete function region, in
-    /// either layout.
+    /// either layout, wrapped or bare.
     #[test]
     fn a_residual_function_region_is_recognized() {
         for output in [
             "<tool_call>\n<function=list_directory>\n</function>\n</tool_call>",
             "<tool_call><function=list_directory></function></tool_call>",
+            "<function=list_directory></function>",
         ] {
             assert_eq!(
                 tool_protocol_emission(output),
@@ -340,7 +377,7 @@ mod tests {
     }
 
     /// The same sentence with a real-looking value rather than an ellipsis
-    /// is still a sentence: words introduce the tag, so it is quotation.
+    /// is still a document: prose owns the reserved bytes it introduces.
     #[test]
     fn reserved_syntax_with_a_real_value_inside_a_sentence_is_prose() {
         let output = "A parameter is encoded as <parameter=path>notes.txt</parameter> in the \
@@ -351,13 +388,76 @@ mod tests {
     }
 
     /// A sentence that quotes the whole compact envelope is still a
-    /// sentence: `<tool_call>` is reserved markup, but it does not erase the
-    /// words that introduced it.
+    /// document: `<tool_call>` is reserved markup, but it does not take
+    /// ownership back from the words that introduced it.
     #[test]
     fn a_compact_envelope_quoted_in_a_sentence_is_prose() {
         let output = "Wrap it in <tool_call><function=write_file><parameter=path>notes.txt\
                       </parameter></function></tool_call> to call the tool.";
         assert_eq!(tool_protocol_emission(output), None);
+    }
+
+    /// The invariant this recognizer is built around: a line break between
+    /// explanatory prose and the syntax it introduces is presentation, so
+    /// the two spellings of one answer classify identically. Every pairing
+    /// here is the same text with the separating space swapped for a
+    /// newline.
+    #[test]
+    fn a_line_break_does_not_change_classification() {
+        for (inline, broken) in [
+            (
+                "The exact parameter syntax is: <parameter=path>notes.txt</parameter>",
+                "The exact parameter syntax is:\n<parameter=path>notes.txt</parameter>",
+            ),
+            (
+                "The function form is: <function=write_file>...</function>",
+                "The function form is:\n<function=write_file>...</function>",
+            ),
+            (
+                "The complete compact example is: <tool_call><function=write_file>\
+                 <parameter=path>notes.txt</parameter></function></tool_call>",
+                "The complete compact example is:\n<tool_call><function=write_file>\
+                 <parameter=path>notes.txt</parameter></function></tool_call>",
+            ),
+            (
+                "The pretty-printed form is: <tool_call> <function=write_file> \
+                 <parameter=path> notes.txt </parameter> </function> </tool_call>",
+                "The pretty-printed form is:\n<tool_call>\n<function=write_file>\n\
+                 <parameter=path>\nnotes.txt\n</parameter>\n</function>\n</tool_call>",
+            ),
+        ] {
+            assert_eq!(
+                tool_protocol_emission(inline),
+                tool_protocol_emission(broken),
+                "layout changed classification: {inline:?} vs {broken:?}"
+            );
+            assert_eq!(tool_protocol_emission(broken), None, "{broken:?}");
+        }
+    }
+
+    /// Prose introduces an opener on one line and its closer only arrives
+    /// several lines later, inside more prose. No envelope may be left open
+    /// across the explanation and completed by the sentence that describes
+    /// the closing tag.
+    #[test]
+    fn an_explanation_split_across_lines_never_completes_an_envelope() {
+        let output = "The opening tag is:\n<parameter=path>\nThe closing tag is </parameter>.";
+        assert_eq!(tool_protocol_emission(output), None);
+        let function = "The opening tag is:\n<function=write_file>\nand it ends at </function>.";
+        assert_eq!(tool_protocol_emission(function), None);
+    }
+
+    /// Once the generation is writing a document, reserved bytes further
+    /// down are that document's material however they are laid out —
+    /// including a blank line or a Markdown list between the prose and the
+    /// example.
+    #[test]
+    fn a_document_keeps_ownership_of_later_reserved_bytes() {
+        let paragraph = "Here is the syntax.\n\n<parameter=path>notes.txt</parameter>";
+        assert_eq!(tool_protocol_emission(paragraph), None);
+        let list = "The pieces are:\n\n- <function=write_file></function>\n\
+                    - <parameter=path>notes.txt</parameter>\n";
+        assert_eq!(tool_protocol_emission(list), None);
     }
 
     /// A standalone `<tool_call>` block whose body is an ellipsis is an
@@ -376,7 +476,8 @@ mod tests {
     }
 
     /// A fenced code block is quoted syntax, which is how a model shows the
-    /// reader the dialect. Quotation is not emission — in either layout.
+    /// reader the dialect. Quotation is not emission — in either layout, and
+    /// whether or not a sentence introduces the fence.
     #[test]
     fn a_fenced_example_is_quoted_not_emitted() {
         let output = "Here is the shape:\n\n```xml\n<tool_call>\n<function=write_file>\n\
@@ -386,6 +487,9 @@ mod tests {
         let compact = "Here is the shape:\n\n```xml\n<tool_call><function=write_file>\
                        <parameter=path>notes.txt</parameter></function></tool_call>\n```\n";
         assert_eq!(tool_protocol_emission(compact), None);
+        let bare_fence = "```xml\n<tool_call><function=write_file><parameter=path>notes.txt\
+                          </parameter></function></tool_call>\n```\n";
+        assert_eq!(tool_protocol_emission(bare_fence), None);
     }
 
     /// An unmatched opener is not a region: ordering is required, not just

@@ -274,10 +274,17 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
   that dialect through `compat.chatToolProtocol` — stays inside the adapter
   and is translated into that one provider-independent class; no provider
   protocol token appears above the adapter. Reserved-markup recognition
-  proves an actual protocol *emission shape* — a standalone, correctly
-  ordered, identifier-bearing reserved region outside quoted code — and never
-  the mere co-occurrence of reserved tokens, so an assistant answer that
-  quotes or discusses the exact reserved syntax stays an ordinary completion.
+  proves an actual protocol *emission shape* — a correctly ordered,
+  identifier-bearing reserved region that the generation's own output is,
+  rather than material inside a document that generation is writing — and
+  never the mere co-occurrence of reserved tokens, so an assistant answer
+  that quotes or discusses the exact reserved syntax stays an ordinary
+  completion. That classification is a property of the output, not of its
+  layout: it must not change solely because ordinary explanatory prose and
+  the exact same quoted syntax are separated by a newline rather than a
+  space, and a raw newline is never the structural basis for treating a
+  region as emitted tool intent. An explicit quotation marker such as a
+  Markdown code fence is; ordinary line breaks are presentation.
   Recognizing a leak never reconstructs it: leaked markup is refused, never
   parsed back into a `ToolCall`.
 
