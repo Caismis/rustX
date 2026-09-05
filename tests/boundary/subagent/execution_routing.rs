@@ -162,7 +162,7 @@ async fn subagent_start_returns_a_typed_subagent_execution_handle() {
     );
     // The exact result-shaping function the `subagent` intrinsic executor
     // runs.
-    let result = crate::tools::native::subagent::accepted_result(accepted.clone());
+    let result = crate::tools::native::subagent::accepted_result(&accepted);
     let value = json_content(&result);
     assert_eq!(
         value,

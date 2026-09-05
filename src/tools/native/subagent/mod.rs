@@ -73,7 +73,7 @@ use super::support::{failed_result, success_json};
 ///
 /// The final child report is **not** part of this result: it arrives later,
 /// exactly once, through the canonical inbound message path.
-pub(crate) fn accepted_result(accepted: SubagentAccepted) -> ToolExecutionResult {
+pub(crate) fn accepted_result(accepted: &SubagentAccepted) -> ToolExecutionResult {
     success_json(serde_json::json!({
         "execution": crate::tools::execution::ExecutionHandle::subagent(&accepted.subagent_id),
         "state": "running",
@@ -265,7 +265,7 @@ impl ToolExecutor for SubagentExecutor {
                 Err(error) => return start_failure_result(&error),
             };
             match self.subagents.commit(prepared, &child_cancellation).await {
-                Ok(SubagentStartOutcome::Accepted(accepted)) => accepted_result(accepted),
+                Ok(SubagentStartOutcome::Accepted(accepted)) => accepted_result(&accepted),
                 // The attempt cancellation won the race against the
                 // ownership commit: nothing was published, the staged child
                 // is already torn down, and the tool result is the
@@ -381,7 +381,7 @@ mod tests {
             agent: "explore".to_owned(),
             definition_digest: "sha256:d1".to_owned(),
         };
-        let result = super::accepted_result(accepted);
+        let result = super::accepted_result(&accepted);
         assert_eq!(result.status, ToolExecutionStatus::Success);
         let value = match &result.content[0] {
             ToolResultContent::Json { value } => value.clone(),

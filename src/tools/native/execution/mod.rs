@@ -375,7 +375,9 @@ fn tool_snapshot_result(
     id: &str,
 ) -> ToolExecutionResult {
     match snapshot {
-        Some(snapshot) => json_result(&ExecutionSnapshot::Tool { snapshot }),
+        Some(snapshot) => json_result(&ExecutionSnapshot::Tool {
+            snapshot: Box::new(snapshot),
+        }),
         None => failed(format!("unknown background execution {id}")),
     }
 }
@@ -557,6 +559,7 @@ pub struct SubagentExecutionSnapshot {
 
 /// The `skip_serializing_if` predicate for an opt-in boolean annotation:
 /// the fact is present exactly when it is true.
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde predicates take references
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -596,10 +599,12 @@ impl From<SubagentSnapshot> for SubagentExecutionSnapshot {
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ExecutionSnapshot {
-    /// The authoritative snapshot of one detached tool execution.
+    /// The authoritative snapshot of one detached tool execution. Boxed:
+    /// the detached tool domain's snapshot is far larger than the minimal
+    /// subagent projection, and this envelope is only ever serialized.
     Tool {
         #[serde(flatten)]
-        snapshot: BackgroundExecutionSnapshot,
+        snapshot: Box<BackgroundExecutionSnapshot>,
     },
     /// The authoritative snapshot of one subagent child, projected into
     /// the bounded model-facing [`SubagentExecutionSnapshot`].
@@ -936,7 +941,10 @@ mod tests {
             progress: None,
             result: None,
         };
-        let value = serde_json::to_value(ExecutionSnapshot::Tool { snapshot }).expect("serializes");
+        let value = serde_json::to_value(ExecutionSnapshot::Tool {
+            snapshot: Box::new(snapshot),
+        })
+        .expect("serializes");
         assert_eq!(value["kind"], "tool");
         assert_eq!(value["execution_id"], "exec_1");
         assert_eq!(value["tool_name"], "bash");

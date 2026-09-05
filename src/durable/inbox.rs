@@ -800,14 +800,13 @@ fn accept_subagent_terminal_through(
             "the subagent terminal transition requires a subagent terminal fact".to_owned(),
         ));
     }
-    if let Some(notice) = &notice {
-        if notice.source != crate::message::types::UserSource::Runtime
-            || notice.kind != crate::message::types::InboundKind::Message
-        {
-            return Err(ConversationStoreError::InvalidReference(
-                "a subagent terminal notice is runtime-authored only".to_owned(),
-            ));
-        }
+    if let Some(notice) = &notice
+        && (notice.source != crate::message::types::UserSource::Runtime
+            || notice.kind != crate::message::types::InboundKind::Message)
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "a subagent terminal notice is runtime-authored only".to_owned(),
+        ));
     }
     store.accept_subagent_terminal(notice, draft, event)
 }
