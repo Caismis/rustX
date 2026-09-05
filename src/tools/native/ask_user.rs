@@ -4,7 +4,6 @@
 //! invocation contains one bounded questionnaire and publishes exactly one
 //! interaction through the runtime-owned `InteractionCoordinator`.
 
-use futures_util::future::BoxFuture;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -17,7 +16,7 @@ use crate::events::{
 use crate::runtime::interaction::QuestionnaireFacts;
 use crate::runtime::{InteractionOutcome, InteractionResponse};
 use crate::tools::deadline::ToolProgressCapability;
-use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
+use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
 use crate::tools::native::support::{cancelled_result, failed_result, success_json};
 use crate::tools::types::{
@@ -144,47 +143,51 @@ fn definition() -> ToolDefinition {
 struct AskUserExecutor;
 
 impl ToolExecutor for AskUserExecutor {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
-    ) -> BoxFuture<'a, ToolExecutionResult> {
-        Box::pin(async move {
-            let input: AskUserInput = match serde_json::from_value(invocation.arguments) {
-                Ok(input) => input,
-                Err(error) => {
-                    return failed_result(format!(
-                        "ask_user received an invocation that was not preflight-normalized: {error}"
-                    ));
+    ) -> ToolExecutionHandle<'a> {
+        let cancellation = context.cancellation.clone();
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                let input: AskUserInput = match serde_json::from_value(invocation.arguments) {
+                    Ok(input) => input,
+                    Err(error) => {
+                        return failed_result(format!(
+                            "ask_user received an invocation that was not preflight-normalized: {error}"
+                        ));
+                    }
+                };
+                let specification = input.specification();
+                if let Err(error) = validate_questionnaire(&specification) {
+                    return failed_result(format!("invalid ask_user arguments: {error}"));
                 }
-            };
-            let specification = input.specification();
-            if let Err(error) = validate_questionnaire(&specification) {
-                return failed_result(format!("invalid ask_user arguments: {error}"));
-            }
-            let Some(requester) = context.questionnaire_requester() else {
-                return failed_result("ask_user interaction provider unavailable");
-            };
-            let outcome = requester
-                .request_questionnaire(QuestionnaireFacts {
-                    turn: 0,
-                    questionnaire: specification.clone(),
-                })
-                .await;
-            match outcome {
-                Ok(InteractionOutcome::Responded {
-                    response: InteractionResponse::Questionnaire { response },
-                }) => questionnaire_result(&specification, &response),
-                Ok(InteractionOutcome::Responded { .. }) => {
-                    failed_result("ask_user received a mismatched interaction response")
+                let Some(requester) = context.questionnaire_requester() else {
+                    return failed_result("ask_user interaction provider unavailable");
+                };
+                let outcome = requester
+                    .request_questionnaire(QuestionnaireFacts {
+                        turn: 0,
+                        questionnaire: specification.clone(),
+                    })
+                    .await;
+                match outcome {
+                    Ok(InteractionOutcome::Responded {
+                        response: InteractionResponse::Questionnaire { response },
+                    }) => questionnaire_result(&specification, &response),
+                    Ok(InteractionOutcome::Responded { .. }) => {
+                        failed_result("ask_user received a mismatched interaction response")
+                    }
+                    Ok(InteractionOutcome::Cancelled { reason }) => cancelled_result(reason),
+                    Err(failure) if failure.is_unavailable() => {
+                        failed_result("ask_user interaction provider unavailable")
+                    }
+                    Err(_) => failed_result("ask_user interaction control path failed"),
                 }
-                Ok(InteractionOutcome::Cancelled { reason }) => cancelled_result(reason),
-                Err(failure) if failure.is_unavailable() => {
-                    failed_result("ask_user interaction provider unavailable")
-                }
-                Err(_) => failed_result("ask_user interaction control path failed"),
-            }
-        })
+            }),
+            cancellation,
+        )
     }
 
     fn progress_capability(&self) -> ToolProgressCapability {

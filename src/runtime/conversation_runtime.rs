@@ -5533,16 +5533,19 @@ mod tests {
     }
 
     impl ToolExecutor for ParkedMcpBackgroundExecutor {
-        fn execute<'a>(
+        fn start<'a>(
             &'a self,
             _invocation: ToolInvocation,
-            _context: ToolExecutionContext<'a>,
-        ) -> BoxFuture<'a, crate::tools::types::ToolExecutionResult> {
-            Box::pin(async move {
-                self.started.notify_one();
-                self.release.notified().await;
-                success_result("background settled")
-            })
+            context: ToolExecutionContext<'a>,
+        ) -> crate::tools::executor::ToolExecutionHandle<'a> {
+            crate::tools::executor::ToolExecutionHandle::settled_by_operation(
+                Box::pin(async move {
+                    self.started.notify_one();
+                    self.release.notified().await;
+                    success_result("background settled")
+                }),
+                context.cancellation.clone(),
+            )
         }
 
         fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
@@ -9381,7 +9384,7 @@ mod tests {
         let progress = NoProgressForMcp;
         let tool_runtime = runtime.tool_runtime();
         let old_result = old_executor
-            .execute(
+            .start(
                 ToolInvocation {
                     call_id: ToolCallId::new("old-generation-call"),
                     tool_id: old_definition.id,
@@ -9403,6 +9406,7 @@ mod tests {
                     tool_runtime.environment(),
                 ),
             )
+            .completion
             .await;
         assert!(matches!(old_result.status, ToolExecutionStatus::Success));
 
@@ -11843,29 +11847,32 @@ mod tests {
     }
 
     impl crate::tools::executor::ToolExecutor for GatedBackgroundExecutor {
-        fn execute<'a>(
+        fn start<'a>(
             &'a self,
             _invocation: crate::tools::types::ToolInvocation,
-            _context: crate::tools::executor::ToolExecutionContext<'a>,
-        ) -> futures_util::future::BoxFuture<'a, crate::tools::types::ToolExecutionResult> {
+            context: crate::tools::executor::ToolExecutionContext<'a>,
+        ) -> crate::tools::executor::ToolExecutionHandle<'a> {
             let started = self.started.clone();
             let mut release = self.release.subscribe();
-            Box::pin(async move {
-                started.send_replace(true);
-                release
-                    .wait_for(|released| *released)
-                    .await
-                    .expect("release channel stays open");
-                crate::tools::types::ToolExecutionResult {
-                    status: crate::tools::types::ToolExecutionStatus::Success,
-                    content: Vec::new(),
-                    duration_ms: 0,
-                    exit_code: None,
-                    artifacts: Vec::new(),
-                    truncation: None,
-                    managed_output: None,
-                }
-            })
+            crate::tools::executor::ToolExecutionHandle::settled_by_operation(
+                Box::pin(async move {
+                    started.send_replace(true);
+                    release
+                        .wait_for(|released| *released)
+                        .await
+                        .expect("release channel stays open");
+                    crate::tools::types::ToolExecutionResult {
+                        status: crate::tools::types::ToolExecutionStatus::Success,
+                        content: Vec::new(),
+                        duration_ms: 0,
+                        exit_code: None,
+                        artifacts: Vec::new(),
+                        truncation: None,
+                        managed_output: None,
+                    }
+                }),
+                context.cancellation.clone(),
+            )
         }
 
         fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
@@ -13369,35 +13376,39 @@ mod tests {
     }
 
     impl crate::tools::executor::ToolExecutor for CauseProbeTool {
-        fn execute<'a>(
+        fn start<'a>(
             &'a self,
             _invocation: crate::tools::types::ToolInvocation,
             context: crate::tools::executor::ToolExecutionContext<'a>,
-        ) -> futures_util::future::BoxFuture<'a, crate::tools::types::ToolExecutionResult> {
+        ) -> crate::tools::executor::ToolExecutionHandle<'a> {
             let started = self.started.clone();
             let observed = self.observed.clone();
-            Box::pin(async move {
-                // The context is built at tool start, before any cancellation
-                // exists: a start-time copy of the cause could only ever be
-                // the attempt's default.
-                assert!(!context.cancellation.is_cancelled());
-                started.send_replace(true);
-                context.cancellation.cancelled().await;
-                let reason = context.cancellation.reason();
-                *observed.lock().expect("observed cause lock") = Some(reason);
-                crate::tools::types::ToolExecutionResult {
-                    status: crate::tools::types::ToolExecutionStatus::Cancelled {
-                        reason,
-                        phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
-                    },
-                    content: Vec::new(),
-                    duration_ms: 0,
-                    exit_code: None,
-                    artifacts: Vec::new(),
-                    truncation: None,
-                    managed_output: None,
-                }
-            })
+            let cancellation = context.cancellation.clone();
+            crate::tools::executor::ToolExecutionHandle::settled_by_operation(
+                Box::pin(async move {
+                    // The context is built at tool start, before any cancellation
+                    // exists: a start-time copy of the cause could only ever be
+                    // the attempt's default.
+                    assert!(!context.cancellation.is_cancelled());
+                    started.send_replace(true);
+                    context.cancellation.cancelled().await;
+                    let reason = context.cancellation.reason();
+                    *observed.lock().expect("observed cause lock") = Some(reason);
+                    crate::tools::types::ToolExecutionResult {
+                        status: crate::tools::types::ToolExecutionStatus::Cancelled {
+                            reason,
+                            phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
+                        },
+                        content: Vec::new(),
+                        duration_ms: 0,
+                        exit_code: None,
+                        artifacts: Vec::new(),
+                        truncation: None,
+                        managed_output: None,
+                    }
+                }),
+                cancellation,
+            )
         }
 
         fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
@@ -13626,42 +13637,46 @@ mod tests {
     }
 
     impl ToolExecutor for SettleGateProbeTool {
-        fn execute<'a>(
+        fn start<'a>(
             &'a self,
             _invocation: ToolInvocation,
             context: ToolExecutionContext<'a>,
-        ) -> BoxFuture<'a, crate::tools::types::ToolExecutionResult> {
+        ) -> crate::tools::executor::ToolExecutionHandle<'a> {
             let started = self.started.clone();
             let cancel_observed = self.cancel_observed.clone();
             let settle_gate = self.settle_gate.clone();
-            Box::pin(async move {
-                assert!(!context.cancellation.is_cancelled());
-                started.send_replace(true);
-                context.cancellation.cancelled().await;
-                cancel_observed.send_replace(true);
-                // The settlement gate models late physical settlement
-                // evidence: the outcome is already decided, but the
-                // execution future does not resolve until the executor's
-                // settlement is real.
-                let mut released = settle_gate.subscribe();
-                released
-                    .wait_for(|is_released| *is_released)
-                    .await
-                    .expect("settle gate stays open");
-                let reason = context.cancellation.reason();
-                crate::tools::types::ToolExecutionResult {
-                    status: ToolExecutionStatus::Cancelled {
-                        reason,
-                        phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
-                    },
-                    content: Vec::new(),
-                    duration_ms: 0,
-                    exit_code: None,
-                    artifacts: Vec::new(),
-                    truncation: None,
-                    managed_output: None,
-                }
-            })
+            let cancellation = context.cancellation.clone();
+            crate::tools::executor::ToolExecutionHandle::settled_by_operation(
+                Box::pin(async move {
+                    assert!(!context.cancellation.is_cancelled());
+                    started.send_replace(true);
+                    context.cancellation.cancelled().await;
+                    cancel_observed.send_replace(true);
+                    // The settlement gate models late physical settlement
+                    // evidence: the outcome is already decided, but the
+                    // settlement plane's drive of the operation does not
+                    // resolve until the executor's settlement is real.
+                    let mut released = settle_gate.subscribe();
+                    released
+                        .wait_for(|is_released| *is_released)
+                        .await
+                        .expect("settle gate stays open");
+                    let reason = context.cancellation.reason();
+                    crate::tools::types::ToolExecutionResult {
+                        status: ToolExecutionStatus::Cancelled {
+                            reason,
+                            phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
+                        },
+                        content: Vec::new(),
+                        duration_ms: 0,
+                        exit_code: None,
+                        artifacts: Vec::new(),
+                        truncation: None,
+                        managed_output: None,
+                    }
+                }),
+                cancellation,
+            )
         }
 
         fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
@@ -13784,6 +13799,28 @@ mod tests {
             )),
             "the frozen construction-time hard deadline fired for the admitted execution"
         );
+        assert!(
+            events.iter().any(|envelope| matches!(
+                &envelope.event,
+                RuntimeEvent::ToolExecutionCancellationRequested {
+                    cause: crate::tools::deadline::ToolCancellationCause::Deadline(
+                        crate::tools::deadline::ToolDeadlineKind::Hard
+                    ),
+                    ..
+                }
+            )),
+            "the deadline winner's physical cancellation request is journaled"
+        );
+        assert!(
+            events.iter().any(|envelope| matches!(
+                &envelope.event,
+                RuntimeEvent::ToolExecutionSettlementObserved {
+                    certainty: crate::tools::deadline::ToolSettlementCertainty::Confirmed,
+                    ..
+                }
+            )),
+            "the executor's proven settlement is journaled"
+        );
         let completed = events
             .iter()
             .filter_map(|envelope| match &envelope.event {
@@ -13807,10 +13844,11 @@ mod tests {
     /// Runtime drain cancels the admitted attempt and requests physical
     /// cancellation of its foreground execution, but `shutdown` cannot
     /// complete while the executor's settlement is still unresolved — the
-    /// drain barrier awaits the executor's real terminal evidence (bounded
-    /// by the settlement-confirmation window, which this test never
-    /// approaches on the wall clock) rather than dropping the execution
-    /// future.
+    /// drain barrier awaits the executor's settlement authority driving the
+    /// operation to its real terminal evidence (guarded against a
+    /// contract-violating executor by the settlement control-plane guard,
+    /// which this test never approaches on the wall clock) rather than
+    /// abandoning the operation.
     ///
     /// Happens-before: `cancel_observed` proves the drain's cancellation
     /// request already reached the executor and the executor is now parked
@@ -13885,6 +13923,515 @@ mod tests {
                 .count(),
             1,
             "exactly one terminal result is committed for the call"
+        );
+    }
+
+    /// A foreground executor with a genuinely split handle (Issue #204
+    /// drain cut, confirmed path): the physical completion plane parks
+    /// forever, so only the independent cancellation/settlement control
+    /// plane can report. The settlement plane observes the cancellation
+    /// request, signals `cancel_observed`, then parks on the settle gate
+    /// before reporting `Confirmed` with its proven cancellation result —
+    /// the case where runtime drain must keep awaiting the settlement
+    /// authority even though the completion plane can never return.
+    struct DetachedConfirmGateTool {
+        started: tokio::sync::watch::Sender<bool>,
+        cancel_observed: tokio::sync::watch::Sender<bool>,
+        settle_gate: tokio::sync::watch::Sender<bool>,
+    }
+
+    impl DetachedConfirmGateTool {
+        fn new() -> (
+            Self,
+            tokio::sync::watch::Receiver<bool>,
+            tokio::sync::watch::Receiver<bool>,
+            tokio::sync::watch::Sender<bool>,
+        ) {
+            let (started, started_rx) = tokio::sync::watch::channel(false);
+            let (cancel_observed, cancel_observed_rx) = tokio::sync::watch::channel(false);
+            let (settle_gate, _) = tokio::sync::watch::channel(false);
+            (
+                Self {
+                    started,
+                    cancel_observed,
+                    settle_gate: settle_gate.clone(),
+                },
+                started_rx,
+                cancel_observed_rx,
+                settle_gate,
+            )
+        }
+    }
+
+    impl ToolExecutor for DetachedConfirmGateTool {
+        fn start<'a>(
+            &'a self,
+            _invocation: ToolInvocation,
+            context: ToolExecutionContext<'a>,
+        ) -> crate::tools::executor::ToolExecutionHandle<'a> {
+            self.started.send_replace(true);
+            // The physical completion plane can never resolve: this
+            // execution settles through its settlement authority or not at
+            // all.
+            let completion: BoxFuture<'a, crate::tools::types::ToolExecutionResult> =
+                Box::pin(std::future::pending());
+            let cancel_observed = self.cancel_observed.clone();
+            let settle_gate = self.settle_gate.clone();
+            let settlement: BoxFuture<'a, crate::tools::executor::ToolSettlement> =
+                Box::pin(async move {
+                    context.cancellation.cancelled().await;
+                    cancel_observed.send_replace(true);
+                    // The executor's settlement evidence arrives only when
+                    // its physical cancellation path has genuinely run to
+                    // its end.
+                    let mut released = settle_gate.subscribe();
+                    released
+                        .wait_for(|is_released| *is_released)
+                        .await
+                        .expect("settle gate stays open");
+                    let reason = context.cancellation.reason();
+                    crate::tools::executor::ToolSettlement::Confirmed(
+                        crate::tools::types::ToolExecutionResult {
+                            status: ToolExecutionStatus::Cancelled {
+                                reason,
+                                phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
+                            },
+                            content: Vec::new(),
+                            duration_ms: 0,
+                            exit_code: None,
+                            artifacts: Vec::new(),
+                            truncation: None,
+                            managed_output: None,
+                        },
+                    )
+                });
+            crate::tools::executor::ToolExecutionHandle::new(completion, settlement)
+        }
+
+        fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+            crate::tools::deadline::ToolProgressCapability::None
+        }
+    }
+
+    /// A foreground executor modelling an execution whose physical activity
+    /// is detached from the completion plane the lifecycle drives (Issue
+    /// #204 drain cut, unconfirmed path): `start` dispatches the physical
+    /// operation as a separate task parked on a test gate, returns a
+    /// completion plane that parks forever, and its settlement plane
+    /// reports `Unconfirmed` promptly once it observes the cancellation
+    /// request — local operation ownership is consumed, but terminality
+    /// past the external-effect frontier cannot be proven.
+    ///
+    /// Ownership after `OutcomeUnknown`: what remains is the executor's own
+    /// bounded residual physical ownership — the parked detached task,
+    /// whose `JoinHandle` the fixture retains and whose finish the test
+    /// drives and joins explicitly. The residual task is sealed from
+    /// canonical history by the closed call slot: it can never publish a
+    /// canonical fact, a late `ToolResult`, or a second
+    /// `ToolExecutionCompleted`.
+    struct DetachedUnconfirmedTool {
+        started: tokio::sync::watch::Sender<bool>,
+        cancel_observed: tokio::sync::watch::Sender<bool>,
+        physical_finish_gate: tokio::sync::watch::Sender<bool>,
+        physical_finished: tokio::sync::watch::Sender<bool>,
+        physical_task: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    }
+
+    impl DetachedUnconfirmedTool {
+        #[allow(clippy::type_complexity)] // one test-fixture constructor tuple
+        fn new() -> (
+            Self,
+            tokio::sync::watch::Receiver<bool>,
+            tokio::sync::watch::Receiver<bool>,
+            tokio::sync::watch::Sender<bool>,
+            tokio::sync::watch::Receiver<bool>,
+            Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+        ) {
+            let (started, started_rx) = tokio::sync::watch::channel(false);
+            let (cancel_observed, cancel_observed_rx) = tokio::sync::watch::channel(false);
+            let (physical_finish_gate, _) = tokio::sync::watch::channel(false);
+            let (physical_finished, physical_finished_rx) = tokio::sync::watch::channel(false);
+            let physical_task = Arc::new(std::sync::Mutex::new(None));
+            (
+                Self {
+                    started,
+                    cancel_observed,
+                    physical_finish_gate: physical_finish_gate.clone(),
+                    physical_finished,
+                    physical_task: physical_task.clone(),
+                },
+                started_rx,
+                cancel_observed_rx,
+                physical_finish_gate,
+                physical_finished_rx,
+                physical_task,
+            )
+        }
+    }
+
+    impl ToolExecutor for DetachedUnconfirmedTool {
+        fn start<'a>(
+            &'a self,
+            _invocation: ToolInvocation,
+            context: ToolExecutionContext<'a>,
+        ) -> crate::tools::executor::ToolExecutionHandle<'a> {
+            self.started.send_replace(true);
+            // The physical operation is detached from the completion plane:
+            // it parks on its finish gate and publishes its own finish
+            // observation. The fixture retains the JoinHandle — explicit
+            // executor-side cleanup ownership.
+            let finish_gate = self.physical_finish_gate.clone();
+            let physical_finished = self.physical_finished.clone();
+            let task = tokio::spawn(async move {
+                let mut released = finish_gate.subscribe();
+                released
+                    .wait_for(|is_released| *is_released)
+                    .await
+                    .expect("physical finish gate stays open");
+                physical_finished.send_replace(true);
+            });
+            self.physical_task
+                .lock()
+                .expect("physical task lock")
+                .replace(task);
+            let completion: BoxFuture<'a, crate::tools::types::ToolExecutionResult> =
+                Box::pin(std::future::pending());
+            let cancel_observed = self.cancel_observed.clone();
+            let settlement: BoxFuture<'a, crate::tools::executor::ToolSettlement> =
+                Box::pin(async move {
+                    context.cancellation.cancelled().await;
+                    cancel_observed.send_replace(true);
+                    crate::tools::executor::ToolSettlement::Unconfirmed {
+                        detail: "the dispatched operation crossed the external-effect frontier; \
+                                 remote terminality cannot be proven"
+                            .to_owned(),
+                    }
+                });
+            crate::tools::executor::ToolExecutionHandle::new(completion, settlement)
+        }
+
+        fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+            crate::tools::deadline::ToolProgressCapability::None
+        }
+    }
+
+    /// The execution-fact sequence of one call within one event list, in
+    /// journal order — the drain-cut counterpart of the scripted suite's
+    /// fact-sequence audit.
+    fn drain_call_facts(events: &[RuntimeEvent], call_id: &ToolCallId) -> Vec<&'static str> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                RuntimeEvent::ToolExecutionStarted { tool_call_id, .. }
+                    if tool_call_id == call_id =>
+                {
+                    Some("started")
+                }
+                RuntimeEvent::ToolExecutionProgress { tool_call_id, .. }
+                    if tool_call_id == call_id =>
+                {
+                    Some("progress")
+                }
+                RuntimeEvent::ToolExecutionDeadlineFired { tool_call_id, .. }
+                    if tool_call_id == call_id =>
+                {
+                    Some("deadline")
+                }
+                RuntimeEvent::ToolExecutionCancellationRequested { tool_call_id, .. }
+                    if tool_call_id == call_id =>
+                {
+                    Some("cancellation-requested")
+                }
+                RuntimeEvent::ToolExecutionSettlementObserved { tool_call_id, .. }
+                    if tool_call_id == call_id =>
+                {
+                    Some("settlement")
+                }
+                RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. }
+                    if tool_call_id == call_id =>
+                {
+                    Some("completed")
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Issue #204 (drain, confirmed split settlement): runtime drain awaits
+    /// the executor's settlement AUTHORITY, not the physical completion
+    /// plane. The fixture's completion plane parks forever; its settlement
+    /// plane reports `Confirmed` only after a test gate releases. While the
+    /// gate is closed the shutdown future must still be pending; releasing
+    /// it lets drain cross the settlement barrier and reach quiescence,
+    /// with the canonical `Cancelled { RuntimeShutdown }` committed exactly
+    /// once.
+    ///
+    /// Happens-before: `cancel_observed` proves the drain's cancellation
+    /// request already reached the executor and the settlement plane is
+    /// parked on its gate, mid-settlement — the shutdown result channel is
+    /// provably empty at that instant.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn shutdown_waits_for_confirmed_settlement_then_drains() {
+        let (tool, mut started, mut cancel_observed, settle_release) =
+            DetachedConfirmGateTool::new();
+        let (registry, script) = cause_probe_registry_and_script(Arc::new(tool));
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (runtime, _model) =
+            headless_runtime(&dir, vec![script, one_turn_script()], Some(registry), None).await;
+        runtime.activate();
+        runtime
+            .submit_inbound(text_content("start the foreground tool"))
+            .expect("accepted");
+        within_liveness_guard(
+            "the foreground tool to start before any cancellation",
+            started.wait_for(|is_started| *is_started),
+        )
+        .await
+        .expect("start channel stays open");
+
+        let runtime_for_shutdown = runtime.clone();
+        let (shutdown_sender, mut shutdown_receiver) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let _ = shutdown_sender.send(runtime_for_shutdown.shutdown().await);
+        });
+        within_liveness_guard(
+            "the settlement plane to observe the drain's cancellation request",
+            cancel_observed.wait_for(|observed| *observed),
+        )
+        .await
+        .expect("cancel-observation channel stays open");
+        assert_eq!(
+            shutdown_receiver.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty),
+            "drain cannot complete while the settlement authority is still gated"
+        );
+
+        settle_release.send_replace(true);
+        within_liveness_guard("runtime shutdown", shutdown_receiver)
+            .await
+            .expect("shutdown task stays alive")
+            .expect("drain reaches quiescence");
+
+        let events = runtime
+            .tool_runtime()
+            .durable_store()
+            .read_events(None, 256)
+            .expect("events")
+            .events;
+        assert!(
+            events.iter().any(|envelope| matches!(
+                &envelope.event,
+                RuntimeEvent::AttemptCancelled {
+                    reason: CancellationReason::RuntimeShutdown,
+                    ..
+                }
+            )),
+            "the attempt terminal cancellation event is journaled"
+        );
+        assert!(
+            events.iter().any(|envelope| matches!(
+                &envelope.event,
+                RuntimeEvent::ToolExecutionSettlementObserved {
+                    certainty: crate::tools::deadline::ToolSettlementCertainty::Confirmed,
+                    ..
+                }
+            )),
+            "the executor's confirmed settlement evidence is journaled"
+        );
+        let completed = events
+            .iter()
+            .filter_map(|envelope| match &envelope.event {
+                RuntimeEvent::ToolExecutionCompleted {
+                    tool_call_id,
+                    result,
+                    ..
+                } if tool_call_id == &ToolCallId::new("call-cause-probe") => Some(result),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            completed.len(),
+            1,
+            "exactly one terminal result is committed for the call"
+        );
+        assert!(
+            matches!(
+                completed[0].status,
+                ToolExecutionStatus::Cancelled {
+                    reason: CancellationReason::RuntimeShutdown,
+                    phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
+                }
+            ),
+            "the attempt winner owns the canonical reason of the proven cancellation: {:?}",
+            completed[0].status
+        );
+    }
+
+    /// Issue #204 (drain, unconfirmed split settlement): drain waits for
+    /// the attempt's canonical settlement — which now awaits the
+    /// executor's settlement authority — and an `Unconfirmed` settlement
+    /// resolves that wait. The canonical `OutcomeUnknown` is committed and
+    /// `shutdown` RETURNS even though the fixture's detached physical task
+    /// is still parked: the settlement plane consumed the executor's local
+    /// operation ownership, and the residual physical task is the
+    /// executor's (fixture's) bounded contract responsibility, sealed from
+    /// canonical history by the closed call slot.
+    ///
+    /// Happens-before: `cancel_observed` proves the drain's cancellation
+    /// request reached the executor; the settlement plane then reports
+    /// `Unconfirmed` without any further test input, so drain returning
+    /// proves it required no physical completion. Only afterwards does the
+    /// test drive the residual physical task to its finish and join it,
+    /// asserting the journal gained no new facts for the call.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // one linear deterministic scenario
+    async fn shutdown_drains_past_unconfirmed_settlement() {
+        let (
+            tool,
+            mut started,
+            mut cancel_observed,
+            physical_finish_gate,
+            physical_finished,
+            physical_task,
+        ) = DetachedUnconfirmedTool::new();
+        let (registry, script) = cause_probe_registry_and_script(Arc::new(tool));
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (runtime, _model) =
+            headless_runtime(&dir, vec![script, one_turn_script()], Some(registry), None).await;
+        runtime.activate();
+        runtime
+            .submit_inbound(text_content("start the foreground tool"))
+            .expect("accepted");
+        within_liveness_guard(
+            "the foreground tool to start before any cancellation",
+            started.wait_for(|is_started| *is_started),
+        )
+        .await
+        .expect("start channel stays open");
+
+        let runtime_for_shutdown = runtime.clone();
+        let (shutdown_sender, shutdown_receiver) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let _ = shutdown_sender.send(runtime_for_shutdown.shutdown().await);
+        });
+        within_liveness_guard(
+            "the executor to observe the drain's cancellation request",
+            cancel_observed.wait_for(|observed| *observed),
+        )
+        .await
+        .expect("cancel-observation channel stays open");
+        within_liveness_guard("runtime shutdown", shutdown_receiver)
+            .await
+            .expect("shutdown task stays alive")
+            .expect("drain reaches quiescence while the residual physical task is still parked");
+        assert!(
+            !*physical_finished.borrow(),
+            "the residual physical operation is still parked when drain returns"
+        );
+
+        let call_id = ToolCallId::new("call-cause-probe");
+        let store = runtime.tool_runtime().durable_store();
+        let events: Vec<RuntimeEvent> = store
+            .read_events(None, 256)
+            .expect("events")
+            .events
+            .into_iter()
+            .map(|envelope| envelope.event)
+            .collect();
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                RuntimeEvent::AttemptCancelled {
+                    reason: CancellationReason::RuntimeShutdown,
+                    ..
+                }
+            )),
+            "the attempt terminal cancellation event is journaled"
+        );
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                RuntimeEvent::ToolExecutionCancellationRequested {
+                    cause: crate::tools::deadline::ToolCancellationCause::Attempt(
+                        CancellationReason::RuntimeShutdown
+                    ),
+                    ..
+                }
+            )),
+            "the drain's physical cancellation request is journaled"
+        );
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                RuntimeEvent::ToolExecutionSettlementObserved {
+                    certainty: crate::tools::deadline::ToolSettlementCertainty::Unconfirmed,
+                    ..
+                }
+            )),
+            "the executor's unconfirmed settlement evidence is journaled"
+        );
+        let completed = events
+            .iter()
+            .filter_map(|event| match event {
+                RuntimeEvent::ToolExecutionCompleted {
+                    tool_call_id,
+                    result,
+                    ..
+                } if tool_call_id == &call_id => Some(result),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            completed.len(),
+            1,
+            "exactly one terminal result is committed for the call"
+        );
+        let ToolExecutionStatus::OutcomeUnknown { detail } = &completed[0].status else {
+            panic!(
+                "unconfirmed post-frontier settlement is OutcomeUnknown, never a confirmed \
+                 cancellation: {:?}",
+                completed[0].status
+            );
+        };
+        assert!(
+            detail.contains("external-effect frontier"),
+            "the executor's own unconfirmed frontier evidence: {detail}"
+        );
+        let facts_before_cleanup = drain_call_facts(&events, &call_id);
+
+        // Executor-side cleanup of the residual physical ownership: the
+        // fixture releases the parked operation's finish gate and joins it
+        // explicitly. The lifecycle never owned this task.
+        physical_finish_gate.send_replace(true);
+        let task = physical_task
+            .lock()
+            .expect("physical task lock")
+            .take()
+            .expect("the physical operation was dispatched exactly once");
+        within_liveness_guard("the residual physical task to finish", task)
+            .await
+            .expect("the residual physical task joins");
+        assert!(
+            *physical_finished.borrow(),
+            "the residual physical operation published its own finish"
+        );
+
+        // Sealed from canonical history: the journal gained no new facts
+        // for the call — no second ToolExecutionCompleted, no late
+        // progress, cancellation, or settlement fact. The terminal
+        // canonical state is absorbing even though the executor's physical
+        // cleanup completed after drain returned.
+        let later: Vec<RuntimeEvent> = store
+            .read_events(None, 256)
+            .expect("events")
+            .events
+            .into_iter()
+            .map(|envelope| envelope.event)
+            .collect();
+        assert_eq!(
+            drain_call_facts(&later, &call_id),
+            facts_before_cleanup,
+            "residual physical cleanup can never publish canonical facts"
         );
     }
 

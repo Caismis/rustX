@@ -7,10 +7,8 @@
 
 mod input;
 
-use futures_util::future::BoxFuture;
-
 use crate::tools::deadline::ToolProgressCapability;
-use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
+use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::limits::NATIVE_FILE_TOOL_MAX_BYTES;
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::search::SearchRoot;
@@ -41,12 +39,16 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
 pub struct GlobTool;
 
 impl ToolExecutor for GlobTool {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
-    ) -> BoxFuture<'a, ToolExecutionResult> {
-        Box::pin(async move { run_glob(&invocation, &context) })
+    ) -> ToolExecutionHandle<'a> {
+        let cancellation = context.cancellation.clone();
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move { run_glob(&invocation, &context) }),
+            cancellation,
+        )
     }
 
     fn progress_capability(&self) -> ToolProgressCapability {

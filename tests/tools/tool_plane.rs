@@ -89,7 +89,7 @@ async fn run_tool_unchecked(
     let executor = fixture.registry.executor(&definition.id);
     let reporter = crate::common::NoopProgress;
     executor
-        .execute(
+        .start(
             ToolInvocation {
                 call_id: ToolCallId::new("call-unchecked"),
                 tool_id: definition.id,
@@ -111,6 +111,7 @@ async fn run_tool_unchecked(
                 fixture.runtime.environment(),
             ),
         )
+        .completion
         .await
 }
 

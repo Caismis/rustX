@@ -59,7 +59,9 @@ use rustx::runtime::identity::{
 };
 use rustx::runtime::types::{CancellationReason, ConversationLifecycle, RuntimeError};
 use rustx::tools::ToolProgressCapability;
-use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
+use rustx::tools::executor::{
+    ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistry,
+};
 use rustx::tools::types::{
     ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolOrigin,
@@ -605,25 +607,28 @@ impl InstantTool {
 }
 
 impl ToolExecutor for InstantTool {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         _invocation: ToolInvocation,
-        _context: ToolExecutionContext<'a>,
-    ) -> BoxFuture<'a, ToolExecutionResult> {
+        context: ToolExecutionContext<'a>,
+    ) -> ToolExecutionHandle<'a> {
         let name = self.definition.name.clone();
-        Box::pin(async move {
-            ToolExecutionResult {
-                status: ToolExecutionStatus::Success,
-                content: vec![rustx::tools::types::ToolResultContent::Text(TextBlock {
-                    text: format!("{name} done"),
-                })],
-                duration_ms: 1,
-                exit_code: Some(0),
-                artifacts: Vec::new(),
-                truncation: None,
-                managed_output: None,
-            }
-        })
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                ToolExecutionResult {
+                    status: ToolExecutionStatus::Success,
+                    content: vec![rustx::tools::types::ToolResultContent::Text(TextBlock {
+                        text: format!("{name} done"),
+                    })],
+                    duration_ms: 1,
+                    exit_code: Some(0),
+                    artifacts: Vec::new(),
+                    truncation: None,
+                    managed_output: None,
+                }
+            }),
+            context.cancellation.clone(),
+        )
     }
 
     fn progress_capability(&self) -> ToolProgressCapability {
@@ -718,40 +723,43 @@ impl GatedToolHandle {
 }
 
 impl ToolExecutor for GatedTool {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         invocation: ToolInvocation,
-        _context: ToolExecutionContext<'a>,
-    ) -> BoxFuture<'a, ToolExecutionResult> {
+        context: ToolExecutionContext<'a>,
+    ) -> ToolExecutionHandle<'a> {
         let started = self.started.clone();
         let mut release = self.release.subscribe();
         self.invocations
             .lock()
             .expect("gated invocation lock")
             .push(invocation.clone());
-        Box::pin(async move {
-            started.send_replace(true);
-            release
-                .wait_for(|released| *released)
-                .await
-                .expect("gated tool release channel stays open");
-            self.completion_order
-                .lock()
-                .expect("completion order lock")
-                .push(invocation.tool_name.clone());
-            self.completed.send_replace(true);
-            ToolExecutionResult {
-                status: ToolExecutionStatus::Success,
-                content: vec![rustx::tools::types::ToolResultContent::Text(TextBlock {
-                    text: format!("{} done", invocation.tool_name),
-                })],
-                duration_ms: 1,
-                exit_code: Some(0),
-                artifacts: Vec::new(),
-                truncation: None,
-                managed_output: None,
-            }
-        })
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                started.send_replace(true);
+                release
+                    .wait_for(|released| *released)
+                    .await
+                    .expect("gated tool release channel stays open");
+                self.completion_order
+                    .lock()
+                    .expect("completion order lock")
+                    .push(invocation.tool_name.clone());
+                self.completed.send_replace(true);
+                ToolExecutionResult {
+                    status: ToolExecutionStatus::Success,
+                    content: vec![rustx::tools::types::ToolResultContent::Text(TextBlock {
+                        text: format!("{} done", invocation.tool_name),
+                    })],
+                    duration_ms: 1,
+                    exit_code: Some(0),
+                    artifacts: Vec::new(),
+                    truncation: None,
+                    managed_output: None,
+                }
+            }),
+            context.cancellation.clone(),
+        )
     }
 
     fn progress_capability(&self) -> ToolProgressCapability {

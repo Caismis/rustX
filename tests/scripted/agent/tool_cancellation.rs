@@ -28,7 +28,9 @@ use rustx::publication::{PublicationAudit, PublicationFrame, PublicationStreamSt
 use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolCallId};
 use rustx::runtime::types::CancellationReason;
 use rustx::tools::ToolProgressCapability;
-use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
+use rustx::tools::executor::{
+    ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistry,
+};
 use rustx::tools::types::{
     ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
 };
@@ -348,14 +350,17 @@ impl PhysicalCancelledTool {
 }
 
 impl ToolExecutor for PhysicalCancelledTool {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         _invocation: ToolInvocation,
-        _context: ToolExecutionContext<'a>,
-    ) -> BoxFuture<'a, ToolExecutionResult> {
+        context: ToolExecutionContext<'a>,
+    ) -> ToolExecutionHandle<'a> {
         self.started.send_replace(true);
         let result = self.result.clone();
-        Box::pin(async move { result })
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move { result }),
+            context.cancellation.clone(),
+        )
     }
 
     fn progress_capability(&self) -> ToolProgressCapability {
@@ -372,24 +377,27 @@ impl LateCompletionTool {
 }
 
 impl ToolExecutor for LateCompletionTool {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         _invocation: ToolInvocation,
-        _context: ToolExecutionContext<'a>,
-    ) -> BoxFuture<'a, ToolExecutionResult> {
+        context: ToolExecutionContext<'a>,
+    ) -> ToolExecutionHandle<'a> {
         let started = self.started.clone();
         let mut release = self.release.subscribe();
         let side_effect = Arc::clone(&self.side_effect);
         let result = self.result.clone();
-        Box::pin(async move {
-            started.send_replace(true);
-            release
-                .wait_for(|released| *released)
-                .await
-                .expect("late completion release channel stays open");
-            side_effect.store(true, Ordering::SeqCst);
-            result
-        })
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                started.send_replace(true);
+                release
+                    .wait_for(|released| *released)
+                    .await
+                    .expect("late completion release channel stays open");
+                side_effect.store(true, Ordering::SeqCst);
+                result
+            }),
+            context.cancellation.clone(),
+        )
     }
 
     fn progress_capability(&self) -> ToolProgressCapability {

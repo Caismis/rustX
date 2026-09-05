@@ -220,11 +220,17 @@ async fn issue204_bash_hard_deadline_settles_proven_timed_out() {
                 event,
                 RuntimeEvent::ToolExecutionStarted { .. }
                     | RuntimeEvent::ToolExecutionDeadlineFired { .. }
+                    | RuntimeEvent::ToolExecutionCancellationRequested { .. }
+                    | RuntimeEvent::ToolExecutionSettlementObserved { .. }
                     | RuntimeEvent::ToolExecutionCompleted { .. }
             )
         })
         .collect();
-    assert_eq!(facts.len(), 3, "start, intent, terminal — exactly once");
+    assert_eq!(
+        facts.len(),
+        5,
+        "start, intent, cancellation request, settlement observation, terminal — exactly once"
+    );
     assert!(matches!(
         facts[0],
         RuntimeEvent::ToolExecutionStarted { .. }
@@ -238,6 +244,20 @@ async fn issue204_bash_hard_deadline_settles_proven_timed_out() {
     ));
     assert!(matches!(
         facts[2],
+        RuntimeEvent::ToolExecutionCancellationRequested {
+            cause: rustx::tools::deadline::ToolCancellationCause::Deadline(ToolDeadlineKind::Hard),
+            ..
+        }
+    ));
+    assert!(matches!(
+        facts[3],
+        RuntimeEvent::ToolExecutionSettlementObserved {
+            certainty: rustx::tools::deadline::ToolSettlementCertainty::Confirmed,
+            ..
+        }
+    ));
+    assert!(matches!(
+        facts[4],
         RuntimeEvent::ToolExecutionCompleted { .. }
     ));
 }

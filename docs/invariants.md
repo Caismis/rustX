@@ -3182,30 +3182,42 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   never fabricate heartbeat reports.
 - **Deadline expiration is cancellation intent, not settlement.** A deadline
   winner cancels exactly that execution's child cancellation signal and the
-  lifecycle then awaits the executor's physical settlement; dropping an
-  executor future is never settlement, and the lifecycle never abandons
-  ownership because its deadline expired. Executor-proven settlement after a
-  deadline winner settles canonically as `TimedOut`; an executor's honest
-  `OutcomeUnknown` (post-effect-frontier, terminality unproven) and any
-  executor-proven normal outcome survive untouched.
-- **Settlement is finite even for an uncooperative executor.** The
-  post-intent settlement wait is bounded by the settlement-confirmation
-  window (`TOOL_SETTLEMENT_CONFIRMATION`); proven executor evidence always
-  wins a tie with the window's expiry. When the window expires with the
-  execution future still unresolved, the accepted executor-owned settlement
-  mechanism is exhausted without proof of terminality past the
-  external-effect frontier: the canonical result is `OutcomeUnknown` —
-  never `TimedOut`, because an unreturned future is not a stopped operation
-  — and the lifecycle drops the uncooperative future, whose destructors are
-  the bounded physical cleanup. The committed terminal result is absorbing:
-  no late physical completion can publish a second result, emit a
-  post-terminal canonical event, or reopen the call's slot. No detached
-  runtime-owned execution task is left behind.
+  lifecycle then transitions to the executor's settlement authority: the
+  `ToolExecutor` boundary splits one started execution into
+  `ToolExecutionHandle { completion, settlement }` — the physical completion
+  plane and the independent cancellation/settlement control plane, both
+  executor-owned. Once intent wins, the lifecycle awaits only the settlement
+  plane and never polls the completion plane again; dropping an executor
+  future is never settlement, and the lifecycle never abandons ownership
+  because its deadline expired. The settlement plane returns typed
+  `ToolSettlement` evidence: `Confirmed` for executor-proven physical
+  terminality, `Unconfirmed` when the executor consumed its local operation
+  ownership while terminality past the external-effect frontier stayed
+  unprovable. Executor-proven settlement after a deadline winner settles
+  canonically as `TimedOut`; explicit `Unconfirmed` evidence settles as the
+  honest `OutcomeUnknown`, and any executor-proven normal outcome survives
+  untouched.
+- **Settlement is finite even for an executor that violates the settlement
+  contract.** The settlement control plane is the normal settlement
+  mechanism and is awaited without a timeout of its own; typed evidence
+  always wins a tie with the guard. `TOOL_SETTLEMENT_CONTROL_GUARD` exists
+  ONLY as protection against a broken executor whose settlement plane never
+  returns after observing the cancellation request: its expiry is a
+  settlement control-plane failure — an executor settlement-contract
+  violation, never settlement evidence, and never proof that the physical
+  operation stopped — so the canonical result is `OutcomeUnknown`, never
+  `TimedOut`. `OutcomeUnknown` comes only from explicit `Unconfirmed`
+  evidence or the guard, never from "the execution future did not return"
+  or from dropping a future. The committed terminal result is absorbing:
+  the closed call slot guarantees that no late physical completion, no
+  residual executor-owned physical cleanup, and no repeated intent can
+  publish a second result, emit a post-terminal canonical event, or reopen
+  the call's slot. No detached runtime-owned execution task is left behind.
 - **The winner arbitration is one explicit linearization point.** At equal
   readiness the contractual order is: attempt cancellation > hard deadline >
   idle deadline > physical completion. The winner freezes the settlement
-  provenance; the executor's settlement evidence (or the confirmation
-  window's expiry) then supplies the outcome certainty. There is exactly one
+  provenance; the executor's typed settlement evidence (or the guard's
+  expiry) then supplies the outcome certainty. There is exactly one
   terminal ToolResult per call.
 - **Bash keeps its strong physical settlement.** The native Bash tool's
   explicit model-requested `timeout` remains tool-owned business input that
@@ -3216,19 +3228,27 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
 - **A deadline never strands batch siblings.** A per-call deadline cancels
   only its own execution; every accepted sibling call still settles exactly
   once, and the batch commits in canonical model call order.
-- **Runtime drain waits for execution ownership, not for polling to stop.**
-  Drain cancels the attempt, the lifecycle requests physical cancellation and
-  awaits executor settlement bounded by the confirmation window, and the
-  attempt returns only after every admitted execution reached its accepted
-  terminal contract — `OutcomeUnknown` included. Because an unproven
-  execution's future is dropped at its canonical settlement, drain leaves no
-  runtime-owned execution capable of later publishing conflicting canonical
-  state.
-- **The Event Journal records the typed intent fact.** Per started call the
-  journal orders `ToolExecutionStarted`, retained `ToolExecutionProgress`
-  facts, `ToolExecutionDeadlineFired { kind }` when a deadline fired, and
-  the terminal `ToolExecutionCompleted` last. The journal is observational
-  evidence; the canonical ToolResult remains the only outcome authority.
+- **Runtime drain waits for the canonical settlement, which awaits the
+  settlement authority.** Drain cancels the attempt, the lifecycle requests
+  physical cancellation and awaits the executor's settlement control plane
+  (guarded against a contract-violating executor by
+  `TOOL_SETTLEMENT_CONTROL_GUARD`), and the attempt returns only after every
+  admitted execution reached its accepted terminal contract —
+  `OutcomeUnknown` included. After an `Unconfirmed`/`OutcomeUnknown`
+  settlement the executor's local operation ownership is consumed (for
+  `settled_by_operation` the settlement plane drove the operation to its
+  end); any residual external/physical ownership is the executor's bounded
+  contract responsibility, sealed from canonical history by the closed call
+  slot, so drain leaves no runtime-owned execution capable of later
+  publishing conflicting canonical state.
+- **The Event Journal records the typed lifecycle facts.** Per started call
+  the journal orders `ToolExecutionStarted`, retained
+  `ToolExecutionProgress` facts, `ToolExecutionDeadlineFired { kind }` when
+  a deadline fired, `ToolExecutionCancellationRequested { cause }` and
+  `ToolExecutionSettlementObserved { certainty }` when a non-physical winner
+  drove the settlement phase, and the terminal `ToolExecutionCompleted`
+  last. The journal is observational evidence; the canonical ToolResult
+  remains the only outcome authority.
 
 ## Background executions (M5)
 

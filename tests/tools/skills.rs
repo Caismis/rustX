@@ -501,7 +501,7 @@ async fn bash_reaches_skill_assets_through_the_published_location() {
         &environment,
     );
     let result = executor
-        .execute(
+        .start(
             rustx::tools::types::ToolInvocation {
                 call_id: rustx::runtime::identity::ToolCallId::new("call-copy"),
                 tool_id: rustx::runtime::identity::ToolId::new("tool-bash"),
@@ -516,6 +516,7 @@ async fn bash_reaches_skill_assets_through_the_published_location() {
             },
             context,
         )
+        .completion
         .await;
 
     assert_eq!(
@@ -601,7 +602,7 @@ async fn bash_cd_cannot_redefine_the_skill_root() {
             &tool_output,
             &environment,
         );
-        executor.execute(invocation, context).await
+        executor.start(invocation, context).completion.await
     };
     assert!(matches!(
         result.status,

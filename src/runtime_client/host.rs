@@ -2366,7 +2366,6 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
-    use futures_util::future::BoxFuture;
     use tokio::sync::watch;
 
     use super::{EventDelivery, EventSubscription, RuntimeClientHost, RuntimeClientHostConfig};
@@ -2613,40 +2612,43 @@ mod tests {
     }
 
     impl ToolExecutor for ParkingBackgroundTool {
-        fn execute<'a>(
+        fn start<'a>(
             &'a self,
             _invocation: ToolInvocation,
-            _context: ToolExecutionContext<'a>,
-        ) -> BoxFuture<'a, ToolExecutionResult> {
+            context: ToolExecutionContext<'a>,
+        ) -> crate::tools::executor::ToolExecutionHandle<'a> {
             let started = self.started.clone();
             let mut execution_gate = self.execution_gate.clone();
             let mut release = self.release.subscribe();
-            Box::pin(async move {
-                // This signal is published by the returned future, so
-                // observing it means the deterministic execution gate has
-                // actually been entered rather than merely returned by
-                // `execute`.
-                started.send_replace(true);
-                if let Some(execution_gate) = execution_gate.as_mut() {
-                    execution_gate
-                        .wait_for(|entered| *entered)
+            crate::tools::executor::ToolExecutionHandle::settled_by_operation(
+                Box::pin(async move {
+                    // This signal is published by the returned future, so
+                    // observing it means the deterministic execution gate has
+                    // actually been entered rather than merely returned by
+                    // `start`.
+                    started.send_replace(true);
+                    if let Some(execution_gate) = execution_gate.as_mut() {
+                        execution_gate
+                            .wait_for(|entered| *entered)
+                            .await
+                            .expect("execution gate stays open");
+                    }
+                    release
+                        .wait_for(|released| *released)
                         .await
-                        .expect("execution gate stays open");
-                }
-                release
-                    .wait_for(|released| *released)
-                    .await
-                    .expect("release channel stays open");
-                ToolExecutionResult {
-                    status: ToolExecutionStatus::Success,
-                    content: Vec::new(),
-                    duration_ms: 0,
-                    exit_code: None,
-                    artifacts: Vec::new(),
-                    truncation: None,
-                    managed_output: None,
-                }
-            })
+                        .expect("release channel stays open");
+                    ToolExecutionResult {
+                        status: ToolExecutionStatus::Success,
+                        content: Vec::new(),
+                        duration_ms: 0,
+                        exit_code: None,
+                        artifacts: Vec::new(),
+                        truncation: None,
+                        managed_output: None,
+                    }
+                }),
+                context.cancellation.clone(),
+            )
         }
 
         fn progress_capability(&self) -> ToolProgressCapability {

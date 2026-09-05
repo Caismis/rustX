@@ -40,15 +40,15 @@ pub use background::{
     ConversationBackgroundRegistry,
 };
 pub use deadline::{
-    TOOL_SETTLEMENT_CONFIRMATION, ToolDeadlineKind, ToolExecutionDeadlinePolicy,
-    ToolProgressCapability,
+    TOOL_SETTLEMENT_CONTROL_GUARD, ToolCancellationCause, ToolDeadlineKind,
+    ToolExecutionDeadlinePolicy, ToolProgressCapability, ToolSettlementCertainty,
 };
 pub use environment::{ToolEnvironment, ToolEnvironmentError};
 pub use execution::{ExecutionHandle, ExecutionKind};
 pub use executor::{
     ASK_USER_TOOL_NAME, EXECUTION_TOOL_NAME, PreflightOutcome, PreparedInvocation,
-    ProgressReporter, ToolExecutionContext, ToolExecutor, ToolPreflightError, ToolRegistry,
-    ToolRegistryError,
+    ProgressReporter, ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolPreflightError,
+    ToolRegistry, ToolRegistryError, ToolSettlement,
 };
 pub use locator::LocatorError;
 pub use managed_output::{BackgroundOutput, ManagedOutputError, ManagedToolOutput, ResultSpill};
