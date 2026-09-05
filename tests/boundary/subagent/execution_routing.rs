@@ -549,6 +549,97 @@ async fn subagent_terminal_answer_arrives_exactly_once_through_canonical_inbound
     );
 }
 
+/// The Subagent Final Report Principle (Issue #192): the child's
+/// intermediate traffic — diagnostic notes, live observation, everything
+/// before the terminal frame — never becomes parent result content. The
+/// parent's canonical inbound receives exactly the final report, once.
+#[tokio::test]
+async fn child_intermediate_traffic_never_becomes_parent_result_content() {
+    let plane = subagent_plane();
+    let child = stage_exit0(&plane);
+    let accepted = start_subagent(&plane, "inspect the tool plane").await;
+    let mut peer = child.peer;
+    let mut observation_peer = child.observation_peer;
+
+    let frame = crate::runtime::subagent::ipc::read_parent_frame(&mut peer)
+        .await
+        .expect("delegate frame");
+    assert!(matches!(
+        frame,
+        Some(crate::runtime::subagent::ipc::ParentFrame::Delegate(_))
+    ));
+    // Intermediate noise on both channels before the terminal frame.
+    crate::runtime::subagent::ipc::write_child_frame(
+        &mut peer,
+        &ChildFrame::Diagnostic(crate::runtime::subagent::ipc::DiagnosticFrame {
+            message: "intermediate reasoning noise".to_owned(),
+        }),
+    )
+    .await
+    .expect("diagnostic frame");
+    crate::runtime::subagent::ipc::write_activity_frame(
+        &mut observation_peer,
+        &crate::runtime::subagent::ipc::ActivityFrame {
+            observation: crate::runtime::subagent::SubagentObservation {
+                revision: 1,
+                activity: crate::runtime::subagent::SubagentActivity::Model {
+                    request_id: crate::runtime::identity::RequestId::new("req-intermediate"),
+                    retry: 0,
+                },
+                last_activity_at: None,
+                counters: crate::runtime::subagent::SubagentActivityCounters::default(),
+            },
+        },
+    )
+    .await
+    .expect("activity frame");
+    crate::runtime::subagent::ipc::write_child_frame(
+        &mut peer,
+        &ChildFrame::Result(ResultFrame {
+            status: ChildResultStatus::Succeeded,
+            content: Some("FINAL-REPORT-ONLY".to_owned()),
+            diagnostic: None,
+        }),
+    )
+    .await
+    .expect("terminal result frame");
+    let settled = plane
+        .registry
+        .wait_until_settled(&accepted.subagent_id)
+        .await
+        .expect("settled");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+
+    let pending = plane
+        .store
+        .select_pending_batch()
+        .expect("pending")
+        .expect("one pending batch");
+    assert_eq!(
+        pending.items.len(),
+        1,
+        "exactly one parent inbound item exists: the final report"
+    );
+    let text = pending.items[0]
+        .message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            rustx::message::types::UserContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        text, "FINAL-REPORT-ONLY",
+        "the report is exactly the child's final response, no summary or reconstruction"
+    );
+    assert!(
+        !text.contains("intermediate reasoning noise"),
+        "intermediate traffic never enters the parent's result content"
+    );
+}
+
 /// `execution(cancel)` surfaces the committed cancellation reason in the
 /// status projection, so a model-initiated cancellation stays
 /// distinguishable from a deadline expiry (Issue #191/#192).

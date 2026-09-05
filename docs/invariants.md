@@ -1501,6 +1501,28 @@ before restart.
   carries only the bounded typed control plane — Hello/Delegate/Cancel in,
   Ready/StartupError/Result/Diagnostic out, length-prefixed frames bounded
   at 1 MiB — and never appends to any conversation.
+- **The Subagent Final Report Principle (Issue #192).** The successful
+  semantic result is the child's complete final assistant report — never
+  its intermediate messages, tool calls, tool results, reasoning, history,
+  or live observation, and never a generated summary or transcript
+  reconstruction. The child knows this because the runtime owns the rule:
+  every normal one-shot child's `AgentProfile` System authority is the
+  definition's user-authored instruction document composed with the
+  runtime-owned final-report handoff instruction at the child composition
+  boundary, so no user-authored `instructionsFile` has to repeat it and no
+  provider adapter learns it. Workflow-owned children are exempt: their
+  terminal protocol is the structured schema-validated `workflow_output`
+  commit, which a free-form final-report instruction would contradict.
+  When terminal settlement retains changed isolated work, the
+  runtime-observed fact arrives as a separate Runtime-authored inbound
+  item (`subagent-{id}-terminal-notice`, correlation
+  `subagent-terminal-notice:{id}`) committed in the same durable
+  transaction as a successful child-authored report — never concatenated
+  into it — and ordered before it, so the terminal report remains the last
+  item of the publication; a failed/cancelled/interrupted terminal folds
+  the same semantic fact into its existing Runtime-authored notice. The
+  fact is semantic only: retained changes are not applied to the parent
+  workspace, and no physical path or ref is model-facing.
 - **The terminal publication is exactly once.** The driver proves the direct
   child is reaped before it returns a physical outcome. The registry then
   freezes the terminal candidate (state, UTF-8-safe byte-bounded content,
@@ -3340,7 +3362,13 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   typed execution handle (`kind` + `id`), and `execution(status|cancel)`
   dispatches an explicit
   `kind = tool` target only to `ConversationBackgroundRegistry` and a
-  `kind = subagent` target only to `SubagentRegistry`. The intrinsic owns
+  `kind = subagent` target only to `SubagentRegistry`. The subagent
+  creation result is exactly the handle, the running state, and the named
+  agent (Issue #192): the registry's acceptance value carries the
+  committed runtime facts, and the `subagent` intrinsic alone projects
+  them into the model-facing result — no definition digest, child
+  agent/conversation identity, delegating tool call, or workspace fact
+  crosses the creation boundary. The intrinsic owns
   no lifecycle state and no cancellation implementation: the domain
   registries remain the sole authorities for lifecycle, cancellation,
   durability, settlement, and terminal publication, and subagent
@@ -3353,23 +3381,29 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   runtime semantics are outside the ordinary-native-tool contract
   alignment, and it is never moved, renamed, or re-schema'd to make the
   native tool directory look uniform.
-- **The `execution` subagent response is a bounded projection, never a
-  result channel.** The intrinsic obtains the authoritative
+- **The `execution` subagent response is the minimal control contract,
+  never a result channel** (Issue #192's Model-Centric Tool Contract: a
+  model-facing field exists only when a valid model decision or control
+  action requires it). The intrinsic obtains the authoritative
   `SubagentSnapshot` from the registry and projects it into the
-  model-facing `SubagentExecutionSnapshot`: lifecycle, identity, and
-  control facts only (`subagent_id`, `child_agent_id`,
-  `child_conversation_id`, `tool_call_id`, `agent`, `definition_digest`,
-  `workspace`, `handoff`, `state`, `publication_abandoned`, `settled`,
-  `started_at`). The registry's internal `detail` field is
-  diagnostics-only — since Issue #178 the successful child answer never
-  enters it — and is deliberately excluded, in every lifecycle state
-  including `PublishingTerminal`, as are the observation-plane
-  `observation` and `execution_profile` fields, so the canonical inbound
-  child-agent message is the **only** child-result delivery channel,
-  observing a child never enlarges parent model context, and
-  `execution(status|cancel)` never exposes the answer. The projection is
-  derived from the registry's authoritative read model at response time;
-  it is not a second lifecycle record or authority.
+  model-facing `SubagentExecutionSnapshot`: the typed execution handle,
+  the named agent, the lifecycle state, `publication_abandoned`, the
+  committed cancellation reason when one exists (a deadline expiry stays
+  distinguishable from an explicit cancellation), and — when terminal
+  settlement retained changed isolated work — the semantic
+  `isolated_changes_retained` fact, never a path or ref. Everything else
+  the authoritative snapshot carries — child agent/conversation
+  correlation, the delegating tool call, the definition digest, physical
+  workspace facts, the execution profile, the observation plane, the
+  diagnostics-only internal `detail`, `started_at` — stays below the model
+  boundary in the rich runtime authority that the Runtime Client, TUI,
+  recovery, and internal diagnostics consume. The projection is derived
+  from the registry's authoritative read model at response time; it is
+  not a second lifecycle record or authority, and in every lifecycle state
+  including `PublishingTerminal` the canonical inbound child-agent message
+  is the **only** child-result delivery channel, observing a child never
+  enlarges parent model context, and `execution(status|cancel)` never
+  exposes the answer.
 - **`execution(list)` is bounded conversation-scoped discovery, never a
   second execution authority** (Issue #180). The input contract is
   action-tagged: `status`/`cancel` require a `target` and reject a

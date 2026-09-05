@@ -2295,11 +2295,17 @@ owning domain registry (`ConversationBackgroundRegistry` for `kind = tool`,
 snapshot or its own authoritative bounded listing; the intrinsic projects
 those into a bounded tagged model-facing representation. The tool status
 projection carries the `BackgroundExecutionSnapshot`; the subagent status
-projection carries lifecycle, identity, and control facts only and
-deliberately excludes both the registry's internal `detail` —
-diagnostics-only since Issue #178, when the successful child answer stopped
-entering it — and the observation-plane `observation`/`execution_profile`
-fields — so the canonical inbound child-agent message remains the **only**
+projection is the minimal control contract of Issue #192 (typed handle,
+named agent, lifecycle state, `publication_abandoned`, the committed
+cancellation reason when one exists, and the semantic
+`isolated_changes_retained` fact when settlement retained changed isolated
+work) and deliberately excludes everything else the authoritative
+`SubagentSnapshot` carries — the registry's internal `detail` (diagnostics-only
+since Issue #178, when the successful child answer stopped entering it),
+the observation-plane `observation`/`execution_profile` fields, the child
+agent/conversation correlation, the delegating tool call, the definition
+digest, and every physical workspace fact — so the canonical inbound
+child-agent message remains the **only**
 child-result delivery channel, `execution` never becomes a result channel,
 and observing a child never enlarges parent model context. The intrinsic
 never guesses a kind from an id, never tries one registry and falls through

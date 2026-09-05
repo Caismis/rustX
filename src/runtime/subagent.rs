@@ -839,6 +839,83 @@ pub fn recovery_terminal_publication(
 #[cfg(test)]
 mod tests {
     use super::bound_utf8;
+    use super::*;
+
+    /// The recovery-authored interruption notice preserves the "actual
+    /// outcome unknown" semantics and folds the runtime-observed retained
+    /// workspace fact into the same Runtime-authored message (Issue #192).
+    #[test]
+    fn the_recovery_interruption_notice_is_runtime_authored_and_carries_the_retained_fact() {
+        let subagent_id = SubagentId::new("conv-1-subagent-1");
+        let child_agent_id = AgentId::new("agent-child");
+        let conversation_id = ConversationId::new("conv-1");
+        let timestamp = chrono::Utc::now();
+        let handoff = crate::runtime::subagent::WorkspaceHandoff {
+            logical_workspace: std::path::PathBuf::from("/physical/worktree"),
+            physical_worktree_root: std::path::PathBuf::from("/physical/worktree"),
+            branch: "rustx/subagent/secret-branch".to_owned(),
+            base_commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            head_commit: "89abcdef012345670123456789abcdef01234567".to_owned(),
+            dirty: true,
+        };
+        let retained = SubagentWorkspaceTerminalResource::Retained {
+            handoff: handoff.clone(),
+        };
+        let (draft, event) = super::recovery_terminal_publication(
+            &conversation_id,
+            &subagent_id,
+            &child_agent_id,
+            "explore",
+            "sha256:d1",
+            &retained,
+            timestamp,
+        );
+        assert_eq!(draft.source, UserSource::Runtime);
+        let text = match &draft.content[0] {
+            UserContentBlock::Text(text) => text.text.clone(),
+            other => panic!("the notice is text: {other:?}"),
+        };
+        assert!(
+            text.contains("its actual outcome is unknown and it was not restarted"),
+            "interruption never becomes a proven failure or cancellation: {text}"
+        );
+        assert!(
+            text.contains("changes were retained and are not applied to your workspace"),
+            "the retained fact is reported: {text}"
+        );
+        for physical in ["/physical/worktree", "secret-branch"] {
+            assert!(
+                !text.contains(physical),
+                "no physical fact crosses into the notice: {physical} in {text}"
+            );
+        }
+        assert!(matches!(
+            event.event,
+            RuntimeEvent::SubagentTerminalPublished {
+                state: SubagentTerminalState::Interrupted,
+                ..
+            }
+        ));
+
+        // Without a retained settlement, no retained fact is fabricated.
+        let (draft, _) = super::recovery_terminal_publication(
+            &conversation_id,
+            &subagent_id,
+            &child_agent_id,
+            "explore",
+            "sha256:d1",
+            &SubagentWorkspaceTerminalResource::None,
+            timestamp,
+        );
+        let text = match &draft.content[0] {
+            UserContentBlock::Text(text) => text.text.clone(),
+            other => panic!("the notice is text: {other:?}"),
+        };
+        assert!(
+            !text.contains("retained"),
+            "no retained-workspace claim without a retained settlement: {text}"
+        );
+    }
 
     #[test]
     fn utf8_bounds_are_byte_caps_at_character_boundaries() {
