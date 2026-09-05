@@ -3524,7 +3524,7 @@ fn normalize_platform_git_path(path: &Path) -> PathBuf {
         let Some(rest) = path.strip_prefix("/private").ok() else {
             return path.to_path_buf();
         };
-        if rest.starts_with("/var") {
+        if rest.starts_with("var") {
             return rest.to_path_buf();
         }
     }
