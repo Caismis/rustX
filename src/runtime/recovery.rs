@@ -294,12 +294,12 @@ enum ToolExternalSummary {
     UnknownOutstanding,
     /// External tool execution happened; a started call whose outcome was
     /// unknown had its canonical `ToolResult` committed. The external outcome
-    /// of that call can never become durably known — the recovery `Interrupted`
-    /// shape is a canonical representation that the old outcome remains
-    /// unknowable, never evidence that it became known — so the attempt keeps
-    /// an unknown outcome until it terminalizes, even when a durable outcome
-    /// of a *different* call would otherwise resolve every outstanding
-    /// repair entry.
+    /// of that call can never become durably known — the recovery
+    /// `OutcomeUnknown` shape is a canonical representation that the old
+    /// outcome remains unknowable, never evidence that it became known — so
+    /// the attempt keeps an unknown outcome until it terminalizes, even when
+    /// a durable outcome of a *different* call would otherwise resolve every
+    /// outstanding repair entry.
     UnknownIrreversible,
 }
 
@@ -882,11 +882,11 @@ impl RecoveryEvidence {
                     let key = (attempt.clone(), tool_call_id.clone());
                     // A call whose external outcome was still unknown when its
                     // canonical result committed has an outcome that can never
-                    // become durably known: the recovery `Interrupted` shape
-                    // is the canonical representation of "still unknowable",
-                    // not evidence of a known outcome. The owning non-terminal
-                    // attempt therefore keeps an unknown external outcome
-                    // until it terminalizes.
+                    // become durably known: the recovery `OutcomeUnknown`
+                    // shape is the canonical representation of "still
+                    // unknowable", not evidence of a known outcome. The owning
+                    // non-terminal attempt therefore keeps an unknown external
+                    // outcome until it terminalizes.
                     let was_unknown = matches!(
                         self.tool_repairs.get(&key).map(|repair| &repair.lifecycle),
                         Some(ToolExternalLifecycle::StartedOutcomeUnknown)
@@ -1322,9 +1322,9 @@ pub enum AttemptRecoveryClass {
     ///
     /// `tool_calls` names the calls whose unknown outcome is still repairable;
     /// a call whose canonical result already committed (the recovery
-    /// `Interrupted` shape) is no longer named — its external outcome remains
-    /// unknowable and still blocks continuation, but the call identity is
-    /// released with the repair evidence.
+    /// `OutcomeUnknown` shape) is no longer named — its external outcome
+    /// remains unknowable and still blocks continuation, but the call identity
+    /// is released with the repair evidence.
     IndeterminateExternalOutcome {
         /// The interrupted attempt.
         attempt_id: AttemptId,
@@ -1764,7 +1764,7 @@ impl RecoveryPlan {
                     }) => MissingToolResult {
                         call_id: call.id.clone(),
                         tool_id: tool_id.clone(),
-                        result: interrupted_result(),
+                        result: unknown_outcome_result(),
                     },
                     // The outcome *is* durably known; the canonical message
                     // simply never committed. The durable result is used
@@ -2041,7 +2041,7 @@ impl RecoveryPlan {
                     // honest readings: an unknown that is purely the model
                     // request (no tool was ever indeterminate), versus a
                     // started tool whose unknown outcome was already
-                    // canonically committed as `Interrupted` — which keeps
+                    // canonically committed as `OutcomeUnknown` — which keeps
                     // the external outcome unknowable.
                     if self.tool_summary.is_some_and(|summary| {
                         matches!(
@@ -2538,10 +2538,14 @@ pub fn recover(
 }
 
 /// The honest canonical result of a tool execution whose external outcome the
-/// runtime does not know.
-fn interrupted_result() -> ToolExecutionResult {
+/// runtime does not know. Recovery commits it exactly once; it never invents
+/// success and never replays the ambiguous external side effect.
+fn unknown_outcome_result() -> ToolExecutionResult {
     ToolExecutionResult {
-        status: ToolExecutionStatus::Interrupted,
+        status: ToolExecutionStatus::OutcomeUnknown {
+            detail: "execution started, then the runtime restarted before a durable outcome was committed"
+                .to_owned(),
+        },
         content: Vec::new(),
         duration_ms: 0,
         exit_code: None,
@@ -3177,7 +3181,7 @@ mod tests {
                     RuntimeEvent::ToolExecutionCompleted {
                         tool_call_id: ToolCallId::new("call-1"),
                         tool_id: ToolId::new("tool-a"),
-                        result: interrupted_result(),
+                        result: unknown_outcome_result(),
                     },
                     Some(a.clone()),
                 ),
@@ -3335,7 +3339,7 @@ mod tests {
                 RuntimeEvent::ToolExecutionCompleted {
                     tool_call_id: ToolCallId::new(format!("call-{call}")),
                     tool_id: ToolId::new("tool-a"),
-                    result: interrupted_result(),
+                    result: unknown_outcome_result(),
                 },
                 Some(a.clone()),
             ));

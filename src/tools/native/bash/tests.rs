@@ -627,6 +627,55 @@ async fn redirected_descendant_does_not_escape_the_owned_domain() {
     let _ = dir;
 }
 
+/// Issue #202: a confirmed local timeout is `TimedOut` — the deadline
+/// expired AND rustX established terminal settlement of the invocation-owned
+/// process tree — and the model-facing projection is non-empty, bounded, and
+/// states both halves of that contract.
+#[cfg(unix)]
+#[tokio::test]
+async fn confirmed_timeout_is_timed_out_with_bounded_model_facing_feedback() {
+    let (dir, artifacts, tool_output, workspace) = fixture();
+    let result = tokio::time::timeout(
+        Duration::from_secs(20),
+        run_with_control(
+            "sleep 30".to_owned(),
+            BashTestControl::new(),
+            CancellationSignal::new(),
+            artifacts,
+            tool_output,
+            workspace,
+            Some(1),
+        ),
+    )
+    .await
+    .expect("the invocation settles exactly once (bounded)");
+    assert_eq!(
+        result.status,
+        ToolExecutionStatus::TimedOut,
+        "a confirmed local timeout is TimedOut, got {:?}",
+        result.status
+    );
+    let projection = result.model_facing_projection();
+    let text = projection.as_text();
+    assert!(
+        !text.is_empty(),
+        "a timed-out result never faces the model with empty feedback"
+    );
+    assert!(
+        text.contains("deadline expired"),
+        "the feedback states the deadline expiry: {text}"
+    );
+    assert!(
+        text.contains("terminal settlement"),
+        "the feedback states the proven terminal settlement: {text}"
+    );
+    assert!(
+        projection.byte_len() <= crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES,
+        "the projection stays inside the model-facing bound"
+    );
+    let _ = dir;
+}
+
 /// The exact shell-exit boundary regression: the executor provably
 /// observed the shell parent's natural exit (the supervisor's report)
 /// and parked before any settlement handling; the descendant is

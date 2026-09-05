@@ -1397,7 +1397,7 @@ impl ConversationBackgroundRegistry {
                         ToolExecutionStatus::Denied { .. }
                         | ToolExecutionStatus::Failed { .. }
                         | ToolExecutionStatus::TimedOut
-                        | ToolExecutionStatus::Interrupted => {
+                        | ToolExecutionStatus::OutcomeUnknown { .. } => {
                             (BackgroundLifecycle::Failed, result.clone())
                         }
                     }
@@ -1411,6 +1411,13 @@ impl ConversationBackgroundRegistry {
                         result.status,
                         ToolExecutionStatus::Denied { .. } | ToolExecutionStatus::Failed { .. }
                     ) {
+                        (BackgroundLifecycle::Failed, result.clone())
+                    } else if matches!(result.status, ToolExecutionStatus::OutcomeUnknown { .. }) {
+                        // The executor could not prove the external outcome
+                        // after the cancellation request (for example an
+                        // unconfirmed remote termination). A cancellation
+                        // request is not a confirmed cancellation result, so
+                        // the honest unknown survives the cancellation winner.
                         (BackgroundLifecycle::Failed, result.clone())
                     } else {
                         let mut canonical = result.clone();
@@ -2160,7 +2167,7 @@ fn background_ownership_event(
 /// other is either refused by the durable `background:{execution_id}`
 /// lifecycle terminal or resolved as an idempotent correlation retry.
 ///
-/// The published state is [`BackgroundTerminalState::Interrupted`], never
+/// The published state is [`BackgroundTerminalState::OutcomeUnknown`], never
 /// `Failed`: the old task/process did not survive the restart and its actual
 /// external outcome is unknown. Nothing is relaunched.
 pub(crate) fn recovery_terminal_publication(
@@ -2187,7 +2194,7 @@ pub(crate) fn recovery_terminal_publication(
         &EventId::new(format!("background-terminal-event:{execution_id}")),
         &notification,
         execution_id,
-        BackgroundTerminalState::Interrupted,
+        BackgroundTerminalState::OutcomeUnknown,
     );
     let correlation = format!("background-terminal:{}", execution_id.as_str());
     (inbound_draft(notification, correlation), event)
