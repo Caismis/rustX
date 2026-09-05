@@ -97,12 +97,9 @@ mod input;
 
 use futures_util::future::BoxFuture;
 
-use chrono::{DateTime, Utc};
-
-use crate::runtime::identity::{AgentId, ConversationId, SubagentId, ToolCallId, ToolExecutionId};
+use crate::runtime::identity::{SubagentId, ToolExecutionId};
 use crate::runtime::subagent::{
-    SubagentListing, SubagentRegistry, SubagentSnapshot, SubagentState, WorkspaceHandoff,
-    WorkspaceSnapshot,
+    SubagentListing, SubagentRegistry, SubagentSnapshot, SubagentState,
 };
 use crate::runtime::types::CancellationReason;
 use crate::tools::background::{
@@ -157,7 +154,7 @@ fn definition() -> ToolDefinition {
              bounded, deterministically ordered summary of this conversation's own \
              executions — newest-first within each execution kind, the kinds interleaved — \
              optionally filtered by kind and to lifecycle-active ones; it reports handles \
-             and lifecycle state only, never execution output, a subagent's answer, or a \
+             and lifecycle state only, never execution output, a subagent's final report, or a \
              child's history."
             .to_owned(),
         input_schema: input_schema::<ExecutionInput>(),
@@ -378,7 +375,9 @@ fn tool_snapshot_result(
     id: &str,
 ) -> ToolExecutionResult {
     match snapshot {
-        Some(snapshot) => json_result(&ExecutionSnapshot::Tool { snapshot }),
+        Some(snapshot) => json_result(&ExecutionSnapshot::Tool {
+            snapshot: Box::new(snapshot),
+        }),
         None => failed(format!("unknown background execution {id}")),
     }
 }
@@ -463,8 +462,6 @@ pub enum ExecutionSummary {
         state: SubagentState,
         /// The canonical named-agent identity frozen at start.
         agent: String,
-        /// When the ownership committed.
-        started_at: DateTime<Utc>,
         /// Whether a terminal publication was abandoned, which is what
         /// distinguishes a child still settling from one that can never
         /// settle.
@@ -486,107 +483,106 @@ impl ExecutionSummary {
 
     /// Projects one authoritative subagent snapshot into a summary.
     fn of_subagent(snapshot: SubagentSnapshot) -> Self {
-        // `detail`, `observation`, and `profile` are dropped; see the type
-        // documentation for why each one is not model-facing here.
+        // `detail`, `observation`, `profile`, the workspace facts, and
+        // `started_at` are dropped; see the type documentation for why each
+        // one is not model-facing here.
         Self::Subagent {
             execution: ExecutionHandle::subagent(&snapshot.subagent_id),
             state: snapshot.state,
             agent: snapshot.agent,
-            started_at: snapshot.started_at,
             publication_abandoned: snapshot.publication_abandoned,
         }
     }
 }
 
 /// The bounded model-facing projection of one subagent child execution
-/// (Issue #162).
+/// (Issue #162, minimized by Issue #192).
 ///
 /// Derived from the registry's authoritative [`SubagentSnapshot`] at
 /// response time — it is a projection of the registry's read model, never
 /// an authority of its own and never a second lifecycle record.
 ///
-/// The projection exposes lifecycle/identity/control facts only. It
-/// deliberately excludes the registry's internal `detail` field (a
-/// failure/cancellation diagnostic; Issue #178 removed the successful
-/// answer content from it entirely) and the live observation-plane fields:
-/// the model-facing control plane must never carry the child's answer or
-/// its live activity, so the canonical inbound child-agent message stays
-/// the **only** result-delivery channel and `execution(status|cancel)`
-/// stays pure lifecycle observation/control. The same guarantee holds
-/// while the registry is still in `PublishingTerminal`: the pending answer
-/// is never model-visible through the intrinsic.
+/// The Model-Centric Tool Contract: every retained field answers "what
+/// valid model decision or control action requires this field?"
+///
+/// - `execution`: the canonical continuation identity — correlates the
+///   response with the model's target and with `execution(list)` entries;
+/// - `agent`: the named agent — the model's own delegation vocabulary,
+///   needed to interpret which child this is;
+/// - `state`: the lifecycle — decides whether `cancel` is meaningful or
+///   the terminal outcome is durable;
+/// - `publication_abandoned`: distinguishes "still settling, the report
+///   may still arrive" from "the report can never arrive" — the parent
+///   stops waiting and takes over only in the second case;
+/// - `cancellation_reason`: distinguishes a deadline expiry (the parent
+///   may retry with a smaller task) from an explicit/user cancellation
+///   (the parent must respect the intent);
+/// - `isolated_changes_retained`: the one actionable workspace fact — the
+///   parent must not assume the child's changes exist in its own
+///   workspace. Physical paths/refs are user/Runtime Client concerns and
+///   never model-facing.
+///
+/// Everything else the authoritative snapshot carries — child
+/// agent/conversation correlation, the delegating tool call, the
+/// definition digest, physical workspace facts, the execution profile, the
+/// live observation plane, the internal `detail` diagnostic, `started_at`
+/// — stays below the model boundary. A subagent's final report arrives
+/// exactly once through the canonical inbound message path — never through
+/// this projection — and the same guarantee holds while the registry is in
+/// `PublishingTerminal`: the pending report is never model-visible through
+/// the intrinsic.
 ///
 /// [`SubagentSnapshot`]: crate::runtime::subagent::SubagentSnapshot
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SubagentExecutionSnapshot {
-    /// The conversation-owned subagent identity.
-    pub subagent_id: SubagentId,
-    /// The child agent identity (provenance of its answer).
-    pub child_agent_id: AgentId,
-    /// The child's own durable conversation identity.
-    pub child_conversation_id: ConversationId,
-    /// The delegating tool call.
-    pub tool_call_id: ToolCallId,
+    /// The canonical typed continuation identity of the child.
+    pub execution: ExecutionHandle,
     /// The canonical named-agent identity frozen at start (Issue #144).
     pub agent: String,
-    /// The deterministic definition digest frozen at start (Issue #144).
-    pub definition_digest: String,
-    /// The immutable project-workspace authority selected before ownership.
-    pub workspace: WorkspaceSnapshot,
-    /// Retained work-product metadata, when terminal settlement preserves an
-    /// isolated worktree for handoff.
-    pub handoff: Option<WorkspaceHandoff>,
     /// The lifecycle state.
     pub state: SubagentState,
     /// Whether a terminal publication could not reach the durable
-    /// authority and was abandoned.
+    /// authority and was abandoned, which is what distinguishes a child
+    /// still settling from one whose result can never arrive.
     pub publication_abandoned: bool,
-    /// Whether the child reached a settled state (terminal, publication
-    /// not abandoned).
-    pub settled: bool,
-    /// When the ownership committed.
-    pub started_at: DateTime<Utc>,
+    /// The committed cancellation reason, while cancellation intent is
+    /// live or the child settled cancelled with one. This is what keeps a
+    /// deadline expiry distinguishable from an explicit cancellation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cancellation_reason: Option<CancellationReason>,
+    /// The minimal semantic workspace fact: terminal settlement retained
+    /// the child's changed isolated work, so it exists, but not in the
+    /// parent workspace. Never a path or ref.
+    #[serde(skip_serializing_if = "is_false")]
+    pub isolated_changes_retained: bool,
+}
+
+/// The `skip_serializing_if` predicate for an opt-in boolean annotation:
+/// the fact is present exactly when it is true.
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde predicates take references
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl From<SubagentSnapshot> for SubagentExecutionSnapshot {
     fn from(snapshot: SubagentSnapshot) -> Self {
-        // The registry's authoritative snapshot is projected field by
-        // field. `detail` — the registry-internal terminal diagnostic — is
-        // intentionally dropped, as are the observation-plane `observation`
-        // and `profile` fields (Issue #178): live activity enters no model
-        // context, and the canonical inbound child-agent message stays the
-        // only result-delivery channel.
-        let SubagentSnapshot {
-            subagent_id,
-            child_agent_id,
-            child_conversation_id,
-            tool_call_id,
-            agent,
-            definition_digest,
-            workspace,
-            handoff,
-            workspace_resource_state: _,
-            state,
-            detail: _,
-            observation: _,
-            profile: _,
-            publication_abandoned,
-            settled,
-            started_at,
-        } = snapshot;
+        // The registry's authoritative snapshot is projected fact by fact.
+        // Identity/provenance (`child_agent_id`, `child_conversation_id`,
+        // `tool_call_id`, `definition_digest`), physical workspace facts
+        // (`workspace`, `handoff`), the registry-internal `detail`
+        // diagnostic, the observation plane (`observation`, `profile`),
+        // `started_at`, and the derivable `settled` are intentionally
+        // dropped: no valid model decision or control action requires them.
         Self {
-            subagent_id,
-            child_agent_id,
-            child_conversation_id,
-            tool_call_id,
-            agent,
-            definition_digest,
-            workspace,
-            handoff,
-            state,
-            publication_abandoned,
-            settled,
-            started_at,
+            execution: ExecutionHandle::subagent(&snapshot.subagent_id),
+            agent: snapshot.agent,
+            state: snapshot.state,
+            publication_abandoned: snapshot.publication_abandoned,
+            cancellation_reason: snapshot.cancel_reason,
+            isolated_changes_retained: matches!(
+                snapshot.workspace_resource_state,
+                crate::runtime::subagent::SubagentWorkspaceResourceState::Retained
+            ),
         }
     }
 }
@@ -603,10 +599,12 @@ impl From<SubagentSnapshot> for SubagentExecutionSnapshot {
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ExecutionSnapshot {
-    /// The authoritative snapshot of one detached tool execution.
+    /// The authoritative snapshot of one detached tool execution. Boxed:
+    /// the detached tool domain's snapshot is far larger than the minimal
+    /// subagent projection, and this envelope is only ever serialized.
     Tool {
         #[serde(flatten)]
-        snapshot: BackgroundExecutionSnapshot,
+        snapshot: Box<BackgroundExecutionSnapshot>,
     },
     /// The authoritative snapshot of one subagent child, projected into
     /// the bounded model-facing [`SubagentExecutionSnapshot`].
@@ -943,40 +941,172 @@ mod tests {
             progress: None,
             result: None,
         };
-        let value = serde_json::to_value(ExecutionSnapshot::Tool { snapshot }).expect("serializes");
+        let value = serde_json::to_value(ExecutionSnapshot::Tool {
+            snapshot: Box::new(snapshot),
+        })
+        .expect("serializes");
         assert_eq!(value["kind"], "tool");
         assert_eq!(value["execution_id"], "exec_1");
         assert_eq!(value["tool_name"], "bash");
         assert_eq!(value["state"], "running");
     }
 
-    /// The subagent projection keeps every lifecycle/identity/control fact
-    /// but can never expose the registry-internal terminal `detail` or the
-    /// live observation-plane fields.
+    /// The subagent projection carries exactly the minimal lifecycle/
+    /// control vocabulary (Issue #192): the typed handle, the named agent,
+    /// the lifecycle state, and the settlement facts a model can act on —
+    /// never the child answer, the registry-internal `detail`, the
+    /// observation plane, or any runtime provenance.
     #[test]
-    fn the_subagent_projection_never_exposes_the_child_answer() {
+    fn the_subagent_projection_is_the_minimal_control_contract() {
         let snapshot = subagent_snapshot();
         let projection: super::SubagentExecutionSnapshot = snapshot.clone().into();
-        assert_eq!(projection.subagent_id, snapshot.subagent_id);
-        assert_eq!(projection.child_agent_id, snapshot.child_agent_id);
         assert_eq!(projection.agent, "explore");
         assert_eq!(
             projection.state,
             crate::runtime::subagent::SubagentState::Succeeded
         );
-        assert!(projection.settled);
 
-        let value = serde_json::to_value(projection).expect("serializes");
-        assert_eq!(value["subagent_id"], "conversation-1-subagent-2");
+        let value = serde_json::to_value(&projection).expect("serializes");
+        assert_eq!(
+            value["execution"],
+            serde_json::json!({"kind": "subagent", "id": "conversation-1-subagent-2"}),
+            "the projection is identified by the canonical execution handle"
+        );
         assert_eq!(value["state"], "succeeded");
-        assert!(
-            value.get("detail").is_none(),
-            "detail is not a model-facing field: {value}"
+        assert_eq!(value["agent"], "explore");
+        assert_eq!(value["publication_abandoned"], false);
+        let mut fields = value
+            .as_object()
+            .expect("object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        fields.sort();
+        assert_eq!(
+            fields,
+            vec!["agent", "execution", "publication_abandoned", "state"],
+            "the status vocabulary is closed: {value}"
         );
         let serialized = serde_json::to_string(&value).expect("string");
         assert!(
             !serialized.contains("issue162-secret-child-answer"),
             "the child answer never appears in the projection: {serialized}"
+        );
+        // The authoritative snapshot is rich; none of its provenance,
+        // physical workspace facts, or implementation metadata crosses the
+        // model boundary.
+        for removed in [
+            "subagent_id",
+            "child_agent_id",
+            "agent-child",
+            "child_conversation_id",
+            "tool_call_id",
+            "call-1",
+            "definition_digest",
+            "sha256:d1",
+            "workspace",
+            "worktree",
+            "handoff",
+            "physical",
+            "branch",
+            "detail",
+            "observation",
+            "profile",
+            "settled",
+            "started_at",
+        ] {
+            assert!(
+                !serialized.contains(removed),
+                "{removed} is runtime authority, not a model-facing field: {serialized}"
+            );
+        }
+    }
+
+    /// A cancelled child's projection surfaces the committed cancellation
+    /// reason: a deadline expiry stays distinguishable from an explicit
+    /// cancellation at the model boundary (Issue #191 semantics preserved).
+    #[test]
+    fn the_subagent_projection_surfaces_the_cancellation_reason_only_when_one_exists() {
+        let mut snapshot = subagent_snapshot();
+        snapshot.state = crate::runtime::subagent::SubagentState::Cancelled;
+        snapshot.cancel_reason =
+            Some(crate::runtime::types::CancellationReason::SubagentExecutionDeadlineExceeded);
+        let value = serde_json::to_value(super::SubagentExecutionSnapshot::from(snapshot))
+            .expect("serializes");
+        assert_eq!(value["state"], "cancelled");
+        assert_eq!(
+            value["cancellation_reason"], "subagent_execution_deadline_exceeded",
+            "the deadline cancellation stays distinguishable: {value}"
+        );
+
+        let mut snapshot = subagent_snapshot();
+        snapshot.state = crate::runtime::subagent::SubagentState::Cancelled;
+        snapshot.cancel_reason = None;
+        let value = serde_json::to_value(super::SubagentExecutionSnapshot::from(snapshot))
+            .expect("serializes");
+        assert!(
+            value.get("cancellation_reason").is_none(),
+            "a child-reported cancellation has no fabricated reason: {value}"
+        );
+    }
+
+    /// A terminal retained-workspace settlement projects exactly the
+    /// minimal semantic fact — never a physical path, branch, or commit.
+    #[test]
+    fn the_subagent_projection_annotates_retained_isolated_changes_semantically() {
+        use crate::runtime::subagent::{GitWorktreeSnapshot, WorkspaceHandoff, WorkspaceIsolation};
+        let mut snapshot = subagent_snapshot();
+        snapshot.workspace = crate::runtime::subagent::WorkspaceSnapshot {
+            logical_workspace: std::path::PathBuf::from("/physical/worktree/project"),
+            isolation: WorkspaceIsolation::GitWorktree(GitWorktreeSnapshot {
+                source_repository_root: std::path::PathBuf::from("/repo"),
+                repository_relative_workspace: std::path::PathBuf::from("project"),
+                physical_worktree_root: std::path::PathBuf::from("/physical/worktree"),
+                base_commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+                branch: "rustx/subagent/secret-branch".to_owned(),
+                parent_had_uncommitted_changes: false,
+            }),
+        };
+        snapshot.handoff = Some(WorkspaceHandoff {
+            logical_workspace: std::path::PathBuf::from("/physical/worktree/project"),
+            physical_worktree_root: std::path::PathBuf::from("/physical/worktree"),
+            branch: "rustx/subagent/secret-branch".to_owned(),
+            base_commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            head_commit: "89abcdef012345670123456789abcdef01234567".to_owned(),
+            dirty: true,
+        });
+        snapshot.workspace_resource_state =
+            crate::runtime::subagent::SubagentWorkspaceResourceState::Retained;
+
+        let value = serde_json::to_value(super::SubagentExecutionSnapshot::from(snapshot))
+            .expect("serializes");
+        assert_eq!(
+            value["isolated_changes_retained"], true,
+            "the semantic retained-work fact is model-facing: {value}"
+        );
+        let serialized = serde_json::to_string(&value).expect("string");
+        for physical in [
+            "/physical/worktree",
+            "/repo",
+            "secret-branch",
+            "0123456789abcdef",
+            "base_commit",
+            "head_commit",
+            "dirty",
+        ] {
+            assert!(
+                !serialized.contains(physical),
+                "no physical workspace fact crosses the model boundary: {physical} in {serialized}"
+            );
+        }
+
+        // Without a retained settlement the annotation is absent entirely.
+        let value =
+            serde_json::to_value(super::SubagentExecutionSnapshot::from(subagent_snapshot()))
+                .expect("serializes");
+        assert!(
+            value.get("isolated_changes_retained").is_none(),
+            "a shared/clean child carries no workspace annotation: {value}"
         );
     }
 
@@ -1072,13 +1202,7 @@ mod tests {
         fields.sort();
         assert_eq!(
             fields,
-            vec![
-                "agent",
-                "execution",
-                "publication_abandoned",
-                "started_at",
-                "state"
-            ],
+            vec!["agent", "execution", "publication_abandoned", "state"],
             "the summary vocabulary is closed"
         );
         let serialized = serde_json::to_string(&value).expect("string");
@@ -1315,6 +1439,7 @@ mod tests {
             // The registry-internal terminal detail carries diagnostics
             // only since Issue #178; either way the projection must drop it.
             detail: Some("issue162-secret-child-answer".to_owned()),
+            cancel_reason: None,
             observation: SubagentObservation::default(),
             profile: None,
             publication_abandoned: false,

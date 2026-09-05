@@ -3318,7 +3318,7 @@ fn a_durably_settled_subagent_needs_no_recovery() {
             fixed_time(),
         );
         store
-            .accept_inbound_with_event(draft, event)
+            .accept_subagent_terminal(None, draft, event)
             .expect("terminal publication");
     }
 

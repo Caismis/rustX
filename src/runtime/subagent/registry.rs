@@ -286,6 +286,14 @@ impl SubagentRecord {
             handoff: self.handoff.clone(),
             workspace_resource_state: self.workspace_resource_state,
             state,
+            // The reason is meaningful exactly while cancellation intent is
+            // live or the child settled cancelled; a successful (Workflow)
+            // settlement that raced an in-flight intent reports no stale
+            // reason.
+            cancel_reason: match self.lifecycle {
+                SubagentLifecycle::Cancelling | SubagentLifecycle::Cancelled => self.cancel_reason,
+                _ => None,
+            },
             detail: self.detail.clone(),
             observation: self.observation.clone(),
             profile: self.profile.clone(),
@@ -503,9 +511,13 @@ fn map_workspace_disposal_error(
 /// A consistency snapshot of one subagent child.
 ///
 /// Read-model materialization only: every field is derived from the
-/// registry's state machine, never an authority of its own. The snapshot is
-/// also the domain payload of the model-facing `execution(status)` response
-/// (Issue #162), so it serializes as the authoritative state projection.
+/// registry's state machine, never an authority of its own. This is the
+/// **rich runtime-truth projection** consumed by the Runtime Client, the
+/// TUI, recovery, and internal diagnostics. The model-facing
+/// `execution(status)` response is the deliberately minimal
+/// `SubagentExecutionSnapshot` projection of this snapshot (Issue #192),
+/// owned by the `execution` intrinsic — this authoritative type never
+/// weakens to fit the model boundary.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SubagentSnapshot {
     /// The conversation-owned subagent identity.
@@ -534,6 +546,13 @@ pub struct SubagentSnapshot {
     pub workspace_resource_state: SubagentWorkspaceResourceState,
     /// The lifecycle state.
     pub state: SubagentState,
+    /// The committed cancellation reason, while cancellation intent exists
+    /// or the child settled cancelled with one.
+    ///
+    /// A child that reported `Cancelled` without a committed parent
+    /// cancellation intent has no semantic reason (`None`): the runtime
+    /// never fabricates one.
+    pub cancel_reason: Option<CancellationReason>,
     /// The bounded failure/cancellation diagnostic, once known.
     ///
     /// A successful child's answer content never appears here (Issue #178):
@@ -630,6 +649,12 @@ pub struct PreparedSubagent {
 }
 
 /// The outcome of a successful ownership commit.
+///
+/// This is a **runtime acceptance value**: it carries the runtime facts a
+/// caller may legitimately need (the owned identity and its committed
+/// provenance), never a model-facing tool result. The model-facing
+/// `subagent` creation projection is built by the `subagent` intrinsic alone
+/// (Issue #192).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubagentAccepted {
     /// The conversation-owned subagent identity.
@@ -642,8 +667,6 @@ pub struct SubagentAccepted {
     pub agent: String,
     /// The deterministic definition digest frozen at start.
     pub definition_digest: String,
-    /// The tool result the delegating call receives.
-    pub result: serde_json::Value,
 }
 
 /// The outcome of one [`SubagentRegistry::commit`].
@@ -1947,12 +1970,6 @@ impl SubagentRegistry {
                     child_conversation_id,
                     agent: agent.as_str().to_owned(),
                     definition_digest: definition_digest.as_str().to_owned(),
-                    result: serde_json::json!({
-                        "state": "running",
-                        "note": "The child runtime is running asynchronously. Its answer \
-                                 arrives as a new turn from the child agent; do not retry \
-                                 or poll for it."
-                    }),
                 }))
             }
         }
@@ -3098,7 +3115,16 @@ impl SubagentRegistry {
                     &record.terminal_workspace_resource(),
                     candidate.timestamp,
                 );
-                let result = self.config.mailbox.accept_draft_with_event(draft, event);
+                // The runtime-authored terminal notice — the
+                // parent-model correlation projection, with the
+                // retained-workspace fact folded in when applicable —
+                // commits in the same durable transaction, strictly before
+                // the terminal report (Issue #192).
+                let notice = success_terminal_notice(record, candidate);
+                let result = self
+                    .config
+                    .mailbox
+                    .accept_subagent_terminal(notice, draft, event);
                 let record = &mut state.records[index];
                 match result {
                     Ok(_) => {
@@ -3238,9 +3264,10 @@ impl SubagentRegistry {
                 &record.terminal_workspace_resource(),
                 candidate.timestamp,
             );
+            let notice = success_terminal_notice(record, &candidate);
             self.config
                 .mailbox
-                .accept_draft_with_event(draft, event)
+                .accept_subagent_terminal(notice, draft, event)
                 .map(|_| ())
                 .map_err(|error| error.to_string())
         };
@@ -3438,30 +3465,46 @@ fn validate_workflow_candidate(
 }
 
 /// Builds the bounded content blocks of a terminal publication.
+///
+/// A successful report is the child's own final answer, child-authored and
+/// byte-for-byte what the child emitted: no runtime annotation is ever
+/// concatenated into it (Issue #192). Every other terminal is a
+/// runtime-authored notice, so the runtime-observed retained-workspace fact
+/// folds into the same message without any provenance ambiguity.
 fn terminal_blocks(
     record: &SubagentRecord,
     candidate: &TerminalCandidate,
 ) -> Vec<crate::message::types::UserContentBlock> {
+    // Terminal workspace settlement is a runtime-observed fact the child
+    // cannot authoritatively know; it is stated by the runtime only.
+    let retained = matches!(
+        record.workspace_resource_state,
+        SubagentWorkspaceResourceState::Retained
+    )
+    .then(|| format!(" Its {}.", super::RETAINED_WORKSPACE_FACT))
+    .unwrap_or_default();
     let text = match candidate.state {
         TerminalState::Succeeded => candidate.content.clone().unwrap_or_default(),
         TerminalState::Failed => format!(
-            "Subagent {} (agent {}) failed: {}",
+            "Subagent {} (agent {}) failed: {}.{}",
             record.subagent_id,
             record.agent,
             candidate
                 .diagnostic
                 .clone()
-                .unwrap_or_else(|| "unknown failure".to_owned())
+                .unwrap_or_else(|| "unknown failure".to_owned()),
+            retained
         ),
         TerminalState::Cancelled => format!(
-            "Subagent {} (agent {}) was cancelled ({}).",
+            "Subagent {} (agent {}) was cancelled ({}).{}",
             record.subagent_id,
             record.agent,
-            candidate.reason.map_or("cancelled", reason_text)
+            candidate.reason.map_or("cancelled", reason_text),
+            retained
         ),
         TerminalState::Interrupted => format!(
-            "Subagent {} (agent {}) was interrupted: its actual outcome is unknown and it was not restarted.",
-            record.subagent_id, record.agent,
+            "Subagent {} (agent {}) was interrupted: its actual outcome is unknown and it was not restarted.{}",
+            record.subagent_id, record.agent, retained
         ),
     };
     vec![crate::message::types::UserContentBlock::Text(
@@ -3469,6 +3512,36 @@ fn terminal_blocks(
             text: bound_utf8(text, MAX_RESULT_CONTENT_BYTES),
         },
     )]
+}
+
+/// The runtime-authored terminal notice of a successful normal child
+/// (Issue #192) — present on **every** success, not only a retained one:
+/// it is the parent-model correlation projection naming the exact typed
+/// execution handle the creation result returned, and it folds in the
+/// retained-workspace semantic fact when terminal settlement retained
+/// changed isolated work.
+///
+/// The success report stays purely child-authored; this adjacent
+/// `UserSource::Runtime` item commits in the same durable transaction,
+/// ordered before the report, so authorship and ordering are both
+/// preserved. A failed/cancelled/interrupted terminal is already one
+/// runtime-authored message that names the child execution and folds in
+/// the retained fact, so it deliberately carries no separate notice.
+fn success_terminal_notice(
+    record: &SubagentRecord,
+    candidate: &TerminalCandidate,
+) -> Option<crate::durable::inbox::InboundDraft> {
+    (candidate.state == TerminalState::Succeeded).then(|| {
+        super::terminal_notice(
+            &record.subagent_id,
+            &record.agent,
+            matches!(
+                record.workspace_resource_state,
+                SubagentWorkspaceResourceState::Retained
+            ),
+            candidate.timestamp,
+        )
+    })
 }
 
 /// Maps the registry's terminal vocabulary onto the durable event's.
@@ -4524,14 +4597,26 @@ mod tests {
         // and the durable pending inbound below is the one result channel.
         assert_eq!(settled.detail, None);
         // The result entered the parent's durable pending inbound with the
-        // child agent provenance, exactly once.
+        // child agent provenance, exactly once — preceded by the
+        // runtime-authored correlation notice of the same atomic
+        // publication (Issue #192).
         let pending = plane
             .store
             .select_pending_batch()
             .expect("pending")
             .expect("one pending batch");
-        assert_eq!(pending.items.len(), 1);
-        let item = &pending.items[0];
+        assert_eq!(pending.items.len(), 2, "the notice and the report");
+        let notice = &pending.items[0];
+        assert_eq!(
+            notice.message.id,
+            super::super::terminal_notice_message_id(&accepted.subagent_id)
+        );
+        assert!(matches!(
+            notice.message.source,
+            crate::message::types::UserSource::Runtime
+        ));
+        assert!(notice.sequence < pending.items[1].sequence);
+        let item = &pending.items[1];
         assert_eq!(
             item.correlation.as_deref(),
             Some(super::super::terminal_correlation(&accepted.subagent_id).as_str())
@@ -5614,6 +5699,269 @@ mod tests {
             pending.items[0].message.source,
             crate::message::types::UserSource::Runtime
         ));
+    }
+
+    /// Issue #192 — a successful child whose terminal settlement retained
+    /// changed isolated work publishes two items in one durable
+    /// transaction: the runtime-authored terminal notice first — the
+    /// parent-model correlation projection naming the exact typed
+    /// execution handle, with the retained-workspace semantic fact folded
+    /// in (the runtime alone can know terminal workspace settlement) — and
+    /// the child-authored final report last, byte-for-byte the child's own
+    /// content. The notice carries semantic facts only — never a
+    /// physical path, branch, or commit.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // one cohesive retained-notice regression
+    async fn a_successful_retained_worktree_child_publishes_a_runtime_authored_adjacent_notice() {
+        let plane = plane(4);
+        let (accepted, settled) = retained_git_child(&plane, "write a source change").await;
+        let handoff = settled.handoff.clone().expect("retained handoff");
+
+        let pending = plane
+            .store
+            .select_pending_batch()
+            .expect("pending")
+            .expect("one pending batch");
+        assert_eq!(
+            pending.items.len(),
+            2,
+            "the notice and the report, exactly once each"
+        );
+
+        // The adjacent runtime-authored notice, ordered first.
+        let notice = &pending.items[0];
+        assert_eq!(
+            notice.message.id,
+            super::super::terminal_notice_message_id(&accepted.subagent_id)
+        );
+        assert_eq!(
+            notice.correlation.as_deref(),
+            Some(super::super::terminal_notice_correlation(&accepted.subagent_id).as_str())
+        );
+        assert!(
+            matches!(
+                notice.message.source,
+                crate::message::types::UserSource::Runtime
+            ),
+            "the settlement fact is runtime-authored, never attributed to the child"
+        );
+        let notice_text = &notice.message.content[0];
+        let crate::message::types::UserContentBlock::Text(notice_text) = notice_text else {
+            panic!("the notice is text: {notice_text:?}");
+        };
+        assert!(
+            notice_text.text.contains(&format!(
+                "{{\"kind\":\"subagent\",\"id\":\"{}\"}}",
+                accepted.subagent_id
+            )),
+            "the notice names the exact typed execution handle: {}",
+            notice_text.text
+        );
+        assert!(
+            notice_text
+                .text
+                .contains("changes were retained and are not applied to your workspace"),
+            "the minimal actionable semantic fact: {}",
+            notice_text.text
+        );
+        for physical in [
+            handoff.physical_worktree_root.display().to_string(),
+            handoff.branch.clone(),
+            handoff.base_commit.clone(),
+            handoff.head_commit.clone(),
+        ] {
+            assert!(
+                !notice_text.text.contains(&physical),
+                "no physical path/ref crosses into the notice: {physical}"
+            );
+        }
+
+        // The terminal report remains last and purely child-authored.
+        let report = &pending.items[1];
+        assert!(
+            notice.sequence < report.sequence,
+            "the terminal result remains the last item of the publication"
+        );
+        assert_eq!(
+            report.message.id,
+            super::super::terminal_message_id(&accepted.subagent_id)
+        );
+        assert!(
+            matches!(
+                report.message.source,
+                crate::message::types::UserSource::Agent { ref agent_id }
+                    if *agent_id == accepted.child_agent_id
+            ),
+            "the report is the child's own authorship"
+        );
+        let report_text = &report.message.content[0];
+        let crate::message::types::UserContentBlock::Text(report_text) = report_text else {
+            panic!("the report is text: {report_text:?}");
+        };
+        assert_eq!(
+            report_text.text, "child answer",
+            "the child-authored report is never amended with runtime facts"
+        );
+
+        // Exactly one terminal fact committed for the child.
+        assert_eq!(
+            published_terminal_states(&plane, &accepted.subagent_id),
+            vec![SubagentTerminalState::Succeeded]
+        );
+    }
+
+    /// Issue #192 — a failed child whose settlement retained changed
+    /// isolated work folds the retained fact into its one runtime-authored
+    /// diagnostic notice: same provenance, one message, no physical detail.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_failed_retained_worktree_child_folds_the_retained_fact_into_its_runtime_notice() {
+        let plane = plane(4);
+        make_clean_git_workspace(&plane);
+        let child = stage_stubborn(&plane);
+        let mut spec = start_spec("write a source change");
+        spec.resolved.workspace_policy =
+            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
+                require_clean_parent: true,
+            };
+        let accepted = start(&plane, &spec).await;
+        let workspace = plane
+            .registry
+            .snapshot(&accepted.subagent_id)
+            .expect("running snapshot")
+            .workspace
+            .logical_workspace;
+        std::fs::write(workspace.join("retained.txt"), "retain this child work\n")
+            .expect("child work");
+        child.complete(ChildResultStatus::Failed, None).await;
+        let settled = plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
+        assert_eq!(settled.state, SubagentState::Failed);
+        let handoff = settled.handoff.clone().expect("retained handoff");
+
+        let pending = plane
+            .store
+            .select_pending_batch()
+            .expect("pending")
+            .expect("one pending batch");
+        assert_eq!(
+            pending.items.len(),
+            1,
+            "one runtime-authored notice carries both facts"
+        );
+        let notice = &pending.items[0];
+        assert!(matches!(
+            notice.message.source,
+            crate::message::types::UserSource::Runtime
+        ));
+        let crate::message::types::UserContentBlock::Text(text) = &notice.message.content[0] else {
+            panic!("the notice is text");
+        };
+        assert!(text.text.contains("failed"), "the failure diagnostic");
+        assert!(
+            text.text
+                .contains("changes were retained and are not applied to your workspace"),
+            "the retained fact rides the same runtime notice: {}",
+            text.text
+        );
+        for physical in [
+            handoff.physical_worktree_root.display().to_string(),
+            handoff.branch.clone(),
+        ] {
+            assert!(
+                !text.text.contains(&physical),
+                "no physical path/ref crosses into the notice: {physical}"
+            );
+        }
+    }
+
+    /// Issue #191/#192 — ordinary explicit cancellation and deadline
+    /// cancellation are the same `Running -> Cancelling -> Cancelled`
+    /// lifecycle, but the committed reason keeps them distinguishable in
+    /// the authoritative snapshot and in the runtime-authored notice.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn ordinary_and_deadline_cancellation_keep_their_distinct_committed_reasons() {
+        let plane = plane(4);
+
+        // Ordinary explicit cancellation.
+        let explicit_child = stage_stubborn(&plane);
+        let explicit = start(&plane, &start_spec("explicit cancel")).await;
+        plane
+            .registry
+            .cancel(&explicit.subagent_id, CancellationReason::UserRequested)
+            .expect("known child");
+        explicit_child
+            .complete(ChildResultStatus::Cancelled, None)
+            .await;
+        let explicit_settled = plane
+            .registry
+            .wait_until_settled(&explicit.subagent_id)
+            .await
+            .expect("settled");
+        assert_eq!(explicit_settled.state, SubagentState::Cancelled);
+        assert_eq!(
+            explicit_settled.cancel_reason,
+            Some(CancellationReason::UserRequested)
+        );
+
+        // Deadline expiry: the same ordinary cancellation model, driven by
+        // the manual clock, with the deadline reason. The completion latch
+        // is registered before the start commits, against the
+        // deterministic second-child identity.
+        let deadline_child = stage_stubborn(&plane);
+        let deadline_id = SubagentId::for_conversation(&plane.conversation_id, 2);
+        let deadline_done = plane.registry.watch_deadline_completion(&deadline_id);
+        let deadline = start(&plane, &deadline_spec("deadline", 100)).await;
+        assert_eq!(deadline.subagent_id, deadline_id);
+        plane.monotonic_clock.advance(100);
+        deadline_done.await.expect("the deadline cancellation ran");
+        deadline_child
+            .complete(ChildResultStatus::Cancelled, None)
+            .await;
+        let deadline_settled = plane
+            .registry
+            .wait_until_settled(&deadline.subagent_id)
+            .await
+            .expect("settled");
+        assert_eq!(deadline_settled.state, SubagentState::Cancelled);
+        assert_eq!(
+            deadline_settled.cancel_reason,
+            Some(CancellationReason::SubagentExecutionDeadlineExceeded)
+        );
+
+        // The parent-facing notices keep the same distinction.
+        let pending = plane
+            .store
+            .select_pending_batch()
+            .expect("pending")
+            .expect("one pending batch");
+        assert_eq!(pending.items.len(), 2, "one runtime notice per child");
+        let texts = pending
+            .items
+            .iter()
+            .map(|item| {
+                assert!(matches!(
+                    item.message.source,
+                    crate::message::types::UserSource::Runtime
+                ));
+                match &item.message.content[0] {
+                    crate::message::types::UserContentBlock::Text(text) => text.text.clone(),
+                    other => panic!("a cancellation notice is text: {other:?}"),
+                }
+            })
+            .collect::<Vec<_>>();
+        assert!(texts[0].contains("requested by the user"), "{}", texts[0]);
+        assert!(
+            texts[1].contains("the subagent execution deadline expired"),
+            "{}",
+            texts[1]
+        );
+        assert!(
+            !texts.iter().any(|text| text.contains("timed out")),
+            "there is no TimedOut lifecycle: {texts:?}"
+        );
     }
 
     /// The deadline has no authority during prepare or the durable ownership
@@ -6983,15 +7331,15 @@ mod tests {
             .await
             .expect("settled");
         // A retry of the same correlated publication is an idempotent
-        // no-op, never a second message. Rebuild the byte-identical draft:
+        // no-op, never a second message. Rebuild the byte-identical pair:
         // the frozen candidate timestamp is the committed one.
         let first = plane
             .store
             .select_pending_batch()
             .expect("pending")
             .expect("batch");
-        assert_eq!(first.items.len(), 1);
-        let committed_at = first.items[0]
+        assert_eq!(first.items.len(), 2, "the notice and the report");
+        let committed_at = first.items[1]
             .message
             .timestamp
             .expect("terminal notifications carry a timestamp");
@@ -7008,16 +7356,22 @@ mod tests {
             &crate::events::types::SubagentWorkspaceTerminalResource::None,
             committed_at,
         );
+        let notice = super::super::terminal_notice(
+            &accepted.subagent_id,
+            &SubagentName::parse("explore").expect("canonical name"),
+            false,
+            committed_at,
+        );
         plane
             .store
-            .accept_inbound_with_event(draft, event)
+            .accept_subagent_terminal(Some(notice), draft, event)
             .expect("idempotent retry");
         let second = plane
             .store
             .select_pending_batch()
             .expect("pending")
             .expect("batch");
-        assert_eq!(second.items.len(), 1, "exactly once");
+        assert_eq!(second.items.len(), 2, "exactly once, both sides");
     }
 
     #[tokio::test]
