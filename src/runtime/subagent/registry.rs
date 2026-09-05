@@ -291,9 +291,7 @@ impl SubagentRecord {
             // settlement that raced an in-flight intent reports no stale
             // reason.
             cancel_reason: match self.lifecycle {
-                SubagentLifecycle::Cancelling | SubagentLifecycle::Cancelled => {
-                    self.cancel_reason
-                }
+                SubagentLifecycle::Cancelling | SubagentLifecycle::Cancelled => self.cancel_reason,
                 _ => None,
             },
             detail: self.detail.clone(),
@@ -5720,9 +5718,7 @@ mod tests {
         );
         assert_eq!(
             notice.correlation.as_deref(),
-            Some(
-                super::super::terminal_notice_correlation(&accepted.subagent_id).as_str()
-            )
+            Some(super::super::terminal_notice_correlation(&accepted.subagent_id).as_str())
         );
         assert!(
             matches!(
@@ -5834,8 +5830,7 @@ mod tests {
             notice.message.source,
             crate::message::types::UserSource::Runtime
         ));
-        let crate::message::types::UserContentBlock::Text(text) = &notice.message.content[0]
-        else {
+        let crate::message::types::UserContentBlock::Text(text) = &notice.message.content[0] else {
             panic!("the notice is text");
         };
         assert!(text.text.contains("failed"), "the failure diagnostic");

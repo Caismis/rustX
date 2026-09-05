@@ -9806,9 +9806,9 @@ mod tests {
                 text: "retained".to_owned(),
             })],
             timestamp,
-            correlation: Some(
-                crate::runtime::subagent::terminal_notice_correlation(&subagent_id),
-            ),
+            correlation: Some(crate::runtime::subagent::terminal_notice_correlation(
+                &subagent_id,
+            )),
         };
         let report_for_store = || InboundDraft {
             message_id: Some(report_id.clone()),
@@ -9900,8 +9900,9 @@ mod tests {
         child_authored_notice.source = UserSource::Agent {
             agent_id: crate::runtime::identity::AgentId::new("agent-other"),
         };
-        child_authored_notice.correlation =
-            Some(crate::runtime::subagent::terminal_notice_correlation(&other));
+        child_authored_notice.correlation = Some(
+            crate::runtime::subagent::terminal_notice_correlation(&other),
+        );
         let other_report_id = crate::runtime::subagent::terminal_message_id(&other);
         let mut other_report = report_for_store();
         other_report.message_id = Some(other_report_id.clone());
@@ -9993,16 +9994,18 @@ mod tests {
             ))
             .unwrap();
         let notice = || InboundDraft {
-            message_id: Some(crate::runtime::subagent::terminal_notice_message_id(&subagent_id)),
+            message_id: Some(crate::runtime::subagent::terminal_notice_message_id(
+                &subagent_id,
+            )),
             source: UserSource::Runtime,
             kind: InboundKind::Message,
             content: vec![UserContentBlock::Text(TextBlock {
                 text: "retained".to_owned(),
             })],
             timestamp,
-            correlation: Some(
-                crate::runtime::subagent::terminal_notice_correlation(&subagent_id),
-            ),
+            correlation: Some(crate::runtime::subagent::terminal_notice_correlation(
+                &subagent_id,
+            )),
         };
         let report = || InboundDraft {
             message_id: Some(crate::runtime::subagent::terminal_message_id(&subagent_id)),

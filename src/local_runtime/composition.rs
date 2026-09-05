@@ -2822,10 +2822,9 @@ mod subagent_child_tests {
         );
 
         let mut workflow_spec = spec(dir.path(), vec![builtin("read")], Vec::new(), Vec::new());
-        workflow_spec.terminal =
-            crate::runtime::subagent::ipc::ChildTerminalMode::WorkflowOutput {
-                output_schema: serde_json::json!({"type": "object"}),
-            };
+        workflow_spec.terminal = crate::runtime::subagent::ipc::ChildTerminalMode::WorkflowOutput {
+            output_schema: serde_json::json!({"type": "object"}),
+        };
         let workflow = LocalConversationCore::compose_subagent_child(
             &workflow_spec,
             &dependencies(),

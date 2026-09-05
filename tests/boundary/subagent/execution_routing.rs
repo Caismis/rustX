@@ -755,9 +755,7 @@ async fn two_concurrent_children_of_one_agent_stay_unambiguously_correlated() {
     ] {
         assert_eq!(
             item.correlation.as_deref(),
-            Some(
-                crate::runtime::subagent::terminal_correlation(&accepted.subagent_id).as_str()
-            ),
+            Some(crate::runtime::subagent::terminal_correlation(&accepted.subagent_id).as_str()),
             "the report correlates to its own execution"
         );
         assert!(matches!(

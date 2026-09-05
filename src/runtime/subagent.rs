@@ -366,8 +366,7 @@ pub(crate) const MAX_CONTEXT_PACKAGE_BYTES: usize = 64 * 1024;
 /// once at the child instruction boundary, and never repeated in a
 /// user-authored `instructionsFile`, never owned by a provider adapter, and
 /// never rewritten per definition.
-pub(crate) const SUBAGENT_FINAL_REPORT_INSTRUCTION: &str =
-    "Your final response is the complete handoff to the parent agent. Include all findings, \
+pub(crate) const SUBAGENT_FINAL_REPORT_INSTRUCTION: &str = "Your final response is the complete handoff to the parent agent. Include all findings, \
      conclusions, changes, validation results, and caveats the parent needs to continue the \
      task. Do not assume the parent can see your intermediate reasoning, tool calls, tool \
      outputs, or conversation history.";
@@ -508,8 +507,7 @@ pub(crate) fn terminal_notice_correlation(subagent_id: &SubagentId) -> String {
 /// workspace (Issue #192): semantic only — never a physical path, branch,
 /// or commit, which remain user/Runtime Client concerns below the model
 /// boundary.
-pub(crate) const RETAINED_WORKSPACE_FACT: &str =
-    "changes were retained and are not applied to your workspace; the user can inspect or \
+pub(crate) const RETAINED_WORKSPACE_FACT: &str = "changes were retained and are not applied to your workspace; the user can inspect or \
      dispose of the retained workspace";
 
 /// The runtime-authored adjacent notice of a successful child whose

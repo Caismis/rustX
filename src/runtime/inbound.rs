@@ -970,7 +970,9 @@ impl ConversationInboundMailbox {
         // admission: a committed child must be able to durably publish its
         // terminal inbound while the conversation drains.
         let _settlement = self.begin_settlement_admission()?;
-        let (notice, accepted, event) = self.inbound.accept_subagent_terminal(notice, draft, event)?;
+        let (notice, accepted, event) = self
+            .inbound
+            .accept_subagent_terminal(notice, draft, event)?;
         let mut woke = false;
         for accepted in [notice, Some(accepted)].into_iter().flatten() {
             if accepted.retried {

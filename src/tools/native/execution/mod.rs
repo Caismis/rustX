@@ -1021,15 +1021,13 @@ mod tests {
     fn the_subagent_projection_surfaces_the_cancellation_reason_only_when_one_exists() {
         let mut snapshot = subagent_snapshot();
         snapshot.state = crate::runtime::subagent::SubagentState::Cancelled;
-        snapshot.cancel_reason = Some(
-            crate::runtime::types::CancellationReason::SubagentExecutionDeadlineExceeded,
-        );
+        snapshot.cancel_reason =
+            Some(crate::runtime::types::CancellationReason::SubagentExecutionDeadlineExceeded);
         let value = serde_json::to_value(super::SubagentExecutionSnapshot::from(snapshot))
             .expect("serializes");
         assert_eq!(value["state"], "cancelled");
         assert_eq!(
-            value["cancellation_reason"],
-            "subagent_execution_deadline_exceeded",
+            value["cancellation_reason"], "subagent_execution_deadline_exceeded",
             "the deadline cancellation stays distinguishable: {value}"
         );
 
@@ -1048,9 +1046,7 @@ mod tests {
     /// minimal semantic fact — never a physical path, branch, or commit.
     #[test]
     fn the_subagent_projection_annotates_retained_isolated_changes_semantically() {
-        use crate::runtime::subagent::{
-            GitWorktreeSnapshot, WorkspaceHandoff, WorkspaceIsolation,
-        };
+        use crate::runtime::subagent::{GitWorktreeSnapshot, WorkspaceHandoff, WorkspaceIsolation};
         let mut snapshot = subagent_snapshot();
         snapshot.workspace = crate::runtime::subagent::WorkspaceSnapshot {
             logical_workspace: std::path::PathBuf::from("/physical/worktree/project"),
@@ -1097,10 +1093,9 @@ mod tests {
         }
 
         // Without a retained settlement the annotation is absent entirely.
-        let value = serde_json::to_value(super::SubagentExecutionSnapshot::from(
-            subagent_snapshot(),
-        ))
-        .expect("serializes");
+        let value =
+            serde_json::to_value(super::SubagentExecutionSnapshot::from(subagent_snapshot()))
+                .expect("serializes");
         assert!(
             value.get("isolated_changes_retained").is_none(),
             "a shared/clean child carries no workspace annotation: {value}"
