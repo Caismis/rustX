@@ -56,7 +56,9 @@ use rustx::runtime::{
     ApprovalDecision, InteractionOutcome, InteractionRequest, InteractionResponse,
 };
 use rustx::tools::ToolProgressCapability;
-use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
+use rustx::tools::executor::{
+    ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistry,
+};
 use rustx::tools::types::{
     ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
     ToolInvocation,
@@ -178,26 +180,29 @@ impl SpyTool {
 }
 
 impl ToolExecutor for SpyTool {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         invocation: ToolInvocation,
-        _context: ToolExecutionContext<'a>,
-    ) -> BoxFuture<'a, ToolExecutionResult> {
+        context: ToolExecutionContext<'a>,
+    ) -> ToolExecutionHandle<'a> {
         self.invocations
             .lock()
             .expect("spy invocations lock")
             .push(invocation);
-        Box::pin(async move {
-            ToolExecutionResult {
-                status: ToolExecutionStatus::Success,
-                content: Vec::new(),
-                duration_ms: 0,
-                exit_code: Some(0),
-                artifacts: Vec::new(),
-                truncation: None,
-                managed_output: None,
-            }
-        })
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                ToolExecutionResult {
+                    status: ToolExecutionStatus::Success,
+                    content: Vec::new(),
+                    duration_ms: 0,
+                    exit_code: Some(0),
+                    artifacts: Vec::new(),
+                    truncation: None,
+                    managed_output: None,
+                }
+            }),
+            context.cancellation.clone(),
+        )
     }
 
     fn progress_capability(&self) -> ToolProgressCapability {

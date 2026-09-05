@@ -16,18 +16,22 @@
 //!
 //! A deadline expiring is cancellation/liveness **intent**, not proof that
 //! external execution stopped (Issue #202). The lifecycle requests
-//! executor-owned physical cancellation and then awaits the executor's
-//! settlement evidence, bounded by [`TOOL_SETTLEMENT_CONFIRMATION`]. The
-//! settled evidence selects the canonical status: proven terminal settlement
-//! after a deadline winner is [`ToolExecutionStatus::TimedOut`], an
-//! executor-proven `OutcomeUnknown` stays unknown, and a normal completion
-//! that won the physical race inside the executor survives untouched. When
-//! the executor's execution future does not return within the confirmation
-//! window, the lifecycle has exhausted the accepted executor-owned
-//! settlement mechanism without proving terminality: the canonical result is
-//! `OutcomeUnknown` — never `TimedOut`, because "the execution future did
-//! not return" is not "physical execution definitely stopped" — and the
-//! lifecycle drops the uncooperative future so the Agent Loop stays live.
+//! executor-owned physical cancellation and then transitions to the
+//! executor's settlement authority: the independent cancellation/settlement
+//! control plane of the started execution
+//! ([`crate::tools::executor::ToolExecutionHandle`]), which returns typed
+//! [`crate::tools::executor::ToolSettlement`] evidence and is awaited without
+//! a timeout — it is the *normal* settlement mechanism. The settled evidence
+//! selects the canonical status: proven terminal settlement after a deadline
+//! winner is [`ToolExecutionStatus::TimedOut`], an executor-proven
+//! `OutcomeUnknown` (unconfirmed settlement evidence) stays unknown, and a
+//! normal completion that won the physical race inside the executor survives
+//! untouched. [`TOOL_SETTLEMENT_CONTROL_GUARD`] exists ONLY as protection
+//! against a broken executor whose settlement plane never returns; its expiry
+//! is a settlement control-plane failure, never settlement evidence, and the
+//! canonical result of that failure is `OutcomeUnknown` — never `TimedOut`,
+//! because "the settlement plane did not return" is not "physical execution
+//! definitely stopped".
 //!
 //! [`ToolExecutionStatus::TimedOut`]: crate::tools::types::ToolExecutionStatus::TimedOut
 
@@ -37,21 +41,28 @@ use std::time::Duration;
 /// provide another value.
 pub const DEFAULT_TOOL_HARD_DEADLINE: Duration = Duration::from_mins(2);
 
-/// The bounded window the generic lifecycle awaits an executor's physical
-/// settlement evidence after cancellation intent (a deadline winner or
-/// attempt cancellation) was delivered to the execution (Issue #204).
+/// The guard bounding the lifecycle's wait for the executor's settlement
+/// control plane after cancellation intent (a deadline winner or attempt
+/// cancellation) was delivered to the execution (Issue #204).
 ///
 /// This is not a second execution deadline and its expiry is never
-/// `TimedOut`: it bounds only the wait for *settlement evidence* from an
-/// executor that was already asked to cancel. Cooperative executors settle
-/// promptly inside their own bounded physical ladders (for example Bash's
-/// process-group kill, wait, and reap, bounded well below this window). An
-/// executor whose execution future still has not returned when the window
-/// expires has crossed — or may have crossed — the external-effect frontier
-/// without provable terminality, so the lifecycle commits `OutcomeUnknown`
-/// and drops the uncooperative future rather than blocking the Agent Loop
-/// forever.
-pub const TOOL_SETTLEMENT_CONFIRMATION: Duration = Duration::from_secs(30);
+/// `TimedOut` — and it is never settlement evidence: the settlement control
+/// plane is the normal settlement mechanism and is awaited without a
+/// timeout. The guard exists ONLY as protection against a broken executor
+/// whose settlement plane never returns after observing cancellation.
+/// Conforming executors settle promptly inside their own bounded physical
+/// ladders (for example Bash's process-group kill, wait, and reap, bounded
+/// well below this window).
+///
+/// Guard expiry is a settlement control-plane FAILURE: it never implies the
+/// physical operation stopped. On that exceptional path the lifecycle
+/// commits `OutcomeUnknown` and drops the handle — which, for
+/// [`crate::tools::executor::ToolExecutionHandle::settled_by_operation`],
+/// drops the operation future the hung settlement plane had taken;
+/// destructors of a contract-violating executor are not a cleanup guarantee,
+/// just the end of runtime ownership — and the closed call slot guarantees
+/// no late executor state can publish canonical facts.
+pub const TOOL_SETTLEMENT_CONTROL_GUARD: Duration = Duration::from_secs(30);
 
 /// The immutable execution-liveness policy of one runtime.
 ///
@@ -166,6 +177,43 @@ pub enum ToolDeadlineKind {
     Idle,
 }
 
+/// Why the generic lifecycle requested physical cancellation of one started
+/// execution (Issue #204).
+///
+/// The cause is observational evidence: it records which authority's intent
+/// reached the execution, never the settlement outcome. The canonical
+/// outcome is selected from the executor's typed settlement evidence at the
+/// terminal result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCancellationCause {
+    /// The owning attempt's cancellation won arbitration; the payload is the
+    /// attempt authority's absorbing reason.
+    Attempt(crate::runtime::types::CancellationReason),
+    /// A generic liveness deadline won arbitration.
+    Deadline(ToolDeadlineKind),
+}
+
+/// The certainty of one observed physical settlement (Issue #204).
+///
+/// This is the journaled form of the executor's typed
+/// [`crate::tools::executor::ToolSettlement`] evidence: `Confirmed` records
+/// executor-proven physical terminality, `Unconfirmed` records that the
+/// executor consumed its local operation ownership while terminality past
+/// the external-effect frontier stayed unprovable — including the guard
+/// case, where a broken executor's settlement control plane never returned
+/// (a settlement-contract violation, never proof about the physical
+/// operation).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolSettlementCertainty {
+    /// The executor proved its physical operation terminal.
+    Confirmed,
+    /// Physical terminality past the external-effect frontier could not be
+    /// proven.
+    Unconfirmed,
+}
+
 /// The absolute monotonic-clock deadline `duration` after `now_millis`,
 /// saturating at the representable maximum.
 pub(crate) fn deadline_after(now_millis: u64, duration: Duration) -> u64 {
@@ -176,7 +224,7 @@ pub(crate) fn deadline_after(now_millis: u64, duration: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_TOOL_HARD_DEADLINE, TOOL_SETTLEMENT_CONFIRMATION, ToolDeadlineKind,
+        DEFAULT_TOOL_HARD_DEADLINE, TOOL_SETTLEMENT_CONTROL_GUARD, ToolDeadlineKind,
         ToolExecutionDeadlinePolicy, ToolProgressCapability, deadline_after,
     };
     use std::time::Duration;
@@ -211,12 +259,12 @@ mod tests {
         );
     }
 
-    /// The settlement-confirmation window is finite and comfortably exceeds
+    /// The settlement control-plane guard is finite and comfortably exceeds
     /// the bounded physical settlement ladders of cooperative executors.
     #[test]
-    fn settlement_confirmation_is_finite_and_generous() {
-        assert!(TOOL_SETTLEMENT_CONFIRMATION >= Duration::from_secs(10));
-        assert!(TOOL_SETTLEMENT_CONFIRMATION <= Duration::from_mins(5));
+    fn settlement_control_guard_is_finite_and_generous() {
+        assert!(TOOL_SETTLEMENT_CONTROL_GUARD >= Duration::from_secs(10));
+        assert!(TOOL_SETTLEMENT_CONTROL_GUARD <= Duration::from_mins(5));
     }
 
     /// The hard deadline is measured from the executor-start frontier and

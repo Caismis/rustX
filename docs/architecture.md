@@ -742,20 +742,32 @@ never moves. The biased winner arbitration is one explicit linearization
 point — attempt cancellation > hard deadline > idle deadline > physical
 completion at equal readiness — and a deadline winner is cancellation
 intent, not settlement: the lifecycle cancels exactly that call's child
-cancellation signal and awaits the executor's physical settlement evidence,
-bounded by the settlement-confirmation window so an execution future that
-never returns cannot block the Agent Loop. The evidence then selects the
-canonical status under the Issue #202 contract: proven terminal settlement
-after a deadline is `TimedOut`, unconfirmed post-frontier terminality —
-including confirmation-window expiry with no executor evidence — is
-`OutcomeUnknown`, and a proven normal outcome that won the physical race
-survives. Canonical settlement is absorbing: an executor future that
-outlived the confirmation window is dropped after the `OutcomeUnknown`
-commit and can never publish a second result, so runtime drain transitively
-waits only for each admitted execution's bounded canonical settlement, and
-a per-call deadline never strands its batch siblings. The durable typed
-intent fact is `ToolExecutionDeadlineFired { kind }`, ordered between the
-call's retained progress facts and its terminal `ToolExecutionCompleted`.
+cancellation signal and transitions to the executor's settlement authority.
+The `ToolExecutor` boundary splits one started execution into
+`ToolExecutionHandle { completion, settlement }` — the physical completion
+plane and the independent cancellation/settlement control plane, both
+executor-owned. Once intent wins, the lifecycle awaits only the settlement
+plane, which returns typed `Confirmed`/`Unconfirmed` evidence and is the
+normal settlement mechanism, awaited without a timeout of its own;
+`TOOL_SETTLEMENT_CONTROL_GUARD` bounds only the wait for a broken executor
+whose settlement plane never returns, and its expiry is a settlement
+control-plane failure, never settlement evidence. The evidence then selects
+the canonical status under the Issue #202 contract: proven terminal
+settlement after a deadline is `TimedOut`, explicit `Unconfirmed` evidence
+or guard expiry is `OutcomeUnknown` — never derived from an unreturned or
+dropped execution future — and a proven normal outcome that won the physical
+race survives. Canonical settlement is absorbing: the closed call slot
+guarantees that no late physical completion, residual executor-owned
+physical cleanup, or repeated intent can publish a second result or a
+post-terminal fact, so runtime drain transitively waits only for each
+admitted execution's canonical settlement, and a per-call deadline never
+strands its batch siblings. The durable typed facts of a cancelled call are
+ordered `ToolExecutionStarted`, the retained progress facts,
+`ToolExecutionDeadlineFired { kind }` when a deadline fired,
+`ToolExecutionCancellationRequested { cause }`,
+`ToolExecutionSettlementObserved { certainty }`, and the terminal
+`ToolExecutionCompleted` last; the journal is observational evidence and the
+canonical ToolResult remains the only outcome authority.
 
 The Bash tool's explicit model-requested `timeout` is tool-owned business
 input below this lifecycle: the executor settles it physically (process-group

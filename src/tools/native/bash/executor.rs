@@ -6,8 +6,6 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use futures_util::future::BoxFuture;
-
 #[cfg(test)]
 use super::capture::CaptureHold;
 use super::capture::{
@@ -28,7 +26,7 @@ use crate::runtime::process_runner::{
     RunnerChannelEofHook as ChannelEofHook, RunnerTerminalHold as TerminalHold,
 };
 use crate::tools::deadline::ToolProgressCapability;
-use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
+use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::limits::{BASH_TERMINATION_CONFIRMATION, FOREGROUND_TOOL_RESULT_PREVIEW_BYTES};
 use crate::tools::native::support::failed_result;
 use crate::tools::types::{
@@ -70,17 +68,27 @@ impl Default for BashTool {
 }
 
 impl ToolExecutor for BashTool {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
-    ) -> BoxFuture<'a, ToolExecutionResult> {
+    ) -> ToolExecutionHandle<'a> {
+        // The kill/wait/reap cancellation ladder stays inside the operation
+        // future: the settlement plane drives that same operation to its
+        // proven terminal end.
+        let cancellation = context.cancellation.clone();
         #[cfg(test)]
         let control = self.control.clone();
         #[cfg(test)]
-        return Box::pin(async move { run_bash(&invocation, &context, control.as_ref()).await });
+        return ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move { run_bash(&invocation, &context, control.as_ref()).await }),
+            cancellation,
+        );
         #[cfg(not(test))]
-        Box::pin(async move { run_bash(&invocation, &context, None).await })
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move { run_bash(&invocation, &context, None).await }),
+            cancellation,
+        )
     }
 
     // No progress protocol; the generic hard deadline bounds one execution.

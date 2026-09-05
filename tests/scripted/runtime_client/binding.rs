@@ -175,26 +175,30 @@ fn write_skill(workspace: &Path, name: &str) {
 struct ParkedBackgroundTool;
 
 impl rustx::tools::executor::ToolExecutor for ParkedBackgroundTool {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         _invocation: rustx::tools::types::ToolInvocation,
         context: rustx::tools::executor::ToolExecutionContext<'a>,
-    ) -> futures_util::future::BoxFuture<'a, rustx::tools::types::ToolExecutionResult> {
-        Box::pin(async move {
-            context.cancellation.cancelled().await;
-            rustx::tools::types::ToolExecutionResult {
-                status: rustx::tools::types::ToolExecutionStatus::Cancelled {
-                    reason: rustx::runtime::types::CancellationReason::UserRequested,
-                    phase: rustx::tools::types::ToolCancellationPhase::DuringExecution,
-                },
-                content: Vec::new(),
-                duration_ms: 0,
-                exit_code: None,
-                artifacts: Vec::new(),
-                truncation: None,
-                managed_output: None,
-            }
-        })
+    ) -> rustx::tools::executor::ToolExecutionHandle<'a> {
+        let cancellation = context.cancellation.clone();
+        rustx::tools::executor::ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                context.cancellation.cancelled().await;
+                rustx::tools::types::ToolExecutionResult {
+                    status: rustx::tools::types::ToolExecutionStatus::Cancelled {
+                        reason: rustx::runtime::types::CancellationReason::UserRequested,
+                        phase: rustx::tools::types::ToolCancellationPhase::DuringExecution,
+                    },
+                    content: Vec::new(),
+                    duration_ms: 0,
+                    exit_code: None,
+                    artifacts: Vec::new(),
+                    truncation: None,
+                    managed_output: None,
+                }
+            }),
+            cancellation,
+        )
     }
 
     fn progress_capability(&self) -> rustx::tools::ToolProgressCapability {

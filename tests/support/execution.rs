@@ -187,7 +187,10 @@ pub(crate) async fn run_execution(
         fixture.runtime.tool_output(),
         fixture.runtime.environment(),
     );
-    executor.execute(prepared.invocation, context).await
+    executor
+        .start(prepared.invocation, context)
+        .completion
+        .await
 }
 
 /// The single JSON content block of a successful structured result.

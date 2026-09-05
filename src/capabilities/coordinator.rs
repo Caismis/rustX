@@ -3037,7 +3037,7 @@ mod mcp_race_tests {
         )
         .expect("tool runtime");
         let progress = NoProgress;
-        let result = crate::tools::executor::ToolExecutor::execute(
+        let result = crate::tools::executor::ToolExecutor::start(
             executor.as_ref(),
             crate::tools::types::ToolInvocation {
                 call_id: crate::runtime::identity::ToolCallId::new("mutate"),
@@ -3063,6 +3063,7 @@ mod mcp_race_tests {
                 subagent: None,
             },
         )
+        .completion
         .await;
         assert!(matches!(
             result.status,

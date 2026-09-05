@@ -7,16 +7,14 @@
 
 use std::sync::Arc;
 
-use futures_util::future::BoxFuture;
-
 use crate::runtime::workflow::{WorkflowCatalog, WorkflowProgram, WorkflowRuntime};
 use crate::tools::deadline::ToolProgressCapability;
-use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
+use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::native::registration::NativeToolRegistration;
 use crate::tools::native::support::{cancelled_result, failed_result, success_json};
 use crate::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
-    ToolExecutionResult, ToolInvocation, ToolOrigin, ToolReplayPolicy,
+    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolInvocation,
+    ToolOrigin, ToolReplayPolicy,
 };
 
 /// Builds one registration per explicitly model-visible Workflow id.
@@ -62,36 +60,44 @@ struct WorkflowToolExecutor {
 }
 
 impl ToolExecutor for WorkflowToolExecutor {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
-    ) -> BoxFuture<'a, ToolExecutionResult> {
+    ) -> ToolExecutionHandle<'a> {
         let Some(subagent_context) = context.subagent_context().cloned() else {
-            return Box::pin(async {
-                failed_result("Workflow Tools are available only inside an admitted Agent turn")
-            });
+            return ToolExecutionHandle::settled_by_operation(
+                Box::pin(async {
+                    failed_result("Workflow Tools are available only inside an admitted Agent turn")
+                }),
+                context.cancellation.clone(),
+            );
         };
         let runtime = self.runtime.clone();
         let program = Arc::clone(&self.program);
         let run_id = invocation.call_id.clone();
-        let cancellation = context.cancellation.clone();
-        Box::pin(async move {
-            match runtime
-                .run_foreground(
-                    program,
-                    run_id,
-                    subagent_context,
-                    invocation.arguments,
-                    cancellation.clone(),
-                )
-                .await
-            {
-                Ok(value) => success_json(value),
-                Err(error) if error.is_cancelled() => cancelled_result(cancellation.reason()),
-                Err(error) => failed_result(error.to_string()),
-            }
-        })
+        let operation_cancellation = context.cancellation.clone();
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                match runtime
+                    .run_foreground(
+                        program,
+                        run_id,
+                        subagent_context,
+                        invocation.arguments,
+                        operation_cancellation.clone(),
+                    )
+                    .await
+                {
+                    Ok(value) => success_json(value),
+                    Err(error) if error.is_cancelled() => {
+                        cancelled_result(operation_cancellation.reason())
+                    }
+                    Err(error) => failed_result(error.to_string()),
+                }
+            }),
+            context.cancellation.clone(),
+        )
     }
 
     fn progress_capability(&self) -> ToolProgressCapability {

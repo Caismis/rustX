@@ -118,7 +118,7 @@ async fn run_with_control(
         Some(seconds) => invocation_with_timeout(&command, seconds),
         None => invocation(&command),
     };
-    tool.execute(invocation, context).await
+    tool.start(invocation, context).completion.await
 }
 
 /// Whether a specific process still exists (signal-0 probe).

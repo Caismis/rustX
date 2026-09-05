@@ -3,11 +3,12 @@
 
 use std::sync::Arc;
 
-use futures_util::future::BoxFuture;
 use rustx::runtime::identity::ToolId;
 use rustx::tools::ToolProgressCapability;
 use rustx::tools::Workspace;
-use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
+use rustx::tools::executor::{
+    ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistry,
+};
 use rustx::tools::python::discover_python_packages;
 use rustx::tools::types::{
     ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
@@ -17,24 +18,27 @@ use rustx::tools::types::{
 struct NoopExecutor;
 
 impl ToolExecutor for NoopExecutor {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         _invocation: ToolInvocation,
-        _context: ToolExecutionContext<'a>,
-    ) -> BoxFuture<'a, ToolExecutionResult> {
-        Box::pin(async {
-            ToolExecutionResult {
-                status: rustx::tools::types::ToolExecutionStatus::Failed {
-                    error: "noop".to_owned(),
-                },
-                content: Vec::new(),
-                duration_ms: 0,
-                exit_code: None,
-                artifacts: Vec::new(),
-                truncation: None,
-                managed_output: None,
-            }
-        })
+        context: ToolExecutionContext<'a>,
+    ) -> ToolExecutionHandle<'a> {
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async {
+                ToolExecutionResult {
+                    status: rustx::tools::types::ToolExecutionStatus::Failed {
+                        error: "noop".to_owned(),
+                    },
+                    content: Vec::new(),
+                    duration_ms: 0,
+                    exit_code: None,
+                    artifacts: Vec::new(),
+                    truncation: None,
+                    managed_output: None,
+                }
+            }),
+            context.cancellation.clone(),
+        )
     }
 
     fn progress_capability(&self) -> ToolProgressCapability {

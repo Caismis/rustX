@@ -392,6 +392,48 @@ pub enum RuntimeEvent {
         /// Which generic deadline fired.
         kind: crate::tools::deadline::ToolDeadlineKind,
     },
+    /// Physical cancellation was actually requested and delivered to a
+    /// started foreground tool execution (Issue #204).
+    ///
+    /// This fact is distinct from [`RuntimeEvent::ToolExecutionDeadlineFired`]:
+    /// that records that a liveness condition won arbitration (intent); this
+    /// records that physical cancellation reached the executor — for a
+    /// deadline winner, the lifecycle triggering the per-call cancellation
+    /// signal; for an attempt winner, the attempt's cancellation reaching
+    /// the execution. What cancellation achieved is recorded separately by
+    /// [`RuntimeEvent::ToolExecutionSettlementObserved`]; the call's terminal
+    /// [`RuntimeEvent::ToolExecutionCompleted`] stays terminal-last.
+    ///
+    /// Emitted by the foreground generic lifecycle only.
+    ToolExecutionCancellationRequested {
+        /// Identity of the executing tool call.
+        tool_call_id: ToolCallId,
+        /// Identity of the executed tool.
+        tool_id: ToolId,
+        /// Why physical cancellation was requested.
+        cause: crate::tools::deadline::ToolCancellationCause,
+    },
+    /// The settlement authority of a cancelled foreground tool execution
+    /// returned typed certainty about physical terminality (Issue #204).
+    ///
+    /// This is the executor's own settlement evidence: `Confirmed` records
+    /// executor-proven physical terminality, `Unconfirmed` records that
+    /// terminality past the external-effect frontier stayed unprovable
+    /// (including the guard case of a broken executor whose settlement
+    /// control plane never returned — a settlement-contract failure, never
+    /// proof the operation stopped). The canonical result it selected
+    /// arrives with the call's terminal
+    /// [`RuntimeEvent::ToolExecutionCompleted`].
+    ///
+    /// Emitted by the foreground generic lifecycle only.
+    ToolExecutionSettlementObserved {
+        /// Identity of the executing tool call.
+        tool_call_id: ToolCallId,
+        /// Identity of the executed tool.
+        tool_id: ToolId,
+        /// The observed certainty of the physical settlement.
+        certainty: crate::tools::deadline::ToolSettlementCertainty,
+    },
     /// Tool execution finished and produced a normalized result.
     ToolExecutionCompleted {
         /// Identity of the tool call that finished.

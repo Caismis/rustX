@@ -9,14 +9,18 @@
 //! meaningful progress evidence run hard-deadline-only. Deadline expiration
 //! is cancellation/liveness *intent*, never proof of settlement: the loop
 //! requests physical cancellation of exactly the admitted execution and
-//! awaits the executor's settlement, bounded by the settlement-confirmation
-//! window so an executor whose execution future never returns cannot block
-//! the Agent Loop. The loop commits `TimedOut` only when the executor
+//! transitions to the executor's settlement authority — the independent
+//! cancellation/settlement control plane, which returns typed
+//! Confirmed/Unconfirmed evidence and is guarded against a contract-violating
+//! executor by the settlement control-plane guard, so an executor whose
+//! settlement plane never returns cannot block the Agent Loop. The loop
+//! commits `TimedOut` only when the executor
 //! proved terminality because of the deadline, keeps an executor-proven
 //! completion or failure that won the physical race, keeps an honest
 //! `OutcomeUnknown` when a post-frontier termination cannot be proven, and
-//! commits `OutcomeUnknown` itself when the confirmation window expires
-//! without settlement evidence (the Issue #202 outcome-certainty contract).
+//! commits `OutcomeUnknown` itself when the guard fires on a settlement
+//! control plane that never returned (the Issue #202 outcome-certainty
+//! contract).
 //! The committed terminal result is absorbing: a late physical completion
 //! can never publish a second result.
 //!
@@ -29,10 +33,11 @@
 
 use super::super::{common, support};
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
+
 use rustx::agent::{AgentCancellation, AgentExecution, AgentExecutionRequest};
 use rustx::events::types::{AttemptOutcome, RuntimeEvent};
 use rustx::message::content::TextBlock;
@@ -45,8 +50,12 @@ use rustx::model::finish::ModelFinishReason;
 use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolCallId};
 use rustx::runtime::types::CancellationReason;
 use rustx::runtime::{ManualMonotonicClock, MonotonicClock};
-use rustx::tools::deadline::{ToolDeadlineKind, ToolExecutionDeadlinePolicy};
-use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
+use rustx::tools::deadline::{
+    ToolCancellationCause, ToolDeadlineKind, ToolExecutionDeadlinePolicy, ToolSettlementCertainty,
+};
+use rustx::tools::executor::{
+    ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistry, ToolSettlement,
+};
 use rustx::tools::types::{
     ToolCancellationPhase, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionResult,
     ToolExecutionStatus, ToolInvocation, ToolProgress,
@@ -241,48 +250,54 @@ impl DeadlineProbeTool {
 }
 
 impl ToolExecutor for DeadlineProbeTool {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         _invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
-    ) -> BoxFuture<'a, ToolExecutionResult> {
-        Box::pin(async move {
-            self.started.send_replace(true);
-            let mut cancelled = None;
-            for (index, gate) in self.gates.iter().enumerate() {
-                let mut released = gate.subscribe();
-                tokio::select! {
-                    biased;
-                    () = context.cancellation.cancelled() => {
-                        cancelled = Some(self.cancel_settlement());
-                        break;
-                    }
-                    ok = released.wait_for(|is_released| *is_released) => {
-                        ok.expect("probe release gate stays open");
-                        if let Some(message) = self.phase_messages.get(index) {
-                            context.progress.report(ToolProgress {
-                                message: Some(message.clone()),
-                                completed: None,
-                                total: None,
-                            });
-                            self.reported.send_modify(|count| *count += 1);
+    ) -> ToolExecutionHandle<'a> {
+        let cancellation = context.cancellation.clone();
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                self.started.send_replace(true);
+                let mut cancelled = None;
+                for (index, gate) in self.gates.iter().enumerate() {
+                    let mut released = gate.subscribe();
+                    tokio::select! {
+                        biased;
+                        () = context.cancellation.cancelled() => {
+                            cancelled = Some(self.cancel_settlement());
+                            break;
+                        }
+                        ok = released.wait_for(|is_released| *is_released) => {
+                            ok.expect("probe release gate stays open");
+                            if let Some(message) = self.phase_messages.get(index) {
+                                context.progress.report(ToolProgress {
+                                    message: Some(message.clone()),
+                                    completed: None,
+                                    total: None,
+                                });
+                                self.reported.send_modify(|count| *count += 1);
+                            }
                         }
                     }
                 }
-            }
-            let outcome = cancelled.unwrap_or_else(|| self.result.clone());
-            // The settlement gate models late physical settlement evidence:
-            // the outcome is already decided, but the execution future does
-            // not resolve until the executor's settlement is real.
-            if let Some(settle_gate) = &self.settle_gate {
-                let mut released = settle_gate.subscribe();
-                released
-                    .wait_for(|is_released| *is_released)
-                    .await
-                    .expect("probe settle gate stays open");
-            }
-            outcome
-        })
+                let outcome = cancelled.unwrap_or_else(|| self.result.clone());
+                // The settlement gate models late physical settlement
+                // evidence: the outcome is already decided, but the operation
+                // future does not resolve until the executor's settlement is
+                // real. An honest `OutcomeUnknown` here is unconfirmed
+                // settlement evidence of the executor's own control plane.
+                if let Some(settle_gate) = &self.settle_gate {
+                    let mut released = settle_gate.subscribe();
+                    released
+                        .wait_for(|is_released| *is_released)
+                        .await
+                        .expect("probe settle gate stays open");
+                }
+                outcome
+            }),
+            cancellation,
+        )
     }
 
     /// The probe reports genuine phase progress, so it honestly declares
@@ -295,9 +310,10 @@ impl ToolExecutor for DeadlineProbeTool {
 /// A deterministic executor that violates the settlement contract (the
 /// Issue #204 uncooperative-executor cut): it signals `started`, and when
 /// its cancellation signal fires it records the observation through
-/// `cancel_observed` — but its execution future then never resolves, however
-/// long the lifecycle waits and whatever the release gate later does.
-/// Without cancellation it settles normally once released.
+/// `cancel_observed` — but its operation then never resolves, so the
+/// settlement plane driving it never returns either, however long the
+/// lifecycle waits and whatever the release gate later does. Without
+/// cancellation it settles normally once released.
 struct UncooperativeTool {
     result: ToolExecutionResult,
     release: watch::Sender<bool>,
@@ -345,29 +361,34 @@ impl UncooperativeTool {
 }
 
 impl ToolExecutor for UncooperativeTool {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         _invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
-    ) -> BoxFuture<'a, ToolExecutionResult> {
-        Box::pin(async move {
-            self.started.send_replace(true);
-            let mut released = self.release.subscribe();
-            tokio::select! {
-                biased;
-                () = context.cancellation.cancelled() => {
-                    self.cancel_observed.send_replace(true);
+    ) -> ToolExecutionHandle<'a> {
+        let cancellation = context.cancellation.clone();
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                self.started.send_replace(true);
+                let mut released = self.release.subscribe();
+                tokio::select! {
+                    biased;
+                    () = context.cancellation.cancelled() => {
+                        self.cancel_observed.send_replace(true);
+                    }
+                    ok = released.wait_for(|is_released| *is_released) => {
+                        ok.expect("release gate stays open");
+                        return self.result.clone();
+                    }
                 }
-                ok = released.wait_for(|is_released| *is_released) => {
-                    ok.expect("release gate stays open");
-                    return self.result.clone();
-                }
-            }
-            // The contract violation under test: the cancellation request
-            // was observed, yet the execution future never settles.
-            std::future::pending::<()>().await;
-            unreachable!("the uncooperative execution never settles")
-        })
+                // The contract violation under test: the cancellation request
+                // was observed, yet the operation — and with it the
+                // settlement plane — never settles.
+                std::future::pending::<()>().await;
+                unreachable!("the uncooperative execution never settles")
+            }),
+            cancellation,
+        )
     }
 
     fn progress_capability(&self) -> rustx::tools::ToolProgressCapability {
@@ -428,6 +449,243 @@ fn register_probe(
     handles
 }
 
+/// A split-boundary executor for the settlement-authority cut: its physical
+/// completion plane parks forever, so ONLY the independent
+/// cancellation/settlement control plane can ever report. `completion`
+/// flips `completion_resolved` if it ever resolves (it never does; after
+/// settlement the lifecycle drops it as an empty shell). The settlement
+/// plane observes the cancellation request, reports the observation through
+/// `cancel_observed`, parks on the test's confirm gate, and then returns
+/// `Confirmed` with the executor's proven cancellation result. If the two
+/// planes were not genuinely split, this call could never settle.
+struct DetachedSettlementTool {
+    started: watch::Sender<bool>,
+    cancel_observed: watch::Sender<bool>,
+    confirm_gate: watch::Sender<bool>,
+    completion_resolved: watch::Sender<bool>,
+}
+
+/// The controller-side handles of a registered [`DetachedSettlementTool`].
+struct DetachedSettlementHandles {
+    started: watch::Receiver<bool>,
+    cancel_observed: watch::Receiver<bool>,
+    confirm_gate: watch::Sender<bool>,
+    completion_resolved: watch::Receiver<bool>,
+}
+
+impl DetachedSettlementTool {
+    /// Registers the tool and returns its controller handles: start and
+    /// cancellation-observation receivers, the confirm gate, and the
+    /// completion-resolution observation.
+    fn register(
+        registry: &mut ToolRegistry,
+        name: &str,
+        tool_id: &str,
+    ) -> DetachedSettlementHandles {
+        let tool = Self {
+            started: watch::Sender::new(false),
+            cancel_observed: watch::Sender::new(false),
+            confirm_gate: watch::Sender::new(false),
+            completion_resolved: watch::Sender::new(false),
+        };
+        let handles = DetachedSettlementHandles {
+            started: tool.started.subscribe(),
+            cancel_observed: tool.cancel_observed.subscribe(),
+            confirm_gate: tool.confirm_gate.clone(),
+            completion_resolved: tool.completion_resolved.subscribe(),
+        };
+        registry
+            .register(
+                common::tool_policies(
+                    name,
+                    tool_id,
+                    ToolExecutionPolicy::ForegroundOnly,
+                    ToolConcurrencyPolicy::Sequential,
+                ),
+                Arc::new(tool),
+            )
+            .expect("detached settlement tool registration");
+        handles
+    }
+}
+
+impl ToolExecutor for DetachedSettlementTool {
+    fn start<'a>(
+        &'a self,
+        _invocation: ToolInvocation,
+        context: ToolExecutionContext<'a>,
+    ) -> ToolExecutionHandle<'a> {
+        self.started.send_replace(true);
+        let completion_resolved = self.completion_resolved.clone();
+        let completion: BoxFuture<'a, ToolExecutionResult> = Box::pin(async move {
+            std::future::pending::<()>().await;
+            completion_resolved.send_replace(true);
+            unreachable!("the parked completion plane never resolves");
+        });
+        let cancel_observed = self.cancel_observed.clone();
+        let confirm_gate = self.confirm_gate.clone();
+        let settlement: BoxFuture<'a, ToolSettlement> = Box::pin(async move {
+            context.cancellation.cancelled().await;
+            cancel_observed.send_replace(true);
+            // The executor's settlement evidence arrives only when its
+            // physical cancellation path has genuinely run to its end.
+            let mut released = confirm_gate.subscribe();
+            released
+                .wait_for(|is_released| *is_released)
+                .await
+                .expect("confirm gate stays open");
+            ToolSettlement::Confirmed(ToolExecutionResult {
+                status: ToolExecutionStatus::Cancelled {
+                    reason: context.cancellation.reason(),
+                    phase: ToolCancellationPhase::DuringExecution,
+                },
+                content: Vec::new(),
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                managed_output: None,
+            })
+        });
+        ToolExecutionHandle::new(completion, settlement)
+    }
+
+    fn progress_capability(&self) -> rustx::tools::ToolProgressCapability {
+        rustx::tools::ToolProgressCapability::None
+    }
+}
+
+/// A split-boundary executor whose *physical operation* is detached from
+/// the completion plane the lifecycle drives: `start` records that the
+/// dispatch crossed the external-effect frontier, spawns the physical
+/// operation as a separate task parked on the test's finish gate (it
+/// publishes `physical_finished` when it physically ends), and returns a
+/// completion plane that parks forever. The settlement plane observes the
+/// cancellation request, parks on the test's settle gate, and then reports
+/// `Unconfirmed` — the executor consumed its local operation ownership, but
+/// terminality past the external-effect frontier cannot be proven.
+///
+/// The fixture retains the physical task's `JoinHandle`: finishing and
+/// joining that residual physical ownership is the executor's own bounded
+/// cleanup contract, and the residual task can never publish canonical
+/// state — the call's slot is closed once the canonical result commits.
+struct DetachedPhysicalTool {
+    started: watch::Sender<bool>,
+    frontier_crossed: watch::Sender<bool>,
+    cancel_observed: watch::Sender<bool>,
+    settle_gate: watch::Sender<bool>,
+    physical_finish_gate: watch::Sender<bool>,
+    physical_finished: watch::Sender<bool>,
+    completion_resolved: watch::Sender<bool>,
+    physical_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+}
+
+/// The controller-side handles of a registered [`DetachedPhysicalTool`].
+struct DetachedPhysicalHandles {
+    started: watch::Receiver<bool>,
+    frontier_crossed: watch::Receiver<bool>,
+    cancel_observed: watch::Receiver<bool>,
+    settle_gate: watch::Sender<bool>,
+    physical_finish_gate: watch::Sender<bool>,
+    physical_finished: watch::Receiver<bool>,
+    completion_resolved: watch::Receiver<bool>,
+    physical_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+}
+
+impl DetachedPhysicalTool {
+    /// Registers the tool and returns its controller handles.
+    fn register(registry: &mut ToolRegistry, name: &str, tool_id: &str) -> DetachedPhysicalHandles {
+        let tool = Self {
+            started: watch::Sender::new(false),
+            frontier_crossed: watch::Sender::new(false),
+            cancel_observed: watch::Sender::new(false),
+            settle_gate: watch::Sender::new(false),
+            physical_finish_gate: watch::Sender::new(false),
+            physical_finished: watch::Sender::new(false),
+            completion_resolved: watch::Sender::new(false),
+            physical_task: Arc::new(Mutex::new(None)),
+        };
+        let handles = DetachedPhysicalHandles {
+            started: tool.started.subscribe(),
+            frontier_crossed: tool.frontier_crossed.subscribe(),
+            cancel_observed: tool.cancel_observed.subscribe(),
+            settle_gate: tool.settle_gate.clone(),
+            physical_finish_gate: tool.physical_finish_gate.clone(),
+            physical_finished: tool.physical_finished.subscribe(),
+            completion_resolved: tool.completion_resolved.subscribe(),
+            physical_task: tool.physical_task.clone(),
+        };
+        registry
+            .register(
+                common::tool_policies(
+                    name,
+                    tool_id,
+                    ToolExecutionPolicy::ForegroundOnly,
+                    ToolConcurrencyPolicy::Sequential,
+                ),
+                Arc::new(tool),
+            )
+            .expect("detached physical tool registration");
+        handles
+    }
+}
+
+impl ToolExecutor for DetachedPhysicalTool {
+    fn start<'a>(
+        &'a self,
+        _invocation: ToolInvocation,
+        context: ToolExecutionContext<'a>,
+    ) -> ToolExecutionHandle<'a> {
+        self.started.send_replace(true);
+        // The dispatch itself crossed the external-effect frontier: from
+        // this instant the call can never be proven terminal.
+        self.frontier_crossed.send_replace(true);
+        // The physical operation is detached from the completion plane: it
+        // parks on its finish gate and publishes its own finish observation.
+        let finish_gate = self.physical_finish_gate.clone();
+        let physical_finished = self.physical_finished.clone();
+        let task = tokio::spawn(async move {
+            let mut released = finish_gate.subscribe();
+            released
+                .wait_for(|is_released| *is_released)
+                .await
+                .expect("physical finish gate stays open");
+            physical_finished.send_replace(true);
+        });
+        self.physical_task
+            .lock()
+            .expect("physical task lock")
+            .replace(task);
+        let completion_resolved = self.completion_resolved.clone();
+        let completion: BoxFuture<'a, ToolExecutionResult> = Box::pin(async move {
+            std::future::pending::<()>().await;
+            completion_resolved.send_replace(true);
+            unreachable!("the parked completion plane never resolves");
+        });
+        let cancel_observed = self.cancel_observed.clone();
+        let settle_gate = self.settle_gate.clone();
+        let settlement: BoxFuture<'a, ToolSettlement> = Box::pin(async move {
+            context.cancellation.cancelled().await;
+            cancel_observed.send_replace(true);
+            let mut released = settle_gate.subscribe();
+            released
+                .wait_for(|is_released| *is_released)
+                .await
+                .expect("settle gate stays open");
+            ToolSettlement::Unconfirmed {
+                detail: "the dispatched operation crossed the external-effect frontier; remote \
+                         terminality cannot be proven"
+                    .to_owned(),
+            }
+        });
+        ToolExecutionHandle::new(completion, settlement)
+    }
+
+    fn progress_capability(&self) -> rustx::tools::ToolProgressCapability {
+        rustx::tools::ToolProgressCapability::None
+    }
+}
+
 async fn run(
     model: &Arc<FakeModel>,
     tools: ToolRegistry,
@@ -468,8 +726,13 @@ fn tool_messages(audit: &common::DurableExecutionAudit) -> Vec<&ToolMessageBlock
 
 /// The durable execution-fact sequence of one call, in journal order.
 fn fact_sequence(audit: &common::DurableExecutionAudit, call_id: &str) -> Vec<String> {
-    audit
-        .event_history
+    fact_sequence_of(&audit.event_history, call_id)
+}
+
+/// The execution-fact sequence of one call within one event history, in
+/// journal order.
+fn fact_sequence_of(events: &[RuntimeEvent], call_id: &str) -> Vec<String> {
+    events
         .iter()
         .filter_map(|event| match event {
             RuntimeEvent::ToolExecutionStarted { tool_call_id, .. }
@@ -487,6 +750,27 @@ fn fact_sequence(audit: &common::DurableExecutionAudit, call_id: &str) -> Vec<St
             } if tool_call_id.as_str() == call_id => Some(match kind {
                 ToolDeadlineKind::Hard => "deadline:hard".to_owned(),
                 ToolDeadlineKind::Idle => "deadline:idle".to_owned(),
+            }),
+            RuntimeEvent::ToolExecutionCancellationRequested {
+                tool_call_id,
+                cause,
+                ..
+            } if tool_call_id.as_str() == call_id => Some(match cause {
+                ToolCancellationCause::Attempt(_) => "cancellation-requested:attempt".to_owned(),
+                ToolCancellationCause::Deadline(ToolDeadlineKind::Hard) => {
+                    "cancellation-requested:deadline:hard".to_owned()
+                }
+                ToolCancellationCause::Deadline(ToolDeadlineKind::Idle) => {
+                    "cancellation-requested:deadline:idle".to_owned()
+                }
+            }),
+            RuntimeEvent::ToolExecutionSettlementObserved {
+                tool_call_id,
+                certainty,
+                ..
+            } if tool_call_id.as_str() == call_id => Some(match certainty {
+                ToolSettlementCertainty::Confirmed => "settlement:confirmed".to_owned(),
+                ToolSettlementCertainty::Unconfirmed => "settlement:unconfirmed".to_owned(),
             }),
             RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. }
                 if tool_call_id.as_str() == call_id =>
@@ -555,8 +839,40 @@ async fn issue204_hard_deadline_bounds_a_hung_executor() {
     assert_eq!(calls.borrow().len(), 1, "one executor invocation");
     assert_eq!(
         fact_sequence(&audit, "call-hung"),
-        vec!["started", "deadline:hard", "completed"],
-        "intent fact lands between start and the terminal completion fact"
+        vec![
+            "started",
+            "deadline:hard",
+            "cancellation-requested:deadline:hard",
+            "settlement:confirmed",
+            "completed"
+        ],
+        "intent, cancellation request, and proven settlement land between start          and the terminal completion fact"
+    );
+    assert_eq!(
+        audit
+            .event_history
+            .iter()
+            .filter(|event| matches!(
+                event,
+                RuntimeEvent::ToolExecutionCancellationRequested { tool_call_id, .. }
+                    if tool_call_id.as_str() == "call-hung"
+            ))
+            .count(),
+        1,
+        "exactly one cancellation-request fact per cancelled call"
+    );
+    assert_eq!(
+        audit
+            .event_history
+            .iter()
+            .filter(|event| matches!(
+                event,
+                RuntimeEvent::ToolExecutionSettlementObserved { tool_call_id, .. }
+                    if tool_call_id.as_str() == "call-hung"
+            ))
+            .count(),
+        1,
+        "exactly one settlement-observation fact per cancelled call"
     );
     assert!(matches!(
         audit.result.outcome,
@@ -627,7 +943,14 @@ async fn issue204_progress_refreshes_idle_liveness() {
     );
     assert_eq!(
         fact_sequence(&audit, "call-progress"),
-        vec!["started", "progress", "deadline:hard", "completed"]
+        vec![
+            "started",
+            "progress",
+            "deadline:hard",
+            "cancellation-requested:deadline:hard",
+            "settlement:confirmed",
+            "completed"
+        ]
     );
 }
 
@@ -698,6 +1021,8 @@ async fn issue204_progress_never_extends_the_hard_deadline() {
             "progress",
             "progress",
             "deadline:hard",
+            "cancellation-requested:deadline:hard",
+            "settlement:confirmed",
             "completed"
         ]
     );
@@ -747,7 +1072,13 @@ async fn issue204_idle_deadline_cancels_a_silent_execution() {
     ));
     assert_eq!(
         fact_sequence(&audit, "call-silent"),
-        vec!["started", "deadline:idle", "completed"],
+        vec![
+            "started",
+            "deadline:idle",
+            "cancellation-requested:deadline:idle",
+            "settlement:confirmed",
+            "completed"
+        ],
         "the idle deadline is the one cancellation cause"
     );
 }
@@ -798,7 +1129,13 @@ async fn issue204_simultaneous_hard_and_idle_have_one_winner() {
     ));
     assert_eq!(
         fact_sequence(&audit, "call-tie"),
-        vec!["started", "deadline:hard", "completed"],
+        vec![
+            "started",
+            "deadline:hard",
+            "cancellation-requested:deadline:hard",
+            "settlement:confirmed",
+            "completed"
+        ],
         "the hard deadline is the documented simultaneous-eligibility winner"
     );
 }
@@ -859,8 +1196,14 @@ async fn issue204_unconfirmed_external_termination_is_outcome_unknown() {
     assert!(detail.contains("could not be confirmed"));
     assert_eq!(
         fact_sequence(&audit, "call-remote"),
-        vec!["started", "deadline:hard", "completed"],
-        "the intent fact is journaled even when the outcome stays unknown"
+        vec![
+            "started",
+            "deadline:hard",
+            "cancellation-requested:deadline:hard",
+            "settlement:unconfirmed",
+            "completed"
+        ],
+        "the intent and the unconfirmed settlement fact are journaled even          when the outcome stays unknown"
     );
 }
 
@@ -994,14 +1337,54 @@ async fn issue204_physical_completion_winner_never_fires_a_deadline() {
         fact_sequence(&audit, "call-fast"),
         vec!["started", "completed"]
     );
+    assert_eq!(
+        audit
+            .event_history
+            .iter()
+            .filter(|event| matches!(
+                event,
+                RuntimeEvent::ToolExecutionCancellationRequested { tool_call_id, .. }
+                    if tool_call_id.as_str() == "call-fast"
+            ))
+            .count(),
+        0,
+        "a physical-completion winner requests no cancellation"
+    );
+    assert_eq!(
+        audit
+            .event_history
+            .iter()
+            .filter(|event| matches!(
+                event,
+                RuntimeEvent::ToolExecutionSettlementObserved { tool_call_id, .. }
+                    if tool_call_id.as_str() == "call-fast"
+            ))
+            .count(),
+        0,
+        "a physical-completion winner drives no settlement-control-plane phase"
+    );
+    assert_eq!(
+        audit
+            .event_history
+            .iter()
+            .filter(|event| matches!(
+                event,
+                RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. }
+                    if tool_call_id.as_str() == "call-fast"
+            ))
+            .count(),
+        1,
+        "exactly one terminal fact for the completed call"
+    );
 }
 
 /// K: repeated cancellation intent — the hard deadline first, then an
 /// attempt-level cancellation while physical settlement is still in flight,
-/// then further clock advances inside the settlement-confirmation window —
-/// settles the call exactly once. The already-linearized deadline winner
-/// keeps the executor's honest `OutcomeUnknown`; the attempt terminates
-/// cancelled without a second turn.
+/// then further clock advances inside the settlement control-plane guard
+/// window — settles the call exactly once. The already-linearized deadline
+/// winner keeps the executor's honest `OutcomeUnknown` (unconfirmed
+/// settlement evidence); the attempt terminates cancelled without a second
+/// turn.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn issue204_repeated_cancellation_intent_settles_exactly_once() {
     let scripted = call("call-repeat", "tool-repeat", "repeated");
@@ -1034,8 +1417,9 @@ async fn issue204_repeated_cancellation_intent_settles_exactly_once() {
             .expect("cancellation observation channel stays open");
         // A second, attempt-level cancellation intent while the executor's
         // physical settlement is still in flight, plus further time that
-        // stays inside the settlement-confirmation window — so the executor's
-        // own late evidence, not the window's expiry, supplies the outcome.
+        // stays inside the settlement control-plane guard window — so the
+        // executor's own late evidence, not the guard's expiry, supplies the
+        // outcome.
         assert!(controller_cancellation.request_cancel(CancellationReason::UserRequested));
         controller_clock.advance(5_000);
         settle_gate.send_replace(true);
@@ -1064,8 +1448,14 @@ async fn issue204_repeated_cancellation_intent_settles_exactly_once() {
     );
     assert_eq!(
         fact_sequence(&audit, "call-repeat"),
-        vec!["started", "deadline:hard", "completed"],
-        "one intent fact and one terminal fact, however many signals repeat"
+        vec![
+            "started",
+            "deadline:hard",
+            "cancellation-requested:deadline:hard",
+            "settlement:unconfirmed",
+            "completed"
+        ],
+        "one intent fact, one cancellation request, one settlement fact, and          one terminal fact, however many signals repeat"
     );
     assert_eq!(
         model.requests().len(),
@@ -1174,7 +1564,13 @@ async fn issue204_batch_siblings_settle_exactly_once_in_model_order() {
     assert_eq!(messages[1].result, success_result("sibling done"));
     assert_eq!(
         fact_sequence(&audit, "call-slow"),
-        vec!["started", "deadline:hard", "completed"]
+        vec![
+            "started",
+            "deadline:hard",
+            "cancellation-requested:deadline:hard",
+            "settlement:confirmed",
+            "completed"
+        ]
     );
     assert_eq!(
         fact_sequence(&audit, "call-fast-sibling"),
@@ -1270,13 +1666,14 @@ async fn issue204_admitted_executions_obey_their_own_frozen_policy() {
 }
 
 /// M (finite settlement, the primary #204 liveness goal): an executor whose
-/// execution future NEVER resolves after observing the cancellation request
-/// cannot block the Agent Loop. The hard deadline fires, the lifecycle
-/// requests physical cancellation, the executor provably observes it and
-/// still never settles — so the bounded settlement-confirmation window
-/// expires and the lifecycle commits one canonical `OutcomeUnknown` (never
-/// `TimedOut`: an unreturned future is not proven terminality). The run
-/// completes its second model turn, proving the loop stayed live, and a
+/// settlement control plane NEVER returns after observing the cancellation
+/// request cannot block the Agent Loop. The hard deadline fires, the
+/// lifecycle requests physical cancellation, the executor provably observes
+/// it and still never settles — so the settlement control-plane guard fires
+/// (an executor settlement-contract violation, never settlement evidence)
+/// and the lifecycle commits one canonical `OutcomeUnknown` (never
+/// `TimedOut`: an unreturned settlement plane is not proven terminality). The
+/// run completes its second model turn, proving the loop stayed live, and a
 /// late release of the executor's gate cannot change the committed result.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn issue204_uncooperative_executor_settles_outcome_unknown_in_finite_time() {
@@ -1301,9 +1698,9 @@ async fn issue204_uncooperative_executor_settles_outcome_unknown_in_finite_time(
             .wait_for(|observed| *observed)
             .await
             .expect("cancellation observation channel stays open");
-        // Exhaust the settlement-confirmation window (30s from the intent):
-        // the accepted executor-owned settlement mechanism is exhausted
-        // without any evidence.
+        // Exhaust the settlement control-plane guard (30s from the
+        // intent): the executor's settlement authority never returns, a
+        // settlement-contract violation with no evidence.
         controller_clock.advance(30_000);
     });
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
@@ -1329,13 +1726,19 @@ async fn issue204_uncooperative_executor_settles_outcome_unknown_in_finite_time(
         );
     };
     assert!(
-        detail.contains("did not confirm physical settlement"),
-        "the lifecycle's own unproven-settlement evidence: {detail}"
+        detail.contains("settlement control plane did not return"),
+        "the lifecycle's own guard evidence of the contract violation: {detail}"
     );
     assert_eq!(
         fact_sequence(&audit, "call-stuck"),
-        vec!["started", "deadline:hard", "completed"],
-        "one intent fact and exactly one terminal fact"
+        vec![
+            "started",
+            "deadline:hard",
+            "cancellation-requested:deadline:hard",
+            "settlement:unconfirmed",
+            "completed"
+        ],
+        "one intent fact, one cancellation request, one unconfirmed          settlement fact, and exactly one terminal fact"
     );
     assert_eq!(
         audit
@@ -1361,6 +1764,371 @@ async fn issue204_uncooperative_executor_settles_outcome_unknown_in_finite_time(
             finish_reason: ModelFinishReason::Stop
         }
     ));
+}
+
+/// O (split boundary, confirmed): the `ToolExecutor` boundary is genuinely
+/// split into a physical completion plane and an independent
+/// cancellation/settlement control plane. The fixture's completion plane
+/// parks forever and can never resolve, so the executor's settlement
+/// authority is the ONLY thing that can settle the call. After the hard
+/// deadline's cancellation intent, the loop is parked awaiting exactly that
+/// authority — proven by the confirm gate: while it is closed the call
+/// cannot settle, and the completion plane demonstrably never resolved. The
+/// executor's `Confirmed` evidence then settles the one canonical
+/// `TimedOut`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn issue204_settlement_authority_confirms_without_physical_completion() {
+    let scripted = call("call-split-confirm", "tool-split-confirm", "split_confirm");
+    let model = fake_model(tool_turn_then_stop(&[scripted]));
+    let mut tools = ToolRegistry::new();
+    let handles =
+        DetachedSettlementTool::register(&mut tools, "split_confirm", "tool-split-confirm");
+    let mut started = handles.started;
+    let mut cancel_observed = handles.cancel_observed;
+    let confirm_gate = handles.confirm_gate;
+    let completion_resolved = handles.completion_resolved;
+
+    let clock = Arc::new(ManualMonotonicClock::new());
+    let controller_clock = clock.clone();
+    let controller_completion = completion_resolved.clone();
+    let controller = tokio::spawn(async move {
+        await_started(&mut started, "split-confirm tool").await;
+        // t=60_000: the hard deadline fires cancellation intent.
+        controller_clock.advance(60_000);
+        // The settlement plane provably observed the cancellation request
+        // and is now parked on the confirm gate; the completion plane did
+        // not resolve, so the loop is parked awaiting exactly the
+        // settlement authority.
+        cancel_observed
+            .wait_for(|observed| *observed)
+            .await
+            .expect("cancellation observation channel stays open");
+        assert!(
+            !*controller_completion.borrow(),
+            "the physical completion plane never resolved"
+        );
+        confirm_gate.send_replace(true);
+    });
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let audit = run(
+        &model,
+        tools,
+        deadline_policy(60_000, None),
+        clock,
+        &cancellation,
+    )
+    .await;
+    controller.await.expect("split-confirm controller");
+
+    assert!(
+        !*completion_resolved.borrow(),
+        "the completion plane stayed parked across the whole settlement"
+    );
+    let messages = tool_messages(&audit);
+    assert_eq!(messages.len(), 1, "exactly one canonical tool result");
+    assert!(
+        matches!(messages[0].result.status, ToolExecutionStatus::TimedOut),
+        "executor-confirmed cancellation settlement after the hard deadline is the proven \
+         timeout: {:?}",
+        messages[0].result.status
+    );
+    assert_eq!(
+        fact_sequence(&audit, "call-split-confirm"),
+        vec![
+            "started",
+            "deadline:hard",
+            "cancellation-requested:deadline:hard",
+            "settlement:confirmed",
+            "completed"
+        ],
+        "settlement-authority evidence lands between the cancellation request and the          terminal fact"
+    );
+    assert!(matches!(
+        audit.result.outcome,
+        AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop
+        }
+    ));
+}
+
+/// P (detached physical operation, unconfirmed): the physical activity of
+/// an execution can be separate from the completion plane the lifecycle
+/// drives. The fixture dispatches its physical operation as a detached
+/// task, parks its completion plane forever, and — after the deadline's
+/// cancellation intent — its settlement plane consumes local operation
+/// ownership and reports `Unconfirmed`: terminality past the
+/// external-effect frontier cannot be proven. The loop commits one
+/// canonical `OutcomeUnknown` and stays live (the second model turn runs).
+/// Afterwards the fixture releases and joins its residual physical task —
+/// explicit executor-side cleanup ownership — and the durable journal gains
+/// NO new facts for the call: the committed terminal state is absorbing
+/// even though physical cleanup completed later.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn issue204_detached_physical_operation_settles_unconfirmed() {
+    let scripted = call("call-detached", "tool-detached", "detached");
+    let model = fake_model(tool_turn_then_stop(&[scripted]));
+    let mut tools = ToolRegistry::new();
+    let handles = DetachedPhysicalTool::register(&mut tools, "detached", "tool-detached");
+    let mut started = handles.started;
+    let mut cancel_observed = handles.cancel_observed;
+    let settle_gate = handles.settle_gate.clone();
+    let physical_finish_gate = handles.physical_finish_gate.clone();
+    let physical_finished = handles.physical_finished.clone();
+    let completion_resolved = handles.completion_resolved.clone();
+    let physical_task = handles.physical_task.clone();
+
+    let clock = Arc::new(ManualMonotonicClock::new());
+    let controller_clock = clock.clone();
+    let controller = tokio::spawn(async move {
+        await_started(&mut started, "detached tool").await;
+        // t=20_000: the hard deadline fires cancellation intent.
+        controller_clock.advance(20_000);
+        // The settlement plane provably observed the request and is parked
+        // on the settle gate: nothing else can settle this call.
+        cancel_observed
+            .wait_for(|observed| *observed)
+            .await
+            .expect("cancellation observation channel stays open");
+        settle_gate.send_replace(true);
+    });
+
+    let tool_runtime = common::tool_runtime(CONVERSATION);
+    let store = tool_runtime.durable_store();
+    let capability = common::capability_lease(tools, &tool_runtime).await;
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let execution = AgentExecution::new(
+        request(&model),
+        capability.into_lease(),
+        &cancellation,
+        execution_policy(deadline_policy(20_000, None), clock.clone()),
+        context_runtime(&model, clock),
+        &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
+    )
+    .expect("conversation identity matches the tool runtime");
+    let result = tokio::time::timeout(GUARD, execution.run())
+        .await
+        .expect("Issue #204 execution must settle without wall-clock waiting");
+    let audit = common::durable_agent_result(result, store.as_ref());
+    controller.await.expect("detached controller");
+
+    let messages = tool_messages(&audit);
+    assert_eq!(messages.len(), 1, "exactly one canonical tool result");
+    let ToolExecutionStatus::OutcomeUnknown { detail } = &messages[0].result.status else {
+        panic!(
+            "unconfirmed post-frontier settlement is OutcomeUnknown, never TimedOut: {:?}",
+            messages[0].result.status
+        );
+    };
+    assert!(
+        detail.contains("external-effect frontier"),
+        "the executor's own unconfirmed frontier evidence: {detail}"
+    );
+    assert_eq!(
+        fact_sequence(&audit, "call-detached"),
+        vec![
+            "started",
+            "deadline:hard",
+            "cancellation-requested:deadline:hard",
+            "settlement:unconfirmed",
+            "completed"
+        ],
+        "one intent, one cancellation request, one unconfirmed settlement, one terminal fact"
+    );
+    assert_eq!(
+        audit
+            .event_history
+            .iter()
+            .filter(|event| matches!(
+                event,
+                RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. }
+                    if tool_call_id.as_str() == "call-detached"
+            ))
+            .count(),
+        1,
+        "terminal ToolExecutionCompleted exactly once"
+    );
+    assert_eq!(
+        model.requests().len(),
+        2,
+        "the loop stayed live: the second model turn ran"
+    );
+    assert!(
+        !*completion_resolved.borrow(),
+        "the completion plane never resolved"
+    );
+    assert!(
+        !*physical_finished.borrow(),
+        "the residual physical operation is still parked when the call settled"
+    );
+
+    // Executor-side cleanup ownership: the residual physical task belongs
+    // to the executor (here: the fixture), never to the lifecycle. Finish
+    // it and join it explicitly.
+    physical_finish_gate.send_replace(true);
+    let physical_task = physical_task
+        .lock()
+        .expect("physical task lock")
+        .take()
+        .expect("the physical operation was dispatched exactly once");
+    tokio::time::timeout(GUARD, physical_task)
+        .await
+        .expect("the residual physical task finishes without wall-clock waiting")
+        .expect("the residual physical task joins");
+    assert!(
+        *physical_finished.borrow(),
+        "the physical operation published its own finish"
+    );
+
+    // The terminal canonical state is absorbing: physical cleanup
+    // completing later publishes no new facts for the call — no second
+    // ToolExecutionCompleted, no late progress, cancellation, or
+    // settlement fact. The closed call slot never reopens.
+    let later = common::read_event_history(store.as_ref(), &audit.result.attempt_id);
+    assert_eq!(
+        fact_sequence_of(&later, "call-detached"),
+        vec![
+            "started",
+            "deadline:hard",
+            "cancellation-requested:deadline:hard",
+            "settlement:unconfirmed",
+            "completed"
+        ],
+        "residual physical cleanup can never publish canonical facts"
+    );
+}
+
+/// Q (typed facts of the unconfirmed remote settlement): the journal
+/// evidence of an unconfirmed settlement is the exact typed variant
+/// sequence, asserted positionally — `ToolExecutionStarted`,
+/// `ToolExecutionDeadlineFired { Hard }`,
+/// `ToolExecutionCancellationRequested { Deadline(Hard) }`,
+/// `ToolExecutionSettlementObserved { Unconfirmed }`, and the terminal
+/// `ToolExecutionCompleted` carrying the canonical `OutcomeUnknown`. The
+/// fixture records the effect-frontier crossing at dispatch, before any
+/// parking.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn issue204_unconfirmed_remote_settlement_journals_typed_facts() {
+    let scripted = call(
+        "call-remote-detached",
+        "tool-remote-detached",
+        "remote_detached",
+    );
+    let model = fake_model(tool_turn_then_stop(&[scripted]));
+    let mut tools = ToolRegistry::new();
+    let handles =
+        DetachedPhysicalTool::register(&mut tools, "remote_detached", "tool-remote-detached");
+    let mut started = handles.started;
+    let mut frontier_crossed = handles.frontier_crossed;
+    let mut cancel_observed = handles.cancel_observed;
+    let settle_gate = handles.settle_gate.clone();
+    let physical_finish_gate = handles.physical_finish_gate.clone();
+    let physical_task = handles.physical_task.clone();
+
+    let clock = Arc::new(ManualMonotonicClock::new());
+    let controller_clock = clock.clone();
+    let controller = tokio::spawn(async move {
+        await_started(&mut started, "remote-detached tool").await;
+        // The dispatch crossed the external-effect frontier before the
+        // execution parked: this call can never be proven terminal.
+        frontier_crossed
+            .wait_for(|crossed| *crossed)
+            .await
+            .expect("frontier observation channel stays open");
+        controller_clock.advance(20_000);
+        cancel_observed
+            .wait_for(|observed| *observed)
+            .await
+            .expect("cancellation observation channel stays open");
+        settle_gate.send_replace(true);
+    });
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let audit = run(
+        &model,
+        tools,
+        deadline_policy(20_000, None),
+        clock,
+        &cancellation,
+    )
+    .await;
+    controller.await.expect("remote-detached controller");
+
+    let messages = tool_messages(&audit);
+    assert_eq!(messages.len(), 1, "exactly one canonical tool result");
+    let ToolExecutionStatus::OutcomeUnknown { detail } = &messages[0].result.status else {
+        panic!(
+            "unconfirmed post-frontier settlement is OutcomeUnknown, never TimedOut: {:?}",
+            messages[0].result.status
+        );
+    };
+    assert!(
+        detail.contains("external-effect frontier"),
+        "the executor's own unconfirmed frontier evidence: {detail}"
+    );
+
+    let facts: Vec<&RuntimeEvent> = audit
+        .event_history
+        .iter()
+        .filter(|event| match event {
+            RuntimeEvent::ToolExecutionStarted { tool_call_id, .. }
+            | RuntimeEvent::ToolExecutionDeadlineFired { tool_call_id, .. }
+            | RuntimeEvent::ToolExecutionCancellationRequested { tool_call_id, .. }
+            | RuntimeEvent::ToolExecutionSettlementObserved { tool_call_id, .. }
+            | RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. } => {
+                tool_call_id.as_str() == "call-remote-detached"
+            }
+            _ => false,
+        })
+        .collect();
+    assert_eq!(
+        facts.len(),
+        5,
+        "start, intent, cancellation request, settlement observation, terminal — exactly once"
+    );
+    assert!(matches!(
+        facts[0],
+        RuntimeEvent::ToolExecutionStarted { .. }
+    ));
+    assert!(matches!(
+        facts[1],
+        RuntimeEvent::ToolExecutionDeadlineFired {
+            kind: ToolDeadlineKind::Hard,
+            ..
+        }
+    ));
+    assert!(matches!(
+        facts[2],
+        RuntimeEvent::ToolExecutionCancellationRequested {
+            cause: ToolCancellationCause::Deadline(ToolDeadlineKind::Hard),
+            ..
+        }
+    ));
+    assert!(matches!(
+        facts[3],
+        RuntimeEvent::ToolExecutionSettlementObserved {
+            certainty: ToolSettlementCertainty::Unconfirmed,
+            ..
+        }
+    ));
+    assert!(matches!(
+        facts[4],
+        RuntimeEvent::ToolExecutionCompleted { result, .. }
+            if matches!(result.status, ToolExecutionStatus::OutcomeUnknown { .. })
+    ));
+
+    // Executor-side cleanup of the residual physical ownership, exactly as
+    // in the detached-operation cut: the terminal canonical state is
+    // absorbing and the fixture joins its own leftover task.
+    physical_finish_gate.send_replace(true);
+    let physical_task = physical_task
+        .lock()
+        .expect("physical task lock")
+        .take()
+        .expect("the physical operation was dispatched exactly once");
+    tokio::time::timeout(GUARD, physical_task)
+        .await
+        .expect("the residual physical task finishes without wall-clock waiting")
+        .expect("the residual physical task joins");
 }
 
 /// N (capability gating): the configured idle-liveness window applies only

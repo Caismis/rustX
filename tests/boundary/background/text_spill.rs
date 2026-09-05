@@ -740,27 +740,30 @@ async fn genuine_artifacts_still_publish_as_file_blocks_in_the_terminal_inbound(
     /// A stub executor whose result carries one genuine semantic artifact.
     struct ArtifactExecutor;
     impl ToolExecutor for ArtifactExecutor {
-        fn execute<'a>(
+        fn start<'a>(
             &'a self,
             _invocation: ToolInvocation,
-            _context: rustx::tools::executor::ToolExecutionContext<'a>,
-        ) -> futures_util::future::BoxFuture<'a, ToolExecutionResult> {
-            Box::pin(async move {
-                ToolExecutionResult {
-                    status: ToolExecutionStatus::Success,
-                    content: Vec::new(),
-                    duration_ms: 0,
-                    exit_code: None,
-                    artifacts: vec![rustx::message::content::FileReference {
-                        artifact_id: ArtifactId::new("artifact-report"),
-                        name: Some("report.pdf".to_owned()),
-                        mime_type: Some("application/pdf".to_owned()),
-                        description: None,
-                    }],
-                    truncation: None,
-                    managed_output: None,
-                }
-            })
+            context: rustx::tools::executor::ToolExecutionContext<'a>,
+        ) -> rustx::tools::executor::ToolExecutionHandle<'a> {
+            rustx::tools::executor::ToolExecutionHandle::settled_by_operation(
+                Box::pin(async move {
+                    ToolExecutionResult {
+                        status: ToolExecutionStatus::Success,
+                        content: Vec::new(),
+                        duration_ms: 0,
+                        exit_code: None,
+                        artifacts: vec![rustx::message::content::FileReference {
+                            artifact_id: ArtifactId::new("artifact-report"),
+                            name: Some("report.pdf".to_owned()),
+                            mime_type: Some("application/pdf".to_owned()),
+                            description: None,
+                        }],
+                        truncation: None,
+                        managed_output: None,
+                    }
+                }),
+                context.cancellation.clone(),
+            )
         }
 
         fn progress_capability(&self) -> rustx::tools::ToolProgressCapability {
