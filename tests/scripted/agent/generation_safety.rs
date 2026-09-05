@@ -38,7 +38,7 @@ use rustx::message::types::{
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
 use rustx::model::{
-    GenerationBudget, GenerationBudgetKind, GenerationChannel, GenerationFailure,
+    GenerationBudgetKind, GenerationChannel, GenerationFailure, GenerationSafetyPolicy,
     MalformedToolProposalSource, ModelError, ModelErrorKind, ModelInputMessage,
     ModelRetryDisposition,
 };
@@ -107,33 +107,37 @@ fn runtime(model: &Arc<FakeModel>) -> rustx::context::ContextRuntime {
     .expect("valid context runtime")
 }
 
-/// The generation safeguard installed by the budget regressions.
+/// The generation-safety policy installed by the budget regressions.
 ///
-/// Production derives the safeguard from the attempt's resolved output
-/// budget, which is a runaway backstop measured in hundreds of kilobytes. A
-/// regression that proves the *policy* does not need to stream that much
-/// through the publication and durability planes, so it installs an explicit
-/// bound exactly as the deadline suites install an explicit timeout policy.
-/// The reasoning bound is deliberately below the repetition detector's
-/// evidence threshold, so a budget regression cannot pass by accidentally
-/// tripping the detector instead.
-fn small_budget() -> GenerationBudget {
-    GenerationBudget {
+/// Production resolves the policy at the model-invocation layer, where it is
+/// a runaway backstop measured in hundreds of kilobytes. A regression that
+/// proves the *enforcement* does not need to stream that much through the
+/// publication and durability planes, so it installs an explicit policy
+/// exactly as the deadline suites install an explicit timeout policy.
+///
+/// The two bounds here are deliberately unrelated to each other — 4096 and
+/// 512 stand in no ratio the runtime knows about — which is itself the point:
+/// total output and reasoning are independent inputs of the policy, not one
+/// derived from the other. The reasoning bound also sits below the repetition
+/// detector's evidence threshold, so a budget regression cannot pass by
+/// accidentally tripping the detector instead.
+fn small_policy() -> GenerationSafetyPolicy {
+    GenerationSafetyPolicy {
         max_generated_bytes: 4_096,
-        max_reasoning_bytes: 512,
+        max_reasoning_bytes: Some(512),
     }
 }
 
 struct Setup {
     tools: ToolRegistry,
-    budget: Option<GenerationBudget>,
+    policy: Option<GenerationSafetyPolicy>,
 }
 
 impl Setup {
     fn new() -> Self {
         Self {
             tools: ToolRegistry::new(),
-            budget: None,
+            policy: None,
         }
     }
 
@@ -142,8 +146,8 @@ impl Setup {
         self
     }
 
-    const fn with_budget(mut self, budget: GenerationBudget) -> Self {
-        self.budget = Some(budget);
+    const fn with_policy(mut self, policy: GenerationSafetyPolicy) -> Self {
+        self.policy = Some(policy);
         self
     }
 }
@@ -166,8 +170,8 @@ async fn run_with(
         rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime");
-    if let Some(budget) = setup.budget {
-        execution.install_generation_budget(budget);
+    if let Some(policy) = setup.policy {
+        execution.install_generation_policy(policy);
     }
     let result = execution.run().await;
     common::durable_agent_result(result, store.as_ref())
@@ -295,6 +299,34 @@ fn transient_generation() -> Vec<FakeStep> {
                 provider_code: Some("rate_limit_error".to_owned()),
                 context_overflow: None,
                 malformed_tool_proposal: None,
+                timeout_phase: None,
+                generation: None,
+            },
+        }),
+    ]
+}
+
+/// A provider-reported request timeout.
+///
+/// It is a *transport* failure: the request did not produce a usable
+/// generation because the provider stopped responding, which says nothing
+/// about the integrity of anything it did produce. A provider-reported
+/// timeout carries no `timeout_phase`, because this runtime observed no
+/// deadline of its own; the runtime-owned deadline path, which does carry
+/// one, is proven in `scripted_suites::agent::deadlines`.
+fn provider_timeout_generation() -> Vec<FakeStep> {
+    vec![
+        FakeStep::Emit(ModelEvent::Started),
+        FakeStep::Emit(ModelEvent::Failed {
+            error: ModelError {
+                kind: ModelErrorKind::Timeout,
+                message: "the provider did not respond in time".to_owned(),
+                retry_disposition: ModelRetryDisposition::Transient,
+                retry_after_ms: Some(0),
+                provider_code: Some("timeout".to_owned()),
+                context_overflow: None,
+                malformed_tool_proposal: None,
+                timeout_phase: None,
                 generation: None,
             },
         }),
@@ -577,9 +609,9 @@ async fn degeneration_is_detected_before_the_generation_budget_is_consumed() {
         &cancellation,
         // The whole degenerate fixture is 1_818 bytes; the budget is larger,
         // so a budget classification here would be a bug rather than a race.
-        Setup::new().with_budget(GenerationBudget {
+        Setup::new().with_policy(GenerationSafetyPolicy {
             max_generated_bytes: 8_192,
-            max_reasoning_bytes: 8_192,
+            max_reasoning_bytes: Some(8_192),
         }),
     )
     .await;
@@ -651,7 +683,7 @@ async fn continuous_reasoning_cannot_evade_the_reasoning_budget() {
     let audit = run_with(
         &model,
         &cancellation,
-        Setup::new().with_budget(small_budget()),
+        Setup::new().with_policy(small_policy()),
     )
     .await;
 
@@ -669,10 +701,17 @@ async fn continuous_reasoning_cannot_evade_the_reasoning_budget() {
     assert_eq!(budget, GenerationBudgetKind::Reasoning);
     assert_eq!(
         u64::from(limit_bytes),
-        small_budget().max_reasoning_bytes,
+        small_policy()
+            .max_reasoning_bytes
+            .expect("a reasoning bound"),
         "the fact names the reasoning bound, never the total"
     );
-    assert!(u64::from(observed_bytes) > small_budget().max_reasoning_bytes);
+    assert!(
+        u64::from(observed_bytes)
+            > small_policy()
+                .max_reasoning_bytes
+                .expect("a reasoning bound")
+    );
     assert_bounded_diagnostic(&failures[0].1);
 
     // The over-budget generation is discarded; only the corrective one
@@ -957,6 +996,71 @@ async fn the_corrective_hint_does_not_survive_its_generation() {
         "only the corrective generation carries the hint"
     );
     assert_eq!(tool_messages(&audit).len(), 1);
+    assert_outcome(
+        &audit,
+        &AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
+    );
+}
+
+/// A timeout is transport liveness, not generation safety, so it consumes
+/// the transient request-retry budget and leaves the semantic
+/// corrective-generation budget untouched.
+///
+/// ```text
+/// #0  timeout               -> transient retry, semantic budget still unused
+/// #1  degenerate generation -> semantic budget consumed
+/// #2  valid answer          -> commits
+/// ```
+///
+/// If the timeout had consumed the shared semantic budget — the exact
+/// regression the liveness/generation type split exists to prevent — the
+/// degeneration at `#1` would have found it spent and terminated the attempt
+/// instead of regenerating.
+#[tokio::test]
+async fn a_timeout_does_not_consume_the_semantic_corrective_budget() {
+    let model = fake_model(vec![
+        provider_timeout_generation(),
+        degenerate_content_generation(),
+        answer_generation("answered after the timeout and the loop"),
+        answer_generation("this generation must never be requested"),
+    ]);
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let audit = run(&model, &cancellation).await;
+
+    assert_eq!(
+        model.requests().len(),
+        3,
+        "one transport retry plus one semantic corrective generation"
+    );
+    assert_eq!(
+        corrective_requests(&model),
+        vec![2],
+        "only the degeneration authorized a corrective generation; the timeout did not"
+    );
+
+    // The timeout is recorded as a liveness fact and carries no generation
+    // detail; the degeneration is recorded as a generation fact and carries
+    // no timeout phase. Neither is inferred from a message.
+    let failures = generation_failures(&audit);
+    assert_eq!(failures.len(), 2);
+    assert_eq!(failures[0].0, ModelErrorKind::Timeout);
+    assert!(
+        failures[0].1.generation.is_none(),
+        "a transport timeout is not a generation-safety fact"
+    );
+    assert_eq!(failures[1].0, ModelErrorKind::GenerationDegenerated);
+    assert!(
+        failures[1].1.timeout_phase.is_none(),
+        "a generation defect is not a liveness fact"
+    );
+
+    assert_eq!(
+        assistant_texts(&audit),
+        vec!["answered after the timeout and the loop"]
+    );
+    assert!(!canonical_text(&audit).contains(LOOP_UNIT));
     assert_outcome(
         &audit,
         &AttemptOutcome::Completed {

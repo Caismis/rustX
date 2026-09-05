@@ -447,12 +447,14 @@ async fn started_and_silence_reaches_response_start_timeout() {
 }
 
 /// A stream that never produces qualifying progress terminates through the
-/// idle watchdog, and the phase it violated crosses as a **typed** fact.
+/// idle watchdog, and the phase it violated crosses as a **typed liveness**
+/// fact owned by the deadline module.
 ///
 /// Liveness is a different contract from generation integrity and generation
-/// budget (Issue #203): a deadline failure keeps its transient disposition
-/// and the existing transport retry budget, and it carries a typed phase so
-/// no consumer has to read a diagnostic message to learn which liveness
+/// budget (Issue #203), and the separation is in the type system: a timeout
+/// carries `ModelError::timeout_phase` and *no* `ModelError::generation`, it
+/// keeps its transient disposition and the existing transport retry budget,
+/// and no consumer has to read a diagnostic message to learn which liveness
 /// contract expired.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_timeout_carries_its_phase_as_a_typed_fact() {
@@ -473,10 +475,12 @@ async fn a_timeout_carries_its_phase_as_a_typed_fact() {
         .expect("one durable timeout failure");
     assert_eq!(failure.kind, rustx::model::ModelErrorKind::Timeout);
     assert_eq!(
-        failure.generation,
-        Some(rustx::model::GenerationFailure::Timeout {
-            phase: rustx::model::ModelTimeoutPhase::ResponseStart,
-        })
+        failure.timeout_phase,
+        Some(rustx::model::ModelTimeoutPhase::ResponseStart)
+    );
+    assert!(
+        failure.generation.is_none(),
+        "a transport timeout is not a generation-safety fact"
     );
     assert_eq!(
         failure.retry_disposition,
@@ -500,11 +504,44 @@ async fn a_timeout_carries_its_phase_as_a_typed_fact() {
         })
         .expect("one durable timeout failure");
     assert_eq!(
-        failure.generation,
-        Some(rustx::model::GenerationFailure::Timeout {
-            phase: rustx::model::ModelTimeoutPhase::StreamIdle,
-        })
+        failure.timeout_phase,
+        Some(rustx::model::ModelTimeoutPhase::StreamIdle)
     );
+    assert!(failure.generation.is_none());
+}
+
+/// A terminal request owns no deadline, so it cannot expire — and there is no
+/// conversion that could turn that state into a plausible one.
+///
+/// The state machine has three phases; only two can expire. Asking a
+/// terminal deadline what it is running against yields nothing at all, so
+/// `ModelError::timeout` — whose only argument is a phase obtained from
+/// exactly that call — has no input to be given. The impossible expiry is
+/// unrepresentable rather than defaulted to stream-idle.
+#[test]
+fn a_terminal_deadline_cannot_produce_a_timeout_fact() {
+    let clock = ManualMonotonicClock::new();
+    let mut deadline = ModelRequestDeadline::new(timeout_policy(10, 20), clock.now_millis());
+    assert_eq!(
+        deadline.pending().map(|(phase, _)| phase),
+        Some(rustx::model::ModelTimeoutPhase::ResponseStart)
+    );
+    deadline.observe(&ModelStreamItem::Event(text("partial")), clock.now_millis());
+    assert_eq!(
+        deadline.pending().map(|(phase, _)| phase),
+        Some(rustx::model::ModelTimeoutPhase::StreamIdle)
+    );
+
+    deadline.observe(&ModelStreamItem::Event(completed()), clock.now_millis());
+    assert_eq!(deadline.phase(), ModelDeadlinePhase::Terminal);
+    assert_eq!(
+        deadline.pending(),
+        None,
+        "a terminal request runs against no deadline, so it offers no phase to expire"
+    );
+    // The pair is the only source of a timeout phase, so the absence above is
+    // the absence of any timeout fact at all — not a fallback to one.
+    assert_eq!(deadline.deadline_millis(), None);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

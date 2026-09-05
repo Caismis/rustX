@@ -142,6 +142,7 @@ pub(crate) fn normalize_http_error(
         provider_code,
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
         generation: None,
     }
     .normalized()
@@ -348,6 +349,7 @@ pub(crate) fn translate_request(
             provider_code: None,
             context_overflow: None,
             malformed_tool_proposal: None,
+            timeout_phase: None,
             generation: None,
         });
     }
@@ -369,6 +371,7 @@ pub(crate) fn translate_request(
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
         generation: None,
     })?;
     finalize_provider_request(
@@ -479,6 +482,7 @@ fn translate_messages(
             provider_code: None,
             context_overflow: None,
             malformed_tool_proposal: None,
+            timeout_phase: None,
             generation: None,
         });
     }
@@ -651,6 +655,7 @@ fn invalid_request(message: &str) -> ModelError {
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
         generation: None,
     }
 }
@@ -664,6 +669,7 @@ fn unsupported(message: &str) -> ModelError {
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
         generation: None,
     }
 }

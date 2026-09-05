@@ -191,6 +191,7 @@ fn transient(message: &str) -> ModelEvent {
             provider_code: Some("rate_limit_error".to_owned()),
             context_overflow: None,
             malformed_tool_proposal: None,
+            timeout_phase: None,
             generation: None,
         },
     }
@@ -212,6 +213,7 @@ fn overflow(message: &str) -> ModelEvent {
                 context_limit: None,
             }),
             malformed_tool_proposal: None,
+            timeout_phase: None,
             generation: None,
         },
     }

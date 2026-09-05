@@ -278,6 +278,7 @@ fn cancelled_error() -> ModelError {
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
         generation: None,
     }
 }
@@ -665,6 +666,7 @@ impl ChatStreamNormalizer {
                 provider_code,
                 context_overflow: None,
                 malformed_tool_proposal: None,
+                timeout_phase: None,
                 generation: None,
             }
             .normalized());
@@ -727,6 +729,7 @@ impl ChatStreamNormalizer {
                         provider_code: Some(reason.clone()),
                         context_overflow: None,
                         malformed_tool_proposal: None,
+                        timeout_phase: None,
                         generation: None,
                     });
                 }
@@ -751,6 +754,7 @@ impl ChatStreamNormalizer {
                         provider_code: Some(reason.clone()),
                         context_overflow: None,
                         malformed_tool_proposal: None,
+                        timeout_phase: None,
                         generation: None,
                     });
                 }
@@ -1296,6 +1300,7 @@ fn provider_error(message: String) -> ModelError {
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
         generation: None,
     }
 }
@@ -1391,6 +1396,7 @@ fn chat_stream_error(error: &serde_json::Value) -> ModelError {
         provider_code: provider_code.map(str::to_owned),
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
         generation: None,
     }
     .normalized()
@@ -1466,6 +1472,7 @@ fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelE
             provider_code: None,
             context_overflow: None,
             malformed_tool_proposal: None,
+            timeout_phase: None,
             generation: None,
         })?;
         if let Some(field) = request
@@ -1746,6 +1753,7 @@ fn unsupported(message: impl Into<String>) -> ModelError {
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
         generation: None,
     }
 }
@@ -1759,6 +1767,7 @@ fn invalid_request(message: &str) -> ModelError {
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
         generation: None,
     }
 }

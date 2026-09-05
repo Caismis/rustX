@@ -101,11 +101,11 @@ use crate::message::types::{
     AgentStatusEmission, AgentStatusModuleId, AssistantMessageBlock, MessageBlock, ToolMessageBlock,
 };
 use crate::model::adapter::{ModelStream, ModelStreamItem};
-use crate::model::deadline::{ModelDeadlinePhase, ModelRequestDeadline, ModelTimeoutPolicy};
+use crate::model::deadline::{ModelRequestDeadline, ModelTimeoutPolicy};
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
-use crate::model::generation::{GenerationBudget, GenerationFailure, GenerationGuard};
+use crate::model::generation::{GenerationFailure, GenerationGuard, GenerationSafetyPolicy};
 use crate::model::session::AttemptModelSnapshot;
 use crate::model::snapshot::{AgentStatusStart, RequestIdentity, RequestSnapshot};
 use crate::model::types::{ModelRequest, ModelUsage};
@@ -219,37 +219,16 @@ fn transient_retry_delay_ms(retry_count: u32, retry_after_ms: Option<u64>) -> u6
     )
 }
 
-/// Builds the runtime-owned failure for a deadline that won the request
-/// arbitration.
+/// The runtime generation-safety policy of one attempt, resolved once from
+/// the attempt's frozen model invocation.
 ///
-/// Transport liveness is deliberately *not* generation integrity: a deadline
-/// says the provider stopped producing, not that what it produced is
-/// unusable. Runtime timeouts therefore remain transient model failures and
-/// keep using the existing Agent-Loop transient retry budget, and they never
-/// touch the semantic corrective-generation budget. The expired phase
-/// crosses as a typed fact rather than as a substring of the diagnostic.
+/// The *decision* about the bounds belongs to the invocation layer, which
+/// already resolves the effective output budget; this loop only freezes the
+/// answer, exactly like the timeout policy beside it: one attempt, one
+/// policy, and no live model state is read again while the attempt runs.
 #[must_use]
-fn model_timeout_error(phase: ModelDeadlinePhase) -> ModelError {
-    // A terminal phase owns no deadline and cannot expire; if the
-    // arbitration ever reached here with one, report the phase that was
-    // actually waiting for provider progress rather than inventing a name.
-    let timeout_phase = phase
-        .timeout_phase()
-        .unwrap_or(crate::model::generation::ModelTimeoutPhase::StreamIdle);
-    ModelError::generation_failure(GenerationFailure::Timeout {
-        phase: timeout_phase,
-    })
-}
-
-/// The runtime generation safeguard of one attempt, frozen at construction
-/// from the attempt's already-resolved output budget.
-///
-/// It is derived exactly once, exactly like the timeout policy beside it: one
-/// attempt, one bound, and no live model state is read again while the
-/// attempt runs.
-#[must_use]
-fn frozen_generation_budget(request: &AgentExecutionRequest) -> GenerationBudget {
-    GenerationBudget::for_output_tokens(request.model.primary().max_output_tokens())
+fn frozen_generation_policy(request: &AgentExecutionRequest) -> GenerationSafetyPolicy {
+    request.model.primary().generation_safety_policy()
 }
 
 /// Everything the loop needs to know about one attempt.
@@ -556,10 +535,10 @@ pub struct AgentExecution<'a> {
     /// The frozen runtime execution policy copied into every actual request
     /// admitted by this attempt.
     model_timeout_policy: ModelTimeoutPolicy,
-    /// The runtime generation safeguard of every actual request admitted by
-    /// this attempt, derived once from the attempt's own frozen resolved
-    /// output budget. It is execution state, never model input.
-    generation_budget: GenerationBudget,
+    /// The resolved runtime generation-safety policy of every actual request
+    /// admitted by this attempt, frozen once from the attempt's own model
+    /// invocation. It is execution state, never model input.
+    generation_policy: GenerationSafetyPolicy,
     /// The open, not-yet-settled publication stream of the in-flight model
     /// request. Exactly one stream is open at a time: a stream settles — as
     /// canonical, unaccepted, or incomplete — before the next one opens.
@@ -1236,7 +1215,7 @@ impl<'a> AgentExecution<'a> {
         }
         Ok(Self {
             conversation,
-            generation_budget: frozen_generation_budget(&request),
+            generation_policy: frozen_generation_policy(&request),
             request,
             capability,
             cancellation,
@@ -1379,15 +1358,16 @@ impl<'a> AgentExecution<'a> {
             .expect("model arbitration pause lock") = Some(pause);
     }
 
-    /// Installs the deterministic generation safeguard of one attempt.
+    /// Installs the resolved generation-safety policy of one attempt.
     ///
-    /// Production always derives the safeguard from the attempt's resolved
-    /// output budget. A test installs an explicit byte bound so a budget
-    /// regression is decided by the policy alone, without streaming a
-    /// quarter of a megabyte through the publication and durability planes.
+    /// Production resolves the policy at the model-invocation layer. A test
+    /// installs an explicit one so a budget regression is decided by the
+    /// policy alone, without streaming a quarter of a megabyte through the
+    /// publication and durability planes, and so a policy whose two bounds
+    /// are unrelated can be exercised directly.
     #[cfg(test)]
-    pub(crate) fn install_generation_budget(&mut self, budget: GenerationBudget) {
-        self.generation_budget = budget;
+    pub(crate) fn install_generation_policy(&mut self, policy: GenerationSafetyPolicy) {
+        self.generation_policy = policy;
     }
 
     /// Installs the deterministic rejected-generation synchronization hook.
@@ -3604,7 +3584,7 @@ impl<'a> AgentExecution<'a> {
         // attempt's own frozen resolved output budget. It is created here,
         // at the same dispatch frontier, so a retry can never inherit the
         // accounting or the repetition window of the generation it replaces.
-        let guard = GenerationGuard::new(self.generation_budget);
+        let guard = GenerationGuard::new(self.generation_policy);
         let stream = self
             .request
             .model
@@ -3931,8 +3911,17 @@ impl<'a> AgentExecution<'a> {
                 .as_ref()
                 .and_then(|publication| publication.coalescer.latency_wait())
                 .unwrap_or_else(|| Box::pin(pending::<()>()));
-            let timeout_wait: BoxFuture<'static, ()> = match deadline.deadline_millis() {
-                Some(deadline_millis) => self.monotonic_clock.wait_until_millis(deadline_millis),
+            // The pending deadline is the liveness contract this request is
+            // currently running against, together with the instant it is
+            // violated. Taking both from one place is what makes an
+            // impossible expiry unrepresentable: a request that owns no
+            // deadline yields nothing to wait on *and* no phase to report,
+            // so the timeout branch below can never invent one.
+            let pending_deadline = deadline.pending();
+            let timeout_wait: BoxFuture<'static, ()> = match pending_deadline {
+                Some((_, deadline_millis)) => {
+                    self.monotonic_clock.wait_until_millis(deadline_millis)
+                }
                 None => Box::pin(pending::<()>()),
             };
             let next = tokio::select! {
@@ -3958,11 +3947,27 @@ impl<'a> AgentExecution<'a> {
                     continue;
                 }
                 () = timeout_wait => {
+                    // Only a pending deadline can select this branch, and it
+                    // carries the phase that expired. Transport liveness is
+                    // not generation integrity: this is a transient model
+                    // failure on the existing retry budget, it carries no
+                    // generation detail, and it never touches the semantic
+                    // corrective-generation budget.
+                    let Some((phase, _)) = pending_deadline else {
+                        return Err(Terminal::Failed {
+                            failure: AttemptFailure::Runtime {
+                                error: RuntimeError::ContractViolation {
+                                    message: "a model request deadline expired with no pending deadline"
+                                        .to_owned(),
+                                },
+                            },
+                        });
+                    };
                     // The pull-based adapter stream is the request-local
                     // authority. Dropping it terminates adapter work without
                     // touching the attempt cancellation authority.
                     drop(stream);
-                    let error = model_timeout_error(deadline.phase());
+                    let error = ModelError::timeout(phase);
                     self.settle_model_request_failure(assembler, &error)?;
                     return Ok(StreamTerminal::Failed { error });
                 }
@@ -7470,6 +7475,7 @@ mod tests {
                 provider_code: Some("request_too_large".to_owned()),
                 context_overflow: None,
                 malformed_tool_proposal: None,
+                timeout_phase: None,
                 generation: None,
             },
         }]]));
@@ -8761,6 +8767,7 @@ mod tests {
                         provider_code: None,
                         context_overflow: None,
                         malformed_tool_proposal: None,
+                        timeout_phase: None,
                         generation: None,
                     },
                 })
@@ -8940,6 +8947,7 @@ mod tests {
                 provider_code: None,
                 context_overflow: None,
                 malformed_tool_proposal: None,
+                timeout_phase: None,
                 generation: None,
             },
         }]]));

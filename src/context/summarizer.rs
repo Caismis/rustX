@@ -38,7 +38,7 @@ use crate::message::types::{
 use crate::model::adapter::ModelStreamItem;
 use crate::model::deadline::{ModelRequestDeadline, ModelTimeoutPolicy};
 use crate::model::event::ModelEvent;
-use crate::model::generation::{GenerationBudget, GenerationGuard};
+use crate::model::generation::GenerationGuard;
 use crate::model::invocation::ResolvedModelInvocation;
 use crate::model::types::ModelRequest;
 use crate::runtime::cancellation::CancellationSignal;
@@ -443,14 +443,12 @@ impl ContextSummarizer for ModelBackedSummarizer {
             // Summary generation is a model generation like any other: it can
             // degenerate and it can stream past its output budget while
             // remaining perfectly live. It gets the same provider-independent
-            // guard as the primary path, derived from the summary
-            // invocation's own resolved output budget, and maps the result
-            // through this module's existing summary-failure boundary
-            // instead of entering generic model retry — exactly as the
-            // shared request deadline already does.
-            let mut guard = GenerationGuard::new(GenerationBudget::for_output_tokens(
-                self.invocation.max_output_tokens(),
-            ));
+            // guard as the primary path, enforcing the policy the summary
+            // invocation itself resolves, and maps the result through this
+            // module's existing summary-failure boundary instead of entering
+            // generic model retry — exactly as the shared request deadline
+            // already does.
+            let mut guard = GenerationGuard::new(self.invocation.generation_safety_policy());
             let mut stream = self
                 .invocation
                 .adapter()

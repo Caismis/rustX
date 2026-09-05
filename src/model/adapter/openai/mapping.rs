@@ -60,6 +60,7 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
                 provider_code: None,
                 context_overflow: None,
                 malformed_tool_proposal: None,
+                timeout_phase: None,
                 generation: None,
             }
         }
@@ -95,6 +96,7 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
                 provider_code,
                 context_overflow: None,
                 malformed_tool_proposal: None,
+                timeout_phase: None,
                 generation: None,
             }
             .normalized()
@@ -107,6 +109,7 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
             provider_code: None,
             context_overflow: None,
             malformed_tool_proposal: None,
+            timeout_phase: None,
             generation: None,
         },
         OpenAIError::StreamError(stream_error) => ModelError {
@@ -124,6 +127,7 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
             provider_code: None,
             context_overflow: None,
             malformed_tool_proposal: None,
+            timeout_phase: None,
             generation: None,
         },
         OpenAIError::Boxed(boxed) => ModelError {
@@ -139,6 +143,7 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
             provider_code: None,
             context_overflow: None,
             malformed_tool_proposal: None,
+            timeout_phase: None,
             generation: None,
         },
         OpenAIError::JSONDeserialize(_, content) => {
@@ -151,6 +156,7 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
                     provider_code: None,
                     context_overflow: None,
                     malformed_tool_proposal: None,
+                    timeout_phase: None,
                     generation: None,
                 }
             } else {
@@ -162,6 +168,7 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
                     provider_code: None,
                     context_overflow: None,
                     malformed_tool_proposal: None,
+                    timeout_phase: None,
                     generation: None,
                 }
             }
@@ -174,6 +181,7 @@ fn normalize_sdk_error(error: OpenAIError) -> ModelError {
             provider_code: None,
             context_overflow: None,
             malformed_tool_proposal: None,
+            timeout_phase: None,
             generation: None,
         },
     }
@@ -192,6 +200,7 @@ fn context_or_invalid(message: &str, provider_code: Option<&str>) -> ModelError 
         provider_code: provider_code.map(str::to_owned),
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
         generation: None,
     }
     .normalized()
@@ -214,6 +223,7 @@ fn context_window(failure: &super::client::HttpFailure) -> ModelError {
         provider_code: failure.provider_code.clone(),
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
         generation: None,
     }
     .normalized()
@@ -228,6 +238,7 @@ fn auth(failure: &super::client::HttpFailure) -> ModelError {
         provider_code: failure.provider_code.clone(),
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
         generation: None,
     }
 }
@@ -241,6 +252,7 @@ fn invalid_or_unsupported(failure: &super::client::HttpFailure) -> ModelError {
         provider_code: failure.provider_code.clone(),
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
         generation: None,
     }
 }
@@ -263,6 +275,7 @@ fn timeout(failure: &super::client::HttpFailure) -> ModelError {
         provider_code: failure.provider_code.clone(),
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
         generation: None,
     }
 }
@@ -281,6 +294,7 @@ fn rate_limit(failure: &super::client::HttpFailure) -> ModelError {
         provider_code: failure.provider_code.clone(),
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
         generation: None,
     }
 }
@@ -303,6 +317,7 @@ fn provider_error(failure: &super::client::HttpFailure) -> ModelError {
         provider_code: failure.provider_code.clone(),
         context_overflow: None,
         malformed_tool_proposal: None,
+        timeout_phase: None,
         generation: None,
     }
 }

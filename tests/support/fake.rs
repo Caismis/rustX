@@ -184,6 +184,7 @@ impl FakeModel {
                         provider_code: None,
                         context_overflow: None,
                         malformed_tool_proposal: None,
+                        timeout_phase: None,
                         generation: None,
                     },
                 })]
@@ -257,6 +258,7 @@ impl ModelAdapter for FakeModel {
                                         provider_code: None,
                                         context_overflow: None,
                                         malformed_tool_proposal: None,
+                                        timeout_phase: None,
                                         generation: None,
                                     },
                                 }),

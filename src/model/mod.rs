@@ -38,7 +38,7 @@ pub use catalog::{
 };
 pub use deadline::{
     DEFAULT_RESPONSE_START_TIMEOUT, DEFAULT_STREAM_IDLE_TIMEOUT, ModelDeadlinePhase, ModelProgress,
-    ModelRequestDeadline, ModelTimeoutPolicy,
+    ModelRequestDeadline, ModelTimeoutPhase, ModelTimeoutPolicy,
 };
 pub use error::{
     ContextOverflowReport, MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES, MalformedToolProposalSource,
@@ -50,11 +50,10 @@ pub use frozen::{
     FrozenModelInvocation, FrozenModelSpec, FrozenProviderBinding, FrozenSummaryModel,
 };
 pub use generation::{
+    DEGENERATION_CANDIDATE_PERIODS, DEGENERATION_MAX_COMPARISONS_PER_SCAN,
     DEGENERATION_MAX_PERIOD_BYTES, DEGENERATION_MIN_PERIOD_BYTES, DEGENERATION_MIN_REPETITIONS,
-    DEGENERATION_MIN_SPAN_BYTES, DEGENERATION_SCAN_STRIDE_BYTES, GenerationBudget,
-    GenerationBudgetKind, GenerationChannel, GenerationFailure, GenerationGuard, ModelTimeoutPhase,
-    RUNTIME_GENERATED_BYTES_PER_OUTPUT_TOKEN, RUNTIME_MIN_GENERATED_BYTES,
-    RUNTIME_REASONING_BYTE_SHARE_DENOMINATOR, RUNTIME_REASONING_BYTE_SHARE_NUMERATOR,
+    DEGENERATION_MIN_SPAN_BYTES, DEGENERATION_SCAN_STRIDE_BYTES, GenerationBudgetKind,
+    GenerationChannel, GenerationFailure, GenerationGuard, GenerationSafetyPolicy,
 };
 pub use input::{
     CarryoverBlockKind, CarryoverDetailLevel, CarryoverOmissionCounts, ModelInputMessage,
@@ -63,8 +62,11 @@ pub use input::{
     UnresolvedOutputSettlement, canonical_input,
 };
 pub use invocation::{
-    ModelBindingRegistry, ModelInvocationConfig, ModelInvocationError, ModelInvocationView,
-    ModelSelection, RequestParams, ResolvedModelInvocation,
+    DEFAULT_RUNTIME_REASONING_BYTE_SHARE_DENOMINATOR,
+    DEFAULT_RUNTIME_REASONING_BYTE_SHARE_NUMERATOR, ModelBindingRegistry, ModelInvocationConfig,
+    ModelInvocationError, ModelInvocationView, ModelSelection,
+    RUNTIME_GENERATED_BYTES_PER_OUTPUT_TOKEN, RUNTIME_MIN_GENERATED_BYTES, RequestParams,
+    ResolvedModelInvocation, runtime_fallback_generation_safety_policy,
 };
 pub use session::{
     AttemptModelSnapshot, AttemptModelView, AttemptSummaryModel, SessionModelConfig,
