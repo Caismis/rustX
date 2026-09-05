@@ -3115,10 +3115,12 @@ impl SubagentRegistry {
                     &record.terminal_workspace_resource(),
                     candidate.timestamp,
                 );
-                // A retained-workspace notice commits in the same durable
-                // transaction, strictly before the terminal report (Issue
-                // #192).
-                let notice = retained_terminal_notice(record, candidate);
+                // The runtime-authored terminal notice — the
+                // parent-model correlation projection, with the
+                // retained-workspace fact folded in when applicable —
+                // commits in the same durable transaction, strictly before
+                // the terminal report (Issue #192).
+                let notice = success_terminal_notice(record, candidate);
                 let result = self
                     .config
                     .mailbox
@@ -3262,7 +3264,7 @@ impl SubagentRegistry {
                 &record.terminal_workspace_resource(),
                 candidate.timestamp,
             );
-            let notice = retained_terminal_notice(record, &candidate);
+            let notice = success_terminal_notice(record, &candidate);
             self.config
                 .mailbox
                 .accept_subagent_terminal(notice, draft, event)
@@ -3512,32 +3514,34 @@ fn terminal_blocks(
     )]
 }
 
-/// The runtime-authored retained-workspace notice accompanying a successful
-/// terminal publication (Issue #192), when — and only when — terminal
-/// settlement retained changed isolated work.
+/// The runtime-authored terminal notice of a successful normal child
+/// (Issue #192) — present on **every** success, not only a retained one:
+/// it is the parent-model correlation projection naming the exact typed
+/// execution handle the creation result returned, and it folds in the
+/// retained-workspace semantic fact when terminal settlement retained
+/// changed isolated work.
 ///
 /// The success report stays purely child-authored; this adjacent
 /// `UserSource::Runtime` item commits in the same durable transaction,
 /// ordered before the report, so authorship and ordering are both
-/// preserved.
-fn retained_terminal_notice(
+/// preserved. A failed/cancelled/interrupted terminal is already one
+/// runtime-authored message that names the child execution and folds in
+/// the retained fact, so it deliberately carries no separate notice.
+fn success_terminal_notice(
     record: &SubagentRecord,
     candidate: &TerminalCandidate,
 ) -> Option<crate::durable::inbox::InboundDraft> {
-    if candidate.state == TerminalState::Succeeded
-        && matches!(
-            record.workspace_resource_state,
-            SubagentWorkspaceResourceState::Retained
-        )
-    {
-        Some(super::retained_workspace_notice(
+    (candidate.state == TerminalState::Succeeded).then(|| {
+        super::terminal_notice(
             &record.subagent_id,
             &record.agent,
+            matches!(
+                record.workspace_resource_state,
+                SubagentWorkspaceResourceState::Retained
+            ),
             candidate.timestamp,
-        ))
-    } else {
-        None
-    }
+        )
+    })
 }
 
 /// Maps the registry's terminal vocabulary onto the durable event's.
@@ -4593,14 +4597,26 @@ mod tests {
         // and the durable pending inbound below is the one result channel.
         assert_eq!(settled.detail, None);
         // The result entered the parent's durable pending inbound with the
-        // child agent provenance, exactly once.
+        // child agent provenance, exactly once — preceded by the
+        // runtime-authored correlation notice of the same atomic
+        // publication (Issue #192).
         let pending = plane
             .store
             .select_pending_batch()
             .expect("pending")
             .expect("one pending batch");
-        assert_eq!(pending.items.len(), 1);
-        let item = &pending.items[0];
+        assert_eq!(pending.items.len(), 2, "the notice and the report");
+        let notice = &pending.items[0];
+        assert_eq!(
+            notice.message.id,
+            super::super::terminal_notice_message_id(&accepted.subagent_id)
+        );
+        assert!(matches!(
+            notice.message.source,
+            crate::message::types::UserSource::Runtime
+        ));
+        assert!(notice.sequence < pending.items[1].sequence);
+        let item = &pending.items[1];
         assert_eq!(
             item.correlation.as_deref(),
             Some(super::super::terminal_correlation(&accepted.subagent_id).as_str())
@@ -5687,10 +5703,12 @@ mod tests {
 
     /// Issue #192 — a successful child whose terminal settlement retained
     /// changed isolated work publishes two items in one durable
-    /// transaction: the runtime-authored retained-workspace notice first
-    /// (the runtime alone can know terminal workspace settlement) and the
-    /// child-authored final report last, byte-for-byte the child's own
-    /// content. The notice carries the semantic fact only — never a
+    /// transaction: the runtime-authored terminal notice first — the
+    /// parent-model correlation projection naming the exact typed
+    /// execution handle, with the retained-workspace semantic fact folded
+    /// in (the runtime alone can know terminal workspace settlement) — and
+    /// the child-authored final report last, byte-for-byte the child's own
+    /// content. The notice carries semantic facts only — never a
     /// physical path, branch, or commit.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)] // one cohesive retained-notice regression
@@ -5731,6 +5749,14 @@ mod tests {
         let crate::message::types::UserContentBlock::Text(notice_text) = notice_text else {
             panic!("the notice is text: {notice_text:?}");
         };
+        assert!(
+            notice_text.text.contains(&format!(
+                "{{\"kind\":\"subagent\",\"id\":\"{}\"}}",
+                accepted.subagent_id
+            )),
+            "the notice names the exact typed execution handle: {}",
+            notice_text.text
+        );
         assert!(
             notice_text
                 .text
@@ -7305,15 +7331,15 @@ mod tests {
             .await
             .expect("settled");
         // A retry of the same correlated publication is an idempotent
-        // no-op, never a second message. Rebuild the byte-identical draft:
+        // no-op, never a second message. Rebuild the byte-identical pair:
         // the frozen candidate timestamp is the committed one.
         let first = plane
             .store
             .select_pending_batch()
             .expect("pending")
             .expect("batch");
-        assert_eq!(first.items.len(), 1);
-        let committed_at = first.items[0]
+        assert_eq!(first.items.len(), 2, "the notice and the report");
+        let committed_at = first.items[1]
             .message
             .timestamp
             .expect("terminal notifications carry a timestamp");
@@ -7330,16 +7356,22 @@ mod tests {
             &crate::events::types::SubagentWorkspaceTerminalResource::None,
             committed_at,
         );
+        let notice = super::super::terminal_notice(
+            &accepted.subagent_id,
+            &SubagentName::parse("explore").expect("canonical name"),
+            false,
+            committed_at,
+        );
         plane
             .store
-            .accept_inbound_with_event(draft, event)
+            .accept_subagent_terminal(Some(notice), draft, event)
             .expect("idempotent retry");
         let second = plane
             .store
             .select_pending_batch()
             .expect("pending")
             .expect("batch");
-        assert_eq!(second.items.len(), 1, "exactly once");
+        assert_eq!(second.items.len(), 2, "exactly once, both sides");
     }
 
     #[tokio::test]

@@ -17,8 +17,10 @@
 //!
 //! The call returns **immediately after the ownership commit** with a
 //! running execution handle — the child runtime works asynchronously and its
-//! final report arrives later as an ordinary inbound turn from the
-//! child agent. There is no wait/poll mode and no result channel outside the
+//! final report arrives later through the canonical inbound path: one
+//! runtime-authored terminal notice naming the exact execution handle
+//! (Issue #192), immediately followed by the byte-for-byte child-authored
+//! report. There is no wait/poll mode and no result channel outside the
 //! conversation's own message bus. The returned execution handle (Issue
 //! #162) is the canonical continuation affordance: pass it to the
 //! `execution` intrinsic to inspect or cancel the child.
@@ -147,7 +149,8 @@ fn definition(catalog: &SubagentCatalog) -> Option<ToolDefinition> {
              asynchronously in its own isolated conversation and process; this call returns \
              as soon as the child is durably started, together with the execution handle you \
              can pass to the execution tool to inspect or cancel the child. The child's final \
-             report arrives later as a new message from the child agent; do not retry or poll \
+             report arrives later as a new message, immediately preceded by a runtime message \
+             that names the exact execution handle it belongs to; do not retry or poll \
              for it. Each named agent has its own fixed instructions, model, capabilities, and \
              Skills, which this call cannot override.\n\n{}",
             render_agent_routing(catalog)

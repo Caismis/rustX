@@ -436,15 +436,28 @@ async fn subagent_terminal_answer_arrives_exactly_once_through_canonical_inbound
         .expect("settled");
     assert_eq!(settled.state, SubagentState::Succeeded);
 
-    // Exactly one canonical inbound message carries the answer, authored by
-    // the child agent.
+    // Exactly one canonical inbound publication carries the answer: the
+    // runtime-authored correlation notice first, then the report authored
+    // by the child agent (Issue #192).
     let pending = plane
         .store
         .select_pending_batch()
         .expect("pending")
         .expect("one pending batch");
-    assert_eq!(pending.items.len(), 1, "exactly one terminal inbound item");
-    let item = &pending.items[0];
+    assert_eq!(
+        pending.items.len(),
+        2,
+        "the correlation notice and the terminal report"
+    );
+    assert!(matches!(
+        pending.items[0].message.source,
+        rustx::message::types::UserSource::Runtime
+    ));
+    assert_eq!(
+        pending.items[0].message.id.as_str(),
+        crate::runtime::subagent::terminal_notice_message_id(&accepted.subagent_id).as_str()
+    );
+    let item = &pending.items[1];
     assert_eq!(
         item.correlation.as_deref(),
         Some(crate::runtime::subagent::terminal_correlation(&accepted.subagent_id).as_str())
@@ -526,14 +539,14 @@ async fn subagent_terminal_answer_arrives_exactly_once_through_canonical_inbound
     );
 
     // Neither call published or delivered anything: the canonical inbound
-    // still holds exactly one item with the answer.
+    // still holds exactly one publication carrying the answer.
     let pending = plane
         .store
         .select_pending_batch()
         .expect("pending")
         .expect("one pending batch");
-    assert_eq!(pending.items.len(), 1);
-    let text = pending.items[0]
+    assert_eq!(pending.items.len(), 2);
+    let text = pending.items[1]
         .message
         .content
         .iter()
@@ -617,10 +630,25 @@ async fn child_intermediate_traffic_never_becomes_parent_result_content() {
         .expect("one pending batch");
     assert_eq!(
         pending.items.len(),
-        1,
-        "exactly one parent inbound item exists: the final report"
+        2,
+        "exactly one publication per child: the runtime-authored notice and the final report"
     );
-    let text = pending.items[0]
+    let notice_text = pending.items[0]
+        .message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            rustx::message::types::UserContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !notice_text.contains("intermediate reasoning noise")
+            && !notice_text.contains("FINAL-REPORT-ONLY"),
+        "the runtime-authored notice carries neither intermediate traffic nor the report: {notice_text}"
+    );
+    let text = pending.items[1]
         .message
         .content
         .iter()
@@ -705,9 +733,25 @@ async fn execution_status_surfaces_the_committed_cancellation_reason() {
 }
 
 /// Two concurrent children of the same named agent stay unambiguously
-/// correlated through their distinct execution handles and their canonical
-/// result provenance — without any other runtime id crossing the model
-/// boundary (Issue #192).
+/// correlated **at the parent-model boundary** (Issue #192).
+///
+/// This is the provider-neutral model-request regression: both children are
+/// settled out of start order, their publications are admitted into the
+/// canonical Ledger through the real adoption transition, and the
+/// provider-neutral model input of the parent's next request is assembled
+/// through the exact `assemble_model_input` seam the runtime uses. The
+/// proof is on what the parent model actually receives:
+///
+/// - every child-authored report is immediately preceded by exactly one
+///   runtime-authored terminal notice naming the typed execution handle
+///   (`{"kind":"subagent","id":...}`) that child's creation result
+///   returned, so `SECOND-ANSWER` correlates to execution B and
+///   `FIRST-ANSWER` to execution A even though both children are the same
+///   named agent;
+/// - the report text is byte-for-byte the child's own answer;
+/// - no internal runtime identity (child agent id, child conversation id,
+///   definition digest, delegating tool call, physical workspace fact)
+///   crosses the model boundary.
 #[tokio::test]
 async fn two_concurrent_children_of_one_agent_stay_unambiguously_correlated() {
     let plane = subagent_plane();
@@ -722,6 +766,23 @@ async fn two_concurrent_children_of_one_agent_stay_unambiguously_correlated() {
     );
     assert_eq!(first.agent, "explore");
     assert_eq!(first.agent, second.agent);
+
+    // The exact model-facing creation results: the typed handles the
+    // parent model holds for the two executions.
+    let creation_handle = |accepted: &rustx::runtime::subagent::SubagentAccepted| {
+        json_content(&crate::tools::native::subagent::accepted_result(accepted))["execution"]
+            .clone()
+    };
+    let first_handle = creation_handle(&first);
+    let second_handle = creation_handle(&second);
+    assert_eq!(
+        first_handle,
+        serde_json::json!({"kind": "subagent", "id": first.subagent_id.to_string()})
+    );
+    assert_eq!(
+        second_handle,
+        serde_json::json!({"kind": "subagent", "id": second.subagent_id.to_string()})
+    );
 
     // Settle them out of start order: the second child first.
     second_child
@@ -741,30 +802,40 @@ async fn two_concurrent_children_of_one_agent_stay_unambiguously_correlated() {
         .await
         .expect("first settled");
 
-    // Each canonical inbound report carries exactly its own child's answer,
-    // authored by that child's own agent identity, in settlement order.
-    let pending = plane
+    // Admit the publications into the canonical Ledger through the real
+    // adoption transition — the parent's next model turn boundary.
+    let batch = plane
         .store
         .select_pending_batch()
         .expect("pending")
         .expect("one pending batch");
-    assert_eq!(pending.items.len(), 2, "exactly one report per child");
-    for (item, accepted, answer) in [
-        (&pending.items[0], &second, "SECOND-ANSWER"),
-        (&pending.items[1], &first, "FIRST-ANSWER"),
-    ] {
-        assert_eq!(
-            item.correlation.as_deref(),
-            Some(crate::runtime::subagent::terminal_correlation(&accepted.subagent_id).as_str()),
-            "the report correlates to its own execution"
-        );
-        assert!(matches!(
-            item.message.source,
-            rustx::message::types::UserSource::Agent { ref agent_id }
-                if *agent_id == accepted.child_agent_id
-        ));
-        let text = item
-            .message
+    assert_eq!(
+        batch.items.len(),
+        4,
+        "each successful child published its runtime-authored notice and its report"
+    );
+    let adopted = plane
+        .store
+        .adopt_pending_batch(batch.watermark, batch.adoption_event(None))
+        .expect("adoption");
+    assert_eq!(adopted.len(), 4);
+
+    // Build the provider-neutral model input of the parent's subsequent
+    // request through the exact assembly seam the runtime uses.
+    let canonical = plane.store.load_canonical().expect("canonical");
+    let model_input = crate::model::input::assemble_model_input(&canonical, &[], None, None)
+        .expect("the provider-neutral model input assembles");
+    let model_visible: Vec<&rustx::message::types::UserMessageBlock> = model_input
+        .iter()
+        .filter_map(|message| match message {
+            rustx::model::ModelInputMessage::Canonical(
+                rustx::message::types::MessageBlock::User(user),
+            ) => Some(user),
+            _ => None,
+        })
+        .collect();
+    let text_of = |message: &rustx::message::types::UserMessageBlock| {
+        message
             .content
             .iter()
             .filter_map(|block| match block {
@@ -772,12 +843,119 @@ async fn two_concurrent_children_of_one_agent_stay_unambiguously_correlated() {
                 _ => None,
             })
             .collect::<Vec<_>>()
-            .join("\n");
-        assert!(text.contains(answer), "the child's own report: {text}");
+            .join("\n")
+    };
+    assert_eq!(
+        model_visible.len(),
+        4,
+        "the parent model receives exactly the two notice/report pairs"
+    );
+
+    // Settlement order: B's pair first, then A's pair. Each pair is the
+    // runtime-authored correlation notice immediately followed by the
+    // unchanged child-authored report.
+    let pairs = [
+        (
+            &model_visible[0],
+            &model_visible[1],
+            &second,
+            &second_handle,
+            "SECOND-ANSWER",
+        ),
+        (
+            &model_visible[2],
+            &model_visible[3],
+            &first,
+            &first_handle,
+            "FIRST-ANSWER",
+        ),
+    ];
+    for (notice, report, accepted, handle, answer) in pairs {
+        let notice_text = text_of(notice);
+        let report_text = text_of(report);
+        assert!(
+            matches!(notice.source, rustx::message::types::UserSource::Runtime),
+            "the correlation notice is runtime-authored"
+        );
+        assert!(
+            matches!(
+                report.source,
+                rustx::message::types::UserSource::Agent { ref agent_id }
+                    if *agent_id == accepted.child_agent_id
+            ),
+            "the report is child-authored"
+        );
+        assert!(
+            notice_text.contains(&serde_json::to_string(handle).expect("handle serializes")),
+            "the notice names the exact typed execution handle the creation result returned: \
+             {notice_text}"
+        );
+        assert!(
+            notice_text.contains("explore"),
+            "the notice names the agent: {notice_text}"
+        );
+        assert_eq!(
+            report_text, answer,
+            "the child report is byte-for-byte child-authored"
+        );
+        assert!(
+            !report_text.contains("Subagent execution"),
+            "no runtime metadata is concatenated into the child report: {report_text}"
+        );
+    }
+    // Unambiguity: each notice names only its own execution's handle.
+    assert!(!text_of(model_visible[0]).contains(&first.subagent_id.to_string()));
+    assert!(!text_of(model_visible[2]).contains(&second.subagent_id.to_string()));
+
+    // Nothing internal crosses the model boundary. The child conversation
+    // identity is string-identical to the execution id by construction, so
+    // the id may appear only inside the exact handle JSON — never as a
+    // separate internal field — and the genuinely distinct internal
+    // identities (child agent id, definition digest, delegating tool call)
+    // never appear at all.
+    let pair_handles = [
+        (&model_visible[0], &second_handle),
+        (&model_visible[1], &second_handle),
+        (&model_visible[2], &first_handle),
+        (&model_visible[3], &first_handle),
+    ];
+    for (message, handle) in pair_handles {
+        let text = text_of(message);
+        let handle_json = serde_json::to_string(handle).expect("handle serializes");
+        let beyond_handle = text.replacen(&handle_json, "", 1);
+        for accepted in [&first, &second] {
+            assert!(
+                !beyond_handle.contains(&accepted.subagent_id.to_string()),
+                "the execution id appears only as the typed handle: {text}"
+            );
+            for internal in [
+                accepted.child_agent_id.to_string(),
+                accepted.definition_digest.clone(),
+            ] {
+                assert!(
+                    !text.contains(&internal),
+                    "internal identity {internal} must not cross the model boundary: {text}"
+                );
+            }
+        }
+        for internal in [
+            "call-162",
+            "definition_digest",
+            "child_agent_id",
+            "child_conversation_id",
+            "tool_call_id",
+            "sha256:",
+            "workspace",
+        ] {
+            assert!(
+                !text.contains(internal),
+                "runtime provenance {internal:?} must not cross the model boundary: {text}"
+            );
+        }
     }
 
     // Each status response is identified by exactly the handle the model
-    // holds for that child.
+    // holds for that child, and never carries a report.
     for accepted in [&first, &second] {
         let status = json_content(
             &run_execution(
@@ -1000,14 +1178,15 @@ async fn activity_frames_racing_terminal_settlement_are_dropped() {
     );
     assert_eq!(settled.detail, None, "the answer never rides the detail");
 
-    // The result channel is still exactly the canonical durable inbound.
+    // The result channel is still exactly the canonical durable inbound:
+    // the runtime-authored notice, then the report.
     let pending = plane
         .store
         .select_pending_batch()
         .expect("pending")
         .expect("one pending batch");
-    assert_eq!(pending.items.len(), 1);
-    let text = pending.items[0]
+    assert_eq!(pending.items.len(), 2);
+    let text = pending.items[1]
         .message
         .content
         .iter()
@@ -1246,7 +1425,8 @@ async fn listing_never_disturbs_a_running_child_or_its_observation() {
         "a listed child is still running"
     );
 
-    // And the child still settles exactly once, through the canonical path.
+    // And the child still settles exactly once, through the canonical path
+    // (notice plus report, Issue #192).
     crate::runtime::subagent::ipc::write_child_frame(
         &mut peer,
         &ChildFrame::Result(ResultFrame {
@@ -1270,7 +1450,7 @@ async fn listing_never_disturbs_a_running_child_or_its_observation() {
         .expect("one pending batch");
     assert_eq!(
         pending.items.len(),
-        1,
+        2,
         "listing added no publication and removed none"
     );
 }
@@ -1318,13 +1498,14 @@ async fn a_listing_never_carries_a_child_answer_or_its_history() {
             "a listing carries no {withheld}: {serialized}"
         );
     }
-    // The answer did arrive, exactly once, on its own channel.
+    // The answer did arrive, exactly once, on its own channel — the
+    // notice/report pair of the one terminal publication.
     let pending = plane
         .store
         .select_pending_batch()
         .expect("pending")
         .expect("one pending batch");
-    assert_eq!(pending.items.len(), 1);
+    assert_eq!(pending.items.len(), 2);
 }
 
 /// `execution(list)` and `execution(status)` project the same authoritative

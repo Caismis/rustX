@@ -944,15 +944,20 @@ impl ConversationInboundMailbox {
     }
 
     /// Accepts one subagent terminal publication: the terminal report, its
-    /// dependent durable terminal fact, and — when terminal settlement
-    /// retained changed isolated work — the runtime-authored adjacent
-    /// notice, all in the same durable transaction (Issue #192).
+    /// dependent durable terminal fact, and — on success — the
+    /// runtime-authored terminal notice, all in the same durable
+    /// transaction (Issue #192).
     ///
-    /// The notice is ordered strictly before the report, so the terminal
-    /// result remains the last item of the publication, and it is
-    /// `UserSource::Runtime`-authored, so no runtime-observed settlement
-    /// fact is ever attributed to the child. The event continues to
-    /// reference the report's `MessageId`.
+    /// The notice is the parent-model correlation projection: it names the
+    /// exact typed execution handle the `subagent` creation result
+    /// returned, and folds in the retained-workspace semantic fact when
+    /// terminal settlement retained changed isolated work. It is ordered
+    /// strictly before the report, so the terminal result remains the last
+    /// item of the publication, and it is `UserSource::Runtime`-authored,
+    /// so no runtime-observed fact is ever attributed to the child. A
+    /// failed/cancelled/interrupted terminal carries no notice: its report
+    /// is already the one runtime-authored terminal message. The event
+    /// continues to reference the report's `MessageId`.
     pub(crate) fn accept_subagent_terminal(
         &self,
         notice: Option<InboundDraft>,
