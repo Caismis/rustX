@@ -26,16 +26,19 @@
 /**
  * Version 16 carries Issue #202's explicit tool outcome certainty: tool
  * status `interrupted` becomes `outcome_unknown` with a bounded `detail`;
- * `timed_out` means proven terminal settlement; older schemas are not
- * decoded. Version 15 adds the retained-workspace disposal request/result,
- * the unresolved-preservation resource state, and the pending
- * partial-settlement outcome. Version 14 adds the Agent Status contextual
- * annotation projection: the snapshot carries the bounded composition window
- * `statuses` instead of a latest-only `status`, each status opportunity
- * carries the durable identity it was established against, and
- * `agent_status_composed` carries the window transition — admission plus
- * eviction — rather than only the new composition. It retains version 13's
- * Issue #187 subagent workspace
+ * `timed_out` means proven terminal settlement; and the background
+ * lifecycle stops collapsing outcomes it cannot prove — its terminal
+ * vocabulary gains `timed_out` and `outcome_unknown`, so an execution whose
+ * external outcome is unknown is never observed as `failed`. Older schemas
+ * are not decoded. Version 15 adds the retained-workspace disposal
+ * request/result, the unresolved-preservation resource state, and the
+ * pending partial-settlement outcome. Version 14 adds the Agent Status
+ * contextual annotation projection: the snapshot carries the bounded
+ * composition window `statuses` instead of a latest-only `status`, each
+ * status opportunity carries the durable identity it was established
+ * against, and `agent_status_composed` carries the window transition —
+ * admission plus eviction — rather than only the new composition. It
+ * retains version 13's Issue #187 subagent workspace
  * representation, which separates logical child project authority
  * (`logical_workspace`) from physical Git worktree ownership
  * (`isolation.git_worktree` facts and the handoff's
@@ -300,13 +303,25 @@ export type ToolReplayPolicy = "never" | "idempotent";
  */
 export type ToolOrigin = "builtin" | { mcp: { server_id: McpServerId } };
 
+/**
+ * The lifecycle states of a detached background execution.
+ *
+ * The terminal vocabulary claims only facts the executor proved: `failed`
+ * is a known failure, `timed_out` a proven deadline settlement, and
+ * `outcome_unknown` means the external outcome is genuinely unknown — it is
+ * never collapsed into `failed`. `publishing_terminal` is non-terminal: the
+ * executor returned and the registry still owns durable publication.
+ */
 export type BackgroundLifecycle =
   | "starting"
   | "running"
   | "cancelling"
+  | "publishing_terminal"
   | "succeeded"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "timed_out"
+  | "outcome_unknown";
 
 /**
  * The lifecycle states of a subagent child (Issue #60).
@@ -325,7 +340,13 @@ export type SubagentState =
   | "interrupted";
 
 export const BACKGROUND_TERMINAL_STATES: ReadonlySet<BackgroundLifecycle> =
-  new Set<BackgroundLifecycle>(["succeeded", "failed", "cancelled"]);
+  new Set<BackgroundLifecycle>([
+    "succeeded",
+    "failed",
+    "cancelled",
+    "timed_out",
+    "outcome_unknown",
+  ]);
 
 /** The subagent lifecycle states the runtime treats as durably settled. */
 export const SUBAGENT_TERMINAL_STATES: ReadonlySet<SubagentState> =

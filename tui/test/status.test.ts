@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { reduce } from "../src/presentation/projection.ts";
+import { activeBackground } from "../src/presentation/selectors.ts";
 import { correlateTools } from "../src/presentation/tools.ts";
 import {
   renderBackground,
@@ -550,6 +551,64 @@ describe("activity area", () => {
     assert.match(rendered, /running exec-1/);
     assert.match(rendered, /succeeded exec-2/);
     assert.match(rendered, /step 2/);
+  });
+
+  it("renders an unknown background outcome distinctly from failure", () => {
+    // Issue #202: `outcome_unknown` is terminal, wears the terminal glyph, and
+    // names itself — it is never collapsed into `failed` and never rendered
+    // as still pending.
+    const unknown = plainText(
+      renderBackground(
+        backgroundExecution("exec-u", "outcome_unknown", {
+          result: toolResult({
+            status: {
+              type: "outcome_unknown",
+              detail: "process exited before settlement could be proven",
+            },
+          }),
+        }),
+        prefs(),
+      ),
+    );
+    assert.match(unknown, /● .*outcome_unknown exec-u/);
+    assert.ok(!unknown.includes("◐"), "a terminal execution never wears the pending glyph");
+    assert.ok(!unknown.includes("failed"), "an unknown outcome is not a known failure");
+    // The runtime's prose explaining the unknown outcome rides the reason
+    // band, driven by the typed status — no text parsing.
+    assert.match(unknown, /process exited before settlement could be proven/);
+
+    const failed = plainText(
+      renderBackground(
+        backgroundExecution("exec-f", "failed", {
+          result: toolResult({ status: { type: "failed", error: "exit 1" } }),
+        }),
+        prefs(),
+      ),
+    );
+    assert.match(failed, /● .*failed exec-f/);
+    assert.match(failed, /exit 1/);
+  });
+
+  it("counts only non-terminal lifecycle states as active background work", () => {
+    // `publishing_terminal` is not terminal: the executor returned but the
+    // registry still owns durable publication. `timed_out` and
+    // `outcome_unknown` are proven terminal states and leave the active set.
+    const state = stateOf({
+      background: [
+        backgroundExecution("exec-run", "running"),
+        backgroundExecution("exec-pub", "publishing_terminal"),
+        backgroundExecution("exec-to", "timed_out"),
+        backgroundExecution("exec-unk", "outcome_unknown"),
+      ],
+    });
+    assert.deepEqual(
+      activeBackground(state).map((execution) => execution.execution_id),
+      ["exec-run", "exec-pub"],
+    );
+    assert.match(
+      plainText(renderBackgroundSection(state, prefs())),
+      /Background · 2 active of 4 known/,
+    );
   });
 
   it("shows runtime-owned approval facts and the human-input surface hint", () => {
