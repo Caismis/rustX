@@ -2965,8 +2965,8 @@ input.
 **Deterministic degeneration detection.** Each generated text channel gets a
 bounded repetition detector. Its whole state is fixed and complete: a 2 KiB
 ring window, one prefix-function table of 2049 `u16` entries, one 64-byte
-checkpoint block, and three counters — about 4 KiB per channel, and nothing
-that grows with the length of the generation.
+checkpoint block, and three counters — about 6.1 KiB per channel, and
+nothing that grows with the length of the generation.
 
 Detection is exact suffix periodicity, computed once per checkpoint rather
 than per candidate. A scan runs the Knuth–Morris–Pratt prefix function over
