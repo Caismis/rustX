@@ -14402,16 +14402,16 @@ mod tests {
         let terminal = background
             .snapshot(&execution_id)
             .expect("terminal background record");
+        // The executor raced past the drain's cancellation request and
+        // proved success: cancellation intent (including drain intent)
+        // cannot overwrite the executor-proven outcome (Issue #202).
         assert_eq!(
             terminal.state,
-            crate::tools::background::BackgroundLifecycle::Cancelled
+            crate::tools::background::BackgroundLifecycle::Succeeded
         );
         assert!(matches!(
             terminal.result.as_ref().map(|result| &result.status),
-            Some(crate::tools::types::ToolExecutionStatus::Cancelled {
-                reason: CancellationReason::RuntimeShutdown,
-                phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
-            })
+            Some(crate::tools::types::ToolExecutionStatus::Success)
         ));
         assert_eq!(
             runtime.lifecycle_state(),

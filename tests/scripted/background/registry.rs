@@ -455,9 +455,9 @@ async fn natural_completion_wins_over_later_cancel() {
     );
 }
 
-/// Cancel transition before completion: cancellation wins and owns
-/// settlement; the later executor return cannot overwrite it with a
-/// success.
+/// Cancel transition before completion: cancellation intent commits first,
+/// the executor observes the signal and proves cancellation settlement, and
+/// the registry settles `Cancelled` with its retained reason.
 #[tokio::test]
 async fn cancel_before_completion_wins_settlement() {
     let fixture = background_fixture("conv-bg");

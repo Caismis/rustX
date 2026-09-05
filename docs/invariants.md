@@ -3000,16 +3000,20 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   `TimedOut`/`Cancelled { DuringExecution }` only after its supervised
   process tree is proven terminal; the MCP executor maps post-dispatch
   transport loss and unconfirmed cancellation to `OutcomeUnknown`; the
-  background registry preserves an executor's `OutcomeUnknown` instead of
-  rewriting it to the cancellation winner.
+  background registry preserves an executor's proven outcome — including a
+  proven `Success` or `OutcomeUnknown` — instead of rewriting it to the
+  cancellation winner; only an executor-proven cancellation settles as
+  `Cancelled`.
 - **The background lifecycle's terminal vocabulary is honest.** An execution
   settles as exactly one of `succeeded`, `failed`, `cancelled`, `timed_out`,
   or `outcome_unknown`. `failed` claims a known, proven failure — never
-  "anything that is not success or cancelled". An executor `OutcomeUnknown`
-  settles as lifecycle `outcome_unknown`, including when cancellation intent
-  won the settlement race (a cancellation request is not a confirmed
-  cancellation), and a proven deadline settlement (`TimedOut`) is reported
-  as lifecycle `timed_out`.
+  "anything that is not success or cancelled". Cancellation intent (`cancelling`)
+  owns only the cancellation-request fact and its reason: an executor-proven
+  `Success` settles as lifecycle `succeeded` even when the cancellation
+  request won the race, an executor `OutcomeUnknown` settles as lifecycle
+  `outcome_unknown`, and a proven deadline settlement (`TimedOut`) is reported
+  as lifecycle `timed_out`. Lifecycle `cancelled` requires an executor-proven
+  cancellation settlement.
 - **Every terminal non-success status produces non-empty, bounded,
   provider-independent model-facing feedback** through
   `ToolExecutionResult::model_facing_projection()` and the typed status
@@ -3038,10 +3042,14 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
 - The public lifecycle is `Starting -> Running -> Cancelling -> terminal`,
   with the five terminal states (`Succeeded`, `Failed`, `Cancelled`,
   `TimedOut`, `OutcomeUnknown`) absorbing; exactly one terminal transition
-  settles an execution. `Cancelling` means cancellation intent committed and
-  owns settlement — it is not a confirmed cancellation: an executor
-  `OutcomeUnknown` survives the cancellation winner and settles the
-  lifecycle as `OutcomeUnknown`, never as `Cancelled`.
+  settles an execution. `Cancelling` is non-terminal: it means cancellation
+  intent committed and the cancellation was requested — terminal certainty
+  is still pending, and it is not a confirmed cancellation. When the
+  executor returns, its proven settlement decides the terminal state: an
+  executor-proven cancellation settles as `Cancelled` with the
+  registry-retained reason and the `DuringExecution` phase, while every
+  other executor-proven outcome (`Success`, `Failed`, `Denied`, `TimedOut`,
+  `OutcomeUnknown`) settles under its own truthful lifecycle state.
 - The dispatch ownership commit is the background linearization point: the
   registry synchronization boundary is acquired first, the deciding
   attempt-cancellation observation happens at that same protected boundary,
@@ -3053,18 +3061,20 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
 - The cancellation-vs-completion race is linearized: the first registry
   transition that commits either terminal completion or cancellation intent
   wins. Completion-first makes later cancels idempotent no-ops returning the
-  terminal snapshot; cancellation-intent-first owns settlement
-  (`Cancelling -> Cancelled`) and canonicalizes the stored terminal result
-  to `Cancelled` with the retained reason, so a normal executor return
-  (`Success`, executor-level `Cancelled`) can
-  never contradict the registry winner. Executor-proven facts survive the
-  cancellation winner under their own truthful terminal states: a proven
-  deadline settlement settles as `TimedOut` (the cancellation request did
-  not manufacture it), a known executor failure as `Failed`, and an
-  executor `OutcomeUnknown` as `OutcomeUnknown` — a cancellation request is
-  not a confirmed cancellation result, so the registry preserves the
-  executor's honest unknown instead of rewriting it to the cancellation
-  winner.
+  terminal snapshot. Cancellation-intent-first commits the request and its
+  reason (`Cancelling`), but the request alone is not a confirmed
+  cancellation: the executor owns the physical terminal outcome. Only an
+  executor-proven cancellation settles as `Cancelled`, canonicalized with
+  the retained registry reason; an executor that raced past the request and
+  proved success settles as `Succeeded` with `ToolExecutionStatus::Success`
+  — the cancellation intent can never manufacture a cancellation settlement
+  over a proven success. The remaining executor-proven outcomes likewise
+  survive under their own truthful terminal states: a known executor
+  failure as `Failed`, a proven deadline settlement as `TimedOut` (the
+  cancellation request did not manufacture it), and an executor
+  `OutcomeUnknown` as `OutcomeUnknown` — a cancellation request is not a
+  confirmed cancellation result, so the registry preserves the executor's
+  honest unknown instead of rewriting it to the cancellation winner.
 - Every successfully dispatched execution reaches exactly one terminal
   registry state and claims at most one terminal inbound publication
   (a timestamped `UserMessageBlock` with `UserSource::Runtime` through the

@@ -2154,9 +2154,12 @@ durable evidence a restart can classify. A durable failure there rolls the
 dispatch back completely and returns `BackgroundDispatchError::Durable`;
 nothing is detached. The fact opens the `background:{execution_id}` durable
 lifecycle that the one terminal publication closes. Cancellation intent that commits
-first retains its reason and canonicalizes the final terminal result, so
-the registry winner and the stored result always agree (only an explicit
-process-control failure after cancellation intent settles as `Failed`).
+first retains its reason in the non-terminal `Cancelling` state, but the request
+alone is not a confirmed cancellation: the executor owns the physical terminal
+outcome. Only an executor-proven cancellation is canonicalized to `Cancelled`
+with the retained reason; an executor-proven success settles as `Succeeded`,
+and failure, timeout, and the honest unknown survive under their own truthful
+terminal states.
 All progress entering runtime state and events passes through one shared
 UTF-8-safe bound (`bound_tool_progress`) used by both foreground and
 background paths. Foreground progress is additionally cardinality-bounded

@@ -5640,18 +5640,20 @@ mod tests {
             Some(RuntimeClientError::UnknownBackgroundExecution { .. })
         ));
 
-        // Settlement: the cancellation winner canonicalizes the terminal
-        // result to Cancelled.
+        // Settlement: the executor raced past the cancellation request and
+        // proved success. Cancellation intent owns the request fact and its
+        // reason, never the physical outcome (Issue #202), so the execution
+        // settles as `Succeeded`, not `Cancelled`.
         release.send_replace(true);
         let terminal = await_background_terminal(
             fixture.runtime.tool_runtime().background(),
             &execution_id,
-            "cancelled background execution",
+            "background execution settlement after a racing cancel",
         )
         .await;
-        assert_eq!(terminal.state, BackgroundLifecycle::Cancelled);
+        assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
         let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
-        assert_eq!(snapshot.background[0].state, BackgroundLifecycle::Cancelled);
+        assert_eq!(snapshot.background[0].state, BackgroundLifecycle::Succeeded);
         assert!(snapshot.background[0].result.is_some());
     }
 
