@@ -286,6 +286,16 @@ impl SubagentRecord {
             handoff: self.handoff.clone(),
             workspace_resource_state: self.workspace_resource_state,
             state,
+            // The reason is meaningful exactly while cancellation intent is
+            // live or the child settled cancelled; a successful (Workflow)
+            // settlement that raced an in-flight intent reports no stale
+            // reason.
+            cancel_reason: match self.lifecycle {
+                SubagentLifecycle::Cancelling | SubagentLifecycle::Cancelled => {
+                    self.cancel_reason
+                }
+                _ => None,
+            },
             detail: self.detail.clone(),
             observation: self.observation.clone(),
             profile: self.profile.clone(),
@@ -503,9 +513,13 @@ fn map_workspace_disposal_error(
 /// A consistency snapshot of one subagent child.
 ///
 /// Read-model materialization only: every field is derived from the
-/// registry's state machine, never an authority of its own. The snapshot is
-/// also the domain payload of the model-facing `execution(status)` response
-/// (Issue #162), so it serializes as the authoritative state projection.
+/// registry's state machine, never an authority of its own. This is the
+/// **rich runtime-truth projection** consumed by the Runtime Client, the
+/// TUI, recovery, and internal diagnostics. The model-facing
+/// `execution(status)` response is the deliberately minimal
+/// `SubagentExecutionSnapshot` projection of this snapshot (Issue #192),
+/// owned by the `execution` intrinsic — this authoritative type never
+/// weakens to fit the model boundary.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SubagentSnapshot {
     /// The conversation-owned subagent identity.
@@ -534,6 +548,13 @@ pub struct SubagentSnapshot {
     pub workspace_resource_state: SubagentWorkspaceResourceState,
     /// The lifecycle state.
     pub state: SubagentState,
+    /// The committed cancellation reason, while cancellation intent exists
+    /// or the child settled cancelled with one.
+    ///
+    /// A child that reported `Cancelled` without a committed parent
+    /// cancellation intent has no semantic reason (`None`): the runtime
+    /// never fabricates one.
+    pub cancel_reason: Option<CancellationReason>,
     /// The bounded failure/cancellation diagnostic, once known.
     ///
     /// A successful child's answer content never appears here (Issue #178):
@@ -630,6 +651,12 @@ pub struct PreparedSubagent {
 }
 
 /// The outcome of a successful ownership commit.
+///
+/// This is a **runtime acceptance value**: it carries the runtime facts a
+/// caller may legitimately need (the owned identity and its committed
+/// provenance), never a model-facing tool result. The model-facing
+/// `subagent` creation projection is built by the `subagent` intrinsic alone
+/// (Issue #192).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubagentAccepted {
     /// The conversation-owned subagent identity.
@@ -642,8 +669,6 @@ pub struct SubagentAccepted {
     pub agent: String,
     /// The deterministic definition digest frozen at start.
     pub definition_digest: String,
-    /// The tool result the delegating call receives.
-    pub result: serde_json::Value,
 }
 
 /// The outcome of one [`SubagentRegistry::commit`].
@@ -1947,12 +1972,6 @@ impl SubagentRegistry {
                     child_conversation_id,
                     agent: agent.as_str().to_owned(),
                     definition_digest: definition_digest.as_str().to_owned(),
-                    result: serde_json::json!({
-                        "state": "running",
-                        "note": "The child runtime is running asynchronously. Its answer \
-                                 arrives as a new turn from the child agent; do not retry \
-                                 or poll for it."
-                    }),
                 }))
             }
         }

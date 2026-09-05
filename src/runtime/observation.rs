@@ -760,6 +760,7 @@ mod tests {
             handoff: None,
             workspace_resource_state: SubagentWorkspaceResourceState::None,
             state: SubagentState::Running,
+            cancel_reason: None,
             detail: None,
             observation: SubagentObservation {
                 revision,

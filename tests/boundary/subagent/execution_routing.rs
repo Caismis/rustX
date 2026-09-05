@@ -148,8 +148,9 @@ async fn start_subagent(
     }
 }
 
-/// A subagent start returns a typed execution handle:
-/// `{ "execution": { "kind": "subagent", "id": "conversation-1-subagent-1" }, "state": "running", ... }`.
+/// A subagent start returns the minimal model-facing creation contract
+/// (Issue #192): the typed execution handle, the running state, and the
+/// named agent — and nothing else.
 #[tokio::test]
 async fn subagent_start_returns_a_typed_subagent_execution_handle() {
     let plane = subagent_plane();
@@ -161,18 +162,34 @@ async fn subagent_start_returns_a_typed_subagent_execution_handle() {
     );
     // The exact result-shaping function the `subagent` intrinsic executor
     // runs.
-    let result = crate::tools::native::subagent::accepted_result(accepted);
+    let result = crate::tools::native::subagent::accepted_result(accepted.clone());
     let value = json_content(&result);
     assert_eq!(
-        value["execution"],
-        serde_json::json!({"kind": "subagent", "id": "conv-162-subagent-1"}),
-        "the creation result returns the typed execution handle"
+        value,
+        serde_json::json!({
+            "execution": {"kind": "subagent", "id": "conv-162-subagent-1"},
+            "state": "running",
+            "agent": "explore",
+        }),
+        "the creation result is exactly the minimal control contract"
     );
-    assert_eq!(value["state"], "running");
-    assert!(
-        value.get("subagent_id").is_none(),
-        "the bare subagent id is replaced by the tagged handle"
-    );
+    // The runtime acceptance value still carries the rich provenance —
+    // below the model boundary.
+    assert!(!accepted.definition_digest.is_empty());
+    let serialized = serde_json::to_string(&value).expect("serializes");
+    for removed in [
+        "definition_digest",
+        "child_agent_id",
+        "child_conversation_id",
+        "tool_call_id",
+        "workspace",
+        "note",
+    ] {
+        assert!(
+            !serialized.contains(removed),
+            "runtime provenance is not model-facing: {removed} in {serialized}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -198,7 +215,11 @@ async fn execution_status_routes_subagent_targets_to_the_subagent_registry() {
     .await;
     let snapshot = json_content(&result);
     assert_eq!(snapshot["kind"], "subagent");
-    assert_eq!(snapshot["subagent_id"], accepted.subagent_id.to_string());
+    assert_eq!(
+        snapshot["execution"],
+        serde_json::json!({"kind": "subagent", "id": accepted.subagent_id.to_string()}),
+        "the response is identified by the canonical execution handle"
+    );
     assert_eq!(snapshot["agent"], "explore");
     assert_eq!(snapshot["state"], "running");
     assert_eq!(
@@ -466,7 +487,11 @@ async fn subagent_terminal_answer_arrives_exactly_once_through_canonical_inbound
     let snapshot = json_content(&status);
     assert_eq!(snapshot["kind"], "subagent");
     assert_eq!(snapshot["state"], "succeeded");
-    assert_eq!(snapshot["subagent_id"], accepted.subagent_id.to_string());
+    assert_eq!(
+        snapshot["execution"],
+        serde_json::json!({"kind": "subagent", "id": accepted.subagent_id.to_string()}),
+        "the response is identified by the canonical execution handle"
+    );
     assert!(
         snapshot.get("detail").is_none(),
         "no success-result field exposes the answer: {snapshot}"
@@ -1071,12 +1096,11 @@ async fn list_and_status_agree_about_a_subagent() {
     );
     assert_eq!(entry["state"], status["state"]);
     assert_eq!(entry["agent"], status["agent"]);
-    assert_eq!(entry["started_at"], status["started_at"]);
     assert_eq!(
         entry["publication_abandoned"],
         status["publication_abandoned"]
     );
-    assert_eq!(entry["execution"]["id"], status["subagent_id"]);
+    assert_eq!(entry["execution"], status["execution"]);
     assert_eq!(entry["execution"]["kind"], "subagent");
 }
 
