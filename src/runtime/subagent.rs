@@ -489,6 +489,60 @@ pub(crate) fn terminal_message_id(subagent_id: &SubagentId) -> MessageId {
     MessageId::new(format!("subagent-{subagent_id}-terminal"))
 }
 
+/// The deterministic message identity of the runtime-authored
+/// retained-workspace notice accompanying a successful terminal publication
+/// (Issue #192).
+pub(crate) fn terminal_notice_message_id(subagent_id: &SubagentId) -> MessageId {
+    MessageId::new(format!("subagent-{subagent_id}-terminal-notice"))
+}
+
+/// The one producer correlation of a retained-workspace terminal notice. It
+/// shares the terminal publication's exactly-once durable transaction, so
+/// the bounded retry rebuilds it byte-identically and an ambiguous commit
+/// resolves as the idempotent correlation retry.
+pub(crate) fn terminal_notice_correlation(subagent_id: &SubagentId) -> String {
+    format!("subagent-terminal-notice:{subagent_id}")
+}
+
+/// The minimal actionable parent-facing fact of a retained changed isolated
+/// workspace (Issue #192): semantic only — never a physical path, branch,
+/// or commit, which remain user/Runtime Client concerns below the model
+/// boundary.
+pub(crate) const RETAINED_WORKSPACE_FACT: &str =
+    "changes were retained and are not applied to your workspace; the user can inspect or \
+     dispose of the retained workspace";
+
+/// The runtime-authored adjacent notice of a successful child whose
+/// terminal settlement retained changed isolated work (Issue #192).
+///
+/// The success report itself is child-authored, so this runtime-observed
+/// settlement fact must not be concatenated into it — that would falsely
+/// attribute a runtime statement to the child, and the child cannot
+/// authoritatively know terminal workspace settlement anyway. The notice is
+/// a separate `UserSource::Runtime` inbound item committed in the **same**
+/// durable transaction as the terminal publication, ordered strictly before
+/// the report: the terminal result remains the last item of the
+/// publication.
+pub(crate) fn retained_workspace_notice(
+    subagent_id: &SubagentId,
+    agent: &SubagentName,
+    timestamp: DateTime<Utc>,
+) -> InboundDraft {
+    InboundDraft {
+        message_id: Some(terminal_notice_message_id(subagent_id)),
+        source: UserSource::Runtime,
+        kind: InboundKind::Message,
+        content: vec![UserContentBlock::Text(TextBlock {
+            text: format!(
+                "Subagent {subagent_id} (agent {agent}) worked in an isolated workspace: its \
+                 {RETAINED_WORKSPACE_FACT}."
+            ),
+        })],
+        timestamp,
+        correlation: Some(terminal_notice_correlation(subagent_id)),
+    }
+}
+
 /// The deterministic event identity of a subagent terminal publication.
 pub(crate) fn terminal_event_id(subagent_id: &SubagentId) -> EventId {
     EventId::new(format!("subagent-terminal-event:{subagent_id}"))
@@ -757,6 +811,14 @@ pub fn recovery_terminal_publication(
     workspace_resource: &SubagentWorkspaceTerminalResource,
     timestamp: DateTime<Utc>,
 ) -> (InboundDraft, RuntimeEventEnvelope) {
+    // The notice is runtime-authored, so the retained-workspace fact folds
+    // into the same message without any provenance ambiguity.
+    let retained = matches!(
+        workspace_resource,
+        SubagentWorkspaceTerminalResource::Retained { .. }
+    )
+    .then(|| format!(" Its {RETAINED_WORKSPACE_FACT}."))
+    .unwrap_or_default();
     terminal_publication(
         conversation_id,
         subagent_id,
@@ -766,7 +828,7 @@ pub fn recovery_terminal_publication(
             text: format!(
                 "Subagent {subagent_id} (agent {agent}, definition {definition_digest}) was \
                  interrupted by a runtime restart: its actual outcome is unknown and it was \
-                 not restarted."
+                 not restarted.{retained}"
             ),
         })],
         workspace_resource,

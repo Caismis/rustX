@@ -549,6 +549,171 @@ async fn subagent_terminal_answer_arrives_exactly_once_through_canonical_inbound
     );
 }
 
+/// `execution(cancel)` surfaces the committed cancellation reason in the
+/// status projection, so a model-initiated cancellation stays
+/// distinguishable from a deadline expiry (Issue #191/#192).
+#[tokio::test]
+async fn execution_status_surfaces_the_committed_cancellation_reason() {
+    let plane = subagent_plane();
+    let child = stage_exit0(&plane);
+    let accepted = start_subagent(&plane, "inspect the tool plane").await;
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+
+    // A running child has no cancellation reason.
+    let running = json_content(
+        &run_execution(
+            &fixture,
+            serde_json::json!({
+                "action": "status",
+                "target": {"kind": "subagent", "id": accepted.subagent_id.to_string()},
+            }),
+        )
+        .await,
+    );
+    assert_eq!(running["state"], "running");
+    assert!(
+        running.get("cancellation_reason").is_none(),
+        "no reason exists before any cancellation intent: {running}"
+    );
+
+    let cancelling = json_content(
+        &run_execution(
+            &fixture,
+            serde_json::json!({
+                "action": "cancel",
+                "target": {"kind": "subagent", "id": accepted.subagent_id.to_string()},
+            }),
+        )
+        .await,
+    );
+    assert_eq!(cancelling["state"], "cancelling");
+    assert_eq!(cancelling["cancellation_reason"], "user_requested");
+
+    child.complete(ChildResultStatus::Cancelled, None).await;
+    let settled = plane
+        .registry
+        .wait_until_settled(&accepted.subagent_id)
+        .await
+        .expect("settled");
+    assert_eq!(settled.state, SubagentState::Cancelled);
+    let terminal = json_content(
+        &run_execution(
+            &fixture,
+            serde_json::json!({
+                "action": "status",
+                "target": {"kind": "subagent", "id": accepted.subagent_id.to_string()},
+            }),
+        )
+        .await,
+    );
+    assert_eq!(terminal["state"], "cancelled");
+    assert_eq!(
+        terminal["cancellation_reason"], "user_requested",
+        "the reason survives terminal settlement: {terminal}"
+    );
+}
+
+/// Two concurrent children of the same named agent stay unambiguously
+/// correlated through their distinct execution handles and their canonical
+/// result provenance — without any other runtime id crossing the model
+/// boundary (Issue #192).
+#[tokio::test]
+async fn two_concurrent_children_of_one_agent_stay_unambiguously_correlated() {
+    let plane = subagent_plane();
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    let first_child = stage_exit0(&plane);
+    let first = start_subagent(&plane, "first task").await;
+    let second_child = stage_exit0(&plane);
+    let second = start_subagent(&plane, "second task").await;
+    assert_ne!(
+        first.subagent_id, second.subagent_id,
+        "same agent, distinct executions"
+    );
+    assert_eq!(first.agent, "explore");
+    assert_eq!(first.agent, second.agent);
+
+    // Settle them out of start order: the second child first.
+    second_child
+        .complete(ChildResultStatus::Succeeded, Some("SECOND-ANSWER"))
+        .await;
+    plane
+        .registry
+        .wait_until_settled(&second.subagent_id)
+        .await
+        .expect("second settled");
+    first_child
+        .complete(ChildResultStatus::Succeeded, Some("FIRST-ANSWER"))
+        .await;
+    plane
+        .registry
+        .wait_until_settled(&first.subagent_id)
+        .await
+        .expect("first settled");
+
+    // Each canonical inbound report carries exactly its own child's answer,
+    // authored by that child's own agent identity, in settlement order.
+    let pending = plane
+        .store
+        .select_pending_batch()
+        .expect("pending")
+        .expect("one pending batch");
+    assert_eq!(pending.items.len(), 2, "exactly one report per child");
+    for (item, accepted, answer) in [
+        (&pending.items[0], &second, "SECOND-ANSWER"),
+        (&pending.items[1], &first, "FIRST-ANSWER"),
+    ] {
+        assert_eq!(
+            item.correlation.as_deref(),
+            Some(
+                crate::runtime::subagent::terminal_correlation(&accepted.subagent_id).as_str()
+            ),
+            "the report correlates to its own execution"
+        );
+        assert!(matches!(
+            item.message.source,
+            rustx::message::types::UserSource::Agent { ref agent_id }
+                if *agent_id == accepted.child_agent_id
+        ));
+        let text = item
+            .message
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                rustx::message::types::UserContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains(answer), "the child's own report: {text}");
+    }
+
+    // Each status response is identified by exactly the handle the model
+    // holds for that child.
+    for accepted in [&first, &second] {
+        let status = json_content(
+            &run_execution(
+                &fixture,
+                serde_json::json!({
+                    "action": "status",
+                    "target": {"kind": "subagent", "id": accepted.subagent_id.to_string()},
+                }),
+            )
+            .await,
+        );
+        assert_eq!(
+            status["execution"],
+            serde_json::json!({"kind": "subagent", "id": accepted.subagent_id.to_string()})
+        );
+        assert_eq!(status["agent"], "explore");
+        assert_eq!(status["state"], "succeeded");
+        let serialized = serde_json::to_string(&status).expect("serializes");
+        assert!(
+            !serialized.contains("FIRST-ANSWER") && !serialized.contains("SECOND-ANSWER"),
+            "status never carries a child report: {serialized}"
+        );
+    }
+}
+
 /// While the registry is still in `PublishingTerminal` (terminal publication
 /// has not yet reached the durable authority), the pending child answer must
 /// not be model-visible through `execution(status)` either.

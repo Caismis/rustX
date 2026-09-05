@@ -943,6 +943,58 @@ impl ConversationInboundMailbox {
         Ok((accepted, event))
     }
 
+    /// Accepts one subagent terminal publication: the terminal report, its
+    /// dependent durable terminal fact, and — when terminal settlement
+    /// retained changed isolated work — the runtime-authored adjacent
+    /// notice, all in the same durable transaction (Issue #192).
+    ///
+    /// The notice is ordered strictly before the report, so the terminal
+    /// result remains the last item of the publication, and it is
+    /// `UserSource::Runtime`-authored, so no runtime-observed settlement
+    /// fact is ever attributed to the child. The event continues to
+    /// reference the report's `MessageId`.
+    pub(crate) fn accept_subagent_terminal(
+        &self,
+        notice: Option<InboundDraft>,
+        draft: InboundDraft,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, MailboxError> {
+        if draft.kind.is_compaction_summary()
+            || notice
+                .as_ref()
+                .is_some_and(|notice| notice.kind.is_compaction_summary())
+        {
+            return Err(MailboxError::CompactionSummaryNotEligible);
+        }
+        // This path is intentionally settlement-owned rather than normal
+        // admission: a committed child must be able to durably publish its
+        // terminal inbound while the conversation drains.
+        let _settlement = self.begin_settlement_admission()?;
+        let (notice, accepted, event) = self.inbound.accept_subagent_terminal(notice, draft, event)?;
+        let mut woke = false;
+        for accepted in [notice, Some(accepted)].into_iter().flatten() {
+            if accepted.retried {
+                continue;
+            }
+            let item = InboundItem {
+                sequence: accepted.sequence,
+                message: accepted.message.clone(),
+                transcript_cursor: accepted.transcript_cursor,
+            };
+            {
+                let state = self.state.lock().expect("inbound mailbox lock poisoned");
+                if let Some(observer) = &state.observer {
+                    observer.on_enqueued(&item);
+                }
+            }
+            woke = true;
+        }
+        if woke {
+            self.wake.notify_one();
+        }
+        Ok(event)
+    }
+
     /// Commits the durable background-ownership fact of one detached
     /// execution (Issue #12, M9a).
     ///

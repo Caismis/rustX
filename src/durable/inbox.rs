@@ -771,6 +771,47 @@ fn commit_background_ownership_through(
     store.append_event(event)
 }
 
+/// Accepts one subagent terminal publication through a store handle,
+/// rejecting every other event payload and every non-runtime-authored
+/// notice.
+///
+/// The narrow capability must not become a general multi-inbound seam: the
+/// subagent plane may commit exactly its terminal report, at most one
+/// runtime-authored retained-workspace notice, and the one dependent
+/// terminal fact, in one transaction — nothing else (Issue #192).
+fn accept_subagent_terminal_through(
+    store: &(impl ConversationStore + ?Sized),
+    notice: Option<InboundDraft>,
+    draft: InboundDraft,
+    event: RuntimeEventEnvelope,
+) -> Result<
+    (
+        Option<AcceptedInbound>,
+        AcceptedInbound,
+        RuntimeEventEnvelope,
+    ),
+    ConversationStoreError,
+> {
+    if !matches!(
+        event.event,
+        crate::events::types::RuntimeEvent::SubagentTerminalPublished { .. }
+    ) {
+        return Err(ConversationStoreError::InvalidReference(
+            "the subagent terminal transition requires a subagent terminal fact".to_owned(),
+        ));
+    }
+    if let Some(notice) = &notice {
+        if notice.source != crate::message::types::UserSource::Runtime
+            || notice.kind != crate::message::types::InboundKind::Message
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "a subagent terminal notice is runtime-authored only".to_owned(),
+            ));
+        }
+    }
+    store.accept_subagent_terminal(notice, draft, event)
+}
+
 /// Commits the durable subagent-ownership fact of one child through a store
 /// handle, rejecting every other event payload.
 ///
@@ -1004,6 +1045,32 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
         event: RuntimeEventEnvelope,
     ) -> Result<(AcceptedInbound, RuntimeEventEnvelope), ConversationStoreError>;
 
+    /// Atomically accepts one subagent terminal publication: the optional
+    /// runtime-authored retained-workspace notice (ordered first), the
+    /// terminal report, and the dependent `SubagentTerminalPublished` fact,
+    /// in one transaction (Issue #192).
+    ///
+    /// The notice must be `UserSource::Runtime`-authored: it states a
+    /// runtime-observed workspace settlement fact and must never be
+    /// attributed to the child. The event references the report's accepted
+    /// `MessageId`, so the terminal result remains the last item of the
+    /// publication. The payload must be a
+    /// [`RuntimeEvent::SubagentTerminalPublished`](crate::events::types::RuntimeEvent::SubagentTerminalPublished);
+    /// every other event is rejected.
+    fn accept_subagent_terminal(
+        &self,
+        notice: Option<InboundDraft>,
+        draft: InboundDraft,
+        event: RuntimeEventEnvelope,
+    ) -> Result<
+        (
+            Option<AcceptedInbound>,
+            AcceptedInbound,
+            RuntimeEventEnvelope,
+        ),
+        ConversationStoreError,
+    >;
+
     /// Commits the durable background-ownership fact of one detached
     /// execution (Issue #12, M9a).
     ///
@@ -1135,6 +1202,32 @@ pub trait ConversationStore: Send + Sync + 'static {
         draft: InboundDraft,
         event: RuntimeEventEnvelope,
     ) -> Result<(AcceptedInbound, RuntimeEventEnvelope), ConversationStoreError>;
+
+    /// Atomically accepts one subagent terminal publication: the optional
+    /// runtime-authored retained-workspace notice first, then the terminal
+    /// report, then the dependent `SubagentTerminalPublished` fact — one
+    /// transaction, so a crash can never observe the report without its
+    /// notice or the fact without either (Issue #192).
+    ///
+    /// The notice must be a `UserSource::Runtime` `InboundKind::Message`
+    /// item: it states a runtime-observed workspace settlement fact and
+    /// must never be attributed to the child. The terminal fact references
+    /// the report's `MessageId`, so the report remains the last item of
+    /// the publication. Both drafts carry their deterministic producer
+    /// correlations, so an ambiguous commit retries idempotently.
+    fn accept_subagent_terminal(
+        &self,
+        notice: Option<InboundDraft>,
+        draft: InboundDraft,
+        event: RuntimeEventEnvelope,
+    ) -> Result<
+        (
+            Option<AcceptedInbound>,
+            AcceptedInbound,
+            RuntimeEventEnvelope,
+        ),
+        ConversationStoreError,
+    >;
 
     /// Selects the currently pending items as one finite watermark-bounded
     /// batch, without consuming them.
@@ -1704,6 +1797,22 @@ impl<T: ConversationStore + ?Sized> ConversationInboundCapability for T {
         ConversationStore::accept_inbound_with_event(self, draft, event)
     }
 
+    fn accept_subagent_terminal(
+        &self,
+        notice: Option<InboundDraft>,
+        draft: InboundDraft,
+        event: RuntimeEventEnvelope,
+    ) -> Result<
+        (
+            Option<AcceptedInbound>,
+            AcceptedInbound,
+            RuntimeEventEnvelope,
+        ),
+        ConversationStoreError,
+    > {
+        ConversationStore::accept_subagent_terminal(self, notice, draft, event)
+    }
+
     fn commit_background_ownership(
         &self,
         event: RuntimeEventEnvelope,
@@ -1861,6 +1970,22 @@ impl ConversationInboundCapability for StoreInboundCapability {
         event: RuntimeEventEnvelope,
     ) -> Result<(AcceptedInbound, RuntimeEventEnvelope), ConversationStoreError> {
         self.store.accept_inbound_with_event(draft, event)
+    }
+
+    fn accept_subagent_terminal(
+        &self,
+        notice: Option<InboundDraft>,
+        draft: InboundDraft,
+        event: RuntimeEventEnvelope,
+    ) -> Result<
+        (
+            Option<AcceptedInbound>,
+            AcceptedInbound,
+            RuntimeEventEnvelope,
+        ),
+        ConversationStoreError,
+    > {
+        accept_subagent_terminal_through(self.store.as_ref(), notice, draft, event)
     }
 
     fn commit_background_ownership(

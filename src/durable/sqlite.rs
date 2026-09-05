@@ -882,6 +882,98 @@ impl ConversationStore for SqliteConversationStore {
         Ok((accepted, persisted.event))
     }
 
+    #[allow(clippy::too_many_lines)] // one durable linearization boundary
+    fn accept_subagent_terminal(
+        &self,
+        notice: Option<InboundDraft>,
+        draft: InboundDraft,
+        mut event: RuntimeEventEnvelope,
+    ) -> Result<
+        (
+            Option<AcceptedInbound>,
+            AcceptedInbound,
+            RuntimeEventEnvelope,
+        ),
+        ConversationStoreError,
+    > {
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("subagent terminal transaction: {error}")))?;
+        // The notice is ordered first, so the terminal report remains the
+        // last item of the publication.
+        let notice = notice
+            .map(|notice| accept_inbound_tx(self, &transaction, notice))
+            .transpose()?;
+        if let Some(notice) = &notice
+            && (notice.message.source != UserSource::Runtime
+                || notice.message.kind != InboundKind::Message)
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "a subagent terminal notice is runtime-authored only".to_owned(),
+            ));
+        }
+        let accepted = accept_inbound_tx(self, &transaction, draft)?;
+        if event.event_id.as_str().is_empty()
+            && let RuntimeEvent::SubagentTerminalPublished { subagent_id, .. } = &event.event
+        {
+            event.event_id = EventId::new(format!("subagent-terminal-event:{subagent_id}"));
+        }
+        let event_message_id = match &event.event {
+            RuntimeEvent::SubagentTerminalPublished { message_id, .. } => message_id.clone(),
+            _ => {
+                return Err(ConversationStoreError::InvalidReference(
+                    "subagent terminal acceptance requires a subagent terminal fact".to_owned(),
+                ));
+            }
+        };
+        if event_message_id != accepted.message_id {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "subagent terminal fact references {}, accepted inbound is {}",
+                event_message_id, accepted.message_id
+            )));
+        }
+        // The notice/report pair is one atomic publication: a retry must
+        // find both sides already accepted, never exactly one.
+        if notice.as_ref().is_some_and(|notice| notice.retried) != accepted.retried {
+            return Err(ConversationStoreError::InvalidReference(
+                "a subagent terminal notice/report pair must retry together".to_owned(),
+            ));
+        }
+        if accepted.retried {
+            let Some(existing) = find_event_by_id(&transaction, &event.event_id)? else {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "correlated inbound {} has no durable terminal fact",
+                    accepted.message_id
+                )));
+            };
+            if existing.event != event.event {
+                return Err(ConversationStoreError::InvalidReference(
+                    "correlated inbound terminal fact conflicts with the stored fact".to_owned(),
+                ));
+            }
+            transaction
+                .commit()
+                .map_err(|error| storage(format!("subagent terminal retry commit: {error}")))?;
+            return Ok((notice, accepted, existing));
+        }
+        #[cfg(test)]
+        if Self::consume(&self.fail_accept_remaining) {
+            return Err(storage("fault injected: subagent terminal accept commit"));
+        }
+        #[cfg(test)]
+        if Self::consume(&self.fail_event_remaining) {
+            return Err(storage("fault injected: subagent terminal journal commit"));
+        }
+        process_death::reach_event("before:event", &event.event);
+        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("subagent terminal commit: {error}")))?;
+        process_death::reach_event("after:event", &persisted.event.event);
+        Ok((notice, accepted, persisted.event))
+    }
+
     fn select_pending_batch(&self) -> Result<Option<PendingBatch>, ConversationStoreError> {
         #[cfg(test)]
         {
@@ -9668,6 +9760,298 @@ mod tests {
             Err(ConversationStoreError::InvalidReference(_))
         ));
         assert_eq!(store.load_pending().unwrap().len(), 1);
+    }
+
+    /// The Issue #192 pair publication: a successful terminal whose
+    /// settlement retained changed isolated work commits the runtime-authored
+    /// notice and the child-authored report in one transaction — notice
+    /// first, report (the terminal result) last, event committed once.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn subagent_terminal_pair_publication_is_atomic_idempotent_and_ordered() {
+        let store = store();
+        let conversation_id = store.conversation_id().clone();
+        let subagent_id =
+            crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
+        let child_agent_id = crate::runtime::identity::AgentId::new(format!("agent-{subagent_id}"));
+        let timestamp = Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap();
+        store
+            .append_event(envelope(
+                &conversation_id,
+                crate::runtime::subagent::subagent_ownership_event_id(&subagent_id).as_ref(),
+                None,
+                RuntimeEvent::SubagentOwnershipCommitted {
+                    subagent_id: subagent_id.clone(),
+                    child_agent_id: child_agent_id.clone(),
+                    child_conversation_id: crate::runtime::identity::ConversationId::new(
+                        subagent_id.as_str(),
+                    ),
+                    tool_call_id: crate::runtime::identity::ToolCallId::new("call-sub"),
+                    agent: "explore".to_owned(),
+                    definition_digest: "sha256:definition".to_owned(),
+                    ownership: crate::events::types::SubagentOwnershipKind::Normal,
+                    workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
+                        std::path::PathBuf::from("<shared-workspace>"),
+                    ),
+                },
+            ))
+            .unwrap();
+        let notice_id = crate::runtime::subagent::terminal_notice_message_id(&subagent_id);
+        let report_id = crate::runtime::subagent::terminal_message_id(&subagent_id);
+        let notice_for_store = || InboundDraft {
+            message_id: Some(notice_id.clone()),
+            source: UserSource::Runtime,
+            kind: InboundKind::Message,
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "retained".to_owned(),
+            })],
+            timestamp,
+            correlation: Some(
+                crate::runtime::subagent::terminal_notice_correlation(&subagent_id),
+            ),
+        };
+        let report_for_store = || InboundDraft {
+            message_id: Some(report_id.clone()),
+            source: UserSource::Agent {
+                agent_id: child_agent_id.clone(),
+            },
+            kind: InboundKind::Message,
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "the final report".to_owned(),
+            })],
+            timestamp,
+            correlation: Some(format!("subagent-terminal:{subagent_id}")),
+        };
+        let event_for_store = || {
+            envelope(
+                &conversation_id,
+                crate::runtime::subagent::terminal_event_id(&subagent_id).as_ref(),
+                None,
+                RuntimeEvent::SubagentTerminalPublished {
+                    subagent_id: subagent_id.clone(),
+                    child_agent_id: child_agent_id.clone(),
+                    message_id: report_id.clone(),
+                    state: crate::events::types::SubagentTerminalState::Succeeded,
+                    workspace_resource:
+                        crate::events::types::SubagentWorkspaceTerminalResource::None,
+                },
+            )
+        };
+
+        let (notice, report, persisted) = store
+            .accept_subagent_terminal(
+                Some(notice_for_store()),
+                report_for_store(),
+                event_for_store(),
+            )
+            .unwrap();
+        let notice = notice.expect("the notice was accepted");
+        assert!(!notice.retried && !report.retried);
+        assert!(
+            notice.sequence < report.sequence,
+            "the notice is ordered strictly before the terminal report"
+        );
+        let pending = store.load_pending().unwrap();
+        assert_eq!(pending.len(), 2);
+        assert_eq!(pending[0].message.id, notice_id);
+        assert_eq!(pending[1].message.id, report_id);
+
+        // The retry of the identical pair is an idempotent no-op on both
+        // sides and never re-commits the event.
+        let (notice_retry, report_retry, persisted_retry) = store
+            .accept_subagent_terminal(
+                Some(notice_for_store()),
+                report_for_store(),
+                event_for_store(),
+            )
+            .unwrap();
+        assert!(notice_retry.expect("notice").retried);
+        assert!(report_retry.retried);
+        assert_eq!(persisted_retry.sequence, persisted.sequence);
+        assert_eq!(store.load_pending().unwrap().len(), 2);
+
+        // A notice that is not runtime-authored is rejected before anything
+        // is accepted.
+        let other = crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 2);
+        store
+            .append_event(envelope(
+                &conversation_id,
+                crate::runtime::subagent::subagent_ownership_event_id(&other).as_ref(),
+                None,
+                RuntimeEvent::SubagentOwnershipCommitted {
+                    subagent_id: other.clone(),
+                    child_agent_id: crate::runtime::identity::AgentId::new("agent-other"),
+                    child_conversation_id: crate::runtime::identity::ConversationId::new(
+                        other.as_str(),
+                    ),
+                    tool_call_id: crate::runtime::identity::ToolCallId::new("call-other"),
+                    agent: "explore".to_owned(),
+                    definition_digest: "sha256:definition".to_owned(),
+                    ownership: crate::events::types::SubagentOwnershipKind::Normal,
+                    workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
+                        std::path::PathBuf::from("<shared-workspace>"),
+                    ),
+                },
+            ))
+            .unwrap();
+        let mut child_authored_notice = notice_for_store();
+        child_authored_notice.message_id =
+            Some(crate::runtime::subagent::terminal_notice_message_id(&other));
+        child_authored_notice.source = UserSource::Agent {
+            agent_id: crate::runtime::identity::AgentId::new("agent-other"),
+        };
+        child_authored_notice.correlation =
+            Some(crate::runtime::subagent::terminal_notice_correlation(&other));
+        let other_report_id = crate::runtime::subagent::terminal_message_id(&other);
+        let mut other_report = report_for_store();
+        other_report.message_id = Some(other_report_id.clone());
+        other_report.source = UserSource::Agent {
+            agent_id: crate::runtime::identity::AgentId::new("agent-other"),
+        };
+        other_report.correlation = Some(format!("subagent-terminal:{other}"));
+        let other_event = envelope(
+            &conversation_id,
+            crate::runtime::subagent::terminal_event_id(&other).as_ref(),
+            None,
+            RuntimeEvent::SubagentTerminalPublished {
+                subagent_id: other.clone(),
+                child_agent_id: crate::runtime::identity::AgentId::new("agent-other"),
+                message_id: other_report_id,
+                state: crate::events::types::SubagentTerminalState::Succeeded,
+                workspace_resource: crate::events::types::SubagentWorkspaceTerminalResource::None,
+            },
+        );
+        assert!(matches!(
+            store.accept_subagent_terminal(
+                Some(child_authored_notice),
+                other_report.clone(),
+                other_event.clone()
+            ),
+            Err(ConversationStoreError::InvalidReference(_))
+        ));
+        // A non-terminal event payload is rejected just as strictly.
+        let wrong_event = envelope(
+            &conversation_id,
+            "not-a-terminal",
+            None,
+            RuntimeEvent::SubagentOwnershipCommitted {
+                subagent_id: other.clone(),
+                child_agent_id: crate::runtime::identity::AgentId::new("agent-other"),
+                child_conversation_id: crate::runtime::identity::ConversationId::new(
+                    other.as_str(),
+                ),
+                tool_call_id: crate::runtime::identity::ToolCallId::new("call-other"),
+                agent: "explore".to_owned(),
+                definition_digest: "sha256:definition".to_owned(),
+                ownership: crate::events::types::SubagentOwnershipKind::Normal,
+                workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
+                    std::path::PathBuf::from("<shared-workspace>"),
+                ),
+            },
+        );
+        assert!(matches!(
+            store.accept_subagent_terminal(None, other_report, wrong_event),
+            Err(ConversationStoreError::InvalidReference(_))
+        ));
+        assert_eq!(
+            store.load_pending().unwrap().len(),
+            2,
+            "rejections accept nothing"
+        );
+    }
+
+    /// A durable failure between the pair's acceptances and the event commit
+    /// commits nothing: the bounded retry then publishes the pair and the
+    /// fact cleanly and exactly once.
+    #[test]
+    fn subagent_terminal_pair_publication_retries_atomically_after_a_fault() {
+        let store = store();
+        let conversation_id = store.conversation_id().clone();
+        let subagent_id =
+            crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
+        let child_agent_id = crate::runtime::identity::AgentId::new(format!("agent-{subagent_id}"));
+        let timestamp = Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap();
+        store
+            .append_event(envelope(
+                &conversation_id,
+                crate::runtime::subagent::subagent_ownership_event_id(&subagent_id).as_ref(),
+                None,
+                RuntimeEvent::SubagentOwnershipCommitted {
+                    subagent_id: subagent_id.clone(),
+                    child_agent_id: child_agent_id.clone(),
+                    child_conversation_id: crate::runtime::identity::ConversationId::new(
+                        subagent_id.as_str(),
+                    ),
+                    tool_call_id: crate::runtime::identity::ToolCallId::new("call-sub"),
+                    agent: "explore".to_owned(),
+                    definition_digest: "sha256:definition".to_owned(),
+                    ownership: crate::events::types::SubagentOwnershipKind::Normal,
+                    workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
+                        std::path::PathBuf::from("<shared-workspace>"),
+                    ),
+                },
+            ))
+            .unwrap();
+        let notice = || InboundDraft {
+            message_id: Some(crate::runtime::subagent::terminal_notice_message_id(&subagent_id)),
+            source: UserSource::Runtime,
+            kind: InboundKind::Message,
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "retained".to_owned(),
+            })],
+            timestamp,
+            correlation: Some(
+                crate::runtime::subagent::terminal_notice_correlation(&subagent_id),
+            ),
+        };
+        let report = || InboundDraft {
+            message_id: Some(crate::runtime::subagent::terminal_message_id(&subagent_id)),
+            source: UserSource::Agent {
+                agent_id: child_agent_id.clone(),
+            },
+            kind: InboundKind::Message,
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "the final report".to_owned(),
+            })],
+            timestamp,
+            correlation: Some(format!("subagent-terminal:{subagent_id}")),
+        };
+        let event = || {
+            envelope(
+                &conversation_id,
+                crate::runtime::subagent::terminal_event_id(&subagent_id).as_ref(),
+                None,
+                RuntimeEvent::SubagentTerminalPublished {
+                    subagent_id: subagent_id.clone(),
+                    child_agent_id: child_agent_id.clone(),
+                    message_id: crate::runtime::subagent::terminal_message_id(&subagent_id),
+                    state: crate::events::types::SubagentTerminalState::Succeeded,
+                    workspace_resource:
+                        crate::events::types::SubagentWorkspaceTerminalResource::None,
+                },
+            )
+        };
+
+        store.arm_fail_event_times(1);
+        assert!(
+            store
+                .accept_subagent_terminal(Some(notice()), report(), event())
+                .is_err(),
+            "the injected journal fault fails the publication"
+        );
+        assert_eq!(
+            store.load_pending().unwrap().len(),
+            0,
+            "the failed transaction committed neither the notice nor the report"
+        );
+
+        let (notice, report, persisted) = store
+            .accept_subagent_terminal(Some(notice()), report(), event())
+            .expect("the bounded retry commits the pair");
+        assert!(!notice.expect("notice").retried);
+        assert!(!report.retried);
+        assert_eq!(persisted.sequence, 2);
+        assert_eq!(store.load_pending().unwrap().len(), 2);
     }
 
     #[test]
