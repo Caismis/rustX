@@ -3524,10 +3524,7 @@ fn normalize_platform_git_path(path: &Path) -> PathBuf {
         let Some(rest) = path.strip_prefix("/private").ok() else {
             return path.to_path_buf();
         };
-        let is_system_alias = rest.components().next().is_some_and(
-            |component| matches!(component, std::path::Component::Normal(name) if name == "var"),
-        );
-        if is_system_alias {
+        if rest.starts_with("/var") {
             return rest.to_path_buf();
         }
     }
@@ -3878,6 +3875,22 @@ mod tests {
     };
     use crate::runtime::cancellation::CancellationSignal;
     use crate::runtime::identity::SubagentId;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_git_worktree_path_alias_is_normalized_without_general_symlink_resolution() {
+        let private = std::path::Path::new("/private/var/folders/rustx/worktree");
+        let public = std::path::Path::new("/var/folders/rustx/worktree");
+        assert_eq!(
+            super::normalize_platform_git_path(private),
+            public,
+            "the OS-owned /private/var alias must compare with /var"
+        );
+        assert!(super::git_registration_paths_match(
+            Some(private),
+            Some(public)
+        ));
+    }
 
     fn git(cwd: &std::path::Path, args: &[&str]) -> String {
         let output = std::process::Command::new("git")
