@@ -315,14 +315,18 @@ impl AgentExecutionObserver for CancelOnToolEvent {
     }
 }
 
-/// An executor that deliberately ignores the cancellation view and returns a
-/// success after a release. The Agent Loop must still retain cancellation as
-/// the terminal result while allowing this late physical completion to occur.
+/// An executor that deliberately ignores the cancellation view and settles
+/// with a fixed late result after a release. A cancellation *request* is not
+/// a confirmed cancellation result: when the cancellation branch wins the
+/// foreground arbitration, the outcome this executor itself settled remains
+/// authoritative in the tool result slot, while the attempt still settles
+/// cancelled.
 struct LateCompletionTool {
     definition: rustx::tools::types::ToolDefinition,
     started: watch::Sender<bool>,
     release: watch::Sender<bool>,
     side_effect: Arc<AtomicBool>,
+    result: ToolExecutionResult,
 }
 
 /// An executor that returns a physical cancellation with its own reason. The
@@ -371,6 +375,7 @@ impl ToolExecutor for LateCompletionTool {
         let started = self.started.clone();
         let mut release = self.release.subscribe();
         let side_effect = Arc::clone(&self.side_effect);
+        let result = self.result.clone();
         Box::pin(async move {
             started.send_replace(true);
             release
@@ -378,7 +383,7 @@ impl ToolExecutor for LateCompletionTool {
                 .await
                 .expect("late completion release channel stays open");
             side_effect.store(true, Ordering::SeqCst);
-            success_result("late completion")
+            result
         })
     }
 }
@@ -550,8 +555,19 @@ async fn issue136_completion_wins_before_cancellation() {
     ));
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn issue136_cancellation_wins_and_late_completion_cannot_replace_it() {
+/// Drives the exact parked cut: the late-completion executor started, the
+/// attempt cancellation wins the foreground arbitration (proven by the
+/// cancellation-settlement pause), and only then does the executor settle
+/// with its pre-programmed result. The cancellation request is not a
+/// confirmed cancellation result, so the executor-settled status is
+/// authoritative for the tool result slot.
+async fn run_cancellation_winner_with_late_executor_outcome(
+    result: ToolExecutionResult,
+) -> (
+    common::DurableExecutionAudit,
+    Arc<AtomicBool>,
+    Arc<FakeModel>,
+) {
     let call = call("call-late", "tool-late", "late");
     let model = fake_model(tool_turn(&[call]));
     let (started, mut started_rx) = watch::channel(false);
@@ -565,6 +581,7 @@ async fn issue136_cancellation_wins_and_late_completion_cannot_replace_it() {
         started,
         release: release.clone(),
         side_effect: Arc::clone(&side_effect),
+        result,
     }
     .register(&mut tools);
 
@@ -595,25 +612,81 @@ async fn issue136_cancellation_wins_and_late_completion_cannot_replace_it() {
     )
     .await;
     controller.await.expect("late completion controller");
+    (audit, side_effect, model)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn issue136_cancellation_winner_keeps_the_executor_settled_success() {
+    let (audit, side_effect, model) =
+        run_cancellation_winner_with_late_executor_outcome(success_result("late completion")).await;
 
     let messages = tool_messages(&audit);
     assert_eq!(messages.len(), 1);
+    // The executor proved the call ran to a known completion; the earlier
+    // cancellation request must not overwrite that settled outcome.
     assert!(matches!(
         messages[0].result.status,
-        ToolExecutionStatus::Cancelled {
-            reason: CancellationReason::UserRequested,
-            phase: ToolCancellationPhase::DuringExecution,
-        }
+        ToolExecutionStatus::Success
     ));
     assert!(
         side_effect.load(Ordering::SeqCst),
-        "DuringExecution does not imply rollback or absence of side effects"
+        "the settled completion's side effect is real, never rolled back"
     );
     assert_eq!(
         model.requests().len(),
         1,
-        "late completion cannot reopen a turn"
+        "the cancelled attempt has no next turn even though the tool completed"
     );
+    assert!(matches!(
+        audit.result.outcome,
+        AttemptOutcome::Cancelled {
+            reason: CancellationReason::UserRequested
+        }
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn issue136_cancellation_winner_keeps_the_executor_settled_outcome_unknown() {
+    let (audit, side_effect, model) =
+        run_cancellation_winner_with_late_executor_outcome(ToolExecutionResult {
+            status: ToolExecutionStatus::OutcomeUnknown {
+                detail: "remote termination could not be confirmed".to_owned(),
+            },
+            content: Vec::new(),
+            duration_ms: 4,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+            managed_output: None,
+        })
+        .await;
+
+    let messages = tool_messages(&audit);
+    assert_eq!(messages.len(), 1);
+    // The executor's honest unknown outcome is kept: a cancellation request
+    // must not overwrite it with a false `Cancelled` claim.
+    let ToolExecutionStatus::OutcomeUnknown { detail } = &messages[0].result.status else {
+        panic!(
+            "the executor-settled unknown outcome is authoritative: {:?}",
+            messages[0].result.status
+        );
+    };
+    assert_eq!(detail, "remote termination could not be confirmed");
+    assert!(
+        side_effect.load(Ordering::SeqCst),
+        "an unknown outcome may carry real side effects"
+    );
+    assert_eq!(
+        model.requests().len(),
+        1,
+        "the cancelled attempt has no next turn"
+    );
+    assert!(matches!(
+        audit.result.outcome,
+        AttemptOutcome::Cancelled {
+            reason: CancellationReason::UserRequested
+        }
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

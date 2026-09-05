@@ -795,7 +795,8 @@ fn a_historical_approval_cannot_be_replayed_as_current_authority() {
     let (store, report) = recover_reopened(&durable);
     // Recovery's reconciliation vocabulary has no interaction dimension at
     // all: an interaction is never something recovery acts on. The only
-    // repair is the canonical `Interrupted` slot the dead attempt owed, and
+    // repair is the canonical `Cancelled` slot the dead attempt owed (the
+    // tool never started, so its outcome is known: it did not run), and
     // the tool still never ran.
     assert!(!has_tool_start(&store));
     assert!(report.reconciliation().background_terminals.is_empty());

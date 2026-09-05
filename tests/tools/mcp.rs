@@ -182,12 +182,24 @@ mod unix_tests {
         }
         slow_cancellation.cancel();
         let slow_result = slow_future.await;
-        assert!(matches!(
-            slow_result.status,
-            rustx::tools::types::ToolExecutionStatus::Cancelled { .. }
-        ));
+        // The call was already dispatched, so an accepted cancellation
+        // notification proves only that the request reached the peer — never
+        // that the remote operation terminated. The outcome is unknown.
+        let rustx::tools::types::ToolExecutionStatus::OutcomeUnknown { detail } =
+            &slow_result.status
+        else {
+            panic!(
+                "post-dispatch cancellation is an unknown outcome: {:?}",
+                slow_result.status
+            );
+        };
+        assert!(
+            detail.contains("cancellation was requested after dispatch"),
+            "the detail names the unconfirmed remote termination: {detail}"
+        );
         // The server-side cancellation context must become observable in
-        // the fixture process, not only that rustX returned `Cancelled`.
+        // the fixture process, not only that rustX admitted the outcome is
+        // unknown.
         tokio::time::timeout(
             std::time::Duration::from_secs(5),
             wait_for_file(&cancel_marker),
@@ -636,8 +648,9 @@ mod unix_tests {
             ["echo", "new_tool"]
         );
         // HTTP cancellation: the server-side cancellation context becomes
-        // observable (the fixture's `slow` tool waits on it), not only that
-        // rustX returned `Cancelled`.
+        // observable (the fixture's `slow` tool waits on it), while rustX
+        // reports the post-dispatch call as an unknown outcome — the accepted
+        // notification never proves remote termination.
         let slow_executor = definitions
             .iter()
             .find(|(definition, _)| definition.name == "slow")
@@ -676,10 +689,18 @@ mod unix_tests {
         }
         slow_cancellation.cancel();
         let slow_result = slow_future.await;
-        assert!(matches!(
-            slow_result.status,
-            rustx::tools::types::ToolExecutionStatus::Cancelled { .. }
-        ));
+        let rustx::tools::types::ToolExecutionStatus::OutcomeUnknown { detail } =
+            &slow_result.status
+        else {
+            panic!(
+                "post-dispatch cancellation is an unknown outcome: {:?}",
+                slow_result.status
+            );
+        };
+        assert!(
+            detail.contains("cancellation was requested after dispatch"),
+            "the detail names the unconfirmed remote termination: {detail}"
+        );
         tokio::time::timeout(
             std::time::Duration::from_secs(5),
             cancel_observed.notified(),
@@ -762,6 +783,301 @@ mod unix_tests {
                 .map(|definition| definition.name.as_str())
                 .collect::<Vec<_>>(),
             ["alpha", "beta", "delta", "echo", "gamma"]
+        );
+        runtime
+            .close()
+            .await
+            .expect("the owned stdio unit must publish physical settlement");
+    }
+
+    // ---------------------------------------------------------------------
+    // Issue #202: a peer that never answers a dispatched `tools/call`
+    // ---------------------------------------------------------------------
+
+    /// The environment variable selecting the dangling-call scripted fixture
+    /// when the test binary is re-executed as its own MCP server.
+    const DANGLING_FIXTURE_MODE_ENV: &str = "RUSTX_M7_DANGLING_MCP_FIXTURE";
+    /// The environment variable naming the marker file the fixture touches
+    /// once it has observed the dispatched `tools/call` request.
+    const DANGLING_MARKER_ENV: &str = "RUSTX_M7_DANGLING_FIXTURE_MARKER";
+
+    /// Runs the current test binary as the dangling-call fixture when
+    /// [`DANGLING_FIXTURE_MODE_ENV`] selects it. The fixture serves exactly
+    /// the handshake and catalog the client needs, then deliberately never
+    /// answers the one `echo` call it accepts.
+    async fn serve_if_dangling_fixture_mode() -> bool {
+        if std::env::var_os(DANGLING_FIXTURE_MODE_ENV).is_none() {
+            return false;
+        }
+        let marker = std::env::var_os(DANGLING_MARKER_ENV).map(std::path::PathBuf::from);
+        serve_dangling_fixture(marker.as_deref()).await;
+        true
+    }
+
+    /// The hand-written wire loop of the dangling-call fixture. Message flow:
+    ///
+    /// ```text
+    /// <- server/discover                 -> error -32601 (legacy fallback)
+    /// <- initialize                      -> InitializeResult
+    /// <- notifications/initialized       (no reply)
+    /// <- tools/list                      -> [echo]
+    /// <- tools/call echo                 -> marker touched, process exit
+    ///    (the transport closes without any response)
+    /// ```
+    async fn serve_dangling_fixture(marker: Option<&std::path::Path>) {
+        use rmcp::model::{
+            ClientJsonRpcMessage, ClientRequest, DiscoverRequestMethod, ErrorData, Implementation,
+            InitializeResult, ListToolsResult, ProtocolVersion, ServerCapabilities,
+            ServerJsonRpcMessage, ServerResult,
+        };
+        use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+
+        async fn write_message(
+            output: &mut tokio::io::Stdout,
+            mut result: ServerResult,
+            id: rmcp::model::RequestId,
+        ) {
+            result.strip_result_type_for_legacy_peer();
+            let mut bytes = serde_json::to_vec(&ServerJsonRpcMessage::response(result, id))
+                .expect("a fixture message always serializes");
+            bytes.push(b'\n');
+            let _ = output.write_all(&bytes).await;
+            let _ = output.flush().await;
+        }
+
+        async fn write_error(
+            output: &mut tokio::io::Stdout,
+            error: ErrorData,
+            id: rmcp::model::RequestId,
+        ) {
+            let mut bytes = serde_json::to_vec(&ServerJsonRpcMessage::error(error, Some(id)))
+                .expect("a fixture error always serializes");
+            bytes.push(b'\n');
+            let _ = output.write_all(&bytes).await;
+            let _ = output.flush().await;
+        }
+
+        let mut input = BufReader::new(tokio::io::stdin());
+        let mut output = tokio::io::stdout();
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match input.read_line(&mut line).await {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {}
+            }
+            let trimmed = line.trim_end();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Ok(message) = serde_json::from_str::<ClientJsonRpcMessage>(trimmed) else {
+                continue;
+            };
+            let ClientJsonRpcMessage::Request(request) = message else {
+                continue;
+            };
+            let id = request.id.clone();
+            match request.request {
+                ClientRequest::DiscoverRequest(_) => {
+                    write_error(
+                        &mut output,
+                        ErrorData::method_not_found::<DiscoverRequestMethod>(),
+                        id,
+                    )
+                    .await;
+                }
+                ClientRequest::InitializeRequest(_) => {
+                    let mut result =
+                        InitializeResult::new(ServerCapabilities::builder().enable_tools().build());
+                    result.protocol_version = ProtocolVersion::V_2025_06_18;
+                    result.server_info = Implementation::new("rustx-dangling-fixture", "0.0.0");
+                    write_message(&mut output, ServerResult::InitializeResult(result), id).await;
+                }
+                ClientRequest::ListToolsRequest(_) => {
+                    let result = ListToolsResult {
+                        tools: vec![rustx::tools::mcp::fixture::fixture_tool_named("echo")],
+                        ..Default::default()
+                    };
+                    write_message(&mut output, ServerResult::ListToolsResult(result), id).await;
+                }
+                ClientRequest::PingRequest(_) => {
+                    write_message(
+                        &mut output,
+                        ServerResult::EmptyResult(rmcp::model::EmptyResult {}),
+                        id,
+                    )
+                    .await;
+                }
+                ClientRequest::CallToolRequest(_) => {
+                    // The dispatched call provably crossed the wire before
+                    // the fixture strands it; exiting closes the transport
+                    // without any response.
+                    if let Some(marker) = marker {
+                        std::fs::write(marker, "dispatched").expect("marker write");
+                    }
+                    return;
+                }
+                other => {
+                    write_error(
+                        &mut output,
+                        ErrorData::new(
+                            rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+                            format!("the dangling fixture does not serve {other:?}"),
+                            None,
+                        ),
+                        id,
+                    )
+                    .await;
+                }
+            }
+        }
+    }
+
+    /// Connects the dangling-call fixture and returns the runtime plus the
+    /// canonical `echo` definition and executor pair.
+    async fn connect_dangling_fixture(
+        test_name: &str,
+        workspace_dir: &tempfile::TempDir,
+        marker: &std::path::Path,
+    ) -> (
+        Arc<rustx::tools::mcp::McpServerRuntime>,
+        rustx::tools::types::ToolDefinition,
+        Arc<dyn rustx::tools::executor::ToolExecutor>,
+    ) {
+        let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
+        let server_id = rustx::runtime::identity::McpServerId::new("dangling-fixture");
+        let binding = rustx::tools::mcp::McpServerBinding {
+            transport: rustx::tools::mcp::McpTransportConfig::Stdio {
+                program: std::env::current_exe()
+                    .expect("test executable")
+                    .display()
+                    .to_string(),
+                args: rustx::tools::mcp::fixture::fixture_spawn_args(test_name),
+                cwd: None,
+                environment: std::collections::BTreeMap::from([
+                    (DANGLING_FIXTURE_MODE_ENV.to_owned(), "1".to_owned()),
+                    (DANGLING_MARKER_ENV.to_owned(), marker.display().to_string()),
+                ]),
+            },
+            policy: rustx::tools::types::ToolInvocationPolicy::default(),
+        };
+        let runtime = rustx::tools::mcp::McpServerRuntime::connect(
+            &server_id,
+            &binding,
+            &workspace,
+            Arc::new(rustx::tools::mcp::McpInvalidationState::new()),
+        )
+        .await
+        .expect("the dangling fixture negotiates a clean handshake");
+        let tools = runtime.list_tools().await.expect("tools/list");
+        let (definition, executor) =
+            rustx::tools::mcp::definitions(&server_id, binding.policy, &runtime, tools)
+                .into_iter()
+                .find(|(definition, _)| definition.name == "echo")
+                .expect("echo definition");
+        (runtime, definition, executor)
+    }
+
+    /// Executes the fixture's `echo` tool through the canonical executor
+    /// boundary, the same path the Agent Loop uses.
+    async fn execute_dangling_echo(
+        definition: &rustx::tools::types::ToolDefinition,
+        executor: &dyn rustx::tools::executor::ToolExecutor,
+        workspace_dir: &tempfile::TempDir,
+        conversation: &str,
+        call_id: &str,
+        cancellation: rustx::runtime::CancellationSignal,
+    ) -> rustx::tools::types::ToolExecutionResult {
+        let artifacts_dir = tempfile::tempdir().expect("artifacts");
+        let bundle = rustx::tools::runtime::ConversationToolRuntime::new(
+            rustx::runtime::identity::ConversationId::new(conversation),
+            workspace_dir.path(),
+            artifacts_dir.path(),
+        )
+        .expect("tool runtime");
+        let progress = NoProgress;
+        rustx::tools::executor::ToolExecutor::execute(
+            executor,
+            rustx::tools::types::ToolInvocation {
+                call_id: rustx::runtime::identity::ToolCallId::new(call_id),
+                tool_id: definition.id.clone(),
+                tool_name: "echo".to_owned(),
+                mode: rustx::tools::types::ToolInvocationMode::Foreground,
+                arguments: serde_json::json!({}),
+            },
+            rustx::tools::executor::ToolExecutionContext::new(
+                bundle.conversation_id(),
+                None,
+                rustx::runtime::ExecutionCancellation::detached(
+                    cancellation,
+                    rustx::runtime::types::CancellationReason::UserRequested,
+                ),
+                bundle.workspace(),
+                &progress,
+                bundle.artifacts(),
+                bundle.tool_output(),
+                bundle.environment(),
+            ),
+        )
+        .await
+    }
+
+    /// Issue #202: the transport closing after dispatch without a response is
+    /// an unknown outcome, never a known failure. The remote operation may
+    /// have partially or fully completed, so the model-facing feedback must
+    /// communicate uncertainty and the possibility of side effects.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn mcp_transport_close_after_dispatch_is_outcome_unknown() {
+        if serve_if_dangling_fixture_mode().await {
+            return;
+        }
+        let workspace_dir = tempfile::tempdir().expect("workspace");
+        let marker = workspace_dir.path().join("dispatched.marker");
+        let (runtime, definition, executor) = connect_dangling_fixture(
+            "mcp::unix_tests::mcp_transport_close_after_dispatch_is_outcome_unknown",
+            &workspace_dir,
+            &marker,
+        )
+        .await;
+        let result = execute_dangling_echo(
+            &definition,
+            executor.as_ref(),
+            &workspace_dir,
+            "mcp-dangling-close",
+            "dangling-close",
+            rustx::runtime::CancellationSignal::new(),
+        )
+        .await;
+        // The fixture touched the marker only after observing the dispatched
+        // request, and the marker exists once the transport closed.
+        assert!(
+            marker.exists(),
+            "the tools/call request provably crossed the wire before the close"
+        );
+        let rustx::tools::types::ToolExecutionStatus::OutcomeUnknown { detail } = &result.status
+        else {
+            panic!(
+                "a post-dispatch transport close is an unknown outcome, got {:?}",
+                result.status
+            );
+        };
+        assert!(
+            detail.contains("MCP transport closed during tools/call"),
+            "the detail names the stranded call: {detail}"
+        );
+        let projection = result.model_facing_projection().as_text();
+        assert!(!projection.is_empty(), "the projection is never empty");
+        assert!(
+            projection.contains("could not establish its final external outcome"),
+            "the projection communicates uncertainty: {projection}"
+        );
+        assert!(
+            projection.contains("partially or fully completed"),
+            "the projection admits possible side effects: {projection}"
+        );
+        assert!(
+            projection.contains("inspect the relevant state"),
+            "the projection guards against blind repetition: {projection}"
         );
         runtime
             .close()

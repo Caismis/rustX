@@ -822,8 +822,61 @@ mod tests {
         let encoded = translate_tool_result(&message).expect("translate cancelled result");
         assert_eq!(
             encoded["content"][0]["text"],
-            "Tool call was cancelled (reason: parent_cancelled). Execution had already started, but cancellation occurred before normal completion. Partial side effects may have occurred."
+            "Tool call was cancelled (reason: parent_cancelled). Execution had already started and cancellation was confirmed before normal completion. Partial side effects may have occurred before the execution was stopped."
         );
+    }
+
+    /// Issue #202: a proven terminal timeout and an admitted unknown outcome
+    /// project their typed status feedback through the wire unchanged — the
+    /// adapter renders the canonical projection and manufactures no
+    /// provider-specific prose of its own.
+    #[test]
+    fn issue202_anthropic_translation_consumes_typed_timeout_and_unknown_outcome() {
+        for (status, required) in [
+            (
+                ToolExecutionStatus::TimedOut,
+                "established terminal settlement",
+            ),
+            (
+                ToolExecutionStatus::OutcomeUnknown {
+                    detail: "transport closed after dispatch".to_owned(),
+                },
+                "could not establish its final external outcome",
+            ),
+        ] {
+            let message = ToolMessageBlock {
+                id: MessageId::new("tool-result-1"),
+                tool_call_id: ToolCallId::new("call-1"),
+                tool_id: ToolId::new("tool-1"),
+                result: ToolExecutionResult {
+                    status,
+                    content: Vec::new(),
+                    duration_ms: 0,
+                    exit_code: None,
+                    artifacts: Vec::new(),
+                    truncation: None,
+                    managed_output: None,
+                },
+            };
+            let encoded = translate_tool_result(&message).expect("translate status result");
+            let projection = message.result.model_facing_projection();
+            let wire_parts: Vec<String> = encoded["content"]
+                .as_array()
+                .expect("content array")
+                .iter()
+                .map(|part| part["text"].as_str().expect("text part").to_owned())
+                .collect();
+            assert_eq!(
+                wire_parts.as_slice(),
+                projection.parts(),
+                "the wire content is the canonical projection, verbatim"
+            );
+            assert!(
+                wire_parts[0].contains(required),
+                "the typed status feedback reaches the wire: {}",
+                wire_parts[0]
+            );
+        }
     }
 
     #[test]
