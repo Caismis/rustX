@@ -278,6 +278,7 @@ fn cancelled_error() -> ModelError {
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        generation: None,
     }
 }
 
@@ -664,6 +665,7 @@ impl ChatStreamNormalizer {
                 provider_code,
                 context_overflow: None,
                 malformed_tool_proposal: None,
+                generation: None,
             }
             .normalized());
         }
@@ -725,6 +727,7 @@ impl ChatStreamNormalizer {
                         provider_code: Some(reason.clone()),
                         context_overflow: None,
                         malformed_tool_proposal: None,
+                        generation: None,
                     });
                 }
                 if matches!(
@@ -748,6 +751,7 @@ impl ChatStreamNormalizer {
                         provider_code: Some(reason.clone()),
                         context_overflow: None,
                         malformed_tool_proposal: None,
+                        generation: None,
                     });
                 }
                 self.finish_reason = Some(map_chat_finish_reason(Some(reason)));
@@ -1292,6 +1296,7 @@ fn provider_error(message: String) -> ModelError {
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        generation: None,
     }
 }
 
@@ -1386,6 +1391,7 @@ fn chat_stream_error(error: &serde_json::Value) -> ModelError {
         provider_code: provider_code.map(str::to_owned),
         context_overflow: None,
         malformed_tool_proposal: None,
+        generation: None,
     }
     .normalized()
 }
@@ -1429,46 +1435,24 @@ fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelE
         }
         builder.tools(translate_tools(&request.tools));
     }
-    let typed = builder.build().map_err(|e| ModelError {
-        kind: ModelErrorKind::InvalidRequest,
-        message: format!("failed to build Chat Completions request: {e}"),
-        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
-        retry_after_ms: None,
-        provider_code: None,
-        context_overflow: None,
-        malformed_tool_proposal: None,
-    })?;
-    let mut value = serde_json::to_value(&typed).map_err(|e| ModelError {
-        kind: ModelErrorKind::InvalidRequest,
-        message: format!("failed to serialize the Chat Completions request: {e}"),
-        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
-        retry_after_ms: None,
-        provider_code: None,
-        context_overflow: None,
-        malformed_tool_proposal: None,
+    let typed = builder
+        .build()
+        .map_err(|e| invalid_request(&format!("failed to build Chat Completions request: {e}")))?;
+    let mut value = serde_json::to_value(&typed).map_err(|e| {
+        invalid_request(&format!(
+            "failed to serialize the Chat Completions request: {e}"
+        ))
     })?;
     let wire_messages = value
         .get_mut("messages")
         .and_then(serde_json::Value::as_array_mut)
-        .ok_or_else(|| ModelError {
-            kind: ModelErrorKind::InvalidRequest,
-            message: "serialized Chat Completions request has no message array".to_owned(),
-            retry_disposition: crate::model::error::ModelRetryDisposition::Never,
-            retry_after_ms: None,
-            provider_code: None,
-            context_overflow: None,
-            malformed_tool_proposal: None,
+        .ok_or_else(|| {
+            invalid_request("serialized Chat Completions request has no message array")
         })?;
     if wire_messages.len() != assistant_reasoning.len() {
-        return Err(ModelError {
-            kind: ModelErrorKind::InvalidRequest,
-            message: "serialized Chat Completions message count changed unexpectedly".to_owned(),
-            retry_disposition: crate::model::error::ModelRetryDisposition::Never,
-            retry_after_ms: None,
-            provider_code: None,
-            context_overflow: None,
-            malformed_tool_proposal: None,
-        });
+        return Err(invalid_request(
+            "serialized Chat Completions message count changed unexpectedly",
+        ));
     }
     for (wire_message, reasoning) in wire_messages.iter_mut().zip(assistant_reasoning) {
         let Some(reasoning) = reasoning else {
@@ -1482,6 +1466,7 @@ fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelE
             provider_code: None,
             context_overflow: None,
             malformed_tool_proposal: None,
+            generation: None,
         })?;
         if let Some(field) = request
             .invocation
@@ -1761,6 +1746,7 @@ fn unsupported(message: impl Into<String>) -> ModelError {
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        generation: None,
     }
 }
 
@@ -1773,6 +1759,7 @@ fn invalid_request(message: &str) -> ModelError {
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        generation: None,
     }
 }
 

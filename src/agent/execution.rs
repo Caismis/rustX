@@ -105,6 +105,7 @@ use crate::model::deadline::{ModelDeadlinePhase, ModelRequestDeadline, ModelTime
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
+use crate::model::generation::{GenerationBudget, GenerationFailure, GenerationGuard};
 use crate::model::session::AttemptModelSnapshot;
 use crate::model::snapshot::{AgentStatusStart, RequestIdentity, RequestSnapshot};
 use crate::model::types::{ModelRequest, ModelUsage};
@@ -160,29 +161,44 @@ pub const MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN: u32 = 1;
 /// model step.
 pub const MAX_TRANSIENT_MODEL_RETRIES_PER_LOGICAL_STEP: u32 = 3;
 
-/// The bounded malformed-tool-proposal recovery budget of one logical model
-/// step, counted in **semantic generations**.
+/// The bounded **semantic corrective-generation** budget of one logical
+/// model step, counted in semantic generations.
 ///
-/// A physical generation whose tool intent could not cross `ToolCall`
-/// acceptance is noncanonical: nothing executed, nothing settled, and
-/// nothing entered canonical history. The step may be regenerated **once**
-/// with bounded corrective context; a second malformed generation terminates
-/// the attempt with an explicit model-generation failure. The maximum number
-/// of semantic generations caused solely by this mechanism is therefore two.
+/// A physical generation can fail semantically in several ways: its tool
+/// intent cannot cross `ToolCall` acceptance (Issue #201), one of its
+/// generated channels deterministically degenerates, or it exhausts a
+/// generation budget before completing (Issue #203). Every one of those is
+/// the same kind of fact — *this generation is unusable* — so they share one
+/// budget rather than each owning a private retry:
+///
+/// ```text
+/// logical model step
+///   semantic generation #1
+///       accepted        -> commit
+///       semantic anomaly
+///           budget unused -> discard, bounded ephemeral correction,
+///                            semantic generation #2
+///           budget spent  -> explicit terminal generation failure
+/// ```
+///
+/// With a budget of one, a logical step can never have a third semantic
+/// generation caused by these conditions, in any order. `malformed ->
+/// degeneration -> corrective` and `degeneration -> malformed -> corrective`
+/// are not representable, because the second anomaly finds the budget spent.
 ///
 /// This counts generations, not requests. One corrective generation may be
 /// realized by several actual provider requests when a transport failure or
 /// a context overflow interrupts it; those are attempts at the same frozen
 /// semantic state and consume the transient and overflow budgets, never this
-/// one. The step-owned `MalformedProposalRecovery` state owns that
+/// one. The step-owned `SemanticGenerationRecovery` state owns that
 /// distinction.
 ///
 /// This budget is deliberately separate from — and never resets — the
 /// transient transport budget, the context-overflow recovery budget, or any
-/// Tool-side behaviour. It is keyed on
-/// [`ModelErrorKind::MalformedToolProposal`], which no other recovery path
-/// accepts.
-pub const MAX_MALFORMED_TOOL_PROPOSAL_REGENERATIONS_PER_LOGICAL_STEP: u32 = 1;
+/// Tool-side behaviour. It is keyed on the error classes
+/// `SemanticGenerationAnomaly::classify` recognizes, which no other recovery
+/// path accepts.
+pub const MAX_SEMANTIC_CORRECTIVE_GENERATIONS_PER_LOGICAL_STEP: u32 = 1;
 
 /// The upper bound for an adapter-provided retry delay.
 pub const MAX_MODEL_RETRY_DELAY_MS: u64 = 60_000;
@@ -204,24 +220,36 @@ fn transient_retry_delay_ms(retry_count: u32, retry_after_ms: Option<u64>) -> u6
 }
 
 /// Builds the runtime-owned failure for a deadline that won the request
-/// arbitration. Runtime timeouts are transient model failures, so the
-/// existing Agent-Loop retry budget remains the only retry policy.
+/// arbitration.
+///
+/// Transport liveness is deliberately *not* generation integrity: a deadline
+/// says the provider stopped producing, not that what it produced is
+/// unusable. Runtime timeouts therefore remain transient model failures and
+/// keep using the existing Agent-Loop transient retry budget, and they never
+/// touch the semantic corrective-generation budget. The expired phase
+/// crosses as a typed fact rather than as a substring of the diagnostic.
 #[must_use]
 fn model_timeout_error(phase: ModelDeadlinePhase) -> ModelError {
-    let phase_name = match phase {
-        ModelDeadlinePhase::AwaitingGeneration => "response-start",
-        ModelDeadlinePhase::Streaming => "stream-idle",
-        ModelDeadlinePhase::Terminal => "terminal",
-    };
-    ModelError {
-        kind: ModelErrorKind::Timeout,
-        message: format!("model request exceeded its {phase_name} deadline"),
-        retry_disposition: crate::model::error::ModelRetryDisposition::Transient,
-        retry_after_ms: None,
-        provider_code: None,
-        context_overflow: None,
-        malformed_tool_proposal: None,
-    }
+    // A terminal phase owns no deadline and cannot expire; if the
+    // arbitration ever reached here with one, report the phase that was
+    // actually waiting for provider progress rather than inventing a name.
+    let timeout_phase = phase
+        .timeout_phase()
+        .unwrap_or(crate::model::generation::ModelTimeoutPhase::StreamIdle);
+    ModelError::generation_failure(GenerationFailure::Timeout {
+        phase: timeout_phase,
+    })
+}
+
+/// The runtime generation safeguard of one attempt, frozen at construction
+/// from the attempt's already-resolved output budget.
+///
+/// It is derived exactly once, exactly like the timeout policy beside it: one
+/// attempt, one bound, and no live model state is read again while the
+/// attempt runs.
+#[must_use]
+fn frozen_generation_budget(request: &AgentExecutionRequest) -> GenerationBudget {
+    GenerationBudget::for_output_tokens(request.model.primary().max_output_tokens())
 }
 
 /// Everything the loop needs to know about one attempt.
@@ -433,19 +461,20 @@ pub struct AgentExecution<'a> {
     /// schema rejection. This is request-only context, never canonical
     /// conversation history.
     workflow_output_feedback: Option<String>,
-    /// The malformed-proposal recovery state of the current logical model
-    /// step: its spent regeneration budget and, while a corrective
-    /// generation is pending, the one bounded corrective hint every actual
-    /// request of that generation carries.
+    /// The semantic-generation recovery state of the current logical model
+    /// step: its one spent corrective-generation budget, shared by every
+    /// anomaly class, and — while a corrective generation is pending — the
+    /// one bounded corrective hint every actual request of that generation
+    /// carries.
     ///
     /// This is noncanonical request-only state. It is frozen into the exact
     /// `RequestSnapshot` of every actual request that used it — durable
     /// audit evidence, so a historical request stays byte-for-byte
     /// reconstructible — but it never enters canonical Assistant/User
     /// history and never survives the corrective generation as semantic
-    /// context. The discarded malformed generation itself is never stored
-    /// here at all.
-    malformed_proposal_recovery: MalformedProposalRecovery,
+    /// context. The discarded generation itself is never stored here at
+    /// all.
+    semantic_recovery: SemanticGenerationRecovery,
     /// The transient accepted context for the current admitted logical model
     /// step. It is retained across every actual-request retry and discarded
     /// only when the next logical step begins.
@@ -527,6 +556,10 @@ pub struct AgentExecution<'a> {
     /// The frozen runtime execution policy copied into every actual request
     /// admitted by this attempt.
     model_timeout_policy: ModelTimeoutPolicy,
+    /// The runtime generation safeguard of every actual request admitted by
+    /// this attempt, derived once from the attempt's own frozen resolved
+    /// output budget. It is execution state, never model input.
+    generation_budget: GenerationBudget,
     /// The open, not-yet-settled publication stream of the in-flight model
     /// request. Exactly one stream is open at a time: a stream settles — as
     /// canonical, unaccepted, or incomplete — before the next one opens.
@@ -576,6 +609,13 @@ pub struct AgentExecution<'a> {
     /// parked, then release it to prove the explicit biased precedence.
     #[cfg(test)]
     model_arbitration_pause: std::sync::Mutex<Option<test_sync::ModelArbitrationPause>>,
+    /// Test-only control point after a rejected physical generation is
+    /// durably settled and before the logical step decides whether a
+    /// corrective generation is authorized. It makes the
+    /// cancellation-versus-generation-anomaly race an exact interleaving
+    /// rather than a likely one.
+    #[cfg(test)]
+    generation_anomaly_pause: std::sync::Mutex<Option<test_sync::GenerationAnomalyPause>>,
     /// Test-only control point after a foreground tool-start fact and before
     /// the next sibling's start frontier advances. This makes cancellation
     /// during a parallel batch deterministic without changing production
@@ -839,21 +879,89 @@ enum LogicalModelStepState {
     CanonicalAccepted,
 }
 
-/// The malformed-proposal recovery state of one logical model step.
+/// The provider-independent class of one semantic generation anomaly.
+///
+/// A semantic anomaly is a fact about the *generation*, never about the
+/// request that carried it: the physical generation happened and its output
+/// is unusable. The three classes below are the complete set, they are
+/// recognized from the typed [`ModelErrorKind`] alone, and they share one
+/// corrective-generation budget precisely because they are the same kind of
+/// fact.
+///
+/// Nothing here reads a provider message, a provider code, or a finish-reason
+/// string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SemanticGenerationAnomaly {
+    /// The generation's tool intent could not cross `ToolCall` acceptance.
+    MalformedToolProposal,
+    /// One generated channel deterministically degenerated into repetition.
+    Degenerated,
+    /// A generation budget was exhausted before the generation completed.
+    BudgetExceeded,
+}
+
+impl SemanticGenerationAnomaly {
+    /// Classifies one normalized model failure.
+    ///
+    /// Returns `None` for every transport, request, cancellation, and
+    /// context-window failure: those are not defects of the generation and
+    /// keep their own existing recovery architecture untouched.
+    fn classify(error: &ModelError) -> Option<Self> {
+        match error.kind {
+            ModelErrorKind::MalformedToolProposal => Some(Self::MalformedToolProposal),
+            ModelErrorKind::GenerationDegenerated => Some(Self::Degenerated),
+            ModelErrorKind::GenerationBudgetExceeded => Some(Self::BudgetExceeded),
+            _ => None,
+        }
+    }
+
+    /// The bounded generic instruction the corrective generation carries.
+    ///
+    /// It states the failure *class* and what to do instead. It never
+    /// contains the discarded output: a repetition loop quoted back to the
+    /// model is a few-shot example of the exact failure, and a truncated
+    /// answer replayed as context is the same mistake in another form.
+    const fn instruction(self) -> &'static str {
+        match self {
+            Self::MalformedToolProposal => {
+                "The previous response did not produce a structurally valid tool call \
+                 and was discarded. Regenerate this step: to call a tool, emit one \
+                 structured tool call with a declared tool name and complete JSON \
+                 arguments; otherwise answer without calling a tool."
+            }
+            Self::Degenerated => {
+                "The previous response repeated itself and was discarded before it \
+                 was used. Regenerate this step: answer once, directly, and do not \
+                 restate the same sentence or the same reasoning again."
+            }
+            Self::BudgetExceeded => {
+                "The previous response did not finish within this step's generation \
+                 budget and was discarded. Regenerate this step: think briefly, then \
+                 answer completely and concisely within the limit."
+            }
+        }
+    }
+}
+
+/// The semantic-generation recovery state of one logical model step.
 ///
 /// The distinction this type exists to make explicit is **semantic
-/// generation** versus **actual request**. A malformed generation authorizes
-/// one *corrective generation*; an actual provider request is merely one
-/// attempt to realize it. A transport failure, a rate limit, a timeout, or a
+/// generation** versus **actual request**. A semantic anomaly authorizes one
+/// *corrective generation*; an actual provider request is merely one attempt
+/// to realize it. A transport failure, a rate limit, a timeout, or a
 /// context-overflow recovery inside that corrective generation produces
 /// another actual request of the *same* semantic generation, so the
 /// corrective hint belongs to the generation and must survive every one of
 /// them.
 ///
+/// One budget serves every anomaly class. There is no per-class counter, so
+/// no ordering of malformed proposals, degeneration, and budget exhaustion
+/// can produce a third semantic generation for the same logical step.
+///
 /// Lifetime, exactly:
 ///
-/// - **created** by [`Self::authorize`], when a malformed generation is
-///   observed and the step's budget still allows a corrective generation;
+/// - **created** by [`Self::authorize`], when a semantic anomaly is observed
+///   and the step's budget still allows a corrective generation;
 /// - **carried** by every actual request built while it is pending —
 ///   [`Self::pending_hint`] borrows, it never takes, so no request
 ///   construction can consume it;
@@ -865,36 +973,47 @@ enum LogicalModelStepState {
 /// The budget lives here too, for the same reason: it is semantic state of
 /// the step, not of any one request.
 #[derive(Debug, Default)]
-struct MalformedProposalRecovery {
+struct SemanticGenerationRecovery {
     /// Corrective generations already authorized in this logical step.
-    regenerations: u32,
+    corrective_generations: u32,
     /// The bounded corrective hint owned by the corrective generation that
     /// has not yet resolved.
-    pending_hint: Option<String>,
+    pending_hint: Option<CorrectiveHint>,
 }
 
-impl MalformedProposalRecovery {
-    /// Authorizes the corrective generation of one malformed generation, if
-    /// the step's budget still allows it, and takes ownership of its hint.
+/// The bounded request-only corrective context of one corrective generation.
+#[derive(Debug, Clone)]
+struct CorrectiveHint {
+    /// The generic instruction of the anomaly class.
+    anomaly: SemanticGenerationAnomaly,
+    /// The bounded provider-independent reason recorded with the discarded
+    /// generation.
+    reason: String,
+}
+
+impl SemanticGenerationRecovery {
+    /// Authorizes the corrective generation of one semantic anomaly, if the
+    /// step's budget still allows it, and takes ownership of its hint.
     ///
-    /// The hint is already bounded: it is the diagnostic of a
-    /// [`ModelErrorKind::MalformedToolProposal`], which the model layer
-    /// bounds at construction (see
-    /// [`crate::model::MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES`]). There is
-    /// one owner of that bound, and it is not this loop.
-    fn authorize(&mut self, hint: String) -> bool {
-        if self.regenerations >= MAX_MALFORMED_TOOL_PROPOSAL_REGENERATIONS_PER_LOGICAL_STEP {
+    /// The reason is already bounded at its construction boundary: a
+    /// malformed-proposal diagnostic is bounded by the model layer (see
+    /// [`crate::model::MAX_MALFORMED_TOOL_PROPOSAL_MESSAGE_BYTES`]) and a
+    /// generation-safety diagnostic is rendered from a typed all-numeric
+    /// fact and can never carry provider output at all. There is one owner
+    /// of each bound, and it is not this loop.
+    fn authorize(&mut self, anomaly: SemanticGenerationAnomaly, reason: String) -> bool {
+        if self.corrective_generations >= MAX_SEMANTIC_CORRECTIVE_GENERATIONS_PER_LOGICAL_STEP {
             return false;
         }
-        self.regenerations += 1;
-        self.pending_hint = Some(hint);
+        self.corrective_generations += 1;
+        self.pending_hint = Some(CorrectiveHint { anomaly, reason });
         true
     }
 
     /// The corrective hint every actual request realizing the pending
     /// corrective generation must carry.
-    fn pending_hint(&self) -> Option<&str> {
-        self.pending_hint.as_deref()
+    const fn pending_hint(&self) -> Option<&CorrectiveHint> {
+        self.pending_hint.as_ref()
     }
 
     /// The pending corrective generation reached a canonical model outcome.
@@ -1066,7 +1185,7 @@ impl<'a> AgentExecution<'a> {
     /// initialize the standalone fixture history.
     #[allow(clippy::too_many_arguments)] // one explicit authority-binding boundary
     fn new_bound(
-        request: AgentExecutionRequest,
+        mut request: AgentExecutionRequest,
         capability: AttemptCapabilityLease,
         cancellation: &'a AgentCancellation,
         context_runtime: ContextRuntime,
@@ -1100,7 +1219,6 @@ impl<'a> AgentExecution<'a> {
                 runtime_workspace: tool_runtime.workspace().root().to_path_buf(),
             });
         }
-        let mut request = request;
         let conversation = core::mem::take(&mut request.conversation);
         // Standalone execution fixtures may provide a fresh store rather than
         // constructing a ConversationRuntime first. Initialize that store
@@ -1118,6 +1236,7 @@ impl<'a> AgentExecution<'a> {
         }
         Ok(Self {
             conversation,
+            generation_budget: frozen_generation_budget(&request),
             request,
             capability,
             cancellation,
@@ -1134,7 +1253,7 @@ impl<'a> AgentExecution<'a> {
             subagent_context: runtime_policy.subagent_context,
             workflow_output: runtime_policy.workflow_output,
             workflow_output_feedback: None,
-            malformed_proposal_recovery: MalformedProposalRecovery::default(),
+            semantic_recovery: SemanticGenerationRecovery::default(),
             accepted_context: None,
             frozen_agent_status: None,
             frozen_carryover: None,
@@ -1168,6 +1287,8 @@ impl<'a> AgentExecution<'a> {
             model_stream_item_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
             model_arbitration_pause: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            generation_anomaly_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
             tool_start_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
@@ -1256,6 +1377,29 @@ impl<'a> AgentExecution<'a> {
             .model_arbitration_pause
             .lock()
             .expect("model arbitration pause lock") = Some(pause);
+    }
+
+    /// Installs the deterministic generation safeguard of one attempt.
+    ///
+    /// Production always derives the safeguard from the attempt's resolved
+    /// output budget. A test installs an explicit byte bound so a budget
+    /// regression is decided by the policy alone, without streaming a
+    /// quarter of a megabyte through the publication and durability planes.
+    #[cfg(test)]
+    pub(crate) fn install_generation_budget(&mut self, budget: GenerationBudget) {
+        self.generation_budget = budget;
+    }
+
+    /// Installs the deterministic rejected-generation synchronization hook.
+    #[cfg(test)]
+    pub(crate) fn install_generation_anomaly_pause(
+        &mut self,
+        pause: test_sync::GenerationAnomalyPause,
+    ) {
+        *self
+            .generation_anomaly_pause
+            .lock()
+            .expect("generation anomaly pause lock") = Some(pause);
     }
 
     /// Installs the test-only foreground tool-start pause for one attempt.
@@ -1478,10 +1622,10 @@ impl<'a> AgentExecution<'a> {
         self.frozen_agent_status = None;
         self.frozen_carryover = None;
         self.last_started_request = None;
-        // The malformed-proposal budget and any unresolved corrective hint
-        // are semantic state of the step that just ended, so neither may
-        // cross this boundary.
-        self.malformed_proposal_recovery.reset();
+        // The semantic corrective-generation budget and any unresolved
+        // corrective hint are semantic state of the step that just ended, so
+        // neither may cross this boundary.
+        self.semantic_recovery.reset();
         self.logical_model_step = LogicalModelStepState::NotStarted;
         self.terminal_commit_state = TerminalCommitState::Ready;
         self.terminal_carryover_decision = TerminalCarryoverDecision::Undecided;
@@ -1522,7 +1666,7 @@ impl<'a> AgentExecution<'a> {
                     // a canonical model outcome, so a corrective generation —
                     // if this was one — has resolved and its hint must not
                     // reach the tool-result continuation that follows.
-                    self.malformed_proposal_recovery.resolve();
+                    self.semantic_recovery.resolve();
                     return self.complete_turn(message_id, assembler).await;
                 }
                 StreamTerminal::Failed { error } => {
@@ -1536,25 +1680,28 @@ impl<'a> AgentExecution<'a> {
                         });
                     };
 
-                    // A malformed tool proposal is a model-generation
-                    // defect, not a transport defect: the physical
-                    // generation is discarded whole and the same logical
-                    // step gets one corrective *generation*, carrying
-                    // bounded corrective context. The budget and that
-                    // context are owned together by the logical step
-                    // (`MalformedProposalRecovery`), so they can neither
-                    // reset nor be reset by the transient and overflow
-                    // budgets tracked alongside them — and an actual-request
-                    // retry inside the corrective generation is not a second
-                    // authorization.
-                    if error.kind == ModelErrorKind::MalformedToolProposal
+                    // A semantic generation anomaly — a malformed tool
+                    // proposal, a degenerate channel, an exhausted
+                    // generation budget — is a model-generation defect, not
+                    // a transport defect: the physical generation is
+                    // discarded whole and the same logical step gets one
+                    // corrective *generation*, carrying bounded corrective
+                    // context. The three classes share this one budget, so a
+                    // second anomaly of any class terminates the step. The
+                    // budget and the corrective context are owned together
+                    // by the logical step (`SemanticGenerationRecovery`), so
+                    // they can neither reset nor be reset by the transient
+                    // and overflow budgets tracked alongside them — and an
+                    // actual-request retry inside the corrective generation
+                    // is not a second authorization.
+                    if let Some(anomaly) = SemanticGenerationAnomaly::classify(&error)
                         && self
-                            .malformed_proposal_recovery
-                            .authorize(error.message.clone())
+                            .semantic_recovery
+                            .authorize(anomaly, error.message.clone())
                     {
                         let retry_number = next_request_ordinal;
                         match self
-                            .regenerate_after_malformed_tool_proposal(
+                            .regenerate_after_semantic_anomaly(
                                 &failed_request_id,
                                 retry_number,
                                 &mut next_request_ordinal,
@@ -3452,6 +3599,12 @@ impl<'a> AgentExecution<'a> {
         // adapter's synchronous dispatch method.
         let deadline =
             ModelRequestDeadline::new(self.model_timeout_policy, self.monotonic_clock.now_millis());
+        // The generation guard is request-local execution state exactly like
+        // the deadline: one physical generation, one guard, derived from the
+        // attempt's own frozen resolved output budget. It is created here,
+        // at the same dispatch frontier, so a retry can never inherit the
+        // accounting or the repetition window of the generation it replaces.
+        let guard = GenerationGuard::new(self.generation_budget);
         let stream = self
             .request
             .model
@@ -3460,7 +3613,7 @@ impl<'a> AgentExecution<'a> {
             .stream(request, self.cancellation.model_cancellation());
         let mut assembler = ModelEventAssembler::new();
         let terminal = match self
-            .consume_model_stream(&mut assembler, &message_id, stream, deadline)
+            .consume_model_stream(&mut assembler, &message_id, stream, deadline, guard)
             .await
         {
             Ok(stream_terminal) => stream_terminal,
@@ -3491,17 +3644,17 @@ impl<'a> AgentExecution<'a> {
     }
 
     /// The first actual request of the corrective generation authorized by
-    /// one malformed tool proposal.
+    /// one semantic generation anomaly.
     ///
     /// The failed physical generation is noncanonical and is discarded
     /// whole: its assembler, its provisional Assistant identity, its
     /// provisional content, and any provider continuation state it carried
-    /// are dropped with the failed [`ModelInvocation`], so no malformed
+    /// are dropped with the failed [`ModelInvocation`], so no rejected
     /// Assistant message, orphan canonical `ToolCall`, `ToolResult`, or
     /// provider continuation fragment can survive into the next request. The
     /// only thing that crosses into the corrective generation is one bounded
     /// provider-independent corrective hint, already installed on the
-    /// step-owned [`MalformedProposalRecovery`] by the caller.
+    /// step-owned [`SemanticGenerationRecovery`] by the caller.
     ///
     /// This is one actual request of the *same* logical step, not a new
     /// semantic decision: it reuses the frozen accepted context, freezes its
@@ -3515,7 +3668,7 @@ impl<'a> AgentExecution<'a> {
     /// same corrective generation. They do not re-enter this function and
     /// they do not touch the recovery state, so each of them carries the
     /// identical corrective hint.
-    async fn regenerate_after_malformed_tool_proposal(
+    async fn regenerate_after_semantic_anomaly(
         &mut self,
         failed_request_id: &RequestId,
         retry_number: u32,
@@ -3662,6 +3815,36 @@ impl<'a> AgentExecution<'a> {
             .await
     }
 
+    /// Settles one rejected physical generation.
+    ///
+    /// The typed fact becomes one normalized provider-independent
+    /// [`ModelError`] whose diagnostic this runtime authored, exactly one
+    /// durable `ModelRequestFailed` is recorded for the request that
+    /// produced it, and the error is returned so the caller can send it
+    /// through the ordinary logical-step recovery state machine. Nothing
+    /// here decides recovery, and nothing here can commit.
+    fn settle_generation_anomaly(
+        &mut self,
+        assembler: &ModelEventAssembler,
+        failure: GenerationFailure,
+    ) -> Result<ModelError, Terminal> {
+        let error = ModelError::generation_failure(failure);
+        self.settle_model_request_failure(assembler, &error)?;
+        #[cfg(test)]
+        if let Some(pause) = self
+            .generation_anomaly_pause
+            .lock()
+            .expect("generation anomaly pause lock")
+            .as_ref()
+        {
+            // The rejected generation is durably settled and no corrective
+            // generation has been authorized yet. A test can make
+            // cancellation observable exactly at that cut.
+            pause.park();
+        }
+        Ok(error)
+    }
+
     /// Settles the failed request's publication before recording a transient
     /// retry schedule. Failed deltas remain in the durable publication audit;
     /// no failed stream can stay open while the next request is admitted.
@@ -3728,6 +3911,7 @@ impl<'a> AgentExecution<'a> {
         assistant_message_id: &MessageId,
         mut stream: ModelStream,
         mut deadline: ModelRequestDeadline,
+        mut guard: GenerationGuard,
     ) -> Result<StreamTerminal, Terminal> {
         // The response-start deadline was created at the dispatch frontier,
         // after the durable RequestSnapshot + ModelRequestStarted commit and
@@ -3825,6 +4009,20 @@ impl<'a> AgentExecution<'a> {
                 });
             }
             deadline.observe(&item, self.monotonic_clock.now_millis());
+            // Generation integrity and generation budget are evaluated here,
+            // *before* the item reaches assembly or publication: a delta that
+            // proves the generation is unusable is not part of a message this
+            // loop will ever commit. Liveness has already been observed above
+            // and is deliberately unaffected — a degenerate stream is a live
+            // stream, which is exactly why the deadline cannot bound it.
+            if let Some(failure) = guard.observe(&item) {
+                // The pull-based adapter stream is the request-local
+                // authority. Dropping it terminates adapter work without
+                // touching the attempt cancellation authority.
+                drop(stream);
+                let error = self.settle_generation_anomaly(assembler, failure)?;
+                return Ok(StreamTerminal::Failed { error });
+            }
             match item {
                 ModelStreamItem::Progress(_) => {
                     // Progress is provider-derived execution state only. It
@@ -3838,8 +4036,20 @@ impl<'a> AgentExecution<'a> {
                         });
                     }
                     match &event {
-                        ModelEvent::Completed { .. } => {
-                            stream_terminal = Some(StreamTerminal::Completed);
+                        ModelEvent::Completed { finish_reason, .. } => {
+                            // A provider that stopped at its own token limit
+                            // is stating that the generation is incomplete.
+                            // Fail closed here, before the terminal can reach
+                            // the canonical commit path, rather than
+                            // committing a truncated assistant turn.
+                            if let Some(failure) =
+                                GenerationGuard::classify_completion(finish_reason)
+                            {
+                                let error = self.settle_generation_anomaly(assembler, failure)?;
+                                stream_terminal = Some(StreamTerminal::Failed { error });
+                            } else {
+                                stream_terminal = Some(StreamTerminal::Completed);
+                            }
                         }
                         ModelEvent::Failed { error } => {
                             self.settle_model_request_failure(assembler, error)?;
@@ -4898,26 +5108,23 @@ impl<'a> AgentExecution<'a> {
             effective_system_prompt.push_str("[runtime Workflow output feedback]\n");
             effective_system_prompt.push_str(&feedback);
         }
-        // The corrective hint of the pending malformed-proposal corrective
-        // generation. It is *borrowed*, never taken: building a request is
-        // not the lifetime boundary of this state. Every actual request that
-        // realizes the corrective generation — the first one, a transient
-        // retry of it, a post-compaction retry of it — must carry the same
-        // hint, and the state is cleared only when that generation resolves
-        // or the logical step ends.
-        if let Some(feedback) = self.malformed_proposal_recovery.pending_hint() {
+        // The corrective hint of the pending corrective generation. It is
+        // *borrowed*, never taken: building a request is not the lifetime
+        // boundary of this state. Every actual request that realizes the
+        // corrective generation — the first one, a transient retry of it, a
+        // post-compaction retry of it — must carry the same hint, and the
+        // state is cleared only when that generation resolves or the logical
+        // step ends. The instruction is chosen by the anomaly class and is
+        // bounded, provider-independent, and request-only; it never contains
+        // the discarded generation.
+        if let Some(hint) = self.semantic_recovery.pending_hint() {
             if !effective_system_prompt.is_empty() {
                 effective_system_prompt.push('\n');
             }
-            effective_system_prompt.push_str("[runtime tool-call feedback]\n");
-            effective_system_prompt.push_str(
-                "The previous response did not produce a structurally valid tool call \
-                 and was discarded. Regenerate this step: to call a tool, emit one \
-                 structured tool call with a declared tool name and complete JSON \
-                 arguments; otherwise answer without calling a tool.",
-            );
+            effective_system_prompt.push_str("[runtime generation feedback]\n");
+            effective_system_prompt.push_str(hint.anomaly.instruction());
             effective_system_prompt.push_str("\nReason: ");
-            effective_system_prompt.push_str(feedback);
+            effective_system_prompt.push_str(&hint.reason);
         }
         ModelRequest {
             invocation: primary.invocation_config(),
@@ -5778,6 +5985,40 @@ pub(crate) mod test_sync {
 
         /// Announces that one event has been fully processed, then waits for
         /// the test to release the next provider wait.
+        pub(super) fn park(&self) {
+            self.reached.send_modify(|count| *count += 1);
+            let _ = self.release.recv();
+        }
+    }
+
+    /// A test-only control point after one rejected physical generation is
+    /// durably settled and before the logical model step decides whether a
+    /// corrective generation is authorized. Cancellation can therefore be
+    /// placed exactly between those two linearization points.
+    #[derive(Debug)]
+    pub(crate) struct GenerationAnomalyPause {
+        reached: watch::Sender<u32>,
+        release: mpsc::Receiver<()>,
+    }
+
+    impl GenerationAnomalyPause {
+        /// Creates the pause and its observation/release handles.
+        #[must_use]
+        pub(crate) fn install() -> (Self, watch::Receiver<u32>, mpsc::Sender<()>) {
+            let (reached, reached_rx) = watch::channel(0);
+            let (release_tx, release_rx) = mpsc::channel();
+            (
+                Self {
+                    reached,
+                    release: release_rx,
+                },
+                reached_rx,
+                release_tx,
+            )
+        }
+
+        /// Announces one settled rejected generation, then waits for the
+        /// test to release the recovery decision.
         pub(super) fn park(&self) {
             self.reached.send_modify(|count| *count += 1);
             let _ = self.release.recv();
@@ -7229,6 +7470,7 @@ mod tests {
                 provider_code: Some("request_too_large".to_owned()),
                 context_overflow: None,
                 malformed_tool_proposal: None,
+                generation: None,
             },
         }]]));
         let tool_runtime = tool_runtime("conv-1");
@@ -8519,6 +8761,7 @@ mod tests {
                         provider_code: None,
                         context_overflow: None,
                         malformed_tool_proposal: None,
+                        generation: None,
                     },
                 })
             }))
@@ -8697,6 +8940,7 @@ mod tests {
                 provider_code: None,
                 context_overflow: None,
                 malformed_tool_proposal: None,
+                generation: None,
             },
         }]]));
         let mut request = request(&adapter);

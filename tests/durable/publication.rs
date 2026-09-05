@@ -2496,6 +2496,7 @@ fn publication_generation_rejections_are_side_effect_free() {
                 provider_code: None,
                 context_overflow: None,
                 malformed_tool_proposal: None,
+                generation: None,
             },
             usage: None,
         },

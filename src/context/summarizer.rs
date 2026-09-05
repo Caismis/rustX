@@ -38,6 +38,7 @@ use crate::message::types::{
 use crate::model::adapter::ModelStreamItem;
 use crate::model::deadline::{ModelRequestDeadline, ModelTimeoutPolicy};
 use crate::model::event::ModelEvent;
+use crate::model::generation::{GenerationBudget, GenerationGuard};
 use crate::model::invocation::ResolvedModelInvocation;
 use crate::model::types::ModelRequest;
 use crate::runtime::cancellation::CancellationSignal;
@@ -439,6 +440,17 @@ impl ContextSummarizer for ModelBackedSummarizer {
                 self.model_timeout_policy,
                 self.monotonic_clock.now_millis(),
             );
+            // Summary generation is a model generation like any other: it can
+            // degenerate and it can stream past its output budget while
+            // remaining perfectly live. It gets the same provider-independent
+            // guard as the primary path, derived from the summary
+            // invocation's own resolved output budget, and maps the result
+            // through this module's existing summary-failure boundary
+            // instead of entering generic model retry — exactly as the
+            // shared request deadline already does.
+            let mut guard = GenerationGuard::new(GenerationBudget::for_output_tokens(
+                self.invocation.max_output_tokens(),
+            ));
             let mut stream = self
                 .invocation
                 .adapter()
@@ -474,6 +486,13 @@ impl ContextSummarizer for ModelBackedSummarizer {
                 // phase transitions. Publication/compaction work never
                 // reaches this call and therefore cannot reset a deadline.
                 deadline.observe(&item, self.monotonic_clock.now_millis());
+                if let Some(failure) = guard.observe(&item) {
+                    drop(stream);
+                    return Err(summary_failed(&format!(
+                        "summary generation was discarded: {}",
+                        failure.message()
+                    )));
+                }
                 // Malformed canonical orderings are compaction failures,
                 // never silently folded into a canonical message.
                 state.accept(&item)?;
@@ -547,7 +566,20 @@ impl ContextSummarizer for ModelBackedSummarizer {
                 Some(crate::model::finish::ModelFinishReason::ToolCalls) => {
                     return Err(summary_failed("summary generation must not request tools"));
                 }
-                _ => {}
+                // A summary truncated at the provider's token limit is not a
+                // summary: it replaces retired history with a sentence that
+                // stops mid-thought. The same fail-closed rule the Agent Loop
+                // applies before its canonical commit applies here, before
+                // compaction can commit this text.
+                Some(reason) => {
+                    if let Some(failure) = GenerationGuard::classify_completion(&reason) {
+                        return Err(summary_failed(&format!(
+                            "summary generation was discarded: {}",
+                            failure.message()
+                        )));
+                    }
+                }
+                None => {}
             }
             // An empty or whitespace-only output erases history; it is never
             // a valid summary.

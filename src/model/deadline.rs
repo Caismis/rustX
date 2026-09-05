@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use crate::model::adapter::{ModelStreamItem, ModelStreamProgress};
 use crate::model::event::ModelEvent;
+use crate::model::generation::ModelTimeoutPhase;
 
 /// The finite response-start timeout used when a runtime configuration does
 /// not provide another value.
@@ -111,6 +112,21 @@ pub enum ModelDeadlinePhase {
     Streaming,
     /// A terminal event transferred deadline ownership away.
     Terminal,
+}
+
+impl ModelDeadlinePhase {
+    /// The typed liveness contract this phase violates when it expires.
+    ///
+    /// [`Self::Terminal`] owns no deadline, so it can never expire; the
+    /// mapping reports that structurally instead of inventing a phase name.
+    #[must_use]
+    pub const fn timeout_phase(self) -> Option<ModelTimeoutPhase> {
+        match self {
+            Self::AwaitingGeneration => Some(ModelTimeoutPhase::ResponseStart),
+            Self::Streaming => Some(ModelTimeoutPhase::StreamIdle),
+            Self::Terminal => None,
+        }
+    }
 }
 
 /// The narrow request-local deadline state machine shared by model paths.
@@ -301,6 +317,7 @@ mod tests {
                     provider_code: None,
                     context_overflow: None,
                     malformed_tool_proposal: None,
+                    generation: None,
                 },
             })),
             ModelProgress::Terminal

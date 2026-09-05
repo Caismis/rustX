@@ -179,6 +179,7 @@ fn overflow_turn() -> Vec<FakeStep> {
                 provider_code: None,
                 context_overflow: None,
                 malformed_tool_proposal: None,
+                generation: None,
             },
         }),
     ]
@@ -1098,6 +1099,7 @@ async fn session_summary_mode_freezes_the_attempt_summary_model_against_mid_atte
                     provider_code: None,
                     context_overflow: None,
                     malformed_tool_proposal: None,
+                    generation: None,
                 },
             }),
         ],

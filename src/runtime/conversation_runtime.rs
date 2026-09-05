@@ -8199,6 +8199,7 @@ mod tests {
                     provider_code: None,
                     context_overflow: None,
                     malformed_tool_proposal: None,
+                    generation: None,
                 },
             }),
         ];
@@ -13576,6 +13577,7 @@ mod tests {
                     provider_code: None,
                     context_overflow: None,
                     malformed_tool_proposal: None,
+                    generation: None,
                 },
             }),
         ];
@@ -15990,6 +15992,7 @@ mod tests {
                     provider_code: None,
                     context_overflow: None,
                     malformed_tool_proposal: None,
+                    generation: None,
                 },
             }),
         ];

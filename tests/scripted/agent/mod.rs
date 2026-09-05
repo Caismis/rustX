@@ -17,6 +17,7 @@
 mod carryover;
 mod deadlines;
 mod execution;
+mod generation_safety;
 mod lifecycle;
 mod malformed_tool_proposal;
 mod publication;

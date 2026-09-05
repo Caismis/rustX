@@ -1093,6 +1093,7 @@ fn failed_model_request_before_terminal_is_not_retried() {
                         provider_code: None,
                         context_overflow: None,
                         malformed_tool_proposal: None,
+                        generation: None,
                     },
                     usage: None,
                 },

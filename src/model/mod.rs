@@ -16,6 +16,7 @@ pub mod error;
 pub mod event;
 pub mod finish;
 pub mod frozen;
+pub mod generation;
 pub mod input;
 pub mod invocation;
 pub mod session;
@@ -47,6 +48,13 @@ pub use event::ModelEvent;
 pub use finish::ModelFinishReason;
 pub use frozen::{
     FrozenModelInvocation, FrozenModelSpec, FrozenProviderBinding, FrozenSummaryModel,
+};
+pub use generation::{
+    DEGENERATION_MAX_PERIOD_BYTES, DEGENERATION_MIN_PERIOD_BYTES, DEGENERATION_MIN_REPETITIONS,
+    DEGENERATION_MIN_SPAN_BYTES, DEGENERATION_SCAN_STRIDE_BYTES, GenerationBudget,
+    GenerationBudgetKind, GenerationChannel, GenerationFailure, GenerationGuard, ModelTimeoutPhase,
+    RUNTIME_GENERATED_BYTES_PER_OUTPUT_TOKEN, RUNTIME_MIN_GENERATED_BYTES,
+    RUNTIME_REASONING_BYTE_SHARE_DENOMINATOR, RUNTIME_REASONING_BYTE_SHARE_NUMERATOR,
 };
 pub use input::{
     CarryoverBlockKind, CarryoverDetailLevel, CarryoverOmissionCounts, ModelInputMessage,

@@ -446,6 +446,67 @@ async fn started_and_silence_reaches_response_start_timeout() {
     assert_eq!(failures[0].0, audit.snapshot_history()[0].request_id);
 }
 
+/// A stream that never produces qualifying progress terminates through the
+/// idle watchdog, and the phase it violated crosses as a **typed** fact.
+///
+/// Liveness is a different contract from generation integrity and generation
+/// budget (Issue #203): a deadline failure keeps its transient disposition
+/// and the existing transport retry budget, and it carries a typed phase so
+/// no consumer has to read a diagnostic message to learn which liveness
+/// contract expired.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_timeout_carries_its_phase_as_a_typed_fact() {
+    // No qualifying progress at all: the response-start phase expires.
+    let (audit, _) = Box::pin(run_first_timeout(
+        "attempt-135-typed-start",
+        vec![started(), usage(3, 1)],
+        timeout_policy(10, 20),
+    ))
+    .await;
+    let failure = audit
+        .event_history
+        .iter()
+        .find_map(|event| match event {
+            RuntimeEvent::ModelRequestFailed { error, .. } => Some(error.clone()),
+            _ => None,
+        })
+        .expect("one durable timeout failure");
+    assert_eq!(failure.kind, rustx::model::ModelErrorKind::Timeout);
+    assert_eq!(
+        failure.generation,
+        Some(rustx::model::GenerationFailure::Timeout {
+            phase: rustx::model::ModelTimeoutPhase::ResponseStart,
+        })
+    );
+    assert_eq!(
+        failure.retry_disposition,
+        rustx::model::ModelRetryDisposition::Transient,
+        "transport liveness keeps the existing transient retry architecture"
+    );
+
+    // Generation began and then stopped: the stream-idle phase expires.
+    let (audit, _) = Box::pin(run_first_timeout(
+        "attempt-135-typed-idle",
+        vec![started(), text("partial")],
+        timeout_policy(100, 10),
+    ))
+    .await;
+    let failure = audit
+        .event_history
+        .iter()
+        .find_map(|event| match event {
+            RuntimeEvent::ModelRequestFailed { error, .. } => Some(error.clone()),
+            _ => None,
+        })
+        .expect("one durable timeout failure");
+    assert_eq!(
+        failure.generation,
+        Some(rustx::model::GenerationFailure::Timeout {
+            phase: rustx::model::ModelTimeoutPhase::StreamIdle,
+        })
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn early_usage_and_continuation_still_reach_response_start_timeout() {
     for (attempt, event) in [
@@ -1041,6 +1102,66 @@ async fn model_backed_summarizer_uses_the_same_deadlines_without_generic_retry()
         controller.await.expect("summary controller completes");
         assert_eq!(error.kind, rustx::context::ContextErrorKind::SummaryFailed);
         assert!(error.message.contains(expected));
+        assert_eq!(model.requests().len(), 1, "summarizer has no generic retry");
+    }
+}
+
+/// The model-backed summarizer is a shared consumer of the model plane, so
+/// it carries the same generation-safety guard as the primary path — and maps
+/// the result through its own summary-failure boundary rather than entering
+/// generic model retry, exactly as it already does for a deadline.
+///
+/// A degenerate or truncated summary is the dangerous case: compaction
+/// *replaces* retired history, so committing a repetition loop or a sentence
+/// that stops mid-word would destroy the conversation it was meant to
+/// preserve.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn model_backed_summarizer_discards_a_degenerate_or_truncated_summary() {
+    let mut degenerate = vec![FakeStep::Emit(started())];
+    for _ in 0..200 {
+        degenerate.push(FakeStep::Emit(text("SUMMARYLOOP ")));
+    }
+    degenerate.push(FakeStep::Emit(completed()));
+    let truncated = vec![
+        FakeStep::Emit(started()),
+        FakeStep::Emit(text("## Goal\n\nthe summary stops mid-")),
+        FakeStep::Emit(ModelEvent::Completed {
+            finish_reason: ModelFinishReason::Length,
+            usage: None,
+        }),
+    ];
+
+    for (script, expected) in [
+        (degenerate, "degenerated"),
+        (
+            truncated,
+            "terminated the generation at its total output limit",
+        ),
+    ] {
+        let model = fake_model(vec![script]);
+        let summarizer = ModelBackedSummarizer::new(
+            summary_invocation(&model),
+            timeout_policy(1_000, 1_000),
+            Arc::new(ManualMonotonicClock::new()) as Arc<dyn MonotonicClock>,
+        );
+        let error = tokio::time::timeout(
+            Duration::from_secs(2),
+            summarizer.summarize(
+                SummaryRequest {
+                    retired: vec![user("retired", "old")],
+                },
+                rustx::runtime::CancellationSignal::new(),
+            ),
+        )
+        .await
+        .expect("the summary must settle without wall-clock waiting")
+        .expect_err("a discarded summary generation is a compaction failure");
+        assert_eq!(error.kind, rustx::context::ContextErrorKind::SummaryFailed);
+        assert!(
+            error.message.contains(expected),
+            "unexpected summary failure: {}",
+            error.message
+        );
         assert_eq!(model.requests().len(), 1, "summarizer has no generic retry");
     }
 }

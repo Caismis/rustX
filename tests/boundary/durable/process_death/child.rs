@@ -652,6 +652,7 @@ fn unresolved_output_turn() -> Vec<FakeStep> {
                 provider_code: None,
                 context_overflow: None,
                 malformed_tool_proposal: None,
+                generation: None,
             },
         }),
     ]
@@ -672,6 +673,7 @@ fn retryable_unresolved_output_turn() -> Vec<FakeStep> {
                 provider_code: None,
                 context_overflow: None,
                 malformed_tool_proposal: None,
+                generation: None,
             },
         }),
     ]

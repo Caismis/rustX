@@ -265,6 +265,7 @@ fn cancelled_error() -> ModelError {
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        generation: None,
     }
 }
 
@@ -1091,6 +1092,7 @@ impl ResponsesNormalizer {
                     provider_code: Some(reason.to_owned()),
                     context_overflow: None,
                     malformed_tool_proposal: None,
+                    generation: None,
                 });
             }
             match reason {
@@ -1604,6 +1606,7 @@ fn provider_error(message: String) -> ModelError {
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        generation: None,
     }
 }
 
@@ -1665,6 +1668,7 @@ fn responses_stream_error(event: &serde_json::Value) -> ModelError {
         provider_code: provider_code.map(str::to_owned),
         context_overflow: None,
         malformed_tool_proposal: None,
+        generation: None,
     }
     .normalized()
 }
@@ -1678,6 +1682,7 @@ fn invalid_request(message: &str) -> ModelError {
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        generation: None,
     }
 }
 
@@ -1691,6 +1696,7 @@ fn unsupported(message: impl Into<String>) -> ModelError {
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        generation: None,
     }
 }
 

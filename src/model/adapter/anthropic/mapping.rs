@@ -142,6 +142,7 @@ pub(crate) fn normalize_http_error(
         provider_code,
         context_overflow: None,
         malformed_tool_proposal: None,
+        generation: None,
     }
     .normalized()
 }
@@ -181,9 +182,15 @@ fn http_retry_disposition(
         | ModelErrorKind::ContextWindowExceeded
         | ModelErrorKind::Cancelled
         | ModelErrorKind::Transport
-        // A malformed tool proposal is a generation defect with its own
-        // bounded Agent-Loop recovery; it never joins the transient budget.
-        | ModelErrorKind::MalformedToolProposal => ModelRetryDisposition::Never,
+        // Generation defects — a malformed tool proposal, a degenerate
+        // generation, an exhausted generation budget — have their own
+        // bounded Agent-Loop semantic recovery and never join the transient
+        // budget. The last two are runtime-owned classifications an adapter
+        // never produces from provider evidence; the arm exists so the
+        // contract is stated in one place rather than by a wildcard.
+        | ModelErrorKind::MalformedToolProposal
+        | ModelErrorKind::GenerationDegenerated
+        | ModelErrorKind::GenerationBudgetExceeded => ModelRetryDisposition::Never,
     }
 }
 
@@ -341,6 +348,7 @@ pub(crate) fn translate_request(
             provider_code: None,
             context_overflow: None,
             malformed_tool_proposal: None,
+            generation: None,
         });
     }
     let tools = translate_tools(&request.tools);
@@ -361,6 +369,7 @@ pub(crate) fn translate_request(
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        generation: None,
     })?;
     finalize_provider_request(
         value,
@@ -470,6 +479,7 @@ fn translate_messages(
             provider_code: None,
             context_overflow: None,
             malformed_tool_proposal: None,
+            generation: None,
         });
     }
     Ok((system, messages))
@@ -641,6 +651,7 @@ fn invalid_request(message: &str) -> ModelError {
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        generation: None,
     }
 }
 
@@ -653,6 +664,7 @@ fn unsupported(message: &str) -> ModelError {
         provider_code: None,
         context_overflow: None,
         malformed_tool_proposal: None,
+        generation: None,
     }
 }
 
