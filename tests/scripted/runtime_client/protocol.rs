@@ -361,16 +361,30 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         incompatible,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 15,
-            requested: 16,
+            supported: 16,
+            requested: 17,
         })
     ));
     let old_protocol = host.attach(7);
     assert!(matches!(
         old_protocol,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 15,
+            supported: 16,
             requested: 7,
+        })
+    ));
+    // v15 carried the pre-#202 tool status vocabulary: `interrupted` with no
+    // bounded `detail`, and a `timed_out` that covered deadline expiry
+    // whether or not terminal settlement was proven. Issue #202 replaced
+    // that vocabulary under v16, so a v15 client is refused rather than
+    // served a projection it would misread. There is no v15 -> v16
+    // conversion.
+    let interrupted_status = host.attach(15);
+    assert!(matches!(
+        interrupted_status,
+        Err(RuntimeClientError::UnsupportedProtocolVersion {
+            supported: 16,
+            requested: 15,
         })
     ));
     // v14 is the pre-#190 contract: it already carries Issue #187's
@@ -378,12 +392,25 @@ async fn attachment_request_correlation_and_version_negotiation() {
     // The v15 disposal/resource shape has no v14 conversion path, so the
     // older client is refused rather than served a projection it would
     // misread.
-    let latest_only_status = host.attach(14);
+    let pre_disposal = host.attach(14);
+    assert!(matches!(
+        pre_disposal,
+        Err(RuntimeClientError::UnsupportedProtocolVersion {
+            supported: 16,
+            requested: 14,
+        })
+    ));
+    // v13 carried Issue #187's workspace authority projection together with
+    // the pre-#194 latest-only Agent Status shape (`status`, no published
+    // placement, no window transition). Issue #194 replaced that shape under
+    // v14, so a v13 client is refused rather than served a projection it
+    // would misread. There is no v13 -> v14 conversion.
+    let latest_only_status = host.attach(13);
     assert!(matches!(
         latest_only_status,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 15,
-            requested: 14,
+            supported: 16,
+            requested: 13,
         })
     ));
     // v6 carried the obsolete profile-shaped subagent projection (Issue
@@ -392,7 +419,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         profile_shaped,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 15,
+            supported: 16,
             requested: 6,
         })
     ));
@@ -404,7 +431,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_workspace_boundary,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 15,
+            supported: 16,
             requested: 12,
         })
     ));
@@ -512,10 +539,10 @@ async fn attachment_raii_drop_detaches() {
 /// `tests/fixtures/runtime-client/*.json` fixtures the TUI protocol mirror
 /// is validated against. This is the cross-language regression for the
 /// Issue #187 wire shape, carried into v15 with the authoritative retained
-/// handoff identity fields: if either side drifts
+/// handoff identity fields and unchanged into v16: if either side drifts
 /// back to the pre-#187 flat `workspace`/`isolated` schema, or Issue #190
-/// silently drops a workspace field, one of the two fixture
-/// assertions fails.
+/// silently drops a workspace field, or the Issue #202 renumbering drops
+/// one, one of the two fixture assertions fails.
 #[test]
 fn v15_workspace_wire_shape_matches_the_shared_fixtures() {
     let shared = RuntimeClientSubagentWorkspace {

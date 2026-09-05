@@ -10,7 +10,8 @@
  * schema, or this mirror did, one side fails — the typecheck pins the
  * declaration, the deep equality pins the runtime bytes. The Issue #187
  * workspace authority shape is carried into v15 with the explicit
- * post-terminal resource lifecycle.
+ * post-terminal resource lifecycle and unchanged into v16; the Issue #202
+ * renumbering (tool outcome certainty) must not drop a field from it.
  */
 
 import assert from "node:assert/strict";

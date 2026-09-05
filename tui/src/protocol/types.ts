@@ -24,15 +24,18 @@
  */
 
 /**
- * Version 15 adds the retained-workspace disposal request/result, the
- * unresolved-preservation resource state, and the pending partial-settlement
- * outcome. Version 14 adds the Agent Status contextual
- * annotation projection: the
- * snapshot carries the bounded composition window `statuses` instead of a
- * latest-only `status`, each status opportunity carries the durable identity
- * it was established against, and `agent_status_composed` carries the window
- * transition — admission plus eviction — rather than only the new
- * composition. It retains version 13's Issue #187 subagent workspace
+ * Version 16 carries Issue #202's explicit tool outcome certainty: tool
+ * status `interrupted` becomes `outcome_unknown` with a bounded `detail`;
+ * `timed_out` means proven terminal settlement; older schemas are not
+ * decoded. Version 15 adds the retained-workspace disposal request/result,
+ * the unresolved-preservation resource state, and the pending
+ * partial-settlement outcome. Version 14 adds the Agent Status contextual
+ * annotation projection: the snapshot carries the bounded composition window
+ * `statuses` instead of a latest-only `status`, each status opportunity
+ * carries the durable identity it was established against, and
+ * `agent_status_composed` carries the window transition — admission plus
+ * eviction — rather than only the new composition. It retains version 13's
+ * Issue #187 subagent workspace
  * representation, which separates logical child project authority
  * (`logical_workspace`) from physical Git worktree ownership
  * (`isolation.git_worktree` facts and the handoff's
@@ -40,7 +43,7 @@
  * version 11's subagent activity projection; and version 9's closed
  * `interrupted` lifecycle vocabulary. Older schemas are not decoded.
  */
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 15;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 16;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -228,8 +231,14 @@ export type ToolExecutionStatus =
   | { type: "failed"; error: string }
   | { type: "denied"; reason: string }
   | { type: "cancelled"; reason: CancellationReason; phase: ToolCancellationPhase }
+  // `timed_out` means the deadline expired *and* terminal settlement was
+  // proven; a deadline expiry without proven settlement is `outcome_unknown`.
   | { type: "timed_out" }
-  | { type: "interrupted" };
+  // The execution crossed the external-effect frontier but the runtime could
+  // not establish the final external outcome: it may have partially or fully
+  // completed. `detail` is bounded producer-owned prose. This is not a known
+  // failure and is never rendered as one.
+  | { type: "outcome_unknown"; detail: string };
 
 export type ToolResultContent =
   | ({ type: "text" } & TextBlock)
@@ -285,9 +294,9 @@ export type ToolReplayPolicy = "never" | "idempotent";
  * specialized presentation renderer — the reason a Bash call reads as
  * `$ cargo test --all` instead of argument JSON. It may never decide whether
  * a call is running, succeeded, failed, was denied, cancelled, timed out or
- * interrupted, may never change what is executed or how, and may never alter
- * approval, concurrency, or replay behaviour. Those are Rust-owned and reach
- * the client only as published facts.
+ * of unknown outcome, may never change what is executed or how, and may never
+ * alter approval, concurrency, or replay behaviour. Those are Rust-owned and
+ * reach the client only as published facts.
  */
 export type ToolOrigin = "builtin" | { mcp: { server_id: McpServerId } };
 

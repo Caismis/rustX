@@ -73,24 +73,50 @@ describe("runtime-owned outcomes", () => {
         /cancelled \(user_requested, during_execution\)/,
       ],
       [{ status: { type: "timed_out" } }, /timed out/],
-      [{ status: { type: "interrupted" } }, /interrupted \(outcome unknown\)/],
+      [
+        { status: { type: "outcome_unknown", detail: "process vanished" } },
+        /outcome unknown/,
+      ],
     ];
     for (const [result, expected] of cases) {
       assert.match(card({ lifecycle: settled(result) }), expected);
     }
   });
 
-  it("never reads a status out of the output text", () => {
-    // Output that says "ok" under an interrupted settlement is still
-    // interrupted; output that says "error" under a success is still ok.
-    const interrupted = card({
+  it("keeps an unknown outcome distinct from a known failure, detail and all", () => {
+    const unknown = card({
       lifecycle: settled({
-        status: { type: "interrupted" },
+        status: {
+          type: "outcome_unknown",
+          detail: "worker exited before settlement was recorded",
+        },
+      }),
+    });
+    // The header names the settlement as unknown, never as a failure, and
+    // the bounded detail lands in the reason band like a denial's prose.
+    assert.match(unknown, /outcome unknown/);
+    assert.match(unknown, /worker exited before settlement was recorded/);
+    assert.ok(!/failed/.test(unknown));
+    assert.ok(!/interrupted/.test(unknown));
+
+    const failed = card({
+      lifecycle: settled({ status: { type: "failed", error: "boom" } }),
+    });
+    assert.match(failed, /failed/);
+    assert.ok(!/outcome unknown/.test(failed));
+  });
+
+  it("never reads a status out of the output text", () => {
+    // Output that says "ok" under an outcome-unknown settlement is still of
+    // unknown outcome; output that says "error" under a success is still ok.
+    const unknown = card({
+      lifecycle: settled({
+        status: { type: "outcome_unknown", detail: "settlement not recorded" },
         content: [{ type: "text", text: "test result: ok. 842 passed" }],
       }),
     });
-    assert.match(interrupted, /interrupted \(outcome unknown\)/);
-    assert.ok(!/(^|\s)ok(\s|$)/.test(interrupted.split("\n")[0] ?? ""));
+    assert.match(unknown, /outcome unknown/);
+    assert.ok(!/(^|\s)ok(\s|$)/.test(unknown.split("\n")[0] ?? ""));
 
     const success = card({
       lifecycle: settled({
