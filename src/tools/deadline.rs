@@ -48,20 +48,30 @@ pub const DEFAULT_TOOL_HARD_DEADLINE: Duration = Duration::from_mins(2);
 /// This is not a second execution deadline and its expiry is never
 /// `TimedOut` — and it is never settlement evidence: the settlement control
 /// plane is the normal settlement mechanism and is awaited without a
-/// timeout. The guard exists ONLY as protection against a broken executor
-/// whose settlement plane never returns after observing cancellation.
-/// Conforming executors settle promptly inside their own bounded physical
-/// ladders (for example Bash's process-group kill, wait, and reap, bounded
-/// well below this window).
+/// timeout. The guard exists ONLY as liveness protection against a broken
+/// executor whose settlement plane never returns after observing
+/// cancellation. Conforming executors settle promptly inside their own
+/// bounded physical ladders (for example Bash's process-group kill, wait,
+/// and reap, bounded well below this window).
 ///
-/// Guard expiry is a settlement control-plane FAILURE: it never implies the
-/// physical operation stopped. On that exceptional path the lifecycle
-/// commits `OutcomeUnknown` and drops the handle — which, for
-/// [`crate::tools::executor::ToolExecutionHandle::settled_by_operation`],
-/// drops the operation future the hung settlement plane had taken;
-/// destructors of a contract-violating executor are not a cleanup guarantee,
-/// just the end of runtime ownership — and the closed call slot guarantees
-/// no late executor state can publish canonical facts.
+/// Guard expiry is a settlement control-plane FAILURE and means exactly one
+/// thing: the executor violated the settlement contract. It never implies
+/// the physical operation stopped, that local cleanup completed, or that
+/// remote termination is known or unknown for a protocol reason. On that
+/// exceptional path the lifecycle commits `OutcomeUnknown`, journals the
+/// typed [`crate::events::types::RuntimeEvent::ToolExecutionSettlementControlFailed`]
+/// fact (never `ToolExecutionSettlementObserved` — no executor evidence was
+/// observed), and drops the handle. For
+/// [`crate::tools::executor::ToolExecutionHandle::settled_by_operation`]
+/// dropping the handle drops the settlement future, which owns the
+/// operation future: all rustX-owned local execution ownership of a
+/// conforming executor is consumed by that drop, because a conforming
+/// executor never spawns unmanaged local tasks or processes outside its
+/// handle futures. A contract-violating executor that still spawned
+/// unmanaged local ownership remains the executor's own bug — the runtime
+/// cannot reclaim what the executor detached from the handle, and the
+/// closed call slot guarantees no late executor state can publish canonical
+/// facts.
 pub const TOOL_SETTLEMENT_CONTROL_GUARD: Duration = Duration::from_secs(30);
 
 /// The immutable execution-liveness policy of one runtime.
@@ -199,18 +209,21 @@ pub enum ToolCancellationCause {
 /// This is the journaled form of the executor's typed
 /// [`crate::tools::executor::ToolSettlement`] evidence: `Confirmed` records
 /// executor-proven physical terminality, `Unconfirmed` records that the
-/// executor consumed its local operation ownership while terminality past
-/// the external-effect frontier stayed unprovable — including the guard
-/// case, where a broken executor's settlement control plane never returned
-/// (a settlement-contract violation, never proof about the physical
-/// operation).
+/// executor's settlement authority consumed/reclaimed all rustX-owned local
+/// execution ownership while terminality past the external-effect frontier
+/// stayed unprovable. It is journaled only when the executor's settlement
+/// control plane actually returned. A settlement authority that never
+/// returned is a settlement control-plane failure and is journaled through
+/// its own typed fact
+/// ([`crate::events::types::RuntimeEvent::ToolExecutionSettlementControlFailed`]),
+/// never as `Unconfirmed` certainty.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolSettlementCertainty {
     /// The executor proved its physical operation terminal.
     Confirmed,
-    /// Physical terminality past the external-effect frontier could not be
-    /// proven.
+    /// Local rustX execution ownership fully settled, but physical
+    /// terminality past the external-effect frontier could not be proven.
     Unconfirmed,
 }
 

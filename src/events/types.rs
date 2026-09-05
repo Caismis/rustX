@@ -416,14 +416,17 @@ pub enum RuntimeEvent {
     /// The settlement authority of a cancelled foreground tool execution
     /// returned typed certainty about physical terminality (Issue #204).
     ///
-    /// This is the executor's own settlement evidence: `Confirmed` records
-    /// executor-proven physical terminality, `Unconfirmed` records that
-    /// terminality past the external-effect frontier stayed unprovable
-    /// (including the guard case of a broken executor whose settlement
-    /// control plane never returned — a settlement-contract failure, never
-    /// proof the operation stopped). The canonical result it selected
-    /// arrives with the call's terminal
-    /// [`RuntimeEvent::ToolExecutionCompleted`].
+    /// This is the executor's own settlement evidence and nothing else:
+    /// `Confirmed` records executor-proven physical terminality,
+    /// `Unconfirmed` records that the executor's settlement authority
+    /// consumed/reclaimed all rustX-owned local execution ownership while
+    /// terminality past the external-effect frontier stayed unprovable. It
+    /// is emitted exactly when the executor's settlement control plane
+    /// returned — never when it did not: a settlement authority that never
+    /// returned is journaled as
+    /// [`RuntimeEvent::ToolExecutionSettlementControlFailed`] instead. The
+    /// canonical result the evidence selected arrives with the call's
+    /// terminal [`RuntimeEvent::ToolExecutionCompleted`].
     ///
     /// Emitted by the foreground generic lifecycle only.
     ToolExecutionSettlementObserved {
@@ -433,6 +436,31 @@ pub enum RuntimeEvent {
         tool_id: ToolId,
         /// The observed certainty of the physical settlement.
         certainty: crate::tools::deadline::ToolSettlementCertainty,
+    },
+    /// The settlement control plane of a cancelled foreground tool
+    /// execution violated its contract: the executor's settlement authority
+    /// never returned within [`TOOL_SETTLEMENT_CONTROL_GUARD`] after the
+    /// cancellation request (Issue #204).
+    ///
+    /// This is a lifecycle-generated fact, never executor settlement
+    /// evidence: it means only that the executor violated the settlement
+    /// contract. It does not mean the physical operation stopped, that
+    /// local cleanup completed, or that remote termination is known or
+    /// unknown for a protocol reason. No
+    /// [`RuntimeEvent::ToolExecutionSettlementObserved`] is emitted on this
+    /// path; the canonical `OutcomeUnknown` arrives with the call's
+    /// terminal [`RuntimeEvent::ToolExecutionCompleted`].
+    ///
+    /// Emitted by the foreground generic lifecycle only.
+    ///
+    /// [`TOOL_SETTLEMENT_CONTROL_GUARD`]: crate::tools::deadline::TOOL_SETTLEMENT_CONTROL_GUARD
+    ToolExecutionSettlementControlFailed {
+        /// Identity of the executing tool call.
+        tool_call_id: ToolCallId,
+        /// Identity of the executed tool.
+        tool_id: ToolId,
+        /// The lifecycle's record of the settlement-contract violation.
+        reason: String,
     },
     /// Tool execution finished and produced a normalized result.
     ToolExecutionCompleted {

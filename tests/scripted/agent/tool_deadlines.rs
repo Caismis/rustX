@@ -33,7 +33,8 @@
 
 use super::super::{common, support};
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
@@ -314,16 +315,35 @@ impl ToolExecutor for DeadlineProbeTool {
 /// settlement plane driving it never returns either, however long the
 /// lifecycle waits and whatever the release gate later does. Without
 /// cancellation it settles normally once released.
+///
+/// The operation holds a drop guard flipping `operation_dropped`: the
+/// fixture keeps all of its local ownership inside the handle's futures
+/// (the `settled_by_operation` contract), so when the settlement
+/// control-plane guard fires and the lifecycle drops the handle, the drop
+/// of the hung settlement future provably consumes the operation future —
+/// the real ownership guarantee behind the guard path.
 struct UncooperativeTool {
     result: ToolExecutionResult,
     release: watch::Sender<bool>,
     started: watch::Sender<bool>,
     cancel_observed: watch::Sender<bool>,
+    operation_dropped: Arc<AtomicBool>,
+}
+
+/// Flips the shared flag when the owning operation future is dropped.
+struct OperationDropGuard(Arc<AtomicBool>);
+
+impl Drop for OperationDropGuard {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
 }
 
 impl UncooperativeTool {
     /// Registers the tool and returns its controller handles: start and
-    /// cancellation observation receivers plus the release gate.
+    /// cancellation observation receivers, the release gate, and the
+    /// operation-drop flag.
+    #[allow(clippy::type_complexity)] // one test-fixture constructor tuple
     fn register(
         registry: &mut ToolRegistry,
         name: &str,
@@ -333,17 +353,21 @@ impl UncooperativeTool {
         watch::Receiver<bool>,
         watch::Receiver<bool>,
         watch::Sender<bool>,
+        Arc<AtomicBool>,
     ) {
+        let operation_dropped = Arc::new(AtomicBool::new(false));
         let tool = Self {
             result,
             release: watch::Sender::new(false),
             started: watch::Sender::new(false),
             cancel_observed: watch::Sender::new(false),
+            operation_dropped: operation_dropped.clone(),
         };
         let handles = (
             tool.started.subscribe(),
             tool.cancel_observed.subscribe(),
             tool.release.clone(),
+            operation_dropped,
         );
         registry
             .register(
@@ -367,8 +391,12 @@ impl ToolExecutor for UncooperativeTool {
         context: ToolExecutionContext<'a>,
     ) -> ToolExecutionHandle<'a> {
         let cancellation = context.cancellation.clone();
+        let drop_guard = OperationDropGuard(self.operation_dropped.clone());
         ToolExecutionHandle::settled_by_operation(
             Box::pin(async move {
+                // The operation future owns this guard: dropping the
+                // operation drops the guard.
+                let _drop_guard = drop_guard;
                 self.started.send_replace(true);
                 let mut released = self.release.subscribe();
                 tokio::select! {
@@ -555,65 +583,53 @@ impl ToolExecutor for DetachedSettlementTool {
     }
 }
 
-/// A split-boundary executor whose *physical operation* is detached from
-/// the completion plane the lifecycle drives: `start` records that the
-/// dispatch crossed the external-effect frontier, spawns the physical
-/// operation as a separate task parked on the test's finish gate (it
-/// publishes `physical_finished` when it physically ends), and returns a
-/// completion plane that parks forever. The settlement plane observes the
-/// cancellation request, parks on the test's settle gate, and then reports
-/// `Unconfirmed` — the executor consumed its local operation ownership, but
-/// terminality past the external-effect frontier cannot be proven.
+/// A split-boundary executor modelling the one VALID `Unconfirmed` case —
+/// a remote external effect with fully reclaimed local ownership (the MCP
+/// shape, Issue #204): `start` records that the dispatch crossed the
+/// external-effect frontier and returns a completion plane that parks
+/// forever. The settlement plane observes the cancellation request, parks
+/// on the test's settle gate, and then reports `Unconfirmed`.
 ///
-/// The fixture retains the physical task's `JoinHandle`: finishing and
-/// joining that residual physical ownership is the executor's own bounded
-/// cleanup contract, and the residual task can never publish canonical
-/// state — the call's slot is closed once the canonical result commits.
-struct DetachedPhysicalTool {
+/// The local-ownership invariant is structural in this fixture: the
+/// executor spawns no task, thread, or process. When the settlement plane
+/// returns, every rustX-owned local operation ownership of the execution
+/// has already settled — the only remaining uncertainty is the remote
+/// external effect, exactly what `ToolSettlement::Unconfirmed` means. The
+/// parked completion plane is an empty poller shell the lifecycle drops
+/// after settlement; dropping it abandons nothing.
+struct RemoteFrontierTool {
     started: watch::Sender<bool>,
     frontier_crossed: watch::Sender<bool>,
     cancel_observed: watch::Sender<bool>,
     settle_gate: watch::Sender<bool>,
-    physical_finish_gate: watch::Sender<bool>,
-    physical_finished: watch::Sender<bool>,
     completion_resolved: watch::Sender<bool>,
-    physical_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
-/// The controller-side handles of a registered [`DetachedPhysicalTool`].
-struct DetachedPhysicalHandles {
+/// The controller-side handles of a registered [`RemoteFrontierTool`].
+struct RemoteFrontierHandles {
     started: watch::Receiver<bool>,
     frontier_crossed: watch::Receiver<bool>,
     cancel_observed: watch::Receiver<bool>,
     settle_gate: watch::Sender<bool>,
-    physical_finish_gate: watch::Sender<bool>,
-    physical_finished: watch::Receiver<bool>,
     completion_resolved: watch::Receiver<bool>,
-    physical_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
-impl DetachedPhysicalTool {
+impl RemoteFrontierTool {
     /// Registers the tool and returns its controller handles.
-    fn register(registry: &mut ToolRegistry, name: &str, tool_id: &str) -> DetachedPhysicalHandles {
+    fn register(registry: &mut ToolRegistry, name: &str, tool_id: &str) -> RemoteFrontierHandles {
         let tool = Self {
             started: watch::Sender::new(false),
             frontier_crossed: watch::Sender::new(false),
             cancel_observed: watch::Sender::new(false),
             settle_gate: watch::Sender::new(false),
-            physical_finish_gate: watch::Sender::new(false),
-            physical_finished: watch::Sender::new(false),
             completion_resolved: watch::Sender::new(false),
-            physical_task: Arc::new(Mutex::new(None)),
         };
-        let handles = DetachedPhysicalHandles {
+        let handles = RemoteFrontierHandles {
             started: tool.started.subscribe(),
             frontier_crossed: tool.frontier_crossed.subscribe(),
             cancel_observed: tool.cancel_observed.subscribe(),
             settle_gate: tool.settle_gate.clone(),
-            physical_finish_gate: tool.physical_finish_gate.clone(),
-            physical_finished: tool.physical_finished.subscribe(),
             completion_resolved: tool.completion_resolved.subscribe(),
-            physical_task: tool.physical_task.clone(),
         };
         registry
             .register(
@@ -625,12 +641,12 @@ impl DetachedPhysicalTool {
                 ),
                 Arc::new(tool),
             )
-            .expect("detached physical tool registration");
+            .expect("remote frontier tool registration");
         handles
     }
 }
 
-impl ToolExecutor for DetachedPhysicalTool {
+impl ToolExecutor for RemoteFrontierTool {
     fn start<'a>(
         &'a self,
         _invocation: ToolInvocation,
@@ -638,24 +654,10 @@ impl ToolExecutor for DetachedPhysicalTool {
     ) -> ToolExecutionHandle<'a> {
         self.started.send_replace(true);
         // The dispatch itself crossed the external-effect frontier: from
-        // this instant the call can never be proven terminal.
+        // this instant the remote effect can never be proven terminal. No
+        // local task or process is spawned — the fixture's entire local
+        // ownership lives inside the two returned futures.
         self.frontier_crossed.send_replace(true);
-        // The physical operation is detached from the completion plane: it
-        // parks on its finish gate and publishes its own finish observation.
-        let finish_gate = self.physical_finish_gate.clone();
-        let physical_finished = self.physical_finished.clone();
-        let task = tokio::spawn(async move {
-            let mut released = finish_gate.subscribe();
-            released
-                .wait_for(|is_released| *is_released)
-                .await
-                .expect("physical finish gate stays open");
-            physical_finished.send_replace(true);
-        });
-        self.physical_task
-            .lock()
-            .expect("physical task lock")
-            .replace(task);
         let completion_resolved = self.completion_resolved.clone();
         let completion: BoxFuture<'a, ToolExecutionResult> = Box::pin(async move {
             std::future::pending::<()>().await;
@@ -672,6 +674,9 @@ impl ToolExecutor for DetachedPhysicalTool {
                 .wait_for(|is_released| *is_released)
                 .await
                 .expect("settle gate stays open");
+            // Local rustX execution ownership is fully settled — nothing
+            // local remains running. Only the remote external effect is
+            // uncertain.
             ToolSettlement::Unconfirmed {
                 detail: "the dispatched operation crossed the external-effect frontier; remote \
                          terminality cannot be proven"
@@ -772,6 +777,11 @@ fn fact_sequence_of(events: &[RuntimeEvent], call_id: &str) -> Vec<String> {
                 ToolSettlementCertainty::Confirmed => "settlement:confirmed".to_owned(),
                 ToolSettlementCertainty::Unconfirmed => "settlement:unconfirmed".to_owned(),
             }),
+            RuntimeEvent::ToolExecutionSettlementControlFailed { tool_call_id, .. }
+                if tool_call_id.as_str() == call_id =>
+            {
+                Some("settlement-control-failed".to_owned())
+            }
             RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. }
                 if tool_call_id.as_str() == call_id =>
             {
@@ -1669,23 +1679,30 @@ async fn issue204_admitted_executions_obey_their_own_frozen_policy() {
 /// settlement control plane NEVER returns after observing the cancellation
 /// request cannot block the Agent Loop. The hard deadline fires, the
 /// lifecycle requests physical cancellation, the executor provably observes
-/// it and still never settles — so the settlement control-plane guard fires
-/// (an executor settlement-contract violation, never settlement evidence)
-/// and the lifecycle commits one canonical `OutcomeUnknown` (never
-/// `TimedOut`: an unreturned settlement plane is not proven terminality). The
-/// run completes its second model turn, proving the loop stayed live, and a
-/// late release of the executor's gate cannot change the committed result.
+/// it and still never settles — so the settlement control-plane guard fires.
+/// Guard expiry is a lifecycle-detected settlement control-plane failure,
+/// never executor settlement evidence: the journal records the typed
+/// `ToolExecutionSettlementControlFailed` fact and NO
+/// `ToolExecutionSettlementObserved`, and the lifecycle commits one
+/// canonical `OutcomeUnknown` (never `TimedOut`: an unreturned settlement
+/// plane is not proven terminality). Dropping the handle then consumes the
+/// executor's remaining local ownership — the operation future is dropped,
+/// proven by its drop guard — so no rustX-owned local execution survives
+/// the guard path. The run completes its second model turn, proving the
+/// loop stayed live, and a late release of the executor's gate cannot
+/// change the committed result.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn issue204_uncooperative_executor_settles_outcome_unknown_in_finite_time() {
     let scripted = call("call-stuck", "tool-stuck", "stuck");
     let model = fake_model(tool_turn_then_stop(&[scripted]));
     let mut tools = ToolRegistry::new();
-    let (mut started, mut cancel_observed, release) = UncooperativeTool::register(
-        &mut tools,
-        "stuck",
-        "tool-stuck",
-        success_result("must never be committed"),
-    );
+    let (mut started, mut cancel_observed, release, operation_dropped) =
+        UncooperativeTool::register(
+            &mut tools,
+            "stuck",
+            "tool-stuck",
+            success_result("must never be committed"),
+        );
 
     let clock = Arc::new(ManualMonotonicClock::new());
     let controller_clock = clock.clone();
@@ -1735,10 +1752,45 @@ async fn issue204_uncooperative_executor_settles_outcome_unknown_in_finite_time(
             "started",
             "deadline:hard",
             "cancellation-requested:deadline:hard",
-            "settlement:unconfirmed",
+            "settlement-control-failed",
             "completed"
         ],
-        "one intent fact, one cancellation request, one unconfirmed          settlement fact, and exactly one terminal fact"
+        "one intent fact, one cancellation request, one typed control-plane failure, and \
+         exactly one terminal fact"
+    );
+    // The control-plane failure is type-distinct from executor evidence:
+    // the settlement authority never returned, so no
+    // ToolExecutionSettlementObserved fact exists for this call, and the
+    // one typed failure fact carries the lifecycle's violation record.
+    assert!(
+        !audit.event_history.iter().any(|event| matches!(
+            event,
+            RuntimeEvent::ToolExecutionSettlementObserved { tool_call_id, .. }
+                if tool_call_id.as_str() == "call-stuck"
+        )),
+        "no settlement was ever observed: the executor's authority never returned"
+    );
+    let control_failures: Vec<&str> = audit
+        .event_history
+        .iter()
+        .filter_map(|event| match event {
+            RuntimeEvent::ToolExecutionSettlementControlFailed {
+                tool_call_id,
+                reason,
+                ..
+            } if tool_call_id.as_str() == "call-stuck" => Some(reason.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        control_failures.len(),
+        1,
+        "exactly one typed settlement control-plane failure fact"
+    );
+    assert!(
+        control_failures[0].contains("settlement control plane did not return"),
+        "the lifecycle's contract-violation record: {}",
+        control_failures[0]
     );
     assert_eq!(
         audit
@@ -1752,6 +1804,10 @@ async fn issue204_uncooperative_executor_settles_outcome_unknown_in_finite_time(
             .count(),
         1,
         "terminal ToolExecutionCompleted exactly once — no late duplicate"
+    );
+    assert!(
+        operation_dropped.load(Ordering::Acquire),
+        "the guard path dropped the handle, consuming the executor's remaining local ownership"
     );
     assert_eq!(
         model.requests().len(),
@@ -1851,31 +1907,24 @@ async fn issue204_settlement_authority_confirms_without_physical_completion() {
     ));
 }
 
-/// P (detached physical operation, unconfirmed): the physical activity of
-/// an execution can be separate from the completion plane the lifecycle
-/// drives. The fixture dispatches its physical operation as a detached
-/// task, parks its completion plane forever, and — after the deadline's
-/// cancellation intent — its settlement plane consumes local operation
-/// ownership and reports `Unconfirmed`: terminality past the
-/// external-effect frontier cannot be proven. The loop commits one
-/// canonical `OutcomeUnknown` and stays live (the second model turn runs).
-/// Afterwards the fixture releases and joins its residual physical task —
-/// explicit executor-side cleanup ownership — and the durable journal gains
-/// NO new facts for the call: the committed terminal state is absorbing
-/// even though physical cleanup completed later.
+/// P (remote external uncertainty, the valid `Unconfirmed`): the executor's
+/// dispatch crossed the external-effect frontier (the MCP shape), and after
+/// the deadline's cancellation intent its settlement plane reports
+/// `Unconfirmed` with all rustX-owned local execution ownership already
+/// settled — the fixture spawns no task or process, so nothing local
+/// remains running. The loop commits one canonical `OutcomeUnknown` and
+/// stays live (the second model turn runs), and the committed terminal
+/// state is absorbing: no late fact can ever be published for the call.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn issue204_detached_physical_operation_settles_unconfirmed() {
+async fn issue204_remote_frontier_settlement_settles_unconfirmed() {
     let scripted = call("call-detached", "tool-detached", "detached");
     let model = fake_model(tool_turn_then_stop(&[scripted]));
     let mut tools = ToolRegistry::new();
-    let handles = DetachedPhysicalTool::register(&mut tools, "detached", "tool-detached");
+    let handles = RemoteFrontierTool::register(&mut tools, "detached", "tool-detached");
     let mut started = handles.started;
     let mut cancel_observed = handles.cancel_observed;
     let settle_gate = handles.settle_gate.clone();
-    let physical_finish_gate = handles.physical_finish_gate.clone();
-    let physical_finished = handles.physical_finished.clone();
     let completion_resolved = handles.completion_resolved.clone();
-    let physical_task = handles.physical_task.clone();
 
     let clock = Arc::new(ManualMonotonicClock::new());
     let controller_clock = clock.clone();
@@ -1957,33 +2006,10 @@ async fn issue204_detached_physical_operation_settles_unconfirmed() {
         !*completion_resolved.borrow(),
         "the completion plane never resolved"
     );
-    assert!(
-        !*physical_finished.borrow(),
-        "the residual physical operation is still parked when the call settled"
-    );
-
-    // Executor-side cleanup ownership: the residual physical task belongs
-    // to the executor (here: the fixture), never to the lifecycle. Finish
-    // it and join it explicitly.
-    physical_finish_gate.send_replace(true);
-    let physical_task = physical_task
-        .lock()
-        .expect("physical task lock")
-        .take()
-        .expect("the physical operation was dispatched exactly once");
-    tokio::time::timeout(GUARD, physical_task)
-        .await
-        .expect("the residual physical task finishes without wall-clock waiting")
-        .expect("the residual physical task joins");
-    assert!(
-        *physical_finished.borrow(),
-        "the physical operation published its own finish"
-    );
-
-    // The terminal canonical state is absorbing: physical cleanup
-    // completing later publishes no new facts for the call — no second
-    // ToolExecutionCompleted, no late progress, cancellation, or
-    // settlement fact. The closed call slot never reopens.
+    // The executor spawned no local task or process: after `Unconfirmed`
+    // no rustX-owned local execution ownership remains — only the remote
+    // external effect is uncertain. The terminal canonical state is
+    // absorbing and the journal never gains another fact for the call.
     let later = common::read_event_history(store.as_ref(), &audit.result.attempt_id);
     assert_eq!(
         fact_sequence_of(&later, "call-detached"),
@@ -1994,19 +2020,23 @@ async fn issue204_detached_physical_operation_settles_unconfirmed() {
             "settlement:unconfirmed",
             "completed"
         ],
-        "residual physical cleanup can never publish canonical facts"
+        "the settled terminal state is absorbing"
     );
 }
 
-/// Q (typed facts of the unconfirmed remote settlement): the journal
-/// evidence of an unconfirmed settlement is the exact typed variant
-/// sequence, asserted positionally — `ToolExecutionStarted`,
+/// Q (typed facts of the executor-returned `Unconfirmed`): the journal
+/// evidence of an executor-owned unconfirmed settlement is the exact typed
+/// variant sequence, asserted positionally — `ToolExecutionStarted`,
 /// `ToolExecutionDeadlineFired { Hard }`,
 /// `ToolExecutionCancellationRequested { Deadline(Hard) }`,
 /// `ToolExecutionSettlementObserved { Unconfirmed }`, and the terminal
-/// `ToolExecutionCompleted` carrying the canonical `OutcomeUnknown`. The
-/// fixture records the effect-frontier crossing at dispatch, before any
-/// parking.
+/// `ToolExecutionCompleted` carrying the canonical `OutcomeUnknown`. This
+/// path is type-distinct from the settlement control-plane failure of the
+/// uncooperative-executor cut: here the executor's settlement authority
+/// genuinely returned its evidence, so the journal records
+/// `SettlementObserved`, never `SettlementControlFailed`. The fixture
+/// records the effect-frontier crossing at dispatch, before any parking,
+/// and leaves no rustX-owned local execution behind.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn issue204_unconfirmed_remote_settlement_journals_typed_facts() {
     let scripted = call(
@@ -2017,13 +2047,11 @@ async fn issue204_unconfirmed_remote_settlement_journals_typed_facts() {
     let model = fake_model(tool_turn_then_stop(&[scripted]));
     let mut tools = ToolRegistry::new();
     let handles =
-        DetachedPhysicalTool::register(&mut tools, "remote_detached", "tool-remote-detached");
+        RemoteFrontierTool::register(&mut tools, "remote_detached", "tool-remote-detached");
     let mut started = handles.started;
     let mut frontier_crossed = handles.frontier_crossed;
     let mut cancel_observed = handles.cancel_observed;
     let settle_gate = handles.settle_gate.clone();
-    let physical_finish_gate = handles.physical_finish_gate.clone();
-    let physical_task = handles.physical_task.clone();
 
     let clock = Arc::new(ManualMonotonicClock::new());
     let controller_clock = clock.clone();
@@ -2074,6 +2102,7 @@ async fn issue204_unconfirmed_remote_settlement_journals_typed_facts() {
             | RuntimeEvent::ToolExecutionDeadlineFired { tool_call_id, .. }
             | RuntimeEvent::ToolExecutionCancellationRequested { tool_call_id, .. }
             | RuntimeEvent::ToolExecutionSettlementObserved { tool_call_id, .. }
+            | RuntimeEvent::ToolExecutionSettlementControlFailed { tool_call_id, .. }
             | RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. } => {
                 tool_call_id.as_str() == "call-remote-detached"
             }
@@ -2083,7 +2112,8 @@ async fn issue204_unconfirmed_remote_settlement_journals_typed_facts() {
     assert_eq!(
         facts.len(),
         5,
-        "start, intent, cancellation request, settlement observation, terminal — exactly once"
+        "start, intent, cancellation request, settlement observation, terminal — exactly once, \
+         and never a settlement control-plane failure on the executor-evidence path"
     );
     assert!(matches!(
         facts[0],
@@ -2115,20 +2145,6 @@ async fn issue204_unconfirmed_remote_settlement_journals_typed_facts() {
         RuntimeEvent::ToolExecutionCompleted { result, .. }
             if matches!(result.status, ToolExecutionStatus::OutcomeUnknown { .. })
     ));
-
-    // Executor-side cleanup of the residual physical ownership, exactly as
-    // in the detached-operation cut: the terminal canonical state is
-    // absorbing and the fixture joins its own leftover task.
-    physical_finish_gate.send_replace(true);
-    let physical_task = physical_task
-        .lock()
-        .expect("physical task lock")
-        .take()
-        .expect("the physical operation was dispatched exactly once");
-    tokio::time::timeout(GUARD, physical_task)
-        .await
-        .expect("the residual physical task finishes without wall-clock waiting")
-        .expect("the residual physical task joins");
 }
 
 /// N (capability gating): the configured idle-liveness window applies only

@@ -4987,11 +4987,20 @@ impl<'a> AgentExecution<'a> {
     /// The canonical `OutcomeUnknown` comes ONLY from explicit
     /// [`ToolSettlement::Unconfirmed`] evidence or from the settlement
     /// control-plane guard [`TOOL_SETTLEMENT_CONTROL_GUARD`] — never from
-    /// "the execution future did not return". Guard expiry is a settlement
-    /// control-plane failure (an executor settlement-contract violation),
-    /// not settlement evidence: the lifecycle commits `OutcomeUnknown`,
-    /// drops the handle, and the closed call slot guarantees no late
-    /// executor state can publish canonical facts.
+    /// "the execution future did not return". The two paths stay
+    /// type-distinct: executor-returned `Unconfirmed` means all rustX-owned
+    /// local execution ownership settled and only external terminality is
+    /// unprovable; guard expiry is a settlement control-plane failure (an
+    /// executor settlement-contract violation) that proves nothing about
+    /// physical execution. The journal keeps them apart:
+    /// `ToolExecutionSettlementObserved { Unconfirmed }` is emitted only for
+    /// executor-returned evidence, while guard expiry journals
+    /// `ToolExecutionSettlementControlFailed` and never a
+    /// settlement-observed fact. On the guard path the lifecycle commits
+    /// `OutcomeUnknown`, drops the handle — which for a conforming executor
+    /// consumes all remaining rustX-owned local execution ownership — and
+    /// the closed call slot guarantees no late executor state can publish
+    /// canonical facts.
     ///
     /// The winner of the arbitration freezes provenance, and proven
     /// settlement evidence then selects the canonical status: an
@@ -5161,11 +5170,14 @@ impl<'a> AgentExecution<'a> {
         };
         let mut deadline_fired = None;
         // The cancellation/settlement control-plane facts of this call: the
-        // delivered cancellation cause and the certainty the executor's
-        // settlement authority returned. Both are present exactly when a
-        // non-physical winner drove the settlement phase.
+        // delivered cancellation cause, the certainty the executor's
+        // settlement authority returned, and the settlement control-plane
+        // failure the lifecycle itself detected when the authority never
+        // returned. Exactly one of the latter two is present, and both are
+        // present only when a non-physical winner drove the settlement phase.
         let mut cancellation_requested: Option<ToolCancellationCause> = None;
         let mut settlement_certainty: Option<ToolSettlementCertainty> = None;
+        let mut settlement_control_failed: Option<String> = None;
         let result = match winner {
             ToolSettlementWinner::Physical(mut result) => {
                 if let ToolExecutionStatus::Cancelled { reason, .. } = &result.status {
@@ -5184,7 +5196,7 @@ impl<'a> AgentExecution<'a> {
             ToolSettlementWinner::Cancellation(reason) => {
                 cancellation_requested = Some(ToolCancellationCause::Attempt(reason));
                 match self.await_settlement_authority(settlement.as_mut()).await {
-                    ToolSettlement::Confirmed(mut result) => {
+                    SettlementAuthorityOutcome::Settled(ToolSettlement::Confirmed(mut result)) => {
                         settlement_certainty = Some(ToolSettlementCertainty::Confirmed);
                         result.status = match result.status {
                             // The executor proved physical cancellation
@@ -5207,13 +5219,21 @@ impl<'a> AgentExecution<'a> {
                         };
                         result
                     }
-                    // The executor consumed its local operation ownership but
-                    // could not prove terminality past the external-effect
-                    // frontier — or its settlement control plane violated the
-                    // contract and the guard fired: the canonical outcome is
-                    // unknown, not a confirmed cancellation.
-                    ToolSettlement::Unconfirmed { detail } => {
+                    // The executor's settlement authority returned: all
+                    // rustX-owned local execution ownership settled, but
+                    // terminality past the external-effect frontier is
+                    // unproven — the canonical outcome is unknown, not a
+                    // confirmed cancellation.
+                    SettlementAuthorityOutcome::Settled(ToolSettlement::Unconfirmed { detail }) => {
                         settlement_certainty = Some(ToolSettlementCertainty::Unconfirmed);
+                        unconfirmed_settlement_result(detail)
+                    }
+                    // The executor's settlement authority never returned:
+                    // a lifecycle-detected settlement-contract violation,
+                    // journaled as its own typed fact — never as observed
+                    // executor evidence.
+                    SettlementAuthorityOutcome::ControlPlaneFailed { detail } => {
+                        settlement_control_failed = Some(detail.clone());
                         unconfirmed_settlement_result(detail)
                     }
                 }
@@ -5222,7 +5242,7 @@ impl<'a> AgentExecution<'a> {
                 deadline_fired = Some(kind);
                 cancellation_requested = Some(ToolCancellationCause::Deadline(kind));
                 match self.await_settlement_authority(settlement.as_mut()).await {
-                    ToolSettlement::Confirmed(mut result) => {
+                    SettlementAuthorityOutcome::Settled(ToolSettlement::Confirmed(mut result)) => {
                         settlement_certainty = Some(ToolSettlementCertainty::Confirmed);
                         result.status = match result.status {
                             // The executor proved physical settlement after
@@ -5240,13 +5260,21 @@ impl<'a> AgentExecution<'a> {
                         };
                         result
                     }
-                    // Terminality past the external-effect frontier is
-                    // unproven — by the executor's own unconfirmed evidence or
-                    // by its settlement control plane violating the contract —
-                    // so the canonical outcome is `OutcomeUnknown`, never
-                    // `TimedOut`.
-                    ToolSettlement::Unconfirmed { detail } => {
+                    // The executor's settlement authority returned: all
+                    // rustX-owned local execution ownership settled, but
+                    // terminality past the external-effect frontier is
+                    // unproven — the canonical outcome is `OutcomeUnknown`,
+                    // never `TimedOut`.
+                    SettlementAuthorityOutcome::Settled(ToolSettlement::Unconfirmed { detail }) => {
                         settlement_certainty = Some(ToolSettlementCertainty::Unconfirmed);
+                        unconfirmed_settlement_result(detail)
+                    }
+                    // The executor's settlement authority never returned:
+                    // a lifecycle-detected settlement-contract violation,
+                    // journaled as its own typed fact — never as observed
+                    // executor evidence, and never `TimedOut`.
+                    SettlementAuthorityOutcome::ControlPlaneFailed { detail } => {
+                        settlement_control_failed = Some(detail.clone());
                         unconfirmed_settlement_result(detail)
                     }
                 }
@@ -5266,19 +5294,36 @@ impl<'a> AgentExecution<'a> {
         }
         if let Some(cause) = cancellation_requested {
             // The control-plane facts of the settlement phase: physical
-            // cancellation was actually delivered to the executor, and its
-            // settlement authority returned typed certainty.
+            // cancellation was actually delivered to the executor. Then
+            // exactly one settlement fact: the executor's own typed certainty
+            // when its settlement authority returned, or the lifecycle's
+            // settlement control-plane failure when it never did — the two
+            // are type-distinct and never collapsed.
             events.push(RuntimeEvent::ToolExecutionCancellationRequested {
                 tool_call_id: invocation.call_id.clone(),
                 tool_id: invocation.tool_id.clone(),
                 cause,
             });
-            events.push(RuntimeEvent::ToolExecutionSettlementObserved {
-                tool_call_id: invocation.call_id.clone(),
-                tool_id: invocation.tool_id.clone(),
-                certainty: settlement_certainty
-                    .expect("settlement evidence accompanies every cancellation request"),
-            });
+            match (settlement_certainty, settlement_control_failed) {
+                (Some(certainty), None) => {
+                    events.push(RuntimeEvent::ToolExecutionSettlementObserved {
+                        tool_call_id: invocation.call_id.clone(),
+                        tool_id: invocation.tool_id.clone(),
+                        certainty,
+                    });
+                }
+                (None, Some(reason)) => {
+                    events.push(RuntimeEvent::ToolExecutionSettlementControlFailed {
+                        tool_call_id: invocation.call_id.clone(),
+                        tool_id: invocation.tool_id.clone(),
+                        reason,
+                    });
+                }
+                // The settlement phase always resolves to exactly one fact.
+                _ => {
+                    unreachable!("a cancellation request settles with exactly one settlement fact")
+                }
+            }
         }
         (result, events)
     }
@@ -5288,17 +5333,24 @@ impl<'a> AgentExecution<'a> {
     ///
     /// The settlement control plane is the normal settlement mechanism and
     /// is awaited without a timeout of its own; typed evidence that arrives
-    /// (which always wins a tie with the guard's expiry) is authoritative.
-    /// [`TOOL_SETTLEMENT_CONTROL_GUARD`] exists ONLY as protection against a
-    /// broken executor whose settlement plane never returns: its expiry is a
-    /// settlement control-plane failure, never settlement evidence — it
-    /// never implies the physical operation stopped — so it reports
-    /// [`ToolSettlement::Unconfirmed`] and the caller commits
-    /// `OutcomeUnknown` and drops the handle.
+    /// (which always wins a tie with the guard's expiry) is authoritative
+    /// and returned as [`SettlementAuthorityOutcome::Settled`].
+    /// [`TOOL_SETTLEMENT_CONTROL_GUARD`] exists ONLY as liveness protection
+    /// against a broken executor whose settlement plane never returns: its
+    /// expiry is a settlement control-plane failure, never settlement
+    /// evidence — it never implies the physical operation stopped — so it
+    /// returns the lifecycle-generated
+    /// [`SettlementAuthorityOutcome::ControlPlaneFailed`], which the caller
+    /// commits as `OutcomeUnknown` and journals as its own typed fact, then
+    /// drops the handle. For a conforming
+    /// [`crate::tools::executor::ToolExecutionHandle`] that drop consumes
+    /// all rustX-owned local execution ownership: the executor never spawned
+    /// unmanaged local tasks or processes outside the handle futures, so
+    /// dropping them cancels the in-process operation itself.
     async fn await_settlement_authority(
         &self,
         settlement: impl Future<Output = ToolSettlement>,
-    ) -> ToolSettlement {
+    ) -> SettlementAuthorityOutcome {
         let guard_deadline = deadline_after(
             self.monotonic_clock.now_millis(),
             TOOL_SETTLEMENT_CONTROL_GUARD,
@@ -5307,8 +5359,8 @@ impl<'a> AgentExecution<'a> {
         tokio::pin!(guard_wait);
         tokio::select! {
             biased;
-            evidence = settlement => evidence,
-            () = guard_wait => ToolSettlement::Unconfirmed {
+            evidence = settlement => SettlementAuthorityOutcome::Settled(evidence),
+            () = guard_wait => SettlementAuthorityOutcome::ControlPlaneFailed {
                 detail: "the executor's settlement control plane did not return within the guard \
                          window after the cancellation request; this is an executor settlement-contract \
                          violation, not proof about the physical operation".to_owned(),
@@ -5944,6 +5996,30 @@ enum ToolSettlementWinner {
     Physical(ToolExecutionResult),
 }
 
+/// The lifecycle-level outcome of awaiting the executor's settlement
+/// authority (Issue #204).
+///
+/// The two variants are type-distinct facts that must never be collapsed:
+/// [`SettlementAuthorityOutcome::Settled`] carries the executor's own
+/// settlement evidence — its settlement control plane returned — while
+/// [`SettlementAuthorityOutcome::ControlPlaneFailed`] is generated by the
+/// lifecycle itself when the settlement control-plane guard expired because
+/// the executor violated its settlement contract and never returned. Both
+/// map to the canonical `OutcomeUnknown` when certainty cannot be proven,
+/// but they journal differently: only executor evidence produces
+/// `ToolExecutionSettlementObserved`; a control-plane failure produces
+/// `ToolExecutionSettlementControlFailed`.
+enum SettlementAuthorityOutcome {
+    /// The executor's settlement authority returned typed evidence.
+    Settled(ToolSettlement),
+    /// The settlement control-plane guard expired: the executor's
+    /// settlement authority never returned after the cancellation request.
+    ControlPlaneFailed {
+        /// The lifecycle's record of the settlement-contract violation.
+        detail: String,
+    },
+}
+
 /// The immutable facts of one settled call of a structurally settled batch.
 ///
 /// These are copies of exactly what was committed as canonical history, kept
@@ -6057,16 +6133,18 @@ fn cancelled_result(reason: CancellationReason) -> ToolExecutionResult {
 }
 
 /// The canonical result of an admitted call whose cancellation/deadline
-/// intent won but whose physical settlement stayed unconfirmed (Issue #204):
+/// intent won but whose physical settlement stayed unproven (Issue #204):
 /// the executor's settlement authority returned
-/// [`ToolSettlement::Unconfirmed`] — its own honest post-frontier evidence —
-/// or the settlement control-plane guard fired on a contract-violating
-/// executor.
+/// [`ToolSettlement::Unconfirmed`] — its own honest post-frontier evidence,
+/// with all rustX-owned local execution ownership already settled — or the
+/// settlement control-plane guard fired on a contract-violating executor
+/// (a lifecycle-detected failure that proves nothing about physical
+/// execution).
 ///
 /// The call crossed its executor-start frontier, so it may have crossed the
 /// external-effect frontier; with terminality unprovable the honest outcome
 /// under the Issue #202 certainty contract is `OutcomeUnknown` — never
-/// `TimedOut` (unconfirmed settlement is not "the operation stopped"),
+/// `TimedOut` (unproven settlement is not "the operation stopped"),
 /// never a fabricated cancellation, and never a fabricated failure. The
 /// detail is the evidence's own: the executor's frontier description, or the
 /// guard's contract-violation record.

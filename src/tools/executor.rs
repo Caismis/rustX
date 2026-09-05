@@ -303,11 +303,16 @@ pub enum ToolSettlement {
     /// result is that proven terminal outcome (for example Bash's killed and
     /// reaped process tree reported as `Cancelled`).
     Confirmed(ToolExecutionResult),
-    /// Cancellation was physically propagated and the executor consumed its
-    /// local operation ownership — no detached rustX-owned task or process
-    /// remains — but terminality past the external-effect frontier cannot be
-    /// proven (for example a dispatched remote MCP call). Never means "we
-    /// stopped waiting".
+    /// Cancellation was physically propagated and the executor's local rustX
+    /// execution ownership reached its terminal cleanup boundary: no
+    /// rustX-owned Tokio task, subprocess, unreaped child process, worker
+    /// task, or other executor-owned local physical activity capable of
+    /// running remains. Only an external effect beyond rustX's ownership
+    /// domain — a dispatched remote MCP call, a remote HTTP operation, the
+    /// state of an external service — may still be uncertain. Never means
+    /// "we stopped waiting": local execution ownership that is still alive
+    /// must keep the settlement plane pending until it is
+    /// reclaimed/joined/aborted.
     Unconfirmed {
         /// The executor's own description of the unprovable frontier.
         detail: String,
@@ -329,8 +334,24 @@ pub enum ToolSettlement {
 /// A settlement future must resolve after cancellation is observed:
 /// [`ToolSettlement::Confirmed`] requires the executor to have actually
 /// proven physical terminality; [`ToolSettlement::Unconfirmed`] requires the
-/// executor to have consumed/reclaimed its local operation ownership while
-/// external terminality stays unprovable.
+/// executor's local rustX execution ownership to have fully settled (no
+/// rustX-owned task or process remains) while external terminality stays
+/// unprovable.
+///
+/// All rustX-owned local physical execution of one started call lives inside
+/// the two futures of this handle: an executor must never spawn an unmanaged
+/// local task or process outside them (no detached `JoinHandle`, no child
+/// process the futures do not own). The settlement plane carries all local
+/// cleanup — kill, wait, reap, join — and stays pending until that cleanup
+/// completes. This is a real ownership guarantee, not a comment about
+/// destructors: if the lifecycle's settlement control-plane guard
+/// ([`crate::tools::deadline::TOOL_SETTLEMENT_CONTROL_GUARD`]) ever drops
+/// this handle because a broken executor's settlement plane never returned,
+/// dropping the futures consumes every local ownership a conforming executor
+/// created — with
+/// [`ToolExecutionHandle::settled_by_operation`] the hung settlement future
+/// owns the operation future, so the drop cancels the in-process operation
+/// itself.
 pub struct ToolExecutionHandle<'a> {
     /// The physical completion of the operation: the executor's terminal
     /// result when the operation runs to its natural end.
@@ -345,10 +366,15 @@ impl<'a> ToolExecutionHandle<'a> {
     /// A handle whose settlement authority is genuinely independent of the
     /// physical operation future.
     ///
-    /// An executor implementing `new` whose `settlement` reports without
-    /// consuming the physical operation must document how its residual
-    /// physical ownership is bounded and that it can never publish canonical
-    /// state (canonical authority is the Agent Loop's call slot anyway).
+    /// The split does not relax the local-ownership invariant of
+    /// [`ToolSettlement::Unconfirmed`]: a settlement plane that reports
+    /// `Unconfirmed` without driving the operation future may do so only
+    /// when the operation owns no remaining rustX-owned local execution —
+    /// the uncertainty it reports belongs to an external system beyond
+    /// rustX's ownership domain (the remote-uncertainty case, for example a
+    /// dispatched remote MCP call). Residual rustX-owned local activity
+    /// (a spawned task or process) must be reclaimed by the settlement plane
+    /// before it reports, never left running past `Unconfirmed`.
     #[must_use]
     pub fn new(
         completion: BoxFuture<'a, ToolExecutionResult>,

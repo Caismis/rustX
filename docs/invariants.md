@@ -3250,9 +3250,14 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   future is never settlement, and the lifecycle never abandons ownership
   because its deadline expired. The settlement plane returns typed
   `ToolSettlement` evidence: `Confirmed` for executor-proven physical
-  terminality, `Unconfirmed` when the executor consumed its local operation
-  ownership while terminality past the external-effect frontier stayed
-  unprovable. Executor-proven settlement after a deadline winner settles
+  terminality, `Unconfirmed` when the executor's local rustX execution
+  ownership reached its terminal cleanup boundary — no rustX-owned Tokio
+  task, subprocess, unreaped child, or worker task remains — while
+  terminality past the external-effect frontier stayed unprovable.
+  `Unconfirmed` never means "the lifecycle stopped waiting": an executor
+  whose local cleanup is still pending must keep its settlement plane
+  pending until that cleanup completes. Executor-proven settlement after a
+  deadline winner settles
   canonically as `TimedOut`; explicit `Unconfirmed` evidence settles as the
   honest `OutcomeUnknown`, and any executor-proven normal outcome survives
   untouched.
@@ -3265,9 +3270,17 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   settlement control-plane failure — an executor settlement-contract
   violation, never settlement evidence, and never proof that the physical
   operation stopped — so the canonical result is `OutcomeUnknown`, never
-  `TimedOut`. `OutcomeUnknown` comes only from explicit `Unconfirmed`
-  evidence or the guard, never from "the execution future did not return"
-  or from dropping a future. The committed terminal result is absorbing:
+  `TimedOut`. The two paths are type-distinct and never collapsed: the
+  executor's `ToolSettlement` is evidence its authority returned, while the
+  lifecycle's `SettlementAuthorityOutcome::ControlPlaneFailed` is generated
+  when that authority never did. `OutcomeUnknown` comes only from explicit
+  `Unconfirmed` evidence or the guard, never from "the execution future did
+  not return" or from dropping a future. A conforming executor keeps every
+  rustX-owned local ownership inside its handle futures — it never spawns an
+  unmanaged local task or process behind them — so when the guard fires and
+  the lifecycle drops the handle, that drop consumes all remaining local
+  execution ownership; only external systems beyond rustX's ownership domain
+  may remain uncertain. The committed terminal result is absorbing:
   the closed call slot guarantees that no late physical completion, no
   residual executor-owned physical cleanup, and no repeated intent can
   publish a second result, emit a post-terminal canonical event, or reopen
@@ -3293,21 +3306,32 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   (guarded against a contract-violating executor by
   `TOOL_SETTLEMENT_CONTROL_GUARD`), and the attempt returns only after every
   admitted execution reached its accepted terminal contract —
-  `OutcomeUnknown` included. After an `Unconfirmed`/`OutcomeUnknown`
-  settlement the executor's local operation ownership is consumed (for
-  `settled_by_operation` the settlement plane drove the operation to its
-  end); any residual external/physical ownership is the executor's bounded
-  contract responsibility, sealed from canonical history by the closed call
-  slot, so drain leaves no runtime-owned execution capable of later
-  publishing conflicting canonical state.
+  `OutcomeUnknown` included. Runtime quiescence is published only after all
+  rustX-owned foreground physical execution and cleanup ownership has
+  settled: an executor-returned `Unconfirmed` already carries that local
+  settlement (only the external effect frontier remains uncertain, and
+  external uncertainty never blocks local quiescence), and on the
+  guard/control-plane-failure path the lifecycle drops the handle, which for
+  a conforming executor consumes all remaining local ownership, before drain
+  may publish `Quiescent`. Residual rustX-owned local cleanup still in
+  flight — a kill/wait/reap or join ladder inside the settlement plane —
+  keeps drain pending until the settlement plane returns. The closed call
+  slot seals the settled call from canonical history: no late state can
+  publish conflicting canonical facts after drain returns.
 - **The Event Journal records the typed lifecycle facts.** Per started call
   the journal orders `ToolExecutionStarted`, retained
   `ToolExecutionProgress` facts, `ToolExecutionDeadlineFired { kind }` when
-  a deadline fired, `ToolExecutionCancellationRequested { cause }` and
-  `ToolExecutionSettlementObserved { certainty }` when a non-physical winner
-  drove the settlement phase, and the terminal `ToolExecutionCompleted`
-  last. The journal is observational evidence; the canonical ToolResult
-  remains the only outcome authority.
+  a deadline fired, `ToolExecutionCancellationRequested { cause }` when a
+  non-physical winner drove the settlement phase, then exactly one
+  settlement fact — `ToolExecutionSettlementObserved { certainty }` when
+  the executor's settlement authority returned typed evidence, or
+  `ToolExecutionSettlementControlFailed { reason }` when the settlement
+  control-plane guard expired without the authority ever returning — and the
+  terminal `ToolExecutionCompleted` last.
+  `ToolExecutionSettlementObserved` never appears on the control-plane
+  failure path: no executor settlement evidence was observed there. The
+  journal is observational evidence; the canonical ToolResult remains the
+  only outcome authority.
 
 ## Background executions (M5)
 

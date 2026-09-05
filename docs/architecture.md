@@ -747,11 +747,21 @@ The `ToolExecutor` boundary splits one started execution into
 `ToolExecutionHandle { completion, settlement }` — the physical completion
 plane and the independent cancellation/settlement control plane, both
 executor-owned. Once intent wins, the lifecycle awaits only the settlement
-plane, which returns typed `Confirmed`/`Unconfirmed` evidence and is the
-normal settlement mechanism, awaited without a timeout of its own;
-`TOOL_SETTLEMENT_CONTROL_GUARD` bounds only the wait for a broken executor
-whose settlement plane never returns, and its expiry is a settlement
-control-plane failure, never settlement evidence. The evidence then selects
+plane, which runs all rustX-owned local cleanup (kill, wait, reap, join) to
+its end and then returns typed `Confirmed`/`Unconfirmed` evidence; it is the
+normal settlement mechanism, awaited without a timeout of its own.
+`Unconfirmed` means local rustX execution ownership reached its terminal
+cleanup boundary — no rustX-owned task or process remains — while
+terminality past the external-effect frontier (a remote MCP call, a remote
+HTTP operation, an external service's state) stays unprovable; it never
+means "the lifecycle stopped waiting". `TOOL_SETTLEMENT_CONTROL_GUARD`
+bounds only the wait for a broken executor whose settlement plane never
+returns, and its expiry is a settlement control-plane failure, never
+settlement evidence. The two `OutcomeUnknown` paths stay type-distinct:
+executor-returned `Unconfirmed` journals
+`ToolExecutionSettlementObserved { Unconfirmed }`, while guard expiry
+journals `ToolExecutionSettlementControlFailed` and never a
+settlement-observed fact. The evidence then selects
 the canonical status under the Issue #202 contract: proven terminal
 settlement after a deadline is `TimedOut`, explicit `Unconfirmed` evidence
 or guard expiry is `OutcomeUnknown` — never derived from an unreturned or
@@ -764,8 +774,9 @@ admitted execution's canonical settlement, and a per-call deadline never
 strands its batch siblings. The durable typed facts of a cancelled call are
 ordered `ToolExecutionStarted`, the retained progress facts,
 `ToolExecutionDeadlineFired { kind }` when a deadline fired,
-`ToolExecutionCancellationRequested { cause }`,
-`ToolExecutionSettlementObserved { certainty }`, and the terminal
+`ToolExecutionCancellationRequested { cause }`, exactly one settlement fact
+(`ToolExecutionSettlementObserved { certainty }` or
+`ToolExecutionSettlementControlFailed { reason }`), and the terminal
 `ToolExecutionCompleted` last; the journal is observational evidence and the
 canonical ToolResult remains the only outcome authority.
 

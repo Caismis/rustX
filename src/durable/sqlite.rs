@@ -6101,6 +6101,9 @@ fn runtime_event_dependency_name(event: &RuntimeEvent) -> &'static str {
             "ToolExecutionCancellationRequested"
         }
         RuntimeEvent::ToolExecutionSettlementObserved { .. } => "ToolExecutionSettlementObserved",
+        RuntimeEvent::ToolExecutionSettlementControlFailed { .. } => {
+            "ToolExecutionSettlementControlFailed"
+        }
         RuntimeEvent::ToolExecutionCompleted { .. } => "ToolExecutionCompleted",
         RuntimeEvent::ToolExecutionFailed { .. } => "ToolExecutionFailed",
         RuntimeEvent::ToolMessageCommitted { .. } => "ToolMessageCommitted",
@@ -6860,6 +6863,11 @@ fn validate_event_reference(
             ..
         }
         | RuntimeEvent::ToolExecutionSettlementObserved {
+            tool_call_id,
+            tool_id,
+            ..
+        }
+        | RuntimeEvent::ToolExecutionSettlementControlFailed {
             tool_call_id,
             tool_id,
             ..

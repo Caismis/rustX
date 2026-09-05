@@ -13850,6 +13850,13 @@ mod tests {
     /// which this test never approaches on the wall clock) rather than
     /// abandoning the operation.
     ///
+    /// This is the runtime quiescence invariant for local ownership: the
+    /// settle gate models residual rustX-owned local physical cleanup still
+    /// in flight (a kill/wait/reap or join ladder), and `shutdown()` must
+    /// never report `Quiescent` while that local cleanup ownership is
+    /// pending. Only when the settlement plane returns — cleanup completed —
+    /// may drain cross its barrier.
+    ///
     /// Happens-before: `cancel_observed` proves the drain's cancellation
     /// request already reached the executor and the executor is now parked
     /// on its settle gate, mid-settlement. The shutdown result channel must
@@ -14013,58 +14020,35 @@ mod tests {
         }
     }
 
-    /// A foreground executor modelling an execution whose physical activity
-    /// is detached from the completion plane the lifecycle drives (Issue
-    /// #204 drain cut, unconfirmed path): `start` dispatches the physical
-    /// operation as a separate task parked on a test gate, returns a
-    /// completion plane that parks forever, and its settlement plane
-    /// reports `Unconfirmed` promptly once it observes the cancellation
-    /// request — local operation ownership is consumed, but terminality
-    /// past the external-effect frontier cannot be proven.
-    ///
-    /// Ownership after `OutcomeUnknown`: what remains is the executor's own
-    /// bounded residual physical ownership — the parked detached task,
-    /// whose `JoinHandle` the fixture retains and whose finish the test
-    /// drives and joins explicitly. The residual task is sealed from
-    /// canonical history by the closed call slot: it can never publish a
-    /// canonical fact, a late `ToolResult`, or a second
-    /// `ToolExecutionCompleted`.
+    /// A foreground executor modelling the one VALID `Unconfirmed` case
+    /// (Issue #204 drain cut): a remote external effect with fully
+    /// reclaimed local ownership. `start` returns a completion plane that
+    /// parks forever; its settlement plane reports `Unconfirmed` promptly
+    /// once it observes the cancellation request. The fixture spawns no
+    /// task, thread, or process: when the settlement plane returns, every
+    /// rustX-owned local execution ownership of the call has already
+    /// settled, and only the remote external effect beyond rustX's
+    /// ownership domain remains uncertain — so runtime drain may complete.
     struct DetachedUnconfirmedTool {
         started: tokio::sync::watch::Sender<bool>,
         cancel_observed: tokio::sync::watch::Sender<bool>,
-        physical_finish_gate: tokio::sync::watch::Sender<bool>,
-        physical_finished: tokio::sync::watch::Sender<bool>,
-        physical_task: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     }
 
     impl DetachedUnconfirmedTool {
-        #[allow(clippy::type_complexity)] // one test-fixture constructor tuple
         fn new() -> (
             Self,
             tokio::sync::watch::Receiver<bool>,
             tokio::sync::watch::Receiver<bool>,
-            tokio::sync::watch::Sender<bool>,
-            tokio::sync::watch::Receiver<bool>,
-            Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
         ) {
             let (started, started_rx) = tokio::sync::watch::channel(false);
             let (cancel_observed, cancel_observed_rx) = tokio::sync::watch::channel(false);
-            let (physical_finish_gate, _) = tokio::sync::watch::channel(false);
-            let (physical_finished, physical_finished_rx) = tokio::sync::watch::channel(false);
-            let physical_task = Arc::new(std::sync::Mutex::new(None));
             (
                 Self {
                     started,
                     cancel_observed,
-                    physical_finish_gate: physical_finish_gate.clone(),
-                    physical_finished,
-                    physical_task: physical_task.clone(),
                 },
                 started_rx,
                 cancel_observed_rx,
-                physical_finish_gate,
-                physical_finished_rx,
-                physical_task,
             )
         }
     }
@@ -14076,24 +14060,9 @@ mod tests {
             context: ToolExecutionContext<'a>,
         ) -> crate::tools::executor::ToolExecutionHandle<'a> {
             self.started.send_replace(true);
-            // The physical operation is detached from the completion plane:
-            // it parks on its finish gate and publishes its own finish
-            // observation. The fixture retains the JoinHandle — explicit
-            // executor-side cleanup ownership.
-            let finish_gate = self.physical_finish_gate.clone();
-            let physical_finished = self.physical_finished.clone();
-            let task = tokio::spawn(async move {
-                let mut released = finish_gate.subscribe();
-                released
-                    .wait_for(|is_released| *is_released)
-                    .await
-                    .expect("physical finish gate stays open");
-                physical_finished.send_replace(true);
-            });
-            self.physical_task
-                .lock()
-                .expect("physical task lock")
-                .replace(task);
+            // No local task or process exists outside the handle's futures:
+            // the entire local ownership of this execution is the parked
+            // completion shell and the settlement plane below.
             let completion: BoxFuture<'a, crate::tools::types::ToolExecutionResult> =
                 Box::pin(std::future::pending());
             let cancel_observed = self.cancel_observed.clone();
@@ -14101,6 +14070,8 @@ mod tests {
                 Box::pin(async move {
                     context.cancellation.cancelled().await;
                     cancel_observed.send_replace(true);
+                    // Local rustX execution ownership fully settled; only
+                    // the remote effect's terminality is unprovable.
                     crate::tools::executor::ToolSettlement::Unconfirmed {
                         detail: "the dispatched operation crossed the external-effect frontier; \
                                  remote terminality cannot be proven"
@@ -14146,6 +14117,11 @@ mod tests {
                     if tool_call_id == call_id =>
                 {
                     Some("settlement")
+                }
+                RuntimeEvent::ToolExecutionSettlementControlFailed { tool_call_id, .. }
+                    if tool_call_id == call_id =>
+                {
+                    Some("settlement-control-failed")
                 }
                 RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. }
                     if tool_call_id == call_id =>
@@ -14268,32 +14244,27 @@ mod tests {
     }
 
     /// Issue #204 (drain, unconfirmed split settlement): drain waits for
-    /// the attempt's canonical settlement — which now awaits the
-    /// executor's settlement authority — and an `Unconfirmed` settlement
-    /// resolves that wait. The canonical `OutcomeUnknown` is committed and
-    /// `shutdown` RETURNS even though the fixture's detached physical task
-    /// is still parked: the settlement plane consumed the executor's local
-    /// operation ownership, and the residual physical task is the
-    /// executor's (fixture's) bounded contract responsibility, sealed from
-    /// canonical history by the closed call slot.
+    /// the attempt's canonical settlement — which awaits the executor's
+    /// settlement authority — and an `Unconfirmed` settlement resolves that
+    /// wait. The canonical `OutcomeUnknown` is committed and `shutdown`
+    /// RETURNS with quiescence, which is honest exactly because the
+    /// executor's `Unconfirmed` carried the local-ownership invariant: all
+    /// rustX-owned local execution ownership of the call already settled
+    /// (the fixture spawns no task or process), and only the remote
+    /// external effect beyond rustX's ownership domain remains uncertain.
+    /// External uncertainty never blocks local quiescence; local rustX
+    /// execution would (see the settle-gate cuts above).
     ///
     /// Happens-before: `cancel_observed` proves the drain's cancellation
     /// request reached the executor; the settlement plane then reports
     /// `Unconfirmed` without any further test input, so drain returning
-    /// proves it required no physical completion. Only afterwards does the
-    /// test drive the residual physical task to its finish and join it,
-    /// asserting the journal gained no new facts for the call.
+    /// proves it required no physical completion. The terminal canonical
+    /// state is absorbing: the journal never gains another fact for the
+    /// call.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)] // one linear deterministic scenario
     async fn shutdown_drains_past_unconfirmed_settlement() {
-        let (
-            tool,
-            mut started,
-            mut cancel_observed,
-            physical_finish_gate,
-            physical_finished,
-            physical_task,
-        ) = DetachedUnconfirmedTool::new();
+        let (tool, mut started, mut cancel_observed) = DetachedUnconfirmedTool::new();
         let (registry, script) = cause_probe_registry_and_script(Arc::new(tool));
         let dir = tempfile::tempdir().expect("temp dir");
         let (runtime, _model) =
@@ -14323,11 +14294,7 @@ mod tests {
         within_liveness_guard("runtime shutdown", shutdown_receiver)
             .await
             .expect("shutdown task stays alive")
-            .expect("drain reaches quiescence while the residual physical task is still parked");
-        assert!(
-            !*physical_finished.borrow(),
-            "the residual physical operation is still parked when drain returns"
-        );
+            .expect("drain reaches quiescence once local execution ownership settled");
 
         let call_id = ToolCallId::new("call-cause-probe");
         let store = runtime.tool_runtime().durable_store();
@@ -14370,6 +14337,13 @@ mod tests {
             )),
             "the executor's unconfirmed settlement evidence is journaled"
         );
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                RuntimeEvent::ToolExecutionSettlementControlFailed { .. }
+            )),
+            "the executor's settlement authority returned, so no control-plane failure is journaled"
+        );
         let completed = events
             .iter()
             .filter_map(|event| match event {
@@ -14399,28 +14373,9 @@ mod tests {
         );
         let facts_before_cleanup = drain_call_facts(&events, &call_id);
 
-        // Executor-side cleanup of the residual physical ownership: the
-        // fixture releases the parked operation's finish gate and joins it
-        // explicitly. The lifecycle never owned this task.
-        physical_finish_gate.send_replace(true);
-        let task = physical_task
-            .lock()
-            .expect("physical task lock")
-            .take()
-            .expect("the physical operation was dispatched exactly once");
-        within_liveness_guard("the residual physical task to finish", task)
-            .await
-            .expect("the residual physical task joins");
-        assert!(
-            *physical_finished.borrow(),
-            "the residual physical operation published its own finish"
-        );
-
-        // Sealed from canonical history: the journal gained no new facts
-        // for the call — no second ToolExecutionCompleted, no late
-        // progress, cancellation, or settlement fact. The terminal
-        // canonical state is absorbing even though the executor's physical
-        // cleanup completed after drain returned.
+        // The executor left no rustX-owned local execution behind: the
+        // settled terminal state is absorbing and the journal never gains
+        // another fact for the call.
         let later: Vec<RuntimeEvent> = store
             .read_events(None, 256)
             .expect("events")
@@ -14431,7 +14386,277 @@ mod tests {
         assert_eq!(
             drain_call_facts(&later, &call_id),
             facts_before_cleanup,
-            "residual physical cleanup can never publish canonical facts"
+            "the committed terminal state is absorbing"
+        );
+    }
+
+    /// A foreground executor that violates the settlement contract at the
+    /// runtime level (Issue #204 drain cut, control-plane failure): it
+    /// signals `started`, records the drain's cancellation request through
+    /// `cancel_observed`, and then never settles — its operation parks
+    /// forever, so the settlement plane driving it never returns. The
+    /// operation future holds a drop guard flipping `operation_dropped`:
+    /// the fixture keeps all local ownership inside the handle's futures
+    /// (the `settled_by_operation` contract), so when the settlement
+    /// control-plane guard expires and the lifecycle drops the handle, the
+    /// drop provably consumes the operation — the bounded ownership rule of
+    /// the guard path.
+    struct GuardViolationTool {
+        started: tokio::sync::watch::Sender<bool>,
+        cancel_observed: tokio::sync::watch::Sender<bool>,
+        operation_dropped: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl GuardViolationTool {
+        fn new() -> (
+            Self,
+            tokio::sync::watch::Receiver<bool>,
+            tokio::sync::watch::Receiver<bool>,
+            Arc<std::sync::atomic::AtomicBool>,
+        ) {
+            let (started, started_rx) = tokio::sync::watch::channel(false);
+            let (cancel_observed, cancel_observed_rx) = tokio::sync::watch::channel(false);
+            let operation_dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            (
+                Self {
+                    started,
+                    cancel_observed,
+                    operation_dropped: operation_dropped.clone(),
+                },
+                started_rx,
+                cancel_observed_rx,
+                operation_dropped,
+            )
+        }
+    }
+
+    impl ToolExecutor for GuardViolationTool {
+        fn start<'a>(
+            &'a self,
+            _invocation: ToolInvocation,
+            context: ToolExecutionContext<'a>,
+        ) -> crate::tools::executor::ToolExecutionHandle<'a> {
+            struct OperationDropGuard(Arc<std::sync::atomic::AtomicBool>);
+            impl Drop for OperationDropGuard {
+                fn drop(&mut self) {
+                    self.0.store(true, std::sync::atomic::Ordering::Release);
+                }
+            }
+            let started = self.started.clone();
+            let cancel_observed = self.cancel_observed.clone();
+            let drop_guard = OperationDropGuard(self.operation_dropped.clone());
+            let cancellation = context.cancellation.clone();
+            crate::tools::executor::ToolExecutionHandle::settled_by_operation(
+                Box::pin(async move {
+                    // The operation future owns this guard: dropping the
+                    // operation drops the guard.
+                    let _drop_guard = drop_guard;
+                    started.send_replace(true);
+                    context.cancellation.cancelled().await;
+                    cancel_observed.send_replace(true);
+                    // The contract violation under test: the cancellation
+                    // request was observed, yet the operation — and with it
+                    // the settlement plane — never settles.
+                    std::future::pending::<()>().await;
+                    unreachable!("the contract-violating execution never settles")
+                }),
+                cancellation,
+            )
+        }
+
+        fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+            crate::tools::deadline::ToolProgressCapability::None
+        }
+    }
+
+    /// Issue #204 (drain, settlement control-plane failure): a
+    /// contract-violating executor whose settlement authority never returns
+    /// cannot block runtime drain forever, and drain never lies about local
+    /// ownership. The hard deadline fires on the manual clock, the
+    /// cancellation request provably reaches the executor, the settlement
+    /// control-plane guard expires, and the lifecycle commits one canonical
+    /// `OutcomeUnknown` — journaled with the typed
+    /// `ToolExecutionSettlementControlFailed` fact and NO
+    /// `ToolExecutionSettlementObserved`, because no executor settlement
+    /// evidence was ever observed. Before shutdown may report quiescence,
+    /// the executor's remaining rustX-owned local ownership is consumed by
+    /// dropping the handle (proven by the operation's drop guard), so
+    /// `Quiescent` is honest: no rustX-owned local execution survives, and
+    /// only the external effect frontier — here unprovable by construction —
+    /// remains unknown.
+    ///
+    /// Happens-before: `cancel_observed` proves the cancellation request
+    /// reached the executor before the guard window is exhausted; the
+    /// settlement waiter is registered before the clock advances, so the
+    /// committed `OutcomeUnknown` cannot settle unobserved.
+    #[allow(clippy::too_many_lines)] // one linear deterministic scenario
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn shutdown_drains_after_settlement_control_plane_failure() {
+        let (tool, mut started, mut cancel_observed, operation_dropped) = GuardViolationTool::new();
+        let (registry, script) = cause_probe_registry_and_script(Arc::new(tool));
+        let dir = tempfile::tempdir().expect("temp dir");
+        let conversation_id = ConversationId::new("conv-204-guard-drain");
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+            conversation_id.clone(),
+            &workspace,
+            dir.path().join("artifacts"),
+        )
+        .expect("tool runtime");
+        let coordinator = crate::capabilities::CapabilityCoordinator::new(
+            crate::capabilities::CapabilityCoordinatorConfig {
+                conversation_id,
+                workspace: tool_runtime.workspace().clone(),
+                base_tool_registry: Arc::new(registry),
+                tool_activation: crate::capabilities::ToolActivationPolicy::default(),
+                skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
+                mcp_servers: std::collections::BTreeMap::new(),
+                base_environment: tool_runtime.environment().clone(),
+                environment_store_root: dir.path().join("skill-env"),
+            },
+        )
+        .expect("coordinator");
+        let candidate = coordinator.prepare_candidate().await.expect("prepare");
+        coordinator.commit(candidate).expect("commit");
+        let model = Arc::new(FakeModel::new(vec![script, one_turn_script()]));
+        let adapter: Arc<dyn ModelAdapter> = model.clone();
+        let clock = Arc::new(crate::runtime::ManualMonotonicClock::new());
+        let config = RuntimeConversationConfig {
+            agent_id: AgentId::new("agent-a"),
+            model: scripted_session_model(adapter),
+            approval_mode: ApprovalMode::Policy,
+            model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::new(
+                std::time::Duration::from_secs(10),
+                None,
+            ),
+            context: ConversationContextConfig {
+                policy: crate::context::SessionContextPolicy {
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 0,
+                    summary_output_cap: None,
+                },
+                estimator: Arc::new(DefaultTokenEstimator),
+                status_engine: AgentStatusEngine::default(),
+            },
+            tool_runtime,
+            resources: test_resources(&coordinator),
+            resource_loader: test_resource_loader(&coordinator),
+            capability: coordinator,
+            clock: None,
+            initial_messages: Vec::new(),
+            subagents: None,
+            workflow_output: None,
+        };
+        let runtime = ConversationRuntime::with_test_monotonic_clock(
+            config,
+            clock.clone() as Arc<dyn crate::runtime::MonotonicClock>,
+        )
+        .expect("runtime composition");
+        runtime.activate();
+        runtime
+            .submit_inbound(text_content("start the foreground tool"))
+            .expect("accepted");
+        within_liveness_guard(
+            "the foreground tool to start at its executor-start frontier",
+            started.wait_for(|is_started| *is_started),
+        )
+        .await
+        .expect("start channel stays open");
+
+        let settled = runtime.settlement_signal().notified();
+        tokio::pin!(settled);
+        settled.as_mut().enable();
+        // t=10_000: the hard deadline fires cancellation intent.
+        clock.advance(10_000);
+        within_liveness_guard(
+            "the executor to observe the cancellation request",
+            cancel_observed.wait_for(|observed| *observed),
+        )
+        .await
+        .expect("cancel-observation channel stays open");
+        // t=40_000: the settlement control-plane guard (30s from the
+        // intent) expires — the executor's settlement authority never
+        // returned, a settlement-contract violation with no evidence.
+        clock.advance(30_000);
+        within_liveness_guard("the admitted attempt to settle", settled).await;
+
+        // The bounded ownership rule of the guard path is real: dropping
+        // the handle consumed the executor's remaining local ownership, so
+        // drain's quiescence below is honest.
+        assert!(
+            operation_dropped.load(std::sync::atomic::Ordering::Acquire),
+            "the guard path dropped the handle, consuming the executor's remaining local ownership"
+        );
+        within_liveness_guard("runtime shutdown", runtime.shutdown())
+            .await
+            .expect("drain reaches quiescence after the control-plane failure");
+
+        let events = runtime
+            .tool_runtime()
+            .durable_store()
+            .read_events(None, 256)
+            .expect("events")
+            .events;
+        assert!(
+            events.iter().any(|envelope| matches!(
+                &envelope.event,
+                RuntimeEvent::ToolExecutionDeadlineFired {
+                    kind: crate::tools::deadline::ToolDeadlineKind::Hard,
+                    ..
+                }
+            )),
+            "the hard deadline intent is journaled"
+        );
+        let control_failures: Vec<&str> = events
+            .iter()
+            .filter_map(|envelope| match &envelope.event {
+                RuntimeEvent::ToolExecutionSettlementControlFailed {
+                    tool_call_id,
+                    reason,
+                    ..
+                } if tool_call_id == &ToolCallId::new("call-cause-probe") => Some(reason.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            control_failures.len(),
+            1,
+            "exactly one typed settlement control-plane failure fact"
+        );
+        assert!(
+            control_failures[0].contains("settlement control plane did not return"),
+            "the lifecycle's contract-violation record: {}",
+            control_failures[0]
+        );
+        assert!(
+            !events.iter().any(|envelope| matches!(
+                &envelope.event,
+                RuntimeEvent::ToolExecutionSettlementObserved { tool_call_id, .. }
+                    if tool_call_id == &ToolCallId::new("call-cause-probe")
+            )),
+            "no settlement was ever observed: the executor's authority never returned"
+        );
+        let completed = events
+            .iter()
+            .filter_map(|envelope| match &envelope.event {
+                RuntimeEvent::ToolExecutionCompleted {
+                    tool_call_id,
+                    result,
+                    ..
+                } if tool_call_id == &ToolCallId::new("call-cause-probe") => Some(result),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(completed.len(), 1, "exactly one canonical tool result");
+        assert!(
+            matches!(
+                completed[0].status,
+                ToolExecutionStatus::OutcomeUnknown { .. }
+            ),
+            "a settlement control-plane failure is OutcomeUnknown, never TimedOut: {:?}",
+            completed[0].status
         );
     }
 
