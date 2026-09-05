@@ -9,6 +9,7 @@
     "branch": "rustx/subagent-1",
     "parent_had_uncommitted_changes": true
   },
+  "resource_state": "retained",
   "handoff": {
     "logical_workspace": "/runtime-root/worktrees/subagent-1/backend",
     "physical_worktree_root": "/runtime-root/worktrees/subagent-1",

@@ -3272,7 +3272,7 @@ fn a_durably_settled_subagent_needs_no_recovery() {
             &AgentId::new(format!("agent-{subagent}")),
             "explore",
             "sha256:definition",
-            None,
+            &rustx::events::types::SubagentWorkspaceTerminalResource::None,
             fixed_time(),
         );
         store

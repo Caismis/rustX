@@ -205,6 +205,10 @@ pub(crate) enum ConversationObservation {
     /// every identity/lifecycle/terminal transition reaches the consumer
     /// exactly once, in publication order.
     SubagentLifecycle(SubagentSnapshot),
+    /// One reliable retained-workspace resource transition. This is separate
+    /// from the logical lifecycle lane: disposing a handoff updates only the
+    /// resource projection and never creates another terminal transition.
+    SubagentWorkspace(SubagentSnapshot),
     /// One subagent live-activity snapshot (Issue #178). **Disposable**:
     /// latest-value, coalescing, keyed by subagent identity — a push
     /// overwrites the previous unpublished snapshot of the same subagent,
@@ -548,6 +552,12 @@ impl PendingObservations {
                     .reliable
                     .push_back(ConversationObservation::SubagentLifecycle(snapshot));
             }
+            ConversationObservation::SubagentWorkspace(snapshot) => {
+                state.latest_activity.remove(&snapshot.subagent_id);
+                state
+                    .reliable
+                    .push_back(ConversationObservation::SubagentWorkspace(snapshot));
+            }
             // Reliable; a tool settlement fact retires the call's pending
             // live progress: a settled call leaves no stale live report
             // behind.
@@ -732,7 +742,9 @@ impl PendingObservations {
 mod tests {
     use super::*;
     use crate::runtime::identity::{AgentId, ConversationId, ToolCallId};
-    use crate::runtime::subagent::{SubagentObservation, SubagentState, WorkspaceSnapshot};
+    use crate::runtime::subagent::{
+        SubagentObservation, SubagentState, SubagentWorkspaceResourceState, WorkspaceSnapshot,
+    };
 
     /// A minimal subagent snapshot carrying only the identity and the
     /// activity revision this suite distinguishes.
@@ -746,6 +758,7 @@ mod tests {
             definition_digest: "sha256:d1".to_owned(),
             workspace: WorkspaceSnapshot::shared(std::path::PathBuf::from("<shared>")),
             handoff: None,
+            workspace_resource_state: SubagentWorkspaceResourceState::None,
             state: SubagentState::Running,
             detail: None,
             observation: SubagentObservation {

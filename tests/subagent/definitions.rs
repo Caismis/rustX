@@ -1222,7 +1222,9 @@ fn the_committed_identity_survives_a_durable_round_trip() {
 #[test]
 fn the_runtime_client_projection_carries_the_named_identity() {
     use rustx::runtime::identity::{AgentId, ConversationId, SubagentId, ToolCallId};
-    use rustx::runtime::subagent::{SubagentSnapshot, SubagentState};
+    use rustx::runtime::subagent::{
+        SubagentSnapshot, SubagentState, SubagentWorkspaceResourceState,
+    };
     use rustx::runtime_client::snapshot::RuntimeClientSubagent;
 
     let snapshot = SubagentSnapshot {
@@ -1236,6 +1238,7 @@ fn the_runtime_client_projection_carries_the_named_identity() {
             "<shared-workspace>",
         )),
         handoff: None,
+        workspace_resource_state: SubagentWorkspaceResourceState::None,
         state: SubagentState::Running,
         detail: None,
         observation: rustx::runtime::subagent::SubagentObservation::default(),
@@ -1258,6 +1261,7 @@ fn the_runtime_client_projection_carries_the_named_identity() {
         workspace: rustx::runtime_client::snapshot::RuntimeClientSubagentWorkspace {
             logical_workspace: snapshot.workspace.logical_workspace.clone(),
             isolation: rustx::runtime_client::snapshot::RuntimeClientWorkspaceIsolation::Shared,
+            resource_state: snapshot.workspace_resource_state,
             handoff: None,
         },
     };

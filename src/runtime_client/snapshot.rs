@@ -736,6 +736,9 @@ pub struct RuntimeClientSubagentWorkspace {
     pub logical_workspace: std::path::PathBuf,
     /// The closed shared/isolated execution facts.
     pub isolation: RuntimeClientWorkspaceIsolation,
+    /// The post-terminal physical-resource lifecycle, independent of the
+    /// child's absorbing logical terminal state.
+    pub resource_state: crate::runtime::subagent::SubagentWorkspaceResourceState,
     /// Retained child work-product facts, if the worktree was handed off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff: Option<RuntimeClientWorkspaceHandoff>,

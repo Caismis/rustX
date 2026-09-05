@@ -565,6 +565,7 @@ impl From<SubagentSnapshot> for SubagentExecutionSnapshot {
             definition_digest,
             workspace,
             handoff,
+            workspace_resource_state: _,
             state,
             detail: _,
             observation: _,
@@ -1284,7 +1285,8 @@ mod tests {
     fn subagent_snapshot() -> SubagentSnapshot {
         use crate::runtime::identity::{AgentId, ConversationId, SubagentId, ToolCallId};
         use crate::runtime::subagent::{
-            SubagentObservation, SubagentSnapshot, SubagentState, WorkspaceSnapshot,
+            SubagentObservation, SubagentSnapshot, SubagentState, SubagentWorkspaceResourceState,
+            WorkspaceSnapshot,
         };
         SubagentSnapshot {
             subagent_id: SubagentId::new("conversation-1-subagent-2"),
@@ -1295,6 +1297,7 @@ mod tests {
             definition_digest: "sha256:d1".to_owned(),
             workspace: WorkspaceSnapshot::shared(std::path::PathBuf::from("<shared-workspace>")),
             handoff: None,
+            workspace_resource_state: SubagentWorkspaceResourceState::None,
             state: SubagentState::Succeeded,
             // The registry-internal terminal detail carries diagnostics
             // only since Issue #178; either way the projection must drop it.

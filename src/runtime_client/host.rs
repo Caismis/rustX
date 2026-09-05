@@ -1252,6 +1252,67 @@ impl ClientInner {
         })
     }
 
+    /// Disposes one retained terminal subagent workspace through the
+    /// runtime-owned workspace/resource lifecycle. The client supplies only
+    /// the subagent identity as the disposal target; existing workspace facts
+    /// may still be returned in the authoritative subagent projection, but
+    /// are never client-selected deletion inputs.
+    pub(crate) async fn subagent_workspace_dispose(
+        &self,
+        subagent_id: &crate::runtime::identity::SubagentId,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_writable_runtime()?;
+        let result = self
+            .runtime
+            .as_ref()
+            .expect("a writable Runtime Client host has a runtime")
+            .subagent_workspace_dispose(subagent_id)
+            .await
+            .map_err(|error| match error {
+                crate::runtime::subagent::SubagentWorkspaceDisposalError::UnknownSubagent {
+                    subagent_id,
+                } => RuntimeClientError::UnknownSubagent { subagent_id },
+                crate::runtime::subagent::SubagentWorkspaceDisposalError::NotTerminal { state } => {
+                    RuntimeClientError::InvalidState {
+                        message: format!(
+                            "retained workspace disposal requires a terminal subagent; current state is {state:?}"
+                        ),
+                    }
+                }
+                crate::runtime::subagent::SubagentWorkspaceDisposalError::OwnershipMismatch {
+                    detail,
+                } => RuntimeClientError::SubagentWorkspaceOwnershipMismatch {
+                    subagent_id: subagent_id.clone(),
+                    message: detail,
+                },
+                crate::runtime::subagent::SubagentWorkspaceDisposalError::Backend { detail } => {
+                    RuntimeClientError::RuntimeFailure { message: detail }
+                }
+            })?;
+        let (snapshot, outcome) = match result {
+            crate::runtime::subagent::SubagentWorkspaceDisposal::Disposed(snapshot) => (
+                snapshot,
+                super::types::RuntimeClientSubagentWorkspaceDisposalOutcome::Disposed,
+            ),
+            crate::runtime::subagent::SubagentWorkspaceDisposal::AlreadyDisposed(snapshot) => (
+                snapshot,
+                super::types::RuntimeClientSubagentWorkspaceDisposalOutcome::AlreadyDisposed,
+            ),
+            crate::runtime::subagent::SubagentWorkspaceDisposal::DisposalPending(snapshot) => (
+                snapshot,
+                super::types::RuntimeClientSubagentWorkspaceDisposalOutcome::DisposalPending,
+            ),
+            crate::runtime::subagent::SubagentWorkspaceDisposal::NoRetainedWorkspace(snapshot) => (
+                snapshot,
+                super::types::RuntimeClientSubagentWorkspaceDisposalOutcome::NoRetainedWorkspace,
+            ),
+        };
+        Ok(RuntimeClientResult::SubagentWorkspaceDisposed {
+            subagent: subagent_view(&snapshot),
+            outcome,
+        })
+    }
+
     /// Drains the conversation runtime and returns only after it is
     /// quiescent. Runtime Client remains a control adapter: the semantic
     /// lifecycle and all settlement ownership remain in `ConversationRuntime`.
@@ -2061,6 +2122,22 @@ impl RuntimeClientHost {
         subagent_id: &crate::runtime::identity::SubagentId,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.inner.subagent_cancel(subagent_id)
+    }
+
+    /// Disposes one exact retained workspace owned by a terminal subagent.
+    /// The operation is asynchronous because physical Git verification and
+    /// removal belong to the runtime/workspace plane.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed Runtime Client error when the request is not writable,
+    /// the subagent is not eligible, ownership cannot be proven, or disposal
+    /// fails in the backend.
+    pub async fn subagent_workspace_dispose(
+        &self,
+        subagent_id: &crate::runtime::identity::SubagentId,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.inner.subagent_workspace_dispose(subagent_id).await
     }
 
     /// Drains the local runtime and completes only at runtime quiescence.

@@ -450,6 +450,7 @@ export function subagent(
     workspace: {
       logical_workspace: "<shared-workspace>",
       isolation: { type: "shared" },
+      resource_state: "none",
     },
     ...overrides,
   };

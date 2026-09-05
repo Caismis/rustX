@@ -160,6 +160,73 @@ running?", which is exactly what ownership, recovery, and the Runtime Client
 projection need; it never claims to answer "which exact effective runtime is
 this child?".
 
+### Retained subagent workspaces
+
+An isolated subagent starts from the captured committed source `HEAD`. If the
+child leaves no source change, rustX removes its runtime-created worktree and
+branch during normal terminal settlement. If it changes the worktree — either
+through uncommitted source edits or a child commit — rustX retains the exact
+worktree as a handoff. Retained work is not merged, copied, rebased, stashed,
+or removed automatically.
+
+Disposal is an explicit user/runtime-client operation on the terminal
+subagent, exposed in the TUI as the confirmed `D` action. It discards the
+retained worktree, including uncommitted source changes, and removes only the
+runtime-created branch proven to belong to that worktree. The model-facing
+`execution` intrinsic cannot dispose workspaces, and clients cannot supply an
+arbitrary filesystem path or Git ref.
+
+The post-terminal resource lifecycle is separate from the child's absorbing
+logical `Succeeded`, `Failed`, `Cancelled`, or `Interrupted` state:
+
+```text
+None -> Retained -> DisposalInProgress -> WorktreeRemoved -> Disposed
+          ^                 |
+          |                 +-- durable intent authorizes exact continuation
+          |
+PreservedUnresolved -- exact re-proof --> DisposalInProgress
+```
+
+`None` means no runtime-owned isolated worktree remains. `Retained` means the
+worktree remains and rustX has a complete `WorkspaceHandoff`.
+`PreservedUnresolved` means a runtime-created worktree may remain but final
+inspection could not prove that stronger handoff. It is durable state, not a
+missing handoff: the immutable `WorkspaceSnapshot` in the ownership fact
+retains the source repository, logical relative workspace, deterministic
+physical root, runtime branch, base commit, and subagent identity. Recovery
+restores this state without inspecting the filesystem and never manufactures a
+handoff.
+
+Before deletion from `Retained`, and before a later retry from
+`PreservedUnresolved`, rustX re-verifies the source repository identity,
+deterministic path, exact physical Git worktree registration, worktree `HEAD`,
+branch attachment, branch value, and snapshot relationship. Any stale,
+tampered, missing, or rebound relationship fails closed and leaves the
+resource `PreservedUnresolved`. Because this state has no durable terminal
+handoff `HEAD`, both current heads must still equal the immutable snapshot base
+before rustX can derive a disposable handoff; a changed commit remains
+unresolved. Filesystem presence is not ownership proof, and filesystem absence
+is not proof of prior disposal. A resource preserved
+because nested supervised-process containment was unproven is stricter: Git
+facts alone cannot authorize deletion, so the Runtime Client refuses the
+disposal request until that containment authority is resolved.
+
+The durable disposal intent is committed before the first destructive Git
+operation. `git worktree remove --force` is the physical destructive
+linearization point. Branch cleanup then uses compare-delete against the exact
+recorded expected `HEAD`; if the branch moved or cleanup cannot be proven, the
+worktree remains represented as `WorktreeRemoved` and the residual branch is
+preserved. Only successful branch settlement and the final durable settlement
+fact reach `Disposed`. Recovery resumes an authorized intent, continues exact
+branch settlement for `WorktreeRemoved`, and converges an intent-authorized
+fully absent resource to `already_disposed`; it never turns an unresolved or
+externally missing resource into ordinary retained or successful disposal.
+Repeated identity-based requests are serialized and idempotent. rustX makes no
+claim that the final proof and Git command are one atomic operation against an
+external Git actor; its own requests serialize, compare-delete is conditional,
+and any remaining ambiguity fails closed. A shared or automatically cleaned
+workspace returns `no_retained_workspace`.
+
 ## Project instruction discovery
 
 ### Workspace-owned Agent resources

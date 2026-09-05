@@ -52,6 +52,8 @@ import {
   type RuntimeClientContextView,
   type RuntimeClientProtocolEvent,
   type RuntimeClientResult,
+  type RuntimeClientSubagent,
+  type RuntimeClientSubagentWorkspaceDisposalOutcome,
   type RuntimeClientSnapshot,
   type RuntimeClientTranscriptCursor,
   type RuntimeClientTranscriptPage,
@@ -309,6 +311,24 @@ export class RuntimeClientAttachment {
       throw new Error(`background_status returned ${result.type}`);
     }
     return result.execution;
+  }
+
+  /** Disposes one retained subagent workspace through the runtime authority. */
+  async disposeSubagent(subagentId: string): Promise<{
+    subagent: RuntimeClientSubagent;
+    outcome: RuntimeClientSubagentWorkspaceDisposalOutcome;
+  }> {
+    const result = await this.#connection.request({
+      method: "subagent_workspace_dispose",
+      subagent_id: subagentId,
+    });
+    if (result.type !== "subagent_workspace_disposed") {
+      throw new Error(`subagent_workspace_dispose returned ${result.type}`);
+    }
+    return {
+      subagent: result.subagent,
+      outcome: result.outcome,
+    };
   }
 
   /** The safe public catalog. This is why the client never reads models.jsonc. */

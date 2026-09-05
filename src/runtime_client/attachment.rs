@@ -175,6 +175,9 @@ impl RuntimeAttachment {
             RuntimeClientRequest::SubagentCancel { subagent_id, .. } => {
                 self.inner.subagent_cancel(&subagent_id)
             }
+            RuntimeClientRequest::SubagentWorkspaceDispose { .. } => {
+                unreachable!("retained workspace disposal is handled asynchronously")
+            }
             RuntimeClientRequest::Detach { .. } => {
                 self.detach();
                 Ok(RuntimeClientResult::Detached)
@@ -243,6 +246,17 @@ impl RuntimeAttachment {
                     .inner
                     .respond_interaction(interaction, response.clone())
                     .await;
+                return match result {
+                    Ok(result) => RuntimeClientResponse {
+                        id,
+                        result: Some(result),
+                        error: None,
+                    },
+                    Err(error) => Self::error_response(id, error),
+                };
+            }
+            if let RuntimeClientRequest::SubagentWorkspaceDispose { subagent_id, .. } = &request {
+                let result = self.inner.subagent_workspace_dispose(subagent_id).await;
                 return match result {
                     Ok(result) => RuntimeClientResponse {
                         id,

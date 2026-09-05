@@ -77,6 +77,56 @@ describe("subagent activity section", () => {
     assert.match(rendered, /conv-1-subagent-2/);
   });
 
+  it("advertises disposal for retained and unresolved physical resources", () => {
+    const rendered = render([
+      subagent("worker", "sha256:d1", "succeeded", {
+        workspace: {
+          logical_workspace: "/runtime/worktrees/one",
+          isolation: {
+            type: "git_worktree",
+            source_repository_root: "/repo",
+            repository_relative_workspace: "",
+            physical_worktree_root: "/runtime/worktrees/one",
+            base_commit: "base",
+            branch: "rustx/subagent/one",
+            parent_had_uncommitted_changes: false,
+          },
+          resource_state: "retained",
+          handoff: {
+            logical_workspace: "/runtime/worktrees/one",
+            physical_worktree_root: "/runtime/worktrees/one",
+            branch: "rustx/subagent/one",
+            base_commit: "base",
+            head_commit: "head",
+            dirty: true,
+          },
+        },
+      }),
+    ]);
+    assert.match(rendered, /D dispose retained/);
+  });
+
+  it("does not hide an unresolved physical resource", () => {
+    const rendered = render([
+      subagent("worker", "sha256:d1", "failed", {
+        workspace: {
+          logical_workspace: "/runtime/worktrees/one",
+          isolation: {
+            type: "git_worktree",
+            source_repository_root: "/repo",
+            repository_relative_workspace: "",
+            physical_worktree_root: "/runtime/worktrees/one",
+            base_commit: "base",
+            branch: "rustx/subagent/one",
+            parent_had_uncommitted_changes: false,
+          },
+          resource_state: "preserved_unresolved",
+        },
+      }),
+    ]);
+    assert.match(rendered, /D dispose retained/);
+  });
+
   it("marks only the selected row without changing the observation payload", () => {
     const rendered = render([
       child({ type: "awaiting_activity" }),

@@ -20,6 +20,7 @@ import {
   sessionModel,
   sessionView,
   snapshot,
+  subagent,
   runtimeCursor,
   transcriptCursor,
   userMessage,
@@ -194,6 +195,53 @@ describe("RuntimeClientAttachment", () => {
       interaction: { conversation_id: "conv-test", interaction_id: "attempt-1-interaction-1" },
     });
     await responding;
+  });
+
+  it("disposes a retained subagent workspace through the Runtime Client", async () => {
+    const { peer, session } = connect();
+    await attach(peer, session);
+
+    const disposing = session.disposeSubagent("conv-test-subagent-1");
+    await peer.awaitRequests(3);
+    assert.deepEqual(peer.requests[2], {
+      method: "subagent_workspace_dispose",
+      subagent_id: "conv-test-subagent-1",
+      id: 3,
+    });
+    peer.respond(3, {
+      type: "subagent_workspace_disposed",
+      subagent: subagent("worker", "sha256:worker", "succeeded", {
+        subagent_id: "conv-test-subagent-1",
+      }),
+      outcome: "disposed",
+    });
+
+    assert.deepEqual(await disposing, {
+      subagent: subagent("worker", "sha256:worker", "succeeded", {
+        subagent_id: "conv-test-subagent-1",
+      }),
+      outcome: "disposed",
+    });
+  });
+
+  it("preserves the typed ownership-mismatch error at the client boundary", async () => {
+    const { peer, session } = connect();
+    await attach(peer, session);
+
+    const disposing = session.disposeSubagent("conv-test-subagent-1");
+    await peer.awaitRequests(3);
+    peer.respondError(3, {
+      type: "subagent_workspace_ownership_mismatch",
+      subagent_id: "conv-test-subagent-1",
+      message: "Git registration no longer matches the retained handoff",
+    });
+
+    await assert.rejects(disposing, (error: unknown) => {
+      assert.ok(error instanceof RuntimeRequestError);
+      assert.equal(error.error.type, "subagent_workspace_ownership_mismatch");
+      assert.match(error.message, /ownership could not be proven/);
+      return true;
+    });
   });
 
   it("ignores an event at or before the installed cursor", async () => {

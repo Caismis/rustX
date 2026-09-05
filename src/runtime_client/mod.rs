@@ -132,5 +132,5 @@ pub use snapshot::{
 pub use types::{
     AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION, RequestId, RuntimeClientCursor,
     RuntimeClientError, RuntimeClientProtocolEvent, RuntimeClientRequest, RuntimeClientResponse,
-    RuntimeClientResult,
+    RuntimeClientResult, RuntimeClientSubagentWorkspaceDisposalOutcome,
 };

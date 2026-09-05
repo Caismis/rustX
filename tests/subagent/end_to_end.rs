@@ -609,7 +609,7 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
         .find(|subagent| subagent.state == rustx::runtime::subagent::SubagentState::Succeeded)
         .expect("the scoped real child must succeed");
 
-    // Protocol v14 is one contract, not two coexisting ones. The same real
+    // Protocol v15 is one contract, not two coexisting ones. The same real
     // stdio/JSONL attachment that just carried the Issue #187 workspace
     // authority projection also carries the Issue #194 Agent Status window:
     // `statuses` is a list, and every composition in it publishes the

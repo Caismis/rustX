@@ -1,0 +1,13 @@
+{
+  "logical_workspace": "/runtime-root/worktrees/subagent-1/backend",
+  "isolation": {
+    "type": "git_worktree",
+    "source_repository_root": "/repo",
+    "repository_relative_workspace": "backend",
+    "physical_worktree_root": "/runtime-root/worktrees/subagent-1",
+    "base_commit": "0123456789abcdef0123456789abcdef01234567",
+    "branch": "rustx/subagent-1",
+    "parent_had_uncommitted_changes": true
+  },
+  "resource_state": "preserved_unresolved"
+}

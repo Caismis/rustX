@@ -41,7 +41,7 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 20 is the only accepted schema; version 19 and every older
+schema version 22 is the only accepted schema; version 21 and every older
 development schema fail explicitly at open and are not migrated. Version 10
 froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation
@@ -56,9 +56,15 @@ subagent ownership identity, and version 18 freezes subagent workspace
 snapshots and preserved-worktree handoffs. Version 19 freezes the native
 Workflow execution fact vocabulary. Version 20 replaces the conflated
 subagent workspace path with explicit logical-child scope and physical-
-worktree ownership facts. Version 19 and every older development schema are
-rejected rather than decoded with missing or invented workspace authority. The
-review-only
+worktree ownership facts. The development schemas through version 20 are
+rejected rather than decoded with missing or invented workspace authority.
+Version 21 freezes the first retained-workspace disposal protocol: durable
+intent, the typed `WorktreeRemoved` partial phase, and final `Disposed`
+settlement. Version 22 freezes the typed terminal resource disposition,
+including durable `PreservedUnresolved` ownership when terminal inspection
+cannot prove a complete handoff. Version 21 and every older development
+schema are rejected rather than decoded with missing or invented workspace
+authority. The review-only
 intermediate schema history was never a supported format.
 
 The durable request-start invariant is strict: the provider adapter cannot be
@@ -4554,6 +4560,45 @@ semantic normalization boundary. The frozen invariants:
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
   explicit at attachment admission; the current protocol is the sole
   supported version, and every superseded version is rejected explicitly.
+- **Runtime Client protocol v15 exposes retained-workspace disposal as a
+  separate resource lifecycle.** The request names only a terminal
+  `SubagentId`; it never carries an arbitrary path or Git ref and is not
+  available through the model-facing `execution` intrinsic. The post-terminal
+  resource state is explicit: `None`, `Retained`, `PreservedUnresolved`,
+  `DisposalInProgress`, `WorktreeRemoved`, or `Disposed`. A `Retained`
+  resource first requires the complete current ownership proof, then a durable
+  `SubagentWorkspaceDisposalStarted` intent authorizes the exact handoff;
+  `DisposalInProgress` precedes the successful `git worktree remove --force`
+  destructive linearization point; `WorktreeRemoved` records an authorized
+  partial state; and only compare-delete of
+  `refs/heads/<recorded branch>` followed by durable settlement reaches
+  `Disposed`. The manager compares the current branch with the recorded
+  handoff `HEAD` and never unconditionally deletes a moved ref.
+  `PreservedUnresolved` means a runtime-created physical workspace may still
+  exist but terminal settlement could not prove the stronger handoff. Its
+  original immutable `WorkspaceSnapshot`, plus a typed reason, is durable
+  authority; it is never projected as `None` and never given a fabricated
+  `WorkspaceHandoff`. A later identity-only disposal request must re-prove the
+  exact repository, deterministic path, registration, branch, HEAD, and
+  snapshot relationship before it can commit disposal intent. Because this
+  form has no durable terminal `HEAD`, both current heads must also equal the
+  immutable snapshot base; changed commit state remains unresolved rather than
+  being guessed into a disposable handoff. Nested
+  containment uncertainty is stricter: Git facts alone cannot authorize
+  deletion, so that resource remains unresolved and disposal is refused.
+  Missing path/registration without durable disposal intent remains an
+  ownership mismatch; a runtime-authorized intent lets recovery continue the
+  exact resource lifecycle without restoring ordinary `Retained` or guessing
+  from filesystem state. Crashes before intent leave `Retained` or
+  `PreservedUnresolved`; crashes after intent recover a retryable phase; a
+  worktree removed before branch cleanup recovers as `WorktreeRemoved`; and
+  physical completion before final settlement converges through the durable
+  intent to `already_disposed`. Repeated identity requests are serialized and
+  deterministic, and no resource outcome changes the absorbing logical
+  terminal state. rustX makes no claim of atomicity across the separate final
+  proof and Git processes: its own calls serialize, the proof is immediately
+  before mutation, and Git/compare-delete preserve fail-closed behavior for
+  external concurrent mutation.
 - **Runtime Client protocol v14 introduces the Issue #194 Agent Status
   contextual annotation projection.** The snapshot's latest-only `status` is
   replaced by the bounded window `statuses`; each status opportunity carries
