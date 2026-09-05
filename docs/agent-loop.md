@@ -89,6 +89,11 @@ loop treats them as one class:
 | a generated channel deterministically degenerated | `GenerationDegenerated` | `GenerationGuard` (Issue #203) |
 | a generation budget was exhausted before completion | `GenerationBudgetExceeded` | `GenerationGuard` (Issue #203) |
 
+A request deadline is deliberately absent from that table. `Timeout` is a
+transport-liveness class with its own typed detail and its own recovery
+architecture; it consumes the transient request-retry budget and never this
+one.
+
 They share **one** corrective-generation budget per logical model step —
 `MAX_SEMANTIC_CORRECTIVE_GENERATIONS_PER_LOGICAL_STEP = 1` — rather than one
 budget each:
@@ -345,6 +350,20 @@ settles partial publication through the existing noncanonical path, and sends
 the error through the Issue #134 retry disposition/budget. It never signals or
 mutates `AgentCancellation`.
 
+The branch takes both the instant it waits on and the phase it reports from
+one place, `ModelRequestDeadline::pending`, which yields a `(phase, instant)`
+pair only while a deadline exists. That is what makes an impossible expiry
+unrepresentable: a terminated request owns no deadline, so it offers nothing
+to wait on *and* no phase to report, and there is no default to fall back to.
+`ModelError::timeout` accepts only such a phase.
+
+A timeout is **transport liveness, not generation safety**. It carries a typed
+`timeout_phase` and no generation detail, it keeps the transient disposition
+and the Issue #134 request-retry budget, and it never touches the semantic
+corrective-generation budget below. A generation defect is the mirror image:
+a typed generation detail, no timeout phase, disposition `Never`, and the
+shared semantic budget. Neither is inferred from a message.
+
 The summarizer uses the same deadline state machine and runtime monotonic clock,
 but maps a timeout through its existing summary/context failure boundary and
 does not enter generic model retry. Both primary and summary deadlines use the
@@ -380,6 +399,15 @@ becomes whichever max-token field the protocol spells. They do **not** own
 generation budgets, degeneration detection, or any recovery decision: those
 are provider-independent and live above the adapter boundary, so runtime
 correctness never depends on a backend honoring a native limit.
+
+The runtime's own safety bounds are decided one layer higher still, by
+`ResolvedModelInvocation::generation_safety_policy`, which resolves a
+`GenerationSafetyPolicy` for the attempt. Total output and reasoning are
+independent dimensions of that policy — `max total output != max reasoning`
+means two separately resolvable bounds, not one scaled from the other — and
+the enforcing `GenerationGuard` knows only the resolved answer. The current
+values come from a documented runtime *fallback* policy; its reasoning share
+is a default of the resolution layer, not a model-independent invariant.
 
 Adapters also own the **ToolCall acceptance boundary** and every piece of
 provider-specific evidence that a tool proposal is malformed — a provider that
