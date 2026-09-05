@@ -5902,7 +5902,17 @@ may start — zero requests before it, in-flight cancellation after it. The
 process driver transports the reason and never chooses it. The child result is only a candidate on IPC;
 the parent driver reaps first, then the registry freezes a UTF-8-safe
 byte-bounded candidate and asks the parent mailbox to atomically accept the
-terminal inbound plus `SubagentTerminalPublished`. A normal terminal state is
+terminal publication through `accept_subagent_terminal` — the one durable
+authority for every normal `SubagentTerminalPublished` fact (Issue #192).
+The generic `accept_inbound_with_event` transition owns only the detached
+background terminal domain and rejects the subagent payload, so no second
+path can publish a subagent terminal. On success the publication is a pair:
+the runtime-authored terminal notice — the provider-independent parent-model
+correlation projection naming the exact typed execution handle the
+`subagent` creation result returned, with the retained-workspace semantic
+fact folded in when applicable — ordered first, then the byte-for-byte
+child-authored terminal report, then the dependent terminal fact, all in one
+transaction. A normal terminal state is
 not observable before that compound commit. `PublishingTerminal` remains
 capacity-owning while the candidate is unresolved. After bounded retry
 exhaustion, the failure sink (called outside the registry mutex) places the
@@ -7639,6 +7649,7 @@ Per plane:
 | `append_canonical_batch_with_events` (tool-turn repair) | the turn is structurally incomplete; no recovered result exists | every issued call owns exactly one committed `ToolResult`; the turn can form a valid later model request |
 | `append_event(AttemptFailed { RestartInterrupted })` | the attempt is durably non-terminal | the attempt is absorbing; a second reconciliation is refused by the durable lifecycle |
 | `accept_inbound_with_event(terminal notification, BackgroundTerminalPublished)` | no model-visible terminal exists; recovery owns publication | the notification and the terminal fact both exist, exactly once |
+| `accept_subagent_terminal(no notice, interruption message, SubagentTerminalPublished)` | an owned normal subagent child never settled; recovery owns the interruption publication | the runtime-authored interruption message and the terminal fact both exist, exactly once, through the same transition the live path uses (Issue #192) |
 | `terminalize_publication_audit` | a publication stream is unsettled staging | the stream holds one bounded immutable audit, its staging rows are gone, and canonical acceptance of it is permanently forbidden |
 
 Recovery-generated canonical facts carry **no** attempt or turn identity: they

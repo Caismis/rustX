@@ -1497,8 +1497,19 @@ before restart.
   `subagent-terminal:{id}`. A success is authored by the child agent; a
   failure, cancellation, or interruption is a Runtime-authored notice —
   the durable authority enforces this provenance when the terminal fact
-  commits. The control channel (one `UnixStream` pair on the child's fd 0)
-  carries only the bounded typed control plane — Hello/Delegate/Cancel in,
+  commits. A successful report is always preceded — in the same durable
+  transaction — by exactly one Runtime-authored terminal notice
+  (`subagent-{id}-terminal-notice`, correlation
+  `subagent-terminal-notice:{id}`) naming the typed execution handle
+  (`{"kind":"subagent","id":"<subagent-id>"}`) the parent's `subagent`
+  creation result returned, plus the named agent (Issue #192). This is
+  the parent-model correlation projection: two concurrent children of one
+  named agent produce two notice/report pairs whose handles are exactly
+  the creation handles, so the parent model can attribute every report to
+  its execution without any internal child identity crossing the model
+  boundary. The control channel (one `UnixStream` pair on the child's fd
+  0) carries only the bounded typed control plane —
+  Hello/Delegate/Cancel in,
   Ready/StartupError/Result/Diagnostic out, length-prefixed frames bounded
   at 1 MiB — and never appends to any conversation.
 - **The Subagent Final Report Principle (Issue #192).** The successful
@@ -1513,22 +1524,36 @@ before restart.
   provider adapter learns it. Workflow-owned children are exempt: their
   terminal protocol is the structured schema-validated `workflow_output`
   commit, which a free-form final-report instruction would contradict.
-  When terminal settlement retains changed isolated work, the
-  runtime-observed fact arrives as a separate Runtime-authored inbound
-  item (`subagent-{id}-terminal-notice`, correlation
-  `subagent-terminal-notice:{id}`) committed in the same durable
-  transaction as a successful child-authored report — never concatenated
-  into it — and ordered before it, so the terminal report remains the last
-  item of the publication; a failed/cancelled/interrupted terminal folds
-  the same semantic fact into its existing Runtime-authored notice. The
-  fact is semantic only: retained changes are not applied to the parent
-  workspace, and no physical path or ref is model-facing.
-- **The terminal publication is exactly once.** The driver proves the direct
+  Because the report body is byte-for-byte child-authored, the runtime
+  never annotates it: every successful terminal instead commits one
+  adjacent Runtime-authored terminal notice
+  (`subagent-{id}-terminal-notice`, correlation
+  `subagent-terminal-notice:{id}`) in the same durable transaction,
+  ordered before the report, so the terminal report remains the last item
+  of the publication. The notice carries exactly the model-actionable
+  runtime facts of the publication — the typed execution handle
+  correlation and the named agent — and, when terminal settlement retained
+  changed isolated work, that retained semantic fact is folded into the
+  same one notice rather than spawning a second message; a
+  failed/cancelled/interrupted terminal folds the retained semantic fact
+  into its existing Runtime-authored notice and carries no adjacent
+  notice. The retained fact is semantic only: retained changes are not
+  applied to the parent workspace, and no physical path or ref is
+  model-facing.
+- **The terminal publication is exactly once, through one durable
+  authority.** The driver proves the direct
   child is reaped before it returns a physical outcome. The registry then
   freezes the terminal candidate (state, UTF-8-safe byte-bounded content,
   frozen timestamp), so every bounded retry rebuilds the byte-identical
   draft and an ambiguous commit resolves as the idempotent correlation
-  retry, never a duplicate or a conflict. The parent terminal inbound plus
+  retry, never a duplicate or a conflict. Every normal
+  `SubagentTerminalPublished` fact commits through
+  `accept_subagent_terminal` — the terminal notice (on success), the
+  terminal report, and the terminal event in one SQLite transaction — and
+  the generic `accept_inbound_with_event` transition rejects the payload,
+  so no second path can publish a subagent terminal and bypass the
+  contract; startup recovery interruption publishes through the same
+  transition with the same identity contract. The parent terminal inbound plus
   `SubagentTerminalPublished` event must be durably accepted before the
   registry reports `Succeeded`, `Failed`, or `Cancelled`. Until that
   settlement, the record is `PublishingTerminal` and still consumes its
@@ -1570,8 +1595,17 @@ before restart.
   `child_agent_id` in the earlier `SubagentOwnershipCommitted` fact for that
   `SubagentId`. A successful terminal must pair with
   `UserSource::Agent(child)`; failure, cancellation, and interruption must
-  pair with `UserSource::Runtime`. The SQLite compound transaction rejects
-  mismatches before accepting either side. The ownership fact is resolved
+  pair with `UserSource::Runtime`. The transition is semantically closed
+  (Issue #192): before accepting anything, the durable authority binds the
+  canonical event identity, the canonical report message identity and
+  producer correlation, the state/provenance pairing, and the notice rules
+  — exactly a success carries the runtime-authored terminal notice, with
+  its canonical identity, correlation, and exact text, including the
+  retained-workspace semantic fact precisely when the terminal resource is
+  `Retained`, and never a success over an unresolved resource — and a pair
+  retry must find both sides durable or neither. The SQLite compound
+  transaction
+  rejects mismatches before accepting either side. The ownership fact is resolved
   through its deterministic event identity (`subagent-committed-event:{id}`)
   and the unique `event_id` index — bounded time, never a journal scan —
   and the embedded `SubagentId` is defensively revalidated before
@@ -1598,10 +1632,13 @@ before restart.
   death closes the child's stdin, and the child drains and exits without a
   result. Nothing polls PIDs. At recovery, a durably owned, never-settled
   child is classified interrupted — the honest unknown — and terminalized
-  exactly once through the same identity contract as the live path
+  exactly once through the same identity contract and the same
+  `accept_subagent_terminal` transition as the live path
   (`recovery_terminal_publication` reuses the live message id and
   correlation, so a live publication and a recovery publication are
-  mutually exclusive by construction). Nothing is relaunched, replayed, or
+  mutually exclusive by construction; an interruption is a Runtime-authored
+  terminal message, so no successful-terminal notice accompanies it).
+  Nothing is relaunched, replayed, or
   reattached.
 - **Capabilities are deny-by-construction.** The child's `ToolRegistry` is
   exactly the Builtin set its named definition resolved to — never "every
