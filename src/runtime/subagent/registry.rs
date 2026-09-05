@@ -321,6 +321,23 @@ struct RegistryState {
     control_handoff_hook: Option<Arc<ControlHandoffHook>>,
     #[cfg(test)]
     gate_release_hook: Option<Arc<GateReleaseHook>>,
+    /// Test seam: pauses the first live cancellation contender (deadline
+    /// expiry or an explicit caller) immediately before it can acquire the
+    /// registry mutex that commits `Running -> Cancelling`.
+    #[cfg(test)]
+    cancellation_boundary_hook: Option<Arc<CancellationBoundaryHook>>,
+    /// Test seam: pauses the terminal settlement path immediately before it
+    /// can acquire the registry mutex that creates the terminal candidate
+    /// and commits `... -> PublishingTerminal`.
+    #[cfg(test)]
+    terminal_authority_hook: Option<Arc<TerminalAuthorityHook>>,
+    /// Test seam: one-shot completion latches for fired record-owned
+    /// deadline tasks. A test registers a latch (by predictable child
+    /// identity) before the child starts; the owning commit claims it when
+    /// it creates the deadline task, and the latch resolves only after the
+    /// fired deadline's cancellation call has fully returned.
+    #[cfg(test)]
+    deadline_completion: HashMap<SubagentId, tokio::sync::oneshot::Sender<()>>,
     /// Test seam: pre-staged children `prepare` consumes instead of
     /// spawning the real child binary.
     #[cfg(test)]
@@ -962,6 +979,12 @@ impl SubagentRegistry {
                 control_handoff_hook: None,
                 #[cfg(test)]
                 gate_release_hook: None,
+                #[cfg(test)]
+                cancellation_boundary_hook: None,
+                #[cfg(test)]
+                terminal_authority_hook: None,
+                #[cfg(test)]
+                deadline_completion: HashMap::new(),
                 #[cfg(test)]
                 staged_overrides: std::collections::VecDeque::new(),
             })),
@@ -1809,12 +1832,26 @@ impl SubagentRegistry {
                     let clock = self.config.monotonic_clock.clone();
                     let registry = self.clone_for_task();
                     let deadline_id = subagent_id.clone();
+                    // Test-only: claim the test's one-shot completion latch
+                    // (if any) for this child, so a fired deadline's full
+                    // return is awaitable by the race regression.
+                    #[cfg(test)]
+                    let completion = {
+                        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+                        state.deadline_completion.remove(&deadline_id)
+                    };
                     tokio::spawn(async move {
                         clock.wait_until_millis(deadline_at_millis).await;
                         let _ = registry.cancel(
                             &deadline_id,
                             CancellationReason::SubagentExecutionDeadlineExceeded,
                         );
+                        // Test-only: fires only after the deadline's
+                        // cancellation call has fully returned.
+                        #[cfg(test)]
+                        if let Some(completion) = completion {
+                            let _ = completion.send(());
+                        }
                     })
                 });
                 // This hook is outside the registry lock and after the
@@ -2223,6 +2260,22 @@ impl SubagentRegistry {
     ) -> Option<SubagentSnapshot> {
         if self.config.mailbox.begin_settlement_admission().is_err() {
             return self.snapshot(subagent_id);
+        }
+        // Test-only: park the first live cancellation contender (the fired
+        // deadline task or an explicit caller) immediately before the
+        // registry mutex that commits `Running -> Cancelling`. The pause
+        // holds no registry lock, so a second cancellation source — or
+        // terminal settlement — can acquire the boundary first; the parked
+        // contender's release then observes the already-committed
+        // transition and cannot overwrite the winner.
+        #[cfg(test)]
+        let cancellation_boundary_hook = {
+            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            state.cancellation_boundary_hook.clone()
+        };
+        #[cfg(test)]
+        if let Some(hook) = cancellation_boundary_hook {
+            hook.wait();
         }
         let (snapshot, deadline_task) = {
             let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
@@ -2675,6 +2728,23 @@ impl SubagentRegistry {
                 }),
             ),
         };
+        // Test-only: park the terminal settlement path after every physical
+        // boundary (nested containment, workspace disposition, runtime root)
+        // is settled and immediately before the registry mutex that creates
+        // the terminal candidate and commits `... -> PublishingTerminal`.
+        // The pause holds no registry lock: while the terminal authority
+        // contender is parked here, a concurrent deadline can race the exact
+        // authority boundary and commit `Running -> Cancelling` first; the
+        // released settlement then observes that intent and must honor it.
+        #[cfg(test)]
+        let terminal_authority_hook = {
+            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            state.terminal_authority_hook.clone()
+        };
+        #[cfg(test)]
+        if let Some(hook) = terminal_authority_hook {
+            hook.wait();
+        }
         let candidate = {
             let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             let Some(&index) = state.index.get(subagent_id) else {
@@ -3257,6 +3327,46 @@ impl SubagentRegistry {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.gate_release_hook = Some(hook);
     }
+
+    /// Installs the test-only pause for the first live cancellation
+    /// contender (deadline expiry or an explicit cancel) at the exact
+    /// pre-commit edge of the cancellation linearization point: the
+    /// contender has passed settlement admission and is parked immediately
+    /// before the registry mutex that commits `Running -> Cancelling`.
+    #[cfg(test)]
+    pub fn install_cancellation_boundary_hook(&self, hook: Arc<CancellationBoundaryHook>) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.cancellation_boundary_hook = Some(hook);
+    }
+
+    /// Installs the test-only pause for the terminal settlement path at the
+    /// exact pre-commit edge of the terminal-authority linearization point:
+    /// physical settlement is complete and the path is parked immediately
+    /// before the registry mutex that commits the terminal candidate and
+    /// `... -> PublishingTerminal`.
+    #[cfg(test)]
+    pub fn install_terminal_authority_hook(&self, hook: Arc<TerminalAuthorityHook>) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.terminal_authority_hook = Some(hook);
+    }
+
+    /// Test-only: registers a one-shot completion latch for this child's
+    /// record-owned deadline task. The receiver resolves only after the
+    /// fired deadline's cancellation call has fully returned. Must be
+    /// called before the child starts: the owning commit claims the latch
+    /// when it creates the deadline task.
+    #[cfg(test)]
+    pub fn watch_deadline_completion(
+        &self,
+        subagent_id: &SubagentId,
+    ) -> tokio::sync::oneshot::Receiver<()> {
+        let (completion, receiver) = tokio::sync::oneshot::channel();
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state
+            .deadline_completion
+            .insert(subagent_id.clone(), completion);
+        receiver
+    }
 }
 
 /// Settles a lease when physical child-root allocation fails before the lease
@@ -3566,6 +3676,125 @@ impl CommitBoundaryHook {
     /// Releases the paused commit section.
     pub fn release(&self) {
         let mut state = self.state.lock().expect("subagent commit hook");
+        *state = CommitHookState::Released;
+        self.changed.notify_all();
+    }
+}
+
+/// The phases of the one-shot cancellation-boundary pause.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum CancellationHookPhase {
+    /// No contender has reached the boundary yet; the next arrival parks.
+    #[default]
+    Armed,
+    /// The first contender is parked immediately before the commit; later
+    /// arrivals pass straight through.
+    Parked,
+    /// The parked contender has been released; every later arrival passes
+    /// straight through (the pause is spent).
+    Open,
+}
+
+/// A test-only pause at the exact pre-commit edge of the registry
+/// cancellation linearization point. The FIRST live cancellation contender
+/// to arrive (deadline expiry or an explicit caller) parks here — after
+/// settlement admission and immediately before the registry mutex that
+/// commits `Running -> Cancelling` — while contenders that arrive while one
+/// is parked (or after the release) pass straight through. A test can
+/// therefore prove that the parked contender reached the true commit
+/// boundary, let a second contender commit the transition first, and only
+/// then release the parked loser, whose release must observe the committed
+/// winner. Production has no pause and no equivalent semantic state; the
+/// hook exists only to force the deterministic deadline/cancellation
+/// interleavings in the race regressions.
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub struct CancellationBoundaryHook {
+    state: std::sync::Mutex<CancellationHookPhase>,
+    changed: std::sync::Condvar,
+}
+
+#[cfg(test)]
+impl CancellationBoundaryHook {
+    /// Blocks the first arriving contender until [`Self::release`]; every
+    /// later arrival (parked or after the release) passes straight through.
+    pub fn wait(&self) {
+        let mut phase = self.state.lock().expect("subagent cancellation hook");
+        if matches!(*phase, CancellationHookPhase::Armed) {
+            *phase = CancellationHookPhase::Parked;
+            self.changed.notify_all();
+            while matches!(*phase, CancellationHookPhase::Parked) {
+                phase = self
+                    .changed
+                    .wait(phase)
+                    .expect("subagent cancellation hook");
+            }
+        }
+    }
+
+    /// Waits until the first contender is parked at the boundary.
+    pub fn wait_until_parked(&self) {
+        let mut phase = self.state.lock().expect("subagent cancellation hook");
+        while matches!(*phase, CancellationHookPhase::Armed) {
+            phase = self
+                .changed
+                .wait(phase)
+                .expect("subagent cancellation hook");
+        }
+    }
+
+    /// Releases the parked contender and spends the pause: every later
+    /// arrival passes straight through.
+    pub fn release(&self) {
+        let mut phase = self.state.lock().expect("subagent cancellation hook");
+        if matches!(*phase, CancellationHookPhase::Parked) {
+            *phase = CancellationHookPhase::Open;
+            self.changed.notify_all();
+        }
+    }
+}
+
+/// A test-only pause for the terminal settlement path at the exact
+/// pre-commit edge of the terminal-authority linearization point: every
+/// required physical boundary (nested containment, workspace disposition,
+/// runtime root) is settled and the path is parked immediately before the
+/// registry mutex that creates the terminal candidate and commits
+/// `... -> PublishingTerminal`. While parked, a concurrent deadline (or
+/// explicit cancellation) races the same authority; the pause holds no
+/// registry lock. Production has no pause and no equivalent semantic
+/// state; the hook exists only to force the deterministic
+/// terminal-vs-deadline interleaving in the race regression.
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub struct TerminalAuthorityHook {
+    state: std::sync::Mutex<CommitHookState>,
+    changed: std::sync::Condvar,
+}
+
+#[cfg(test)]
+impl TerminalAuthorityHook {
+    /// Blocks the terminal settlement path until [`Self::release`].
+    pub fn wait(&self) {
+        let mut state = self.state.lock().expect("subagent terminal hook");
+        *state = CommitHookState::Entered;
+        self.changed.notify_all();
+        while matches!(*state, CommitHookState::Entered) {
+            state = self.changed.wait(state).expect("subagent terminal hook");
+        }
+    }
+
+    /// Waits until the terminal settlement path has reached the pause.
+    pub fn wait_until_entered(&self) {
+        let mut state = self.state.lock().expect("subagent terminal hook");
+        while matches!(*state, CommitHookState::Idle) {
+            state = self.changed.wait(state).expect("subagent terminal hook");
+        }
+    }
+
+    /// Releases the paused terminal settlement path.
+    pub fn release(&self) {
+        let mut state = self.state.lock().expect("subagent terminal hook");
         *state = CommitHookState::Released;
         self.changed.notify_all();
     }
@@ -3904,6 +4133,64 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Records every snapshot the registry publishes, in publish order. The
+    /// callback runs synchronously under the registry lock (never
+    /// coalesced), so the log is an exact observable sequence of lifecycle
+    /// transitions — the deterministic side-effect counter for the deadline
+    /// race regressions. Activity/workspace projections are never published
+    /// by these races, so the sequence is purely lifecycle.
+    #[derive(Default)]
+    struct RecordingObserver(std::sync::Mutex<Vec<SubagentSnapshot>>);
+
+    impl SubagentObserver for RecordingObserver {
+        fn on_snapshot(&self, snapshot: &SubagentSnapshot) {
+            self.0
+                .lock()
+                .expect("recording observer lock")
+                .push(snapshot.clone());
+        }
+    }
+
+    impl RecordingObserver {
+        fn states(&self) -> Vec<SubagentState> {
+            self.0
+                .lock()
+                .expect("recording observer lock")
+                .iter()
+                .map(|snapshot| snapshot.state)
+                .collect()
+        }
+    }
+
+    /// Installs a recording observer on a fresh plane (no records yet), so
+    /// the published lifecycle sequence from the ownership commit onward is
+    /// captured exactly.
+    fn recording_observer(plane: &TestPlane) -> Arc<RecordingObserver> {
+        let recorded = Arc::new(RecordingObserver::default());
+        plane
+            .registry
+            .install_observer_and_snapshots(Arc::clone(&recorded) as Arc<dyn SubagentObserver>);
+        recorded
+    }
+
+    /// Asserts the driver control wire carries no further frame: reads to
+    /// EOF (the driver shuts down its write half after physical
+    /// settlement), panicking on any frame. Used to prove a losing
+    /// cancellation source produced no second driver command after the
+    /// winner committed and the terminal result settled the child.
+    async fn drain_control_frames(child: &mut ScriptedChild) {
+        let frame = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            super::super::ipc::read_parent_frame(&mut child.peer),
+        )
+        .await
+        .expect("driver control liveness")
+        .expect("driver frame");
+        if let Some(frame) = frame {
+            panic!("unexpected extra driver frame on the wire: {frame:?}");
+        }
     }
 
     #[tokio::test]
@@ -5436,58 +5723,434 @@ mod tests {
         );
     }
 
-    /// The success-first ordering is established by waiting for durable
-    /// terminal settlement before advancing the manual clock. The
-    /// deadline-first ordering is established by waiting for the registry's
-    /// `Running -> Cancelling` watch transition before sending a late result.
-    /// Both orderings therefore test the actual commit boundary, not a
-    /// probabilistic concurrent schedule.
+    /// Both registry orderings of a deadline versus a physical success are
+    /// forced at the actual linearization boundary, with both contenders
+    /// genuinely live:
+    ///
+    /// - **Deadline wins**: the child's success result is fully processed
+    ///   physically, so terminal authority is a real contender parked by
+    ///   the terminal-authority hook immediately before its
+    ///   `... -> PublishingTerminal` commit; only then does the manual
+    ///   clock fire the deadline, which commits `Running -> Cancelling`;
+    ///   the released settlement observes the committed cancellation
+    ///   authority and must publish one canonical `Cancelled` with the
+    ///   deadline reason — never the success.
+    /// - **Terminal authority wins**: the manual clock fires the deadline,
+    ///   which parks by the cancellation-boundary hook immediately before
+    ///   its `Running -> Cancelling` commit; while parked, the terminal
+    ///   settlement acquires the registry critical section and commits one
+    ///   `Succeeded`; the released deadline's cancellation call returns as
+    ///   a no-op.
+    ///
+    /// Every interleaving is driven by hook/barrier synchronization plus
+    /// the manual monotonic clock — never by wall-clock sleeps — and the
+    /// published snapshot sequence is recorded exactly, proving one
+    /// observable `Running -> Cancelling` transition (or none) and one
+    /// final terminal publication.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)]
     async fn deadline_and_success_have_one_deterministic_terminal_winner() {
-        let success_plane = plane(4);
-        let mut child = stage_exit0(&success_plane);
-        let accepted = start(&success_plane, &deadline_spec("success first", 100)).await;
+        // Ordering 1: the fired deadline wins the registry linearization
+        // over a terminal-success contender parked immediately before its
+        // terminal-authority commit.
+        let deadline_wins_plane = plane(4);
+        let terminal_authority = Arc::new(TerminalAuthorityHook::default());
+        deadline_wins_plane
+            .registry
+            .install_terminal_authority_hook(terminal_authority.clone());
+        let recorded = recording_observer(&deadline_wins_plane);
+        let mut child = stage_exit0(&deadline_wins_plane);
+        let accepted = start(
+            &deadline_wins_plane,
+            &deadline_spec("deadline wins the authority race", 100),
+        )
+        .await;
+        assert_eq!(recorded.states(), vec![SubagentState::Running]);
         assert!(matches!(child.read_frame().await, ParentFrame::Delegate(_)));
+
+        // The child's success result is consumed and every physical
+        // boundary is settled; terminal authority is now a real contender
+        // parked immediately before its `... -> PublishingTerminal` commit.
+        // Terminal state is provably NOT committed yet.
         child
-            .send_result(ChildResultStatus::Succeeded, Some("success wins"))
+            .send_result(ChildResultStatus::Succeeded, Some("success contender"))
             .await;
-        let settled = success_plane
+        terminal_authority.wait_until_entered();
+        assert_eq!(
+            deadline_wins_plane
+                .registry
+                .snapshot(&accepted.subagent_id)
+                .expect("running snapshot")
+                .state,
+            SubagentState::Running,
+            "the terminal contender is parked before its commit; Running is not yet Cancelling"
+        );
+        assert_eq!(recorded.states(), vec![SubagentState::Running]);
+
+        // Fire the manual deadline while terminal authority is parked: the
+        // deadline contender acquires the registry mutex first and commits
+        // `Running -> Cancelling` with its typed reason.
+        deadline_wins_plane.monotonic_clock.advance(100);
+        let cancelling = wait_for_cancelling(&deadline_wins_plane, &accepted.subagent_id).await;
+        assert_eq!(cancelling.state, SubagentState::Cancelling);
+        assert_eq!(
+            recorded.states(),
+            vec![SubagentState::Running, SubagentState::Cancelling],
+            "exactly one observable Running -> Cancelling transition"
+        );
+
+        // Release the paused terminal contender: it now observes the
+        // committed cancellation authority under the same registry mutex
+        // and cannot publish success.
+        terminal_authority.release();
+        let settled = deadline_wins_plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("deadline cancellation settled");
+        assert_eq!(settled.state, SubagentState::Cancelled);
+        assert_eq!(
+            settled.detail.as_deref(),
+            Some("the subagent execution deadline expired"),
+            "the winning deadline reason is preserved"
+        );
+        assert_eq!(
+            published_terminal_states(&deadline_wins_plane, &accepted.subagent_id),
+            vec![SubagentTerminalState::Cancelled],
+            "exactly one final terminal result, never the racing success"
+        );
+        assert_eq!(
+            recorded.states(),
+            vec![
+                SubagentState::Running,
+                SubagentState::Cancelling,
+                SubagentState::Cancelled
+            ],
+            "one cancellation transition and one final terminal state"
+        );
+        // No timer survives terminal authority: further elapsed time is
+        // inert and produces no extra publication.
+        deadline_wins_plane.monotonic_clock.advance(100_000);
+        assert_eq!(
+            deadline_wins_plane
+                .registry
+                .snapshot(&accepted.subagent_id)
+                .expect("cancelled snapshot")
+                .state,
+            SubagentState::Cancelled
+        );
+        assert_eq!(
+            recorded.states(),
+            vec![
+                SubagentState::Running,
+                SubagentState::Cancelling,
+                SubagentState::Cancelled
+            ]
+        );
+        // The physical child was already settled when the deadline fired,
+        // so the driver wire carries no cancellation frame at all.
+        drain_control_frames(&mut child).await;
+        drop(child.peer);
+
+        // Ordering 2: terminal authority wins while the fired deadline is
+        // parked immediately before its cancellation commit.
+        let plane = plane(4);
+        let cancellation_boundary = Arc::new(CancellationBoundaryHook::default());
+        plane
+            .registry
+            .install_cancellation_boundary_hook(cancellation_boundary.clone());
+        let recorded = recording_observer(&plane);
+        let mut child = stage_exit0(&plane);
+        // Register the fired-deadline completion latch before the child
+        // starts: the owning commit claims it when it creates the deadline
+        // task (the first child of a fresh plane is ordinal 1).
+        let deadline_done = plane
+            .registry
+            .watch_deadline_completion(&SubagentId::for_conversation(&plane.conversation_id, 1));
+        let accepted = start(&plane, &deadline_spec("terminal authority wins", 100)).await;
+        assert_eq!(recorded.states(), vec![SubagentState::Running]);
+        assert!(matches!(child.read_frame().await, ParentFrame::Delegate(_)));
+
+        // Fire the manual deadline: the fired deadline task is now a live
+        // cancellation contender parked immediately before its
+        // `Running -> Cancelling` commit. The mutation has NOT occurred.
+        plane.monotonic_clock.advance(100);
+        cancellation_boundary.wait_until_parked();
+        assert_eq!(
+            plane
+                .registry
+                .snapshot(&accepted.subagent_id)
+                .expect("running snapshot")
+                .state,
+            SubagentState::Running,
+            "the deadline contender is parked before its commit"
+        );
+        assert_eq!(recorded.states(), vec![SubagentState::Running]);
+
+        // While the deadline contender is parked, terminal settlement
+        // acquires the registry critical section and commits one
+        // `PublishingTerminal`/`Succeeded`.
+        child
+            .send_result(ChildResultStatus::Succeeded, Some("terminal wins"))
+            .await;
+        let settled = plane
             .registry
             .wait_until_settled(&accepted.subagent_id)
             .await
             .expect("success settled");
         assert_eq!(settled.state, SubagentState::Succeeded);
         assert_eq!(
-            published_terminal_states(&success_plane, &accepted.subagent_id),
+            settled.detail, None,
+            "no cancellation reason replaces the success"
+        );
+        assert_eq!(
+            published_terminal_states(&plane, &accepted.subagent_id),
             vec![SubagentTerminalState::Succeeded]
         );
-        // The terminal settlement synchronously invalidated the record-owned
-        // timer before publication returned; later elapsed time is inert.
-        success_plane.monotonic_clock.advance(1_000);
         assert_eq!(
-            success_plane
+            recorded.states(),
+            vec![SubagentState::Running, SubagentState::Succeeded],
+            "terminal authority won; no Cancelling was ever observable"
+        );
+
+        // Release the parked deadline contender: its cancellation call
+        // returns as a no-op over a terminal record.
+        cancellation_boundary.release();
+        tokio::time::timeout(std::time::Duration::from_secs(10), deadline_done)
+            .await
+            .expect("fired deadline liveness")
+            .expect("the fired deadline's cancellation call returned");
+        assert_eq!(
+            plane
                 .registry
                 .snapshot(&accepted.subagent_id)
-                .expect("success snapshot")
+                .expect("succeeded snapshot")
                 .state,
             SubagentState::Succeeded
         );
+        assert_eq!(
+            recorded.states(),
+            vec![SubagentState::Running, SubagentState::Succeeded],
+            "the released deadline produced no second transition"
+        );
+        assert_eq!(
+            published_terminal_states(&plane, &accepted.subagent_id),
+            vec![SubagentTerminalState::Succeeded],
+            "no extra terminal publication"
+        );
+        // No timer effect after terminal authority, and no driver
+        // cancellation ever reached the wire.
+        plane.monotonic_clock.advance(100_000);
+        assert_eq!(
+            plane
+                .registry
+                .snapshot(&accepted.subagent_id)
+                .expect("succeeded snapshot")
+                .state,
+            SubagentState::Succeeded
+        );
+        drain_control_frames(&mut child).await;
+        drop(child.peer);
+    }
+
+    /// Both orderings of the deadline-versus-explicit-cancellation race are
+    /// forced at the actual `Running -> Cancelling` linearization boundary,
+    /// with both cancellation sources genuinely live:
+    ///
+    /// - **Deadline wins**: explicit cancellation is spawned first and
+    ///   parks by the cancellation-boundary hook immediately before the
+    ///   commit; the manual clock then fires the deadline, which reaches
+    ///   the same cancellation authority and is allowed to commit first;
+    ///   the released explicit caller observes the committed reason and
+    ///   cannot overwrite it.
+    /// - **Explicit wins**: the manual clock fires the deadline first and
+    ///   it parks immediately before the commit; explicit cancellation is
+    ///   then allowed to commit `UserRequested`; the released deadline
+    ///   cannot overwrite the reason.
+    ///
+    /// Each ordering proves exactly one observable `Running -> Cancelling`
+    /// transition, exactly one effective `Cancel` frame on the driver
+    /// wire, one winning reason preserved into the terminal detail, and
+    /// one canonical terminal publication. Synchronization is hook/barrier
+    /// driven with the manual monotonic clock — never wall-clock sleeps.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
+    async fn deadline_and_explicit_cancellation_preserve_the_first_reason() {
+        // Ordering 1: the fired deadline wins; explicit cancellation is the
+        // parked loser.
+        let deadline_wins_plane = plane(4);
+        let cancellation_boundary = Arc::new(CancellationBoundaryHook::default());
+        deadline_wins_plane
+            .registry
+            .install_cancellation_boundary_hook(cancellation_boundary.clone());
+        let recorded = recording_observer(&deadline_wins_plane);
+        let mut child = stage_exit0(&deadline_wins_plane);
+        let accepted = start(
+            &deadline_wins_plane,
+            &deadline_spec("deadline wins the cancel race", 100),
+        )
+        .await;
+        assert_eq!(recorded.states(), vec![SubagentState::Running]);
+        assert!(matches!(child.read_frame().await, ParentFrame::Delegate(_)));
+
+        // Explicit cancellation is a live contender first: spawned and
+        // parked immediately before the `Running -> Cancelling` commit.
+        let explicit_registry = deadline_wins_plane.registry.clone();
+        let explicit_id = accepted.subagent_id.clone();
+        let explicit_cancel = tokio::spawn(async move {
+            explicit_registry.cancel(&explicit_id, CancellationReason::UserRequested)
+        });
+        cancellation_boundary.wait_until_parked();
+        assert_eq!(
+            deadline_wins_plane
+                .registry
+                .snapshot(&accepted.subagent_id)
+                .expect("running snapshot")
+                .state,
+            SubagentState::Running,
+            "the explicit contender is parked before its commit"
+        );
+        assert_eq!(recorded.states(), vec![SubagentState::Running]);
+
+        // Fire the manual deadline: it reaches the same cancellation
+        // authority and is allowed to acquire/commit first.
+        deadline_wins_plane.monotonic_clock.advance(100);
+        let cancelling = wait_for_cancelling(&deadline_wins_plane, &accepted.subagent_id).await;
+        assert_eq!(cancelling.state, SubagentState::Cancelling);
+        assert_eq!(
+            recorded.states(),
+            vec![SubagentState::Running, SubagentState::Cancelling],
+            "exactly one observable Running -> Cancelling transition"
+        );
+        assert!(
+            matches!(
+                child.read_frame().await,
+                ParentFrame::Cancel {
+                    reason: Some(CancellationReason::SubagentExecutionDeadlineExceeded)
+                }
+            ),
+            "exactly one effective Cancel frame, with the deadline reason"
+        );
+
+        // Release the parked explicit loser: it observes the committed
+        // Cancelling and cannot replace the reason or send a second driver
+        // command.
+        cancellation_boundary.release();
+        let losing_explicit =
+            tokio::time::timeout(std::time::Duration::from_secs(10), explicit_cancel)
+                .await
+                .expect("explicit cancel liveness")
+                .expect("explicit cancel task")
+                .expect("known cancelling child");
+        assert_eq!(losing_explicit.state, SubagentState::Cancelling);
+        assert_eq!(
+            recorded.states(),
+            vec![SubagentState::Running, SubagentState::Cancelling],
+            "the losing explicit caller produced no transition"
+        );
+
+        // The late child result settles one canonical Cancelled preserving
+        // the winning deadline reason.
+        child
+            .send_result(ChildResultStatus::Succeeded, Some("late success"))
+            .await;
+        let settled = deadline_wins_plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("deadline cancellation settled");
+        assert_eq!(settled.state, SubagentState::Cancelled);
+        assert_eq!(
+            settled.detail.as_deref(),
+            Some("the subagent execution deadline expired"),
+            "the deadline reason is preserved; UserRequested never replaces it"
+        );
+        assert_eq!(
+            published_terminal_states(&deadline_wins_plane, &accepted.subagent_id),
+            vec![SubagentTerminalState::Cancelled],
+            "one canonical terminal publication"
+        );
+        assert_eq!(
+            recorded.states(),
+            vec![
+                SubagentState::Running,
+                SubagentState::Cancelling,
+                SubagentState::Cancelled
+            ]
+        );
+        // One driver cancellation only: no second Cancel frame ever reached
+        // the wire.
+        drain_control_frames(&mut child).await;
         drop(child.peer);
 
+        // Ordering 2: explicit cancellation wins; the fired deadline is the
+        // parked loser.
         let plane = plane(4);
+        let cancellation_boundary = Arc::new(CancellationBoundaryHook::default());
+        plane
+            .registry
+            .install_cancellation_boundary_hook(cancellation_boundary.clone());
+        let recorded = recording_observer(&plane);
         let mut child = stage_exit0(&plane);
-        let accepted = start(&plane, &deadline_spec("deadline first", 100)).await;
+        let deadline_done = plane
+            .registry
+            .watch_deadline_completion(&SubagentId::for_conversation(&plane.conversation_id, 1));
+        let accepted = start(&plane, &deadline_spec("explicit wins the cancel race", 100)).await;
+        assert_eq!(recorded.states(), vec![SubagentState::Running]);
         assert!(matches!(child.read_frame().await, ParentFrame::Delegate(_)));
+
+        // Fire the manual deadline: the fired deadline task is a live
+        // cancellation contender parked immediately before the commit.
         plane.monotonic_clock.advance(100);
-        let cancelling = wait_for_cancelling(&plane, &accepted.subagent_id).await;
+        cancellation_boundary.wait_until_parked();
+        assert_eq!(
+            plane
+                .registry
+                .snapshot(&accepted.subagent_id)
+                .expect("running snapshot")
+                .state,
+            SubagentState::Running,
+            "the deadline contender is parked before its commit"
+        );
+        assert_eq!(recorded.states(), vec![SubagentState::Running]);
+
+        // Explicit cancellation is allowed to commit first (it passes the
+        // parked deadline contender).
+        let cancelling = plane
+            .registry
+            .cancel(&accepted.subagent_id, CancellationReason::UserRequested)
+            .expect("known child");
         assert_eq!(cancelling.state, SubagentState::Cancelling);
-        assert!(matches!(
-            child.read_frame().await,
-            ParentFrame::Cancel {
-                reason: Some(CancellationReason::SubagentExecutionDeadlineExceeded)
-            }
-        ));
+        assert_eq!(
+            recorded.states(),
+            vec![SubagentState::Running, SubagentState::Cancelling],
+            "exactly one observable Running -> Cancelling transition"
+        );
+        assert!(
+            matches!(
+                child.read_frame().await,
+                ParentFrame::Cancel {
+                    reason: Some(CancellationReason::UserRequested)
+                }
+            ),
+            "exactly one effective Cancel frame, with the explicit reason"
+        );
+
+        // Release the parked deadline loser: it cannot overwrite the
+        // committed UserRequested reason.
+        cancellation_boundary.release();
+        tokio::time::timeout(std::time::Duration::from_secs(10), deadline_done)
+            .await
+            .expect("fired deadline liveness")
+            .expect("the fired deadline's cancellation call returned");
+        assert_eq!(
+            recorded.states(),
+            vec![SubagentState::Running, SubagentState::Cancelling],
+            "the released deadline produced no second transition"
+        );
+
+        // The late child result settles one canonical Cancelled preserving
+        // the winning UserRequested reason.
         child
             .send_result(ChildResultStatus::Succeeded, Some("late success"))
             .await;
@@ -5495,94 +6158,38 @@ mod tests {
             .registry
             .wait_until_settled(&accepted.subagent_id)
             .await
-            .expect("deadline cancellation settled");
-        assert_eq!(settled.state, SubagentState::Cancelled);
-        assert_eq!(
-            settled.detail.as_deref(),
-            Some("the subagent execution deadline expired")
-        );
-        assert_eq!(
-            published_terminal_states(&plane, &accepted.subagent_id),
-            vec![SubagentTerminalState::Cancelled]
-        );
-        drop(child.peer);
-    }
-
-    /// Explicit cancellation and deadline cancellation both call the same
-    /// mutex-protected registry transition. Calling the losing source after
-    /// the transition cannot replace the first reason or send another
-    /// cancellation fact.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    #[allow(clippy::too_many_lines)]
-    async fn deadline_and_explicit_cancellation_preserve_the_first_reason() {
-        let explicit_plane = plane(4);
-        let mut child = stage_exit0(&explicit_plane);
-        let accepted = start(&explicit_plane, &deadline_spec("explicit first", 100)).await;
-        assert!(matches!(child.read_frame().await, ParentFrame::Delegate(_)));
-        let cancelling = explicit_plane
-            .registry
-            .cancel(&accepted.subagent_id, CancellationReason::UserRequested)
-            .expect("known child");
-        assert_eq!(cancelling.state, SubagentState::Cancelling);
-        // Advancing after explicit cancellation also proves the timer was
-        // invalidated by the winner rather than left to race later.
-        explicit_plane.monotonic_clock.advance(1_000);
-        assert!(matches!(
-            child.read_frame().await,
-            ParentFrame::Cancel {
-                reason: Some(CancellationReason::UserRequested)
-            }
-        ));
-        child
-            .send_result(ChildResultStatus::Succeeded, Some("late explicit result"))
-            .await;
-        let settled = explicit_plane
-            .registry
-            .wait_until_settled(&accepted.subagent_id)
-            .await
             .expect("explicit cancellation settled");
         assert_eq!(settled.state, SubagentState::Cancelled);
-        assert_eq!(settled.detail.as_deref(), Some("requested by the user"));
-        assert_eq!(
-            published_terminal_states(&explicit_plane, &accepted.subagent_id),
-            vec![SubagentTerminalState::Cancelled]
-        );
-        drop(child.peer);
-
-        let plane = plane(4);
-        let mut child = stage_exit0(&plane);
-        let accepted = start(&plane, &deadline_spec("deadline first", 100)).await;
-        assert!(matches!(child.read_frame().await, ParentFrame::Delegate(_)));
-        plane.monotonic_clock.advance(100);
-        wait_for_cancelling(&plane, &accepted.subagent_id).await;
-        assert!(matches!(
-            child.read_frame().await,
-            ParentFrame::Cancel {
-                reason: Some(CancellationReason::SubagentExecutionDeadlineExceeded)
-            }
-        ));
-        let losing_explicit = plane
-            .registry
-            .cancel(&accepted.subagent_id, CancellationReason::UserRequested)
-            .expect("known cancelling child");
-        assert_eq!(losing_explicit.state, SubagentState::Cancelling);
-        child
-            .send_result(ChildResultStatus::Succeeded, Some("late deadline result"))
-            .await;
-        let settled = plane
-            .registry
-            .wait_until_settled(&accepted.subagent_id)
-            .await
-            .expect("deadline cancellation settled");
-        assert_eq!(settled.state, SubagentState::Cancelled);
         assert_eq!(
             settled.detail.as_deref(),
-            Some("the subagent execution deadline expired")
+            Some("requested by the user"),
+            "the explicit reason is preserved; the deadline never replaces it"
         );
         assert_eq!(
             published_terminal_states(&plane, &accepted.subagent_id),
-            vec![SubagentTerminalState::Cancelled]
+            vec![SubagentTerminalState::Cancelled],
+            "one canonical terminal publication"
         );
+        assert_eq!(
+            recorded.states(),
+            vec![
+                SubagentState::Running,
+                SubagentState::Cancelling,
+                SubagentState::Cancelled
+            ]
+        );
+        // Advancing far past the deadline after the winner committed proves
+        // the timer cannot fire again; one driver cancellation only.
+        plane.monotonic_clock.advance(100_000);
+        assert_eq!(
+            plane
+                .registry
+                .snapshot(&accepted.subagent_id)
+                .expect("cancelled snapshot")
+                .state,
+            SubagentState::Cancelled
+        );
+        drain_control_frames(&mut child).await;
         drop(child.peer);
     }
 
