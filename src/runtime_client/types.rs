@@ -266,11 +266,11 @@ pub enum RuntimeClientSessionRequest {
 /// snapshot that it folded from live events, without ever owning retention or
 /// inferring a position. There is no compatibility decoding of version 13.
 ///
-/// Version 16 carries the explicit Runtime Client retained-workspace disposal
-/// resource phase and pending partial-settlement outcome. Version 15 carried
-/// the disposal operation and its typed outcomes/errors. There is no
-/// compatibility decoding of version 15.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 16;
+/// Version 15 carries the retained-workspace disposal operation and its typed
+/// resource lifecycle, including unresolved-preservation projection and the
+/// pending partial-settlement outcome. There is no compatibility decoding of
+/// version 14.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 15;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1230,7 +1230,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 16);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 15);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

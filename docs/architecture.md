@@ -30,7 +30,7 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 20. An incompatible database
+The SQLite schema is development schema version 22. An incompatible database
 fails explicitly; there is no migration chain, legacy reader, compatibility
 fallback, dual write, or old storage mode. Version 10 froze the structured
 Questionnaire interaction audit vocabulary introduced by Issue #126. Version
@@ -47,8 +47,13 @@ ownership identity, and version 18 freezes subagent workspace snapshots and
 preserved-worktree handoffs. Version 19 freezes the native Workflow execution
 fact vocabulary. Version 20 replaces the conflated subagent workspace path
 with explicit logical-child scope and physical-worktree ownership facts.
-Version 19 and every older development schema are rejected rather than decoded
-with missing or invented workspace authority; the
+Version 21 freezes the first retained-workspace disposal protocol: durable
+disposal intent, the typed `WorktreeRemoved` partial phase, and final
+`Disposed` settlement. Version 22 replaces the terminal event's optional
+handoff with a typed resource disposition that also durably preserves
+`PreservedUnresolved` physical ownership when terminal inspection cannot
+prove a complete handoff. Version 21 and every older development schema are
+rejected rather than decoded with missing or invented workspace authority; the
 review-only intermediate schema history is not a supported format.
 File-backed stores
 use WAL, `synchronous=FULL`, foreign-key enforcement, and a busy timeout. A
@@ -3435,11 +3440,83 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
-The current Runtime Client protocol is version 16. It adds the explicit
-retained-workspace disposal resource phase and pending partial-settlement
-outcome. Version 15 added the disposal operation and its typed outcomes/errors.
-The existing workspace isolation projection remains the source-repository identity
-authority for an exact handoff. Version 14 adds the Agent Status
+The current Runtime Client protocol is version 15. It adds the explicit
+retained-workspace disposal resource lifecycle, including the
+`PreservedUnresolved` state and pending partial-settlement outcome.
+
+#### Retained workspace resource lifecycle (Issue #190)
+
+The logical child lifecycle and its post-terminal physical workspace lifecycle
+are separate authorities. The logical lifecycle remains the closed
+`Succeeded`/`Failed`/`Cancelled`/`Interrupted` set. The workspace resource
+projection is the following bounded state machine:
+
+```text
+None                         no runtime-owned isolated worktree
+Retained { handoff }         exact current handoff is proven
+PreservedUnresolved          a runtime-created workspace may still remain;
+                             settlement proof is incomplete
+        |
+        +-- exact re-proof + durable intent --> DisposalInProgress
+                                                   |
+                                                   +-- worktree removed
+                                                       --> WorktreeRemoved
+                                                            |
+                                                            +-- compare-delete
+                                                                + durable
+                                                                settlement
+                                                                --> Disposed
+```
+
+`SubagentOwnershipCommitted` durably retains the immutable `WorkspaceSnapshot`
+(source repository, logical relative workspace, deterministic physical root,
+runtime branch, base commit, and subagent identity). The terminal event adds a
+typed resource disposition: `None`, `Retained { handoff }`, or
+`PreservedUnresolved { reason, detail }`. The unresolved form deliberately
+does not manufacture a `WorkspaceHandoff`; its snapshot and typed reason keep
+ownership visible across restart while preserving the stronger proof boundary.
+
+For ordinary `Retained` disposal, the workspace manager re-proves source
+repository identity, deterministic allocation, exact Git registration,
+worktree HEAD, branch attachment, branch ref HEAD, and the recorded handoff
+before the first destructive command. A later disposal of
+`PreservedUnresolved` performs that same exact proof to derive a fresh handoff;
+missing or changed facts fail closed and leave the resource unresolved. Since
+the unresolved form has no durable terminal handoff `HEAD`, that re-proof also
+requires both current heads to equal the immutable snapshot base; a changed
+commit cannot be guessed into a disposable handoff.
+Unresolved nested process containment is stricter: Git facts cannot prove that
+the process boundary is safe, so the runtime refuses destructive disposal
+until that separate containment authority is resolved.
+
+The durable disposal intent is the authorization commit point. The exact
+`git worktree remove --force` is the destructive physical linearization point.
+After it succeeds, branch cleanup is a compare-delete of
+`refs/heads/<recorded branch>` with the recorded expected HEAD. A moved or
+otherwise unprovable branch is preserved and the resource settles as
+`WorktreeRemoved`; it is never deleted unconditionally. A successful branch
+settlement followed by the final durable event reaches `Disposed`.
+
+Recovery folds only durable facts. An intent with an intact resource resumes
+the exact authorized operation; an authorized missing worktree with a
+residual expected ref continues at branch settlement; a durable partial fact
+restores `WorktreeRemoved`; and an intent whose exact physical resources are
+already gone converges to `Disposed`/`AlreadyDisposed` and can append the
+missing final settlement. An unresolved terminal fact restores
+`PreservedUnresolved` with the original snapshot and no handoff. A missing
+intent is not inferred from filesystem absence, so an externally disappeared
+worktree remains an ownership mismatch rather than a fabricated success.
+Every durable transition is monotonic; duplicate facts are idempotent and
+conflicting phase/order facts are rejected.
+
+The runtime serializes its own disposal requests and performs the final proof
+immediately before invoking Git, but the proof and Git command are separate
+process operations. rustX therefore makes no atomic check/use claim against
+an external actor concurrently mutating Git. The compare-delete boundary
+still prevents deletion of a moved branch, and all remaining ambiguity fails
+closed.
+
+Version 14 adds the Agent Status
 contextual annotation projection (Issue #194): the snapshot's latest-only
 `status` is replaced by the bounded composition window `statuses`, each status
 opportunity carries the durable identity it was established against, and

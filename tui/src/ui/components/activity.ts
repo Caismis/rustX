@@ -209,7 +209,9 @@ export function renderSubagentSection(
   }
   const active = activeSubagents(state);
   const retained = state.subagents.filter(
-    (subagent) => subagent.workspace.handoff !== undefined,
+    (subagent) =>
+      subagent.workspace.resource_state !== "none" &&
+      subagent.workspace.resource_state !== "disposed",
   ).length;
   const actions = ["Ctrl+↑↓ select", "Enter inspect"];
   if (retained > 0) actions.push("D dispose retained");

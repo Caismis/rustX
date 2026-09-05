@@ -180,7 +180,8 @@ pub use resolver::{
 pub use workspace::{
     GitWorktreeSnapshot, SubagentWorkspaceManager, SubagentWorkspacePolicy, WorkspaceCleanup,
     WorkspaceDisposalError, WorkspaceDisposalSettlement, WorkspaceHandoff, WorkspaceIsolation,
-    WorkspaceLease, WorkspaceSettlement, WorkspaceSnapshot,
+    WorkspaceLease, WorkspaceSettlement, WorkspaceSettlementDisposition, WorkspaceSnapshot,
+    WorkspaceUnresolvedReason,
 };
 
 use std::sync::Arc;
@@ -190,7 +191,7 @@ use chrono::{DateTime, Utc};
 use crate::durable::inbox::InboundDraft;
 use crate::events::types::{
     EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope, SubagentOwnershipKind,
-    SubagentTerminalState, SubagentWorkspaceDisposalSettlement,
+    SubagentTerminalState, SubagentWorkspaceDisposalSettlement, SubagentWorkspaceTerminalResource,
 };
 use crate::message::content::TextBlock;
 use crate::message::types::{InboundKind, UserContentBlock, UserMessageBlock, UserSource};
@@ -535,6 +536,33 @@ pub(crate) fn workspace_disposal_settled_event(
     }
 }
 
+/// Converts the closed workspace settlement disposition into the durable
+/// terminal resource fact. A preserved unresolved workspace carries its
+/// reason and diagnostic, but never a fabricated `WorkspaceHandoff`.
+pub(crate) fn terminal_workspace_resource(
+    settlement: &WorkspaceSettlement,
+) -> SubagentWorkspaceTerminalResource {
+    match &settlement.disposition {
+        WorkspaceSettlementDisposition::Shared | WorkspaceSettlementDisposition::Removed => {
+            SubagentWorkspaceTerminalResource::None
+        }
+        WorkspaceSettlementDisposition::Retained { handoff, .. } => {
+            SubagentWorkspaceTerminalResource::Retained {
+                handoff: handoff.clone(),
+            }
+        }
+        WorkspaceSettlementDisposition::PreservedUnresolved { reason, detail } => {
+            SubagentWorkspaceTerminalResource::PreservedUnresolved {
+                reason: *reason,
+                detail: bound_utf8(
+                    detail.clone(),
+                    workspace::MAX_WORKSPACE_SETTLEMENT_DETAIL_BYTES,
+                ),
+            }
+        }
+    }
+}
+
 /// The deterministic event identity of a committed Workflow Agent value.
 /// This fact is committed in the same transaction as the corresponding
 /// `SubagentTerminalSettled` lifecycle fact.
@@ -551,7 +579,7 @@ pub(crate) fn terminal_settlement(
     subagent_id: &SubagentId,
     child_agent_id: &AgentId,
     state: SubagentTerminalState,
-    workspace_handoff: Option<&WorkspaceHandoff>,
+    workspace_resource: &SubagentWorkspaceTerminalResource,
     timestamp: DateTime<Utc>,
 ) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
@@ -566,7 +594,7 @@ pub(crate) fn terminal_settlement(
             subagent_id: subagent_id.clone(),
             child_agent_id: child_agent_id.clone(),
             state,
-            workspace_handoff: workspace_handoff.cloned(),
+            workspace_resource: workspace_resource.clone(),
         },
     }
 }
@@ -611,7 +639,7 @@ pub(crate) fn terminal_publication(
     child_agent_id: &AgentId,
     state: SubagentTerminalState,
     content: Vec<UserContentBlock>,
-    workspace_handoff: Option<&WorkspaceHandoff>,
+    workspace_resource: &SubagentWorkspaceTerminalResource,
     timestamp: DateTime<Utc>,
 ) -> (InboundDraft, RuntimeEventEnvelope) {
     debug_assert!(
@@ -642,7 +670,7 @@ pub(crate) fn terminal_publication(
             child_agent_id: child_agent_id.clone(),
             message_id: message.id.clone(),
             state,
-            workspace_handoff: workspace_handoff.cloned(),
+            workspace_resource: workspace_resource.clone(),
         },
     };
     let draft = InboundDraft {
@@ -685,7 +713,7 @@ pub fn recovery_terminal_publication(
     child_agent_id: &AgentId,
     agent: &str,
     definition_digest: &str,
-    workspace_handoff: Option<&WorkspaceHandoff>,
+    workspace_resource: &SubagentWorkspaceTerminalResource,
     timestamp: DateTime<Utc>,
 ) -> (InboundDraft, RuntimeEventEnvelope) {
     terminal_publication(
@@ -700,7 +728,7 @@ pub fn recovery_terminal_publication(
                  not restarted."
             ),
         })],
-        workspace_handoff,
+        workspace_resource,
         timestamp,
     )
 }

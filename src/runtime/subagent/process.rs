@@ -998,10 +998,9 @@ impl StagedChild {
         if let Some(detail) = settlement.unproven_diagnostic() {
             return Err(RollbackError::NestedContainment { detail });
         }
-        let workspace_issue = workspace_result.error.clone().or_else(|| {
+        let workspace_issue = workspace_result.error().map(str::to_owned).or_else(|| {
             workspace_result
-                .handoff
-                .as_ref()
+                .handoff()
                 .map(|_| "staged workspace was retained because it contains work".to_owned())
         });
         if let Some(detail) = workspace_issue {
@@ -1838,6 +1837,7 @@ mod tests {
     };
     use crate::runtime::subagent::{
         SubagentWorkspaceManager, SubagentWorkspacePolicy, WorkspaceCleanup,
+        WorkspaceSettlementDisposition, WorkspaceUnresolvedReason,
     };
 
     const DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
@@ -2313,8 +2313,15 @@ mod tests {
         )
         .await;
         assert_eq!(settlement.nested.unproven.len(), 1);
-        assert_eq!(settlement.workspace.cleanup, WorkspaceCleanup::Preserved);
-        assert!(settlement.workspace.handoff.is_none());
+        assert_eq!(settlement.workspace.cleanup(), WorkspaceCleanup::Preserved);
+        assert!(settlement.workspace.handoff().is_none());
+        assert!(matches!(
+            settlement.workspace.disposition,
+            WorkspaceSettlementDisposition::PreservedUnresolved {
+                reason: WorkspaceUnresolvedReason::NestedContainment,
+                ..
+            }
+        ));
         assert!(workspace_path.exists(), "unresolved ownership is preserved");
         assert!(
             child_runtime.exists(),

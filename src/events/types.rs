@@ -101,7 +101,9 @@ use crate::runtime::identity::{
     AgentId, AttemptId, ConversationId, EventId, InteractionId, MessageId, RequestId, SubagentId,
     ToolCallId, ToolExecutionId, ToolId, TurnId,
 };
-use crate::runtime::subagent::{SubagentName, WorkspaceHandoff, WorkspaceSnapshot};
+use crate::runtime::subagent::{
+    SubagentName, WorkspaceHandoff, WorkspaceSnapshot, WorkspaceUnresolvedReason,
+};
 use crate::runtime::types::{CancellationReason, RuntimeError, TokenMeasurement};
 use crate::runtime::workflow::{WorkflowId, WorkflowPort};
 use crate::tools::types::{ToolExecutionResult, ToolProgress};
@@ -133,6 +135,34 @@ pub enum SubagentWorkspaceDisposalSettlement {
     WorktreeRemoved,
     /// The exact runtime worktree and branch are both settled.
     Disposed,
+}
+
+/// The workspace resource disposition committed with a subagent terminal
+/// fact.
+///
+/// This is a post-terminal resource fact, not a logical terminal state. The
+/// closed vocabulary is intentional: `PreservedUnresolved` retains physical
+/// ownership authority without fabricating the stronger [`WorkspaceHandoff`]
+/// contract, and cannot be folded into `None` during recovery.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SubagentWorkspaceTerminalResource {
+    /// No runtime-owned isolated worktree remains after terminal settlement.
+    None,
+    /// An isolated worktree remains with a complete exact handoff proof.
+    Retained {
+        /// The runtime-observed handoff facts.
+        handoff: WorkspaceHandoff,
+    },
+    /// A runtime-created isolated workspace may remain, but the complete
+    /// settlement proof was not established. The original `WorkspaceSnapshot`
+    /// in `SubagentOwnershipCommitted` remains the physical authority.
+    PreservedUnresolved {
+        /// The safety boundary that must be respected by later disposal.
+        reason: WorkspaceUnresolvedReason,
+        /// The bounded physical settlement diagnostic.
+        detail: String,
+    },
 }
 
 /// The current schema version of [`RuntimeEventEnvelope`].
@@ -499,11 +529,10 @@ pub enum RuntimeEvent {
         message_id: MessageId,
         /// The terminal state represented by the publication.
         state: SubagentTerminalState,
-        /// Runtime-observed retained work, when terminal settlement preserved
-        /// an isolated worktree for handoff. This is execution evidence, not
-        /// model-authored output, and is committed with the terminal fact so
-        /// a restart cannot make retained work undiscoverable.
-        workspace_handoff: Option<WorkspaceHandoff>,
+        /// The post-terminal workspace resource disposition. This is
+        /// execution evidence, not model-authored output, and is committed
+        /// with the terminal fact so recovery cannot lose physical ownership.
+        workspace_resource: SubagentWorkspaceTerminalResource,
     },
 
     /// A Workflow-owned subagent reached native terminal settlement without
@@ -517,9 +546,8 @@ pub enum RuntimeEvent {
         child_agent_id: AgentId,
         /// The terminal state reached by the native child.
         state: SubagentTerminalState,
-        /// Runtime-observed retained work, when an isolated workspace was
-        /// preserved for handoff.
-        workspace_handoff: Option<WorkspaceHandoff>,
+        /// The post-terminal workspace resource disposition.
+        workspace_resource: SubagentWorkspaceTerminalResource,
     },
 
     /// The Runtime Client/workspace plane durably admitted disposal of one

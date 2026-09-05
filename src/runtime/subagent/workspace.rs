@@ -62,6 +62,8 @@ const MAX_OVERLAY_FILES: usize = 64;
 const MAX_OVERLAY_BYTES: usize = 8 * 1024 * 1024;
 /// Prevent an input manifest from becoming an unbounded pre-parse read.
 const MAX_OVERLAY_MANIFEST_BYTES: u64 = 64 * 1024;
+/// The maximum diagnostic carried by a durable unresolved workspace fact.
+pub(crate) const MAX_WORKSPACE_SETTLEMENT_DETAIL_BYTES: usize = 2 * 1024;
 
 /// Acquisition-internal immutable bytes selected from the parent logical
 /// workspace. This value never crosses the child/durable protocol boundary.
@@ -341,15 +343,61 @@ impl WorkspaceHandoff {
     }
 }
 
-/// The physical disposition of a workspace lease after inspection.
+/// The reason rustX preserved an isolated workspace without a proven handoff.
+///
+/// This is durable resource authority, not a diagnostic-only label. In
+/// particular, nested containment uncertainty is stricter than an inspection
+/// failure: Git facts alone can never authorize destructive disposal while a
+/// supervised process anchor remains unresolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceUnresolvedReason {
+    /// A required physical workspace fact or cleanup operation could not be
+    /// proven, so the worktree may still be runtime-owned.
+    PhysicalSettlement,
+    /// Nested supervised-process containment was not proven settled.
+    NestedContainment,
+}
+
+/// The closed physical disposition produced by one workspace lease owner.
+///
+/// Keeping the resource disposition in one enum prevents the old invalid
+/// combination `Preserved + no handoff + error` from being projected as an
+/// absent resource. `Retained` and `PreservedUnresolved` are both physical
+/// preservation, but only the former carries the stronger handoff contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceSettlementDisposition {
+    /// Shared workspace: there is no runtime-owned isolated worktree.
+    Shared,
+    /// The runtime-created clean worktree and its branch were removed.
+    Removed,
+    /// The physical worktree remains and its exact handoff was proven. A
+    /// cleanup error is retained only as terminal diagnostic context.
+    Retained {
+        /// The exact runtime-observed handoff.
+        handoff: WorkspaceHandoff,
+        /// A failed best-effort cleanup after the handoff was proven.
+        cleanup_error: Option<String>,
+    },
+    /// A runtime-created physical workspace may remain, but the complete
+    /// handoff/cleanup proof was not established.
+    PreservedUnresolved {
+        /// Why later disposal must remain fail-closed until re-proven.
+        reason: WorkspaceUnresolvedReason,
+        /// The bounded physical settlement diagnostic.
+        detail: String,
+    },
+}
+
+/// The physical cleanup class derived from [`WorkspaceSettlementDisposition`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkspaceCleanup {
     /// Shared workspace: there is no runtime-owned worktree to remove.
     Shared,
     /// The runtime-created clean worktree and its branch were removed.
     Removed,
-    /// The worktree was deliberately retained for handoff or because cleanup
-    /// could not be proven safe.
+    /// An isolated worktree remains, either with a proven handoff or
+    /// conservatively unresolved.
     Preserved,
 }
 
@@ -358,12 +406,8 @@ pub enum WorkspaceCleanup {
 pub struct WorkspaceSettlement {
     /// The immutable selection facts.
     pub snapshot: WorkspaceSnapshot,
-    /// Recovery metadata when the physical worktree remains available.
-    pub handoff: Option<WorkspaceHandoff>,
-    /// The cleanup disposition.
-    pub cleanup: WorkspaceCleanup,
-    /// A bounded physical inspection/cleanup failure, if any.
-    pub error: Option<String>,
+    /// The single authoritative physical settlement disposition.
+    pub disposition: WorkspaceSettlementDisposition,
 }
 
 impl WorkspaceSettlement {
@@ -372,20 +416,141 @@ impl WorkspaceSettlement {
     pub fn shared(snapshot: WorkspaceSnapshot) -> Self {
         Self {
             snapshot,
-            handoff: None,
-            cleanup: WorkspaceCleanup::Shared,
-            error: None,
+            disposition: WorkspaceSettlementDisposition::Shared,
+        }
+    }
+
+    fn removed(snapshot: WorkspaceSnapshot) -> Self {
+        Self {
+            snapshot,
+            disposition: WorkspaceSettlementDisposition::Removed,
+        }
+    }
+
+    fn retained(snapshot: WorkspaceSnapshot, handoff: WorkspaceHandoff) -> Self {
+        Self {
+            snapshot,
+            disposition: WorkspaceSettlementDisposition::Retained {
+                handoff,
+                cleanup_error: None,
+            },
+        }
+    }
+
+    fn retained_with_error(
+        snapshot: WorkspaceSnapshot,
+        handoff: WorkspaceHandoff,
+        cleanup_error: impl Into<String>,
+    ) -> Self {
+        Self {
+            snapshot,
+            disposition: WorkspaceSettlementDisposition::Retained {
+                handoff,
+                cleanup_error: Some(bound_settlement_detail(cleanup_error.into())),
+            },
         }
     }
 
     fn unresolved(snapshot: WorkspaceSnapshot, error: impl Into<String>) -> Self {
+        Self::unresolved_with_reason(
+            snapshot,
+            WorkspaceUnresolvedReason::PhysicalSettlement,
+            error,
+        )
+    }
+
+    fn unresolved_with_reason(
+        snapshot: WorkspaceSnapshot,
+        reason: WorkspaceUnresolvedReason,
+        detail: impl Into<String>,
+    ) -> Self {
         Self {
             snapshot,
-            handoff: None,
-            cleanup: WorkspaceCleanup::Preserved,
-            error: Some(error.into()),
+            disposition: WorkspaceSettlementDisposition::PreservedUnresolved {
+                reason,
+                detail: bound_settlement_detail(detail.into()),
+            },
         }
     }
+
+    /// The proven retained handoff, when the disposition is ordinary
+    /// `Retained`. Unresolved preservation deliberately returns `None`.
+    #[must_use]
+    pub fn handoff(&self) -> Option<&WorkspaceHandoff> {
+        match &self.disposition {
+            WorkspaceSettlementDisposition::Retained { handoff, .. } => Some(handoff),
+            WorkspaceSettlementDisposition::Shared
+            | WorkspaceSettlementDisposition::Removed
+            | WorkspaceSettlementDisposition::PreservedUnresolved { .. } => None,
+        }
+    }
+
+    /// The derived cleanup class. This is a projection, never an independent
+    /// state that can disagree with the disposition.
+    #[must_use]
+    pub const fn cleanup(&self) -> WorkspaceCleanup {
+        match self.disposition {
+            WorkspaceSettlementDisposition::Shared => WorkspaceCleanup::Shared,
+            WorkspaceSettlementDisposition::Removed => WorkspaceCleanup::Removed,
+            WorkspaceSettlementDisposition::Retained { .. }
+            | WorkspaceSettlementDisposition::PreservedUnresolved { .. } => {
+                WorkspaceCleanup::Preserved
+            }
+        }
+    }
+
+    /// The physical diagnostic, if settlement was unresolved or a retained
+    /// worktree's best-effort cleanup failed.
+    #[must_use]
+    pub fn error(&self) -> Option<&str> {
+        match &self.disposition {
+            WorkspaceSettlementDisposition::Retained {
+                cleanup_error: Some(error),
+                ..
+            }
+            | WorkspaceSettlementDisposition::PreservedUnresolved { detail: error, .. } => {
+                Some(error)
+            }
+            WorkspaceSettlementDisposition::Shared
+            | WorkspaceSettlementDisposition::Removed
+            | WorkspaceSettlementDisposition::Retained {
+                cleanup_error: None,
+                ..
+            } => None,
+        }
+    }
+
+    /// The durable reason for unresolved preservation, when applicable.
+    #[must_use]
+    pub const fn unresolved_reason(&self) -> Option<WorkspaceUnresolvedReason> {
+        match self.disposition {
+            WorkspaceSettlementDisposition::PreservedUnresolved { reason, .. } => Some(reason),
+            WorkspaceSettlementDisposition::Shared
+            | WorkspaceSettlementDisposition::Removed
+            | WorkspaceSettlementDisposition::Retained { .. } => None,
+        }
+    }
+
+    /// Whether a physical isolated workspace may remain without a proven
+    /// handoff.
+    #[must_use]
+    pub const fn is_unresolved(&self) -> bool {
+        matches!(
+            self.disposition,
+            WorkspaceSettlementDisposition::PreservedUnresolved { .. }
+        )
+    }
+}
+
+fn bound_settlement_detail(mut detail: String) -> String {
+    if detail.len() > MAX_WORKSPACE_SETTLEMENT_DETAIL_BYTES {
+        let mut end = MAX_WORKSPACE_SETTLEMENT_DETAIL_BYTES;
+        while !detail.is_char_boundary(end) {
+            end -= 1;
+        }
+        detail.truncate(end);
+    }
+    detail
 }
 
 /// A staged workspace acquisition/ownership failure.
@@ -771,6 +936,30 @@ impl SubagentWorkspaceManager {
         self.verify_retained_workspace(subagent_id, snapshot, handoff)
             .await
             .map(|_| ())
+    }
+
+    /// Re-proves an unresolved isolated workspace and, only after the full
+    /// current Git relationship succeeds, derives a fresh handoff for the
+    /// existing resource. Absence of the path or registration is a proof
+    /// failure; it is never treated as evidence that disposal already won.
+    ///
+    /// Nested-containment unresolved resources are rejected by the registry
+    /// before this method is called. Git ownership facts cannot prove that a
+    /// supervised process anchor is gone.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WorkspaceDisposalError::OwnershipMismatch`] when the
+    /// unresolved workspace cannot be re-proven as the exact runtime-owned
+    /// Git worktree recorded in `snapshot`.
+    pub async fn reprove_unresolved_workspace(
+        &self,
+        subagent_id: &SubagentId,
+        snapshot: &WorkspaceSnapshot,
+    ) -> Result<WorkspaceHandoff, WorkspaceDisposalError> {
+        let _disposal = self.disposal_lock.lock().await;
+        self.verify_unresolved_workspace(subagent_id, snapshot)
+            .await
     }
 
     /// Disposes one retained runtime-created worktree and its exact runtime
@@ -1244,6 +1433,153 @@ impl SubagentWorkspaceManager {
             ));
         }
         Ok(worktree.clone())
+    }
+
+    #[allow(clippy::too_many_lines)] // The unresolved re-proof is one ordered ownership check.
+    async fn verify_unresolved_workspace(
+        &self,
+        subagent_id: &SubagentId,
+        snapshot: &WorkspaceSnapshot,
+    ) -> Result<WorkspaceHandoff, WorkspaceDisposalError> {
+        fn mismatch(detail: impl Into<String>) -> WorkspaceDisposalError {
+            WorkspaceDisposalError::OwnershipMismatch {
+                detail: detail.into(),
+            }
+        }
+        snapshot.validate().map_err(mismatch)?;
+        let Some(worktree) = snapshot.git_worktree() else {
+            return Err(mismatch("the unresolved resource has no isolated worktree"));
+        };
+        let expected_branch = format!(
+            "rustx/subagent/{}",
+            deterministic_worktree_name(subagent_id)
+        );
+        let expected_root = self
+            .runtime_root
+            .join("worktrees")
+            .join(deterministic_worktree_name(subagent_id));
+        if worktree.branch != expected_branch || worktree.physical_worktree_root != expected_root {
+            return Err(mismatch(
+                "the unresolved worktree is outside this runtime's deterministic allocation",
+            ));
+        }
+
+        self.verify_source_repository(worktree).await?;
+        let physical_top = self
+            .git_text(
+                &worktree.physical_worktree_root,
+                vec!["rev-parse".into(), "--show-toplevel".into()],
+                None,
+            )
+            .await
+            .map_err(|error| {
+                mismatch(format!(
+                    "the unresolved physical path is not a Git worktree: {error}"
+                ))
+            })?;
+        let physical_top = std::fs::canonicalize(physical_top).map_err(|error| {
+            mismatch(format!(
+                "the current unresolved worktree identity is invalid: {error}"
+            ))
+        })?;
+        let recorded_physical =
+            std::fs::canonicalize(&worktree.physical_worktree_root).map_err(|error| {
+                mismatch(format!(
+                    "the unresolved physical worktree is unavailable: {error}"
+                ))
+            })?;
+        if physical_top != recorded_physical {
+            return Err(mismatch(
+                "the unresolved physical path resolves to a different Git worktree",
+            ));
+        }
+
+        let listing = self
+            .git_text(
+                &worktree.source_repository_root,
+                vec!["worktree".into(), "list".into(), "--porcelain".into()],
+                None,
+            )
+            .await
+            .map_err(|error| {
+                mismatch(format!(
+                    "current Git worktree registration is unavailable: {error}"
+                ))
+            })?;
+        if !worktree_listing_contains_registration(&listing, snapshot) {
+            return Err(mismatch(
+                "current Git registration does not match the unresolved worktree path",
+            ));
+        }
+
+        let physical_head = self
+            .git_text(
+                &worktree.physical_worktree_root,
+                vec!["rev-parse".into(), "HEAD".into()],
+                None,
+            )
+            .await
+            .map_err(|error| {
+                mismatch(format!(
+                    "current unresolved worktree HEAD is unavailable: {error}"
+                ))
+            })?;
+        let reference = format!("refs/heads/{}", worktree.branch);
+        let branch_head = self
+            .git_text(
+                &worktree.source_repository_root,
+                vec!["rev-parse".into(), "--verify".into(), reference.into()],
+                None,
+            )
+            .await
+            .map_err(|error| {
+                mismatch(format!(
+                    "the unresolved runtime branch ref is unavailable: {error}"
+                ))
+            })?;
+        if branch_head != physical_head {
+            return Err(mismatch(
+                "the unresolved worktree HEAD and runtime branch no longer match",
+            ));
+        }
+        // An unresolved settlement has no durable terminal handoff HEAD.
+        // The immutable acquisition snapshot can therefore authorize a later
+        // disposal only while both current heads remain at the selected base.
+        // A changed commit may be legitimate child work, but without a proven
+        // handoff rustX cannot distinguish it from an external ref mutation.
+        if physical_head != worktree.base_commit || branch_head != worktree.base_commit {
+            return Err(mismatch(
+                "the unresolved worktree changed from its immutable base without a durable handoff",
+            ));
+        }
+        let status = self
+            .git_text(
+                &worktree.physical_worktree_root,
+                ordinary_workspace_status_args(),
+                None,
+            )
+            .await
+            .map_err(|error| {
+                mismatch(format!(
+                    "current unresolved worktree status is unavailable: {error}"
+                ))
+            })?;
+        let (dirty, _) =
+            workspace_change_facts(Some(&worktree.base_commit), &physical_head, &status);
+        let handoff = WorkspaceHandoff {
+            logical_workspace: snapshot.logical_workspace.clone(),
+            physical_worktree_root: worktree.physical_worktree_root.clone(),
+            branch: worktree.branch.clone(),
+            base_commit: worktree.base_commit.clone(),
+            head_commit: physical_head,
+            dirty,
+        };
+        if !worktree_listing_contains_handoff(&listing, snapshot, &handoff) {
+            return Err(mismatch(
+                "current Git registration does not match the unresolved worktree branch and HEAD",
+            ));
+        }
+        Ok(handoff)
     }
 
     /// Installs a test-only barrier after worktree and overlay verification,
@@ -2067,16 +2403,17 @@ impl SubagentWorkspaceManager {
         let (dirty, _) = workspace_change_facts(Some(&worktree.base_commit), &head, &status);
         WorkspaceSettlement {
             snapshot: snapshot.clone(),
-            handoff: Some(WorkspaceHandoff {
-                logical_workspace: snapshot.logical_workspace.clone(),
-                physical_worktree_root: worktree.physical_worktree_root.clone(),
-                branch,
-                base_commit,
-                head_commit: head,
-                dirty,
-            }),
-            cleanup: WorkspaceCleanup::Preserved,
-            error: None,
+            disposition: WorkspaceSettlementDisposition::Retained {
+                handoff: WorkspaceHandoff {
+                    logical_workspace: snapshot.logical_workspace.clone(),
+                    physical_worktree_root: worktree.physical_worktree_root.clone(),
+                    branch,
+                    base_commit,
+                    head_commit: head,
+                    dirty,
+                },
+                cleanup_error: None,
+            },
         }
     }
 }
@@ -2137,7 +2474,17 @@ impl WorkspaceLease {
         self,
         detail: impl Into<String>,
     ) -> WorkspaceSettlement {
-        WorkspaceSettlement::unresolved(self.snapshot, detail)
+        if !self.snapshot.is_isolated() {
+            // Nested containment is still reported by the caller as a
+            // physical settlement failure, but a shared workspace has no
+            // runtime-created worktree whose ownership can be preserved.
+            return WorkspaceSettlement::shared(self.snapshot);
+        }
+        WorkspaceSettlement::unresolved_with_reason(
+            self.snapshot,
+            WorkspaceUnresolvedReason::NestedContainment,
+            detail,
+        )
     }
 
     /// Settles a lease that never crossed durable child ownership.  Any dirty
@@ -2146,11 +2493,14 @@ impl WorkspaceLease {
         self,
     ) -> Result<WorkspaceSettlement, WorkspaceSettlementError> {
         let settlement = self.settle().await;
-        if settlement.handoff.is_some() || settlement.error.is_some() {
-            let detail = settlement.error.clone().unwrap_or_else(|| {
-                "staged workspace is dirty or has a committed child change; it was preserved"
-                    .to_owned()
-            });
+        if settlement.cleanup() == WorkspaceCleanup::Preserved {
+            let detail = settlement.error().map_or_else(
+                || {
+                    "staged workspace is dirty or has a committed child change; it was preserved"
+                        .to_owned()
+                },
+                str::to_owned,
+            );
             return Err(WorkspaceSettlementError {
                 detail,
                 settlement: Box::new(settlement),
@@ -2188,12 +2538,7 @@ impl WorkspaceLease {
         {
             return WorkspaceSettlement::unresolved(snapshot, error);
         }
-        WorkspaceSettlement {
-            snapshot,
-            handoff: None,
-            cleanup: WorkspaceCleanup::Removed,
-            error: None,
-        }
+        WorkspaceSettlement::removed(snapshot)
     }
 
     async fn settle_registered(self) -> WorkspaceSettlement {
@@ -2268,26 +2613,11 @@ impl WorkspaceLease {
             dirty,
         };
         if changed {
-            return WorkspaceSettlement {
-                snapshot,
-                handoff: Some(handoff),
-                cleanup: WorkspaceCleanup::Preserved,
-                error: None,
-            };
+            return WorkspaceSettlement::retained(snapshot, handoff);
         }
         match self.manager.remove_clean_worktree(&snapshot).await {
-            Ok(()) => WorkspaceSettlement {
-                snapshot,
-                handoff: None,
-                cleanup: WorkspaceCleanup::Removed,
-                error: None,
-            },
-            Err(error) => WorkspaceSettlement {
-                snapshot,
-                handoff: Some(handoff),
-                cleanup: WorkspaceCleanup::Preserved,
-                error: Some(error),
-            },
+            Ok(()) => WorkspaceSettlement::removed(snapshot),
+            Err(error) => WorkspaceSettlement::retained_with_error(snapshot, handoff, error),
         }
     }
 }
@@ -3665,7 +3995,7 @@ mod tests {
         assert_eq!(lease.logical_workspace(), workspace);
         assert!(!lease.snapshot().is_isolated());
         let settlement = lease.settle_after_child().await;
-        assert_eq!(settlement.cleanup, WorkspaceCleanup::Shared);
+        assert_eq!(settlement.cleanup(), WorkspaceCleanup::Shared);
         assert!(workspace.exists());
         assert_eq!(
             std::fs::read_to_string(workspace.join("dirty.txt")).expect("shared file"),
@@ -3710,7 +4040,7 @@ mod tests {
         );
         assert!(!lease.logical_workspace().join("untracked.txt").exists());
         let settlement = lease.settle_after_child().await;
-        assert_eq!(settlement.cleanup, WorkspaceCleanup::Removed);
+        assert_eq!(settlement.cleanup(), WorkspaceCleanup::Removed);
         assert!(
             !settlement
                 .snapshot
@@ -3742,8 +4072,8 @@ mod tests {
         let branch = worktree.branch.clone();
         assert!(ref_exists(dir.path(), &branch));
         let settlement = lease.settle_after_child().await;
-        assert_eq!(settlement.cleanup, WorkspaceCleanup::Removed);
-        assert!(settlement.handoff.is_none());
+        assert_eq!(settlement.cleanup(), WorkspaceCleanup::Removed);
+        assert!(settlement.handoff().is_none());
         assert!(!physical.exists(), "unchanged isolated worktree is removed");
         assert!(
             !ref_exists(dir.path(), &branch),
@@ -3780,14 +4110,14 @@ mod tests {
         .expect("dirty retained source");
 
         let settlement = lease.settle_after_child().await;
-        assert_eq!(settlement.cleanup, WorkspaceCleanup::Preserved);
-        let handoff = settlement.handoff.clone().expect("retained handoff");
+        assert_eq!(settlement.cleanup(), WorkspaceCleanup::Preserved);
+        let handoff = settlement.handoff().expect("retained handoff");
         assert!(handoff.dirty);
         assert!(physical.exists());
         assert!(ref_exists(repository.path(), &branch));
 
         manager
-            .dispose_retained_workspace(&subagent_id, &settlement.snapshot, &handoff)
+            .dispose_retained_workspace(&subagent_id, &settlement.snapshot, handoff)
             .await
             .expect("exact retained resource disposal");
 
@@ -3824,13 +4154,13 @@ mod tests {
         )
         .expect("retained source change");
         let settlement = lease.settle_after_child().await;
-        let handoff = settlement.handoff.expect("retained handoff");
+        let handoff = settlement.handoff().expect("retained handoff");
         let physical = handoff.physical_worktree_root.clone();
         let branch = handoff.branch.clone();
 
         hook.fail_branch_cleanup("injected compare-delete failure");
         let result = manager
-            .dispose_retained_workspace(&subagent_id, &settlement.snapshot, &handoff)
+            .dispose_retained_workspace(&subagent_id, &settlement.snapshot, handoff)
             .await
             .expect("the physical layer reports partial success as a value");
         assert!(matches!(
@@ -3856,7 +4186,7 @@ mod tests {
         // A direct, non-authorized retry cannot infer success from absence.
         // Only the registry's durable intent may use the continuation phase.
         let retry = manager
-            .dispose_retained_workspace(&subagent_id, &settlement.snapshot, &handoff)
+            .dispose_retained_workspace(&subagent_id, &settlement.snapshot, handoff)
             .await;
         assert!(matches!(
             retry,
@@ -3883,7 +4213,7 @@ mod tests {
         )
         .expect("retained source change");
         let settlement = lease.settle_after_child().await;
-        let handoff = settlement.handoff.expect("retained handoff");
+        let handoff = settlement.handoff().expect("retained handoff");
         let physical = handoff.physical_worktree_root.clone();
         let branch = handoff.branch.clone();
         hook.arm_after_worktree_removal();
@@ -3932,7 +4262,7 @@ mod tests {
             .dispose_authorized_workspace(
                 &subagent_id,
                 &settlement.snapshot,
-                &handoff,
+                handoff,
                 super::WorkspaceDisposalPhase::WorktreeRemoved,
             )
             .await
@@ -3960,7 +4290,7 @@ mod tests {
         )
         .expect("retained source change");
         let settlement = lease.settle_after_child().await;
-        let handoff = settlement.handoff.expect("retained handoff");
+        let handoff = settlement.handoff().expect("retained handoff");
         let physical = handoff.physical_worktree_root.clone();
         let branch = handoff.branch.clone();
         git(
@@ -3976,7 +4306,7 @@ mod tests {
         assert!(ref_exists(repository.path(), &branch));
 
         let result = manager
-            .dispose_retained_workspace(&subagent_id, &settlement.snapshot, &handoff)
+            .dispose_retained_workspace(&subagent_id, &settlement.snapshot, handoff)
             .await;
         assert!(matches!(
             result,
@@ -4026,10 +4356,10 @@ mod tests {
         )
         .expect("target source change");
         let settlement = lease.settle_after_child().await;
-        let handoff = settlement.handoff.expect("changed handoff");
+        let handoff = settlement.handoff().expect("changed handoff");
 
         manager
-            .dispose_retained_workspace(&subagent_id, &settlement.snapshot, &handoff)
+            .dispose_retained_workspace(&subagent_id, &settlement.snapshot, handoff)
             .await
             .expect("target disposal");
 
@@ -4070,7 +4400,7 @@ mod tests {
         )
         .expect("path test source change");
         let tampered_path_settlement = tampered_path_lease.settle_after_child().await;
-        let tampered_path_handoff = tampered_path_settlement.handoff.expect("handoff");
+        let tampered_path_handoff = tampered_path_settlement.handoff().expect("handoff");
         let mut tampered_path = tampered_path_handoff.clone();
         tampered_path.physical_worktree_root = runtime.path().join("somewhere-else");
         let tampered_path_result = manager
@@ -4118,7 +4448,7 @@ mod tests {
         )
         .expect("branch test source change");
         let mismatched_branch_settlement = mismatched_branch_lease.settle_after_child().await;
-        let mismatched_branch_handoff = mismatched_branch_settlement.handoff.expect("handoff");
+        let mismatched_branch_handoff = mismatched_branch_settlement.handoff().expect("handoff");
         let mismatched_branch_physical = mismatched_branch_handoff.physical_worktree_root.clone();
         let mismatched_branch_name = mismatched_branch_handoff.branch.clone();
         git(
@@ -4129,7 +4459,7 @@ mod tests {
             .dispose_retained_workspace(
                 &mismatched_branch_id,
                 &mismatched_branch_settlement.snapshot,
-                &mismatched_branch_handoff,
+                mismatched_branch_handoff,
             )
             .await;
         assert!(matches!(
@@ -4149,7 +4479,7 @@ mod tests {
             .dispose_retained_workspace(
                 &mismatched_branch_id,
                 &mismatched_branch_settlement.snapshot,
-                &mismatched_branch_handoff,
+                mismatched_branch_handoff,
             )
             .await;
         assert!(matches!(
@@ -4177,7 +4507,7 @@ mod tests {
         .expect("registration test source change");
         let missing_registration_settlement = missing_registration_lease.settle_after_child().await;
         let missing_registration_handoff =
-            missing_registration_settlement.handoff.expect("handoff");
+            missing_registration_settlement.handoff().expect("handoff");
         let missing_registration_physical =
             missing_registration_handoff.physical_worktree_root.clone();
         let missing_registration_branch = missing_registration_handoff.branch.clone();
@@ -4197,7 +4527,7 @@ mod tests {
             .dispose_retained_workspace(
                 &missing_registration_id,
                 &missing_registration_settlement.snapshot,
-                &missing_registration_handoff,
+                missing_registration_handoff,
             )
             .await;
         assert!(matches!(
@@ -4232,7 +4562,8 @@ mod tests {
         )
         .expect("repository mismatch source change");
         let mismatch_repository_settlement = mismatch_repository_lease.settle_after_child().await;
-        let mismatch_repository_handoff = mismatch_repository_settlement.handoff.expect("handoff");
+        let mismatch_repository_handoff =
+            mismatch_repository_settlement.handoff().expect("handoff");
         let mismatch_repository_physical =
             mismatch_repository_handoff.physical_worktree_root.clone();
         let mut mismatch_snapshot = mismatch_repository_settlement.snapshot.clone();
@@ -4244,7 +4575,7 @@ mod tests {
             .dispose_retained_workspace(
                 &mismatch_repository_id,
                 &mismatch_snapshot,
-                &mismatch_repository_handoff,
+                mismatch_repository_handoff,
             )
             .await;
         assert!(matches!(
@@ -4273,7 +4604,7 @@ mod tests {
         )
         .expect("race source change");
         let settlement = lease.settle_after_child().await;
-        let handoff = settlement.handoff.expect("retained handoff");
+        let handoff = settlement.handoff().expect("retained handoff");
         let physical = handoff.physical_worktree_root.clone();
         let task_manager = manager.clone();
         let task_id = subagent_id.clone();
@@ -4370,7 +4701,7 @@ mod tests {
             expected
         );
         assert_eq!(
-            lease.settle_after_child().await.cleanup,
+            lease.settle_after_child().await.cleanup(),
             WorkspaceCleanup::Removed
         );
     }
@@ -4414,7 +4745,7 @@ mod tests {
             b"FROZEN=after\n"
         );
         assert_eq!(
-            lease.settle_after_child().await.cleanup,
+            lease.settle_after_child().await.cleanup(),
             WorkspaceCleanup::Removed
         );
     }
@@ -4645,7 +4976,7 @@ mod tests {
             b"OUTSIDE\n"
         );
         assert_eq!(
-            lease.settle_after_child().await.cleanup,
+            lease.settle_after_child().await.cleanup(),
             WorkspaceCleanup::Removed
         );
     }
@@ -4726,7 +5057,7 @@ mod tests {
             u64::try_from(MAX_OVERLAY_BYTES).expect("limit fits u64")
         );
         assert_eq!(
-            accepted.settle_after_child().await.cleanup,
+            accepted.settle_after_child().await.cleanup(),
             WorkspaceCleanup::Removed
         );
 
@@ -4786,7 +5117,7 @@ mod tests {
         assert_eq!(lease.logical_workspace(), physical);
         assert_eq!(lease.physical_worktree_root(), Some(physical.as_path()));
         assert_eq!(
-            lease.settle_after_child().await.cleanup,
+            lease.settle_after_child().await.cleanup(),
             WorkspaceCleanup::Removed
         );
     }
@@ -4819,7 +5150,7 @@ mod tests {
             "committed scope\n"
         );
         assert_eq!(
-            lease.settle_after_child().await.cleanup,
+            lease.settle_after_child().await.cleanup(),
             WorkspaceCleanup::Removed
         );
     }
@@ -4844,7 +5175,7 @@ mod tests {
         assert_eq!(facts.physical_worktree_root, physical);
         assert_eq!(lease.logical_workspace(), physical.join(relative));
         assert_eq!(
-            lease.settle_after_child().await.cleanup,
+            lease.settle_after_child().await.cleanup(),
             WorkspaceCleanup::Removed
         );
     }
@@ -4922,9 +5253,9 @@ mod tests {
         std::fs::write(logical.join("child-work.txt"), "retain me\n").expect("child work");
 
         let settlement = lease.settle_after_child().await;
-        let handoff = settlement.handoff.as_ref().expect("retained handoff");
+        let handoff = settlement.handoff().expect("retained handoff");
 
-        assert_eq!(settlement.cleanup, WorkspaceCleanup::Preserved);
+        assert_eq!(settlement.cleanup(), WorkspaceCleanup::Preserved);
         assert_eq!(settlement.snapshot.logical_workspace, logical);
         assert_eq!(
             settlement
@@ -5017,7 +5348,7 @@ mod tests {
         );
         assert!(!hook_marker.exists(), "checkout hook must not run");
         assert_eq!(
-            lease.settle_after_child().await.cleanup,
+            lease.settle_after_child().await.cleanup(),
             WorkspaceCleanup::Removed
         );
     }
@@ -5047,8 +5378,8 @@ mod tests {
 
         let settlement = lease.settle_after_child().await;
 
-        assert_eq!(settlement.cleanup, WorkspaceCleanup::Removed);
-        assert!(settlement.handoff.is_none());
+        assert_eq!(settlement.cleanup(), WorkspaceCleanup::Removed);
+        assert!(settlement.handoff().is_none());
         assert!(!path.exists(), "ignored-only output is disposable cache");
         assert!(!ref_exists(dir.path(), &branch), "runtime ref was removed");
     }
@@ -5076,8 +5407,8 @@ mod tests {
 
         let settlement = lease.settle_after_child().await;
 
-        assert_eq!(settlement.cleanup, WorkspaceCleanup::Removed);
-        assert!(settlement.handoff.is_none());
+        assert_eq!(settlement.cleanup(), WorkspaceCleanup::Removed);
+        assert!(settlement.handoff().is_none());
         assert!(!path.exists(), "overlay-only state does not force handoff");
     }
 
@@ -5116,8 +5447,8 @@ mod tests {
         );
 
         let settlement = lease.settle_after_child().await;
-        let handoff = settlement.handoff.expect("source handoff");
-        assert_eq!(settlement.cleanup, WorkspaceCleanup::Preserved);
+        let handoff = settlement.handoff().expect("source handoff");
+        assert_eq!(settlement.cleanup(), WorkspaceCleanup::Preserved);
         assert!(
             !handoff.dirty,
             "the overlay is not ordinary source dirtiness"
@@ -5158,7 +5489,7 @@ mod tests {
                 .base_commit
         );
         let settlement = lease.settle_after_child().await;
-        assert_eq!(settlement.cleanup, WorkspaceCleanup::Removed);
+        assert_eq!(settlement.cleanup(), WorkspaceCleanup::Removed);
         assert_eq!(head(dir.path()), parent_head);
     }
 
@@ -5188,8 +5519,8 @@ mod tests {
         .expect("child untracked change");
         let path = lease.logical_workspace().to_path_buf();
         let settlement = lease.settle_after_child().await;
-        let handoff = settlement.handoff.expect("dirty handoff");
-        assert_eq!(settlement.cleanup, WorkspaceCleanup::Preserved);
+        let handoff = settlement.handoff().expect("dirty handoff");
+        assert_eq!(settlement.cleanup(), WorkspaceCleanup::Preserved);
         assert_eq!(handoff.logical_workspace, path);
         assert_eq!(handoff.physical_worktree_root, path);
         assert_eq!(handoff.base_commit, handoff.head_commit);
@@ -5226,8 +5557,8 @@ mod tests {
         .expect("child file");
         commit(lease.logical_workspace(), "child commit");
         let settlement = lease.settle_after_child().await;
-        let handoff = settlement.handoff.expect("committed handoff");
-        assert_eq!(settlement.cleanup, WorkspaceCleanup::Preserved);
+        let handoff = settlement.handoff().expect("committed handoff");
+        assert_eq!(settlement.cleanup(), WorkspaceCleanup::Preserved);
         assert!(!handoff.dirty);
         assert_ne!(handoff.head_commit, base);
         assert_eq!(handoff.head_commit, head(&handoff.physical_worktree_root));
@@ -5266,9 +5597,9 @@ mod tests {
         .expect("cache");
 
         let settlement = lease.settle_after_child().await;
-        let handoff = settlement.handoff.expect("committed handoff");
+        let handoff = settlement.handoff().expect("committed handoff");
 
-        assert_eq!(settlement.cleanup, WorkspaceCleanup::Preserved);
+        assert_eq!(settlement.cleanup(), WorkspaceCleanup::Preserved);
         assert!(!handoff.dirty);
         assert_ne!(handoff.head_commit, base);
     }
@@ -5299,9 +5630,9 @@ mod tests {
         .expect("cache");
 
         let settlement = lease.settle_after_child().await;
-        let handoff = settlement.handoff.expect("source handoff");
+        let handoff = settlement.handoff().expect("source handoff");
 
-        assert_eq!(settlement.cleanup, WorkspaceCleanup::Preserved);
+        assert_eq!(settlement.cleanup(), WorkspaceCleanup::Preserved);
         assert!(handoff.dirty);
         assert_eq!(handoff.base_commit, handoff.head_commit);
     }
@@ -5329,9 +5660,9 @@ mod tests {
         drop(lease);
 
         let settlement = SubagentWorkspaceManager::inspect_recovered(&snapshot);
-        let handoff = settlement.handoff.expect("recovered handoff");
+        let handoff = settlement.handoff().expect("recovered handoff");
 
-        assert_eq!(settlement.cleanup, WorkspaceCleanup::Preserved);
+        assert_eq!(settlement.cleanup(), WorkspaceCleanup::Preserved);
         assert!(!handoff.dirty);
         assert_eq!(handoff.base_commit, handoff.head_commit);
     }
@@ -5366,8 +5697,8 @@ mod tests {
         )
         .expect("dirty child file");
         let settlement = lease.settle_after_child().await;
-        let handoff = settlement.handoff.expect("combined handoff");
-        assert_eq!(settlement.cleanup, WorkspaceCleanup::Preserved);
+        let handoff = settlement.handoff().expect("combined handoff");
+        assert_eq!(settlement.cleanup(), WorkspaceCleanup::Preserved);
         assert!(handoff.dirty);
         assert_ne!(handoff.head_commit, base);
     }
@@ -5390,7 +5721,7 @@ mod tests {
             .settle_staged()
             .await
             .expect_err("unexpected staged work must block cleanup");
-        assert!(error.settlement.handoff.is_some());
+        assert!(error.settlement.handoff().is_some());
         assert!(error.settlement.snapshot.logical_workspace.exists());
         assert!(path.join("staged.txt").exists());
     }
@@ -5544,8 +5875,8 @@ mod tests {
         );
         let first_settlement = first.settle_after_child().await;
         let second_settlement = second.settle_after_child().await;
-        assert_eq!(first_settlement.cleanup, WorkspaceCleanup::Removed);
-        assert_eq!(second_settlement.cleanup, WorkspaceCleanup::Removed);
+        assert_eq!(first_settlement.cleanup(), WorkspaceCleanup::Removed);
+        assert_eq!(second_settlement.cleanup(), WorkspaceCleanup::Removed);
     }
 
     #[tokio::test]
@@ -5572,7 +5903,7 @@ mod tests {
             "the losing acquisition did not touch the winner"
         );
         assert_eq!(
-            first.settle_after_child().await.cleanup,
+            first.settle_after_child().await.cleanup(),
             WorkspaceCleanup::Removed
         );
         assert!(!path.exists());
@@ -5603,7 +5934,7 @@ mod tests {
             "unexpected losing acquisition error: {error:?}"
         );
         assert_eq!(
-            lease.settle_after_child().await.cleanup,
+            lease.settle_after_child().await.cleanup(),
             WorkspaceCleanup::Removed
         );
     }
@@ -5772,7 +6103,7 @@ mod tests {
             "ignored-only artifacts are not uncommitted source changes"
         );
         assert_eq!(
-            lease.settle_after_child().await.cleanup,
+            lease.settle_after_child().await.cleanup(),
             WorkspaceCleanup::Removed
         );
     }
@@ -5836,6 +6167,6 @@ mod tests {
                 .base_commit
         );
         let settlement = lease.settle_after_child().await;
-        assert_eq!(settlement.cleanup, WorkspaceCleanup::Removed);
+        assert_eq!(settlement.cleanup(), WorkspaceCleanup::Removed);
     }
 }

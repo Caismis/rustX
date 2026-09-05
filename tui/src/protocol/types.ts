@@ -24,9 +24,9 @@
  */
 
 /**
- * Version 16 adds the retained-workspace resource phase and pending
- * partial-settlement outcome. Version 15 added the explicit retained-workspace
- * disposal request/result and the ownership-mismatch error. Version 14 adds the Agent Status contextual
+ * Version 15 adds the retained-workspace disposal request/result, the
+ * unresolved-preservation resource state, and the pending partial-settlement
+ * outcome. Version 14 adds the Agent Status contextual
  * annotation projection: the
  * snapshot carries the bounded composition window `statuses` instead of a
  * latest-only `status`, each status opportunity carries the durable identity
@@ -40,7 +40,7 @@
  * version 11's subagent activity projection; and version 9's closed
  * `interrupted` lifecycle vocabulary. Older schemas are not decoded.
  */
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 16;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 15;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -773,6 +773,7 @@ export interface RuntimeClientSubagentWorkspace {
 export type RuntimeClientWorkspaceResourceState =
   | "none"
   | "retained"
+  | "preserved_unresolved"
   | "disposal_in_progress"
   | "worktree_removed"
   | "disposed";

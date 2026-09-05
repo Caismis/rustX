@@ -631,7 +631,7 @@ export class RustxTuiApp {
     }
   }
 
-  /** Asks for confirmation before disposing the selected retained handoff. */
+  /** Asks for confirmation before disposing the selected runtime-owned workspace. */
   #confirmDisposeSelectedSubagent(): void {
     if (
       !this.#subagentListFocused ||
@@ -653,7 +653,9 @@ export class RustxTuiApp {
     }
     const resourceState = selected.workspace.resource_state;
     const disposalRetryable =
-      resourceState === "disposal_in_progress" || resourceState === "worktree_removed";
+      resourceState === "preserved_unresolved" ||
+      resourceState === "disposal_in_progress" ||
+      resourceState === "worktree_removed";
     if (selected.workspace.handoff === undefined && !disposalRetryable) {
       this.#showTransient("info", "the selected subagent has no retained workspace");
       return;
@@ -664,7 +666,9 @@ export class RustxTuiApp {
     const confirmation = new ConfirmationView({
       title: "Dispose retained workspace",
       subject: `Subagent ${subagentId}`,
-      warning: disposalRetryable
+      warning: resourceState === "preserved_unresolved"
+        ? "This workspace was preserved because physical settlement could not be proven. rustX will re-check ownership before attempting disposal."
+        : disposalRetryable
         ? "This resumes the runtime-authorized disposal of the selected subagent workspace."
         : "This permanently removes the retained Git worktree and discards its uncommitted source changes.",
       onConfirm: () => {

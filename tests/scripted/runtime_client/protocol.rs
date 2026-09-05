@@ -361,28 +361,28 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         incompatible,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 16,
-            requested: 17,
+            supported: 15,
+            requested: 16,
         })
     ));
     let old_protocol = host.attach(7);
     assert!(matches!(
         old_protocol,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 16,
+            supported: 15,
             requested: 7,
         })
     ));
-    // v15 carried Issue #187's workspace authority projection together with
-    // the pre-#194 latest-only Agent Status shape (`status`, no published
-    // placement, no window transition). Issue #194 replaced that shape under
-    // v16, so a v14 client is refused rather than served a projection it
-    // would misread. There is no v14 -> v16 conversion.
+    // v14 is the pre-#190 contract: it already carries Issue #187's
+    // workspace authority projection and Issue #194's Agent Status window.
+    // The v15 disposal/resource shape has no v14 conversion path, so the
+    // older client is refused rather than served a projection it would
+    // misread.
     let latest_only_status = host.attach(14);
     assert!(matches!(
         latest_only_status,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 16,
+            supported: 15,
             requested: 14,
         })
     ));
@@ -392,7 +392,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         profile_shaped,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 16,
+            supported: 15,
             requested: 6,
         })
     ));
@@ -404,7 +404,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_workspace_boundary,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 16,
+            supported: 15,
             requested: 12,
         })
     ));
@@ -511,13 +511,13 @@ async fn attachment_raii_drop_detaches() {
 /// The subagent workspace projection serializes exactly as the shared
 /// `tests/fixtures/runtime-client/*.json` fixtures the TUI protocol mirror
 /// is validated against. This is the cross-language regression for the
-/// Issue #187 wire shape, carried into v16 with the authoritative retained
+/// Issue #187 wire shape, carried into v15 with the authoritative retained
 /// handoff identity fields: if either side drifts
 /// back to the pre-#187 flat `workspace`/`isolated` schema, or Issue #190
 /// silently drops a workspace field, one of the two fixture
 /// assertions fails.
 #[test]
-fn v16_workspace_wire_shape_matches_the_shared_fixtures() {
+fn v15_workspace_wire_shape_matches_the_shared_fixtures() {
     let shared = RuntimeClientSubagentWorkspace {
         logical_workspace: std::path::PathBuf::from("/repo"),
         isolation: RuntimeClientWorkspaceIsolation::Shared,
@@ -546,15 +546,26 @@ fn v16_workspace_wire_shape_matches_the_shared_fixtures() {
             dirty: false,
         }),
     };
+    let preserved_unresolved = RuntimeClientSubagentWorkspace {
+        logical_workspace: isolated_subdirectory.logical_workspace.clone(),
+        isolation: isolated_subdirectory.isolation.clone(),
+        resource_state:
+            rustx::runtime::subagent::SubagentWorkspaceResourceState::PreservedUnresolved,
+        handoff: None,
+    };
 
     for (fixture, workspace) in [
         (
-            "tests/fixtures/runtime-client/workspace-shared-v16.json",
+            "tests/fixtures/runtime-client/workspace-shared-v15.json",
             &shared,
         ),
         (
-            "tests/fixtures/runtime-client/workspace-git-worktree-v16.json",
+            "tests/fixtures/runtime-client/workspace-git-worktree-v15.json",
             &isolated_subdirectory,
+        ),
+        (
+            "tests/fixtures/runtime-client/workspace-git-worktree-preserved-unresolved-v15.json",
+            &preserved_unresolved,
         ),
     ] {
         let expected = std::fs::read_to_string(fixture).expect("read fixture");
@@ -562,7 +573,7 @@ fn v16_workspace_wire_shape_matches_the_shared_fixtures() {
         assert_eq!(
             serialized,
             expected.trim_end(),
-            "{fixture}: the serialized v16 workspace shape drifted from the \
+            "{fixture}: the serialized v15 workspace shape drifted from the \
              fixture the TUI mirror is validated against"
         );
         let decoded: RuntimeClientSubagentWorkspace =

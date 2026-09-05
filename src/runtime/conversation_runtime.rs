@@ -3198,15 +3198,22 @@ impl ConversationRuntime {
             test_pre_tool_policy: Mutex::new(None),
         });
         // Recovery has already durably terminalized every orphaned child.
-        // Restore only terminal read-model records and their inspected
-        // workspace handoffs; no child process, policy, or frozen resource is
-        // reconstructed from current configuration.
+        // Restore only terminal read-model records and their durable
+        // workspace resource facts (proven handoffs or unresolved ownership);
+        // no child process, policy, or frozen resource is reconstructed from
+        // current configuration.
         if let Some(subagents) = &inner.subagents {
             for handoff in inner.recovery.settled_subagent_handoffs() {
                 subagents.restore_recovered_handoff(handoff);
             }
             for handoff in &inner.recovery.reconciliation().subagent_handoffs {
                 subagents.restore_recovered_handoff(handoff);
+            }
+            for unresolved in inner.recovery.settled_subagent_unresolved() {
+                subagents.restore_recovered_unresolved(unresolved);
+            }
+            for unresolved in &inner.recovery.reconciliation().subagent_unresolved {
+                subagents.restore_recovered_unresolved(unresolved);
             }
             for disposal in inner.recovery.settled_subagent_disposals() {
                 subagents.restore_recovered_disposal(disposal);
