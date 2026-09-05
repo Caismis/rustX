@@ -120,6 +120,21 @@ pub enum SubagentOwnershipKind {
     Workflow,
 }
 
+/// The durable phase reached by one retained-workspace disposal operation.
+///
+/// This is a post-terminal resource fact, not a logical subagent lifecycle
+/// state. `WorktreeRemoved` deliberately leaves the resource lifecycle open:
+/// the exact runtime branch may still need compare-and-delete settlement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentWorkspaceDisposalSettlement {
+    /// The exact runtime worktree was removed, but branch cleanup remains
+    /// outstanding or was refused by compare-and-delete.
+    WorktreeRemoved,
+    /// The exact runtime worktree and branch are both settled.
+    Disposed,
+}
+
 /// The current schema version of [`RuntimeEventEnvelope`].
 ///
 /// This version stamps the *envelope*, and it is deliberately independent of
@@ -507,18 +522,30 @@ pub enum RuntimeEvent {
         workspace_handoff: Option<WorkspaceHandoff>,
     },
 
-    /// A retained subagent workspace was explicitly disposed by the
-    /// Runtime Client/workspace plane after its physical ownership proof
-    /// succeeded. This is a post-terminal resource fact, not another
-    /// subagent lifecycle transition: the terminal event remains the sole
-    /// logical child terminal boundary.
-    SubagentWorkspaceDisposed {
-        /// The subagent identity whose retained resource was disposed.
+    /// The Runtime Client/workspace plane durably admitted disposal of one
+    /// exact retained handoff. This is a post-terminal resource fact, not
+    /// another subagent lifecycle transition: the terminal event remains the
+    /// sole logical child terminal boundary.
+    SubagentWorkspaceDisposalStarted {
+        /// The subagent identity whose retained resource is being disposed.
         subagent_id: SubagentId,
-        /// The exact retained handoff that the workspace plane proved and
-        /// removed. Durable validation compares it with the ownership and
-        /// terminal facts; it is not authority by itself.
+        /// The exact retained handoff admitted for disposal. Durable
+        /// validation compares it with the ownership and terminal facts; it
+        /// is not authority by itself.
         workspace_handoff: WorkspaceHandoff,
+    },
+
+    /// A durable settlement of one previously admitted retained-workspace
+    /// disposal. `WorktreeRemoved` is an explicit partial state; `Disposed`
+    /// closes the separate resource lifecycle. Neither changes the logical
+    /// subagent terminal state.
+    SubagentWorkspaceDisposalSettled {
+        /// The subagent identity whose retained resource is being settled.
+        subagent_id: SubagentId,
+        /// The exact handoff bound by the durable disposal intent.
+        workspace_handoff: WorkspaceHandoff,
+        /// The physical resource phase reached by the workspace plane.
+        settlement: SubagentWorkspaceDisposalSettlement,
     },
 
     /// A native `WorkflowRun` began executing one immutable `WorkflowProgram`.

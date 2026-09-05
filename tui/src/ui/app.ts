@@ -651,7 +651,10 @@ export class RustxTuiApp {
       this.#showTransient("error", "the selected subagent is no longer known to the runtime");
       return;
     }
-    if (selected.workspace.handoff === undefined) {
+    const resourceState = selected.workspace.resource_state;
+    const disposalRetryable =
+      resourceState === "disposal_in_progress" || resourceState === "worktree_removed";
+    if (selected.workspace.handoff === undefined && !disposalRetryable) {
       this.#showTransient("info", "the selected subagent has no retained workspace");
       return;
     }
@@ -661,7 +664,9 @@ export class RustxTuiApp {
     const confirmation = new ConfirmationView({
       title: "Dispose retained workspace",
       subject: `Subagent ${subagentId}`,
-      warning: "This permanently removes the retained Git worktree and discards its uncommitted source changes.",
+      warning: disposalRetryable
+        ? "This resumes the runtime-authorized disposal of the selected subagent workspace."
+        : "This permanently removes the retained Git worktree and discards its uncommitted source changes.",
       onConfirm: () => {
         this.#closeOverlay();
         void this.#disposeSelectedSubagent(subagentId, lease);
@@ -686,6 +691,12 @@ export class RustxTuiApp {
           return;
         case "already_disposed":
           this.#showTransient("info", `retained workspace for ${subject} was already disposed`);
+          return;
+        case "disposal_pending":
+          this.#showTransient(
+            "info",
+            `retained worktree for ${subject} was removed; branch cleanup remains pending`,
+          );
           return;
         case "no_retained_workspace":
           this.#showTransient("info", `${subject} has no retained workspace`);

@@ -23,8 +23,8 @@ import {
 } from "./support/fixtures.ts";
 
 describe("subagent identity", () => {
-  it("negotiates v15, which carries workspace disposal and the Agent Status projection", () => {
-    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 15);
+  it("negotiates v16, which carries workspace resource settlement and the Agent Status projection", () => {
+    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 16);
   });
 
   it("carries agent and definition_digest from the snapshot", () => {

@@ -266,11 +266,11 @@ pub enum RuntimeClientSessionRequest {
 /// snapshot that it folded from live events, without ever owning retention or
 /// inferring a position. There is no compatibility decoding of version 13.
 ///
-/// Version 15 carries the explicit Runtime Client retained-workspace disposal
-/// operation and its typed outcomes/errors. The existing workspace isolation
-/// projection remains the source-repository identity authority; there is no
-/// compatibility decoding of version 14.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 15;
+/// Version 16 carries the explicit Runtime Client retained-workspace disposal
+/// resource phase and pending partial-settlement outcome. Version 15 carried
+/// the disposal operation and its typed outcomes/errors. There is no
+/// compatibility decoding of version 15.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 16;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -856,6 +856,9 @@ pub enum RuntimeClientSubagentWorkspaceDisposalOutcome {
     /// The same child resource was disposed by an earlier request. No
     /// physical deletion is attempted for this result.
     AlreadyDisposed,
+    /// The exact worktree was removed, but branch compare-delete settlement
+    /// remains pending and the identity-based request may be retried.
+    DisposalPending,
     /// The child has no retained isolated resource to dispose.
     NoRetainedWorkspace,
 }
@@ -1227,7 +1230,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 15);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 16);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1261,6 +1264,7 @@ mod tests {
             workspace: super::RuntimeClientSubagentWorkspace {
                 logical_workspace: std::path::PathBuf::from("<shared-workspace>"),
                 isolation: super::RuntimeClientWorkspaceIsolation::Shared,
+                resource_state: crate::runtime::subagent::SubagentWorkspaceResourceState::None,
                 handoff: None,
             },
         };

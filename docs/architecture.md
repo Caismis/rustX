@@ -3435,9 +3435,10 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
-The current Runtime Client protocol is version 15. It adds the explicit
-retained-workspace disposal operation and its typed outcomes/errors. The
-existing workspace isolation projection remains the source-repository identity
+The current Runtime Client protocol is version 16. It adds the explicit
+retained-workspace disposal resource phase and pending partial-settlement
+outcome. Version 15 added the disposal operation and its typed outcomes/errors.
+The existing workspace isolation projection remains the source-repository identity
 authority for an exact handoff. Version 14 adds the Agent Status
 contextual annotation projection (Issue #194): the snapshot's latest-only
 `status` is replaced by the bounded composition window `statuses`, each status
@@ -5313,31 +5314,81 @@ facts remain available only through the established authoritative projection
 where they materially inform the parent model. The durable terminal handoff and
 ownership facts identify the resource by source repository root,
 repository-relative logical scope, logical child workspace, physical worktree
-root, runtime-created branch, and base/head commits. A
-`SubagentWorkspaceDisposed` fact records the later resource transition without
-changing the absorbing `Succeeded`/`Failed`/`Cancelled`/`Interrupted` state.
+root, runtime-created branch, and base/head commits. The
+The disposal operation is a bounded post-terminal resource lifecycle, separate
+from the absorbing `Succeeded`/`Failed`/`Cancelled`/`Interrupted` child state:
 
-Before mutation, `SubagentWorkspaceManager` re-proves the whole relationship:
-the recorded source root must still be the current Git repository; the
-recorded physical root must still resolve to that exact worktree; the source
-repository's porcelain registration must contain the exact path, branch, and
-handoff `HEAD`; the physical worktree `HEAD` must match; and the exact runtime
-branch must still point at that handoff `HEAD`. A malformed, tampered, missing,
-rebound, or otherwise inconsistent fact fails closed before any destructive
-command. Once the proof succeeds, only that worktree is removed forcefully and
-only that branch is compare-and-deleted. This explicit operation intentionally
-discards dirty retained source changes; the parent and unrelated worktrees or
-refs are not touched. Concurrent runtime requests serialize at the manager
-boundary, while a Git/ref change observed between proof passes fails closed.
+```text
+Retained
+  -- exact current Git proof, then durable SubagentWorkspaceDisposalStarted -->
+DisposalInProgress
+  -- runtime-authorized git worktree remove --force ------------------------->
+WorktreeRemoved
+  -- compare-and-delete refs/heads/<recorded branch> ------------------------>
+Disposed
+```
 
-The public result is deterministic: the first successful request returns
-`disposed`, a repeat returns `already_disposed` without consulting or deleting
-whatever later occupies the old path, and a child with no retained isolated
-resource returns `no_retained_workspace`. Recovery restores the terminal
-read-model record with the resource marker already disposed, so this contract
-survives a restart without reopening physical ownership. Unchanged isolated
-worktrees continue to be removed automatically during ordinary terminal
-settlement; shared workspaces have no physical resource to dispose.
+`SubagentWorkspaceDisposalStarted` is the durable authorization point. It is
+committed only after `SubagentWorkspaceManager` has proved the source
+repository identity, deterministic allocation path, exact Git worktree
+registration, branch attachment, worktree `HEAD`, branch ref `HEAD`, and
+terminal handoff equality. The event repeats the exact `SubagentId` and
+`WorkspaceHandoff`, and the durable store validates both against the ownership
+and terminal facts. It is a resource-lifecycle fact; it never changes the
+logical subagent lifecycle or emits another terminal event.
+
+The destructive physical linearization point is the successful
+`git worktree remove --force` command after the second, immediately preceding
+ownership proof. The workspace manager returns a typed physical result: no
+resource removed, worktree removed with branch residual, or both physical
+resources settled. Once worktree removal succeeds, the registry clears the
+public retained handoff and projects `WorktreeRemoved` or an authorized
+in-progress phase; it never returns to ordinary `Retained`.
+
+Branch settlement is always a compare-and-delete:
+`git update-ref -d refs/heads/<recorded branch> <recorded handoff HEAD>`.
+If the ref moved, or Git cannot complete the comparison, rustX preserves the
+residual branch and durably settles `WorktreeRemoved`; it never unconditionally
+deletes the moved ref. When the compare-delete succeeds, the registry appends
+`SubagentWorkspaceDisposalSettled(Disposed)`, the final durable settlement.
+The durable resource lifecycle key remains open through an intermediate
+`WorktreeRemoved` fact and closes only at `Disposed`.
+
+The crash cases are therefore explicit. A crash before the intent commit leaves
+ordinary `Retained` state and the next request must repeat the full fail-closed
+proof. A crash after intent but before Git mutation recovers
+`DisposalInProgress` and retries only the exact handoff authorized by that
+intent. A crash after worktree removal, before branch cleanup, recovers the
+same authorized resource and can continue branch compare-delete without asking
+the now-missing worktree to pass the pre-deletion proof. A crash after both
+physical operations but before final settlement leaves the durable intent as
+the authority; recovery never recreates a retained handoff, and an identity
+retry observes the exact branch absence and commits the final settlement,
+returning the stable `already_disposed` result. A failed final append has the
+same behavior after restart: the in-memory projection already records a
+non-retained in-progress phase, and durable recovery supplies the missing
+authority.
+
+The absence rule remains fail-closed. A missing worktree path or Git
+registration with no durable disposal intent is not evidence of successful
+runtime deletion; it is an ownership mismatch, and the branch is preserved.
+With an intent, missing physical resources are interpreted only as continuation
+of that exact already-authorized resource lifecycle, never as permission to
+delete an arbitrary path or ref. Repeated identity requests are serialized by
+the registry/manager locks: an unfinished phase returns a bounded pending
+outcome when branch cleanup remains, a completed lifecycle returns
+`already_disposed` without consulting or touching a later occupant of the old
+path, and a child without a retained isolated resource returns
+`no_retained_workspace`. Unchanged isolated worktrees continue to be removed
+automatically during ordinary terminal settlement; shared workspaces have no
+physical resource to dispose.
+
+The runtime serializes its own disposal calls and re-proves immediately before
+the separate Git removal process. This is a best-effort external-concurrency
+contract, not an atomic proof/use lock: an external actor can still race the
+process boundary. The proof prevents unsafe path/ref widening, while Git's
+command result and the branch compare-delete ensure a moved branch is not
+deleted.
 
 `ConversationRuntime::new` validates the registry's typed ownership domain
 before anything is claimed — the same `ConversationId`, the same parent

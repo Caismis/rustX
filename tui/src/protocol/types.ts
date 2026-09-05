@@ -24,8 +24,9 @@
  */
 
 /**
- * Version 15 adds the explicit retained-workspace disposal request/result and
- * the ownership-mismatch error. Version 14 adds the Agent Status contextual
+ * Version 16 adds the retained-workspace resource phase and pending
+ * partial-settlement outcome. Version 15 added the explicit retained-workspace
+ * disposal request/result and the ownership-mismatch error. Version 14 adds the Agent Status contextual
  * annotation projection: the
  * snapshot carries the bounded composition window `statuses` instead of a
  * latest-only `status`, each status opportunity carries the durable identity
@@ -39,7 +40,7 @@
  * version 11's subagent activity projection; and version 9's closed
  * `interrupted` lifecycle vocabulary. Older schemas are not decoded.
  */
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 15;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 16;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -762,9 +763,19 @@ export interface RuntimeClientSubagentWorkspace {
   logical_workspace: string;
   /** The closed shared/isolated execution facts. */
   isolation: RuntimeClientWorkspaceIsolation;
+  /** The post-terminal physical-resource lifecycle. */
+  resource_state: RuntimeClientWorkspaceResourceState;
   /** Retained child work-product facts, if the worktree was handed off. */
   handoff?: RuntimeClientWorkspaceHandoff;
 }
+
+/** The post-terminal physical-resource lifecycle, separate from child state. */
+export type RuntimeClientWorkspaceResourceState =
+  | "none"
+  | "retained"
+  | "disposal_in_progress"
+  | "worktree_removed"
+  | "disposed";
 
 /** The external read-model projection of a child workspace's isolation mode. */
 export type RuntimeClientWorkspaceIsolation =
@@ -1756,6 +1767,7 @@ export type RuntimeClientResult =
 export type RuntimeClientSubagentWorkspaceDisposalOutcome =
   | "disposed"
   | "already_disposed"
+  | "disposal_pending"
   | "no_retained_workspace";
 
 export type RuntimeClientError =

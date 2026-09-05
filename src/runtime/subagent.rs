@@ -171,6 +171,7 @@ pub use registry::{
     SubagentObserver, SubagentRegistry, SubagentRegistryConfig, SubagentSnapshot,
     SubagentStartError, SubagentStartOutcome, SubagentStartSpec, SubagentState,
     SubagentTerminalMode, SubagentWorkspaceDisposal, SubagentWorkspaceDisposalError,
+    SubagentWorkspaceResourceState,
 };
 pub use resolver::{
     ResolvedSubagentSkill, ResolvedSubagentSpec, ResolvedSubagentTool, SubagentDomain,
@@ -178,8 +179,8 @@ pub use resolver::{
 };
 pub use workspace::{
     GitWorktreeSnapshot, SubagentWorkspaceManager, SubagentWorkspacePolicy, WorkspaceCleanup,
-    WorkspaceDisposalError, WorkspaceHandoff, WorkspaceIsolation, WorkspaceLease,
-    WorkspaceSettlement, WorkspaceSnapshot,
+    WorkspaceDisposalError, WorkspaceDisposalSettlement, WorkspaceHandoff, WorkspaceIsolation,
+    WorkspaceLease, WorkspaceSettlement, WorkspaceSnapshot,
 };
 
 use std::sync::Arc;
@@ -189,7 +190,7 @@ use chrono::{DateTime, Utc};
 use crate::durable::inbox::InboundDraft;
 use crate::events::types::{
     EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope, SubagentOwnershipKind,
-    SubagentTerminalState,
+    SubagentTerminalState, SubagentWorkspaceDisposalSettlement,
 };
 use crate::message::content::TextBlock;
 use crate::message::types::{InboundKind, UserContentBlock, UserMessageBlock, UserSource};
@@ -458,18 +459,36 @@ pub(crate) fn terminal_settlement_event_id(subagent_id: &SubagentId) -> EventId 
     EventId::new(format!("subagent-terminal-settled-event:{subagent_id}"))
 }
 
-/// The deterministic event identity of an explicit retained-workspace
-/// disposal. This fact lives after the logical child terminal event and does
-/// not participate in the `subagent:{id}` lifecycle key.
-pub(crate) fn workspace_disposal_event_id(subagent_id: &SubagentId) -> EventId {
-    EventId::new(format!("subagent-workspace-disposed-event:{subagent_id}"))
+/// The deterministic event identity of the durable retained-workspace
+/// disposal intent. This fact lives after the logical child terminal event
+/// and opens a separate resource lifecycle for exactly one handoff.
+pub(crate) fn workspace_disposal_started_event_id(subagent_id: &SubagentId) -> EventId {
+    EventId::new(format!(
+        "subagent-workspace-disposal-started-event:{subagent_id}"
+    ))
 }
 
-/// Builds the post-terminal retained-workspace disposal fact. The physical
-/// workspace manager constructs this only after exact Git ownership proof and
-/// removal; durable validation independently binds the handoff to the child
-/// ownership and terminal facts.
-pub(crate) fn workspace_disposal_event(
+/// The deterministic event identity of one durable retained-workspace
+/// disposal settlement. Intermediate and final settlement facts have
+/// distinct identities so `WorktreeRemoved` can remain open until the exact
+/// branch compare-delete settles.
+pub(crate) fn workspace_disposal_settled_event_id(
+    subagent_id: &SubagentId,
+    settlement: SubagentWorkspaceDisposalSettlement,
+) -> EventId {
+    let phase = match settlement {
+        SubagentWorkspaceDisposalSettlement::WorktreeRemoved => "worktree-removed",
+        SubagentWorkspaceDisposalSettlement::Disposed => "disposed",
+    };
+    EventId::new(format!(
+        "subagent-workspace-disposal-{phase}-event:{subagent_id}"
+    ))
+}
+
+/// Builds the durable post-terminal retained-workspace disposal intent.
+/// Durable validation independently binds the handoff to the child ownership
+/// and terminal facts before the intent can authorize physical mutation.
+pub(crate) fn workspace_disposal_started_event(
     conversation_id: &ConversationId,
     subagent_id: &SubagentId,
     workspace_handoff: &WorkspaceHandoff,
@@ -477,15 +496,41 @@ pub(crate) fn workspace_disposal_event(
 ) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
         schema_version: EVENT_SCHEMA_VERSION,
-        event_id: workspace_disposal_event_id(subagent_id),
+        event_id: workspace_disposal_started_event_id(subagent_id),
         sequence: 0,
         conversation_id: conversation_id.clone(),
         attempt_id: None,
         turn_id: None,
         timestamp,
-        event: RuntimeEvent::SubagentWorkspaceDisposed {
+        event: RuntimeEvent::SubagentWorkspaceDisposalStarted {
             subagent_id: subagent_id.clone(),
             workspace_handoff: workspace_handoff.clone(),
+        },
+    }
+}
+
+/// Builds one durable physical settlement of an admitted retained-workspace
+/// disposal. The exact handoff is repeated so each phase is self-describing;
+/// durable validation compares it with the intent and terminal facts.
+pub(crate) fn workspace_disposal_settled_event(
+    conversation_id: &ConversationId,
+    subagent_id: &SubagentId,
+    workspace_handoff: &WorkspaceHandoff,
+    settlement: SubagentWorkspaceDisposalSettlement,
+    timestamp: DateTime<Utc>,
+) -> RuntimeEventEnvelope {
+    RuntimeEventEnvelope {
+        schema_version: EVENT_SCHEMA_VERSION,
+        event_id: workspace_disposal_settled_event_id(subagent_id, settlement),
+        sequence: 0,
+        conversation_id: conversation_id.clone(),
+        attempt_id: None,
+        turn_id: None,
+        timestamp,
+        event: RuntimeEvent::SubagentWorkspaceDisposalSettled {
+            subagent_id: subagent_id.clone(),
+            workspace_handoff: workspace_handoff.clone(),
+            settlement,
         },
     }
 }

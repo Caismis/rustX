@@ -357,32 +357,32 @@ async fn attachment_request_correlation_and_version_negotiation() {
 
     // Incompatible version negotiation fails explicitly, in both
     // directions and including every superseded wire contract.
-    let incompatible = host.attach(16);
+    let incompatible = host.attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION + 1);
     assert!(matches!(
         incompatible,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 15,
-            requested: 16,
+            supported: 16,
+            requested: 17,
         })
     ));
     let old_protocol = host.attach(7);
     assert!(matches!(
         old_protocol,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 15,
+            supported: 16,
             requested: 7,
         })
     ));
-    // v14 carried Issue #187's workspace authority projection together with
+    // v15 carried Issue #187's workspace authority projection together with
     // the pre-#194 latest-only Agent Status shape (`status`, no published
     // placement, no window transition). Issue #194 replaced that shape under
-    // v15, so a v14 client is refused rather than served a projection it
-    // would misread. There is no v14 -> v15 conversion.
+    // v16, so a v14 client is refused rather than served a projection it
+    // would misread. There is no v14 -> v16 conversion.
     let latest_only_status = host.attach(14);
     assert!(matches!(
         latest_only_status,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 15,
+            supported: 16,
             requested: 14,
         })
     ));
@@ -392,7 +392,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         profile_shaped,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 15,
+            supported: 16,
             requested: 6,
         })
     ));
@@ -404,7 +404,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_workspace_boundary,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 15,
+            supported: 16,
             requested: 12,
         })
     ));
@@ -511,16 +511,17 @@ async fn attachment_raii_drop_detaches() {
 /// The subagent workspace projection serializes exactly as the shared
 /// `tests/fixtures/runtime-client/*.json` fixtures the TUI protocol mirror
 /// is validated against. This is the cross-language regression for the
-/// Issue #187 wire shape, carried into v15 with the authoritative retained
+/// Issue #187 wire shape, carried into v16 with the authoritative retained
 /// handoff identity fields: if either side drifts
 /// back to the pre-#187 flat `workspace`/`isolated` schema, or Issue #190
 /// silently drops a workspace field, one of the two fixture
 /// assertions fails.
 #[test]
-fn v15_workspace_wire_shape_matches_the_shared_fixtures() {
+fn v16_workspace_wire_shape_matches_the_shared_fixtures() {
     let shared = RuntimeClientSubagentWorkspace {
         logical_workspace: std::path::PathBuf::from("/repo"),
         isolation: RuntimeClientWorkspaceIsolation::Shared,
+        resource_state: rustx::runtime::subagent::SubagentWorkspaceResourceState::None,
         handoff: None,
     };
     let isolated_subdirectory = RuntimeClientSubagentWorkspace {
@@ -533,6 +534,7 @@ fn v15_workspace_wire_shape_matches_the_shared_fixtures() {
             branch: "rustx/subagent-1".to_owned(),
             parent_had_uncommitted_changes: true,
         },
+        resource_state: rustx::runtime::subagent::SubagentWorkspaceResourceState::Retained,
         handoff: Some(RuntimeClientWorkspaceHandoff {
             logical_workspace: std::path::PathBuf::from(
                 "/runtime-root/worktrees/subagent-1/backend",
@@ -547,11 +549,11 @@ fn v15_workspace_wire_shape_matches_the_shared_fixtures() {
 
     for (fixture, workspace) in [
         (
-            "tests/fixtures/runtime-client/workspace-shared-v15.json",
+            "tests/fixtures/runtime-client/workspace-shared-v16.json",
             &shared,
         ),
         (
-            "tests/fixtures/runtime-client/workspace-git-worktree-v15.json",
+            "tests/fixtures/runtime-client/workspace-git-worktree-v16.json",
             &isolated_subdirectory,
         ),
     ] {
@@ -560,7 +562,7 @@ fn v15_workspace_wire_shape_matches_the_shared_fixtures() {
         assert_eq!(
             serialized,
             expected.trim_end(),
-            "{fixture}: the serialized v15 workspace shape drifted from the \
+            "{fixture}: the serialized v16 workspace shape drifted from the \
              fixture the TUI mirror is validated against"
         );
         let decoded: RuntimeClientSubagentWorkspace =

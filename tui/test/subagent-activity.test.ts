@@ -91,6 +91,7 @@ describe("subagent activity section", () => {
             branch: "rustx/subagent/one",
             parent_had_uncommitted_changes: false,
           },
+          resource_state: "retained",
           handoff: {
             logical_workspace: "/runtime/worktrees/one",
             physical_worktree_root: "/runtime/worktrees/one",

@@ -4554,18 +4554,34 @@ semantic normalization boundary. The frozen invariants:
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
   explicit at attachment admission; the current protocol is the sole
   supported version, and every superseded version is rejected explicitly.
-- **Runtime Client protocol v15 exposes retained-workspace disposal as a
+- **Runtime Client protocol v16 exposes retained-workspace disposal as a
   separate resource lifecycle.** The request names only a terminal
   `SubagentId`; it never carries an arbitrary path or Git ref and is not
-  available through the model-facing `execution` intrinsic. The workspace
-  manager re-proves the durable source repository, physical worktree
-  registration, branch attachment, and handoff `HEAD` before forcefully
-  removing exactly the proven worktree and compare-deleting exactly its
-  runtime-created branch. Any malformed, stale, tampered, missing, rebound,
-  or mismatched fact fails closed. A successful repeat is the stable
-  `already_disposed` result, while a child without a retained isolated
-  resource is `no_retained_workspace`; neither outcome changes the absorbing
-  logical terminal state.
+  available through the model-facing `execution` intrinsic. Disposal is a
+  separate bounded resource lifecycle: `Retained` first requires the complete
+  current ownership proof, then a durable `SubagentWorkspaceDisposalStarted`
+  intent authorizes the exact handoff; `DisposalInProgress` precedes the
+  successful `git worktree remove --force` linearization point;
+  `WorktreeRemoved` records an authorized partial state; and only the final
+  compare-delete of `refs/heads/<recorded branch>` plus durable settlement
+  reaches `Disposed`. The manager compares the current branch with the
+  recorded handoff `HEAD` and never unconditionally deletes a moved ref. A
+  missing path/registration without durable intent remains an ownership
+  mismatch, while an intent lets recovery continue the same exact resource
+  lifecycle without restoring ordinary `Retained` or guessing from
+  filesystem state. Crashes before intent leave retained state; crashes after
+  intent recover a retryable phase; crashes after physical deletion but before
+  settlement recover through the intent and converge to `already_disposed`.
+  Failed intermediate/final durable appends leave a non-retained resource
+  projection and are recovered from the durable intent. Repeated identity
+  requests are serialized and deterministic; unfinished branch cleanup is
+  exposed as `disposal_pending`, a completed lifecycle is
+  `already_disposed`, and a child without a retained isolated resource is
+  `no_retained_workspace`. None of these resource outcomes changes the
+  absorbing logical terminal state. rustX makes no claim of atomicity across
+  the separate final-proof and Git processes: its own calls serialize, the
+  proof is immediately before mutation, and Git/compare-delete preserve
+  fail-closed external-race behavior.
 - **Runtime Client protocol v14 introduces the Issue #194 Agent Status
   contextual annotation projection.** The snapshot's latest-only `status` is
   replaced by the bounded window `statuses`; each status opportunity carries

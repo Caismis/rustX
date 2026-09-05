@@ -182,9 +182,15 @@ use super::inbox::{
 /// facts. A v19 journal can contain the obsolete shape, so it is rejected
 /// rather than decoded with an invented repository-relative authority.
 ///
-/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13/v14/v15/v16/v17/v18/v19 database
+/// Version 21 freezes Issue #190's retained-workspace disposal resource
+/// lifecycle: a durable disposal intent precedes physical mutation, and
+/// typed settlement facts distinguish an authorized partial worktree removal
+/// from a final disposed resource. A v20 journal has no durable authority for
+/// recovery after physical disposal, so it is rejected rather than guessed.
+///
+/// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13/v14/v15/v16/v17/v18/v19/v20 database
 /// must fail at store open; there is no migration or compatibility path.
-pub const SQLITE_SCHEMA_VERSION: i64 = 20;
+pub const SQLITE_SCHEMA_VERSION: i64 = 21;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -1689,46 +1695,36 @@ impl ConversationStore for SqliteConversationStore {
         self.append_event_internal(event)
     }
 
-    fn commit_subagent_workspace_disposal(
+    fn commit_subagent_workspace_disposal_intent(
         &self,
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
-        if !matches!(&event.event, RuntimeEvent::SubagentWorkspaceDisposed { .. }) {
+        if !matches!(
+            &event.event,
+            RuntimeEvent::SubagentWorkspaceDisposalStarted { .. }
+        ) {
             return Err(ConversationStoreError::InvalidReference(
-                "the retained-workspace disposal transition accepts only a SubagentWorkspaceDisposed fact"
+                "the retained-workspace disposal intent transition accepts only a SubagentWorkspaceDisposalStarted fact"
                     .to_owned(),
             ));
         }
-        let mut connection = self.lock()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| {
-                storage(format!("subagent workspace disposal transaction: {error}"))
-            })?;
-        if let Some(existing) = find_event_by_id(&transaction, &event.event_id)? {
-            if same_event_ignoring_sequence(&existing, &event) {
-                transaction.commit().map_err(|error| {
-                    storage(format!("subagent workspace disposal retry commit: {error}"))
-                })?;
-                return Ok(existing);
-            }
-            return Err(ConversationStoreError::TerminalViolation(
-                "retained-workspace disposal retry conflicts with its durable fact".to_owned(),
+        commit_subagent_workspace_disposal_transition(self, event, "intent")
+    }
+
+    fn commit_subagent_workspace_disposal_settlement(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        if !matches!(
+            &event.event,
+            RuntimeEvent::SubagentWorkspaceDisposalSettled { .. }
+        ) {
+            return Err(ConversationStoreError::InvalidReference(
+                "the retained-workspace disposal settlement transition accepts only a SubagentWorkspaceDisposalSettled fact"
+                    .to_owned(),
             ));
         }
-        #[cfg(test)]
-        if Self::consume(&self.fail_event_remaining) {
-            return Err(storage(
-                "fault injected: subagent workspace disposal commit",
-            ));
-        }
-        process_death::reach_event("before:subagent_workspace_disposal", &event.event);
-        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("subagent workspace disposal commit: {error}")))?;
-        process_death::reach_event("after:subagent_workspace_disposal", &persisted.event.event);
-        Ok(persisted.event)
+        commit_subagent_workspace_disposal_transition(self, event, "settlement")
     }
 
     fn commit_subagent_terminal(
@@ -2359,6 +2355,59 @@ impl ConversationStore for SqliteConversationStore {
         json.map(|json| decode(&json, "publication audit"))
             .transpose()
     }
+}
+
+fn commit_subagent_workspace_disposal_transition(
+    store: &SqliteConversationStore,
+    event: RuntimeEventEnvelope,
+    phase: &str,
+) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+    let mut connection = store.lock()?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| {
+            storage(format!(
+                "subagent workspace disposal {phase} transaction: {error}"
+            ))
+        })?;
+    if let Some(existing) = find_event_by_id(&transaction, &event.event_id)? {
+        if same_event_ignoring_sequence(&existing, &event) {
+            transaction.commit().map_err(|error| {
+                storage(format!(
+                    "subagent workspace disposal {phase} retry commit: {error}"
+                ))
+            })?;
+            return Ok(existing);
+        }
+        return Err(ConversationStoreError::TerminalViolation(format!(
+            "retained-workspace disposal {phase} retry conflicts with its durable fact"
+        )));
+    }
+    #[cfg(test)]
+    if SqliteConversationStore::consume(&store.fail_event_remaining) {
+        return Err(storage(format!(
+            "fault injected: subagent workspace disposal {phase} commit"
+        )));
+    }
+    let boundary = match phase {
+        "intent" => "before:subagent_workspace_disposal_intent",
+        "settlement" => "before:subagent_workspace_disposal_settlement",
+        _ => unreachable!("only disposal intent and settlement transitions exist"),
+    };
+    process_death::reach_event(boundary, &event.event);
+    let persisted = persist_event_tx(&transaction, &store.conversation_id, event)?;
+    transaction.commit().map_err(|error| {
+        storage(format!(
+            "subagent workspace disposal {phase} commit: {error}"
+        ))
+    })?;
+    let boundary = match phase {
+        "intent" => "after:subagent_workspace_disposal_intent",
+        "settlement" => "after:subagent_workspace_disposal_settlement",
+        _ => unreachable!("only disposal intent and settlement transitions exist"),
+    };
+    process_death::reach_event(boundary, &persisted.event.event);
+    Ok(persisted.event)
 }
 
 /// Reads one publication stream record, when it exists.
@@ -6869,41 +6918,100 @@ fn validate_event_reference(
                 )));
             }
         }
-        RuntimeEvent::SubagentWorkspaceDisposed {
+        RuntimeEvent::SubagentWorkspaceDisposalStarted {
             subagent_id,
             workspace_handoff,
         } => {
             let expected_event_id =
-                crate::runtime::subagent::workspace_disposal_event_id(subagent_id);
+                crate::runtime::subagent::workspace_disposal_started_event_id(subagent_id);
             if envelope.event_id != expected_event_id {
                 return Err(ConversationStoreError::InvalidReference(format!(
-                    "subagent workspace disposal event identity {} does not match the canonical identity {expected_event_id}",
+                    "subagent workspace disposal intent identity {} does not match the canonical identity {expected_event_id}",
                     envelope.event_id
                 )));
             }
             if envelope.attempt_id.is_some() || envelope.turn_id.is_some() {
                 return Err(ConversationStoreError::InvalidReference(
-                    "subagent workspace disposal must not carry an attempt or turn envelope"
+                    "subagent workspace disposal intent must not carry an attempt or turn envelope"
                         .to_owned(),
                 ));
             }
             workspace_handoff.validate().map_err(|detail| {
                 ConversationStoreError::InvalidReference(format!(
-                    "subagent {subagent_id} disposal has an invalid workspace handoff: {detail}"
+                    "subagent {subagent_id} disposal intent has an invalid workspace handoff: {detail}"
                 ))
             })?;
             let (_, workspace, ownership) = find_subagent_ownership(transaction, subagent_id)?;
             if !workspace.matches_handoff(workspace_handoff) {
                 return Err(ConversationStoreError::InvalidReference(format!(
-                    "subagent {subagent_id} disposal handoff does not match its durable workspace ownership"
+                    "subagent {subagent_id} disposal intent handoff does not match its durable workspace ownership"
                 )));
             }
             let terminal_handoff =
                 find_subagent_terminal_handoff(transaction, subagent_id, ownership)?;
             if terminal_handoff != *workspace_handoff {
                 return Err(ConversationStoreError::InvalidReference(format!(
-                    "subagent {subagent_id} disposal handoff does not match its durable terminal handoff"
+                    "subagent {subagent_id} disposal intent does not match its durable terminal handoff"
                 )));
+            }
+        }
+        RuntimeEvent::SubagentWorkspaceDisposalSettled {
+            subagent_id,
+            workspace_handoff,
+            settlement,
+        } => {
+            let expected_event_id = crate::runtime::subagent::workspace_disposal_settled_event_id(
+                subagent_id,
+                *settlement,
+            );
+            if envelope.event_id != expected_event_id {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "subagent workspace disposal settlement identity {} does not match the canonical identity {expected_event_id}",
+                    envelope.event_id
+                )));
+            }
+            if envelope.attempt_id.is_some() || envelope.turn_id.is_some() {
+                return Err(ConversationStoreError::InvalidReference(
+                    "subagent workspace disposal settlement must not carry an attempt or turn envelope"
+                        .to_owned(),
+                ));
+            }
+            workspace_handoff.validate().map_err(|detail| {
+                ConversationStoreError::InvalidReference(format!(
+                    "subagent {subagent_id} disposal settlement has an invalid workspace handoff: {detail}"
+                ))
+            })?;
+            let (_, workspace, ownership) = find_subagent_ownership(transaction, subagent_id)?;
+            if !workspace.matches_handoff(workspace_handoff) {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "subagent {subagent_id} disposal settlement handoff does not match its durable workspace ownership"
+                )));
+            }
+            let terminal_handoff =
+                find_subagent_terminal_handoff(transaction, subagent_id, ownership)?;
+            if terminal_handoff != *workspace_handoff {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "subagent {subagent_id} disposal settlement does not match its durable terminal handoff"
+                )));
+            }
+            let intent_id =
+                crate::runtime::subagent::workspace_disposal_started_event_id(subagent_id);
+            let Some(intent) = find_event_by_id(transaction, &intent_id)? else {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "subagent {subagent_id} disposal settlement has no durable disposal intent"
+                )));
+            };
+            match intent.event {
+                RuntimeEvent::SubagentWorkspaceDisposalStarted {
+                    subagent_id: intent_subagent_id,
+                    workspace_handoff: intent_handoff,
+                } if intent_subagent_id == *subagent_id && intent_handoff == *workspace_handoff => {
+                }
+                _ => {
+                    return Err(ConversationStoreError::InvalidReference(format!(
+                        "subagent {subagent_id} disposal settlement is not bound to its exact durable intent"
+                    )));
+                }
             }
         }
         RuntimeEvent::WorkflowAgentOutputCommitted {
@@ -6994,7 +7102,8 @@ fn requires_specialized_transition(event: &RuntimeEvent) -> bool {
             | RuntimeEvent::BackgroundTerminalPublished { .. }
             | RuntimeEvent::SubagentTerminalPublished { .. }
             | RuntimeEvent::SubagentTerminalSettled { .. }
-            | RuntimeEvent::SubagentWorkspaceDisposed { .. }
+            | RuntimeEvent::SubagentWorkspaceDisposalStarted { .. }
+            | RuntimeEvent::SubagentWorkspaceDisposalSettled { .. }
             | RuntimeEvent::WorkflowAgentOutputCommitted { .. }
             | RuntimeEvent::InteractionRequested { .. }
             | RuntimeEvent::InteractionSettled { .. }
@@ -7237,6 +7346,27 @@ fn lifecycle_keys(event: &RuntimeEventEnvelope) -> Vec<(String, bool)> {
     }
     if let RuntimeEvent::SubagentTerminalSettled { subagent_id, .. } = &event.event {
         return vec![(format!("subagent:{subagent_id}"), true)];
+    }
+    // Retained-workspace disposal is a separate post-terminal resource
+    // lifecycle. The intent opens it, an explicit WorktreeRemoved settlement
+    // keeps it pending, and Disposed closes it. It never touches the logical
+    // `subagent:{id}` terminal lifecycle above.
+    if let RuntimeEvent::SubagentWorkspaceDisposalStarted { subagent_id, .. } = &event.event {
+        return vec![(format!("subagent-workspace:{subagent_id}"), false)];
+    }
+    if let RuntimeEvent::SubagentWorkspaceDisposalSettled {
+        subagent_id,
+        settlement,
+        ..
+    } = &event.event
+    {
+        return vec![(
+            format!("subagent-workspace:{subagent_id}"),
+            matches!(
+                settlement,
+                crate::events::types::SubagentWorkspaceDisposalSettlement::Disposed
+            ),
+        )];
     }
     // The interaction lifecycle (Issue #109) is the same shape: opened by the
     // requested fact — which commits before the prompt reaches a client — and
@@ -9644,42 +9774,143 @@ mod tests {
 
         let mut mismatched_handoff = handoff.clone();
         mismatched_handoff.head_commit = "3333333333333333333333333333333333333333".to_owned();
-        let invalid_disposal = crate::runtime::subagent::workspace_disposal_event(
+        let invalid_disposal = crate::runtime::subagent::workspace_disposal_started_event(
             &conversation_id,
             &subagent_id,
             &mismatched_handoff,
             Utc.with_ymd_and_hms(2026, 8, 7, 12, 1, 0).unwrap(),
         );
         let error = store
-            .commit_subagent_workspace_disposal(invalid_disposal)
+            .commit_subagent_workspace_disposal_intent(invalid_disposal)
             .expect_err("durable disposal must repeat the terminal handoff exactly");
         assert!(matches!(error, ConversationStoreError::InvalidReference(_)));
 
-        let disposal = crate::runtime::subagent::workspace_disposal_event(
+        let intent = crate::runtime::subagent::workspace_disposal_started_event(
             &conversation_id,
             &subagent_id,
             &handoff,
             Utc.with_ymd_and_hms(2026, 8, 7, 12, 1, 1).unwrap(),
         );
         let committed = store
-            .commit_subagent_workspace_disposal(disposal.clone())
-            .expect("retained-workspace disposal fact");
+            .commit_subagent_workspace_disposal_intent(intent.clone())
+            .expect("retained-workspace disposal intent");
         let retried = store
-            .commit_subagent_workspace_disposal(disposal)
-            .expect("same disposal fact is idempotent");
+            .commit_subagent_workspace_disposal_intent(intent)
+            .expect("same disposal intent is idempotent");
         assert_eq!(retried, committed);
+        let conflicting_intent = crate::runtime::subagent::workspace_disposal_started_event(
+            &conversation_id,
+            &subagent_id,
+            &mismatched_handoff,
+            Utc.with_ymd_and_hms(2026, 8, 7, 12, 1, 3).unwrap(),
+        );
+        let error = store
+            .commit_subagent_workspace_disposal_intent(conflicting_intent)
+            .expect_err("an intent replay with a different handoff conflicts");
+        assert!(matches!(
+            error,
+            ConversationStoreError::TerminalViolation(_)
+        ));
+        let partial = crate::runtime::subagent::workspace_disposal_settled_event(
+            &conversation_id,
+            &subagent_id,
+            &handoff,
+            crate::events::types::SubagentWorkspaceDisposalSettlement::WorktreeRemoved,
+            Utc.with_ymd_and_hms(2026, 8, 7, 12, 1, 2).unwrap(),
+        );
+        let committed_partial = store
+            .commit_subagent_workspace_disposal_settlement(partial.clone())
+            .expect("partial settlement");
+        assert_eq!(
+            store
+                .commit_subagent_workspace_disposal_settlement(partial)
+                .expect("same partial settlement is idempotent"),
+            committed_partial
+        );
+        let conflicting_partial = crate::runtime::subagent::workspace_disposal_settled_event(
+            &conversation_id,
+            &subagent_id,
+            &mismatched_handoff,
+            crate::events::types::SubagentWorkspaceDisposalSettlement::WorktreeRemoved,
+            Utc.with_ymd_and_hms(2026, 8, 7, 12, 1, 4).unwrap(),
+        );
+        let error = store
+            .commit_subagent_workspace_disposal_settlement(conflicting_partial)
+            .expect_err("a partial replay with a different handoff conflicts");
+        assert!(matches!(
+            error,
+            ConversationStoreError::TerminalViolation(_)
+        ));
+        let settlement = crate::runtime::subagent::workspace_disposal_settled_event(
+            &conversation_id,
+            &subagent_id,
+            &handoff,
+            crate::events::types::SubagentWorkspaceDisposalSettlement::Disposed,
+            Utc.with_ymd_and_hms(2026, 8, 7, 12, 1, 2).unwrap(),
+        );
+        let settled = store
+            .commit_subagent_workspace_disposal_settlement(settlement.clone())
+            .expect("retained-workspace disposal settlement");
+        let retried_settlement = store
+            .commit_subagent_workspace_disposal_settlement(settlement)
+            .expect("same disposal settlement is idempotent");
+        assert_eq!(retried_settlement, settled);
+        let conflicting_settlement = crate::runtime::subagent::workspace_disposal_settled_event(
+            &conversation_id,
+            &subagent_id,
+            &mismatched_handoff,
+            crate::events::types::SubagentWorkspaceDisposalSettlement::Disposed,
+            Utc.with_ymd_and_hms(2026, 8, 7, 12, 1, 5).unwrap(),
+        );
+        let error = store
+            .commit_subagent_workspace_disposal_settlement(conflicting_settlement)
+            .expect_err("a final settlement replay with a different handoff conflicts");
+        assert!(matches!(
+            error,
+            ConversationStoreError::TerminalViolation(_)
+        ));
         let events = store.read_events(None, 64).expect("events").events;
         assert_eq!(
             events
                 .iter()
                 .filter(|event| matches!(
                     &event.event,
-                    RuntimeEvent::SubagentWorkspaceDisposed { subagent_id: actual, .. }
+                    RuntimeEvent::SubagentWorkspaceDisposalStarted { subagent_id: actual, .. }
                         if actual == &subagent_id
                 ))
                 .count(),
             1,
-            "a retry never creates a second disposal fact"
+            "an intent retry never creates a second disposal fact"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    &event.event,
+                    RuntimeEvent::SubagentWorkspaceDisposalSettled {
+                        subagent_id: actual,
+                        settlement: crate::events::types::SubagentWorkspaceDisposalSettlement::WorktreeRemoved,
+                        ..
+                    } if actual == &subagent_id
+                ))
+                .count(),
+            1,
+            "a partial settlement retry never creates a second partial fact"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    &event.event,
+                    RuntimeEvent::SubagentWorkspaceDisposalSettled {
+                        subagent_id: actual,
+                        settlement: crate::events::types::SubagentWorkspaceDisposalSettlement::Disposed,
+                        ..
+                    } if actual == &subagent_id
+                ))
+                .count(),
+            1,
+            "a settlement retry never creates a second disposal fact"
         );
     }
 

@@ -118,7 +118,7 @@ use crate::conversation::{RecoverySafetyError, recovery_safety};
 use crate::durable::{ConversationStore, ConversationStoreError, PendingInboundItem};
 use crate::events::types::{
     AttemptFailure, RuntimeEvent, RuntimeEventEnvelope, SubagentOwnershipKind,
-    SubagentTerminalState,
+    SubagentTerminalState, SubagentWorkspaceDisposalSettlement,
 };
 use crate::message::types::{AssistantContentBlock, MessageBlock, ToolMessageBlock};
 use crate::publication::{
@@ -388,18 +388,38 @@ pub struct RecoveredSubagentHandoff {
     pub handoff: WorkspaceHandoff,
 }
 
-/// A terminal child whose retained workspace was explicitly disposed before
-/// this recovery. The original handoff remains in the durable audit fact so
-/// recovery can restore the idempotent `AlreadyDisposed` resource state
-/// without reintroducing the physical handoff into the live projection.
+/// The durable phase of a retained-workspace disposal resource lifecycle.
+/// This is not a logical subagent terminal state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveredSubagentDisposalPhase {
+    /// The disposal intent is durable; the physical boundary is unfinished
+    /// or its outcome was interrupted before a settlement fact.
+    Authorized,
+    /// The runtime-authorized worktree removal is known; branch settlement is
+    /// still pending.
+    WorktreeRemoved,
+    /// The exact physical resources are durably settled.
+    Disposed,
+}
+
+/// A terminal child whose retained workspace entered the durable disposal
+/// lifecycle before this recovery. The original handoff remains in the
+/// durable audit facts so recovery can restore an authorized, partial, or
+/// disposed resource phase without reintroducing the physical handoff into
+/// the ordinary retained projection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecoveredSubagentDisposal {
     /// The child identity and immutable start facts.
     pub evidence: SubagentEvidence,
     /// The durable semantic child terminal state.
     pub state: SubagentTerminalState,
-    /// The exact handoff that the prior disposal proved and removed.
+    /// The exact handoff bound by the prior disposal intent. It remains
+    /// durable authority for an unfinished physical phase and is not exposed
+    /// as an ordinary retained handoff during recovery.
     pub handoff: WorkspaceHandoff,
+    /// The post-terminal resource phase recovered from the durable intent and
+    /// settlement facts.
+    pub phase: RecoveredSubagentDisposalPhase,
 }
 
 /// The complete durable evidence of one conversation at process startup.
@@ -454,7 +474,7 @@ pub struct RecoveryEvidence {
     /// Terminally published subagents whose durable terminal fact retained a
     /// workspace handoff for the recovered read model.
     settled_subagent_handoffs: Vec<RecoveredSubagentHandoff>,
-    /// Terminal subagents whose retained handoff was explicitly disposed.
+    /// Terminal subagents whose retained handoff entered disposal.
     settled_subagent_disposals: Vec<RecoveredSubagentDisposal>,
     /// The highest conversation-scoped attempt ordinal that entered durable
     /// authority, terminal or not.
@@ -952,7 +972,7 @@ impl RecoveryEvidence {
                     );
                 }
             }
-            RuntimeEvent::SubagentWorkspaceDisposed {
+            RuntimeEvent::SubagentWorkspaceDisposalStarted {
                 subagent_id,
                 workspace_handoff,
             } => {
@@ -967,6 +987,7 @@ impl RecoveryEvidence {
                                 evidence: terminal.evidence,
                                 state: terminal.state,
                                 handoff: workspace_handoff.clone(),
+                                phase: RecoveredSubagentDisposalPhase::Authorized,
                             },
                         );
                     } else {
@@ -977,6 +998,27 @@ impl RecoveryEvidence {
                         // Runtime Client request can fail closed against it.
                         settled_subagent_handoffs.insert(subagent_id.clone(), terminal);
                     }
+                }
+            }
+            RuntimeEvent::SubagentWorkspaceDisposalSettled {
+                subagent_id,
+                workspace_handoff,
+                settlement,
+            } => {
+                if let Some(ordinal) = subagent_id.conversation_ordinal(&self.conversation_id) {
+                    self.highest_subagent_ordinal = self.highest_subagent_ordinal.max(ordinal);
+                }
+                if let Some(disposal) = settled_subagent_disposals.get_mut(subagent_id)
+                    && disposal.handoff == *workspace_handoff
+                {
+                    disposal.phase = match settlement {
+                        SubagentWorkspaceDisposalSettlement::WorktreeRemoved => {
+                            RecoveredSubagentDisposalPhase::WorktreeRemoved
+                        }
+                        SubagentWorkspaceDisposalSettlement::Disposed => {
+                            RecoveredSubagentDisposalPhase::Disposed
+                        }
+                    };
                 }
             }
             // Every remaining fact contributes its attempt identity watermark
@@ -1297,8 +1339,8 @@ pub struct RecoveryPlan {
     /// Already-terminal subagents whose durable publication retained a
     /// workspace handoff. These require read-model restoration only.
     settled_subagent_handoffs: Vec<RecoveredSubagentHandoff>,
-    /// Already-terminal subagents whose retained handoff was explicitly
-    /// disposed. These require read-model restoration only.
+    /// Already-terminal subagents whose retained handoff entered the disposal
+    /// lifecycle. These require resource read-model restoration only.
     settled_subagent_disposals: Vec<RecoveredSubagentDisposal>,
     /// The missing canonical `ToolResult` siblings, grouped by their owning
     /// Assistant message, in canonical model-call order.
@@ -1684,8 +1726,8 @@ impl RecoveryPlan {
         &self.settled_subagent_handoffs
     }
 
-    /// The terminal subagents whose retained workspaces were explicitly
-    /// disposed before reconciliation.
+    /// The terminal subagents whose retained workspaces entered disposal
+    /// before reconciliation, including authorized and partial phases.
     #[must_use]
     pub fn settled_subagent_disposals(&self) -> &[RecoveredSubagentDisposal] {
         &self.settled_subagent_disposals
@@ -2262,8 +2304,8 @@ impl RecoveryReport {
         &self.settled_subagent_handoffs
     }
 
-    /// The terminal subagents whose retained workspaces were explicitly
-    /// disposed before this process started.
+    /// The terminal subagents whose retained workspaces entered disposal
+    /// before this process started, including authorized and partial phases.
     #[must_use]
     pub fn settled_subagent_disposals(&self) -> &[RecoveredSubagentDisposal] {
         &self.settled_subagent_disposals
@@ -2502,17 +2544,66 @@ mod tests {
             SubagentTerminalState::Succeeded
         );
 
-        let disposal = envelope(
-            RuntimeEvent::SubagentWorkspaceDisposed {
+        let disposal_intent = envelope(
+            RuntimeEvent::SubagentWorkspaceDisposalStarted {
                 subagent_id: subagent_id.clone(),
                 workspace_handoff: handoff.clone(),
             },
             None,
         );
+        let disposal_settlement = envelope(
+            RuntimeEvent::SubagentWorkspaceDisposalSettled {
+                subagent_id: subagent_id.clone(),
+                workspace_handoff: handoff.clone(),
+                settlement: SubagentWorkspaceDisposalSettlement::Disposed,
+            },
+            None,
+        );
+        let mut intent_only_evidence = base_evidence();
+        fold_all(
+            &mut intent_only_evidence,
+            &[ownership.clone(), terminal.clone(), disposal_intent.clone()],
+        );
+        let intent_only_plan = RecoveryPlan::classify(&intent_only_evidence);
+        assert!(intent_only_plan.settled_subagent_handoffs().is_empty());
+        assert_eq!(intent_only_plan.settled_subagent_disposals().len(), 1);
+        assert_eq!(
+            intent_only_plan.settled_subagent_disposals()[0].phase,
+            RecoveredSubagentDisposalPhase::Authorized
+        );
+
+        let partial_settlement = envelope(
+            RuntimeEvent::SubagentWorkspaceDisposalSettled {
+                subagent_id: subagent_id.clone(),
+                workspace_handoff: handoff.clone(),
+                settlement: SubagentWorkspaceDisposalSettlement::WorktreeRemoved,
+            },
+            None,
+        );
+        let mut partial_evidence = base_evidence();
+        fold_all(
+            &mut partial_evidence,
+            &[
+                ownership.clone(),
+                terminal.clone(),
+                disposal_intent.clone(),
+                partial_settlement,
+            ],
+        );
+        let partial_plan = RecoveryPlan::classify(&partial_evidence);
+        assert_eq!(
+            partial_plan.settled_subagent_disposals()[0].phase,
+            RecoveredSubagentDisposalPhase::WorktreeRemoved
+        );
         let mut disposed_evidence = base_evidence();
         fold_all(
             &mut disposed_evidence,
-            &[ownership.clone(), terminal.clone(), disposal],
+            &[
+                ownership.clone(),
+                terminal.clone(),
+                disposal_intent,
+                disposal_settlement,
+            ],
         );
         let disposed_plan = RecoveryPlan::classify(&disposed_evidence);
         assert!(disposed_plan.settled_subagent_handoffs().is_empty());
@@ -2535,7 +2626,7 @@ mod tests {
                 ownership,
                 terminal,
                 envelope(
-                    RuntimeEvent::SubagentWorkspaceDisposed {
+                    RuntimeEvent::SubagentWorkspaceDisposalStarted {
                         subagent_id,
                         workspace_handoff: mismatched_handoff,
                     },

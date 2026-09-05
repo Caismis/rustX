@@ -1160,7 +1160,8 @@ impl RuntimeClientProjection {
             | RuntimeEvent::SubagentOwnershipCommitted { .. }
             | RuntimeEvent::SubagentTerminalPublished { .. }
             | RuntimeEvent::SubagentTerminalSettled { .. }
-            | RuntimeEvent::SubagentWorkspaceDisposed { .. } => Vec::new(),
+            | RuntimeEvent::SubagentWorkspaceDisposalStarted { .. }
+            | RuntimeEvent::SubagentWorkspaceDisposalSettled { .. } => Vec::new(),
             // The interaction requested/settled facts are durable audit
             // evidence (Issue #109). The client already learns the live
             // pending/settled transitions from the coordinator's own
@@ -1901,6 +1902,7 @@ pub(crate) fn subagent_view(
                     }
                 }
             },
+            resource_state: snapshot.workspace_resource_state,
             handoff: snapshot.handoff.as_ref().map(|handoff| {
                 super::snapshot::RuntimeClientWorkspaceHandoff {
                     logical_workspace: handoff.logical_workspace.clone(),
@@ -5050,7 +5052,8 @@ mod tests {
     fn subagent_observations_fold_the_activity_projection_into_the_view() {
         use crate::runtime::subagent::{
             SubagentActivity, SubagentActivityCounters, SubagentExecutionProfile,
-            SubagentObservation, SubagentSnapshot, SubagentState, WorkspaceSnapshot,
+            SubagentObservation, SubagentSnapshot, SubagentState, SubagentWorkspaceResourceState,
+            WorkspaceSnapshot,
         };
 
         fn snapshot(observation: SubagentObservation) -> SubagentSnapshot {
@@ -5065,6 +5068,7 @@ mod tests {
                     "<shared-workspace>",
                 )),
                 handoff: None,
+                workspace_resource_state: SubagentWorkspaceResourceState::None,
                 state: SubagentState::Running,
                 detail: None,
                 observation,

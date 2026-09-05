@@ -742,7 +742,9 @@ impl PendingObservations {
 mod tests {
     use super::*;
     use crate::runtime::identity::{AgentId, ConversationId, ToolCallId};
-    use crate::runtime::subagent::{SubagentObservation, SubagentState, WorkspaceSnapshot};
+    use crate::runtime::subagent::{
+        SubagentObservation, SubagentState, SubagentWorkspaceResourceState, WorkspaceSnapshot,
+    };
 
     /// A minimal subagent snapshot carrying only the identity and the
     /// activity revision this suite distinguishes.
@@ -756,6 +758,7 @@ mod tests {
             definition_digest: "sha256:d1".to_owned(),
             workspace: WorkspaceSnapshot::shared(std::path::PathBuf::from("<shared>")),
             handoff: None,
+            workspace_resource_state: SubagentWorkspaceResourceState::None,
             state: SubagentState::Running,
             detail: None,
             observation: SubagentObservation {

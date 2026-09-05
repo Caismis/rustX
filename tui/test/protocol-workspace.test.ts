@@ -1,5 +1,5 @@
 /**
- * Cross-language Runtime Client workspace wire-contract regression (v15).
+ * Cross-language Runtime Client workspace wire-contract regression (v16).
  *
  * The fixtures under `tests/fixtures/runtime-client/` are the shared
  * contract between the Rust projection and this TypeScript mirror: a Rust
@@ -9,8 +9,8 @@
  * Rust projection drifted back to the pre-#187 flat `workspace`/`isolated`
  * schema, or this mirror did, one side fails — the typecheck pins the
  * declaration, the deep equality pins the runtime bytes. The Issue #187
- * workspace authority shape is carried into v15 unchanged while the
- * Runtime Client gains the explicit disposal operation.
+ * workspace authority shape is carried into v16 with the explicit
+ * post-terminal resource lifecycle.
  */
 
 import assert from "node:assert/strict";
@@ -28,13 +28,14 @@ function fixture(name: string): unknown {
   );
 }
 
-describe("Runtime Client v15 workspace wire contract", () => {
+describe("Runtime Client v16 workspace wire contract", () => {
   it("shared isolation matches the Rust fixture", () => {
     const expected: RuntimeClientSubagentWorkspace = {
       logical_workspace: "/repo",
       isolation: { type: "shared" },
+      resource_state: "none",
     };
-    assert.deepEqual(fixture("workspace-shared-v15.json"), expected);
+    assert.deepEqual(fixture("workspace-shared-v16.json"), expected);
   });
 
   it("isolated subdirectory with retained handoff matches the Rust fixture", () => {
@@ -49,6 +50,7 @@ describe("Runtime Client v15 workspace wire contract", () => {
         branch: "rustx/subagent-1",
         parent_had_uncommitted_changes: true,
       },
+      resource_state: "retained",
       handoff: {
         logical_workspace: "/runtime-root/worktrees/subagent-1/backend",
         physical_worktree_root: "/runtime-root/worktrees/subagent-1",
@@ -58,6 +60,6 @@ describe("Runtime Client v15 workspace wire contract", () => {
         dirty: false,
       },
     };
-    assert.deepEqual(fixture("workspace-git-worktree-v15.json"), expected);
+    assert.deepEqual(fixture("workspace-git-worktree-v16.json"), expected);
   });
 });

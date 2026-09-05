@@ -1298,6 +1298,10 @@ impl ClientInner {
                 snapshot,
                 super::types::RuntimeClientSubagentWorkspaceDisposalOutcome::AlreadyDisposed,
             ),
+            crate::runtime::subagent::SubagentWorkspaceDisposal::DisposalPending(snapshot) => (
+                snapshot,
+                super::types::RuntimeClientSubagentWorkspaceDisposalOutcome::DisposalPending,
+            ),
             crate::runtime::subagent::SubagentWorkspaceDisposal::NoRetainedWorkspace(snapshot) => (
                 snapshot,
                 super::types::RuntimeClientSubagentWorkspaceDisposalOutcome::NoRetainedWorkspace,

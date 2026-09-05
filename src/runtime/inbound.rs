@@ -995,14 +995,26 @@ impl ConversationInboundMailbox {
         Ok(self.inbound.commit_subagent_terminal(event)?)
     }
 
-    /// Commits the post-terminal retained-workspace disposal fact. This is a
-    /// resource-lifecycle audit and deliberately does not reopen or advance
+    /// Commits the post-terminal retained-workspace disposal intent. This is
+    /// a resource-lifecycle fact and deliberately does not reopen or advance
     /// the subagent's logical terminal lifecycle.
-    pub(crate) fn commit_subagent_workspace_disposal(
+    pub(crate) fn commit_subagent_workspace_disposal_intent(
         &self,
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, MailboxError> {
-        Ok(self.inbound.commit_subagent_workspace_disposal(event)?)
+        Ok(self
+            .inbound
+            .commit_subagent_workspace_disposal_intent(event)?)
+    }
+
+    /// Commits a post-terminal retained-workspace disposal settlement.
+    pub(crate) fn commit_subagent_workspace_disposal_settlement(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, MailboxError> {
+        Ok(self
+            .inbound
+            .commit_subagent_workspace_disposal_settlement(event)?)
     }
 
     /// Commits a successful Workflow Agent value together with the native

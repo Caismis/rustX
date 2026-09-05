@@ -4478,7 +4478,8 @@ impl ConversationRuntime {
 
     /// Disposes the exact retained workspace of one terminal subagent through
     /// the registry/workspace resource lifecycle. The logical subagent state
-    /// remains terminal; this method never synthesizes a `Disposed` state.
+    /// remains terminal; resource disposal never adds a logical `Disposed`
+    /// state.
     ///
     /// # Errors
     ///
