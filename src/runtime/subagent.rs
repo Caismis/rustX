@@ -357,6 +357,45 @@ pub(crate) const MAX_TASK_BYTES: usize = 32 * 1024;
 /// The bounded explicit context-package size.
 pub(crate) const MAX_CONTEXT_PACKAGE_BYTES: usize = 64 * 1024;
 
+/// The runtime-owned final-report instruction of every normal one-shot
+/// subagent child (Issue #192).
+///
+/// This is generic subagent execution semantics — the Subagent Final Report
+/// Principle: the parent receives the child's complete final assistant
+/// report and nothing else. It is owned by the runtime, composed exactly
+/// once at the child instruction boundary, and never repeated in a
+/// user-authored `instructionsFile`, never owned by a provider adapter, and
+/// never rewritten per definition.
+pub(crate) const SUBAGENT_FINAL_REPORT_INSTRUCTION: &str =
+    "Your final response is the complete handoff to the parent agent. Include all findings, \
+     conclusions, changes, validation results, and caveats the parent needs to continue the \
+     task. Do not assume the parent can see your intermediate reasoning, tool calls, tool \
+     outputs, or conversation history.";
+
+/// Composes the child's immutable `AgentProfile` System authority from the
+/// definition's instruction document (Issue #192).
+///
+/// The user-authored instructions are preserved exactly; the generic
+/// final-report handoff rule is appended for a **normal** one-shot child,
+/// whose final response is the whole semantic result the parent receives.
+///
+/// A Workflow-owned child (`workflow_output` terminal protocol) is
+/// deliberately excluded: its terminal contract is the structured,
+/// schema-validated `workflow_output` commit, so a free-form final-report
+/// instruction would contradict the terminal protocol its Agent Loop must
+/// satisfy.
+pub(crate) fn compose_child_agent_profile(
+    instructions: &str,
+    terminal: &ipc::ChildTerminalMode,
+) -> String {
+    match terminal {
+        ipc::ChildTerminalMode::Normal => {
+            format!("{instructions}\n\n{SUBAGENT_FINAL_REPORT_INSTRUCTION}")
+        }
+        ipc::ChildTerminalMode::WorkflowOutput { .. } => instructions.to_owned(),
+    }
+}
+
 /// Bounds model-generated or diagnostic text by UTF-8 bytes without ever
 /// splitting a Unicode scalar value.
 ///
