@@ -3459,8 +3459,10 @@ fn worktree_listing_contains(
 }
 
 /// Checks a current Git worktree listing against the complete retained
-/// handoff. Disposal uses lexical path equality deliberately: a stale or
-/// symlink-rebound recorded path is not an equivalent ownership proof.
+/// handoff. The registration path must be the recorded runtime allocation,
+/// allowing only the fixed `/var` <-> `/private/var` spelling that macOS Git
+/// can introduce. Arbitrary symlink resolution is intentionally not accepted
+/// here: a stale or symlink-rebound recorded path is not an ownership proof.
 fn worktree_listing_contains_handoff(
     listing: &str,
     snapshot: &WorkspaceSnapshot,
@@ -3488,8 +3490,10 @@ fn worktree_listing_contains_handoff(
             branch = Some(value);
             continue;
         }
-        if path.as_deref() == Some(worktree.physical_worktree_root.as_path())
-            && head == Some(handoff.head_commit.as_str())
+        if git_registration_paths_match(
+            path.as_deref(),
+            Some(worktree.physical_worktree_root.as_path()),
+        ) && head == Some(handoff.head_commit.as_str())
             && branch == Some(expected_branch.as_str())
         {
             return true;
@@ -3499,6 +3503,35 @@ fn worktree_listing_contains_handoff(
         branch = None;
     }
     false
+}
+
+/// Compares a Git-reported worktree path with the immutable runtime path.
+/// macOS exposes `/var` as a symlink to `/private/var`, and recent Git
+/// versions may choose either spelling when rendering `worktree list`. That
+/// OS-owned alias is safe to normalize lexically; resolving arbitrary
+/// symlinks would turn path identity into a mutable filesystem claim.
+fn git_registration_paths_match(actual: Option<&Path>, expected: Option<&Path>) -> bool {
+    let (Some(actual), Some(expected)) = (actual, expected) else {
+        return actual == expected;
+    };
+    actual == expected
+        || normalize_platform_git_path(actual) == normalize_platform_git_path(expected)
+}
+
+fn normalize_platform_git_path(path: &Path) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        let Some(rest) = path.strip_prefix("/private").ok() else {
+            return path.to_path_buf();
+        };
+        let is_system_alias = rest.components().next().is_some_and(
+            |component| matches!(component, std::path::Component::Normal(name) if name == "var"),
+        );
+        if is_system_alias {
+            return rest.to_path_buf();
+        }
+    }
+    path.to_path_buf()
 }
 
 /// Checks only whether the exact runtime allocation path is still registered
