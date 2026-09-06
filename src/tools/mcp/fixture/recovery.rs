@@ -12,18 +12,21 @@
 //! A self-spawned stdio fixture's state lives in another process, so the
 //! parent proves ordering through two seams, never through timing:
 //!
-//! - **the in-band progress seam.** Every accepted `tools/call` emits one
-//!   `notifications/progress` for the request's own progress token *before*
-//!   the tool behaves. The parent observes it through the ordinary
-//!   [`crate::tools::executor::ProgressReporter`], so "the dispatched
-//!   request provably reached the server" is a channel receive in the
-//!   parent, not a sleep. That is strictly stronger than the effect
-//!   frontier rustX classifies against (`send_cancellable_request`
-//!   returning `Ok`), so it is a sound gate for every post-frontier claim.
 //! - **the journal file.** Every generation appends one line per lifecycle
-//!   event and per accepted `tools/call`. Counting `call:` lines is how
-//!   "the ambiguous invocation was received at most once" is proven across
-//!   a reconnection, since the two generations are two different processes.
+//!   event and per accepted `tools/call`, before it acts on it. Waiting for
+//!   a `call:` line is how the parent proves a dispatched request reached
+//!   the server — strictly stronger than the effect frontier rustX
+//!   classifies against (`send_cancellable_request` returning `Ok`), so it
+//!   is a sound gate for every post-frontier claim. Counting those lines is
+//!   how "the ambiguous invocation was received at most once" is proven
+//!   across a reconnection, since two generations are two processes.
+//! - **the released progress seam.** [`TOOL_HANG`] emits a
+//!   `notifications/progress` for pulse `i` only once the parent creates
+//!   that pulse's release marker, which is always long after the client
+//!   subscribed to the request's progress token. Remote liveness evidence
+//!   therefore appears exactly when the parent asked for it, with no
+//!   subscription race — the parent observes each pulse through the ordinary
+//!   [`crate::tools::executor::ProgressReporter`].
 //!
 //! **This is a test fixture, not an MCP server implementation, and must not
 //! grow into one.**
@@ -125,98 +128,154 @@ pub async fn serve_if_recovery_fixture_mode() -> bool {
     true
 }
 
-/// The environment a parent test hands to one recovery fixture binding.
-#[must_use]
-pub fn recovery_environment(
-    journal: &Path,
-    generation_file: &Path,
-    release_dir: &Path,
-    die_generations: &[u64],
-    refuse_generations: &[u64],
-    corrupt_generations: &[u64],
-    extra_tool_generations: &[u64],
-    hang_pulses: u32,
-) -> std::collections::BTreeMap<String, String> {
-    std::collections::BTreeMap::from([
-        (
-            RECOVERY_CORRUPT_GENERATIONS_ENV.to_owned(),
-            corrupt_generations
-                .iter()
-                .map(u64::to_string)
-                .collect::<Vec<_>>()
-                .join(","),
-        ),
-        (RECOVERY_HANG_PULSES_ENV.to_owned(), hang_pulses.to_string()),
-        (
-            RECOVERY_EXTRA_TOOL_GENERATIONS_ENV.to_owned(),
-            extra_tool_generations
-                .iter()
-                .map(u64::to_string)
-                .collect::<Vec<_>>()
-                .join(","),
-        ),
-        (
-            RECOVERY_REFUSE_GENERATIONS_ENV.to_owned(),
-            refuse_generations
-                .iter()
-                .map(u64::to_string)
-                .collect::<Vec<_>>()
-                .join(","),
-        ),
-        (RECOVERY_FIXTURE_MODE_ENV.to_owned(), "1".to_owned()),
-        (
-            RECOVERY_JOURNAL_ENV.to_owned(),
-            journal.display().to_string(),
-        ),
-        (
-            RECOVERY_GENERATION_FILE_ENV.to_owned(),
-            generation_file.display().to_string(),
-        ),
-        (
-            RECOVERY_RELEASE_DIR_ENV.to_owned(),
-            release_dir.display().to_string(),
-        ),
-        (
-            RECOVERY_DIE_GENERATIONS_ENV.to_owned(),
-            die_generations
-                .iter()
-                .map(u64::to_string)
-                .collect::<Vec<_>>()
-                .join(","),
-        ),
-    ])
+/// The scripted per-generation behaviour of one recovery fixture server
+/// identity.
+///
+/// Generations are numbered from 1 in spawn order, so a parent test names
+/// exactly which transport generation misbehaves and how.
+#[derive(Debug, Clone, Default)]
+pub struct RecoveryScript {
+    /// Generations that exit with the request in flight, after journaling
+    /// the accepted call and emitting its dispatch notification.
+    pub die_generations: Vec<u64>,
+    /// Generations that exit before the handshake, so a bounded reconnect
+    /// attempt provably fails.
+    pub refuse_generations: Vec<u64>,
+    /// Generations that answer a `tools/call` with one structurally invalid
+    /// MCP/JSON-RPC line.
+    pub corrupt_generations: Vec<u64>,
+    /// Generations that publish [`TOOL_EXTRA`] in their catalog.
+    pub extra_tool_generations: Vec<u64>,
+    /// How many gated progress pulses [`TOOL_HANG`] emits.
+    pub hang_pulses: u32,
 }
 
-/// Reads every journal line written so far.
-#[must_use]
-pub fn journal_entries(journal: &Path) -> Vec<String> {
-    std::fs::read_to_string(journal)
-        .unwrap_or_default()
-        .lines()
-        .map(str::to_owned)
-        .collect()
+fn joined(values: &[u64]) -> String {
+    values
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
-/// Counts the accepted `tools/call` requests for one tool across every
-/// generation of the server.
-#[must_use]
-pub fn accepted_calls(journal: &Path, tool: &str) -> usize {
-    let entry = format!("{JOURNAL_CALL_PREFIX}{tool}");
-    journal_entries(journal)
-        .into_iter()
-        .filter(|line| *line == entry)
-        .count()
+/// The cross-process control files of one recovery fixture server identity.
+///
+/// The journal is the parent's observation seam and the generation counter
+/// is what gives every spawned server process its number, so both are shared
+/// by every generation of the same server identity.
+#[derive(Debug, Clone)]
+pub struct RecoveryControl {
+    /// The append-only journal of lifecycle and `tools/call` facts.
+    pub journal: PathBuf,
+    /// The generation counter file.
+    pub generation_file: PathBuf,
+    /// The directory in which the parent creates release markers.
+    pub release_dir: PathBuf,
 }
 
-/// Releases one named fixture gate.
-pub fn release(release_dir: &Path, name: &str) {
-    std::fs::write(release_dir.join(format!("{name}.release")), "go")
+impl RecoveryControl {
+    /// Creates the control files under `root`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the release directory cannot be created.
+    #[must_use]
+    pub fn new(root: &Path) -> Self {
+        let release_dir = root.join("mcp-recovery-release");
+        std::fs::create_dir_all(&release_dir).expect("release directory");
+        Self {
+            journal: root.join("mcp-recovery.journal"),
+            generation_file: root.join("mcp-recovery.generation"),
+            release_dir,
+        }
+    }
+
+    /// The environment a parent test hands to one recovery fixture binding.
+    #[must_use]
+    pub fn environment(
+        &self,
+        script: &RecoveryScript,
+    ) -> std::collections::BTreeMap<String, String> {
+        std::collections::BTreeMap::from([
+            (RECOVERY_FIXTURE_MODE_ENV.to_owned(), "1".to_owned()),
+            (
+                RECOVERY_JOURNAL_ENV.to_owned(),
+                self.journal.display().to_string(),
+            ),
+            (
+                RECOVERY_GENERATION_FILE_ENV.to_owned(),
+                self.generation_file.display().to_string(),
+            ),
+            (
+                RECOVERY_RELEASE_DIR_ENV.to_owned(),
+                self.release_dir.display().to_string(),
+            ),
+            (
+                RECOVERY_DIE_GENERATIONS_ENV.to_owned(),
+                joined(&script.die_generations),
+            ),
+            (
+                RECOVERY_REFUSE_GENERATIONS_ENV.to_owned(),
+                joined(&script.refuse_generations),
+            ),
+            (
+                RECOVERY_CORRUPT_GENERATIONS_ENV.to_owned(),
+                joined(&script.corrupt_generations),
+            ),
+            (
+                RECOVERY_EXTRA_TOOL_GENERATIONS_ENV.to_owned(),
+                joined(&script.extra_tool_generations),
+            ),
+            (
+                RECOVERY_HANG_PULSES_ENV.to_owned(),
+                script.hang_pulses.to_string(),
+            ),
+        ])
+    }
+
+    /// Every journal line written so far, oldest first.
+    #[must_use]
+    pub fn journal_entries(&self) -> Vec<String> {
+        std::fs::read_to_string(&self.journal)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Counts the accepted `tools/call` requests for one tool across every
+    /// generation of the server.
+    #[must_use]
+    pub fn accepted_calls(&self, tool: &str) -> usize {
+        let entry = format!("{JOURNAL_CALL_PREFIX}{tool}");
+        self.journal_entries()
+            .into_iter()
+            .filter(|line| *line == entry)
+            .count()
+    }
+
+    /// How many server generations were ever spawned for this identity.
+    #[must_use]
+    pub fn established_generations(&self) -> usize {
+        self.journal_entries()
+            .into_iter()
+            .filter(|line| line.starts_with(JOURNAL_GENERATION_PREFIX))
+            .count()
+    }
+
+    /// Releases the `hang` tool's `pulse`-th progress notification.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the marker cannot be written.
+    pub fn release_hang_pulse(&self, pulse: u32) {
+        std::fs::write(
+            self.release_dir
+                .join(format!("{TOOL_HANG}.{pulse}.release")),
+            "go",
+        )
         .expect("release marker write");
-}
-
-/// Releases the `hang` tool's `pulse`-th progress notification.
-pub fn release_hang_pulse(release_dir: &Path, pulse: u32) {
-    release(release_dir, &format!("{TOOL_HANG}.{pulse}"));
+    }
 }
 
 /// The progress token of one `tools/call`.
@@ -322,42 +381,18 @@ async fn await_release(release_dir: Option<&PathBuf>, tool: &str) {
 async fn serve() {
     let journal = std::env::var_os(RECOVERY_JOURNAL_ENV).map(PathBuf::from);
     let release_dir = std::env::var_os(RECOVERY_RELEASE_DIR_ENV).map(PathBuf::from);
-    let die_generations: Vec<u64> = std::env::var(RECOVERY_DIE_GENERATIONS_ENV)
-        .unwrap_or_default()
-        .split(',')
-        .filter_map(|entry| entry.trim().parse::<u64>().ok())
-        .collect();
-    let hang_pulses: u32 = std::env::var(RECOVERY_HANG_PULSES_ENV)
-        .ok()
-        .and_then(|value| value.trim().parse().ok())
-        .unwrap_or(0);
-    let corrupt_generations: Vec<u64> = std::env::var(RECOVERY_CORRUPT_GENERATIONS_ENV)
-        .unwrap_or_default()
-        .split(',')
-        .filter_map(|entry| entry.trim().parse::<u64>().ok())
-        .collect();
-    let extra_tool_generations: Vec<u64> = std::env::var(RECOVERY_EXTRA_TOOL_GENERATIONS_ENV)
-        .unwrap_or_default()
-        .split(',')
-        .filter_map(|entry| entry.trim().parse::<u64>().ok())
-        .collect();
-    let refuse_generations: Vec<u64> = std::env::var(RECOVERY_REFUSE_GENERATIONS_ENV)
-        .unwrap_or_default()
-        .split(',')
-        .filter_map(|entry| entry.trim().parse::<u64>().ok())
-        .collect();
-    let generation = claim_generation();
+    let generation = Generation::from_env();
     record(
         journal.as_ref(),
-        &format!("{JOURNAL_GENERATION_PREFIX}{generation}"),
+        &format!("{JOURNAL_GENERATION_PREFIX}{}", generation.number),
     );
-    if refuse_generations.contains(&generation) {
+    if generation.refuses {
         // The replacement transport never completes a handshake, so the
         // client's one bounded reconnect attempt fails before any request
         // can exist.
         record(
             journal.as_ref(),
-            &format!("{JOURNAL_REFUSED_PREFIX}{generation}"),
+            &format!("{JOURNAL_REFUSED_PREFIX}{}", generation.number),
         );
         return;
     }
@@ -385,7 +420,7 @@ async fn serve() {
                 if raw.contains("notifications/cancelled") {
                     record(
                         journal.as_ref(),
-                        &format!("{JOURNAL_CANCELLED_PREFIX}{generation}"),
+                        &format!("{JOURNAL_CANCELLED_PREFIX}{}", generation.number),
                     );
                 }
                 continue;
@@ -394,118 +429,175 @@ async fn serve() {
         };
         let id = request.id.clone();
         match request.request {
-            ClientRequest::DiscoverRequest(_) => {
-                write_error(
-                    &mut output,
-                    ErrorData::method_not_found::<DiscoverRequestMethod>(),
-                    id,
-                )
-                .await;
-            }
-            ClientRequest::InitializeRequest(_) => {
-                let mut result =
-                    InitializeResult::new(ServerCapabilities::builder().enable_tools().build());
-                result.protocol_version = ProtocolVersion::V_2025_06_18;
-                result.server_info = Implementation::new("rustx-recovery-fixture", "0.0.0");
-                write_message(&mut output, ServerResult::InitializeResult(result), id).await;
-            }
-            ClientRequest::ListToolsRequest(_) => {
-                let result = ListToolsResult {
-                    tools: catalog(extra_tool_generations.contains(&generation)),
-                    ..Default::default()
-                };
-                write_message(&mut output, ServerResult::ListToolsResult(result), id).await;
-            }
-            ClientRequest::PingRequest(_) => {
-                write_message(
-                    &mut output,
-                    ServerResult::EmptyResult(rmcp::model::EmptyResult {}),
-                    id,
-                )
-                .await;
-            }
             ClientRequest::CallToolRequest(call) => {
-                let tool = call.params.name.to_string();
-                record(
-                    journal.as_ref(),
-                    &format!("{JOURNAL_CALL_PREFIX}{}", tool.as_str()),
-                );
-                // The in-band dispatch gate: one progress notification for
-                // this request's own token, emitted before any per-tool
-                // behavior. Its arrival in the parent proves the dispatched
-                // request reached the server.
-                let progress_token = request_progress_token(&call);
-                if let Some(token) = progress_token.clone() {
-                    let mut params = ProgressNotificationParam::new(token, 1.0);
-                    params.total = Some(2.0);
-                    params.message = Some(format!("{tool} dispatched"));
-                    write_progress(&mut output, params).await;
-                }
-                if corrupt_generations.contains(&generation) {
-                    // Well-formed JSON that is not a valid MCP message: a
-                    // confirmed structural protocol violation (serde `Data`
-                    // class), which the client's framing seam must treat as
-                    // a rustX fact rather than peer-only traffic.
-                    record(journal.as_ref(), JOURNAL_CORRUPTED);
-                    let _ = output
-                        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":123}\n")
-                        .await;
-                    let _ = output.flush().await;
-                    continue;
-                }
-                if die_generations.contains(&generation) {
-                    // The request provably crossed the frontier (it is
-                    // journaled and its progress notification is on the
-                    // wire) and no response will ever exist: the transport
-                    // dies with the call in flight.
-                    record(journal.as_ref(), JOURNAL_DIED);
-                    std::process::exit(0);
-                }
-                match tool.as_str() {
-                    TOOL_HANG => {
-                        // Additional remote liveness evidence, each emitted
-                        // exactly when the parent releases its gate, then the
-                        // request is never answered. The connection stays
-                        // open and healthy, so only the generic hard deadline
-                        // can bound this call.
-                        let token = progress_token.clone();
-                        for pulse in 1..=hang_pulses {
-                            await_release(release_dir.as_ref(), &format!("{TOOL_HANG}.{pulse}"))
-                                .await;
-                            if let Some(token) = token.clone() {
-                                let mut params =
-                                    ProgressNotificationParam::new(token, f64::from(pulse) + 1.0);
-                                params.message = Some(format!("{TOOL_HANG} pulse {pulse}"));
-                                write_progress(&mut output, params).await;
-                            }
-                        }
-                    }
-                    _ => {
-                        write_message(
-                            &mut output,
-                            ServerResult::CallToolResult(CallToolResult::success(vec![
-                                ContentBlock::text(format!(
-                                    "{tool} ok from generation {generation}"
-                                )),
-                            ])),
-                            id,
-                        )
-                        .await;
-                    }
-                }
-            }
-            other => {
-                write_error(
+                serve_call(
                     &mut output,
-                    ErrorData::new(
-                        rmcp::model::ErrorCode::METHOD_NOT_FOUND,
-                        format!("the recovery fixture does not serve {other:?}"),
-                        None,
-                    ),
+                    call,
                     id,
+                    &generation,
+                    journal.as_ref(),
+                    release_dir.as_ref(),
                 )
                 .await;
             }
+            other => serve_lifecycle(&mut output, other, id, &generation).await,
         }
     }
+}
+
+/// Answers everything that is not a `tools/call`: the lifecycle handshake,
+/// the catalog, and the deliberate refusal of anything else.
+async fn serve_lifecycle(
+    output: &mut tokio::io::Stdout,
+    request: ClientRequest,
+    id: RequestId,
+    generation: &Generation,
+) {
+    match request {
+        ClientRequest::DiscoverRequest(_) => {
+            write_error(
+                output,
+                ErrorData::method_not_found::<DiscoverRequestMethod>(),
+                id,
+            )
+            .await;
+        }
+        ClientRequest::InitializeRequest(_) => {
+            let mut result =
+                InitializeResult::new(ServerCapabilities::builder().enable_tools().build());
+            result.protocol_version = ProtocolVersion::V_2025_06_18;
+            result.server_info = Implementation::new("rustx-recovery-fixture", "0.0.0");
+            write_message(output, ServerResult::InitializeResult(result), id).await;
+        }
+        ClientRequest::ListToolsRequest(_) => {
+            let result = ListToolsResult {
+                tools: catalog(generation.publishes_extra_tool),
+                ..Default::default()
+            };
+            write_message(output, ServerResult::ListToolsResult(result), id).await;
+        }
+        ClientRequest::PingRequest(_) => {
+            write_message(
+                output,
+                ServerResult::EmptyResult(rmcp::model::EmptyResult {}),
+                id,
+            )
+            .await;
+        }
+        other => {
+            write_error(
+                output,
+                ErrorData::new(
+                    rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+                    format!("the recovery fixture does not serve {other:?}"),
+                    None,
+                ),
+                id,
+            )
+            .await;
+        }
+    }
+}
+
+/// The scripted behaviour of the one generation this process serves.
+#[allow(clippy::struct_excessive_bools)] // one independent switch per scripted fault
+struct Generation {
+    number: u64,
+    dies: bool,
+    corrupts: bool,
+    refuses: bool,
+    publishes_extra_tool: bool,
+    hang_pulses: u32,
+}
+
+impl Generation {
+    /// Claims this process's generation number and resolves its scripted
+    /// behaviour from the environment the parent handed the binding.
+    fn from_env() -> Self {
+        fn generations(name: &str) -> Vec<u64> {
+            std::env::var(name)
+                .unwrap_or_default()
+                .split(',')
+                .filter_map(|entry| entry.trim().parse::<u64>().ok())
+                .collect()
+        }
+        let number = claim_generation();
+        Self {
+            number,
+            dies: generations(RECOVERY_DIE_GENERATIONS_ENV).contains(&number),
+            corrupts: generations(RECOVERY_CORRUPT_GENERATIONS_ENV).contains(&number),
+            refuses: generations(RECOVERY_REFUSE_GENERATIONS_ENV).contains(&number),
+            publishes_extra_tool: generations(RECOVERY_EXTRA_TOOL_GENERATIONS_ENV)
+                .contains(&number),
+            hang_pulses: std::env::var(RECOVERY_HANG_PULSES_ENV)
+                .ok()
+                .and_then(|value| value.trim().parse().ok())
+                .unwrap_or(0),
+        }
+    }
+}
+
+/// Answers one `tools/call` according to this generation's script.
+async fn serve_call(
+    output: &mut tokio::io::Stdout,
+    call: CallToolRequest,
+    id: RequestId,
+    generation: &Generation,
+    journal: Option<&PathBuf>,
+    release_dir: Option<&PathBuf>,
+) {
+    let tool = call.params.name.to_string();
+    // The dispatch gate: journaled before any per-tool behaviour, so the
+    // parent proves "this request reached the server" by reading a fact the
+    // server process wrote. A progress notification would be the wrong gate
+    // here — an MCP client can only subscribe to a request's progress token
+    // after the request is enqueued, so a notification emitted the instant
+    // the server receives the call may legitimately race that subscription.
+    // Progress in this fixture is therefore emitted only where the parent
+    // has explicitly released it, long after any subscription exists.
+    record(journal, &format!("{JOURNAL_CALL_PREFIX}{}", tool.as_str()));
+    let progress_token = request_progress_token(&call);
+    if generation.corrupts {
+        // Well-formed JSON that is not a valid MCP message: a confirmed
+        // structural protocol violation (serde `Data` class), which the
+        // client's framing seam must treat as a rustX fact rather than
+        // peer-only traffic.
+        record(journal, JOURNAL_CORRUPTED);
+        let _ = output
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":123}\n")
+            .await;
+        let _ = output.flush().await;
+        return;
+    }
+    if generation.dies {
+        // The request provably crossed the frontier (it is journaled and its
+        // progress notification is on the wire) and no response will ever
+        // exist: the transport dies with the call in flight.
+        record(journal, JOURNAL_DIED);
+        std::process::exit(0);
+    }
+    if tool == TOOL_HANG {
+        // Additional remote liveness evidence, each emitted exactly when the
+        // parent releases its gate, then the request is never answered. The
+        // connection stays open and healthy, so only the generic hard
+        // deadline can bound this call.
+        for pulse in 1..=generation.hang_pulses {
+            await_release(release_dir, &format!("{TOOL_HANG}.{pulse}")).await;
+            if let Some(token) = progress_token.clone() {
+                let mut params = ProgressNotificationParam::new(token, f64::from(pulse) + 1.0);
+                params.message = Some(format!("{TOOL_HANG} pulse {pulse}"));
+                write_progress(output, params).await;
+            }
+        }
+        return;
+    }
+    write_message(
+        output,
+        ServerResult::CallToolResult(CallToolResult::success(vec![ContentBlock::text(format!(
+            "{tool} ok from generation {}",
+            generation.number
+        ))])),
+        id,
+    )
+    .await;
 }

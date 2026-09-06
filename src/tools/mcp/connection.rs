@@ -131,7 +131,7 @@ impl McpConnectionGeneration {
 pub(crate) enum McpConnectionFact {
     /// A transport generation completed its handshake and became the
     /// authoritative transport of this server.
-    GenerationEstablished {
+    Established {
         /// The established generation number.
         generation: u64,
         /// The MCP revision that generation negotiated.
@@ -139,14 +139,14 @@ pub(crate) enum McpConnectionFact {
     },
     /// A transport generation was proven unusable and retired. It never
     /// serves another request as healthy.
-    GenerationLost {
+    Lost {
         /// The retired generation number.
         generation: u64,
         /// The bounded evidence that proved it unusable.
         reason: String,
     },
     /// A replacement transport generation could not be established.
-    GenerationUnavailable {
+    Unavailable {
         /// The bounded connect failure.
         reason: String,
     },
@@ -279,7 +279,7 @@ impl McpConnection {
             runtime,
         }));
         drop(state);
-        self.record(McpConnectionFact::GenerationEstablished {
+        self.record(McpConnectionFact::Established {
             generation,
             protocol_version,
         });
@@ -318,7 +318,7 @@ impl McpConnection {
         {
             state.current = None;
             state.retired.push(current.clone());
-            self.record(McpConnectionFact::GenerationLost {
+            self.record(McpConnectionFact::Lost {
                 generation: current.generation,
                 reason,
             });
@@ -332,7 +332,7 @@ impl McpConnection {
                  does not own reconnection",
                 self.server_id
             );
-            self.record(McpConnectionFact::GenerationUnavailable {
+            self.record(McpConnectionFact::Unavailable {
                 reason: reason.clone(),
             });
             return Err(McpError::Execution(reason));
@@ -348,7 +348,7 @@ impl McpConnection {
                  cancelled",
                 self.server_id
             );
-            self.record(McpConnectionFact::GenerationUnavailable {
+            self.record(McpConnectionFact::Unavailable {
                 reason: reason.clone(),
             });
             return Err(McpError::Execution(reason));
@@ -361,13 +361,17 @@ impl McpConnection {
         // last-known-good capability generation, which stays authoritative
         // until a complete validated candidate commits.
         reconnect.invalidation.lock().advance(&self.server_id);
-        let connected = McpServerRuntime::connect_owned(OwnedConnect::new(
+        // Boxed deliberately: the connect future is large, and `acquire` is
+        // awaited from capability preparation, whose own future is already
+        // near the crate's large-future budget. Boxing keeps the reconnect
+        // path off every caller's inline state machine.
+        let connected = Box::pin(McpServerRuntime::connect_owned(OwnedConnect::new(
             &self.server_id,
             &reconnect.binding,
             &reconnect.workspace,
             reconnect.invalidation.clone(),
             reconnect.cancellation.child(),
-        ))
+        )))
         .await;
         match connected {
             Ok(runtime) => {
@@ -385,7 +389,7 @@ impl McpConnection {
                 });
                 state.current = Some(established.clone());
                 drop(state);
-                self.record(McpConnectionFact::GenerationEstablished {
+                self.record(McpConnectionFact::Established {
                     generation,
                     protocol_version,
                 });
@@ -394,7 +398,7 @@ impl McpConnection {
             Err(error) => {
                 drop(state);
                 let reason = error.to_string();
-                self.record(McpConnectionFact::GenerationUnavailable {
+                self.record(McpConnectionFact::Unavailable {
                     reason: reason.clone(),
                 });
                 Err(error)
@@ -471,14 +475,14 @@ impl McpConnection {
             .take(MAX_RENDERED_CONNECTION_FACTS)
             .rev()
             .map(|fact| match fact {
-                McpConnectionFact::GenerationEstablished {
+                McpConnectionFact::Established {
                     generation,
                     protocol_version,
                 } => format!("generation {generation} established ({protocol_version})"),
-                McpConnectionFact::GenerationLost { generation, reason } => {
+                McpConnectionFact::Lost { generation, reason } => {
                     format!("generation {generation} lost: {reason}")
                 }
-                McpConnectionFact::GenerationUnavailable { reason } => {
+                McpConnectionFact::Unavailable { reason } => {
                     format!("no replacement generation: {reason}")
                 }
             })

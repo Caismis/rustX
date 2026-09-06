@@ -3493,7 +3493,80 @@ the failure on `CapabilitySourceId::Mcp(server_id)`, so a managed Python
 package's stdout corruption is diagnosed through its synthesized
 `python:<folder>` identity by the generic runtime — there is no
 Python-specific parser and FastMCP has no separate framing contract.
-Executors capture an `Arc` to that runtime. The observed remote tool surface
+#### MCP liveness, connection generations, and recovery (Issue #205)
+
+MCP is a Tool executor and transport adapter. The Agent Loop's generic
+Issue #204 lifecycle remains the only generic deadline owner and the only
+canonical status authority; MCP owns physical execution, external-effect
+certainty, connection health, protocol cancellation, and capability
+acquisition.
+
+**The external-effect frontier is `send_cancellable_request` returning
+`Ok`.** rmcp fails that call under exactly one condition — its service event
+loop is gone, so the request was never enqueued — which makes an `Err` a
+proof that nothing was serialized or written. `Ok` proves only enqueueing:
+the write happens in rmcp's own send task, and no observation distinguishes
+"not yet written" from "written and executing". Everything before that point
+therefore settles as an ordinary outcome (`Failed`, or a proven `Cancelled`
+when cancellation intent is observed at the pre-dispatch checkpoint, in which
+case no request is dispatched at all). After it, only a **correlated remote
+response** — a `CallToolResult`, or a JSON-RPC error answering this request
+id — proves terminality; transport loss, a poisoned generation, an
+acknowledged cancellation notification, and an abandoned response channel all
+settle as `OutcomeUnknown`.
+
+Cancellation propagates as `notifications/cancelled`, the strongest
+cancellation the negotiated protocol defines, and the executor **keeps the
+response channel across it**: rmcp resolves the request's local responder in
+the same event-loop step in which it reports the notification's send outcome,
+so a remote result that beat the cancellation inside rmcp still wins and is
+reported as proven terminality. MCP never selects a canonical terminal
+status; the lifecycle maps confirmed settlement to `Cancelled` or `TimedOut`
+from the winning cause. Remote progress notifications flow through the one
+generic `ProgressReporter` seam and refresh only the idle watchdog — never
+the immutable hard deadline — and the executor fabricates no heartbeats.
+
+**`McpConnection` (`src/tools/mcp/connection.rs`) is the stable connection
+owner** of one configured server, and it is what a published capability
+generation and every discovered executor bind to. Underneath it, one
+*connection generation* is one concrete negotiated transport/session
+authority: one spawned stdio unit or HTTP session, its handshake, its
+negotiated revision, its peer, and its own corruption seam. Executors resolve
+the authoritative generation at dispatch, so a replaced transport is served
+immediately by every already-admitted tool. A generation dies only on proof
+(closed runtime, confirmed protocol violation, transport-class rmcp failure),
+that proof is recorded monotonically so repeated loss signals retire it once,
+and replacement is bounded by construction: **at most one connect attempt per
+dispatch**, driven inline by the dispatching execution future, before that
+dispatch crosses its own frontier. There is no reconnect loop, no backoff
+timer, and no detached reconnect task to own.
+
+**Reconnect is therefore never replay.** Reconnection is reachable only from
+a new dispatch's transport resolution; there is no in-flight queue, no
+correlation-id carry-over, and no resubmission path. A request that crossed
+the frontier lives entirely inside its own execution future and has already
+reached a terminal classification before any replacement generation exists.
+
+**Capability refresh is publish-on-success**, and capability knowledge is
+kept separate from transport availability. When an MCP server's refresh
+cannot produce a complete validated generation, the candidate carries that
+server's last-known-good registrations forward verbatim — executors included,
+so they remain bound to the same connection owner — and commit *retains* its
+published physical generation instead of retiring it; the source is reported
+`Unavailable` in the availability plane while its catalog stays
+authoritative. A refresh that changes nothing else is a no-op that fabricates
+no revision. Only a complete validated candidate replaces a generation, at
+the single snapshot swap under the capability state lock.
+
+Drain closes publication authority: closing a connection cancels its
+ownership root first (so a connect in flight settles its own process and
+returns), then drives every generation it established to physical
+settlement. Afterwards no acquire can establish a generation, no reconnection
+can spawn a server, and a later dispatch through a stale handle settles as an
+ordinary pre-frontier failure.
+
+Executors capture an `Arc` to the server's connection, not to one transport
+generation. The observed remote tool surface
 and binding are immutable for a capability revision, but rustX does not claim
 to snapshot the implementation behavior of the independent remote server.
 `tools/list_changed` epoch mutation and capability snapshot activation share

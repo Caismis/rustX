@@ -30,7 +30,6 @@
 
 use super::{common, support};
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -59,50 +58,12 @@ use tokio::sync::watch;
 // Fixture wiring
 // ---------------------------------------------------------------------------
 
-/// The cross-process control files of one recovery-fixture server identity.
-struct RecoveryPaths {
-    journal: PathBuf,
-    generation_file: PathBuf,
-    release_dir: PathBuf,
-}
-
-impl RecoveryPaths {
-    fn new(root: &Path) -> Self {
-        let release_dir = root.join("release");
-        std::fs::create_dir_all(&release_dir).expect("release directory");
-        Self {
-            journal: root.join("recovery.journal"),
-            generation_file: root.join("recovery.generation"),
-            release_dir,
-        }
-    }
-
-    fn accepted_calls(&self, tool: &str) -> usize {
-        recovery::accepted_calls(&self.journal, tool)
-    }
-
-    fn entries(&self) -> Vec<String> {
-        recovery::journal_entries(&self.journal)
-    }
-
-    fn established_generations(&self) -> usize {
-        self.entries()
-            .into_iter()
-            .filter(|line| line.starts_with(recovery::JOURNAL_GENERATION_PREFIX))
-            .count()
-    }
-}
-
 /// The binding of one recovery-fixture server: this test binary re-executed
 /// as exactly `test_name` in recovery-fixture mode.
 fn recovery_binding(
     test_name: &str,
-    paths: &RecoveryPaths,
-    die_generations: &[u64],
-    refuse_generations: &[u64],
-    corrupt_generations: &[u64],
-    extra_tool_generations: &[u64],
-    hang_pulses: u32,
+    control: &recovery::RecoveryControl,
+    script: &recovery::RecoveryScript,
 ) -> rustx::tools::mcp::McpServerBinding {
     rustx::tools::mcp::McpServerBinding {
         transport: rustx::tools::mcp::McpTransportConfig::Stdio {
@@ -112,16 +73,7 @@ fn recovery_binding(
                 .to_string(),
             args: rustx::tools::mcp::fixture::fixture_spawn_args(test_name),
             cwd: None,
-            environment: recovery::recovery_environment(
-                &paths.journal,
-                &paths.generation_file,
-                &paths.release_dir,
-                die_generations,
-                refuse_generations,
-                corrupt_generations,
-                extra_tool_generations,
-                hang_pulses,
-            ),
+            environment: control.environment(script),
         },
         policy: rustx::tools::types::ToolInvocationPolicy::default(),
     }
@@ -139,12 +91,8 @@ struct McpCapability {
 async fn recovery_capability(
     tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
     test_name: &str,
-    paths: &RecoveryPaths,
-    die_generations: &[u64],
-    refuse_generations: &[u64],
-    corrupt_generations: &[u64],
-    extra_tool_generations: &[u64],
-    hang_pulses: u32,
+    control: &recovery::RecoveryControl,
+    script: &recovery::RecoveryScript,
 ) -> McpCapability {
     let dir = tempfile::tempdir().expect("capability temp dir");
     let server_id = McpServerId::new("recovery");
@@ -156,15 +104,7 @@ async fn recovery_capability(
         skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
         mcp_servers: std::collections::BTreeMap::from([(
             server_id.clone(),
-            recovery_binding(
-                test_name,
-                paths,
-                die_generations,
-                refuse_generations,
-                corrupt_generations,
-                extra_tool_generations,
-                hang_pulses,
-            ),
+            recovery_binding(test_name, control, script),
         )]),
         base_environment: tool_runtime.environment().clone(),
         environment_store_root: dir.path().join("skill-env"),
@@ -283,15 +223,6 @@ impl Controls {
             .expect("the tool start observation channel stays open");
     }
 
-    /// Waits for the in-band dispatch proof: the fixture's progress
-    /// notification for the accepted `tools/call`.
-    async fn wait_dispatched(&mut self) {
-        self.progress
-            .wait_for(|count| *count >= 1)
-            .await
-            .expect("the progress observation channel stays open");
-    }
-
     async fn wait_progress_at_least(&mut self, count: u32) {
         self.progress
             .wait_for(|observed| *observed >= count)
@@ -327,7 +258,7 @@ impl Controls {
 /// must observe the same conversation identity and the same durable
 /// authority, and a second attempt over the same store would reconstruct a
 /// different canonical request. It also matches the real shape of the
-/// contract under test, where a later ToolCall of the same conversation is
+/// contract under test, where a later `ToolCall` of the same conversation is
 /// served by a replacement connection generation.
 async fn run_mcp_calls<C, F>(
     fixture: &common::NativeFixture,
@@ -400,10 +331,10 @@ where
         AgentExecutionRequest {
             agent_id: AgentId::new("agent-205-boundary"),
             conversation_id: fixture.runtime.conversation_id().clone(),
-            attempt_id: AttemptId::new(&format!("attempt-205-{attempt}")),
+            attempt_id: AttemptId::new(format!("attempt-205-{attempt}")),
             conversation: rustx::conversation::ConversationState::from_messages(vec![
                 MessageBlock::User(UserMessageBlock {
-                    id: MessageId::new(&format!("msg-user-205-{attempt}")),
+                    id: MessageId::new(format!("msg-user-205-{attempt}")),
                     content: vec![UserContentBlock::Text(TextBlock {
                         text: "call the mcp tool".to_owned(),
                     })],
@@ -585,22 +516,47 @@ async fn direct_mcp_call(
     .await
 }
 
+/// Waits for one journal entry from inside an async controller.
+///
+/// Same rendezvous as [`wait_for_journal_entry`]: the entry is a fact the
+/// server process wrote before acting, and the wall-clock bound is only an
+/// anti-hang guard.
+async fn await_journal_entry(control: &recovery::RecoveryControl, entry: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        if control.journal_entries().iter().any(|line| line == entry) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "anti-hang guard: the fixture never journaled {entry:?}; journal: {:?}",
+            control.journal_entries()
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// The journal entry proving the server accepted a `tools/call` for `tool`.
+fn accepted_call_entry(tool: &str) -> String {
+    format!("{}{tool}", recovery::JOURNAL_CALL_PREFIX)
+}
+
 /// Waits for one journal entry, with a wall-clock anti-hang guard.
 ///
 /// The entry itself is the ordering proof: the fixture writes it only after
 /// the corresponding protocol event actually happened in the server process.
 /// The guard only bounds how long the parent is willing to wait for a fact
 /// that must eventually appear.
-fn wait_for_journal_entry(paths: &RecoveryPaths, entry: &str) {
+fn wait_for_journal_entry(control: &recovery::RecoveryControl, entry: &str) {
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
     loop {
-        if paths.entries().iter().any(|line| line == entry) {
+        if control.journal_entries().iter().any(|line| line == entry) {
             return;
         }
         assert!(
             std::time::Instant::now() < deadline,
             "anti-hang guard: the fixture never journaled {entry:?}; journal: {:?}",
-            paths.entries()
+            control.journal_entries()
         );
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -627,19 +583,16 @@ async fn an_unanswered_mcp_call_is_bounded_by_the_generic_hard_deadline() {
         return;
     }
     let fixture = common::native_fixture();
-    let paths = RecoveryPaths::new(fixture.dir().path());
+    let control = recovery::RecoveryControl::new(fixture.dir().path());
     let capability = recovery_capability(
         &fixture.runtime,
         "boundary_suites::mcp_recovery::an_unanswered_mcp_call_is_bounded_by_the_generic_hard_deadline",
-        &paths,
-        &[],
-        &[],
-        &[],
-        &[],
-        0,
+        &control,
+        &recovery::RecoveryScript::default(),
     )
     .await;
     let lease = capability.coordinator.acquire_attempt_lease();
+    let dispatch_gate = control.clone();
     let audit = run_mcp_call(
         &fixture,
         lease,
@@ -649,10 +602,11 @@ async fn an_unanswered_mcp_call_is_bounded_by_the_generic_hard_deadline() {
             hard_deadline: Duration::from_secs(5),
             idle_liveness: None,
         },
-        |mut controls| async move {
+        move |mut controls| async move {
             controls.wait_started().await;
-            // The in-band gate: the request provably reached the server.
-            controls.wait_dispatched().await;
+            // The dispatch gate: the server journaled the accepted request,
+            // so it provably crossed the effect frontier.
+            await_journal_entry(&dispatch_gate, &accepted_call_entry(recovery::TOOL_HANG)).await;
             let deadline = controls.cross_hard_deadline().await;
             assert_eq!(
                 deadline, 5_000,
@@ -721,9 +675,12 @@ async fn an_unanswered_mcp_call_is_bounded_by_the_generic_hard_deadline() {
 
     // The deadline propagated the strongest cancellation the negotiated
     // protocol defines: the server observed `notifications/cancelled`.
-    wait_for_journal_entry(&paths, &format!("{}1", recovery::JOURNAL_CANCELLED_PREFIX));
+    wait_for_journal_entry(
+        &control,
+        &format!("{}1", recovery::JOURNAL_CANCELLED_PREFIX),
+    );
     assert_eq!(
-        paths.accepted_calls(recovery::TOOL_HANG),
+        control.accepted_calls(recovery::TOOL_HANG),
         1,
         "the ambiguous invocation reached the server exactly once"
     );
@@ -749,38 +706,38 @@ async fn mcp_progress_refreshes_idle_liveness_and_never_extends_the_hard_deadlin
         return;
     }
     let fixture = common::native_fixture();
-    let paths = RecoveryPaths::new(fixture.dir().path());
+    let control = recovery::RecoveryControl::new(fixture.dir().path());
     let capability = recovery_capability(
         &fixture.runtime,
         "boundary_suites::mcp_recovery::mcp_progress_refreshes_idle_liveness_and_never_extends_the_hard_deadline",
-        &paths,
-        &[],
-        &[],
-        &[],
-        &[],
-        3,
+        &control,
+        &recovery::RecoveryScript {
+            hang_pulses: 3,
+            ..recovery::RecoveryScript::default()
+        },
     )
     .await;
     let lease = capability.coordinator.acquire_attempt_lease();
-    let release_dir = paths.release_dir.clone();
+    let control_handle = control.clone();
+    let dispatch_gate = control.clone();
     let audit = run_mcp_call(
         &fixture,
         lease,
         "hang",
         recovery::TOOL_HANG,
         ToolExecutionDeadlinePolicy {
-            hard_deadline: Duration::from_millis(3_000),
-            idle_liveness: Some(Duration::from_millis(1_000)),
+            hard_deadline: Duration::from_secs(3),
+            idle_liveness: Some(Duration::from_secs(1)),
         },
         move |mut controls| async move {
             controls.wait_started().await;
-            controls.wait_dispatched().await;
+            await_journal_entry(&dispatch_gate, &accepted_call_entry(recovery::TOOL_HANG)).await;
             for pulse in 1..=3_u32 {
                 // 900 < 1000: the current idle window survives this advance.
                 controls.clock.advance(900);
-                recovery::release_hang_pulse(&release_dir, pulse);
+                control_handle.release_hang_pulse(pulse);
                 // The refreshed window is published before this returns.
-                controls.wait_progress_at_least(pulse + 1).await;
+                controls.wait_progress_at_least(pulse).await;
             }
             // t = 2700, newest idle window 2700..3700, hard deadline 3000.
             controls.clock.advance(900);
@@ -808,9 +765,9 @@ async fn mcp_progress_refreshes_idle_liveness_and_never_extends_the_hard_deadlin
         .filter(|event| matches!(event, RuntimeEvent::ToolExecutionProgress { .. }))
         .count();
     assert_eq!(
-        progress_facts, 4,
-        "one dispatch notification plus three released pulses were forwarded as \
-         durable liveness evidence"
+        progress_facts, 3,
+        "exactly the three released remote pulses were forwarded as durable \
+         liveness evidence; the executor fabricates none"
     );
     assert!(matches!(
         single_tool_result(&audit).status,
@@ -850,18 +807,17 @@ async fn transport_loss_after_dispatch_is_unknown_and_reconnect_never_replays_it
         return;
     }
     let fixture = common::native_fixture();
-    let paths = RecoveryPaths::new(fixture.dir().path());
+    let control = recovery::RecoveryControl::new(fixture.dir().path());
     // Only generation 1 dies with the request in flight; generation 2 serves
     // normally.
     let capability = recovery_capability(
         &fixture.runtime,
         "boundary_suites::mcp_recovery::transport_loss_after_dispatch_is_unknown_and_reconnect_never_replays_it",
-        &paths,
-        &[1],
-        &[],
-        &[],
-        &[],
-        0,
+        &control,
+        &recovery::RecoveryScript {
+            die_generations: vec![1],
+            ..recovery::RecoveryScript::default()
+        },
     )
     .await;
     let published = capability.definition_names();
@@ -876,7 +832,7 @@ async fn transport_loss_after_dispatch_is_unknown_and_reconnect_never_replays_it
         "loss",
         &[recovery::TOOL_ECHO, recovery::TOOL_ECHO],
         ToolExecutionDeadlinePolicy {
-            hard_deadline: Duration::from_secs(60),
+            hard_deadline: Duration::from_mins(1),
             idle_liveness: None,
         },
         |_controls| async move {},
@@ -919,14 +875,14 @@ async fn transport_loss_after_dispatch_is_unknown_and_reconnect_never_replays_it
         published,
         "a dead transport never erases validated capability knowledge"
     );
-    wait_for_journal_entry(&paths, recovery::JOURNAL_DIED);
+    wait_for_journal_entry(&control, recovery::JOURNAL_DIED);
     assert_eq!(
-        paths.established_generations(),
+        control.established_generations(),
         2,
         "exactly one bounded replacement transport was established"
     );
     assert_eq!(
-        paths.accepted_calls(recovery::TOOL_ECHO),
+        control.accepted_calls(recovery::TOOL_ECHO),
         2,
         "exactly one accepted request per model-issued call: the ambiguous \
          invocation was never resubmitted to the replacement generation"
@@ -967,16 +923,16 @@ async fn a_failed_reconnect_is_a_pre_frontier_failure_and_never_replays_the_ambi
         return;
     }
     let fixture = common::native_fixture();
-    let paths = RecoveryPaths::new(fixture.dir().path());
+    let control = recovery::RecoveryControl::new(fixture.dir().path());
     let capability = recovery_capability(
         &fixture.runtime,
         "boundary_suites::mcp_recovery::a_failed_reconnect_is_a_pre_frontier_failure_and_never_replays_the_ambiguous_call",
-        &paths,
-        &[1],
-        &[2],
-        &[],
-        &[],
-        0,
+        &control,
+        &recovery::RecoveryScript {
+            die_generations: vec![1],
+            refuse_generations: vec![2],
+            ..recovery::RecoveryScript::default()
+        },
     )
     .await;
 
@@ -986,7 +942,7 @@ async fn a_failed_reconnect_is_a_pre_frontier_failure_and_never_replays_the_ambi
         "reconnect",
         &[recovery::TOOL_ECHO, recovery::TOOL_ECHO],
         ToolExecutionDeadlinePolicy {
-            hard_deadline: Duration::from_secs(60),
+            hard_deadline: Duration::from_mins(1),
             idle_liveness: None,
         },
         |_controls| async move {},
@@ -1024,15 +980,15 @@ async fn a_failed_reconnect_is_a_pre_frontier_failure_and_never_replays_the_ambi
         "the bounded typed connection facts reach the diagnostic: {error}"
     );
 
-    wait_for_journal_entry(&paths, recovery::JOURNAL_DIED);
-    wait_for_journal_entry(&paths, &format!("{}2", recovery::JOURNAL_REFUSED_PREFIX));
+    wait_for_journal_entry(&control, recovery::JOURNAL_DIED);
+    wait_for_journal_entry(&control, &format!("{}2", recovery::JOURNAL_REFUSED_PREFIX));
     assert_eq!(
-        paths.established_generations(),
+        control.established_generations(),
         2,
         "exactly one bounded replacement attempt was made, not a reconnect loop"
     );
     assert_eq!(
-        paths.accepted_calls(recovery::TOOL_ECHO),
+        control.accepted_calls(recovery::TOOL_ECHO),
         1,
         "the ambiguous invocation was never resubmitted anywhere"
     );
@@ -1055,31 +1011,28 @@ async fn cancellation_without_a_remote_response_is_exactly_one_outcome_unknown()
         return;
     }
     let fixture = common::native_fixture();
-    let paths = RecoveryPaths::new(fixture.dir().path());
+    let control = recovery::RecoveryControl::new(fixture.dir().path());
     let capability = recovery_capability(
         &fixture.runtime,
         "boundary_suites::mcp_recovery::cancellation_without_a_remote_response_is_exactly_one_outcome_unknown",
-        &paths,
-        &[],
-        &[],
-        &[],
-        &[],
-        0,
+        &control,
+        &recovery::RecoveryScript::default(),
     )
     .await;
     let lease = capability.coordinator.acquire_attempt_lease();
+    let dispatch_gate = control.clone();
     let audit = run_mcp_call(
         &fixture,
         lease,
         "cancel",
         recovery::TOOL_HANG,
         ToolExecutionDeadlinePolicy {
-            hard_deadline: Duration::from_secs(60),
+            hard_deadline: Duration::from_mins(1),
             idle_liveness: None,
         },
         move |mut controls| async move {
             controls.wait_started().await;
-            controls.wait_dispatched().await;
+            await_journal_entry(&dispatch_gate, &accepted_call_entry(recovery::TOOL_HANG)).await;
             // The `hang` tool never answers, so no correlated remote
             // response can exist when cancellation is delivered.
             controls.cancellation.cancel();
@@ -1128,9 +1081,12 @@ async fn cancellation_without_a_remote_response_is_exactly_one_outcome_unknown()
     );
     // The strongest cancellation the negotiated protocol defines was
     // actually propagated to the server.
-    wait_for_journal_entry(&paths, &format!("{}1", recovery::JOURNAL_CANCELLED_PREFIX));
+    wait_for_journal_entry(
+        &control,
+        &format!("{}1", recovery::JOURNAL_CANCELLED_PREFIX),
+    );
     assert_eq!(
-        paths.accepted_calls(recovery::TOOL_HANG),
+        control.accepted_calls(recovery::TOOL_HANG),
         1,
         "cancellation never causes a second dispatch"
     );
@@ -1156,16 +1112,12 @@ async fn a_remote_response_that_won_arbitration_survives_a_later_cancellation() 
         return;
     }
     let fixture = common::native_fixture();
-    let paths = RecoveryPaths::new(fixture.dir().path());
+    let control = recovery::RecoveryControl::new(fixture.dir().path());
     let capability = recovery_capability(
         &fixture.runtime,
         "boundary_suites::mcp_recovery::a_remote_response_that_won_arbitration_survives_a_later_cancellation",
-        &paths,
-        &[],
-        &[],
-        &[],
-        &[],
-        0,
+        &control,
+        &recovery::RecoveryScript::default(),
     )
     .await;
     let lease = capability.coordinator.acquire_attempt_lease();
@@ -1175,7 +1127,7 @@ async fn a_remote_response_that_won_arbitration_survives_a_later_cancellation() 
         "won",
         recovery::TOOL_ECHO,
         ToolExecutionDeadlinePolicy {
-            hard_deadline: Duration::from_secs(60),
+            hard_deadline: Duration::from_mins(1),
             idle_liveness: None,
         },
         move |mut controls| async move {
@@ -1214,7 +1166,7 @@ async fn a_remote_response_that_won_arbitration_survives_a_later_cancellation() 
         1,
         "exactly one canonical terminal settlement"
     );
-    assert_eq!(paths.accepted_calls(recovery::TOOL_ECHO), 1);
+    assert_eq!(control.accepted_calls(recovery::TOOL_ECHO), 1);
     drop(capability);
 }
 
@@ -1237,16 +1189,15 @@ async fn drain_closes_every_connection_generation_and_refuses_reconnection() {
         return;
     }
     let fixture = common::native_fixture();
-    let paths = RecoveryPaths::new(fixture.dir().path());
+    let control = recovery::RecoveryControl::new(fixture.dir().path());
     let capability = recovery_capability(
         &fixture.runtime,
         "boundary_suites::mcp_recovery::drain_closes_every_connection_generation_and_refuses_reconnection",
-        &paths,
-        &[1],
-        &[],
-        &[],
-        &[],
-        0,
+        &control,
+        &recovery::RecoveryScript {
+            die_generations: vec![1],
+            ..recovery::RecoveryScript::default()
+        },
     )
     .await;
     // Generation 1 dies in flight and generation 2 is established by the
@@ -1257,7 +1208,7 @@ async fn drain_closes_every_connection_generation_and_refuses_reconnection() {
         "drain",
         &[recovery::TOOL_ECHO, recovery::TOOL_ECHO],
         ToolExecutionDeadlinePolicy {
-            hard_deadline: Duration::from_secs(60),
+            hard_deadline: Duration::from_mins(1),
             idle_liveness: None,
         },
         |_controls| async move {},
@@ -1266,7 +1217,7 @@ async fn drain_closes_every_connection_generation_and_refuses_reconnection() {
     let results = tool_results(&audit);
     assert_eq!(results.len(), 2);
     assert!(matches!(results[1].status, ToolExecutionStatus::Success));
-    assert_eq!(paths.established_generations(), 2);
+    assert_eq!(control.established_generations(), 2);
 
     // The published capability generation is captured before drain, exactly
     // as a still-running consumer would hold it.
@@ -1276,7 +1227,7 @@ async fn drain_closes_every_connection_generation_and_refuses_reconnection() {
         .drain_conversation_owned()
         .await
         .expect("every established transport generation proves settlement");
-    let generations_after_drain = paths.established_generations();
+    let generations_after_drain = control.established_generations();
 
     let result = direct_mcp_call(&fixture, &published, recovery::TOOL_ECHO).await;
     assert!(
@@ -1286,12 +1237,12 @@ async fn drain_closes_every_connection_generation_and_refuses_reconnection() {
         result.status
     );
     assert_eq!(
-        paths.established_generations(),
+        control.established_generations(),
         generations_after_drain,
         "drain closes publication authority: no reconnection may spawn a server after it"
     );
     assert_eq!(
-        paths.accepted_calls(recovery::TOOL_ECHO),
+        control.accepted_calls(recovery::TOOL_ECHO),
         2,
         "the drained plane accepted no further remote request"
     );
@@ -1327,18 +1278,17 @@ async fn a_failed_capability_refresh_keeps_the_last_known_good_generation() {
         return;
     }
     let fixture = common::native_fixture();
-    let paths = RecoveryPaths::new(fixture.dir().path());
+    let control = recovery::RecoveryControl::new(fixture.dir().path());
     // Generation 2 — the one a refresh would establish — refuses to
     // handshake, so the refresh cannot produce a validated generation.
     let capability = recovery_capability(
         &fixture.runtime,
         "boundary_suites::mcp_recovery::a_failed_capability_refresh_keeps_the_last_known_good_generation",
-        &paths,
-        &[],
-        &[2],
-        &[],
-        &[],
-        0,
+        &control,
+        &recovery::RecoveryScript {
+            refuse_generations: vec![2],
+            ..recovery::RecoveryScript::default()
+        },
     )
     .await;
     let published = capability.definition_names();
@@ -1373,7 +1323,7 @@ async fn a_failed_capability_refresh_keeps_the_last_known_good_generation() {
         .commit(candidate)
         .expect("the carried-forward candidate commits");
 
-    wait_for_journal_entry(&paths, &format!("{}2", recovery::JOURNAL_REFUSED_PREFIX));
+    wait_for_journal_entry(&control, &format!("{}2", recovery::JOURNAL_REFUSED_PREFIX));
     assert_eq!(
         capability.definition_names(),
         published,
@@ -1395,7 +1345,7 @@ async fn a_failed_capability_refresh_keeps_the_last_known_good_generation() {
         "after-failed-refresh",
         recovery::TOOL_ECHO,
         ToolExecutionDeadlinePolicy {
-            hard_deadline: Duration::from_secs(60),
+            hard_deadline: Duration::from_mins(1),
             idle_liveness: None,
         },
         |_controls| async move {},
@@ -1431,16 +1381,15 @@ async fn a_successful_refresh_atomically_replaces_the_previous_generation() {
         return;
     }
     let fixture = common::native_fixture();
-    let paths = RecoveryPaths::new(fixture.dir().path());
+    let control = recovery::RecoveryControl::new(fixture.dir().path());
     let capability = recovery_capability(
         &fixture.runtime,
         "boundary_suites::mcp_recovery::a_successful_refresh_atomically_replaces_the_previous_generation",
-        &paths,
-        &[],
-        &[],
-        &[],
-        &[2],
-        0,
+        &control,
+        &recovery::RecoveryScript {
+            extra_tool_generations: vec![2],
+            ..recovery::RecoveryScript::default()
+        },
     )
     .await;
     let before = capability.coordinator.current_snapshot();
@@ -1520,16 +1469,15 @@ async fn tool_admission_never_observes_a_candidate_under_construction() {
         return;
     }
     let fixture = common::native_fixture();
-    let paths = RecoveryPaths::new(fixture.dir().path());
+    let control = recovery::RecoveryControl::new(fixture.dir().path());
     let capability = recovery_capability(
         &fixture.runtime,
         "boundary_suites::mcp_recovery::tool_admission_never_observes_a_candidate_under_construction",
-        &paths,
-        &[],
-        &[],
-        &[],
-        &[2],
-        0,
+        &control,
+        &recovery::RecoveryScript {
+            extra_tool_generations: vec![2],
+            ..recovery::RecoveryScript::default()
+        },
     )
     .await;
     let authoritative = vec![
@@ -1608,16 +1556,15 @@ async fn a_poisoned_generation_fails_closed_and_is_replaced_without_replay() {
         return;
     }
     let fixture = common::native_fixture();
-    let paths = RecoveryPaths::new(fixture.dir().path());
+    let control = recovery::RecoveryControl::new(fixture.dir().path());
     let capability = recovery_capability(
         &fixture.runtime,
         "boundary_suites::mcp_recovery::a_poisoned_generation_fails_closed_and_is_replaced_without_replay",
-        &paths,
-        &[],
-        &[],
-        &[1],
-        &[],
-        0,
+        &control,
+        &recovery::RecoveryScript {
+            corrupt_generations: vec![1],
+            ..recovery::RecoveryScript::default()
+        },
     )
     .await;
 
@@ -1627,7 +1574,7 @@ async fn a_poisoned_generation_fails_closed_and_is_replaced_without_replay() {
         "poison",
         &[recovery::TOOL_ECHO, recovery::TOOL_ECHO],
         ToolExecutionDeadlinePolicy {
-            hard_deadline: Duration::from_secs(60),
+            hard_deadline: Duration::from_mins(1),
             idle_liveness: None,
         },
         |_controls| async move {},
@@ -1662,14 +1609,14 @@ async fn a_poisoned_generation_fails_closed_and_is_replaced_without_replay() {
         results[1].status
     );
 
-    wait_for_journal_entry(&paths, recovery::JOURNAL_CORRUPTED);
+    wait_for_journal_entry(&control, recovery::JOURNAL_CORRUPTED);
     assert_eq!(
-        paths.established_generations(),
+        control.established_generations(),
         2,
         "the poisoned generation is retired and replaced exactly once"
     );
     assert_eq!(
-        paths.accepted_calls(recovery::TOOL_ECHO),
+        control.accepted_calls(recovery::TOOL_ECHO),
         2,
         "the poisoned invocation was never resubmitted to the replacement"
     );
