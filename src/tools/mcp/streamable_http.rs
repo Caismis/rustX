@@ -53,7 +53,7 @@
 //! generation: closing the runtime terminates every entry, and joining
 //! rmcp's transport worker consumes the futures that hold the guards.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -74,15 +74,6 @@ use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 type SseStream = BoxStream<'static, Result<Sse, SseError>>;
 /// The header map every [`StreamableHttpClient`] method takes.
 type CustomHeaders = HashMap<HeaderName, HeaderValue>;
-
-/// How many request ids terminated before their POST started are remembered.
-///
-/// The ledger only has to outlive the window between rmcp accepting a
-/// request on its outbound queue and its POST actually starting, so it is
-/// bounded by the requests in flight on one transport rather than by
-/// anything a peer controls. Eviction is FIFO: the entry a settlement just
-/// recorded is the newest and is the last one an overflow can reach.
-const MAX_PRE_TERMINATED_REQUESTS: usize = 64;
 
 /// A one-shot latch that resolves once its request's local HTTP ownership
 /// has been released.
@@ -119,7 +110,24 @@ struct OwnershipState {
     /// The HTTP requests rustX currently owns locally.
     live: HashMap<RequestId, LiveRequest>,
     /// Requests terminated before their POST started, so it never starts.
-    pre_terminated: VecDeque<RequestId>,
+    ///
+    /// # Why nothing here is ever evicted
+    ///
+    /// This is the only state that stops a POST which has not entered
+    /// [`McpHttpClient::owned_post`] yet from reaching the server *after*
+    /// its tool call has already settled. Forgetting one would let a
+    /// dispatched request produce a remote side effect past a terminal
+    /// `OutcomeUnknown` — precisely the guarantee this module exists to
+    /// keep — so a record is dropped only when the thing it protects
+    /// against can no longer happen: the request registers and takes the
+    /// pre-cancelled token, or the connection generation closes and no POST
+    /// of it can start at all.
+    ///
+    /// It is bounded all the same, and by a workload quantity rather than by
+    /// a peer-controlled one: one small request id per tool call of this
+    /// generation that was cancelled after its effect frontier but before
+    /// its POST began, cleared with the generation.
+    pre_terminated: HashSet<RequestId>,
 }
 
 /// The rustX-owned local HTTP request ownership of one Streamable HTTP
@@ -173,14 +181,11 @@ impl McpHttpRequestOwnership {
         let release = Arc::new(ReleaseLatch::default());
         {
             let mut state = self.state.lock().expect("MCP HTTP ownership lock poisoned");
-            if let Some(index) = state
-                .pre_terminated
-                .iter()
-                .position(|terminated| terminated == &id)
-            {
+            if state.pre_terminated.remove(&id) {
                 // Settlement already terminated this request before its POST
-                // started: it must not reach the network now.
-                state.pre_terminated.remove(index);
+                // started: it must not reach the network now. The record is
+                // consumed here because from this point the token carries
+                // the termination instead.
                 terminate.cancel();
             }
             state.live.insert(
@@ -211,12 +216,7 @@ impl McpHttpRequestOwnership {
             live.terminate.cancel();
             return LocalRequestTermination::Terminated(Arc::clone(&live.release));
         }
-        if !state.pre_terminated.iter().any(|known| known == id) {
-            if state.pre_terminated.len() == MAX_PRE_TERMINATED_REQUESTS {
-                state.pre_terminated.pop_front();
-            }
-            state.pre_terminated.push_back(id.clone());
-        }
+        state.pre_terminated.insert(id.clone());
         LocalRequestTermination::Settled
     }
 
@@ -226,10 +226,13 @@ impl McpHttpRequestOwnership {
     /// shutdown, so drain owns the per-request control primitives introduced
     /// here rather than inheriting them.
     pub(crate) fn terminate_all(&self) {
-        let state = self.state.lock().expect("MCP HTTP ownership lock poisoned");
+        let mut state = self.state.lock().expect("MCP HTTP ownership lock poisoned");
         for live in state.live.values() {
             live.terminate.cancel();
         }
+        // After close no POST of this generation can start, so the records
+        // that existed only to stop one are no longer protecting anything.
+        state.pre_terminated.clear();
     }
 
     /// Releases one request's ownership, but only if the entry is still the
@@ -539,7 +542,7 @@ mod tests {
 
     use rmcp::model::RequestId;
 
-    use super::{LocalRequestTermination, MAX_PRE_TERMINATED_REQUESTS, McpHttpRequestOwnership};
+    use super::{LocalRequestTermination, McpHttpRequestOwnership};
 
     fn id(value: i64) -> RequestId {
         RequestId::Number(value)
@@ -595,10 +598,9 @@ mod tests {
         );
     }
 
-    /// An unrelated request is untouched by another's termination, and the
-    /// ledger is bounded.
+    /// An unrelated request is untouched by another's termination.
     #[tokio::test]
-    async fn termination_is_per_request_and_the_ledger_is_bounded() {
+    async fn termination_is_per_request() {
         let ownership = Arc::new(McpHttpRequestOwnership::default());
         let kept = ownership.register(id(1));
         let doomed = ownership.register(id(2));
@@ -608,16 +610,52 @@ mod tests {
             !kept.terminate.is_cancelled(),
             "only the named request ends"
         );
+    }
 
-        for value in 100..(100 + i64::try_from(MAX_PRE_TERMINATED_REQUESTS).expect("small bound")) {
-            ownership.terminate(&id(value));
+    /// No pre-termination is ever forgotten, however many are outstanding.
+    ///
+    /// A record dropped while its request could still start would let that
+    /// POST reach the server *after* its tool call had already settled — a
+    /// remote side effect past a terminal `OutcomeUnknown`, which is exactly
+    /// the guarantee this module exists to keep. So the number outstanding
+    /// is not a bound: every one of them still pre-terminates its POST, in
+    /// any registration order.
+    #[tokio::test]
+    async fn every_outstanding_pre_termination_is_honoured() {
+        let ownership = Arc::new(McpHttpRequestOwnership::default());
+        let outstanding = 512_i64;
+        for value in 0..outstanding {
+            assert!(matches!(
+                ownership.terminate(&id(value)),
+                LocalRequestTermination::Settled
+            ));
         }
-        // One past the bound: the oldest ledger entry is evicted, the newest
-        // still pre-terminates its POST.
-        let overflow = 100 + i64::try_from(MAX_PRE_TERMINATED_REQUESTS).expect("small bound");
-        ownership.terminate(&id(overflow));
-        assert!(ownership.register(id(overflow)).terminate.is_cancelled());
-        assert!(!ownership.register(id(100)).terminate.is_cancelled());
+        // Registration order is rmcp's, not settlement's, so the oldest
+        // record must survive as surely as the newest.
+        for value in (0..outstanding).rev() {
+            assert!(
+                ownership.register(id(value)).terminate.is_cancelled(),
+                "request {value} was terminated before its POST started and must \
+                 never reach the network"
+            );
+        }
+    }
+
+    /// Close is the one point where a pre-termination stops protecting
+    /// anything, because no POST of the generation can start afterwards.
+    #[tokio::test]
+    async fn close_clears_the_records_that_no_longer_protect_anything() {
+        let ownership = Arc::new(McpHttpRequestOwnership::default());
+        ownership.terminate(&id(1));
+        ownership.terminate_all();
+        assert!(
+            ownership
+                .state
+                .lock()
+                .expect("MCP HTTP ownership lock poisoned")
+                .pre_terminated
+                .is_empty()
+        );
     }
 
     /// Close terminates every request the generation still owns, so drain

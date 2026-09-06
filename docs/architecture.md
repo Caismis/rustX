@@ -3542,7 +3542,11 @@ explicit release proof: the wrapper drops the POST future or the response
 body **first** and releases the latch **afterwards**, so the latch is real
 ownership evidence rather than a restatement of "we stopped waiting". A
 request cancelled before its POST started is recorded so the POST is
-pre-terminated instead of reaching the network. That proof depends on no
+pre-terminated instead of reaching the network, and that record is never
+evicted — it is the only thing stopping a not-yet-started POST from producing
+a remote side effect after its call has settled, so it is dropped only when
+the request registers and takes the pre-cancelled token, or when the
+generation closes. That proof depends on no
 remote response, no protocol acknowledgement, and no timer — timing a future
 out, or dropping one and calling the drop a proof, is never settlement
 evidence here. Over stdio an outbound write owns no resource that outlives

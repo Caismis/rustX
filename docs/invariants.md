@@ -3778,9 +3778,14 @@ remote control plane            local ownership plane
   proof that the POST future or response body was **dropped before the proof
   fired**. That proof depends on no remote response, no protocol
   acknowledgement, and no timer. A request cancelled before its POST started
-  is recorded so the POST is pre-terminated instead of reaching the network.
-  Over stdio there is no such local half — an outbound write owns no resource
-  that outlives it — so the termination is already settled.
+  is recorded so the POST is pre-terminated instead of reaching the network,
+  and **that record is never evicted**: it is the only thing stopping a
+  not-yet-started POST from producing a remote side effect after its call has
+  already settled, so it is dropped only when the request registers and takes
+  the pre-cancelled token, or when the connection generation closes and no
+  POST of it can start at all. Over stdio there is no such local half — an
+  outbound write owns no resource that outlives it — so the termination is
+  already settled.
 - **`notifications/cancelled` alone never owns HTTP cancellation.** Local
   HTTP request termination is a separate owned control primitive inside the
   MCP adapter, not a hoped-for side effect of the protocol notification.
