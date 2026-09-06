@@ -828,9 +828,17 @@ async fn a_subagent_child_runs_end_to_end_through_the_real_process_stack() {
     // final-report rule — the user-authored document itself never states
     // the handoff rule.
     let bodies = server.request_bodies();
+    // The parent's continuation requests also carry the delegated task inside
+    // the tool-call history, and arrival order against the child's own model
+    // request is nondeterministic (the tool result commits at delegation,
+    // before the child runtime calls the provider). Select the child request
+    // by content — it is the one WITHOUT the parent's original user message —
+    // the same predicate the isolated-subdirectory regression uses below.
     let child_request = bodies
         .iter()
-        .find(|body| body.contains("count the workspace files"))
+        .find(|body| {
+            body.contains("count the workspace files") && !body.contains("please delegate")
+        })
         .expect("the child's own model request was observed");
     assert!(
         child_request.contains(EXPLORE_INSTRUCTIONS),
