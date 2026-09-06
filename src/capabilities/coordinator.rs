@@ -860,10 +860,10 @@ impl CapabilityCoordinator {
                     // Publish-on-success (Issue #205): a refresh that did not
                     // produce a complete validated generation never replaces
                     // the authoritative one. When this server already has a
-                    // published last-known-good generation, the candidate
-                    // reuses it verbatim; only when there is no last-known-good
-                    // generation at all does the source contribute nothing.
-                    if let Some(carried) = self.published_mcp_registrations(server_id) {
+                    // published last-known-good generation **for exactly this
+                    // binding**, the candidate reuses it verbatim; otherwise
+                    // the source contributes nothing at all.
+                    if let Some(carried) = self.published_mcp_registrations(server_id, binding) {
                         mcp_carried_forward.insert(server_id.clone());
                         discovered_tools.extend(carried);
                     }
@@ -1306,18 +1306,46 @@ impl CapabilityCoordinator {
 
     /// The authoritative snapshot's registrations for one MCP server, when
     /// that server currently has a published last-known-good capability
-    /// generation (Issue #205).
+    /// generation **that was validated under exactly the binding this
+    /// candidate is preparing** (Issue #205).
     ///
-    /// The registrations are reused **verbatim**, executors included: those
-    /// executors are bound to the server's stable connection owner, so the
-    /// carried-forward generation keeps working the moment a replacement
-    /// transport can be established, without any capability republication.
-    /// Nothing here re-derives, filters, or partially reconstructs a
-    /// catalog: a carried-forward generation is exactly the one that was
-    /// validated when it was published.
+    /// # Carry-forward requires binding identity
+    ///
+    /// A server identity is *not* sufficient identity for this fallback. The
+    /// registrations reused here carry their executors, and those executors
+    /// dispatch through the connection the published generation established
+    /// — a connection negotiated from the *published* binding. Reusing them
+    /// under a different binding would publish a snapshot whose authoritative
+    /// metadata says `S -> B2` while every executor of `S` still talks to
+    /// `B1`: a split-brain authority in which endpoint, executable,
+    /// environment, headers, credentials, cwd, and every policy field of the
+    /// published binding disagree with the transport that actually runs the
+    /// call.
+    ///
+    /// ```text
+    /// published S/B1/G1, candidate S/B1, refresh fails => G1 carried forward
+    /// published S/B1/G1, candidate S/B2, refresh fails => nothing carried
+    /// ```
+    ///
+    /// The comparison is the domain equality of
+    /// [`crate::tools::mcp::McpServerBinding`] against
+    /// the authoritative frozen binding set of the published snapshot, so it
+    /// covers every execution-relevant field the type represents — never a
+    /// digest, a tool definition, or a `tools/list` result standing in for
+    /// one.
+    ///
+    /// When the binding is unchanged the registrations are reused
+    /// **verbatim**, executors included: those executors are bound to the
+    /// server's stable connection owner, so the carried-forward generation
+    /// keeps working the moment a replacement transport can be established,
+    /// without any capability republication. Nothing here re-derives,
+    /// filters, or partially reconstructs a catalog: a carried-forward
+    /// generation is exactly the one that was validated when it was
+    /// published.
     fn published_mcp_registrations(
         &self,
         server_id: &McpServerId,
+        binding: &crate::tools::mcp::McpServerBinding,
     ) -> Option<Vec<ToolRegistration>> {
         let snapshot = self
             .inner
@@ -1326,6 +1354,13 @@ impl CapabilityCoordinator {
             .expect("capability state lock poisoned")
             .snapshot
             .clone();
+        // The publication linearization point: the snapshot carries the
+        // frozen binding set its generation was validated under, so the
+        // binding compared here is the one the published executors actually
+        // negotiated — never the currently configured desired state.
+        if snapshot.mcp_servers().get(server_id) != Some(binding) {
+            return None;
+        }
         let carried: Vec<ToolRegistration> = snapshot
             .tool_registry()
             .registrations()
