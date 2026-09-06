@@ -333,20 +333,31 @@ impl McpHttpClient {
     /// request's socket closes at once, which is what a server observes as
     /// the cancellation), and redirects are disabled so configured headers —
     /// credentials included — can never be replayed to a redirect target.
-    pub(crate) fn new() -> (Self, Arc<McpHttpRequestOwnership>) {
+    /// # Errors
+    ///
+    /// Returns an error when the HTTP client cannot be built. This is a
+    /// connect-path failure, not a panic: `connect` is reached by ordinary
+    /// reconnection, and a bounded reconnect attempt that cannot build a
+    /// client must fail that one dispatch rather than take the runtime down.
+    pub(crate) fn new() -> Result<(Self, Arc<McpHttpRequestOwnership>), crate::tools::mcp::McpError>
+    {
         let ownership = Arc::new(McpHttpRequestOwnership::default());
         let inner = reqwest::Client::builder()
             .pool_max_idle_per_host(0)
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            .expect("the MCP HTTP client configuration is valid");
-        (
+            .map_err(|error| {
+                crate::tools::mcp::McpError::Configuration(format!(
+                    "the MCP HTTP client could not be built: {error}"
+                ))
+            })?;
+        Ok((
             Self {
                 inner,
                 ownership: Arc::clone(&ownership),
             },
             ownership,
-        )
+        ))
     }
 }
 

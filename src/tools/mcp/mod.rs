@@ -1460,7 +1460,7 @@ impl McpServerRuntime {
                 // call has to terminate and prove released. The registry
                 // returned here is that authority; it belongs to exactly
                 // this connection generation.
-                let (client, ownership) = streamable_http::McpHttpClient::new();
+                let (client, ownership) = streamable_http::McpHttpClient::new()?;
                 request_ownership = Some(ownership);
                 let transport = rmcp::transport::StreamableHttpClientTransport::with_client(
                     client,
