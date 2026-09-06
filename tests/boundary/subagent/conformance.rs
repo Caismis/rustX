@@ -5663,3 +5663,402 @@ async fn the_snapshot_projects_only_the_frozen_execution_profile() {
         .await
         .expect("child runtime drains");
 }
+
+// ---------------------------------------------------------------------------
+// In-flight steering (Issue #193)
+// ---------------------------------------------------------------------------
+
+/// Scripts one turn that streams a partial answer, parks until the test
+/// releases it, and only then finishes. While it is parked the child's one
+/// attempt is provably live and provably has not reached its next inbound
+/// safe boundary, so a steer accepted during the park races nothing but the
+/// ordinary Agent Loop.
+fn parking_answer_script(
+    answer: &str,
+    release: tokio::sync::watch::Receiver<bool>,
+) -> Vec<FakeStep> {
+    vec![
+        FakeStep::Emit(started()),
+        FakeStep::Emit(text(answer)),
+        FakeStep::ParkUntilReleased(release),
+        FakeStep::Emit(completed()),
+    ]
+}
+
+/// Waits until the scripted child model has parked `count` times.
+async fn await_model_parks(model: &Arc<FakeModel>, count: u64) {
+    let mut parks = model.parks();
+    tokio::time::timeout(LIVENESS, parks.wait_for(|parked| *parked >= count))
+        .await
+        .expect("child model park liveness")
+        .expect("child model park watch");
+}
+
+/// The parent-authored user messages the child conversation canonically
+/// adopted, in canonical order.
+fn child_parent_authored_texts(child: &ChildFixture) -> Vec<String> {
+    child_canonical_messages(child)
+        .into_iter()
+        .filter_map(|block| match block {
+            MessageBlock::User(user) if matches!(user.source, UserSource::Agent { .. }) => Some(
+                user.content
+                    .iter()
+                    .filter_map(|content| match content {
+                        UserContentBlock::Text(text) => Some(text.text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<String>(),
+            ),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether one recorded model request carries a user message with exactly
+/// this text.
+fn request_carries_user_text(request: &rustx::model::ModelRequest, wanted: &str) -> bool {
+    request.messages.iter().any(|message| {
+        matches!(
+            message,
+            rustx::model::input::ModelInputMessage::Canonical(MessageBlock::User(user))
+                if user.content.iter().any(|content| matches!(
+                    content,
+                    UserContentBlock::Text(text) if text.text == wanted
+                ))
+        )
+    })
+}
+
+/// A steer enters **the same running child's own conversation** and is
+/// consumed by that child's **ordinary Agent Loop**, at its ordinary
+/// inbound safe boundary, inside the same attempt.
+///
+/// Determinism: the child model is parked mid-stream, so the attempt is
+/// provably live and provably has not reached its next safe boundary when
+/// the steer is accepted; the accepted guidance can therefore only be
+/// observed by a later turn of that same attempt. Releasing the park is what
+/// advances the loop — no elapsed time proves anything.
+///
+/// One `SubagentId`, one child conversation, one attempt (one Agent Loop),
+/// one registry record, one spawn, one terminal publication.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_steer_is_consumed_by_the_same_child_conversation_and_agent_loop() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let plane = standalone_parent_plane(&dir, "conv-193-same-child");
+    let (release, released) = support::fake::model_release();
+    let child = child_fixture(
+        &dir,
+        &ConversationId::new("conv-193-same-child-1"),
+        vec![
+            parking_answer_script("working", released),
+            answer_script("final answer after steering"),
+        ],
+        ToolRegistry::new(),
+        Vec::new(),
+    )
+    .await;
+    let wired = launch_wired_child(&plane, &child, "survey the cancellation plane").await;
+    await_model_parks(&child.model, 1).await;
+
+    // The steer crosses the real parent registry, the real driver, and the
+    // real control IPC into the real child conversation.
+    let accepted = plane
+        .registry
+        .steer(
+            &wired.accepted.subagent_id,
+            "Focus on cancellation ownership and ignore TUI code.",
+        )
+        .await
+        .expect("the running child durably accepts the guidance");
+    assert_eq!(
+        accepted.subagent_id, wired.accepted.subagent_id,
+        "steering names the SAME child; it never allocates another identity"
+    );
+    assert_eq!(accepted.state, SubagentState::Running);
+
+    release.send(true).expect("release the parked child model");
+    await_serve(wired.serve).await;
+    let settled = plane
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .expect("terminal settlement");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+
+    // The guidance entered the child's own conversation as ordinary
+    // parent-authored inbound, after the delegation.
+    assert_eq!(
+        child_parent_authored_texts(&child),
+        vec![
+            "survey the cancellation plane".to_owned(),
+            "Focus on cancellation ownership and ignore TUI code.".to_owned(),
+        ],
+    );
+    // ...and the next ordinary model turn of that same child observed it.
+    let requests = child.model.requests();
+    assert_eq!(requests.len(), 2, "exactly one further ordinary model turn");
+    assert!(
+        !request_carries_user_text(
+            &requests[0],
+            "Focus on cancellation ownership and ignore TUI code."
+        ),
+        "the in-flight turn is never rewritten: v1 steering interrupts nothing"
+    );
+    assert!(
+        request_carries_user_text(
+            &requests[1],
+            "Focus on cancellation ownership and ignore TUI code."
+        ),
+        "the steer becomes visible at the next ordinary Agent Loop boundary"
+    );
+
+    // One logical child, one Agent Loop, one terminal settlement.
+    let child_events = journal(&child.store);
+    assert_eq!(
+        count_events(&child_events, |event| matches!(
+            event,
+            RuntimeEvent::AttemptStarted { .. }
+        )),
+        1,
+        "the steer is consumed by the ORDINARY loop of the existing attempt: \
+         no second attempt, no second Agent Loop"
+    );
+    assert_eq!(
+        plane.registry.all_snapshots().len(),
+        1,
+        "steering creates no second registry record"
+    );
+    let parent_events = journal(&plane.store);
+    assert_eq!(
+        count_events(&parent_events, |event| matches!(
+            event,
+            RuntimeEvent::SubagentOwnershipCommitted { .. }
+        )),
+        1,
+        "steering commits no second ownership and spawns no second child"
+    );
+    assert_eq!(
+        terminal_publications(&parent_events),
+        vec![SubagentTerminalState::Succeeded],
+        "exactly one terminal publication"
+    );
+    assert_parent_terminal_publication(&plane, "final answer after steering");
+}
+
+/// Several accepted steers are observed by the child in exactly their
+/// acceptance order.
+///
+/// Determinism: acceptance order is program order — each
+/// `SubagentRegistry::steer` is awaited to its durable acceptance before the
+/// next is issued — and observation order is the child conversation's own
+/// canonical adoption order, which follows the durable inbound sequence
+/// domain. No scheduler ordering is involved on either side.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn accepted_steers_are_observed_in_their_durable_acceptance_order() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let plane = standalone_parent_plane(&dir, "conv-193-order");
+    let (release, released) = support::fake::model_release();
+    let child = child_fixture(
+        &dir,
+        &ConversationId::new("conv-193-order-1"),
+        vec![
+            parking_answer_script("working", released),
+            answer_script("done"),
+        ],
+        ToolRegistry::new(),
+        Vec::new(),
+    )
+    .await;
+    let wired = launch_wired_child(&plane, &child, "the delegated task").await;
+    await_model_parks(&child.model, 1).await;
+
+    for message in ["steer A", "steer B", "steer C"] {
+        plane
+            .registry
+            .steer(&wired.accepted.subagent_id, message)
+            .await
+            .unwrap_or_else(|error| panic!("{message} is accepted: {error}"));
+    }
+
+    release.send(true).expect("release the parked child model");
+    await_serve(wired.serve).await;
+    plane
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .expect("terminal settlement");
+
+    assert_eq!(
+        child_parent_authored_texts(&child),
+        vec![
+            "the delegated task".to_owned(),
+            "steer A".to_owned(),
+            "steer B".to_owned(),
+            "steer C".to_owned(),
+        ],
+        "the child observes the accepted steers in acceptance order, never reordered"
+    );
+    let requests = child.model.requests();
+    assert_eq!(requests.len(), 2);
+    for message in ["steer A", "steer B", "steer C"] {
+        assert!(
+            request_carries_user_text(&requests[1], message),
+            "the ordinary continuation turn observed {message}"
+        );
+    }
+}
+
+/// A steer never reconstructs the child from current runtime resources.
+///
+/// The parent's runtime resource generation is reloaded *while the child is
+/// running* and between two steers; the child nevertheless keeps running
+/// under exactly the launch authority frozen at its start — the same frozen
+/// definition digest and named agent on the parent side, and, on the child
+/// side, byte-identical system authority and tool exposure across the turn
+/// before the reload and the turn after it — while still observing both
+/// steers. `SubagentRegistry::steer` cannot do otherwise: it accepts only a
+/// `SubagentId` and a message, so there is no resolver, no definition, and
+/// no launch specification anywhere on the path.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn steering_preserves_the_child_frozen_launch_authority_across_a_resource_reload() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let parent = parent_runtime_plane(&dir, "conv-193-frozen", Vec::new()).await;
+    let (release, released) = support::fake::model_release();
+    let child = child_fixture(
+        &dir,
+        &ConversationId::new("conv-193-frozen-1"),
+        vec![
+            parking_answer_script("working", released),
+            answer_script("done under the original authority"),
+        ],
+        ToolRegistry::new(),
+        Vec::new(),
+    )
+    .await;
+    let wired = launch_wired_child(&parent.plane, &child, "the delegated task").await;
+    await_model_parks(&child.model, 1).await;
+    let frozen = parent
+        .plane
+        .registry
+        .snapshot(&wired.accepted.subagent_id)
+        .expect("the running child record");
+
+    parent
+        .plane
+        .registry
+        .steer(&wired.accepted.subagent_id, "before the reload")
+        .await
+        .expect("accepted");
+
+    // A complete parent runtime resource/capability generation is published
+    // while the child runs.
+    parent
+        .runtime
+        .reload_resources()
+        .await
+        .expect("the parent publishes a new resource generation");
+
+    parent
+        .plane
+        .registry
+        .steer(&wired.accepted.subagent_id, "after the reload")
+        .await
+        .expect("the reload does not disturb the running child's steerability");
+
+    release.send(true).expect("release the parked child model");
+    await_serve(wired.serve).await;
+    let settled = parent
+        .plane
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .expect("terminal settlement");
+
+    // The child's frozen launch authority is byte-identical before and
+    // after the reload.
+    assert_eq!(settled.agent, frozen.agent);
+    assert_eq!(settled.definition_digest, frozen.definition_digest);
+    assert_eq!(settled.child_agent_id, frozen.child_agent_id);
+    assert_eq!(settled.child_conversation_id, frozen.child_conversation_id);
+    assert_eq!(settled.profile, frozen.profile);
+
+    let requests = child.model.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].effective_system_prompt, requests[1].effective_system_prompt,
+        "the reload never re-authors the running child's frozen system authority"
+    );
+    assert_eq!(
+        requests[0].tools, requests[1].tools,
+        "a steer never widens, narrows, or substitutes the child's frozen tools"
+    );
+    assert_eq!(
+        requests[0].model(),
+        requests[1].model(),
+        "a steer never re-resolves the child's frozen model"
+    );
+    assert!(
+        request_carries_user_text(&requests[1], "before the reload")
+            && request_carries_user_text(&requests[1], "after the reload"),
+        "both steers still reached the existing child conversation"
+    );
+}
+
+/// Steering a child that has already settled is refused, and the settled
+/// child's terminal publication stays exactly-once. `execution` never
+/// becomes a second result channel: the answer arrives only through the
+/// canonical parent inbound publication.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_settled_child_refuses_steering_and_keeps_exactly_one_terminal() {
+    let dir = tempfile::tempdir().expect("temp root");
+    let plane = standalone_parent_plane(&dir, "conv-193-settled");
+    let child = child_fixture(
+        &dir,
+        &ConversationId::new("conv-193-settled-1"),
+        vec![answer_script("the one final answer")],
+        ToolRegistry::new(),
+        Vec::new(),
+    )
+    .await;
+    let wired = launch_wired_child(&plane, &child, "the delegated task").await;
+    await_serve(wired.serve).await;
+    let settled = plane
+        .registry
+        .wait_until_settled(&wired.accepted.subagent_id)
+        .await
+        .expect("terminal settlement");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+
+    let refused = plane
+        .registry
+        .steer(&wired.accepted.subagent_id, "too late")
+        .await
+        .expect_err("a settled child is never steered");
+    assert!(
+        matches!(
+            refused,
+            rustx::runtime::subagent::SubagentSteerError::Settled { .. }
+        ),
+        "terminal authority already won: {refused}"
+    );
+    assert_eq!(
+        plane
+            .registry
+            .snapshot(&wired.accepted.subagent_id)
+            .expect("record")
+            .state,
+        SubagentState::Succeeded,
+        "terminal states stay absorbing: Succeeded never becomes Running"
+    );
+    assert_eq!(
+        terminal_publications(&journal(&plane.store)),
+        vec![SubagentTerminalState::Succeeded],
+        "the refused steer publishes nothing and duplicates nothing"
+    );
+    assert_parent_terminal_publication(&plane, "the one final answer");
+    assert_eq!(
+        child_parent_authored_texts(&child),
+        vec!["the delegated task".to_owned()],
+        "a refused steer never enters the child conversation"
+    );
+}

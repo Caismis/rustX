@@ -1718,3 +1718,512 @@ async fn dispatch_parking_pair(
     }
     gates
 }
+
+// ---------------------------------------------------------------------------
+// In-flight steering (Issue #193)
+// ---------------------------------------------------------------------------
+
+/// The child half of a steer, driven explicitly by the test.
+///
+/// The real child conversation is the durable acceptance authority; here the
+/// test *is* that authority, so every interleaving below is established by
+/// the test deciding when — and whether — the answer is written, never by
+/// elapsed time. The composed proofs that a real child conversation accepts,
+/// orders, and observes the guidance live in
+/// [`super::conformance`].
+impl ScriptedChild {
+    /// Reads the next parent-bound frame.
+    async fn read_frame(&mut self) -> crate::runtime::subagent::ipc::ParentFrame {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            crate::runtime::subagent::ipc::read_parent_frame(&mut self.peer),
+        )
+        .await
+        .expect("driver control liveness")
+        .expect("driver frame")
+        .expect("parent frame")
+    }
+
+    /// Consumes the delegation frame the committed child always receives
+    /// first.
+    async fn take_delegation(&mut self) {
+        assert!(
+            matches!(
+                self.read_frame().await,
+                crate::runtime::subagent::ipc::ParentFrame::Delegate(_)
+            ),
+            "the committed child is delegated first"
+        );
+    }
+
+    /// Reads exactly one guidance envelope and answers it with `outcome`.
+    async fn answer_guidance(
+        &mut self,
+        outcome: crate::runtime::subagent::ipc::ChildGuidanceOutcome,
+    ) -> String {
+        let crate::runtime::subagent::ipc::ParentFrame::Guidance(guidance) =
+            self.read_frame().await
+        else {
+            panic!("the steer routes exactly one guidance envelope to this child");
+        };
+        crate::runtime::subagent::ipc::write_child_frame(
+            &mut self.peer,
+            &ChildFrame::GuidanceResult(crate::runtime::subagent::ipc::GuidanceResultFrame {
+                guidance_id: guidance.guidance_id,
+                outcome,
+            }),
+        )
+        .await
+        .expect("guidance answer");
+        guidance.message
+    }
+
+    /// Sends the terminal result frame.
+    async fn send_result(&mut self, status: ChildResultStatus, content: Option<&str>) {
+        crate::runtime::subagent::ipc::write_child_frame(
+            &mut self.peer,
+            &ChildFrame::Result(ResultFrame {
+                status,
+                content: content.map(str::to_owned),
+                diagnostic: None,
+            }),
+        )
+        .await
+        .expect("result frame");
+    }
+}
+
+fn accepted() -> crate::runtime::subagent::ipc::ChildGuidanceOutcome {
+    crate::runtime::subagent::ipc::ChildGuidanceOutcome::Accepted
+}
+
+/// A successful `execution(steer)` returns exactly the model-actionable
+/// acknowledgement: the canonical handle the caller named, the lifecycle
+/// state, and the acceptance fact. It is a control acknowledgement, never a
+/// result channel.
+#[tokio::test]
+async fn steer_returns_the_minimal_control_acknowledgement() {
+    let plane = subagent_plane();
+    let mut child = stage_exit0(&plane);
+    let accepted_child = start_subagent(&plane, "survey the cancellation plane").await;
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+
+    let child_side = tokio::spawn(async move {
+        child.take_delegation().await;
+        let message = child.answer_guidance(accepted()).await;
+        (child, message)
+    });
+    let result = run_execution(
+        &fixture,
+        serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": accepted_child.subagent_id.to_string()},
+            "message": "Focus on cancellation ownership and ignore TUI code.",
+        }),
+    )
+    .await;
+    let (_child, delivered) = child_side.await.expect("child side");
+
+    assert_eq!(
+        json_content(&result),
+        serde_json::json!({
+            "execution": {"kind": "subagent", "id": "conv-162-subagent-1"},
+            "state": "running",
+            "accepted": true,
+        }),
+        "the steer acknowledgement is exactly the minimal control contract"
+    );
+    assert_eq!(
+        delivered, "Focus on cancellation ownership and ignore TUI code.",
+        "the parent-authored message crosses unchanged"
+    );
+    let serialized = serde_json::to_string(&json_content(&result)).expect("serializes");
+    for leaked in [
+        "content",
+        "answer",
+        "history",
+        "transcript",
+        "detail",
+        "message",
+    ] {
+        assert!(
+            !serialized.contains(leaked),
+            "a steer acknowledgement never carries child content: {leaked} in {serialized}"
+        );
+    }
+}
+
+/// `kind = tool` + `action = steer` is an unsupported kind/action
+/// combination, refused by explicit dispatch **before any authority is
+/// consulted**.
+///
+/// The proof is structural rather than textual: the id named is a *live
+/// subagent's* id, so a registry fall-through in either direction would have
+/// found a steerable execution. The child's control wire is then read and
+/// proven to carry the delegation followed immediately by the guidance
+/// envelope of the *second*, correctly-kinded call — never one from the
+/// refused call.
+#[tokio::test]
+async fn steer_of_a_tool_target_never_falls_through_to_the_subagent_registry() {
+    let plane = subagent_plane();
+    let mut child = stage_exit0(&plane);
+    let accepted_child = start_subagent(&plane, "survey the tool plane").await;
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    let id = accepted_child.subagent_id.to_string();
+
+    let refused = run_execution(
+        &fixture,
+        serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "tool", "id": id.clone()},
+            "message": "this must never reach the subagent domain",
+        }),
+    )
+    .await;
+    let message = failure_message(&refused);
+    assert!(
+        message.contains("not supported for kind \"tool\""),
+        "the refusal names the unsupported kind/action combination: {message}"
+    );
+
+    // The subagent registry was never consulted: the very next envelope on
+    // the child's wire is the correctly-kinded steer, not the refused one.
+    let child_side = tokio::spawn(async move {
+        child.take_delegation().await;
+        let message = child.answer_guidance(accepted()).await;
+        (child, message)
+    });
+    let accepted_result = run_execution(
+        &fixture,
+        serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": id},
+            "message": "the only guidance this child ever receives",
+        }),
+    )
+    .await;
+    let (_child, delivered) = child_side.await.expect("child side");
+    assert_eq!(
+        json_content(&accepted_result)["accepted"],
+        serde_json::json!(true)
+    );
+    assert_eq!(delivered, "the only guidance this child ever receives");
+}
+
+/// Every deterministic steer refusal of the model-facing boundary and the
+/// domain authority. A steer is never silently ignored and never reports
+/// `accepted` without a durable acceptance.
+#[tokio::test]
+async fn steer_refusals_are_deterministic_and_bounded() {
+    let plane = subagent_plane();
+    let mut child = stage_exit0(&plane);
+    let accepted_child = start_subagent(&plane, "survey").await;
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    let id = accepted_child.subagent_id.to_string();
+    child.take_delegation().await;
+
+    // An unknown id is an ordinary failed result of the owning domain.
+    let unknown = run_execution(
+        &fixture,
+        serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": "conv-162-subagent-99"},
+            "message": "nobody is listening",
+        }),
+    )
+    .await;
+    assert_eq!(
+        failure_message(&unknown),
+        "unknown subagent execution conv-162-subagent-99"
+    );
+
+    // An empty or whitespace-only message is refused before any routing.
+    for empty in ["", "   \n\t "] {
+        let refused = run_execution(
+            &fixture,
+            serde_json::json!({
+                "action": "steer",
+                "target": {"kind": "subagent", "id": id.clone()},
+                "message": empty,
+            }),
+        )
+        .await;
+        assert!(
+            failure_message(&refused).contains("must be non-empty"),
+            "an empty steer message is a bounded refusal"
+        );
+    }
+
+    // A message beyond the delegated-task bound is refused with its length.
+    let oversized = "x".repeat(32 * 1024 + 1);
+    let refused = run_execution(
+        &fixture,
+        serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": id.clone()},
+            "message": oversized,
+        }),
+    )
+    .await;
+    assert!(
+        failure_message(&refused).contains("32769 given"),
+        "the bound refusal names the offending length"
+    );
+
+    // Malformed targets and missing fields never reach an executor at all:
+    // they are canonical-schema violations, proven at the input contract in
+    // the intrinsic's own unit suite.
+
+    // Nothing above reached the child: its wire still carries no envelope,
+    // proven by the next steer being the first guidance it ever sees.
+    let child_side = tokio::spawn(async move {
+        let message = child.answer_guidance(accepted()).await;
+        (child, message)
+    });
+    let ok = run_execution(
+        &fixture,
+        serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": id},
+            "message": "the first envelope",
+        }),
+    )
+    .await;
+    let (_child, delivered) = child_side.await.expect("child side");
+    assert_eq!(json_content(&ok)["accepted"], serde_json::json!(true));
+    assert_eq!(delivered, "the first envelope");
+}
+
+/// A steer that loses the race to the registry's cancellation linearization
+/// point is refused deterministically, and no steer can move a cancelling or
+/// cancelled child back toward `Running`.
+///
+/// The interleaving is established by the cancellation boundary hook: the
+/// cancellation is parked immediately before the registry mutex that commits
+/// `Running -> Cancelling`, the steer that acquires that mutex while the
+/// cancellation is still parked is admitted, and the steer issued after the
+/// commit is refused by the very same mutex. No sleep is involved.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancellation_intent_and_steer_share_one_arbitration_boundary() {
+    let plane = subagent_plane();
+    let mut child = stage_exit0(&plane);
+    let accepted_child = start_subagent(&plane, "survey").await;
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    let id = accepted_child.subagent_id.to_string();
+    child.take_delegation().await;
+
+    let hook = Arc::new(crate::runtime::subagent::CancellationBoundaryHook::default());
+    plane
+        .registry
+        .install_cancellation_boundary_hook(hook.clone());
+    let cancelling = tokio::task::spawn_blocking({
+        let registry = plane.registry.clone();
+        let subagent_id = accepted_child.subagent_id.clone();
+        move || {
+            registry.cancel(
+                &subagent_id,
+                rustx::runtime::types::CancellationReason::UserRequested,
+            )
+        }
+    });
+    // The cancellation is provably parked at the exact pre-commit edge: the
+    // record is still `Running` and the steer below therefore races the
+    // authority boundary itself, not an arbitrary earlier instant.
+    tokio::task::spawn_blocking({
+        let hook = hook.clone();
+        move || hook.wait_until_parked()
+    })
+    .await
+    .expect("cancellation parks at the boundary");
+
+    let child_side = tokio::spawn(async move {
+        let message = child.answer_guidance(accepted()).await;
+        (child, message)
+    });
+    let won = run_execution(
+        &fixture,
+        serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": id.clone()},
+            "message": "accepted before the cancellation intent commits",
+        }),
+    )
+    .await;
+    let (_child, delivered) = child_side.await.expect("child side");
+    assert_eq!(
+        json_content(&won),
+        serde_json::json!({
+            "execution": {"kind": "subagent", "id": "conv-162-subagent-1"},
+            "state": "running",
+            "accepted": true,
+        }),
+        "the steer that wins the boundary is durably accepted while Running"
+    );
+    assert_eq!(delivered, "accepted before the cancellation intent commits");
+
+    // Release the parked cancellation and let it commit the intent.
+    hook.release();
+    let snapshot = cancelling.await.expect("cancellation").expect("record");
+    assert_eq!(snapshot.state, SubagentState::Cancelling);
+
+    // Every later steer is refused by the same mutex that committed the
+    // intent, and the refusal names cancellation explicitly.
+    let refused = run_execution(
+        &fixture,
+        serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": id},
+            "message": "must never resurrect a cancelling child",
+        }),
+    )
+    .await;
+    let message = failure_message(&refused);
+    assert!(
+        message.contains("cancellation intent is already committed"),
+        "a committed cancellation intent refuses every later steer: {message}"
+    );
+    assert_eq!(
+        plane
+            .registry
+            .snapshot(&accepted_child.subagent_id)
+            .expect("record")
+            .state,
+        SubagentState::Cancelling,
+        "a refused steer mutates no lifecycle state: Cancelling never becomes Running"
+    );
+}
+
+/// A steer that loses the race to the registry's terminal-authority
+/// linearization point is refused deterministically, and one that wins it is
+/// accepted before any terminal fact exists.
+///
+/// The interleaving is established by the terminal authority hook: the
+/// settlement path is parked immediately before the registry mutex that
+/// creates the terminal candidate and commits `... -> PublishingTerminal`.
+/// A steer taken while it is parked provably precedes the terminal commit; a
+/// steer taken after the released settlement provably follows it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn terminal_authority_and_steer_share_one_arbitration_boundary() {
+    let plane = subagent_plane();
+    let mut child = stage_exit0(&plane);
+    let accepted_child = start_subagent(&plane, "survey").await;
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    let id = accepted_child.subagent_id.to_string();
+    child.take_delegation().await;
+
+    let hook = Arc::new(crate::runtime::subagent::TerminalAuthorityHook::default());
+    plane.registry.install_terminal_authority_hook(hook.clone());
+
+    // The child answers one steer, then reports its terminal result. The
+    // settlement path parks at the terminal authority boundary.
+    let child_side = tokio::spawn(async move {
+        let message = child.answer_guidance(accepted()).await;
+        child
+            .send_result(ChildResultStatus::Succeeded, Some("done"))
+            .await;
+        (child, message)
+    });
+    let won = run_execution(
+        &fixture,
+        serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": id.clone()},
+            "message": "accepted before terminal authority commits",
+        }),
+    )
+    .await;
+    let (_child, delivered) = child_side.await.expect("child side");
+    assert_eq!(json_content(&won)["accepted"], serde_json::json!(true));
+    assert_eq!(delivered, "accepted before terminal authority commits");
+
+    // The settlement path is provably parked at the pre-commit edge of the
+    // terminal authority: no terminal fact exists yet.
+    tokio::task::spawn_blocking({
+        let hook = hook.clone();
+        move || hook.wait_until_entered()
+    })
+    .await
+    .expect("terminal settlement parks at the boundary");
+    assert_eq!(
+        plane
+            .registry
+            .snapshot(&accepted_child.subagent_id)
+            .expect("record")
+            .state,
+        SubagentState::Running,
+        "the parked settlement has not committed any terminal transition"
+    );
+
+    hook.release();
+    let settled = plane
+        .registry
+        .wait_until_settled(&accepted_child.subagent_id)
+        .await
+        .expect("terminal settlement");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+
+    // Terminal authority won: every later steer is refused by the same
+    // mutex, naming the settled lifecycle.
+    let refused = run_execution(
+        &fixture,
+        serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": id},
+            "message": "must never reopen a settled child",
+        }),
+    )
+    .await;
+    let message = failure_message(&refused);
+    assert!(
+        message.contains("no longer running"),
+        "a settled child refuses every later steer: {message}"
+    );
+    assert_eq!(
+        plane
+            .registry
+            .snapshot(&accepted_child.subagent_id)
+            .expect("record")
+            .state,
+        SubagentState::Succeeded,
+        "terminal states stay absorbing: Succeeded never becomes Running"
+    );
+}
+
+/// A child that settles without answering the guidance envelope refuses it:
+/// the driver task drops the waiter at settlement, and the registry reports
+/// that deterministically rather than optimistically claiming acceptance.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_child_that_settles_without_answering_refuses_the_steer() {
+    let plane = subagent_plane();
+    let mut child = stage_exit0(&plane);
+    let accepted_child = start_subagent(&plane, "survey").await;
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    child.take_delegation().await;
+
+    let child_side = tokio::spawn(async move {
+        // Read the envelope and settle without ever answering it.
+        let crate::runtime::subagent::ipc::ParentFrame::Guidance(_) = child.read_frame().await
+        else {
+            panic!("the steer routes one guidance envelope");
+        };
+        child
+            .send_result(ChildResultStatus::Succeeded, Some("done"))
+            .await;
+        child
+    });
+    let refused = run_execution(
+        &fixture,
+        serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": accepted_child.subagent_id.to_string()},
+            "message": "never answered",
+        }),
+    )
+    .await;
+    let _child = child_side.await.expect("child side");
+    let message = failure_message(&refused);
+    assert!(
+        message.contains("settled before the guidance was accepted"),
+        "an unanswered envelope is a refusal, never an optimistic acceptance: {message}"
+    );
+}
