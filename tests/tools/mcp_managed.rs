@@ -190,7 +190,7 @@ impl ConnectedServer {
             .into_iter()
             .find(|(definition, _)| definition.name == name)
             .unwrap_or_else(|| panic!("the tool {name} must be discovered"));
-        ToolExecutor::execute(
+        ToolExecutor::start(
             executor.as_ref(),
             ToolInvocation {
                 call_id: ToolCallId::new(format!("call-{name}")),
@@ -213,6 +213,7 @@ impl ConnectedServer {
                 self.bundle.environment(),
             ),
         )
+        .completion
         .await
     }
 
@@ -718,7 +719,7 @@ async fn call_through_snapshot(
         artifacts.path(),
     )
     .expect("tool runtime");
-    ToolExecutor::execute(
+    ToolExecutor::start(
         executor.as_ref(),
         ToolInvocation {
             call_id: ToolCallId::new(format!("call-{name}")),
@@ -741,6 +742,7 @@ async fn call_through_snapshot(
             bundle.environment(),
         ),
     )
+    .completion
     .await
 }
 

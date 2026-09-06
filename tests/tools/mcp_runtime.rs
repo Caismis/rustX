@@ -129,7 +129,7 @@ mod unix_tests {
             artifacts_dir.path(),
         )
         .expect("tool runtime");
-        rustx::tools::executor::ToolExecutor::execute(
+        rustx::tools::executor::ToolExecutor::start(
             executor.as_ref(),
             rustx::tools::types::ToolInvocation {
                 call_id: rustx::runtime::identity::ToolCallId::new("canonical-call"),
@@ -152,6 +152,7 @@ mod unix_tests {
                 bundle.environment(),
             ),
         )
+        .completion
         .await
     }
 
@@ -925,7 +926,7 @@ mod unix_tests {
             artifacts_dir.path(),
         )
         .expect("tool runtime");
-        rustx::tools::executor::ToolExecutor::execute(
+        rustx::tools::executor::ToolExecutor::start(
             executor,
             rustx::tools::types::ToolInvocation {
                 call_id: rustx::runtime::identity::ToolCallId::new(call_id),
@@ -948,6 +949,7 @@ mod unix_tests {
                 bundle.environment(),
             ),
         )
+        .completion
         .await
     }
 

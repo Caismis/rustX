@@ -82,7 +82,9 @@ invariant is a real process boundary.
   correspondence, request start/settlement lifecycle, exact request counts
   and ordinals, canonical Assistant commit rules, tool lifecycle and
   canonical result ordering, cancellation arbitration and structural
-  settlement, transient retry with frozen replay, model deadlines,
+  settlement, transient retry with frozen replay, model deadlines, tool
+  execution-liveness deadlines (hard/idle deadline arbitration, cancellation
+  intent vs physical settlement, frozen admitted policy, batch exactly-once),
   unresolved-output carryover, publication interaction at the loop boundary,
   and the Agent-Loop half of single-generation safety: the
   malformed-tool-proposal boundary and the degeneration/budget guard share one
@@ -133,6 +135,9 @@ invariant is a real process boundary.
 - `background/text_spill` — real bash background execution through the
   actual `bash-supervisor` binary: oversized output spills and the terminal
   inbound.
+- `tool_deadline` — the Issue #204 generic hard deadline bounding a real
+  foreground Bash process: the supervisor's process-group kill and reap are
+  the physical settlement behind the proven `TimedOut`.
 - `subagent/conformance` — the child ownership boundary with real staged
   children (`sh`, own process group, real control socket): frozen authority
   crossing, registry lifecycle, exactly one terminal child notice, parent

@@ -96,7 +96,10 @@ impl TodoPlane {
             Some(batch) => context.with_todos(batch.writer()),
             None => context,
         };
-        executor.execute(prepared.invocation, context).await
+        executor
+            .start(prepared.invocation, context)
+            .completion
+            .await
     }
 
     /// Ends the batch without committing anything, exactly as every

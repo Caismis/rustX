@@ -180,12 +180,11 @@ pub(crate) fn select_tools(
 mod tests {
     use std::sync::Arc;
 
-    use futures_util::future::BoxFuture;
-
     use super::{ToolActivationPolicy, select_tools};
     use crate::runtime::identity::ToolId;
+    use crate::tools::deadline::ToolProgressCapability;
     use crate::tools::executor::{
-        ToolExecutionContext, ToolExecutor, ToolRegistration, ToolRegistry,
+        ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistration, ToolRegistry,
     };
     use crate::tools::types::{
         ToolConcurrencyPolicy, ToolDefinition, ToolExecutionResult, ToolExecutionStatus,
@@ -195,22 +194,29 @@ mod tests {
     struct NoopTool;
 
     impl ToolExecutor for NoopTool {
-        fn execute<'a>(
+        fn start<'a>(
             &'a self,
             _invocation: ToolInvocation,
-            _context: ToolExecutionContext<'a>,
-        ) -> BoxFuture<'a, ToolExecutionResult> {
-            Box::pin(async {
-                ToolExecutionResult {
-                    status: ToolExecutionStatus::Success,
-                    content: Vec::new(),
-                    duration_ms: 0,
-                    exit_code: None,
-                    artifacts: Vec::new(),
-                    truncation: None,
-                    managed_output: None,
-                }
-            })
+            context: ToolExecutionContext<'a>,
+        ) -> ToolExecutionHandle<'a> {
+            ToolExecutionHandle::settled_by_operation(
+                Box::pin(async {
+                    ToolExecutionResult {
+                        status: ToolExecutionStatus::Success,
+                        content: Vec::new(),
+                        duration_ms: 0,
+                        exit_code: None,
+                        artifacts: Vec::new(),
+                        truncation: None,
+                        managed_output: None,
+                    }
+                }),
+                context.cancellation.clone(),
+            )
+        }
+
+        fn progress_capability(&self) -> ToolProgressCapability {
+            ToolProgressCapability::None
         }
     }
 

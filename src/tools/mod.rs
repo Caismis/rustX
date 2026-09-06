@@ -15,6 +15,7 @@
 
 pub mod artifacts;
 pub mod background;
+pub mod deadline;
 pub mod environment;
 pub mod execution;
 pub mod executor;
@@ -38,12 +39,16 @@ pub use background::{
     BackgroundDispatchOutcome, BackgroundExecutionSnapshot, BackgroundLifecycle,
     ConversationBackgroundRegistry,
 };
+pub use deadline::{
+    TOOL_SETTLEMENT_CONTROL_GUARD, ToolCancellationCause, ToolDeadlineKind,
+    ToolExecutionDeadlinePolicy, ToolProgressCapability, ToolSettlementCertainty,
+};
 pub use environment::{ToolEnvironment, ToolEnvironmentError};
 pub use execution::{ExecutionHandle, ExecutionKind};
 pub use executor::{
     ASK_USER_TOOL_NAME, EXECUTION_TOOL_NAME, PreflightOutcome, PreparedInvocation,
-    ProgressReporter, ToolExecutionContext, ToolExecutor, ToolPreflightError, ToolRegistry,
-    ToolRegistryError,
+    ProgressReporter, ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolPreflightError,
+    ToolRegistry, ToolRegistryError, ToolSettlement,
 };
 pub use locator::LocatorError;
 pub use managed_output::{BackgroundOutput, ManagedOutputError, ManagedToolOutput, ResultSpill};

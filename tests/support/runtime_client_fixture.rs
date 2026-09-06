@@ -320,6 +320,7 @@ impl RuntimeClientFixtureBuilder {
             model: session_model,
             approval_mode: rustx::runtime::ApprovalMode::Policy,
             model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
                 policy: self.context_policy,
                 estimator,

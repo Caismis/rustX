@@ -95,8 +95,6 @@
 
 mod input;
 
-use futures_util::future::BoxFuture;
-
 use crate::runtime::identity::{SubagentId, ToolExecutionId};
 use crate::runtime::subagent::{
     SubagentListing, SubagentRegistry, SubagentSnapshot, SubagentState,
@@ -106,8 +104,9 @@ use crate::tools::background::{
     BackgroundExecutionListing, BackgroundExecutionSnapshot, BackgroundLifecycle,
     ConversationBackgroundRegistry,
 };
+use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::execution::{ExecutionHandle, ExecutionKind, MAX_LISTED_EXECUTIONS};
-use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
+use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
 use crate::tools::types::{
     ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
@@ -195,16 +194,23 @@ impl ExecutionExecutor {
 }
 
 impl ToolExecutor for ExecutionExecutor {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         invocation: ToolInvocation,
-        _context: ToolExecutionContext<'a>,
-    ) -> BoxFuture<'a, ToolExecutionResult> {
+        context: ToolExecutionContext<'a>,
+    ) -> ToolExecutionHandle<'a> {
         let background = self.background.clone();
         let subagents = self.subagents.clone();
-        Box::pin(
-            async move { run_execution(&background, subagents.as_ref(), &invocation.arguments) },
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                run_execution(&background, subagents.as_ref(), &invocation.arguments)
+            }),
+            context.cancellation.clone(),
         )
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 

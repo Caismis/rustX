@@ -17,12 +17,15 @@ use rustx::capabilities::{
 use rustx::runtime::identity::{ConversationId, ToolCallId, ToolExecutionId, ToolId};
 use rustx::runtime::inbound::ConversationInboundMailbox;
 use rustx::skills::Ecosystem;
+use rustx::tools::ToolProgressCapability;
 use rustx::tools::artifacts::ArtifactStore;
 use rustx::tools::background::{
     BackgroundDispatchOutcome, BackgroundResources, ConversationBackgroundRegistry,
 };
 use rustx::tools::environment::ToolEnvironment;
-use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
+use rustx::tools::executor::{
+    ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistry,
+};
 use rustx::tools::types::{
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode,
 };
@@ -1419,30 +1422,37 @@ impl RecordingParkingExecutor {
 }
 
 impl ToolExecutor for RecordingParkingExecutor {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         _invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
-    ) -> futures_util::future::BoxFuture<'a, ToolExecutionResult> {
+    ) -> ToolExecutionHandle<'a> {
         *self.environment.lock().expect("env lock") = Some(context.environment.clone());
         let started = self.seen.clone();
         let mut release = self.release.subscribe();
-        Box::pin(async move {
-            started.send_replace(true);
-            release
-                .wait_for(|released| *released)
-                .await
-                .expect("background release channel stays open");
-            ToolExecutionResult {
-                status: ToolExecutionStatus::Success,
-                content: Vec::new(),
-                duration_ms: 0,
-                exit_code: None,
-                artifacts: Vec::new(),
-                truncation: None,
-                managed_output: None,
-            }
-        })
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                started.send_replace(true);
+                release
+                    .wait_for(|released| *released)
+                    .await
+                    .expect("background release channel stays open");
+                ToolExecutionResult {
+                    status: ToolExecutionStatus::Success,
+                    content: Vec::new(),
+                    duration_ms: 0,
+                    exit_code: None,
+                    artifacts: Vec::new(),
+                    truncation: None,
+                    managed_output: None,
+                }
+            }),
+            context.cancellation.clone(),
+        )
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 

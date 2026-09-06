@@ -173,6 +173,18 @@ ordinary cancellation path with a deadline-specific reason; there is no
 `TimedOut` subagent state. The model chooses only the named agent and its
 task/context, and cannot set or extend this deadline per invocation.
 
+`toolDeadlinePolicy` bounds each admitted foreground tool call:
+`hardDeadlineMs` is the total execution lifetime (default 2 minutes) and the
+optional `idleLivenessMs` cancels a started call that produces no progress
+for that long. The idle window applies only to executors that declare
+meaningful progress capability; executors without honest progress evidence
+run under the hard deadline only. Executor progress refreshes only the idle
+window, never the hard deadline. The policy is frozen at attempt admission,
+and a deadline is cancellation intent: the loop cancels the call and awaits
+the executor's physical settlement, bounded by a confirmation window —
+committing `TimedOut` only when terminal settlement is proven, and
+`OutcomeUnknown` when the executor cannot prove it.
+
 `approvalMode` is the current runtime-wide HITL mode. It defaults to `policy`;
 `full_access` suppresses only approval prompts for the current runtime and is
 never restored from Session history. The runtime applies it at attempt

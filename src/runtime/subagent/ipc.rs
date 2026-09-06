@@ -75,11 +75,13 @@ use super::workspace::WorkspaceSnapshot;
 /// logical project workspace from the physical Git worktree root owned by
 /// the parent. Version 13 carries the definition-level whole-lifecycle
 /// execution deadline inside the frozen resolved launch specification (Issue
-/// #191). HITL traffic remains on fd 0 and never uses the disposable activity
-/// lane.
+/// #191). Version 14 carries the parent's frozen generic tool
+/// execution-liveness deadline policy (Issue #204), inherited unchanged by
+/// the child runtime's foreground Tool lifecycle. HITL traffic remains on
+/// fd 0 and never uses the disposable activity lane.
 /// There is no compatibility decoding: a peer that does not speak exactly
 /// this version exits before composing anything.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 13;
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 14;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -162,6 +164,10 @@ pub(crate) struct SubagentChildSpec {
     /// summarization. The parent never enforces child provider deadlines
     /// itself.
     pub model_timeout_policy: ModelTimeoutPolicy,
+    /// The parent runtime's frozen generic tool execution-liveness policy,
+    /// inherited by the child unchanged (Issue #204): the child applies it
+    /// to the hard/idle deadlines of its own foreground Tool executions.
+    pub tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy,
     /// The launch-scoped Agent Status configuration of the child.
     pub agent_status: AgentStatusConfig,
     /// The session context policy of the child.
@@ -955,6 +961,7 @@ mod tests {
             resolved: resolved_spec(),
             approval_mode: ApprovalMode::FullAccess,
             model_timeout_policy: ModelTimeoutPolicy::default(),
+            tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             agent_status: AgentStatusConfig::default(),
             context: SessionContextPolicy {
                 reserve_tokens: 1,

@@ -181,7 +181,7 @@ async fn prove_native_tool_executes(runtime: &LocalConversationRuntime) {
         .expect("the native bash tool is committed");
     let executor = registry.executor(&bash.id);
     let tool_runtime = runtime.tool_runtime();
-    let result = rustx::tools::executor::ToolExecutor::execute(
+    let result = rustx::tools::executor::ToolExecutor::start(
         executor.as_ref(),
         rustx::tools::types::ToolInvocation {
             call_id: rustx::runtime::identity::ToolCallId::new("issue81-bash"),
@@ -204,6 +204,7 @@ async fn prove_native_tool_executes(runtime: &LocalConversationRuntime) {
             tool_runtime.environment(),
         ),
     )
+    .completion
     .await;
     let rustx::tools::types::ToolExecutionStatus::Success = result.status else {
         panic!("the native bash tool must execute: {:?}", result.status);

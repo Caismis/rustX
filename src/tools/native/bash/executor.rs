@@ -6,8 +6,6 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use futures_util::future::BoxFuture;
-
 #[cfg(test)]
 use super::capture::CaptureHold;
 use super::capture::{
@@ -27,11 +25,9 @@ use crate::runtime::process_runner::{
 use crate::runtime::process_runner::{
     RunnerChannelEofHook as ChannelEofHook, RunnerTerminalHold as TerminalHold,
 };
-use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
-use crate::tools::limits::{
-    BASH_TERMINATION_CONFIRMATION, DEFAULT_FOREGROUND_BASH_TIMEOUT,
-    FOREGROUND_TOOL_RESULT_PREVIEW_BYTES,
-};
+use crate::tools::deadline::ToolProgressCapability;
+use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
+use crate::tools::limits::{BASH_TERMINATION_CONFIRMATION, FOREGROUND_TOOL_RESULT_PREVIEW_BYTES};
 use crate::tools::native::support::failed_result;
 use crate::tools::types::{
     ManagedOutputContinuation, ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus,
@@ -72,17 +68,32 @@ impl Default for BashTool {
 }
 
 impl ToolExecutor for BashTool {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
-    ) -> BoxFuture<'a, ToolExecutionResult> {
+    ) -> ToolExecutionHandle<'a> {
+        // The kill/wait/reap cancellation ladder stays inside the operation
+        // future: the settlement plane drives that same operation to its
+        // proven terminal end.
+        let cancellation = context.cancellation.clone();
         #[cfg(test)]
         let control = self.control.clone();
         #[cfg(test)]
-        return Box::pin(async move { run_bash(&invocation, &context, control.as_ref()).await });
+        return ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move { run_bash(&invocation, &context, control.as_ref()).await }),
+            cancellation,
+        );
         #[cfg(not(test))]
-        Box::pin(async move { run_bash(&invocation, &context, None).await })
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move { run_bash(&invocation, &context, None).await }),
+            cancellation,
+        )
+    }
+
+    // No progress protocol; the generic hard deadline bounds one execution.
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 
@@ -385,17 +396,17 @@ async fn run_bash(
         }
     };
     let command = input.command.as_str();
-    let explicit_timeout = input.explicit_timeout();
-    let timeout = match invocation.mode {
-        // Foreground: the omitted timeout uses the default foreground
-        // timeout; an explicit timeout overrides it.
-        ToolInvocationMode::Foreground => {
-            Some(explicit_timeout.unwrap_or(DEFAULT_FOREGROUND_BASH_TIMEOUT))
-        }
-        // Background: an omitted timeout means no implicit foreground
-        // timeout; an explicit timeout may still bound the command.
-        ToolInvocationMode::Background => explicit_timeout,
-    };
+    // The executor-local deadline exists only when the model explicitly
+    // requested one as tool business input. There is no implicit
+    // executor-owned default in either mode: the generic Agent Loop
+    // execution-liveness lifecycle owns the hard deadline of every admitted
+    // foreground call (Issue #204), and background executions are
+    // conversation-owned and unbounded unless the model bounds them. When
+    // the generic deadline wins, it cancels this executor through the
+    // context's cancellation view and this executor proves physical
+    // settlement (process-group kill, wait, reap) exactly as for any other
+    // cancellation.
+    let timeout = input.explicit_timeout();
 
     #[cfg(not(unix))]
     {

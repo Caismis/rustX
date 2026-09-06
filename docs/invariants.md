@@ -3157,8 +3157,9 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   deadline expired AND the owning runtime/executor established terminal
   settlement (for example a local process tree killed, waited/reaped, and
   proven unable to continue). A deadline expiry without proven settlement is
-  `OutcomeUnknown`, never `TimedOut`. Generic tool deadlines remain
-  unimplemented.
+  `OutcomeUnknown`, never `TimedOut`. The generic foreground deadlines that
+  produce this intent are owned by the Agent Loop lifecycle (see
+  "Tool execution liveness deadlines (Issue #204)" below).
 - **A cancellation request is not a confirmed cancellation result.**
   `Cancelled` requires established cancellation settlement: `BeforeStart`
   (the call never started) or `DuringExecution` with proven terminal
@@ -3208,6 +3209,129 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   dispatch happened, that the outcome is unconfirmed, that partial or full
   side effects are possible, and that the relevant state should be inspected
   and reconciled before retrying side-effecting calls.
+
+## Tool execution liveness deadlines (Issue #204)
+
+- **The Agent Loop's generic Tool lifecycle is the only generic deadline
+  owner.** One admitted foreground ToolCall is bounded by the runtime's
+  `ToolExecutionDeadlinePolicy`: an immutable **hard deadline** on total
+  execution lifetime and an optional **idle-liveness** window. Executors own
+  physical execution, cancellation propagation, progress evidence, and
+  settlement evidence; no executor independently owns a generic timeout, and
+  no executor can choose a conflicting canonical timeout status.
+- **The policy freezes at attempt admission.** The effective policy is
+  copied into the attempt's frozen execution authority together with the
+  model timeout policy; a running ToolCall can never observe a later
+  configuration value, and no executor receives a runtime-current
+  configuration handle. Subagent children inherit the parent's frozen policy
+  through their typed startup specification, exactly like the model timeout
+  policy (Issue #138).
+- **Both deadlines start at the executor-start frontier** of the call — the
+  lifecycle's one clock read when the admitted invocation crosses into its
+  executor, shared by the hard deadline and the initial idle window.
+  Scheduling-barrier and approval time before that frontier is attempt
+  lifecycle, never execution lifetime.
+- **Progress refreshes idle liveness, never the hard deadline.** Executor
+  progress reports through the existing `ProgressReporter` seam are the only
+  liveness evidence; the lifecycle taps them into its idle watchdog. The
+  watchdog exists only when the runtime policy configures an idle window
+  **and** the executor declared `ToolProgressCapability::Meaningful`, frozen
+  into the prepared invocation at resolution. Executors that cannot produce
+  honest progress declare `None`, run under the hard deadline only, and must
+  never fabricate heartbeat reports.
+- **Deadline expiration is cancellation intent, not settlement.** A deadline
+  winner cancels exactly that execution's child cancellation signal and the
+  lifecycle then transitions to the executor's settlement authority: the
+  `ToolExecutor` boundary splits one started execution into
+  `ToolExecutionHandle { completion, settlement }` — the physical completion
+  plane and the independent cancellation/settlement control plane, both
+  executor-owned. Once intent wins, the lifecycle awaits only the settlement
+  plane and never polls the completion plane again; dropping an executor
+  future is never settlement, and the lifecycle never abandons ownership
+  because its deadline expired. The settlement plane returns typed
+  `ToolSettlement` evidence: `Confirmed` for executor-proven physical
+  terminality, `Unconfirmed` when the executor's local rustX execution
+  ownership reached its terminal cleanup boundary — no rustX-owned Tokio
+  task, subprocess, unreaped child, or worker task remains — while
+  terminality past the external-effect frontier stayed unprovable.
+  `Unconfirmed` never means "the lifecycle stopped waiting": an executor
+  whose local cleanup is still pending must keep its settlement plane
+  pending until that cleanup completes. Executor-proven settlement after a
+  deadline winner settles
+  canonically as `TimedOut`; explicit `Unconfirmed` evidence settles as the
+  honest `OutcomeUnknown`, and any executor-proven normal outcome survives
+  untouched.
+- **Settlement is finite even for an executor that violates the settlement
+  contract.** The settlement control plane is the normal settlement
+  mechanism and is awaited without a timeout of its own; typed evidence
+  always wins a tie with the guard. `TOOL_SETTLEMENT_CONTROL_GUARD` exists
+  ONLY as protection against a broken executor whose settlement plane never
+  returns after observing the cancellation request: its expiry is a
+  settlement control-plane failure — an executor settlement-contract
+  violation, never settlement evidence, and never proof that the physical
+  operation stopped — so the canonical result is `OutcomeUnknown`, never
+  `TimedOut`. The two paths are type-distinct and never collapsed: the
+  executor's `ToolSettlement` is evidence its authority returned, while the
+  lifecycle's `SettlementAuthorityOutcome::ControlPlaneFailed` is generated
+  when that authority never did. `OutcomeUnknown` comes only from explicit
+  `Unconfirmed` evidence or the guard, never from "the execution future did
+  not return" or from dropping a future. A conforming executor keeps every
+  rustX-owned local ownership inside its handle futures — it never spawns an
+  unmanaged local task or process behind them — so when the guard fires and
+  the lifecycle drops the handle, that drop consumes all remaining local
+  execution ownership; only external systems beyond rustX's ownership domain
+  may remain uncertain. The committed terminal result is absorbing:
+  the closed call slot guarantees that no late physical completion, no
+  residual executor-owned physical cleanup, and no repeated intent can
+  publish a second result, emit a post-terminal canonical event, or reopen
+  the call's slot. No detached runtime-owned execution task is left behind.
+- **The winner arbitration is one explicit linearization point.** At equal
+  readiness the contractual order is: attempt cancellation > hard deadline >
+  idle deadline > physical completion. The winner freezes the settlement
+  provenance; the executor's typed settlement evidence (or the guard's
+  expiry) then supplies the outcome certainty. There is exactly one
+  terminal ToolResult per call.
+- **Bash keeps its strong physical settlement.** The native Bash tool's
+  explicit model-requested `timeout` remains tool-owned business input that
+  the executor settles physically (kill process group, wait, reap → proven
+  `TimedOut`). The removed implicit executor-local default is superseded by
+  the generic hard deadline: when it wins, Bash proves the same physical
+  settlement and the lifecycle classifies it `TimedOut`.
+- **A deadline never strands batch siblings.** A per-call deadline cancels
+  only its own execution; every accepted sibling call still settles exactly
+  once, and the batch commits in canonical model call order.
+- **Runtime drain waits for the canonical settlement, which awaits the
+  settlement authority.** Drain cancels the attempt, the lifecycle requests
+  physical cancellation and awaits the executor's settlement control plane
+  (guarded against a contract-violating executor by
+  `TOOL_SETTLEMENT_CONTROL_GUARD`), and the attempt returns only after every
+  admitted execution reached its accepted terminal contract —
+  `OutcomeUnknown` included. Runtime quiescence is published only after all
+  rustX-owned foreground physical execution and cleanup ownership has
+  settled: an executor-returned `Unconfirmed` already carries that local
+  settlement (only the external effect frontier remains uncertain, and
+  external uncertainty never blocks local quiescence), and on the
+  guard/control-plane-failure path the lifecycle drops the handle, which for
+  a conforming executor consumes all remaining local ownership, before drain
+  may publish `Quiescent`. Residual rustX-owned local cleanup still in
+  flight — a kill/wait/reap or join ladder inside the settlement plane —
+  keeps drain pending until the settlement plane returns. The closed call
+  slot seals the settled call from canonical history: no late state can
+  publish conflicting canonical facts after drain returns.
+- **The Event Journal records the typed lifecycle facts.** Per started call
+  the journal orders `ToolExecutionStarted`, retained
+  `ToolExecutionProgress` facts, `ToolExecutionDeadlineFired { kind }` when
+  a deadline fired, `ToolExecutionCancellationRequested { cause }` when a
+  non-physical winner drove the settlement phase, then exactly one
+  settlement fact — `ToolExecutionSettlementObserved { certainty }` when
+  the executor's settlement authority returned typed evidence, or
+  `ToolExecutionSettlementControlFailed { reason }` when the settlement
+  control-plane guard expired without the authority ever returning — and the
+  terminal `ToolExecutionCompleted` last.
+  `ToolExecutionSettlementObserved` never appears on the control-plane
+  failure path: no executor settlement evidence was observed there. The
+  journal is observational evidence; the canonical ToolResult remains the
+  only outcome authority.
 
 ## Background executions (M5)
 

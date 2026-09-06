@@ -7,11 +7,11 @@
 
 mod input;
 
-use futures_util::future::BoxFuture;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{Searcher, SearcherBuilder, SinkContext, SinkContextKind, SinkMatch};
 
-use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
+use crate::tools::deadline::ToolProgressCapability;
+use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::limits::{MAX_GREP_LINE_CHARS, NATIVE_FILE_TOOL_MAX_BYTES};
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::search::{SearchFile, SearchRoot};
@@ -42,12 +42,20 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
 pub struct GrepTool;
 
 impl ToolExecutor for GrepTool {
-    fn execute<'a>(
+    fn start<'a>(
         &'a self,
         invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
-    ) -> BoxFuture<'a, ToolExecutionResult> {
-        Box::pin(async move { run_grep(&invocation, &context) })
+    ) -> ToolExecutionHandle<'a> {
+        let cancellation = context.cancellation.clone();
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move { run_grep(&invocation, &context) }),
+            cancellation,
+        )
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
     }
 }
 
