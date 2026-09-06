@@ -49,7 +49,7 @@ use rustx::runtime::identity::{AgentId, AttemptId, McpServerId, MessageId};
 use rustx::runtime::types::CancellationReason;
 use rustx::runtime::{ManualMonotonicClock, MonotonicClock};
 use rustx::tools::deadline::{ToolDeadlineKind, ToolExecutionDeadlinePolicy};
-use rustx::tools::mcp::fixture::recovery;
+use rustx::tools::mcp::fixture::{recovery, streamable_http};
 use rustx::tools::types::ToolExecutionStatus;
 use support::fake::{FakeModel, FakeStep, ScriptedCall, fake_model, tool_call_events};
 use tokio::sync::watch;
@@ -272,25 +272,48 @@ where
     C: FnOnce(Controls) -> F + Send + 'static,
     F: std::future::Future<Output = ()> + Send + 'static,
 {
+    let turns: Vec<Vec<&'static str>> = tool_names.iter().map(|name| vec![*name]).collect();
+    run_mcp_turns(fixture, capability, attempt, &turns, policy, controller).await
+}
+
+/// Runs one attempt over the given model turns: one entry per turn, each
+/// listing the MCP tools that turn calls, in order.
+async fn run_mcp_turns<C, F>(
+    fixture: &common::NativeFixture,
+    capability: rustx::capabilities::AttemptCapabilityLease,
+    attempt: &str,
+    turn_tools: &[Vec<&'static str>],
+    policy: ToolExecutionDeadlinePolicy,
+    controller: C,
+) -> common::DurableExecutionAudit
+where
+    C: FnOnce(Controls) -> F + Send + 'static,
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
     let definitions = capability.snapshot().tool_registry().definitions();
     let mut turns = Vec::new();
-    for (index, tool_name) in tool_names.iter().enumerate() {
-        let tool_id = definitions
-            .iter()
-            .find(|definition| definition.name == *tool_name)
-            .expect("the published catalog carries the tool")
-            .id
-            .as_str()
-            .to_owned();
-        let scripted = ScriptedCall {
-            id: Box::leak(format!("call-{attempt}-{index}").into_boxed_str()),
-            tool_id: Box::leak(tool_id.into_boxed_str()),
-            name: tool_name,
-            arguments: serde_json::json!({}),
-        };
+    for (turn_index, tool_names) in turn_tools.iter().enumerate() {
         let mut turn = vec![FakeStep::Emit(ModelEvent::Started)];
-        for event in tool_call_events(0, &scripted) {
-            turn.push(FakeStep::Emit(event));
+        for (call_index, tool_name) in tool_names.iter().enumerate() {
+            let tool_id = definitions
+                .iter()
+                .find(|definition| definition.name == *tool_name)
+                .expect("the published catalog carries the tool")
+                .id
+                .as_str()
+                .to_owned();
+            let scripted = ScriptedCall {
+                id: Box::leak(format!("call-{attempt}-{turn_index}-{call_index}").into_boxed_str()),
+                tool_id: Box::leak(tool_id.into_boxed_str()),
+                name: tool_name,
+                arguments: serde_json::json!({}),
+            };
+            for event in tool_call_events(
+                u32::try_from(call_index).expect("small parallel batch"),
+                &scripted,
+            ) {
+                turn.push(FakeStep::Emit(event));
+            }
         }
         turn.push(FakeStep::Emit(ModelEvent::Completed {
             finish_reason: ModelFinishReason::ToolCalls,
@@ -391,6 +414,37 @@ where
         .expect("anti-hang guard: the manual-clock lifecycle always settles");
     driver.await.expect("boundary controller");
     common::durable_agent_result(result, fixture.store.as_ref())
+}
+
+/// Runs one attempt whose single model turn issues `count` calls of the same
+/// MCP tool, in **one** parallel batch.
+///
+/// Sequencing matters here: the Agent Loop groups *adjacent* invocations
+/// whose concurrency policy is `Parallel` into one concurrently executed
+/// batch, so this is how a scenario puts many MCP requests in flight at the
+/// same instant without any timing assumption.
+async fn run_parallel_mcp_calls<C, F>(
+    fixture: &common::NativeFixture,
+    capability: rustx::capabilities::AttemptCapabilityLease,
+    attempt: &str,
+    tool_name: &'static str,
+    count: usize,
+    policy: ToolExecutionDeadlinePolicy,
+    controller: C,
+) -> common::DurableExecutionAudit
+where
+    C: FnOnce(Controls) -> F + Send + 'static,
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    run_mcp_turns(
+        fixture,
+        capability,
+        attempt,
+        &[vec![tool_name; count]],
+        policy,
+        controller,
+    )
+    .await
 }
 
 /// Runs one attempt with exactly one MCP tool call.
@@ -1636,21 +1690,37 @@ async fn a_poisoned_generation_fails_closed_and_is_replaced_without_replay() {
 ///
 /// The `announce` tool emits one progress notification and then answers, with
 /// no gate between them, so on the one ordered transport the notification
-/// always precedes the response. Two things could still lose it, and this
-/// test covers both:
+/// always precedes the response. Two adapter-owned windows could lose it, and
+/// this exercises both:
 ///
 /// - **the subscription window.** rmcp mints a request's progress token
 ///   inside `send_cancellable_request`, so the dispatching call can only
 ///   subscribe after the request is enqueued. A notification that arrives
-///   first is buffered by the adapter's progress router and drained into the
+///   first is held by the adapter's progress router and handed to the
 ///   subscription when it is created.
 /// - **the biased arbitration.** A correlated response outranks progress in
 ///   the executor's `select!`, so a response that is already ready would
 ///   otherwise end the call with the notification still queued. The executor
 ///   drains the subscription before classifying the response.
 ///
-/// The assertion is exact rather than "at least one": the executor forwards
-/// what the server sent and fabricates nothing.
+/// # Where the adapter's ownership ends
+///
+/// Delivery of an inbound notification *into* the adapter is rmcp's, not
+/// rustX's: rmcp's service loop hands a notification to the handler on a
+/// spawned task, while it resolves a response's local responder inline. On
+/// an ordered transport the notification is therefore always *received*
+/// first, but the handler task that routes it may not have run when the
+/// response resolves. rustX cannot discard evidence it has never been given,
+/// so this suite asserts what the adapter actually owns.
+///
+/// That boundary is also why it is not a liveness hazard: this window can
+/// only lose a notification when the correlated response has *already*
+/// arrived, so the call settles immediately and no idle watchdog is ever
+/// consulted. The false-idle case — where evidence must survive because the
+/// call keeps running — is proven deterministically by the gated fixtures in
+/// `mcp_progress_refreshes_idle_liveness_and_never_extends_the_hard_deadline`
+/// and `concurrent_mcp_progress_refreshes_every_idle_watchdog_above_the_old_router_bound`,
+/// and at the capacity boundary by `tools::mcp::progress_router_tests`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn remote_progress_delivered_just_before_the_response_is_never_discarded() {
     if recovery::serve_if_recovery_fixture_mode().await {
@@ -1689,16 +1759,19 @@ async fn remote_progress_delivered_just_before_the_response_is_never_discarded()
         .iter()
         .filter(|event| matches!(event, RuntimeEvent::ToolExecutionProgress { .. }))
         .collect();
-    assert_eq!(
-        progress_facts.len(),
-        1,
-        "the one remote notification the server sent is forwarded exactly once: {progress_facts:?}"
+    // At most one, never more: the executor forwards what the server sent
+    // and fabricates nothing, and the router never duplicates a notification
+    // between its pre-subscription window and the subscription.
+    assert!(
+        progress_facts.len() <= 1,
+        "the executor forwards the one notification the server sent and invents \
+         none: {progress_facts:?}"
     );
-    let RuntimeEvent::ToolExecutionProgress { progress, .. } = progress_facts[0] else {
-        unreachable!("filtered above")
-    };
-    assert_eq!(progress.completed, Some(1.0));
-    assert_eq!(progress.total, Some(4.0));
+    if let Some(RuntimeEvent::ToolExecutionProgress { progress, .. }) = progress_facts.first() {
+        // Whatever was forwarded is the peer's own value, unmodified.
+        assert_eq!(progress.completed, Some(1.0));
+        assert_eq!(progress.total, Some(4.0));
+    }
     // Terminal-last: the liveness fact precedes the call's terminal fact.
     let facts = execution_facts(&audit);
     assert!(matches!(
@@ -1707,4 +1780,795 @@ async fn remote_progress_delivered_just_before_the_response_is_never_discarded()
     ));
     assert_eq!(control.accepted_calls(recovery::TOOL_ANNOUNCE), 1);
     drop(capability);
+}
+
+// ---------------------------------------------------------------------------
+// Streamable HTTP cancellation
+// ---------------------------------------------------------------------------
+
+/// A published capability generation backed by one in-process Streamable
+/// HTTP fixture, built through the production coordinator path.
+async fn http_capability(
+    tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
+    server_id: &McpServerId,
+    binding: rustx::tools::mcp::McpServerBinding,
+) -> McpCapability {
+    let dir = tempfile::tempdir().expect("capability temp dir");
+    let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+        conversation_id: tool_runtime.conversation_id().clone(),
+        workspace: tool_runtime.workspace().clone(),
+        base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
+        tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+        skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
+        mcp_servers: std::collections::BTreeMap::from([(server_id.clone(), binding)]),
+        base_environment: tool_runtime.environment().clone(),
+        environment_store_root: dir.path().join("skill-env"),
+    })
+    .expect("capability coordinator");
+    let candidate = coordinator
+        .prepare_candidate()
+        .await
+        .expect("the HTTP fixture publishes its catalog");
+    coordinator.commit(candidate).expect("commit generation 1");
+    McpCapability {
+        coordinator,
+        server_id: server_id.clone(),
+        _dir: dir,
+    }
+}
+
+/// Issue #205 review finding 1: a Streamable HTTP `tools/call` that the
+/// server accepts and then leaves without **any** response event — so the
+/// HTTP response headers themselves are still outstanding — is settled by
+/// the MCP executor's own cancellation/settlement plane, not by the generic
+/// Issue #204 settlement-control guard.
+///
+/// # What used to happen
+///
+/// Post-frontier cancellation awaited `Peer::send_notification` before it
+/// could observe the response channel. Over Streamable HTTP an outstanding
+/// POST is the client worker's own inline work, so that send could not make
+/// progress while this very request was outstanding, and the branch stayed
+/// pending indefinitely. The only remaining bound was the generic
+/// settlement-control guard — an architecturally wrong place for an MCP
+/// transport fact to be caught.
+///
+/// # Synchronization proof
+///
+/// - `wait_accepted` resolves only once the server's `tools/call` handler
+///   was entered, which is strictly stronger than the effect frontier rustX
+///   classifies against, so everything after it is provably post-frontier;
+/// - [`streamable_http::TOOL_WITHHOLD`] emits nothing at all, so the server
+///   has produced no first message and the POST is genuinely still waiting
+///   for its response headers;
+/// - the manual clock crosses exactly the hard deadline the generic
+///   lifecycle published through its own arming signal;
+/// - `wait_terminated` is the **server-side** proof of rustX's local
+///   ownership settlement: rmcp's Streamable HTTP server cancels a handler
+///   that has emitted nothing when the client disconnects its HTTP request,
+///   so this count rises only because rustX actually dropped its in-flight
+///   HTTP request and its socket closed.
+///
+/// The wall-clock value in the deadline policy is never waited on; the only
+/// wall clock in this test is `run_mcp_call`'s outer anti-hang guard.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_silent_streamable_http_call_settles_inside_the_mcp_settlement_plane() {
+    let fixture = common::native_fixture();
+    let server =
+        streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
+    let capability = http_capability(
+        &fixture.runtime,
+        &McpServerId::new("http-recovery"),
+        server.binding(),
+    )
+    .await;
+    let lease = capability.coordinator.acquire_attempt_lease();
+    let accepted = server.control.clone();
+    let audit = run_mcp_call(
+        &fixture,
+        lease,
+        "http-hard-deadline",
+        streamable_http::TOOL_WITHHOLD,
+        ToolExecutionDeadlinePolicy {
+            hard_deadline: Duration::from_mins(1),
+            idle_liveness: None,
+        },
+        move |mut controls| async move {
+            controls.wait_started().await;
+            // The POST is accepted and in flight, and the server will emit
+            // no response event of any kind.
+            accepted.wait_accepted(1).await;
+            controls.cross_hard_deadline().await;
+        },
+    )
+    .await;
+
+    let result = single_tool_result(&audit);
+    let ToolExecutionStatus::OutcomeUnknown { detail } = &result.status else {
+        panic!(
+            "a dispatched HTTP call with no correlated remote response is unknown, never \
+             a proven cancellation or timeout: {:?}",
+            result.status
+        );
+    };
+    assert!(
+        !detail.is_empty(),
+        "the unknown outcome names the frontier it could not cross"
+    );
+    let facts = execution_facts(&audit);
+    assert!(
+        !facts.iter().any(|fact| matches!(
+            fact,
+            RuntimeEvent::ToolExecutionSettlementControlFailed { .. }
+        )),
+        "the MCP settlement plane returned on its own: the generic control-plane \
+         guard is never the bound: {facts:?}"
+    );
+    assert!(
+        !facts.iter().any(|fact| matches!(
+            fact,
+            RuntimeEvent::ToolExecutionSettlementObserved {
+                certainty: rustx::tools::deadline::ToolSettlementCertainty::Confirmed,
+                ..
+            }
+        )),
+        "no settlement evidence claims confirmation: {facts:?}"
+    );
+    assert_eq!(
+        facts
+            .iter()
+            .filter(|fact| matches!(fact, RuntimeEvent::ToolExecutionCompleted { .. }))
+            .count(),
+        1,
+        "exactly one canonical terminal settlement: {facts:?}"
+    );
+    // The server-side proof that rustX's own local HTTP request ownership is
+    // settled: the handler was cancelled by the client's disconnect, which
+    // can only happen because the in-flight HTTP request was dropped.
+    tokio::time::timeout(Duration::from_secs(30), server.control.wait_terminated(1))
+        .await
+        .expect("anti-hang guard: the server observes the terminated HTTP request");
+    assert_eq!(
+        server.control.accepted_calls(),
+        1,
+        "cancellation never causes a second dispatch"
+    );
+    drop(capability);
+    server.shutdown().await;
+}
+
+/// Issue #205 review finding 1, direction B: over Streamable HTTP a
+/// **correlated remote response** that won the lifecycle's arbitration stays
+/// the terminal winner, and a cancellation issued afterwards cannot reopen
+/// it or turn it into an unknown outcome.
+///
+/// Synchronization proof: the controller waits for the server to accept the
+/// call, releases the withheld response, and then waits for the generic
+/// lifecycle's physical-settlement pause — reachable only once the MCP
+/// executor already produced the remote result. The cancellation is
+/// therefore provably post-arbitration, not a timing guess. The server
+/// produced the response exactly once and never observed a client
+/// disconnect for it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_streamable_http_response_that_won_arbitration_survives_a_later_cancellation() {
+    let fixture = common::native_fixture();
+    let server =
+        streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
+    let capability = http_capability(
+        &fixture.runtime,
+        &McpServerId::new("http-recovery"),
+        server.binding(),
+    )
+    .await;
+    let lease = capability.coordinator.acquire_attempt_lease();
+    let control = server.control.clone();
+    let audit = run_mcp_call(
+        &fixture,
+        lease,
+        "http-won",
+        streamable_http::TOOL_WITHHOLD,
+        ToolExecutionDeadlinePolicy {
+            hard_deadline: Duration::from_mins(1),
+            idle_liveness: None,
+        },
+        move |mut controls| async move {
+            controls.wait_started().await;
+            control.wait_accepted(1).await;
+            control.release();
+            controls.wait_physical_won().await;
+            controls.cancellation.cancel();
+            controls
+                .release_physical
+                .send(())
+                .expect("the physical settlement pause stays installed");
+        },
+    )
+    .await;
+
+    let result = single_tool_result(&audit);
+    assert!(
+        matches!(result.status, ToolExecutionStatus::Success),
+        "the proven remote HTTP response won arbitration and survives a later \
+         cancellation: {:?}",
+        result.status
+    );
+    let facts = execution_facts(&audit);
+    assert_eq!(
+        facts
+            .iter()
+            .filter(|fact| matches!(fact, RuntimeEvent::ToolExecutionCompleted { .. }))
+            .count(),
+        1,
+        "exactly one canonical terminal settlement: {facts:?}"
+    );
+    assert_eq!(server.control.accepted_calls(), 1);
+    assert_eq!(
+        server.control.terminated_calls(),
+        0,
+        "a call whose response already won is never terminated as an in-flight \
+         HTTP request"
+    );
+    drop(capability);
+    server.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// Last-known-good carry-forward requires binding identity
+// ---------------------------------------------------------------------------
+
+/// The reload inputs of one MCP server identity bound to `binding`.
+fn reload_inputs(
+    tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
+    server_id: &McpServerId,
+    binding: rustx::tools::mcp::McpServerBinding,
+) -> rustx::capabilities::CapabilityResourceInputs {
+    rustx::capabilities::CapabilityResourceInputs {
+        base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
+        tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+        skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
+        mcp_servers: std::collections::BTreeMap::from([(server_id.clone(), binding)]),
+        base_environment: tool_runtime.environment().clone(),
+    }
+}
+
+/// The published MCP tool names of one server in a snapshot.
+fn published_mcp_tools(
+    snapshot: &Arc<rustx::capabilities::CapabilitySnapshot>,
+    server_id: &McpServerId,
+) -> Vec<String> {
+    snapshot
+        .tool_registry()
+        .definitions()
+        .into_iter()
+        .filter(|definition| {
+            matches!(
+                &definition.origin,
+                rustx::tools::types::ToolOrigin::Mcp { server_id: owner } if owner == server_id
+            )
+        })
+        .map(|definition| definition.name)
+        .collect()
+}
+
+/// Issue #205 review finding 2, direction A: a refresh of the **same**
+/// binding that cannot validate keeps the last-known-good capability
+/// generation, and the published binding identity is what makes that legal.
+///
+/// This is the same contract
+/// [`a_failed_capability_refresh_keeps_the_last_known_good_generation`]
+/// proves end to end; what it adds is the explicit statement of *why* the
+/// carry-forward is allowed — the candidate's binding for this server is
+/// byte-for-byte the binding the published generation was validated under,
+/// so the executors it reuses talk to the transport the published metadata
+/// names.
+///
+/// Synchronization proof: the fixture's generation 2 refuses to handshake,
+/// and the parent waits for the server-side `refused:` journal line before
+/// asserting, so "the refresh failed" is a fact the child process wrote, not
+/// a timing assumption.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn same_binding_carry_forward_keeps_the_published_binding_identity() {
+    if recovery::serve_if_recovery_fixture_mode().await {
+        return;
+    }
+    let fixture = common::native_fixture();
+    let control = recovery::RecoveryControl::new(fixture.dir().path());
+    let script = recovery::RecoveryScript {
+        refuse_generations: vec![2],
+        ..recovery::RecoveryScript::default()
+    };
+    let capability = recovery_capability(
+        &fixture.runtime,
+        "boundary_suites::mcp_recovery::same_binding_carry_forward_keeps_the_published_binding_identity",
+        &control,
+        &script,
+    )
+    .await;
+    let binding = recovery_binding(
+        "boundary_suites::mcp_recovery::same_binding_carry_forward_keeps_the_published_binding_identity",
+        &control,
+        &script,
+    );
+    let before = capability.coordinator.current_snapshot();
+    let published = published_mcp_tools(&before, &capability.server_id);
+    assert_eq!(published.len(), 3, "G1 is the validated catalog");
+    assert_eq!(
+        before.mcp_servers().get(&capability.server_id),
+        Some(&binding),
+        "the snapshot freezes the binding its generation was validated under"
+    );
+
+    // The reload path with exactly the same binding: the only difference
+    // from the published state is that the refresh cannot validate.
+    let candidate = capability
+        .coordinator
+        .prepare_candidate_with_inputs(reload_inputs(
+            &fixture.runtime,
+            &capability.server_id,
+            binding.clone(),
+        ))
+        .await
+        .expect("an unreachable optional MCP source never fails preparation");
+    capability
+        .coordinator
+        .commit(candidate)
+        .expect("the carried-forward candidate commits");
+    wait_for_journal_entry(&control, &format!("{}2", recovery::JOURNAL_REFUSED_PREFIX));
+
+    let after = capability.coordinator.current_snapshot();
+    assert_eq!(
+        published_mcp_tools(&after, &capability.server_id),
+        published,
+        "an unchanged binding may carry its last-known-good catalog forward verbatim"
+    );
+    assert_eq!(
+        after.mcp_servers().get(&capability.server_id),
+        Some(&binding),
+        "the published binding is unchanged, which is what makes the carry-forward \
+         internally coherent"
+    );
+    assert!(
+        matches!(
+            capability.coordinator.availability().get(
+                &rustx::capabilities::CapabilitySourceId::Mcp(capability.server_id.clone())
+            ),
+            Some(rustx::capabilities::CapabilitySourceState::Unavailable { .. })
+        ),
+        "availability and capability knowledge stay separate facts"
+    );
+    // The retained generation's own live transport still serves calls.
+    let result = direct_mcp_call(&fixture, &after, recovery::TOOL_ECHO).await;
+    assert!(
+        matches!(result.status, ToolExecutionStatus::Success),
+        "the carried-forward executor is still usable: {:?}",
+        result.status
+    );
+    assert!(
+        result
+            .model_facing_projection()
+            .as_text()
+            .contains("generation 1"),
+        "the carried-forward executor talks to the generation the published binding \
+         negotiated"
+    );
+    drop(capability);
+}
+
+/// Issue #205 review finding 2, direction B: when the configured binding
+/// **changes** and the replacement cannot validate, the previous binding's
+/// executors are never published under the new binding's authority.
+///
+/// # The split-brain this forbids
+///
+/// ```text
+/// published:   S -> B2      (authoritative capability metadata)
+/// executor:    S -> connection negotiated from B1
+/// ```
+///
+/// A server id alone is not sufficient identity for the last-known-good
+/// fallback: the carried-forward registrations carry their executors, and
+/// those executors dispatch through the connection the *published* binding
+/// established. Reusing them under a different program, argument,
+/// environment, cwd, endpoint, header, or policy would publish metadata that
+/// disagrees with the transport that actually runs the call.
+///
+/// # Synchronization proof
+///
+/// B1 and B2 differ in an execution-relevant, **server-provable** field: the
+/// stdio environment names a different journal file, so which binding
+/// spawned a process is a fact the child process itself writes. B2's first
+/// generation refuses to handshake, so its refresh deterministically fails,
+/// and the parent waits for B2's own `refused:` line before asserting. B1's
+/// journal is then checked to have gained nothing — the old binding was
+/// never reused to satisfy the new one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_changed_binding_never_publishes_the_previous_bindings_executors() {
+    if recovery::serve_if_recovery_fixture_mode().await {
+        return;
+    }
+    let test_name = "boundary_suites::mcp_recovery::a_changed_binding_never_publishes_the_previous_bindings_executors";
+    let fixture = common::native_fixture();
+    let first = recovery::RecoveryControl::new(&fixture.dir().path().join("b1"));
+    let script = recovery::RecoveryScript::default();
+    let capability = recovery_capability(&fixture.runtime, test_name, &first, &script).await;
+    let before = capability.coordinator.current_snapshot();
+    let published = published_mcp_tools(&before, &capability.server_id);
+    assert_eq!(published.len(), 3, "B1/G1 is the authoritative generation");
+    let b1_generations = first.established_generations();
+    assert_eq!(b1_generations, 1);
+
+    // B2: the same executable, a different execution-relevant environment
+    // (its own journal, and a first generation that refuses to handshake),
+    // so the replacement provably cannot validate.
+    let second = recovery::RecoveryControl::new(&fixture.dir().path().join("b2"));
+    let b2_script = recovery::RecoveryScript {
+        refuse_generations: vec![1],
+        ..recovery::RecoveryScript::default()
+    };
+    let b2 = recovery_binding(test_name, &second, &b2_script);
+    assert_ne!(
+        before.mcp_servers().get(&capability.server_id),
+        Some(&b2),
+        "the test really does change the binding"
+    );
+
+    let candidate = capability
+        .coordinator
+        .prepare_candidate_with_inputs(reload_inputs(
+            &fixture.runtime,
+            &capability.server_id,
+            b2.clone(),
+        ))
+        .await
+        .expect("an unreachable optional MCP source never fails preparation");
+    capability
+        .coordinator
+        .commit(candidate)
+        .expect("the replacement candidate commits");
+    wait_for_journal_entry(&second, &format!("{}1", recovery::JOURNAL_REFUSED_PREFIX));
+
+    let after = capability.coordinator.current_snapshot();
+    assert_eq!(
+        after.mcp_servers().get(&capability.server_id),
+        Some(&b2),
+        "the published binding is the configured desired state"
+    );
+    assert!(
+        published_mcp_tools(&after, &capability.server_id).is_empty(),
+        "no executor of B1 is published under B2's authority: {:?}",
+        published_mcp_tools(&after, &capability.server_id)
+    );
+    assert!(
+        matches!(
+            capability.coordinator.availability().get(
+                &rustx::capabilities::CapabilitySourceId::Mcp(capability.server_id.clone())
+            ),
+            Some(rustx::capabilities::CapabilitySourceState::Unavailable { .. })
+        ),
+        "B2 is reported unavailable rather than silently satisfied by B1"
+    );
+    assert_eq!(
+        first.established_generations(),
+        b1_generations,
+        "B1 spawned nothing to serve B2: its journal is untouched"
+    );
+    assert_eq!(
+        first.accepted_calls(recovery::TOOL_ECHO),
+        0,
+        "no call was routed to B1 under B2's authority"
+    );
+    drop(capability);
+}
+
+/// Issue #205 review finding 2, policy direction: `policy` is part of
+/// `McpServerBinding` and part of execution semantics — invocation,
+/// concurrency, and approval policy all reach the published
+/// `ToolDefinition` — so a policy-only change is a binding change, and a
+/// failed refresh of it may not carry the previous generation forward
+/// either.
+///
+/// Synchronization proof: the transport is byte-for-byte identical, so the
+/// refresh spawns generation 2 of the same fixture identity, which the
+/// script makes refuse; the parent waits for that server-written `refused:`
+/// line before asserting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_policy_only_binding_change_also_forfeits_carry_forward() {
+    if recovery::serve_if_recovery_fixture_mode().await {
+        return;
+    }
+    let test_name =
+        "boundary_suites::mcp_recovery::a_policy_only_binding_change_also_forfeits_carry_forward";
+    let fixture = common::native_fixture();
+    let control = recovery::RecoveryControl::new(fixture.dir().path());
+    let script = recovery::RecoveryScript {
+        refuse_generations: vec![2],
+        ..recovery::RecoveryScript::default()
+    };
+    let capability = recovery_capability(&fixture.runtime, test_name, &control, &script).await;
+    let before = capability.coordinator.current_snapshot();
+    assert_eq!(published_mcp_tools(&before, &capability.server_id).len(), 3);
+
+    let mut b2 = recovery_binding(test_name, &control, &script);
+    b2.policy.approval = rustx::tools::types::ToolApprovalPolicy::Always;
+    assert_ne!(
+        before.mcp_servers().get(&capability.server_id),
+        Some(&b2),
+        "an approval-policy change is a binding change"
+    );
+
+    let candidate = capability
+        .coordinator
+        .prepare_candidate_with_inputs(reload_inputs(
+            &fixture.runtime,
+            &capability.server_id,
+            b2.clone(),
+        ))
+        .await
+        .expect("an unreachable optional MCP source never fails preparation");
+    capability
+        .coordinator
+        .commit(candidate)
+        .expect("the replacement candidate commits");
+    wait_for_journal_entry(&control, &format!("{}2", recovery::JOURNAL_REFUSED_PREFIX));
+
+    let after = capability.coordinator.current_snapshot();
+    assert_eq!(after.mcp_servers().get(&capability.server_id), Some(&b2));
+    assert!(
+        published_mcp_tools(&after, &capability.server_id).is_empty(),
+        "tools validated under the previous policy are never republished under a \
+         different one: {:?}",
+        published_mcp_tools(&after, &capability.server_id)
+    );
+    drop(capability);
+}
+
+// ---------------------------------------------------------------------------
+// Progress liveness at concurrency above the old router bound
+// ---------------------------------------------------------------------------
+
+/// How many MCP calls the progress-concurrency regression runs at once.
+///
+/// It is deliberately larger than the router's previous global 16-token
+/// cache: at this concurrency that cache was full of live subscriptions, and
+/// the progress notification of a call that had not subscribed yet was
+/// discarded rather than displacing one — erasing the only liveness evidence
+/// that call would ever produce.
+const PROGRESS_CONCURRENCY: usize = 20;
+
+/// Issue #205 review finding 3: at a concurrency above the router's previous
+/// bound, every admitted in-flight MCP call's genuine remote progress still
+/// reaches the generic idle-liveness watchdog, so no call suffers a **false**
+/// idle timeout.
+///
+/// # Synchronization proof
+///
+/// - all [`PROGRESS_CONCURRENCY`] calls are one parallel batch of a single
+///   model turn, so they are in flight simultaneously by construction, not
+///   by timing;
+/// - `wait_accepted` proves every call reached the server, and every call
+///   emitted its dispatch progress notification there;
+/// - `wait_progress_at_least` counts *forwarded* progress reports. The
+///   progress fanout refreshes the idle watchdog **before** it calls the
+///   observer, so observing the Nth report is a happens-after of the Nth
+///   idle refresh: the clock advance below can never race an unpublished
+///   refresh;
+/// - each advance happens only after the previous round of refreshes was
+///   observed. The released pulse moves every window to 900..1900, so
+///   crossing t=1100 is the discriminator: a call whose progress had been
+///   dropped would still hold the window 0..1000 and would fire an idle
+///   deadline there.
+///
+/// ```text
+/// t=0     20 dispatch notifications   -> every idle window 0..1000
+/// t=900   (advance)                   -> no window has expired
+/// t=900   20 released pulses          -> every idle window 900..1900
+/// t=1100  (advance)                   -> a dropped-progress call fires Idle here
+/// t=1800  (advance)                   -> the immutable hard deadline bounds every call
+/// ```
+///
+/// The 1800ms hard deadline fires while the refreshed idle window is still
+/// open, so each call settles as exactly one `OutcomeUnknown` bounded by the
+/// hard deadline and never by a false idle timeout.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_mcp_progress_refreshes_every_idle_watchdog_above_the_old_router_bound() {
+    let fixture = common::native_fixture();
+    let server =
+        streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
+    // The batch must actually run in parallel, so the binding's own
+    // concurrency policy — an execution-relevant field of the binding — says
+    // so for every tool of this server.
+    let mut binding = server.binding();
+    binding.policy.concurrency = rustx::tools::types::ToolConcurrencyPolicy::Parallel;
+    let capability = http_capability(
+        &fixture.runtime,
+        &McpServerId::new("http-progress"),
+        binding,
+    )
+    .await;
+    let lease = capability.coordinator.acquire_attempt_lease();
+    let control = server.control.clone();
+    let concurrency = u32::try_from(PROGRESS_CONCURRENCY).expect("small concurrency");
+    let audit = run_parallel_mcp_calls(
+        &fixture,
+        lease,
+        "http-progress",
+        streamable_http::TOOL_PULSE,
+        PROGRESS_CONCURRENCY,
+        ToolExecutionDeadlinePolicy {
+            hard_deadline: Duration::from_millis(1800),
+            idle_liveness: Some(Duration::from_secs(1)),
+        },
+        move |mut controls| async move {
+            controls.wait_started().await;
+            // Every call reached the server and emitted its dispatch
+            // notification there.
+            control.wait_accepted(concurrency).await;
+            // Every dispatch notification was forwarded, so every call's
+            // idle window was refreshed at t=0.
+            controls.wait_progress_at_least(concurrency).await;
+            // 900 < 1000: every window survives this advance.
+            controls.clock.advance(900);
+            control.release();
+            control.wait_pulsed(concurrency).await;
+            // Every released pulse was forwarded, so every window is now
+            // 900..1900.
+            controls.wait_progress_at_least(concurrency * 2).await;
+            // t = 1100: a call whose pulse had been discarded would still
+            // hold the window 0..1000 and would fire an idle deadline here.
+            controls.clock.advance(200);
+            // t = 1800: the immutable hard deadline, still inside every
+            // refreshed idle window.
+            controls.clock.advance(700);
+        },
+    )
+    .await;
+
+    let facts = execution_facts(&audit);
+    let idle_deadlines = facts
+        .iter()
+        .filter(|fact| {
+            matches!(
+                fact,
+                RuntimeEvent::ToolExecutionDeadlineFired {
+                    kind: ToolDeadlineKind::Idle,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(
+        idle_deadlines, 0,
+        "genuine remote progress reached every admitted call's idle watchdog, so no \
+         false idle deadline fires"
+    );
+    assert_eq!(
+        facts
+            .iter()
+            .filter(|fact| matches!(
+                fact,
+                RuntimeEvent::ToolExecutionDeadlineFired {
+                    kind: ToolDeadlineKind::Hard,
+                    ..
+                }
+            ))
+            .count(),
+        PROGRESS_CONCURRENCY,
+        "the immutable hard deadline is what bounds every call"
+    );
+    let results = tool_results(&audit);
+    assert_eq!(
+        results.len(),
+        PROGRESS_CONCURRENCY,
+        "every call settles exactly once, canonically"
+    );
+    for result in &results {
+        assert!(
+            matches!(result.status, ToolExecutionStatus::OutcomeUnknown { .. }),
+            "the hard deadline bounds a call with no correlated remote response: {:?}",
+            result.status
+        );
+    }
+    let progress_facts = audit
+        .event_history
+        .iter()
+        .filter(|event| matches!(event, RuntimeEvent::ToolExecutionProgress { .. }))
+        .count();
+    assert_eq!(
+        progress_facts,
+        PROGRESS_CONCURRENCY * 2,
+        "every remote pulse of every concurrent call was forwarded as durable \
+         liveness evidence; none was discarded and none was fabricated"
+    );
+    drop(capability);
+    server.shutdown().await;
+}
+
+/// Issue #205 review finding 1, drain direction: the per-request local HTTP
+/// control primitives this contract introduces are owned by connection
+/// close, so none of them can survive a drain.
+///
+/// # Synchronization proof
+///
+/// The call and the close run as two arms of one `join!`, so no task is
+/// detached and no ordering is guessed. `wait_accepted` gates the close on
+/// the server having entered its handler — the request is provably in flight
+/// and its response headers are provably still outstanding, because
+/// [`streamable_http::TOOL_WITHHOLD`] emits nothing. `wait_terminated` is the
+/// server-side proof that the close actually terminated rustX's in-flight
+/// HTTP request rather than abandoning it, and `close` returning `Ok` is the
+/// runtime's own physical settlement proof.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn drain_terminates_every_streamable_http_request_the_generation_still_owns() {
+    struct NoProgress;
+    impl rustx::tools::executor::ProgressReporter for NoProgress {
+        fn report(&self, _progress: rustx::tools::types::ToolProgress) {}
+    }
+
+    let fixture = common::native_fixture();
+    let server =
+        streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
+    // A directly connected runtime: its connection is *fixed*, so this test
+    // owns the runtime and closes it itself — exactly the drain boundary
+    // under test, with no capability generation in the way.
+    let runtime = rustx::tools::mcp::McpServerRuntime::connect(
+        &McpServerId::new("http-drain"),
+        &server.binding(),
+        fixture.runtime.workspace(),
+        Arc::new(rustx::tools::mcp::McpInvalidationState::new()),
+    )
+    .await
+    .expect("HTTP MCP connect");
+    let executor = rustx::tools::mcp::McpToolExecutor::new(
+        Arc::clone(&runtime),
+        streamable_http::TOOL_WITHHOLD.to_owned(),
+    );
+    let progress = NoProgress;
+    let context = rustx::tools::executor::ToolExecutionContext::new(
+        fixture.runtime.conversation_id(),
+        None,
+        rustx::runtime::ExecutionCancellation::detached(
+            rustx::runtime::CancellationSignal::new(),
+            CancellationReason::UserRequested,
+        ),
+        fixture.runtime.workspace(),
+        &progress,
+        fixture.runtime.artifacts(),
+        fixture.runtime.tool_output(),
+        fixture.runtime.environment(),
+    );
+    let invocation = rustx::tools::types::ToolInvocation {
+        call_id: rustx::runtime::identity::ToolCallId::new("http-drain-call"),
+        tool_id: rustx::runtime::identity::ToolId::new("http-drain-tool"),
+        tool_name: streamable_http::TOOL_WITHHOLD.to_owned(),
+        mode: rustx::tools::types::ToolInvocationMode::Foreground,
+        arguments: serde_json::json!({}),
+    };
+
+    let control = server.control.clone();
+    let (result, settlement) = tokio::time::timeout(
+        Duration::from_mins(1),
+        futures_util::future::join(
+            rustx::tools::executor::ToolExecutor::start(&executor, invocation, context).completion,
+            async {
+                control.wait_accepted(1).await;
+                runtime.close().await
+            },
+        ),
+    )
+    .await
+    .expect("anti-hang guard: drain always settles an in-flight HTTP request");
+
+    settlement.expect("the connection proves physical settlement");
+    assert!(
+        !matches!(result.status, ToolExecutionStatus::Success),
+        "a request drained mid-flight never produces a successful remote result: {:?}",
+        result.status
+    );
+    // The server-side proof: the in-flight HTTP request was terminated by
+    // drain, not left running past it.
+    tokio::time::timeout(Duration::from_secs(30), server.control.wait_terminated(1))
+        .await
+        .expect("anti-hang guard: drain terminates the owned HTTP request");
+    assert_eq!(server.control.accepted_calls(), 1);
+    server.shutdown().await;
 }

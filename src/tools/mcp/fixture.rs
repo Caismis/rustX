@@ -22,6 +22,14 @@
 pub mod legacy;
 pub mod raw;
 pub mod recovery;
+/// The in-process Streamable HTTP fixture.
+///
+/// It is `cfg(test)` rather than merely feature-gated because it serves over
+/// `axum`, which is a development dependency: the only consumer is the
+/// in-crate boundary conformance suite, which compiles into the lib test
+/// binary alongside it.
+#[cfg(test)]
+pub mod streamable_http;
 
 use std::borrow::Cow;
 use std::io::Write;
