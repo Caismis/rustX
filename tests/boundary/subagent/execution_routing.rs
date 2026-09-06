@@ -2709,3 +2709,144 @@ async fn the_workflow_restriction_leaves_normal_subagent_steering_intact() {
         "the sibling Workflow child is refused by ownership, in the same registry"
     );
 }
+
+/// **A dropped `execution(steer)` tool invocation disposes its steer ticket**
+/// (Issue #193 architecture review blocker 2 at the Issue #204 lifecycle
+/// boundary).
+///
+/// The production path for a dropped [`SubagentRegistry::steer`] future is
+/// not an artificial direct call: the steer operation runs inside the
+/// `execution` intrinsic's Issue #204 `ToolExecutionHandle`, whose
+/// completion and settlement planes share one operation slot. When the
+/// surrounding tool invocation is cancelled, times out, or is torn down,
+/// those futures are dropped while the steer is parked on the child's
+/// durable answer — which drops the shared operation mid-await. This test
+/// proves the ticket ownership is cancellation-safe across exactly that
+/// boundary:
+///
+/// 1. the `execution(steer)` invocation starts and its steer is admitted —
+///    the child side proves it by reading the `Guidance` envelope off the
+///    real control socket, and the ticket is armed;
+/// 2. the tool handle's futures (the Issue #204 shared-ownership planes)
+///    are dropped while the steer is parked — the operation future drops
+///    mid-await, exactly the Issue #204 guard/abandonment path;
+/// 3. the registry ticket is removed — direct authoritative observation;
+/// 4. the child lifecycle is still `Running`, no cancellation was
+///    synthesized, and a later `execution(steer)` on the same child works
+///    normally.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)] // one coherent tool-lifecycle boundary proof
+async fn dropping_an_execution_steer_tool_invocation_cleans_its_ticket() {
+    use rustx::tools::executor::{PreflightOutcome, ToolExecutionContext};
+    use rustx::tools::types::ToolCall;
+
+    let plane = subagent_plane();
+    let mut child = stage_exit0(&plane);
+    let accepted_child = start_subagent(&plane, "survey").await;
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    let id = accepted_child.subagent_id.clone();
+    child.take_delegation().await;
+
+    // Start one `execution(steer)` invocation through the real preflight
+    // path and keep its Issue #204 handle instead of awaiting it.
+    let definition = fixture
+        .registry
+        .definitions()
+        .into_iter()
+        .find(|definition| definition.name == "execution")
+        .expect("execution registered");
+    let call = ToolCall {
+        id: rustx::runtime::identity::ToolCallId::new("call-162-execution-steer-drop"),
+        tool_id: definition.id,
+        name: "execution".to_owned(),
+        arguments: serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": id.to_string()},
+            "message": "dropped with the tool invocation",
+        }),
+    };
+    let PreflightOutcome::Ready(prepared) = fixture.registry.preflight(&call).expect("preflight")
+    else {
+        panic!("execution steers preflight as ready");
+    };
+    let executor = fixture.registry.executor(&prepared.invocation.tool_id);
+    let reporter = common::NoopProgress;
+    let context = ToolExecutionContext::new(
+        fixture.runtime.conversation_id(),
+        None,
+        rustx::runtime::ExecutionCancellation::detached(
+            CancellationSignal::new(),
+            rustx::runtime::types::CancellationReason::UserRequested,
+        ),
+        fixture.runtime.workspace(),
+        &reporter,
+        fixture.runtime.artifacts(),
+        fixture.runtime.tool_output(),
+        fixture.runtime.environment(),
+    );
+    let handle = executor.start(prepared.invocation, context);
+    let mut completion = handle.completion;
+    drop(handle.settlement);
+
+    // (1) Drive the completion plane exactly once: the steer operation runs
+    // through admission and parks on the child's durable answer. The child
+    // side proves admission by reading the `Guidance` envelope (the ticket
+    // is armed strictly before the driver writes the frame).
+    let () = std::future::poll_fn(|cx| {
+        assert!(
+            completion.as_mut().poll(cx).is_pending(),
+            "the tool completion cannot settle while the child withholds its answer"
+        );
+        std::task::Poll::Ready(())
+    })
+    .await;
+    let crate::runtime::subagent::ipc::ParentFrame::Guidance(_) = child.read_frame().await else {
+        panic!("the execution steer routes exactly one guidance envelope");
+    };
+    assert_eq!(
+        plane.registry.outstanding_guidance_tickets(&id),
+        1,
+        "the tool-lifecycle steer holds exactly its own ticket"
+    );
+
+    // (2) The Issue #204 abandonment path: the tool invocation's futures
+    // are dropped while the steer is parked. The completion future is the
+    // only remaining owner of the shared operation slot (the settlement
+    // plane was dropped above), so dropping it drops the steer operation
+    // future mid-await — exactly the Issue #204 guard/abandonment drop.
+    drop(completion);
+
+    // (3)+(4): the ticket is gone (direct authoritative observation), the
+    // child lifecycle is untouched, and steering still works normally.
+    assert_eq!(
+        plane.registry.outstanding_guidance_tickets(&id),
+        0,
+        "dropping the tool futures cleans the steer ticket"
+    );
+    assert_eq!(
+        plane.registry.snapshot(&id).expect("record").state,
+        SubagentState::Running,
+        "the dropped tool invocation synthesizes no cancellation"
+    );
+
+    let child_side = tokio::spawn(async move {
+        let message = child.answer_guidance(accepted()).await;
+        (child, message)
+    });
+    let steered = run_execution(
+        &fixture,
+        serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": id.to_string()},
+            "message": "after the dropped invocation",
+        }),
+    )
+    .await;
+    let (_child, delivered) = child_side.await.expect("child side");
+    assert_eq!(
+        json_content(&steered)["accepted"],
+        serde_json::json!(true),
+        "a later steer through the same tool lifecycle is accepted normally"
+    );
+    assert_eq!(delivered, "after the dropped invocation");
+}

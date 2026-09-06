@@ -556,6 +556,17 @@ pub struct ConversationInboundMailbox {
     /// production entirely.
     #[cfg(test)]
     pending_probe_faults: Arc<std::sync::atomic::AtomicUsize>,
+    /// Test-only invocation counter of the same pending probe (Issue #193).
+    ///
+    /// [`ConversationInboundMailbox::has_pending`] is called by exactly one
+    /// production path — the child terminal seal's positive-emptiness
+    /// proof — so a Workflow-isolation regression can prove *directly* that
+    /// the steering-specific seal machinery was never consulted by
+    /// asserting this counter stayed at zero, instead of inferring
+    /// non-invocation from the absence of an observed failure. Compiled out
+    /// of production entirely.
+    #[cfg(test)]
+    pending_probe_calls: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl ConversationInboundMailbox {
@@ -609,6 +620,8 @@ impl ConversationInboundMailbox {
             wake: Arc::new(tokio::sync::Notify::new()),
             #[cfg(test)]
             pending_probe_faults: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            #[cfg(test)]
+            pending_probe_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -1148,6 +1161,11 @@ impl ConversationInboundMailbox {
     /// Returns [`MailboxError::Durable`] on a durable read failure.
     pub fn has_pending(&self) -> Result<bool, MailboxError> {
         #[cfg(test)]
+        {
+            self.pending_probe_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        #[cfg(test)]
         if self
             .pending_probe_faults
             .fetch_update(
@@ -1172,6 +1190,14 @@ impl ConversationInboundMailbox {
     pub(crate) fn arm_pending_probe_failures(&self, count: usize) {
         self.pending_probe_faults
             .fetch_add(count, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// How many times [`ConversationInboundMailbox::has_pending`] has been
+    /// invoked on this mailbox (test-only, Issue #193).
+    #[cfg(test)]
+    pub(crate) fn pending_probe_calls(&self) -> usize {
+        self.pending_probe_calls
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Atomically adopts the selected batch into the durable canonical

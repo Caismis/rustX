@@ -506,11 +506,11 @@ pub(crate) async fn serve_child_delegation(
     //
     // # The terminal seal (Issue #193)
     //
-    // A completed attempt is not by itself the child's terminal: guidance
-    // the parent steered in may have been durably accepted after this
-    // attempt's last safe boundary, and the ordinary coordinator then
-    // admits the turn that observes it. The child therefore asks its own
-    // conversation — under the one coordinator lock that owns durable
+    // A completed attempt is not by itself the terminal of a **steerable**
+    // child: guidance the parent steered in may have been durably accepted
+    // after this attempt's last safe boundary, and the ordinary coordinator
+    // then admits the turn that observes it. Such a child therefore asks its
+    // own conversation — under the one coordinator lock that owns durable
     // inbound acceptance — whether it may seal. `Open` means semantic work
     // is still owed and exactly one further ordinary attempt terminal
     // follows; `Sealed` means no accepted guidance remains unobserved and
@@ -522,6 +522,21 @@ pub(crate) async fn serve_child_delegation(
     // process incarnation, the same registry record, and still exactly one
     // parent-side terminal settlement: the loop only refuses to report a
     // result that could not have observed an already-accepted steer.
+    //
+    // # Workflow-owned children never enter the seal
+    //
+    // The seal is steering-specific terminal machinery. A Workflow-owned
+    // `AgentRun` (`workflow_output` latch present) is structurally not
+    // steerable — `SubagentRegistry::steer` refuses it from the ownership
+    // fact alone, before any `Guidance` frame exists — so no accepted
+    // generic guidance can ever be pending in its conversation, and the
+    // steering-specific seal must have **no semantic effect** on its
+    // lifecycle or terminal result. Its natural completion is therefore its
+    // terminal: the loop breaks on the first `Completed` without consulting
+    // the seal, so a seal durable-probe failure can never convert a valid
+    // Workflow output settlement into a failure. The one committed
+    // `workflow_output` value remains the exactly-once terminal settlement
+    // through the ordinary Workflow output path below.
     let mut observed_terminals: u64 = 0;
     let terminal = loop {
         let terminal = await_terminal(
@@ -533,11 +548,13 @@ pub(crate) async fn serve_child_delegation(
         )
         .await?;
         observed_terminals = observed_terminals.saturating_add(1);
-        // Only a completed attempt can be extended by accepted guidance. A
-        // cancelled, failed, or orphaned child settles immediately: a
+        // A cancelled, failed, or orphaned child settles immediately: a
         // cancellation intent supersedes every pending semantic input, and
-        // an orphaned child has no parent left to report to.
-        if !matches!(terminal, AttemptTerminal::Completed) {
+        // an orphaned child has no parent left to report to. A
+        // Workflow-owned child settles on its first natural completion too:
+        // it never participates in the generic parent-guidance terminal
+        // protocol (see above).
+        if !matches!(terminal, AttemptTerminal::Completed) || workflow_output.is_some() {
             break terminal;
         }
         match runtime.seal_parent_guidance(observed_terminals).await {
@@ -1145,6 +1162,32 @@ mod tests {
         conversation_id: ConversationId,
         model: Arc<FakeModel>,
     ) -> ConversationRuntime {
+        child_test_runtime_full(
+            dir,
+            start_pause,
+            admission_gate,
+            parent_guidance_seal_gate,
+            None,
+            conversation_id,
+            model,
+        )
+        .await
+    }
+
+    /// The full child-runtime fixture: the seal-gate build above plus an
+    /// optional Workflow-output latch, so a Workflow-owned `AgentRun` child
+    /// (terminal mode `WorkflowOutput`) can be composed exactly like
+    /// production (`SubagentChildCore::workflow_output`).
+    #[allow(clippy::too_many_arguments)] // one composition fixture
+    async fn child_test_runtime_full(
+        dir: &tempfile::TempDir,
+        start_pause: Option<StartBoundaryPause>,
+        admission_gate: Option<Arc<Gate>>,
+        parent_guidance_seal_gate: Option<Arc<Gate>>,
+        workflow_output: Option<Arc<crate::runtime::workflow::WorkflowOutputLatch>>,
+        conversation_id: ConversationId,
+        model: Arc<FakeModel>,
+    ) -> ConversationRuntime {
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let tool_runtime = ConversationToolRuntime::new(
@@ -1199,7 +1242,9 @@ mod tests {
                 clock: None,
                 initial_messages: Vec::new(),
                 subagents: None,
-                workflow_output: None,
+                workflow_output: workflow_output.clone().map(
+                    |latch| -> Arc<dyn crate::runtime::workflow::WorkflowOutputTerminal> { latch },
+                ),
             },
             CoordinatorProbe {
                 start_boundary_pause: start_pause,
@@ -1698,6 +1743,16 @@ mod tests {
     }
 
     fn serve_child(runtime: &ConversationRuntime) -> SealFixture {
+        serve_child_with_output(runtime, None)
+    }
+
+    /// The full [`serve_child`] fixture: also hands the child driver the
+    /// optional Workflow-output latch it would own in production for a
+    /// Workflow `AgentRun` child (`SubagentChildCore::workflow_output`).
+    fn serve_child_with_output(
+        runtime: &ConversationRuntime,
+        workflow_output: Option<Arc<crate::runtime::workflow::WorkflowOutputLatch>>,
+    ) -> SealFixture {
         let (parent, child_end) = tokio::net::UnixStream::pair().expect("control pair");
         let (_observation_parent, observation_child) =
             tokio::net::UnixStream::pair().expect("observation pair");
@@ -1716,7 +1771,7 @@ mod tests {
                 AgentId::new("agent-parent"),
                 child_runtime,
                 observations,
-                None,
+                workflow_output,
             )
             .await;
             dispatcher.shutdown().await;
@@ -2162,5 +2217,179 @@ mod tests {
             "the refusal names the committed cancellation intent: {refused:?}"
         );
         runtime.shutdown().await.expect("child runtime drains");
+    }
+
+    // -----------------------------------------------------------------
+    // Workflow-owned children are isolated from the generic-steering
+    // terminal machinery (Issue #193 architecture review blocker 1)
+    // -----------------------------------------------------------------
+
+    /// Scripts the one model turn of a Workflow `AgentRun` child: a single
+    /// reserved `workflow_output(value)` tool-shaped call (never an
+    /// ordinary Tool Plane call) whose arguments satisfy the frozen output
+    /// schema, which is what commits the terminal value and completes the
+    /// attempt.
+    fn workflow_output_answer(value: serde_json::Value) -> Vec<FakeStep> {
+        vec![
+            FakeStep::Emit(crate::model::event::ModelEvent::Started),
+            FakeStep::Emit(crate::model::event::ModelEvent::ToolCallStarted {
+                block_index: crate::message::types::ContentBlockIndex::new(0),
+                call: crate::tools::types::ToolCallStart {
+                    id: crate::runtime::identity::ToolCallId::new("call-workflow-output"),
+                    tool_id: crate::runtime::identity::ToolId::new("runtime-workflow-output"),
+                    name: crate::runtime::workflow::WORKFLOW_OUTPUT_TOOL_NAME.to_owned(),
+                },
+            }),
+            FakeStep::Emit(crate::model::event::ModelEvent::ToolCallCompleted {
+                block_index: crate::message::types::ContentBlockIndex::new(0),
+                call: crate::tools::types::ToolCall {
+                    id: crate::runtime::identity::ToolCallId::new("call-workflow-output"),
+                    tool_id: crate::runtime::identity::ToolId::new("runtime-workflow-output"),
+                    name: crate::runtime::workflow::WORKFLOW_OUTPUT_TOOL_NAME.to_owned(),
+                    arguments: value,
+                },
+            }),
+            FakeStep::Emit(crate::model::event::ModelEvent::Completed {
+                finish_reason: crate::model::finish::ModelFinishReason::ToolCalls,
+                usage: None,
+            }),
+        ]
+    }
+
+    /// **Workflow-owned children never enter the parent-guidance terminal
+    /// seal** (Issue #193 architecture review blocker 1).
+    ///
+    /// A Workflow `AgentRun` is structurally not steerable — the generic
+    /// control plane refuses it from the ownership fact alone, before any
+    /// `Guidance` frame exists — so the steering-specific seal must have no
+    /// semantic effect on its lifecycle or terminal result. This test arms
+    /// the seal's durable pending-inbox probe to fail **if it is invoked**
+    /// and then proves, in order:
+    ///
+    /// 1. the Workflow child starts and commits a valid `workflow_output`;
+    /// 2. the parent-guidance seal probe is never invoked — the counter is
+    ///    the direct non-invocation proof, not an inference from the absence
+    ///    of an observed failure (the very probe that would fail closed if
+    ///    the seal were consulted);
+    /// 3. the Workflow attempt completes naturally and still settles through
+    ///    its ordinary successful Workflow output contract — `Succeeded`
+    ///    carrying the committed value — never a `Failed` terminal derived
+    ///    from a steering-only durability probe;
+    /// 4. exactly one terminal frame is written;
+    /// 5. no Guidance frame or steer content ever entered the child
+    ///    conversation: the canonical ledger holds only the delegated task,
+    ///    and exactly one model turn ran.
+    ///
+    /// The isolation is decided from the child's frozen terminal mode (the
+    /// `workflow_output` latch), i.e. explicit ownership, never incidental
+    /// timing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_workflow_owned_child_never_consults_the_parent_guidance_seal() {
+        let dir = tempfile::tempdir().expect("temp root");
+        let committed = serde_json::json!({ "summary": "the workflow node answer" });
+        let model = Arc::new(FakeModel::new(vec![workflow_output_answer(
+            committed.clone(),
+        )]));
+        let latch = Arc::new(
+            crate::runtime::workflow::WorkflowOutputLatch::new(serde_json::json!({
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "required": ["summary"],
+                "additionalProperties": false
+            }))
+            .expect("the frozen Workflow output schema compiles"),
+        );
+        let runtime = child_test_runtime_full(
+            &dir,
+            None,
+            None,
+            None,
+            Some(Arc::clone(&latch)),
+            ConversationId::new("conv-child-workflow-isolated"),
+            model.clone(),
+        )
+        .await;
+        let mut fixture = serve_child_with_output(&runtime, Some(Arc::clone(&latch)));
+
+        // If the steering-specific seal machinery were consulted after the
+        // natural Workflow completion, this armed durable-probe fault would
+        // make it fail closed and convert the valid Workflow success into a
+        // `Failed` terminal. The fix must keep the probe at zero invocations.
+        runtime.arm_seal_probe_failures(1);
+
+        delegate(&mut fixture.parent, "produce the node output").await;
+
+        // (1)+(3)+(4): the Workflow child settles through its normal
+        // successful Workflow output contract, exactly once.
+        let result = read_result(&mut fixture.parent).await;
+        assert_eq!(
+            result.status,
+            ChildResultStatus::Succeeded,
+            "a valid Workflow output completion settles Succeeded"
+        );
+        assert_eq!(
+            result.content.as_deref(),
+            Some(
+                serde_json::to_string(&committed)
+                    .expect("serializable")
+                    .as_str()
+            ),
+            "the reported answer is the committed workflow_output value"
+        );
+        assert_eq!(
+            result.diagnostic, None,
+            "no steering-only durability diagnostic can touch a Workflow child"
+        );
+        assert_eq!(
+            latch.committed_value(),
+            Some(committed),
+            "the latch holds the committed Workflow value"
+        );
+
+        // (2): the steering-specific seal probe was never semantically
+        // consulted — proven directly by the invocation counter.
+        assert_eq!(
+            runtime.seal_probe_calls(),
+            0,
+            "a Workflow-owned child never enters the parent-guidance seal \
+             protocol, so its durable probe is never consulted"
+        );
+        // The armed fault is therefore still armed (never consumed), which
+        // is the counterfactual the isolation protects against.
+        assert_eq!(
+            runtime.durability_failure(),
+            None,
+            "no durability-failure fact was committed by any steering-only probe"
+        );
+
+        // (4): exactly one terminal frame — the wire closes right after it.
+        let after = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            crate::runtime::subagent::ipc::read_child_frame(&mut fixture.parent),
+        )
+        .await
+        .expect("wire close liveness")
+        .expect("child frame");
+        assert_eq!(after, None, "exactly one terminal result frame is written");
+        fixture
+            .serve
+            .await
+            .expect("serve task")
+            .expect("serve loop");
+
+        // (5): no Guidance frame or steer content is involved — the child
+        // conversation adopted exactly the delegated task, and one model
+        // turn produced the output.
+        assert_eq!(
+            model.requests().len(),
+            1,
+            "the Workflow AgentRun ran exactly its own model turn"
+        );
+        assert_eq!(
+            adopted_guidance(&runtime),
+            vec!["produce the node output".to_owned()],
+            "the Workflow child's conversation contains only the delegated \
+             task — no Guidance frame or generic steer content ever entered it"
+        );
     }
 }

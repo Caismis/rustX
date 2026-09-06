@@ -105,7 +105,11 @@ pub(crate) struct ExecutionFixture {
     /// declaration order, so the runtime drops before the directory.
     _dir: tempfile::TempDir,
     pub(crate) runtime: rustx::tools::runtime::ConversationToolRuntime,
-    registry: ToolRegistry,
+    /// The registry that registers exactly the `execution` intrinsic.
+    /// Exposed to the boundary suites so a test can drive the raw Issue
+    /// #204 `ToolExecutionHandle` (start/cancel/drop) instead of only
+    /// awaiting the completion plane.
+    pub(crate) registry: ToolRegistry,
 }
 
 pub(crate) fn execution_fixture(subagents: Option<SubagentRegistry>) -> ExecutionFixture {

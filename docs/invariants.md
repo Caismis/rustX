@@ -1838,7 +1838,26 @@ side.
   section that commits `Running -> Cancelling`, and the steer is reported
   accepted only if it can remove its own ticket when it commits — which
   happens strictly after the child answered. That single mutex therefore
-  totally orders admission, cancellation-intent commit, and steer commit.
+  totally orders admission, cancellation-intent commit, steer commit, and
+  terminal-authority commit.
+- **Every steer ticket has one owner and exactly one terminal disposition.**
+  Admission returns a small RAII guard (`GuidanceTicket`) that owns the
+  ticket for exactly as long as the steer future lives, and the ticket is
+  removed by exactly one of four disposals, all under the same registry
+  mutex in a short in-memory section with no async work: the steer's own
+  commit; the guard's `Drop`, when the steer future is abandoned before it
+  commits (the production path is a dropped or cancelled `execution(steer)`
+  tool invocation whose Issue #204 lifecycle tears the operation down
+  mid-await); the cancellation linearization point, which clears every
+  ticket; and the terminal-authority commit, which clears every remaining
+  ticket. An abandoned caller therefore never leaves arbitration state
+  behind, ticket state is bounded by the number of live steer callers rather
+  than by any claim about a child lifetime, and a terminal subagent record
+  never retains live steering arbitration state. The guard holds only the
+  shared registry state — never a driver, deadline, mailbox, or process
+  handle — and its `Drop` removes exactly its own ticket; it never changes a
+  lifecycle, never synthesizes a cancellation, and never duplicates the
+  cancellation or terminal authority.
 - **Cancellation always wins the race.** Any cancellation intent that commits
   before a steer's commit — and therefore any cancellation that commits
   before the child's durable acceptance, which strictly precedes that commit
@@ -1869,8 +1888,15 @@ side.
   after the seal is necessarily refused. The parent's terminal authority is
   strictly downstream of that seal, because the terminal candidate is built
   from the child's `Result` frame and the child sends it only after sealing.
-  A **naturally completing** child therefore cannot publish an answer that
-  predates an accepted steer.
+  A **naturally completing** steerable child therefore cannot publish an
+  answer that predates an accepted steer. The seal is steering-specific
+  terminal machinery: only a steerable normal asynchronous subagent child
+  ever consults it. A Workflow-owned `AgentRun` is structurally not
+  steerable (below), so it never enters the seal protocol at all — its
+  natural completion is its terminal through the ordinary Workflow output
+  path, and a seal durable-probe failure can never change a valid Workflow
+  output settlement into a failure. The isolation is decided from the
+  child's frozen terminal mode, never from incidental timing.
 - **Physical loss makes no promise either.** A child that dies, is orphaned,
   or loses its control plane may end with accepted guidance unobserved. The
   contract is stated as what was committed, never as what will be seen.
@@ -1881,10 +1907,16 @@ side.
   that conversation. `SubagentRegistry::steer` refuses it deterministically —
   in the domain authority itself, not only at the model-facing layer, and
   from the ownership fact alone, ahead of every lifecycle branch, so no
-  `Guidance` frame is ever written. Cancel symmetry is not steer symmetry:
-  cancel is lifecycle control the parent runtime owns for every child it
-  supervises, and Workflow cancellation and Workflow output-schema validation
-  are unchanged. Any future Workflow steering belongs on the
+  `Guidance` frame is ever written. Because generic steering is structurally
+  unavailable to a Workflow-owned child, the parent-guidance acceptance and
+  sealing machinery has **no semantic effect** on its lifecycle or terminal
+  result: such a child does not participate in the generic parent-guidance
+  terminal-seal protocol (the seal is a steering-specific terminal
+  verification, and a child that can never accept generic guidance must not
+  gain a new failure surface from it). Cancel symmetry is not steer
+  symmetry: cancel is lifecycle control the parent runtime owns for every
+  child it supervises, and Workflow cancellation and Workflow output-schema
+  validation are unchanged. Any future Workflow steering belongs on the
   `WorkflowRuntime -> AgentRun -> child conversation` path, never as a
   capability inherited from a shared registry implementation.
 - **No resurrection.** `Cancelling -> Running`, `Cancelled -> Running`, and

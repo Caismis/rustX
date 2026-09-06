@@ -4103,6 +4103,20 @@ impl ConversationRuntime {
     /// The seal is absorbing. It is used only by the one-shot subagent child
     /// driver; an ordinary interactive conversation never seals, because its
     /// coordinator simply admits the next attempt.
+    ///
+    /// # Who may seal
+    ///
+    /// Only a **steerable** normal asynchronous subagent child ever consults
+    /// the seal. A Workflow-owned `AgentRun` (terminal mode
+    /// [`crate::runtime::subagent::SubagentTerminalMode::WorkflowOutput`]) is
+    /// structurally not steerable:
+    /// the generic control plane refuses a steer before any `Guidance` frame
+    /// exists, so no accepted guidance can ever be pending in its
+    /// conversation. Its natural completion is therefore its terminal, and
+    /// `serve_child_delegation` never calls this method for it — the
+    /// steering-specific seal can never add a failure surface to Workflow
+    /// execution. The isolation is decided from the child's frozen terminal
+    /// mode (explicit ownership), never from incidental timing.
     pub(crate) async fn seal_parent_guidance(&self, observed_terminals: u64) -> ParentGuidanceSeal {
         // Test-only gate: parked before the coordinator lock, so a competing
         // guidance submission can still take that lock and durably accept
@@ -4176,6 +4190,21 @@ impl ConversationRuntime {
     #[cfg(test)]
     pub(crate) fn durability_failure(&self) -> Option<crate::runtime::types::DurabilityFailure> {
         self.inner.durability_gate.failure()
+    }
+
+    /// How many times the terminal seal's pending-inbox probe
+    /// ([`ConversationInboundMailbox::has_pending`]) has been invoked on
+    /// this child's mailbox (test-only, Issue #193).
+    ///
+    /// [`ConversationInboundMailbox::has_pending`] has exactly one
+    /// production caller — the seal in
+    /// [`ConversationRuntime::seal_parent_guidance`] — so this counter is a
+    /// direct non-invocation proof that the parent-guidance seal machinery
+    /// was never consulted (for example by a Workflow-owned child, which
+    /// must never enter the generic-steering terminal protocol).
+    #[cfg(test)]
+    pub(crate) fn seal_probe_calls(&self) -> usize {
+        self.inner.mailbox.pending_probe_calls()
     }
 
     /// Arms `count` consecutive durable failures of the terminal seal's
