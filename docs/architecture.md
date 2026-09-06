@@ -2122,16 +2122,32 @@ two-stage dispatch with an explicit ownership commit linearization
 point, a cancel-vs-completion linearization rule, bounded latest progress
 snapshots, and exactly-once terminal inbound mailbox publication
 (`background-exec_N-terminal`). The `execution` intrinsic
-(foreground-only, sequential) is the **single model-facing observation and
-cancellation control plane** for conversation-owned asynchronous
-executions (Issue #162): every creation result returns a typed execution
-handle (`kind` + `id`), and `execution(status|cancel)` routes an explicit
-`kind = tool` target only to `ConversationBackgroundRegistry` and a
-`kind = subagent` target only to `SubagentRegistry`. The intrinsic owns no
-lifecycle state — the domain registries remain the sole authorities for
-lifecycle, cancellation, durability, settlement, and terminal publication
-— and it never infers a kind from an id string or falls through from one
-domain to another.
+(foreground-only, sequential) is the **single model-facing observation,
+steering, and cancellation control plane** for conversation-owned
+asynchronous executions (Issue #162, steering from Issue #193): every
+creation result returns a typed execution handle (`kind` + `id`), and
+`execution(status|cancel|steer)` routes an explicit `kind = tool` target
+only to `ConversationBackgroundRegistry` and a `kind = subagent` target
+only to `SubagentRegistry`. There is exactly one model-facing handle type
+and exactly one model-facing control tool; steering adds an action, never a
+second handle and never a second tool. The intrinsic owns no lifecycle
+state — the domain registries remain the sole authorities for lifecycle,
+cancellation, durability, settlement, and terminal publication — and it
+never infers a kind from an id string or falls through from one domain to
+another. `steer` is subagent-only, and `kind = tool` + `action = steer` is
+refused as an unsupported kind/action combination before either authority
+is consulted.
+
+`execution(steer)` is a **control acknowledgement plane, never a child
+result channel**. It owns the model-facing schema, the explicit action
+dispatch, the target-kind validation, and the minimal acknowledgement
+projection (`execution`, `state`, `accepted`); every semantic decision —
+whether this child may still accept guidance, how accepted guidance is
+ordered, how acceptance linearizes against cancellation intent and
+terminal authority, and how the message reaches the child's Agent Loop —
+belongs to `SubagentRegistry::steer` and, below it, to the child
+conversation's own coordinator. A child's final report continues to arrive
+exactly once through the canonical parent inbound publication.
 
 The bundle also owns the conversation's `ConversationTodoList`: the task
 list the native `todo` tool mutates. It is deliberately *not* a second

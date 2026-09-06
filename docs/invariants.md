@@ -1295,6 +1295,12 @@ Message Ledger          = adopted canonical conversational facts
   so shutdown linearizes either entirely before the acceptance (the
   acceptance fails with `Shutdown` and commits no pending item and consumes
   no sequence) or entirely after it;
+- there is one inbound path, not one per producer. A trusted in-process
+  producer may carry an extra **admission gate** — a subagent child's
+  parent-authored guidance (Issue #193) additionally linearizes against that
+  child's committed cancellation intent and its terminal seal inside the very
+  same coordinator critical section — but it never gets a second acceptance
+  point, a second sequence domain, or a second consumption path;
 - the mailbox accepts only ordinary inbound messages
   (`InboundKind::Message`) that carry their persisted UTC timestamp;
   runtime compaction summaries are rejected at acceptance;
@@ -1748,6 +1754,112 @@ second authority:
   before the restart. Activity is not execution history and must never be
   treated as recoverable.
 
+## Subagent in-flight steering (Issue #193)
+
+A steer is **additional parent-authored semantic conversation input to an
+already-running child**. It does not change the child's identity, authority,
+process incarnation, lifecycle, or terminal model. The path is:
+
+```text
+execution(steer)            model-facing control plane: schema, explicit
+                            action dispatch, target-kind validation, and the
+                            minimal acknowledgement projection
+  |
+  v
+SubagentRegistry::steer     the subagent/conversation authority: whether this
+                            child may still be offered guidance, and the
+                            registry-mutex linearization against cancellation
+                            intent and terminal authority
+  |
+  v
+child durable inbound       ConversationRuntime::submit_parent_guidance under
+                            the ONE child coordinator lock: the durable
+                            acceptance linearization point
+  |
+  v
+ordinary child Agent Loop   the ordinary safe-boundary inbound drain and the
+                            ordinary next model turn
+```
+
+It is deliberately **not** `execution -> process driver -> a steer process
+command`. There is no `DriverCommand::Steer`; the process driver keeps
+exactly its physical responsibilities — spawn, cancellation signalling and
+escalation, reaping, physical settlement — plus pure transport routing of
+child-bound frames some semantic authority already authored
+(`DriverCommand::Route`). It never authors, validates, orders, interprets,
+or persists a routed payload, and it owns no conversation state of either
+side.
+
+- **Steering is semantic conversation input, not process control.** The
+  guidance enters the existing child conversation through exactly the same
+  durable inbound path as the delegation itself — the same coordinator lock,
+  the same durable acceptance, the same `InboundSequence` domain, the same
+  ordinary safe-boundary adoption. No second subagent invocation, child
+  process, conversation, registry record, result channel, terminal
+  lifecycle, resume/restart mechanism, or Agent Loop is created.
+- **Frozen child authority is never re-derived.** `SubagentRegistry::steer`
+  accepts only a `SubagentId` and a bounded message: there is no resolver,
+  no definition, and no launch specification anywhere on the path, and the
+  wire envelope has no model, tools, skills, instructions, workspace, or
+  definition field at all. A runtime resource/capability generation that
+  reloads while a child runs therefore cannot re-author it; a later steer
+  still enters the same child conversation under its original frozen
+  authority.
+- **v1 steering interrupts nothing.** A steer never interrupts the child's
+  in-flight provider request, its partial generation, or its executing tool
+  call, and there is no partial-generation rollback, steer-specific tool
+  cancellation, or steer-specific provider interruption. The guidance
+  becomes semantically visible at the next ordinary Agent Loop boundary
+  where newly accepted conversation input can participate in a model turn.
+- **`accepted` has exactly one meaning.** It means *the parent-authored
+  guidance was durably accepted for this child conversation, and will reach
+  an ordinary Agent Loop boundary before that child settles*. It does not
+  mean the child model has observed it, that anything in flight was
+  interrupted, that the requested behavioral change happened, or that
+  another child turn finished. A steer that cannot be durably accepted is a
+  bounded deterministic failure — unknown child, malformed target, empty or
+  oversized message, `kind = tool` + `action = steer`, terminal child,
+  committed cancellation intent, or a child-side refusal — never silence and
+  never `accepted` without the durable commit.
+- **Acceptance order is durable order.** Multiple accepted steers are
+  observed in exactly their acceptance order, because acceptance *is* the
+  child's durable Pending Inbound Inbox commit and the ordinary safe-boundary
+  drain adopts that sequence domain in order. No scheduler ordering is
+  involved, and no new mailbox or scheduler framework exists.
+- **There are exactly two acceptance linearization points, and they compose.**
+  The **registry mutex** is the same critical section that commits
+  `Running -> Cancelling` and `... -> PublishingTerminal`, so a committed
+  cancellation intent or terminal candidate refuses a steer outright, and an
+  admitted steer mutates no lifecycle state whatsoever. The **child
+  coordinator lock** is the same critical section that owns the child's
+  durable inbound acceptance, its committed one-shot cancellation intent,
+  and its terminal seal, so the authoritative acceptance is decided there.
+- **The child conversation's terminal seal is the terminal linearization
+  point for guidance.** The seal commits only when nothing can still carry
+  accepted guidance into a model turn: no admitted attempt is unobserved by
+  the child driver, no attempt is live, and the durable pending inbox is
+  empty. Because the seal and the durable acceptance share the one
+  coordinator lock, a guidance accepted before the seal is necessarily
+  visible to it — the seal then reports `Open`, the ordinary coordinator
+  admits the turn that observes it, and only that turn's outcome is
+  reported — and a guidance arriving after the seal is necessarily refused.
+  The parent's terminal authority is strictly downstream of that seal,
+  because the terminal candidate is built from the child's `Result` frame
+  and the child sends it only after sealing. There is therefore no
+  interleaving in which a durably accepted steer is discarded by a terminal.
+  Cancellation and physical child loss still supersede every pending
+  semantic input; that is cancellation semantics, not a steering guarantee.
+- **No resurrection.** `Cancelling -> Running`, `Cancelled -> Running`, and
+  `Succeeded -> Running` remain impossible. Terminal states stay absorbing,
+  and a refused steer changes no state at all.
+- **One-shot semantics are unchanged.** Exactly one logical child, one child
+  identity, one child conversation, one process incarnation, one registry
+  record, one terminal settlement. The successful final answer still arrives
+  exactly once through the canonical child -> parent inbound publication of
+  the Issue #192 contract; `execution(steer)` is a control acknowledgement
+  and never a final-answer transport, and it exposes no child transcript,
+  history, result, or live observation.
+
 ## Issue #144: named attempt-scoped subagent definitions
 
 - **Named subagent definitions are immutable members of one admitted
@@ -2129,7 +2241,7 @@ second authority:
   either `UnixStream`; there is no listener and no network service.
 - **Anchor acknowledgements route by exact typed identity.** Two units with
   outstanding offers cannot open each other's start gates.
-- **The subagent IPC version is 13 and there is no compatibility decoding.** A
+- **The subagent IPC version is 14 and there is no compatibility decoding.** A
   peer that does not speak exactly this version exits before composing
   anything. The typed `Cancel` payload carries the parent registry's semantic
   `CancellationReason`; only pre-ownership preparation cancellation uses an
@@ -2145,8 +2257,13 @@ second authority:
   the conflated workspace path with explicit logical-child and physical-
   worktree facts. Version 13 carries the frozen definition-level
   whole-lifecycle execution deadline in `ResolvedSubagentSpec`; only the
-  parent registry enforces it after ownership commits. HITL traffic is never
-  a control acknowledgement and never uses the disposable observation lane.
+  parent registry enforces it after ownership commits. Version 14 adds the
+  parent-authored guidance envelope (`Guidance`) and the child
+  conversation's authoritative acceptance answer (`GuidanceResult`) of
+  Issue #193; the envelope carries a bounded message plus a transport
+  correlation id and nothing else, so no launch authority is spellable on
+  the wire. HITL traffic is never a control acknowledgement and never uses
+  the disposable observation lane.
 
 ## Issues #146, #187, and #189: deterministic, scope-preserving worktree isolation
 
