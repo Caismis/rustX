@@ -2317,8 +2317,11 @@ async fn a_child_that_settles_without_answering_refuses_the_steer() {
 ///
 /// The linearization point being proven is the registry mutex: it totally
 /// orders steer admission, the `Running -> Cancelling` commit, and the steer
-/// commit, and a steer is accepted only if its ticket survived from the
-/// first to the third.
+/// commit. The commit classifies from the child outcome it holds and the
+/// record's committed cancellation fact, and the cancellation's committed
+/// reason is absorbing — so a steer whose admission precedes the
+/// cancellation but whose commit follows it is refused whatever the child
+/// answered.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_cancellation_committed_before_child_acceptance_refuses_the_in_flight_steer() {
     let plane = subagent_plane();
@@ -2428,11 +2431,12 @@ async fn a_cancellation_committed_before_child_acceptance_refuses_the_in_flight_
 /// **A cancellation *after* an accepted steer (Issue #193 contract).**
 ///
 /// The documented contract is asymmetric on purpose, and this test pins the
-/// second half of it: a steer whose ticket survived to its commit is
-/// reported `accepted: true`, and a *later* cancellation still terminates
-/// the child. The acknowledgement therefore never claims the child observed
-/// the guidance — it claims only that the guidance was durably in the
-/// child's conversation with no cancellation committed up to that point.
+/// second half of it: a steer whose child durably accepted — with no
+/// cancellation intent committed up to the steer's commit — is reported
+/// `accepted: true`, and a *later* cancellation still terminates the child.
+/// The acknowledgement therefore never claims the child observed the
+/// guidance — it claims only that the guidance was durably in the child's
+/// conversation with no cancellation committed up to that point.
 ///
 /// The ordering is established by the parent's own return value: the steer
 /// call has returned before `cancel` is invoked, so the acceptance provably
@@ -2710,88 +2714,17 @@ async fn the_workflow_restriction_leaves_normal_subagent_steering_intact() {
     );
 }
 
-/// **A dropped `execution(steer)` tool invocation disposes its steer ticket**
-/// (Issue #193 architecture review blocker 2 at the Issue #204 lifecycle
-/// boundary).
-///
-/// The production path for a dropped [`SubagentRegistry::steer`] future is
-/// not an artificial direct call: the steer operation runs inside the
-/// `execution` intrinsic's Issue #204 `ToolExecutionHandle`, whose
-/// completion and settlement planes share one operation slot. When the
-/// surrounding tool invocation is cancelled, times out, or is torn down,
-/// those futures are dropped while the steer is parked on the child's
-/// durable answer — which drops the shared operation mid-await. This test
-/// proves the ticket ownership is cancellation-safe across exactly that
-/// boundary:
-///
-/// 1. the `execution(steer)` invocation starts and its steer is admitted —
-///    the child side proves it by reading the `Guidance` envelope off the
-///    real control socket, and the ticket is armed;
-/// 2. the tool handle's futures (the Issue #204 shared-ownership planes)
-///    are dropped while the steer is parked — the operation future drops
-///    mid-await, exactly the Issue #204 guard/abandonment path;
-/// 3. the registry ticket is removed — direct authoritative observation;
-/// 4. the child lifecycle is still `Running`, no cancellation was
-///    synthesized, and a later `execution(steer)` on the same child works
-///    normally.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[allow(clippy::too_many_lines)] // one coherent tool-lifecycle boundary proof
-async fn dropping_an_execution_steer_tool_invocation_cleans_its_ticket() {
-    use rustx::tools::executor::{PreflightOutcome, ToolExecutionContext};
-    use rustx::tools::types::ToolCall;
-
-    let plane = subagent_plane();
-    let mut child = stage_exit0(&plane);
-    let accepted_child = start_subagent(&plane, "survey").await;
-    let fixture = execution_fixture(Some(plane.registry.clone()));
-    let id = accepted_child.subagent_id.clone();
-    child.take_delegation().await;
-
-    // Start one `execution(steer)` invocation through the real preflight
-    // path and keep its Issue #204 handle instead of awaiting it.
-    let definition = fixture
-        .registry
-        .definitions()
-        .into_iter()
-        .find(|definition| definition.name == "execution")
-        .expect("execution registered");
-    let call = ToolCall {
-        id: rustx::runtime::identity::ToolCallId::new("call-162-execution-steer-drop"),
-        tool_id: definition.id,
-        name: "execution".to_owned(),
-        arguments: serde_json::json!({
-            "action": "steer",
-            "target": {"kind": "subagent", "id": id.to_string()},
-            "message": "dropped with the tool invocation",
-        }),
-    };
-    let PreflightOutcome::Ready(prepared) = fixture.registry.preflight(&call).expect("preflight")
-    else {
-        panic!("execution steers preflight as ready");
-    };
-    let executor = fixture.registry.executor(&prepared.invocation.tool_id);
-    let reporter = common::NoopProgress;
-    let context = ToolExecutionContext::new(
-        fixture.runtime.conversation_id(),
-        None,
-        rustx::runtime::ExecutionCancellation::detached(
-            CancellationSignal::new(),
-            rustx::runtime::types::CancellationReason::UserRequested,
-        ),
-        fixture.runtime.workspace(),
-        &reporter,
-        fixture.runtime.artifacts(),
-        fixture.runtime.tool_output(),
-        fixture.runtime.environment(),
-    );
-    let handle = executor.start(prepared.invocation, context);
-    let mut completion = handle.completion;
-    drop(handle.settlement);
-
-    // (1) Drive the completion plane exactly once: the steer operation runs
-    // through admission and parks on the child's durable answer. The child
-    // side proves admission by reading the `Guidance` envelope (the ticket
-    // is armed strictly before the driver writes the frame).
+/// Polls one completion plane exactly once and asserts the steer operation
+/// parked on the child's durable answer — the deterministic proof that the
+/// steer crossed its effect frontier (admission ran and the ticket is
+/// armed) without settling.
+/// Polls one completion plane exactly once and asserts the steer operation
+/// parked on the child's durable answer — the deterministic proof that the
+/// steer crossed its effect frontier (admission ran and the ticket is
+/// armed) without settling.
+async fn park_steer_on_child_answer(
+    completion: &mut futures_util::future::BoxFuture<'_, rustx::tools::types::ToolExecutionResult>,
+) {
     let () = std::future::poll_fn(|cx| {
         assert!(
             completion.as_mut().poll(cx).is_pending(),
@@ -2800,35 +2733,172 @@ async fn dropping_an_execution_steer_tool_invocation_cleans_its_ticket() {
         std::task::Poll::Ready(())
     })
     .await;
-    let crate::runtime::subagent::ipc::ParentFrame::Guidance(_) = child.read_frame().await else {
+}
+
+/// **A real Issue #204 cancellation after the guidance handoff settles the
+/// `execution(steer)` `ToolCall` finitely with honest outcome-unknown
+/// evidence, and never cancels the child** (Issue #193 architecture review
+/// blocker 2).
+///
+/// The previous regression dropped both handle futures and called that the
+/// #204 cancellation path; it was not. Under #204, once cancellation intent
+/// wins, the lifecycle transfers ownership of the operation to the
+/// settlement plane and keeps polling it. This test drives exactly that
+/// real path — the actual [`ExecutionCancellation`] signal the foreground
+/// Agent Loop hands the executor, and the completion -> settlement plane
+/// transition — while the child intentionally withholds its
+/// `GuidanceResult`:
+///
+/// 1. the `execution(steer)` invocation starts and crosses the steer effect
+///    frontier: the completion plane is polled once (admission runs, the
+///    ticket is armed), and the child side proves the handoff by reading
+///    the `Guidance` envelope off the real control socket;
+/// 2. the child intentionally withholds `GuidanceResult`;
+/// 3. the tool's `ExecutionCancellation` fires (the actual signal owner of
+///    the generic foreground lifecycle);
+/// 4. the lifecycle transition: completion is no longer polled, and the
+///    settlement plane takes exclusive ownership of the steer operation;
+/// 5. the settlement returns **finite typed `Unconfirmed` evidence** — no
+///    [`TOOL_SETTLEMENT_CONTROL_GUARD`] expiry is involved — because the
+///    already-routed envelope may still be durably accepted by the child;
+/// 6. the steer ticket is cleaned (the abandoned operation's guard removed
+///    it), the child lifecycle stays `Running`, no subagent `Cancel` frame
+///    is synthesized, and steering works normally afterwards — including a
+///    late `Accepted` answer to the first envelope, which the child may
+///    still durably produce.
+///
+/// [`ExecutionCancellation`]: rustx::runtime::ExecutionCancellation
+/// [`TOOL_SETTLEMENT_CONTROL_GUARD`]: rustx::tools::deadline::TOOL_SETTLEMENT_CONTROL_GUARD
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)] // one coherent tool-lifecycle cancellation proof
+async fn a_tool_cancellation_after_the_guidance_handoff_settles_unconfirmed() {
+    use rustx::tools::executor::ToolSettlement;
+
+    let plane = subagent_plane();
+    let mut child = stage_exit0(&plane);
+    let accepted_child = start_subagent(&plane, "survey").await;
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    let id = accepted_child.subagent_id.clone();
+    child.take_delegation().await;
+
+    // (1) Start the steer through the real preflight path; poll the
+    // completion plane exactly once so the steer crosses its effect
+    // frontier (admission ran and parked on the child's durable answer).
+    let definition = fixture
+        .registry
+        .definitions()
+        .into_iter()
+        .find(|definition| definition.name == "execution")
+        .expect("execution registered");
+    let call = rustx::tools::types::ToolCall {
+        id: ToolCallId::new("call-162-execution-steer-cancelled"),
+        tool_id: definition.id,
+        name: "execution".to_owned(),
+        arguments: serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": id.to_string()},
+            "message": "handed off before the cancellation",
+        }),
+    };
+    let rustx::tools::executor::PreflightOutcome::Ready(prepared) =
+        fixture.registry.preflight(&call).expect("preflight")
+    else {
+        panic!("execution steers preflight as ready");
+    };
+    let executor = fixture.registry.executor(&prepared.invocation.tool_id);
+    let reporter = common::NoopProgress;
+    let signal = CancellationSignal::new();
+    let context = rustx::tools::executor::ToolExecutionContext::new(
+        fixture.runtime.conversation_id(),
+        None,
+        rustx::runtime::ExecutionCancellation::detached(
+            signal.clone(),
+            rustx::runtime::types::CancellationReason::UserRequested,
+        ),
+        fixture.runtime.workspace(),
+        &reporter,
+        fixture.runtime.artifacts(),
+        fixture.runtime.tool_output(),
+        fixture.runtime.environment(),
+    );
+    let rustx::tools::executor::ToolExecutionHandle {
+        mut completion,
+        settlement,
+    } = executor.start(prepared.invocation, context);
+    park_steer_on_child_answer(&mut completion).await;
+    let crate::runtime::subagent::ipc::ParentFrame::Guidance(guidance) = child.read_frame().await
+    else {
         panic!("the execution steer routes exactly one guidance envelope");
     };
     assert_eq!(
         plane.registry.outstanding_guidance_tickets(&id),
         1,
-        "the tool-lifecycle steer holds exactly its own ticket"
+        "the tool-lifecycle steer crossed the frontier and holds its ticket"
     );
 
-    // (2) The Issue #204 abandonment path: the tool invocation's futures
-    // are dropped while the steer is parked. The completion future is the
-    // only remaining owner of the shared operation slot (the settlement
-    // plane was dropped above), so dropping it drops the steer operation
-    // future mid-await — exactly the Issue #204 guard/abandonment drop.
+    // (2)+(3): the child withholds its answer, and the real generic tool
+    // cancellation fires.
+    signal.cancel();
+
+    // (4)+(5): the #204 transition — the lifecycle never polls completion
+    // again after cancellation intent wins; it awaits ONLY the settlement
+    // plane, which drives the steer operation to its classified end. The
+    // settlement returns promptly (no control-plane guard involved): the
+    // child had not decided, the envelope may still be accepted, so the
+    // honest evidence is `Unconfirmed`.
+    let evidence = tokio::time::timeout(std::time::Duration::from_secs(10), settlement)
+        .await
+        .expect("the settlement plane resolves finitely after the tool cancellation");
+    let ToolSettlement::Unconfirmed { detail } = &evidence else {
+        panic!("a steer cancelled after the handoff with the child undecided is never confirmed");
+    };
+    assert!(
+        detail.contains("child may still durably accept"),
+        "the uncertainty names the unprovable child-side frontier: {detail}"
+    );
     drop(completion);
 
-    // (3)+(4): the ticket is gone (direct authoritative observation), the
-    // child lifecycle is untouched, and steering still works normally.
+    // (6) Ticket cleanup: abandoning the steer operation removed exactly its
+    // ticket. The child was NOT cancelled — lifecycle Running, no committed
+    // reason, no Cancel frame synthesized — and the tool cancellation never
+    // reached the subagent cancellation authority.
     assert_eq!(
         plane.registry.outstanding_guidance_tickets(&id),
         0,
-        "dropping the tool futures cleans the steer ticket"
+        "the cancelled steer ToolCall leaves no ticket behind"
+    );
+    let snapshot = plane.registry.snapshot(&id).expect("record");
+    assert_eq!(
+        snapshot.state,
+        SubagentState::Running,
+        "cancelling the steering ToolCall never cancels the child"
     );
     assert_eq!(
-        plane.registry.snapshot(&id).expect("record").state,
-        SubagentState::Running,
-        "the dropped tool invocation synthesizes no cancellation"
+        snapshot.cancel_reason, None,
+        "no subagent cancellation intent was synthesized"
     );
 
+    // The child may still durably accept the already-routed envelope: answer
+    // the first envelope late. The driver correlates the answer into the
+    // dropped waiter (a no-op) — no violation, no new ticket, no state.
+    crate::runtime::subagent::ipc::write_child_frame(
+        &mut child.peer,
+        &ChildFrame::GuidanceResult(crate::runtime::subagent::ipc::GuidanceResultFrame {
+            guidance_id: guidance.guidance_id,
+            outcome: crate::runtime::subagent::ipc::ChildGuidanceOutcome::Accepted,
+        }),
+    )
+    .await
+    .expect("late guidance answer");
+    assert_eq!(
+        plane.registry.outstanding_guidance_tickets(&id),
+        0,
+        "a late child-side acceptance after the cancelled ToolCall creates no ticket"
+    );
+
+    // Steering still works normally through the very same running child: the
+    // next frame the child reads is the new steer's envelope — never a
+    // synthesized Cancel.
     let child_side = tokio::spawn(async move {
         let message = child.answer_guidance(accepted()).await;
         (child, message)
@@ -2838,7 +2908,7 @@ async fn dropping_an_execution_steer_tool_invocation_cleans_its_ticket() {
         serde_json::json!({
             "action": "steer",
             "target": {"kind": "subagent", "id": id.to_string()},
-            "message": "after the dropped invocation",
+            "message": "after the cancelled ToolCall",
         }),
     )
     .await;
@@ -2848,5 +2918,389 @@ async fn dropping_an_execution_steer_tool_invocation_cleans_its_ticket() {
         serde_json::json!(true),
         "a later steer through the same tool lifecycle is accepted normally"
     );
-    assert_eq!(delivered, "after the dropped invocation");
+    assert_eq!(delivered, "after the cancelled ToolCall");
+}
+
+/// **A tool cancellation observed before the steer effect frontier is a
+/// confirmed no-effect cancellation** (Issue #193 architecture review
+/// blocker 2, Case A).
+///
+/// The steer operation's first action after the static refusals is its
+/// cancellation check: when the tool's `ExecutionCancellation` has already
+/// fired, admission never runs, so no guidance envelope exists anywhere and
+/// no ticket is ever armed. The settlement plane reports the confirmed
+/// cancellation; nothing reaches the child, and the child is neither
+/// steered nor cancelled.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tool_cancellation_before_the_steer_effect_frontier_is_confirmed_no_effect() {
+    use rustx::tools::executor::ToolSettlement;
+
+    let plane = subagent_plane();
+    let mut child = stage_exit0(&plane);
+    let accepted_child = start_subagent(&plane, "survey").await;
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    let id = accepted_child.subagent_id.clone();
+    child.take_delegation().await;
+
+    // Fire the real generic tool cancellation BEFORE the operation is ever
+    // polled: no admission can have run, so the steer effect frontier was
+    // never crossed.
+    let definition = fixture
+        .registry
+        .definitions()
+        .into_iter()
+        .find(|definition| definition.name == "execution")
+        .expect("execution registered");
+    let call = rustx::tools::types::ToolCall {
+        id: ToolCallId::new("call-162-execution-steer-cancelled-before-handoff"),
+        tool_id: definition.id,
+        name: "execution".to_owned(),
+        arguments: serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": id.to_string()},
+            "message": "never handed off",
+        }),
+    };
+    let rustx::tools::executor::PreflightOutcome::Ready(prepared) =
+        fixture.registry.preflight(&call).expect("preflight")
+    else {
+        panic!("execution steers preflight as ready");
+    };
+    let executor = fixture.registry.executor(&prepared.invocation.tool_id);
+    let reporter = common::NoopProgress;
+    let signal = CancellationSignal::new();
+    let context = rustx::tools::executor::ToolExecutionContext::new(
+        fixture.runtime.conversation_id(),
+        None,
+        rustx::runtime::ExecutionCancellation::detached(
+            signal.clone(),
+            rustx::runtime::types::CancellationReason::UserRequested,
+        ),
+        fixture.runtime.workspace(),
+        &reporter,
+        fixture.runtime.artifacts(),
+        fixture.runtime.tool_output(),
+        fixture.runtime.environment(),
+    );
+    signal.cancel();
+    let rustx::tools::executor::ToolExecutionHandle {
+        completion,
+        settlement,
+        ..
+    } = executor.start(prepared.invocation, context);
+    drop(completion);
+    let evidence = tokio::time::timeout(std::time::Duration::from_secs(10), settlement)
+        .await
+        .expect("the settlement resolves finitely for a pre-frontier cancellation");
+    let ToolSettlement::Confirmed(result) = &evidence else {
+        panic!("a pre-frontier cancellation is confirmed no-effect");
+    };
+    assert!(
+        matches!(
+            result.status,
+            rustx::tools::types::ToolExecutionStatus::Cancelled {
+                reason: rustx::runtime::types::CancellationReason::UserRequested,
+                phase: rustx::tools::types::ToolCancellationPhase::DuringExecution,
+            }
+        ),
+        "the confirmed result is the tool cancellation: {:?}",
+        result.status
+    );
+
+    // No steer effect exists: no ticket was ever armed, the child stays
+    // Running with no cancellation intent, and the first guidance the child
+    // ever sees is a later steer's envelope — never this one, and never a
+    // synthesized Cancel.
+    assert_eq!(
+        plane.registry.outstanding_guidance_tickets(&id),
+        0,
+        "a pre-frontier cancellation never arms a ticket"
+    );
+    assert_eq!(
+        plane.registry.snapshot(&id).expect("record").state,
+        SubagentState::Running,
+        "the child is untouched by the cancelled steer ToolCall"
+    );
+    let child_side = tokio::spawn(async move {
+        let message = child.answer_guidance(accepted()).await;
+        (child, message)
+    });
+    let steered = run_execution(
+        &fixture,
+        serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": id.to_string()},
+            "message": "the first guidance this child ever sees",
+        }),
+    )
+    .await;
+    let (_child, delivered) = child_side.await.expect("child side");
+    assert_eq!(
+        json_content(&steered)["accepted"],
+        serde_json::json!(true),
+        "a later steer through the same tool lifecycle is accepted normally"
+    );
+    assert_eq!(delivered, "the first guidance this child ever sees");
+}
+
+/// **A child `Accepted` decision that committed before the tool cancellation
+/// is confirmed over it** — the Case C winner semantics and the Issue #193
+/// blocker-1 invariant at the model-facing boundary in one deterministic
+/// interleaving.
+///
+/// The child durably accepts and then completes naturally while the
+/// `execution(steer)` operation is parked on its answer (its registry
+/// acknowledgement commit has not run yet). The natural terminal settles
+/// the child and clears the steer ticket — lifecycle cleanup, not a denial
+/// of the acceptance. Only then does the tool cancellation fire and the
+/// generic lifecycle transfer the operation to the settlement plane, which
+/// drives it to its end: the child's committed decision reaches the
+/// operation first (the terminal settlement provably happened after the
+/// driver read the acceptance, and the settlement plane polls the
+/// child-biased operation afterwards), so the settlement reports the
+/// **confirmed accepted steer** — a committed child decision is evidence,
+/// the tool cancellation is a request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_committed_child_acceptance_is_confirmed_over_a_later_tool_cancellation() {
+    use rustx::tools::executor::ToolSettlement;
+
+    let plane = subagent_plane();
+    let mut child = stage_exit0(&plane);
+    let accepted_child = start_subagent(&plane, "survey").await;
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    let id = accepted_child.subagent_id.clone();
+    child.take_delegation().await;
+
+    // The steer crosses its effect frontier and parks on the child answer.
+    let definition = fixture
+        .registry
+        .definitions()
+        .into_iter()
+        .find(|definition| definition.name == "execution")
+        .expect("execution registered");
+    let call = rustx::tools::types::ToolCall {
+        id: ToolCallId::new("call-162-execution-steer-accepted-wins"),
+        tool_id: definition.id,
+        name: "execution".to_owned(),
+        arguments: serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": id.to_string()},
+            "message": "accepted before the natural terminal and the tool cancellation",
+        }),
+    };
+    let rustx::tools::executor::PreflightOutcome::Ready(prepared) =
+        fixture.registry.preflight(&call).expect("preflight")
+    else {
+        panic!("execution steers preflight as ready");
+    };
+    let executor = fixture.registry.executor(&prepared.invocation.tool_id);
+    let reporter = common::NoopProgress;
+    let signal = CancellationSignal::new();
+    let context = rustx::tools::executor::ToolExecutionContext::new(
+        fixture.runtime.conversation_id(),
+        None,
+        rustx::runtime::ExecutionCancellation::detached(
+            signal.clone(),
+            rustx::runtime::types::CancellationReason::UserRequested,
+        ),
+        fixture.runtime.workspace(),
+        &reporter,
+        fixture.runtime.artifacts(),
+        fixture.runtime.tool_output(),
+        fixture.runtime.environment(),
+    );
+    let rustx::tools::executor::ToolExecutionHandle {
+        mut completion,
+        settlement,
+    } = executor.start(prepared.invocation, context);
+    park_steer_on_child_answer(&mut completion).await;
+    let crate::runtime::subagent::ipc::ParentFrame::Guidance(guidance) = child.read_frame().await
+    else {
+        panic!("the execution steer routes exactly one guidance envelope");
+    };
+
+    // The child durably accepts, then completes naturally — while the
+    // parent acknowledgement (the steer operation, parked at its select) has
+    // not yet run its registry commit.
+    crate::runtime::subagent::ipc::write_child_frame(
+        &mut child.peer,
+        &ChildFrame::GuidanceResult(crate::runtime::subagent::ipc::GuidanceResultFrame {
+            guidance_id: guidance.guidance_id,
+            outcome: crate::runtime::subagent::ipc::ChildGuidanceOutcome::Accepted,
+        }),
+    )
+    .await
+    .expect("guidance answer");
+    child
+        .send_result(ChildResultStatus::Succeeded, Some("done"))
+        .await;
+    drop(child);
+    let settled = plane
+        .registry
+        .wait_until_settled(&id)
+        .await
+        .expect("natural terminal settlement");
+    assert_eq!(
+        settled.state,
+        SubagentState::Succeeded,
+        "the child completes naturally, exactly once"
+    );
+    assert_eq!(
+        settled.cancel_reason, None,
+        "no subagent cancellation was ever requested"
+    );
+    assert_eq!(
+        plane.registry.outstanding_guidance_tickets(&id),
+        0,
+        "natural terminal cleanup removed the ticket of the still-unacknowledged steer \
+         without erasing its acceptance"
+    );
+
+    // Only now does the real tool cancellation fire; the settlement plane
+    // drives the parked steer operation, whose child-biased select sees the
+    // committed `Accepted` answer first and commits the acceptance.
+    signal.cancel();
+    let evidence = tokio::time::timeout(std::time::Duration::from_secs(10), settlement)
+        .await
+        .expect("the settlement resolves finitely");
+    let ToolSettlement::Confirmed(result) = &evidence else {
+        panic!("the committed child decision is confirmed over the tool cancellation");
+    };
+    assert_eq!(
+        json_content(result)["accepted"],
+        serde_json::json!(true),
+        "the steer is reported accepted: the child's durable acceptance predates both the \
+         natural terminal and the tool cancellation"
+    );
+    assert_eq!(
+        json_content(result)["state"],
+        serde_json::json!("succeeded"),
+        "the acknowledgement reflects the settled lifecycle"
+    );
+    drop(completion);
+    assert_eq!(
+        plane.registry.outstanding_guidance_tickets(&id),
+        0,
+        "no stale steer arbitration state remains"
+    );
+}
+
+/// **A child `Refused` decision that committed before the tool cancellation
+/// is confirmed over it** — the Case C winner semantics for a refusal.
+///
+/// Identical deterministic construction to the `Accepted` winner: the child
+/// durably refuses, then completes naturally while the steer operation is
+/// parked; the natural terminal settles the child; the tool cancellation
+/// fires; the settlement plane drives the operation and the committed
+/// child-side refusal reaches it first, so the refusal is the confirmed
+/// result — never an optimistic acceptance, never a fabricated
+/// cancellation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_committed_child_refusal_is_confirmed_over_a_later_tool_cancellation() {
+    use rustx::tools::executor::ToolSettlement;
+
+    let plane = subagent_plane();
+    let mut child = stage_exit0(&plane);
+    let accepted_child = start_subagent(&plane, "survey").await;
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    let id = accepted_child.subagent_id.clone();
+    child.take_delegation().await;
+
+    let definition = fixture
+        .registry
+        .definitions()
+        .into_iter()
+        .find(|definition| definition.name == "execution")
+        .expect("execution registered");
+    let call = rustx::tools::types::ToolCall {
+        id: ToolCallId::new("call-162-execution-steer-refused-wins"),
+        tool_id: definition.id,
+        name: "execution".to_owned(),
+        arguments: serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": id.to_string()},
+            "message": "refused before the tool cancellation",
+        }),
+    };
+    let rustx::tools::executor::PreflightOutcome::Ready(prepared) =
+        fixture.registry.preflight(&call).expect("preflight")
+    else {
+        panic!("execution steers preflight as ready");
+    };
+    let executor = fixture.registry.executor(&prepared.invocation.tool_id);
+    let reporter = common::NoopProgress;
+    let signal = CancellationSignal::new();
+    let context = rustx::tools::executor::ToolExecutionContext::new(
+        fixture.runtime.conversation_id(),
+        None,
+        rustx::runtime::ExecutionCancellation::detached(
+            signal.clone(),
+            rustx::runtime::types::CancellationReason::UserRequested,
+        ),
+        fixture.runtime.workspace(),
+        &reporter,
+        fixture.runtime.artifacts(),
+        fixture.runtime.tool_output(),
+        fixture.runtime.environment(),
+    );
+    let rustx::tools::executor::ToolExecutionHandle {
+        mut completion,
+        settlement,
+    } = executor.start(prepared.invocation, context);
+    park_steer_on_child_answer(&mut completion).await;
+    let crate::runtime::subagent::ipc::ParentFrame::Guidance(guidance) = child.read_frame().await
+    else {
+        panic!("the execution steer routes exactly one guidance envelope");
+    };
+
+    // The child durably refuses, then completes naturally while the steer
+    // operation is parked.
+    crate::runtime::subagent::ipc::write_child_frame(
+        &mut child.peer,
+        &ChildFrame::GuidanceResult(crate::runtime::subagent::ipc::GuidanceResultFrame {
+            guidance_id: guidance.guidance_id,
+            outcome: crate::runtime::subagent::ipc::ChildGuidanceOutcome::Refused(
+                crate::runtime::subagent::ipc::ChildGuidanceRefusal::Refused {
+                    detail: "the child conversation refuses this guidance".to_owned(),
+                },
+            ),
+        }),
+    )
+    .await
+    .expect("guidance refusal");
+    child
+        .send_result(ChildResultStatus::Succeeded, Some("done"))
+        .await;
+    drop(child);
+    let settled = plane
+        .registry
+        .wait_until_settled(&id)
+        .await
+        .expect("natural terminal settlement");
+    assert_eq!(settled.state, SubagentState::Succeeded);
+    assert_eq!(
+        plane.registry.outstanding_guidance_tickets(&id),
+        0,
+        "natural terminal cleanup removed the ticket of the still-unacknowledged steer"
+    );
+
+    // The tool cancellation fires; the settlement plane drives the parked
+    // operation, whose child-biased select sees the committed refusal first.
+    signal.cancel();
+    let evidence = tokio::time::timeout(std::time::Duration::from_secs(10), settlement)
+        .await
+        .expect("the settlement resolves finitely");
+    let ToolSettlement::Confirmed(result) = &evidence else {
+        panic!("the committed child refusal is confirmed over the tool cancellation");
+    };
+    assert!(
+        failure_message(result).contains("the child conversation refuses this guidance"),
+        "the refusal is the child-side authority's own, never a fabricated cancellation"
+    );
+    drop(completion);
+    assert_eq!(
+        plane.registry.outstanding_guidance_tickets(&id),
+        0,
+        "no stale steer arbitration state remains"
+    );
 }

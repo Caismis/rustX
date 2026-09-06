@@ -89,6 +89,43 @@
 //!
 //! [`SubagentRegistry::steer`]: crate::runtime::subagent::SubagentRegistry::steer
 //!
+//! # `execution(steer)` participates honestly in the Issue #204 tool lifecycle
+//!
+//! `execution(steer)` is itself a foreground `ToolCall`, so it must
+//! cooperate with the generic Tool cancellation/settlement lifecycle
+//! (Issue #204) instead of relying on the settlement control-plane guard.
+//! The `steer` branch is therefore the one action whose executor splits its
+//! planes explicitly rather than wrapping the whole operation with
+//! [`ToolExecutionHandle::settled_by_operation`]: its operation races the
+//! child's durable decision against the tool's [`ExecutionCancellation`]
+//! and classifies the outcome against the steer **effect frontier** — the
+//! registry admission critical section that hands the guidance envelope to
+//! the child driver:
+//!
+//! - **cancellation observed before the frontier** — no envelope exists
+//!   anywhere, so the settlement is a confirmed no-effect cancellation;
+//! - **cancellation observed after the frontier, child decision unknown** —
+//!   the child may still durably accept the already-routed envelope, so
+//!   local ownership settles finitely and the settlement reports
+//!   [`ToolSettlement::Unconfirmed`] (honest outcome-unknown), never a
+//!   fabricated cancellation and never a wait for the settlement control-
+//!   plane guard;
+//! - **the child's durable decision reached the operation** — the steer's
+//!   registry result (accepted or refused) is the physical completion and
+//!   is reported as confirmed settlement evidence: a committed child
+//!   decision is evidence, while the tool cancellation is a request.
+//!
+//! Tool-call cancellation is deliberately **not** subagent cancellation:
+//! cancelling the `execution(steer)` `ToolCall` never calls
+//! `SubagentRegistry::cancel`. The user cancelled the steering operation,
+//! not the child execution; the single subagent cancellation authority
+//! stays the explicit `execution(cancel)` action, and the child keeps
+//! running under its own lifecycle.
+//!
+//! [`ToolExecutionHandle::settled_by_operation`]: crate::tools::executor::ToolExecutionHandle::settled_by_operation
+//! [`ExecutionCancellation`]: crate::runtime::cancellation::ExecutionCancellation
+//! [`ToolSettlement::Unconfirmed`]: crate::tools::executor::ToolSettlement::Unconfirmed
+//!
 //! # Discovery: ordering, bound, and scope (Issue #180)
 //!
 //! Discovery is conversation-scoped **by construction**: the executor holds
@@ -116,6 +153,7 @@
 
 mod input;
 
+use crate::runtime::cancellation::ExecutionCancellation;
 use crate::runtime::identity::{SubagentId, ToolExecutionId};
 use crate::runtime::subagent::{
     SubagentListing, SubagentRegistry, SubagentSnapshot, SubagentState,
@@ -127,12 +165,16 @@ use crate::tools::background::{
 };
 use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::execution::{ExecutionHandle, ExecutionKind, MAX_LISTED_EXECUTIONS};
-use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
+use crate::tools::executor::{
+    ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolSettlement,
+};
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
 use crate::tools::types::{
-    ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
-    ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy, ToolResultContent,
+    ToolCancellationPhase, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
+    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
+    ToolResultContent,
 };
+use futures_util::future::BoxFuture;
 
 use input::{ExecutionFilter, ExecutionInput};
 
@@ -232,12 +274,26 @@ impl ToolExecutor for ExecutionExecutor {
     ) -> ToolExecutionHandle<'a> {
         let background = self.background.clone();
         let subagents = self.subagents.clone();
-        ToolExecutionHandle::settled_by_operation(
-            Box::pin(async move {
-                run_execution(&background, subagents.as_ref(), &invocation.arguments).await
-            }),
-            context.cancellation.clone(),
-        )
+        // The one action whose operation can outlive its caller's patience
+        // *and* cross a semantic effect frontier — steering a running child
+        // whose durable answer may arrive long after the tool call is
+        // cancelled — gets its own Issue #204 handle whose settlement plane
+        // cooperates with cancellation and classifies the steer effect
+        // honestly (see [`steer_tool_handle`]). The other actions are
+        // synchronous registry reads/writes over an immediately-resolving
+        // operation, for which the standard cooperative pattern is exactly
+        // right.
+        match ExecutionInput::parse(&invocation.arguments) {
+            Ok(ExecutionInput::Steer { target, message }) => {
+                steer_tool_handle(subagents, target, message, context.cancellation.clone())
+            }
+            _ => ToolExecutionHandle::settled_by_operation(
+                Box::pin(async move {
+                    run_execution(&background, subagents.as_ref(), &invocation.arguments)
+                }),
+                context.cancellation.clone(),
+            ),
+        }
     }
 
     fn progress_capability(&self) -> ToolProgressCapability {
@@ -245,8 +301,11 @@ impl ToolExecutor for ExecutionExecutor {
     }
 }
 
-/// Runs one `execution` invocation against the owning domain registry.
-async fn run_execution(
+/// Runs one non-steer `execution` invocation against the owning domain
+/// registry. `steer` never reaches this dispatch: it is split out in
+/// [`ExecutionExecutor::start`] so its Issue #204 handle can cooperate with
+/// the tool cancellation lifecycle.
+fn run_execution(
     background: &ConversationBackgroundRegistry,
     subagents: Option<&SubagentRegistry>,
     arguments: &serde_json::Value,
@@ -254,57 +313,306 @@ async fn run_execution(
     match ExecutionInput::parse(arguments) {
         Ok(ExecutionInput::Status { target }) => run_status(background, subagents, &target),
         Ok(ExecutionInput::Cancel { target }) => run_cancel(background, subagents, &target),
-        Ok(ExecutionInput::Steer { target, message }) => {
-            run_steer(subagents, &target, &message).await
+        // `steer` is dispatched in `ExecutionExecutor::start` and never
+        // reaches this router: reaching it would wrap the steer operation in
+        // the generic `settled_by_operation` pattern, which cannot settle
+        // finitely once the tool cancellation transfers the operation to the
+        // settlement plane while the child withholds its answer.
+        Ok(ExecutionInput::Steer { .. }) => {
+            unreachable!("execution(steer) is dispatched before run_execution")
         }
         Ok(ExecutionInput::List { filter }) => run_list(background, subagents, filter),
         Err(error) => failed(error),
     }
 }
 
+/// The classified end of one cancellable `execution(steer)` operation
+/// (Issue #193 + Issue #204).
+///
+/// The operation is the steer `ToolCall`'s own physical completion: it races
+/// the child's durable decision against the tool's cancellation and ends in
+/// exactly one of these states. The completion plane and the settlement
+/// plane both drive the same operation through one shared ownership slot
+/// (exactly the [`ToolExecutionHandle::settled_by_operation`] shape, but
+/// typed), and map each end to its Issue #204 settlement evidence.
+enum SteerToolEnd {
+    /// The steer reached its natural registry terminal: the child durably
+    /// accepted, the child durably refused, or the invocation was
+    /// deterministically invalid (kind = tool, empty/oversized message,
+    /// unknown child, Workflow-owned child, settled child, committed
+    /// subagent cancellation, …).
+    Result(ToolExecutionResult),
+    /// The tool cancellation was observed **before the steer effect
+    /// frontier**: the guidance envelope was never handed to the child
+    /// driver and no ticket was ever armed, so the no-effect cancellation
+    /// is confirmed. The operation captures the absorbing cancellation
+    /// cause at the observation boundary, so any plane that maps the end
+    /// to a result carries the cause that actually won.
+    CancelledBeforeSteerEffect {
+        /// The absorbing tool-cancellation cause read at the observation
+        /// boundary.
+        reason: CancellationReason,
+    },
+    /// The tool cancellation was observed **after the steer effect
+    /// frontier** and while the child's durable decision was still unknown:
+    /// the already-routed envelope may still be durably accepted by the
+    /// child, so terminal certainty cannot be established. The steer
+    /// operation is abandoned here — its ticket guard removes exactly its
+    /// own ticket — and the local rustX-owned execution ownership of this
+    /// `ToolCall` is fully settled.
+    CancelledAwaitingChildDecision,
+}
+
 /// Routes one parent-authored steer to the subagent domain authority, which
-/// alone decides acceptance (Issue #193).
+/// alone decides acceptance (Issue #193), while observing the Issue #204
+/// tool cancellation.
 ///
 /// The dispatch is explicit and closed. A `kind = tool` target is rejected
 /// here as an unsupported kind/action combination **before any authority is
 /// consulted**: the background registry is not asked (it owns no
 /// conversation to steer) and the subagent registry is not asked either, so
 /// there is no fallback in either direction and no id is ever interpreted
-/// across domains.
+/// across domains. Message validation is equally static and precedes every
+/// authority, so a deterministically invalid invocation is an ordinary
+/// failed tool result whether or not a cancellation is in flight — exactly
+/// as under the previous uniform `settled_by_operation` wrap.
 ///
-/// The intrinsic owns none of the semantics: it validates the target kind,
-/// hands the message to [`SubagentRegistry::steer`], and projects the
-/// authority's answer. Whether this child may still accept guidance —
-/// including the ownership refusal of a Workflow-owned `AgentRun`, whose
+/// The intrinsic owns none of the steer semantics: it composes the
+/// registry's own steering phases ([`SubagentRegistry::admit_guidance`],
+/// the child outcome, [`SubagentRegistry::commit_guidance`]) around the
+/// tool cancellation boundary. Whether this child may still accept guidance
+/// — including the ownership refusal of a Workflow-owned `AgentRun`, whose
 /// semantic input belongs to the compiled Workflow program — how accepted
-/// guidance is ordered, how it races cancellation and terminal authority,
-/// and how it reaches the child conversation are all owned below this
-/// boundary.
-async fn run_steer(
-    subagents: Option<&SubagentRegistry>,
-    target: &ExecutionHandle,
-    message: &str,
-) -> ToolExecutionResult {
+/// guidance is ordered, how it races subagent cancellation and terminal
+/// authority, and how it reaches the child conversation are all decided
+/// inside the registry, under its arbitration mutex, exactly as for the
+/// composed [`SubagentRegistry::steer`] entry point.
+///
+/// # The effect frontier
+///
+/// The steer **effect frontier** is the registry admission critical
+/// section: before it, no guidance envelope exists anywhere (confirmed
+/// no-effect cancellation is possible); after it, the envelope is on the
+/// child driver's lane and the child conversation may durably accept it at
+/// any time, so a later tool cancellation cannot prove the effect absent.
+/// The child's durable decision, once it has reached this operation, is the
+/// physical completion: it is evidence, and the tool cancellation is a
+/// request, so the operation's select is biased toward the child's answer.
+/// A subagent-level cancellation (`SubagentRegistry::cancel`, the explicit
+/// `execution(cancel)` action) remains a separate, registry-owned authority
+/// and is never synthesized from a `ToolCall` cancellation.
+async fn run_steer_tool_operation(
+    subagents: Option<SubagentRegistry>,
+    target: ExecutionHandle,
+    message: String,
+    cancellation: ExecutionCancellation,
+) -> SteerToolEnd {
+    // Static dispatch refusal: a `kind = tool` target has no conversation to
+    // steer. Deterministic, synchronous, and independent of cancellation —
+    // an invalid invocation is refused, never silently dropped.
     match target.kind {
-        ExecutionKind::Tool => failed(
-            "the \"steer\" action is not supported for kind \"tool\": a detached tool \
-             execution has no conversation to steer. Only kind \"subagent\" accepts \
-             \"steer\"."
-                .to_owned(),
-        ),
-        ExecutionKind::Subagent => {
-            let Some(subagents) = subagents else {
-                return failed(format!("unknown subagent execution {}", target.id));
-            };
-            match subagents.steer(&SubagentId::new(&target.id), message).await {
-                Ok(accepted) => json_result(&ExecutionSteerResponse {
-                    execution: ExecutionHandle::subagent(&accepted.subagent_id),
-                    state: accepted.state,
-                    accepted: true,
-                }),
-                Err(error) => failed(error.to_string()),
-            }
+        ExecutionKind::Tool => {
+            return SteerToolEnd::Result(failed(
+                "the \"steer\" action is not supported for kind \"tool\": a detached tool \
+                 execution has no conversation to steer. Only kind \"subagent\" accepts \
+                 \"steer\"."
+                    .to_owned(),
+            ));
         }
+        ExecutionKind::Subagent => {}
+    }
+    // Static message validation, before any ownership or lifecycle
+    // authority — the one bounded message contract shared with the
+    // composed `SubagentRegistry::steer`.
+    if let Err(error) = SubagentRegistry::validate_guidance_message(&message) {
+        return SteerToolEnd::Result(failed(error.to_string()));
+    }
+    let Some(subagents) = subagents else {
+        return SteerToolEnd::Result(failed(format!("unknown subagent execution {}", target.id)));
+    };
+    // Cancellation observed before the steer effect frontier: admission has
+    // not run, so the envelope is provably not on any lane and no ticket
+    // exists. The no-effect cancellation is confirmed.
+    if cancellation.is_cancelled() {
+        return SteerToolEnd::CancelledBeforeSteerEffect {
+            reason: cancellation.reason(),
+        };
+    }
+    let subagent_id = SubagentId::new(&target.id);
+    // Effect frontier: the registry arbitrates ownership and lifecycle and
+    // hands the envelope to the child driver, arming the ticket, all under
+    // its one arbitration mutex. A refusal arms nothing.
+    let (guidance_id, receiver, _ticket) = match subagents.admit_guidance(&subagent_id, &message) {
+        Ok(admitted) => admitted,
+        Err(error) => return SteerToolEnd::Result(failed(error.to_string())),
+    };
+    // The frontier has crossed: the child may durably accept the envelope
+    // at any time. Race its durable decision against the tool cancellation.
+    // The select is biased toward the child's answer: a child decision that
+    // has already reached this operation is committed evidence, while the
+    // tool cancellation is a request, so the decision wins the tie — the
+    // mirror of Issue #204's physical-completion-winner rule. If the
+    // cancellation wins instead, the steer operation is abandoned: the
+    // `_ticket` guard's `Drop` removes exactly its own ticket under the
+    // registry mutex, the receiver is dropped (the child driver's later
+    // answer resolves into a dropped waiter, which the driver cleans on its
+    // own), and the child subagent keeps running untouched.
+    let child_outcome = tokio::select! {
+        biased;
+        outcome = receiver => outcome,
+        () = cancellation.cancelled() => {
+            return SteerToolEnd::CancelledAwaitingChildDecision;
+        }
+    };
+    // The child decided: the registry commit classifies acceptance against
+    // its own arbitration — including a subagent-level cancellation that
+    // may have committed while this operation awaited the child.
+    match subagents.commit_guidance(&subagent_id, guidance_id, child_outcome) {
+        Ok(accepted) => SteerToolEnd::Result(json_result(&ExecutionSteerResponse {
+            execution: ExecutionHandle::subagent(&accepted.subagent_id),
+            state: accepted.state,
+            accepted: true,
+        })),
+        Err(error) => SteerToolEnd::Result(failed(error.to_string())),
+    }
+}
+
+/// Builds the Issue #204 [`ToolExecutionHandle`] of one `execution(steer)`
+/// invocation.
+///
+/// The steer operation lives in one shared ownership slot; the completion
+/// plane drives it while no cancellation/deadline intent has won, and once
+/// intent wins the owning lifecycle awaits ONLY the settlement plane, which
+/// takes exclusive ownership of the same operation and drives it to its
+/// classified end. This is the same ownership shape as
+/// [`ToolExecutionHandle::settled_by_operation`], but the steer operation
+/// observes the cancellation itself and ends in a typed
+/// [`SteerToolEnd`], so the settlement plane can classify the steer effect
+/// against its frontier instead of blindly waiting for the child:
+///
+/// - a natural steer result (child decision) is confirmed settlement
+///   evidence of that result;
+/// - a cancellation observed before the steer effect frontier is a
+///   confirmed no-effect cancellation;
+/// - a cancellation observed after the frontier with the child undecided is
+///   [`ToolSettlement::Unconfirmed`] — the envelope may still be durably
+///   accepted by the child — returned promptly, with no dependence on the
+///   settlement control-plane guard and no synthesized subagent
+///   cancellation.
+fn steer_tool_handle<'a>(
+    subagents: Option<SubagentRegistry>,
+    target: ExecutionHandle,
+    message: String,
+    cancellation: ExecutionCancellation,
+) -> ToolExecutionHandle<'a> {
+    let operation = Box::pin(run_steer_tool_operation(
+        subagents,
+        target,
+        message,
+        cancellation.clone(),
+    ));
+    let slot: std::sync::Arc<std::sync::Mutex<Option<BoxFuture<'a, SteerToolEnd>>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Some(operation)));
+    let completion_slot = std::sync::Arc::clone(&slot);
+    let completion: BoxFuture<'a, ToolExecutionResult> =
+        Box::pin(futures_util::future::poll_fn(move |cx| {
+            let mut guard = completion_slot.lock().expect("steer operation slot lock");
+            match guard.as_mut() {
+                Some(operation) => match operation.as_mut().poll(cx) {
+                    std::task::Poll::Ready(end) => std::task::Poll::Ready(steer_end_result(end)),
+                    std::task::Poll::Pending => std::task::Poll::Pending,
+                },
+                // The settlement plane owns the operation now; the owning
+                // lifecycle never polls this plane again after cancellation
+                // won arbitration.
+                None => std::task::Poll::Pending,
+            }
+        }));
+    let settlement: BoxFuture<'a, ToolSettlement> = Box::pin(async move {
+        cancellation.cancelled().await;
+        let operation = slot
+            .lock()
+            .expect("steer operation slot lock")
+            .take()
+            .expect("the settlement plane is awaited only while the operation is still owned");
+        match operation.await {
+            // The child's durable decision reached the operation: the steer
+            // result is the confirmed settlement evidence (Issue #204 keeps
+            // a known completion that won the physical race).
+            SteerToolEnd::Result(result) => ToolSettlement::Confirmed(result),
+            // Cancellation before the steer effect frontier: the no-effect
+            // cancellation is confirmed.
+            SteerToolEnd::CancelledBeforeSteerEffect { .. } => {
+                ToolSettlement::Confirmed(steer_cancelled_result(cancellation.reason()))
+            }
+            // Cancellation after the frontier, child decision unknown: the
+            // steer operation was abandoned (its ticket guard cleaned the
+            // registry ticket), every rustX-owned local execution ownership
+            // of this call is settled, and only the child-side fate of the
+            // already-routed envelope remains unprovable — the honest
+            // outcome-unknown evidence, never a fabricated cancellation.
+            SteerToolEnd::CancelledAwaitingChildDecision => ToolSettlement::Unconfirmed {
+                detail: steer_effect_uncertain_detail(),
+            },
+        }
+    });
+    ToolExecutionHandle::new(completion, settlement)
+}
+
+/// Maps a classified steer operation end to the [`ToolExecutionResult`] the
+/// completion plane reports when it observes that end. In the owning
+/// Issue #204 lifecycle this is reached only when the operation itself saw
+/// the tool cancellation fire (after which the lifecycle's biased
+/// arbitration hands the call to the settlement plane); the mapping keeps
+/// the completion plane total and honest for any direct driver of the
+/// handle.
+fn steer_end_result(end: SteerToolEnd) -> ToolExecutionResult {
+    match end {
+        SteerToolEnd::Result(result) => result,
+        SteerToolEnd::CancelledBeforeSteerEffect { reason } => steer_cancelled_result(reason),
+        // The child may still durably accept the already-routed envelope,
+        // so the honest status is outcome-unknown, never a confirmed
+        // cancellation.
+        SteerToolEnd::CancelledAwaitingChildDecision => {
+            empty_tool_result(ToolExecutionStatus::OutcomeUnknown {
+                detail: steer_effect_uncertain_detail(),
+            })
+        }
+    }
+}
+
+/// The bounded detail of a steer effect whose terminal fate is unprovable:
+/// the envelope crossed the effect frontier, the child had not decided when
+/// the tool cancellation was observed, and the child may still durably
+/// accept the guidance.
+fn steer_effect_uncertain_detail() -> String {
+    "the steer ToolCall was cancelled after the guidance envelope was handed \
+     to the running child and before the child decided; the child may still \
+     durably accept the guidance, so its effect cannot be proven absent"
+        .to_owned()
+}
+
+/// The confirmed cancelled result of a steer `ToolCall` whose cancellation
+/// was observed before any steer effect: the tool started (its executor
+/// frontier was crossed) but no guidance envelope exists anywhere.
+fn steer_cancelled_result(reason: CancellationReason) -> ToolExecutionResult {
+    empty_tool_result(ToolExecutionStatus::Cancelled {
+        reason,
+        phase: ToolCancellationPhase::DuringExecution,
+    })
+}
+
+/// A result shell carrying exactly the given status and no content — the
+/// shape of a cancelled or outcome-unknown steer `ToolCall` result.
+fn empty_tool_result(status: ToolExecutionStatus) -> ToolExecutionResult {
+    ToolExecutionResult {
+        status,
+        content: Vec::new(),
+        duration_ms: 0,
+        exit_code: None,
+        artifacts: Vec::new(),
+        truncation: None,
+        managed_output: None,
     }
 }
 
@@ -699,8 +1007,13 @@ impl From<SubagentSnapshot> for SubagentExecutionSnapshot {
 ///
 /// A steer that could not be accepted is a failed tool result carrying the
 /// deterministic reason, never a success with `accepted: false`. A steer
-/// that raced a cancellation is always refused, never accepted, and a
-/// Workflow-owned child refuses every steer outright.
+/// that raced a *subagent* cancellation intent is always refused, never
+/// accepted, and a Workflow-owned child refuses every steer outright. The
+/// response itself only ever exists on acceptance: when the steer `ToolCall`
+/// is cancelled (Issue #204) before the child decided, the invocation
+/// settles through the tool's settlement plane as cancelled/unconfirmed
+/// (see the module-level Issue #204 section) without ever producing this
+/// acknowledgement.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ExecutionSteerResponse {
     /// The canonical typed continuation identity — the same handle the

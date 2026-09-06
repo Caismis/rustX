@@ -2152,6 +2152,19 @@ Workflow program through the `WorkflowRuntime` and never by this control
 plane. A child's final report continues to arrive exactly once through the
 canonical parent inbound publication.
 
+As a foreground `ToolCall`, `execution(steer)` participates honestly in
+the generic Issue #204 cancellation/settlement lifecycle: the steer branch
+splits its completion and settlement planes explicitly (instead of
+wrapping the whole operation with `settled_by_operation`) so that once the
+tool's cancellation fires, the settlement plane classifies the steer
+against its **effect frontier** — before admission (confirmed no-effect
+cancellation), after admission with the child undecided (honest
+`Unconfirmed`, with the already-routed envelope possibly still accepted),
+or after the child's committed decision (confirmed steer result).
+Cancelling the steer ToolCall is deliberately not subagent cancellation:
+it never invokes `SubagentRegistry::cancel`, and the child subagent keeps
+running under its own lifecycle.
+
 The bundle also owns the conversation's `ConversationTodoList`: the task
 list the native `todo` tool mutates. It is deliberately *not* a second
 persistence path. Every settled `todo` call publishes the complete

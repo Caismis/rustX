@@ -1771,7 +1771,10 @@ SubagentRegistry::steer     the subagent/conversation authority: ownership
                             whether this child may still be offered guidance,
                             and the registry-mutex arbitration of the steer
                             ticket against cancellation intent and terminal
-                            authority
+                            authority — at the Issue #204 boundary the
+                            `execution(steer)` operation composes the
+                            registry's own phases (admission, child answer,
+                            commit) around the tool cancellation
   |
   v
 child durable inbound       ConversationRuntime::submit_parent_guidance under
@@ -1833,31 +1836,60 @@ side.
 - **The registry mutex is the one steer/cancel arbitration authority.**
   Transport ordering is not a semantic commit, so nothing relies on the
   reliable control lane being FIFO. Instead a steer holds a **ticket** on its
-  registry record: the ticket is armed inside the same critical section that
-  hands the envelope to the driver, it is *dropped* by the same critical
-  section that commits `Running -> Cancelling`, and the steer is reported
-  accepted only if it can remove its own ticket when it commits — which
-  happens strictly after the child answered. That single mutex therefore
-  totally orders admission, cancellation-intent commit, steer commit, and
-  terminal-authority commit.
+  registry record, and every ticket carries an explicit phase: a steer whose
+  child decision is still unknown to the registry is
+  `AwaitingChildDecision`, while a steer whose child-side `Accepted` answer
+  has already reached the registry — but whose parent acknowledgement commit
+  is still owed — is `ChildAcceptedPendingParentCommit`. The ticket is armed
+  inside the same critical section that hands the envelope to the driver
+  (the steer **effect frontier**), it is cleared by the same critical
+  section that commits `Running -> Cancelling`, and the steer's commit
+  consumes it. That single mutex therefore totally orders admission,
+  cancellation-intent commit, steer commit, and terminal-authority commit.
 - **Every steer ticket has one owner and exactly one terminal disposition.**
   Admission returns a small RAII guard (`GuidanceTicket`) that owns the
-  ticket for exactly as long as the steer future lives, and the ticket is
-  removed by exactly one of four disposals, all under the same registry
-  mutex in a short in-memory section with no async work: the steer's own
-  commit; the guard's `Drop`, when the steer future is abandoned before it
-  commits (the production path is a dropped or cancelled `execution(steer)`
-  tool invocation whose Issue #204 lifecycle tears the operation down
-  mid-await); the cancellation linearization point, which clears every
-  ticket; and the terminal-authority commit, which clears every remaining
-  ticket. An abandoned caller therefore never leaves arbitration state
-  behind, ticket state is bounded by the number of live steer callers rather
-  than by any claim about a child lifetime, and a terminal subagent record
-  never retains live steering arbitration state. The guard holds only the
-  shared registry state — never a driver, deadline, mailbox, or process
-  handle — and its `Drop` removes exactly its own ticket; it never changes a
-  lifecycle, never synthesizes a cancellation, and never duplicates the
-  cancellation or terminal authority.
+  ticket for exactly as long as the steer future lives — or, at the Issue
+  #204 boundary, exactly as long as the `execution(steer)` operation that
+  composes the registry's phases around the tool cancellation — and the
+  ticket is removed by exactly one of four disposals, all under the same
+  registry mutex in a short in-memory section with no async work: the
+  steer's own commit; the guard's `Drop`, when the steer operation is
+  abandoned before it commits (the Issue #204 settlement plane drops it
+  after classifying the cancelled steer as unresolved, and any teardown
+  that drops the operation does the same); the cancellation linearization
+  point, which clears every ticket **in either phase** (a committed
+  cancellation intent is absorbing and supersedes even an already-accepted,
+  not-yet-acknowledged steer); and the terminal-authority commit, which
+  clears every remaining ticket **in either phase**, so a terminal subagent
+  record never retains live steering arbitration state. Clearing a ticket is
+  registry **lifecycle cleanup** — it never erases an acceptance (below). An
+  abandoned caller therefore never leaves arbitration state behind, ticket
+  state is bounded by the number of live steer callers rather than by any
+  claim about a child lifetime, and a terminal subagent record never retains
+  live steering arbitration state. The guard holds only the shared registry
+  state — never a driver, deadline, mailbox, or process handle — and its
+  `Drop` removes exactly its own ticket; it never changes a lifecycle,
+  never synthesizes a cancellation, and never duplicates the cancellation or
+  terminal authority.
+- **Child durable acceptance is not parent acknowledgement scheduling.** The
+  child commits acceptance into its own conversation under its own
+  coordinator lock, ahead of its terminal seal, and answers `Accepted` over
+  the control lane; the parent driver resolves the steer waiter with that
+  answer. From that instant the accepted fact is committed in the child and
+  carried by the steer caller into its commit. A later **natural** terminal
+  commit — which can only settle the child *after* the driver already read
+  that answer, because the frames share one FIFO lane and the terminal
+  publication is downstream of the child's seal — may clean up the ticket
+  (the registry lifecycle state), but it must not transform the acceptance
+  into a refusal merely because the parent steer future was not yet
+  scheduled to publish its acknowledgement. The commit therefore classifies
+  the steer from the caller-held child outcome and the record's committed
+  cancellation fact, never from whether the ticket still exists: a natural
+  terminal's cleanup can never destroy the information required to classify
+  an already-accepted steer. A child that never answered `Accepted` before
+  terminal settlement is never optimistically treated as accepted — its
+  caller observes a refusal or the dropped driver waiter and reports the
+  child-side refusal.
 - **Cancellation always wins the race.** Any cancellation intent that commits
   before a steer's commit — and therefore any cancellation that commits
   before the child's durable acceptance, which strictly precedes that commit
@@ -1866,7 +1898,11 @@ side.
   refusal is honest rather than optimistic: a refused steer's envelope may
   physically have reached the child, but the cancellation that refused it is
   absorbing, so the child's terminal is the cancellation's and no answer
-  derived from that guidance is ever published.
+  derived from that guidance is ever published. This applies to an
+  already-accepted, not-yet-acknowledged steer exactly as to an unresolved
+  one: a cancellation that commits before the steer's acknowledgement commit
+  invalidates it (later explicit subagent cancellation supersedes accepted
+  but unobserved guidance).
 - **Cancellation after an accepted steer is still authoritative.** A steer
   that committed before any cancellation stays `accepted: true`, and a later
   cancellation may still terminate the child with the guidance unobserved.
@@ -1929,6 +1965,58 @@ side.
   the Issue #192 contract; `execution(steer)` is a control acknowledgement
   and never a final-answer transport, and it exposes no child transcript,
   history, result, or live observation.
+
+## `execution(steer)` in the Issue #204 Tool lifecycle
+
+`execution(steer)` is itself a foreground `ToolCall`, so it participates
+honestly in the generic Tool cancellation/settlement lifecycle (Issue #204):
+when the tool's [`ExecutionCancellation`] fires (attempt cancellation or the
+Agent-Loop-owned deadline), the owning lifecycle stops polling the completion
+plane and awaits ONLY the executor's settlement plane, which takes exclusive
+ownership of the steer operation and drives it to a classified end. The
+operation's classification is defined against the steer **effect frontier**
+— the registry admission critical section that hands the guidance envelope
+past the parent steer boundary to the child driver:
+
+```text
+before the steer effect frontier:
+    cancellation can prove no steer effect occurred
+
+after the frontier, child decision unknown:
+    cancellation cannot prove whether the child may later durably accept
+
+after ChildGuidanceOutcome::Accepted:
+    the semantic effect is known to have committed
+```
+
+- **Cancellation before the frontier is a confirmed no-effect cancellation.**
+  The steer operation checks the tool cancellation before it runs admission,
+  so when the request has already fired, no envelope exists anywhere and no
+  ticket is ever armed; the settlement reports the confirmed cancellation.
+- **Cancellation after the frontier, child undecided, is honest
+  outcome-unknown.** The already-routed envelope may still be durably
+  accepted by the child, so the settlement reports `Unconfirmed` — promptly,
+  with every rustX-owned local execution ownership of the call settled (the
+  operation's own ticket guard removed its ticket under the registry mutex),
+  and with **no dependence on the settlement control-plane guard**
+  ([`TOOL_SETTLEMENT_CONTROL_GUARD`] is only the last-resort detector of a
+  broken executor contract, never the normal termination path).
+- **A child decision that reaches the operation is the physical completion.**
+  The operation's select is biased toward the child's answer: a committed
+  child decision is evidence, while the tool cancellation is a request, so
+  the decision wins the tie and the settlement reports it confirmed — a
+  completed accepted/refused steer survives the tool cancellation exactly as
+  Issue #204 keeps any known completion that won the physical race.
+- **Tool-call cancellation is not subagent cancellation.** Cancelling the
+  `execution(steer)` ToolCall never calls `SubagentRegistry::cancel`: the
+  user cancelled the steering operation, not the child execution. The single
+  subagent cancellation authority remains the explicit `execution(cancel)`
+  action; the child subagent keeps running under its own lifecycle, no
+  `Cancel` frame is synthesized, and a later steer through the same running
+  child works normally.
+
+[`ExecutionCancellation`]: ../src/runtime/cancellation.rs
+[`TOOL_SETTLEMENT_CONTROL_GUARD`]: ../src/tools/deadline.rs
 
 ## Issue #144: named attempt-scoped subagent definitions
 
