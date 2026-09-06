@@ -77,11 +77,14 @@ use super::workspace::WorkspaceSnapshot;
 /// execution deadline inside the frozen resolved launch specification (Issue
 /// #191). Version 14 carries the parent's frozen generic tool
 /// execution-liveness deadline policy (Issue #204), inherited unchanged by
-/// the child runtime's foreground Tool lifecycle. HITL traffic remains on
+/// the child runtime's foreground Tool lifecycle. Version 15 adds the
+/// parent-authored in-flight guidance lane and its child acceptance answer
+/// (Issue #193): a steer is ordinary semantic conversation input for the
+/// already-running child, never process control. HITL traffic remains on
 /// fd 0 and never uses the disposable activity lane.
 /// There is no compatibility decoding: a peer that does not speak exactly
 /// this version exits before composing anything.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 14;
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 15;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -100,6 +103,7 @@ const KIND_ANCHOR_REFUSED: u8 = 5;
 const KIND_INTERACTION_RESPOND: u8 = 6;
 const KIND_PROVIDER_AVAILABILITY: u8 = 7;
 const KIND_INTERACTION_ADMISSION_RESULT: u8 = 8;
+const KIND_GUIDANCE: u8 = 9;
 
 // Child -> parent frame kinds (reliable control channel, fd 0).
 const KIND_READY: u8 = 101;
@@ -112,6 +116,7 @@ const KIND_INTERACTION_REQUESTED: u8 = 108;
 const KIND_INTERACTION_SETTLED: u8 = 109;
 const KIND_INTERACTION_RESPONSE_RESULT: u8 = 110;
 const KIND_INTERACTION_ADMISSION_REQUESTED: u8 = 111;
+const KIND_GUIDANCE_RESULT: u8 = 112;
 
 // Observation channel frame kind (disposable, fd 1, child -> parent only).
 const KIND_ACTIVITY: u8 = 107;
@@ -326,6 +331,98 @@ pub(crate) struct ActivityFrame {
     pub observation: super::activity::SubagentObservation,
 }
 
+/// One parent-authored in-flight guidance envelope (Issue #193).
+///
+/// A steer is **semantic conversation input for the already-running child**,
+/// not process control: the frame transports one bounded parent-authored
+/// message, and the child enters it through its own ordinary durable inbound
+/// path exactly like the delegation itself. It never carries model, tool,
+/// skill, instruction, workspace, or definition authority, so it can never
+/// re-author the child's frozen launch authority.
+///
+/// `guidance_id` is transport correlation only: it names which acceptance
+/// answer belongs to which request and is never a conversation identity, an
+/// inbound sequence, or a lifecycle fact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct GuidanceFrame {
+    /// Transport-only acceptance correlation identity.
+    pub guidance_id: u64,
+    /// The bounded parent-authored guidance text.
+    pub message: String,
+}
+
+/// The child's authoritative answer to one guidance envelope (Issue #193).
+///
+/// The child conversation is the durable acceptance authority: `Accepted`
+/// means the guidance committed into the child's own Pending Inbound Inbox
+/// under the one coordinator lock, ahead of that conversation's terminal
+/// seal. It never means the child model has already observed the guidance,
+/// that any provider request or tool call was interrupted, or that the
+/// requested behavioral change happened.
+///
+/// It is also **not** the final word on the parent's `accepted` answer: the
+/// parent registry arbitrates this answer against its own cancellation
+/// linearization point before reporting anything (see
+/// `SubagentRegistry::steer`). A child that answers `Accepted` for a steer
+/// the parent has meanwhile cancelled is still refused at the parent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct GuidanceResultFrame {
+    /// The exact request this answer settles.
+    pub guidance_id: u64,
+    /// The child conversation's authoritative acceptance decision.
+    pub outcome: ChildGuidanceOutcome,
+}
+
+/// The child conversation's authoritative acceptance decision (Issue #193).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ChildGuidanceOutcome {
+    /// The guidance is durably accepted into the child conversation's
+    /// Pending Inbound Inbox, ahead of that conversation's terminal seal.
+    ///
+    /// A **naturally completing** child therefore cannot publish a terminal
+    /// that predates it. A cancellation, or physical loss of the child, may
+    /// still end the conversation with the guidance unobserved.
+    Accepted,
+    /// The child conversation refused the guidance, with the bounded
+    /// deterministic reason.
+    Refused(ChildGuidanceRefusal),
+}
+
+/// Why one child conversation refused parent-authored guidance (Issue #193).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ChildGuidanceRefusal {
+    /// The child had not been delegated yet, so no conversation work exists
+    /// to steer.
+    NotDelegated,
+    /// The child conversation's terminal seal already committed: no further
+    /// semantic input can reach an Agent Loop boundary.
+    Settled,
+    /// The child's one-shot cancellation intent already committed.
+    Cancelled,
+    /// The child conversation could not durably accept the guidance.
+    Refused {
+        /// The bounded refusal diagnostic.
+        detail: String,
+    },
+}
+
+impl core::fmt::Display for ChildGuidanceRefusal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::NotDelegated => f.write_str("the child has not begun its delegated conversation"),
+            Self::Settled => f.write_str("the child conversation already settled"),
+            Self::Cancelled => f.write_str("the child cancellation intent is already committed"),
+            Self::Refused { detail } => {
+                write!(f, "the child conversation refused the guidance: {detail}")
+            }
+        }
+    }
+}
+
 /// One child publication-admission request/result. `request_id` is
 /// transport correlation only; the exact `InteractionRef` is echoed so a
 /// stale or mismatched result can never authorize another interaction.
@@ -371,6 +468,9 @@ pub(crate) enum ChildFrame {
     /// A child asks the root provider authority to admit one exact
     /// interaction publication before the child commits `InteractionRequested`.
     InteractionPublicationAdmissionRequested(InteractionPublicationAdmissionFrame),
+    /// The child conversation's authoritative answer to one guidance
+    /// envelope (Issue #193).
+    GuidanceResult(GuidanceResultFrame),
 }
 
 /// One decoded child-bound frame.
@@ -414,6 +514,9 @@ pub(crate) enum ParentFrame {
     },
     /// The root provider authority's answer to one child publication request.
     InteractionPublicationAdmissionResult(InteractionPublicationAdmissionFrame),
+    /// One parent-authored in-flight guidance envelope (Issue #193). The
+    /// child answers with exactly one `GuidanceResult`.
+    Guidance(GuidanceFrame),
 }
 
 /// A control-protocol violation of the peer.
@@ -579,6 +682,9 @@ pub(crate) async fn write_child_frame<W: tokio::io::AsyncWrite + Unpin + ?Sized>
             )
             .await
         }
+        ChildFrame::GuidanceResult(result) => {
+            write_frame(stream, KIND_GUIDANCE_RESULT, &encode(result)?).await
+        }
     }
 }
 
@@ -615,6 +721,7 @@ pub(crate) async fn read_child_frame<R: tokio::io::AsyncRead + Unpin + ?Sized>(
         KIND_INTERACTION_ADMISSION_REQUESTED => {
             ChildFrame::InteractionPublicationAdmissionRequested(decode(&payload)?)
         }
+        KIND_GUIDANCE_RESULT => ChildFrame::GuidanceResult(decode(&payload)?),
         other => return Err(ProtocolError::UnknownKind { kind: other }),
     };
     Ok(Some(frame))
@@ -678,6 +785,9 @@ pub(crate) async fn write_parent_frame<W: tokio::io::AsyncWrite + Unpin + ?Sized
         ParentFrame::InteractionPublicationAdmissionResult(result) => {
             write_frame(stream, KIND_INTERACTION_ADMISSION_RESULT, &encode(result)?).await
         }
+        ParentFrame::Guidance(payload) => {
+            write_frame(stream, KIND_GUIDANCE, &encode(payload)?).await
+        }
     }
 }
 
@@ -714,6 +824,7 @@ pub(crate) async fn read_parent_frame<R: tokio::io::AsyncRead + Unpin + ?Sized>(
         KIND_INTERACTION_ADMISSION_RESULT => {
             ParentFrame::InteractionPublicationAdmissionResult(decode(&payload)?)
         }
+        KIND_GUIDANCE => ParentFrame::Guidance(decode(&payload)?),
         other => return Err(ProtocolError::UnknownKind { kind: other }),
     };
     Ok(Some(frame))
@@ -1012,6 +1123,47 @@ mod tests {
                 reason: Some(CancellationReason::UserRequested),
             })
         );
+
+        // Parent-authored guidance and the child conversation's
+        // authoritative acceptance answer (Issue #193). The guidance frame
+        // carries the message and its transport correlation identity and
+        // nothing else: no model, tool, skill, instruction, workspace, or
+        // definition field exists on the wire at all, so a steer structurally
+        // cannot re-author the child's frozen launch authority.
+        let guidance = GuidanceFrame {
+            guidance_id: 7,
+            message: "focus on cancellation ownership".to_owned(),
+        };
+        write_parent_frame(&mut parent, &ParentFrame::Guidance(guidance.clone()))
+            .await
+            .expect("write guidance");
+        assert_eq!(
+            read_parent_frame(&mut child).await.expect("read guidance"),
+            Some(ParentFrame::Guidance(guidance))
+        );
+        for outcome in [
+            ChildGuidanceOutcome::Accepted,
+            ChildGuidanceOutcome::Refused(ChildGuidanceRefusal::Settled),
+            ChildGuidanceOutcome::Refused(ChildGuidanceRefusal::Cancelled),
+            ChildGuidanceOutcome::Refused(ChildGuidanceRefusal::NotDelegated),
+            ChildGuidanceOutcome::Refused(ChildGuidanceRefusal::Refused {
+                detail: "durable authority refused".to_owned(),
+            }),
+        ] {
+            let answer = GuidanceResultFrame {
+                guidance_id: 7,
+                outcome,
+            };
+            write_child_frame(&mut child, &ChildFrame::GuidanceResult(answer.clone()))
+                .await
+                .expect("write guidance result");
+            assert_eq!(
+                read_child_frame(&mut parent)
+                    .await
+                    .expect("read guidance result"),
+                Some(ChildFrame::GuidanceResult(answer))
+            );
+        }
 
         let routed_request = InteractionRequest {
             id: InteractionId::new("interaction-questionnaire"),

@@ -2122,16 +2122,48 @@ two-stage dispatch with an explicit ownership commit linearization
 point, a cancel-vs-completion linearization rule, bounded latest progress
 snapshots, and exactly-once terminal inbound mailbox publication
 (`background-exec_N-terminal`). The `execution` intrinsic
-(foreground-only, sequential) is the **single model-facing observation and
-cancellation control plane** for conversation-owned asynchronous
-executions (Issue #162): every creation result returns a typed execution
-handle (`kind` + `id`), and `execution(status|cancel)` routes an explicit
-`kind = tool` target only to `ConversationBackgroundRegistry` and a
-`kind = subagent` target only to `SubagentRegistry`. The intrinsic owns no
-lifecycle state — the domain registries remain the sole authorities for
-lifecycle, cancellation, durability, settlement, and terminal publication
-— and it never infers a kind from an id string or falls through from one
-domain to another.
+(foreground-only, sequential) is the **single model-facing observation,
+steering, and cancellation control plane** for conversation-owned
+asynchronous executions (Issue #162, steering from Issue #193): every
+creation result returns a typed execution handle (`kind` + `id`), and
+`execution(status|cancel|steer)` routes an explicit `kind = tool` target
+only to `ConversationBackgroundRegistry` and a `kind = subagent` target
+only to `SubagentRegistry`. There is exactly one model-facing handle type
+and exactly one model-facing control tool; steering adds an action, never a
+second handle and never a second tool. The intrinsic owns no lifecycle
+state — the domain registries remain the sole authorities for lifecycle,
+cancellation, durability, settlement, and terminal publication — and it
+never infers a kind from an id string or falls through from one domain to
+another. `steer` is subagent-only, and `kind = tool` + `action = steer` is
+refused as an unsupported kind/action combination before either authority
+is consulted.
+
+`execution(steer)` is a **control acknowledgement plane, never a child
+result channel**. It owns the model-facing schema, the explicit action
+dispatch, the target-kind validation, and the minimal acknowledgement
+projection (`execution`, `state`, `accepted`); every semantic decision —
+whether this child may still accept guidance, how accepted guidance is
+ordered, how acceptance linearizes against cancellation intent and
+terminal authority, and how the message reaches the child's Agent Loop —
+belongs to `SubagentRegistry::steer` and, below it, to the child
+conversation's own coordinator — including the ownership refusal of a
+Workflow-owned `AgentRun`, whose semantic input is authored by the compiled
+Workflow program through the `WorkflowRuntime` and never by this control
+plane. A child's final report continues to arrive exactly once through the
+canonical parent inbound publication.
+
+As a foreground `ToolCall`, `execution(steer)` participates honestly in
+the generic Issue #204 cancellation/settlement lifecycle: the steer branch
+splits its completion and settlement planes explicitly (instead of
+wrapping the whole operation with `settled_by_operation`) so that once the
+tool's cancellation fires, the settlement plane classifies the steer
+against its **effect frontier** — before admission (confirmed no-effect
+cancellation), after admission with the child undecided (honest
+`Unconfirmed`, with the already-routed envelope possibly still accepted),
+or after the child's committed decision (confirmed steer result).
+Cancelling the steer ToolCall is deliberately not subagent cancellation:
+it never invokes `SubagentRegistry::cancel`, and the child subagent keeps
+running under its own lifecycle.
 
 The bundle also owns the conversation's `ConversationTodoList`: the task
 list the native `todo` tool mutates. It is deliberately *not* a second
@@ -6412,13 +6444,17 @@ order, so two units with outstanding offers cannot open each other's gates.
 The control read half remains the parent-liveness authority, and its EOF is
 what `ChildPreparation` observes during composition. Channels are bounded,
 there is no listener and no network service. The subagent IPC version is
-**13**: its typed `Cancel` frame carries the parent registry's semantic
+**15**: its typed `Cancel` frame carries the parent registry's semantic
 `CancellationReason` (with an absent reason only for pre-ownership
 preparation cancellation, where no child attempt exists), the child→parent
 `Activity` frame (kind 107) carries the Issue #178 live activity projection
-on the dedicated fd 1 observation stream, and routed interaction
+on the dedicated fd 1 observation stream, routed interaction
 publication-admission, request/settlement/response frames plus the early
-root-provider availability hint use the reliable fd 0 control stream. The
+root-provider availability hint use the reliable fd 0 control stream, and
+the Issue #193 parent-authored `Guidance` envelope and its child
+`GuidanceResult` answer share that same reliable stream — the envelope
+carrying a bounded message plus a transport correlation id and nothing
+else, so no launch authority is spellable on the wire. The
 parent answers admission from the root host's synchronized control-attachment
 frontier and echoes the exact `InteractionRef`; the permit is transport
 correlation only and the child coordinator commits the requested fact. A

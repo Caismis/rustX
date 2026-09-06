@@ -546,6 +546,27 @@ pub struct ConversationInboundMailbox {
     /// acceptance between two waits is never missed. The wake is leaf-only:
     /// the coordinator waits on it and never notifies it.
     wake: Arc<tokio::sync::Notify>,
+    /// Test-only fault seam for [`ConversationInboundMailbox::has_pending`]
+    /// (Issue #193).
+    ///
+    /// It exists so the terminal seal's *fail-closed* contract can be proven
+    /// deterministically without arming a store-wide select fault that the
+    /// coordinator's own admission loop would race for. It is armed by
+    /// count, consumed by exactly the pending probe, and is compiled out of
+    /// production entirely.
+    #[cfg(test)]
+    pending_probe_faults: Arc<std::sync::atomic::AtomicUsize>,
+    /// Test-only invocation counter of the same pending probe (Issue #193).
+    ///
+    /// [`ConversationInboundMailbox::has_pending`] is called by exactly one
+    /// production path — the child terminal seal's positive-emptiness
+    /// proof — so a Workflow-isolation regression can prove *directly* that
+    /// the steering-specific seal machinery was never consulted by
+    /// asserting this counter stayed at zero, instead of inferring
+    /// non-invocation from the absence of an observed failure. Compiled out
+    /// of production entirely.
+    #[cfg(test)]
+    pending_probe_calls: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl ConversationInboundMailbox {
@@ -597,6 +618,10 @@ impl ConversationInboundMailbox {
             })),
             inbound,
             wake: Arc::new(tokio::sync::Notify::new()),
+            #[cfg(test)]
+            pending_probe_faults: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            #[cfg(test)]
+            pending_probe_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -1118,6 +1143,61 @@ impl ConversationInboundMailbox {
                 })
                 .collect(),
         }))
+    }
+
+    /// Whether the durable Pending Inbound Inbox currently holds any
+    /// accepted, not-yet-adopted item.
+    ///
+    /// This is a durable read of the same authority
+    /// [`ConversationInboundMailbox::select_pending_batch`] reads and
+    /// [`ConversationInboundMailbox::accept_draft`] writes, so a caller that
+    /// holds a lock which also serializes acceptance observes an exact
+    /// answer: no item accepted before the observation can be missed, and no
+    /// item accepted after it can be seen. The child conversation's terminal
+    /// seal (Issue #193) depends on exactly that property.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MailboxError::Durable`] on a durable read failure.
+    pub fn has_pending(&self) -> Result<bool, MailboxError> {
+        #[cfg(test)]
+        {
+            self.pending_probe_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        #[cfg(test)]
+        if self
+            .pending_probe_faults
+            .fetch_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |remaining| remaining.checked_sub(1),
+            )
+            .is_ok()
+        {
+            return Err(MailboxError::Durable(
+                crate::durable::ConversationStoreError::Storage(
+                    "injected pending-inbox probe failure".to_owned(),
+                ),
+            ));
+        }
+        Ok(self.inbound.select_pending_batch()?.is_some())
+    }
+
+    /// Arms `count` consecutive durable failures of
+    /// [`ConversationInboundMailbox::has_pending`] (test-only, Issue #193).
+    #[cfg(test)]
+    pub(crate) fn arm_pending_probe_failures(&self, count: usize) {
+        self.pending_probe_faults
+            .fetch_add(count, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// How many times [`ConversationInboundMailbox::has_pending`] has been
+    /// invoked on this mailbox (test-only, Issue #193).
+    #[cfg(test)]
+    pub(crate) fn pending_probe_calls(&self) -> usize {
+        self.pending_probe_calls
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Atomically adopts the selected batch into the durable canonical

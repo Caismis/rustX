@@ -681,6 +681,13 @@ impl ClientInner {
                 InboundAdmissionError::Mailbox(error) => RuntimeClientError::InvalidState {
                     message: error.to_string(),
                 },
+                // The guidance-only admission gates belong to the one-shot
+                // subagent child plane (Issue #193); the human submit path
+                // never enters that class and can never observe them.
+                error @ (InboundAdmissionError::GuidanceSealed
+                | InboundAdmissionError::GuidanceCancelled) => RuntimeClientError::InvalidState {
+                    message: error.to_string(),
+                },
             })?;
         Ok(RuntimeClientResult::InboundAccepted {
             message_id: admission.message_id,
@@ -5364,6 +5371,7 @@ mod tests {
                 tool_start_pause: None,
                 drain_supervision: None,
                 attempt_exit_gate: None,
+                parent_guidance_seal_gate: None,
                 background_failure_gate: None,
             },
         )
@@ -5455,6 +5463,7 @@ mod tests {
                 tool_start_pause: None,
                 drain_supervision: None,
                 attempt_exit_gate: None,
+                parent_guidance_seal_gate: None,
                 background_failure_gate: None,
             },
         )
@@ -6078,6 +6087,7 @@ mod tests {
                 tool_start_pause: None,
                 drain_supervision: None,
                 attempt_exit_gate: None,
+                parent_guidance_seal_gate: None,
                 background_failure_gate: None,
             },
         )
@@ -6168,6 +6178,7 @@ mod tests {
                 tool_start_pause: None,
                 drain_supervision: None,
                 attempt_exit_gate: None,
+                parent_guidance_seal_gate: None,
                 background_failure_gate: None,
             },
         )
@@ -6402,6 +6413,7 @@ mod tests {
                 tool_start_pause: None,
                 drain_supervision: None,
                 attempt_exit_gate: None,
+                parent_guidance_seal_gate: None,
                 background_failure_gate: None,
             },
         )
@@ -7504,6 +7516,7 @@ mod tests {
                 ]],
                 Some(CoordinatorProbe {
                     attempt_exit_gate: Some(attempt_exit_gate.clone()),
+                    parent_guidance_seal_gate: None,
                     ..CoordinatorProbe::default()
                 }),
             )
@@ -8511,6 +8524,7 @@ mod tests {
                 tool_start_pause: None,
                 drain_supervision: None,
                 attempt_exit_gate: None,
+                parent_guidance_seal_gate: None,
                 background_failure_gate: None,
             }),
         )
@@ -8773,6 +8787,7 @@ mod tests {
                 tool_start_pause: None,
                 drain_supervision: None,
                 attempt_exit_gate: None,
+                parent_guidance_seal_gate: None,
                 background_failure_gate: None,
             }),
         )

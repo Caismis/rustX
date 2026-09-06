@@ -45,8 +45,9 @@ use crate::runtime::types::CancellationReason;
 
 use super::anchors::{NestedUnitSettlement, RetainedProcessUnits, contain_retained};
 use super::ipc::{
-    ChildFrame, ChildTerminalMode, ParentFrame, ProcessUnitAckFrame, ProcessUnitRefusalFrame,
-    ResultFrame, SubagentChildSpec, read_child_frame, write_parent_frame,
+    ChildFrame, ChildGuidanceOutcome, ChildTerminalMode, GuidanceFrame, ParentFrame,
+    ProcessUnitAckFrame, ProcessUnitRefusalFrame, ResultFrame, SubagentChildSpec, read_child_frame,
+    write_parent_frame,
 };
 use super::registry::{SubagentInteractionSink, SubagentTerminalMode};
 use super::resolver::ResolvedSubagentSpec;
@@ -1171,6 +1172,13 @@ async fn handshake_core(
                     });
                 }
                 Ok(Some(ChildFrame::Diagnostic(_))) => {}
+                // Guidance is only ever routed to a committed, delegated
+                // child, so an acceptance answer cannot precede `Ready`.
+                Ok(Some(ChildFrame::GuidanceResult(_))) => {
+                    return Err(SpawnError::Handshake {
+                        detail: "the child answered guidance before Ready".to_owned(),
+                    });
+                }
                 // External capability preparation runs before `Ready`,
                 // so a nested supervised unit can legitimately offer its
                 // anchor here. The staged owner retains it; the child's
@@ -1252,6 +1260,17 @@ pub(crate) struct ChildDriver {
 }
 
 /// The driver command channel payload.
+///
+/// The driver owns exactly two kinds of work, and the split is the layering
+/// contract rather than a convenience: [`DriverCommand::Cancel`] is
+/// **physical control** the driver implements end to end (frame delivery,
+/// the bounded grace deadline, `SIGTERM`/`SIGKILL` escalation on the child's
+/// process group, reap), while [`DriverCommand::Route`] is **pure transport
+/// routing** of a child-bound frame some semantic authority already
+/// authored, validated, ordered, and committed to. The driver writes the
+/// frame it is handed and correlates the child's answer back to the waiter;
+/// it never authors, validates, orders, interprets, or persists a routed
+/// payload, and it owns no conversation state of either side.
 #[derive(Debug)]
 pub(crate) enum DriverCommand {
     /// Cancel the child with the reason committed by the registry: send the
@@ -1261,6 +1280,20 @@ pub(crate) enum DriverCommand {
         /// The registry's first-winner cancellation cause.
         reason: CancellationReason,
     },
+    /// Transport one already-authored child-bound frame and correlate its
+    /// answer. Semantics belong entirely to the authority that produced it.
+    Route(ChildBoundRoute),
+}
+
+/// One child-bound frame the driver transports on behalf of a semantic
+/// authority.
+///
+/// Every variant is transport plus exact-identity correlation. The
+/// `response_id`/`guidance_id` fields are transport correlation only: they
+/// name which answer belongs to which request and are never a conversation
+/// identity, an inbound sequence, or a lifecycle fact.
+#[derive(Debug)]
+pub(crate) enum ChildBoundRoute {
     /// Forward one root response to the child coordinator and resolve the
     /// sender when the child has applied the originating transition.
     InteractionRespond {
@@ -1272,6 +1305,22 @@ pub(crate) enum DriverCommand {
         response: InteractionResponse,
         /// The child coordinator's accepted or fail-closed result.
         result: tokio::sync::oneshot::Sender<Result<(), RoutedInteractionError>>,
+    },
+    /// Forward one parent-authored guidance envelope (Issue #193) into the
+    /// running child and resolve the sender with the **child conversation's**
+    /// authoritative acceptance decision.
+    ///
+    /// The driver neither decides nor observes that decision: acceptance is
+    /// the child coordinator's durable inbound commit, and the registry —
+    /// not this task — owns whether the guidance could be admitted at all.
+    Guidance {
+        /// Transport-only acceptance correlation identity.
+        guidance_id: u64,
+        /// The bounded parent-authored guidance text.
+        message: String,
+        /// The child conversation's acceptance decision, or a dropped sender
+        /// when the child settled without answering.
+        outcome: tokio::sync::oneshot::Sender<ChildGuidanceOutcome>,
     },
 }
 
@@ -1421,6 +1470,11 @@ async fn drive_child_control(
             tokio::sync::oneshot::Sender<Result<(), RoutedInteractionError>>,
         ),
     > = HashMap::new();
+    // Parent-authored guidance waiters (Issue #193), keyed by the exact
+    // transport correlation identity. Dropping the map at settlement resolves
+    // every unanswered waiter as a deterministic refusal.
+    let mut guidance_waiters: HashMap<u64, tokio::sync::oneshot::Sender<ChildGuidanceOutcome>> =
+        HashMap::new();
     let mut commands_open = true;
     if let Some(reason) = cancelled_before_start {
         if let Err(error) = write_parent_frame(
@@ -1498,12 +1552,12 @@ async fn drive_child_control(
                             }
                         }
                     }
-                    Some(DriverCommand::InteractionRespond {
+                    Some(DriverCommand::Route(ChildBoundRoute::InteractionRespond {
                         response_id,
                         interaction,
                         response,
                         result,
-                    }) => {
+                    })) => {
                         let frame = ParentFrame::InteractionRespond {
                             response_id,
                             interaction: interaction.clone(),
@@ -1531,6 +1585,40 @@ async fn drive_child_control(
                                 }));
                                 violation = Some(format!(
                                     "control channel lost while delivering interaction response: {error}"
+                                ));
+                            }
+                        }
+                    }
+                    Some(DriverCommand::Route(ChildBoundRoute::Guidance {
+                        guidance_id,
+                        message,
+                        outcome,
+                    })) => {
+                        // Transport only: the registry already linearized
+                        // admission against cancellation and terminal
+                        // authority, and the child conversation alone
+                        // decides durable acceptance. The driver writes the
+                        // frame and parks the waiter under the exact
+                        // correlation identity.
+                        let frame = ParentFrame::Guidance(GuidanceFrame {
+                            guidance_id,
+                            message,
+                        });
+                        match write_parent_frame(&mut control, &frame).await {
+                            Ok(()) => {
+                                if guidance_waiters.insert(guidance_id, outcome).is_some() {
+                                    violation = Some(
+                                        "duplicate child guidance correlation id".to_owned(),
+                                    );
+                                }
+                            }
+                            Err(error) => {
+                                // The waiter is dropped, which the registry
+                                // reads as a deterministic refusal: nothing
+                                // reached the child conversation.
+                                drop(outcome);
+                                violation = Some(format!(
+                                    "control channel lost while delivering parent guidance: {error}"
                                 ));
                             }
                         }
@@ -1591,6 +1679,22 @@ async fn drive_child_control(
                                 "child returned a mismatched interaction response identity"
                                     .to_owned(),
                             );
+                        }
+                    }
+                    Ok(Some(ChildFrame::GuidanceResult(frame))) => {
+                        // The child conversation is the acceptance authority;
+                        // the driver only correlates its answer back. An
+                        // unknown correlation id is a protocol violation, not
+                        // a silently ignored answer.
+                        match guidance_waiters.remove(&frame.guidance_id) {
+                            Some(waiter) => {
+                                let _ = waiter.send(frame.outcome);
+                            }
+                            None => {
+                                violation = Some(
+                                    "child returned an unknown guidance correlation id".to_owned(),
+                                );
+                            }
                         }
                     }
                     Ok(Some(

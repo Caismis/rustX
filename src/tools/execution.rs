@@ -1,13 +1,14 @@
 //! The model-facing asynchronous execution control envelope (Issue #162).
 //!
-//! `execution` is the **single model-facing observation and cancellation
-//! control plane** for conversation-owned asynchronous executions. This
-//! module owns only the small typed envelope both creation paths and the
-//! intrinsic share:
+//! `execution` is the **single model-facing observation, steering, and
+//! cancellation control plane** for conversation-owned asynchronous
+//! executions. This module owns only the small typed envelope both creation
+//! paths and the intrinsic share:
 //!
 //! - the explicit [`ExecutionKind`] of one execution;
 //! - the typed [`ExecutionHandle`] every model-visible creation result
-//!   returns and every `execution(status|cancel)` target names;
+//!   returns and every `execution(status|cancel|steer)` target names —
+//!   there is deliberately no second, action-specific handle;
 //! - the single global [`MAX_LISTED_EXECUTIONS`] response bound of
 //!   `execution(list)` (Issue #180), which is a model-facing response
 //!   policy rather than any domain's invariant.
@@ -42,8 +43,8 @@ use crate::runtime::identity::{SubagentId, ToolExecutionId};
 /// The explicit kind of one conversation-owned asynchronous execution.
 ///
 /// The kind is always explicit in model-facing surfaces: creation results
-/// tag their handle with it, `execution(status|cancel)` targets carry it,
-/// and Agent Status renders it. The runtime never infers a kind from an id
+/// tag their handle with it, `execution(status|cancel|steer)` targets carry
+/// it, and Agent Status renders it. The runtime never infers a kind from an id
 /// string and never falls through from one domain to another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -69,8 +70,8 @@ impl ExecutionKind {
 /// execution.
 ///
 /// The handle is the canonical continuation affordance: every model-visible
-/// creation result returns exactly one, and every `execution(status|cancel)`
-/// target names one. It carries the explicit kind plus the owning domain's
+/// creation result returns exactly one, and every
+/// `execution(status|cancel|steer)` target names one. It carries the explicit kind plus the owning domain's
 /// model-facing id string — never a guessed kind, never a bare id. The
 /// domain identity types (`ToolExecutionId`, `SubagentId`) remain internal
 /// to their registries; the handle is their model-facing projection.

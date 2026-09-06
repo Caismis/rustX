@@ -615,6 +615,12 @@ pub struct AgentExecution<'a> {
     /// scheduling.
     #[cfg(test)]
     tool_start_pause: std::sync::Mutex<Option<test_sync::ToolStartPause>>,
+    /// Test-only signal published when one foreground call's hard deadline
+    /// becomes an absolute monotonic value, which is strictly after the
+    /// `ToolExecutionStarted` fact. A manual-clock test uses it to advance
+    /// the clock across a frontier that provably already exists.
+    #[cfg(test)]
+    tool_deadline_armed: std::sync::Mutex<Option<test_sync::ToolDeadlineArmedSignal>>,
     /// Test-only control point after cancellation wins the foreground
     /// physical-result arbitration and before the late physical future is
     /// awaited. It makes the cancellation linearization observable without
@@ -1285,6 +1291,8 @@ impl<'a> AgentExecution<'a> {
             #[cfg(test)]
             tool_start_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
+            tool_deadline_armed: std::sync::Mutex::new(None),
+            #[cfg(test)]
             tool_cancellation_settlement_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
             tool_physical_settlement_pause: std::sync::Mutex::new(None),
@@ -1400,6 +1408,18 @@ impl<'a> AgentExecution<'a> {
     #[cfg(test)]
     pub(crate) fn install_tool_start_pause(&mut self, pause: test_sync::ToolStartPause) {
         *self.tool_start_pause.lock().expect("tool start pause lock") = Some(pause);
+    }
+
+    /// Installs the test-only foreground tool hard-deadline arming signal.
+    #[cfg(test)]
+    pub(crate) fn install_tool_deadline_armed_signal(
+        &mut self,
+        signal: test_sync::ToolDeadlineArmedSignal,
+    ) {
+        *self
+            .tool_deadline_armed
+            .lock()
+            .expect("tool deadline armed signal lock") = Some(signal);
     }
 
     /// Installs the deterministic foreground cancellation-settlement pause.
@@ -5026,6 +5046,17 @@ impl<'a> AgentExecution<'a> {
         // call are measured from.
         let started_at = self.monotonic_clock.now_millis();
         let hard_deadline_millis = self.tool_deadline_policy.hard_deadline_millis(started_at);
+        // The frontier now exists as an absolute value; a manual-clock test
+        // may cross it from here on.
+        #[cfg(test)]
+        if let Some(signal) = self
+            .tool_deadline_armed
+            .lock()
+            .expect("tool deadline armed signal lock")
+            .as_ref()
+        {
+            signal.armed(hard_deadline_millis);
+        }
         // The effective idle-liveness window of this admitted execution: the
         // frozen runtime idle policy applies exactly when the admitted
         // executor declared meaningful progress capability, frozen at
@@ -6531,6 +6562,37 @@ pub(crate) mod test_sync {
         pub(super) fn park(&self) {
             self.reached.send_replace(true);
             let _ = self.release.recv();
+        }
+    }
+
+    /// A test-only **signal** (no park) published the instant one foreground
+    /// tool call's hard deadline becomes an absolute monotonic value.
+    ///
+    /// It exists because `ToolExecutionStarted` is *not* that instant: the
+    /// start fact is emitted to observers before `run_foreground` reads its
+    /// executor-start frontier from the clock. A manual-clock test that
+    /// advanced on the start fact could therefore advance *before* the
+    /// frontier is read, pushing the absolute deadline out by the same
+    /// amount and silently never firing it. Waiting for this signal is what
+    /// makes such a test an ordering rather than a race.
+    #[derive(Debug)]
+    pub(crate) struct ToolDeadlineArmedSignal {
+        armed: watch::Sender<Option<u64>>,
+    }
+
+    impl ToolDeadlineArmedSignal {
+        /// Creates the signal and its observation handle. The handle carries
+        /// the absolute hard-deadline value, so a test can assert exactly
+        /// which frontier it is about to cross.
+        #[must_use]
+        pub(crate) fn install() -> (Self, watch::Receiver<Option<u64>>) {
+            let (armed, armed_rx) = watch::channel(None);
+            (Self { armed }, armed_rx)
+        }
+
+        /// Publishes the absolute hard deadline of the call being started.
+        pub(super) fn armed(&self, deadline_millis: u64) {
+            self.armed.send_replace(Some(deadline_millis));
         }
     }
 

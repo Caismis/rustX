@@ -182,12 +182,33 @@ async fn issue204_bash_hard_deadline_settles_proven_timed_out() {
     };
     execution.observe(&observer);
 
+    // The clock is crossed only once the hard deadline exists as an absolute
+    // monotonic value. `ToolExecutionStarted` is deliberately *not* that
+    // point: the start fact reaches observers before `run_foreground` reads
+    // its executor-start frontier from the clock, so advancing on the start
+    // fact could move the frontier out by the same 5s and never fire it —
+    // the process would then run to completion and settle `Success`. Waiting
+    // for the arming signal makes this an ordering instead of a race, and
+    // asserting the armed value pins which frontier is being crossed.
+    let (armed_signal, mut armed) =
+        crate::agent::execution::test_sync::ToolDeadlineArmedSignal::install();
+    execution.install_tool_deadline_armed_signal(armed_signal);
+
     let controller_clock = clock.clone();
     let controller = tokio::spawn(async move {
         started
             .wait_for(|is_started| *is_started)
             .await
             .expect("tool start observation channel stays open");
+        let deadline = *armed
+            .wait_for(Option::is_some)
+            .await
+            .expect("the hard deadline is armed while the execution runs");
+        assert_eq!(
+            deadline,
+            Some(5_000),
+            "the frontier is measured from the executor start, at clock zero"
+        );
         controller_clock.advance(5_000);
     });
     let result = tokio::time::timeout(Duration::from_mins(2), execution.run())
