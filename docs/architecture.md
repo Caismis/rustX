@@ -6431,13 +6431,17 @@ order, so two units with outstanding offers cannot open each other's gates.
 The control read half remains the parent-liveness authority, and its EOF is
 what `ChildPreparation` observes during composition. Channels are bounded,
 there is no listener and no network service. The subagent IPC version is
-**13**: its typed `Cancel` frame carries the parent registry's semantic
+**15**: its typed `Cancel` frame carries the parent registry's semantic
 `CancellationReason` (with an absent reason only for pre-ownership
 preparation cancellation, where no child attempt exists), the child→parent
 `Activity` frame (kind 107) carries the Issue #178 live activity projection
-on the dedicated fd 1 observation stream, and routed interaction
+on the dedicated fd 1 observation stream, routed interaction
 publication-admission, request/settlement/response frames plus the early
-root-provider availability hint use the reliable fd 0 control stream. The
+root-provider availability hint use the reliable fd 0 control stream, and
+the Issue #193 parent-authored `Guidance` envelope and its child
+`GuidanceResult` answer share that same reliable stream — the envelope
+carrying a bounded message plus a transport correlation id and nothing
+else, so no launch authority is spellable on the wire. The
 parent answers admission from the root host's synchronized control-attachment
 frontier and echoes the exact `InteractionRef`; the permit is transport
 correlation only and the child coordinator commits the requested fact. A
