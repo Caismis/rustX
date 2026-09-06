@@ -10,20 +10,25 @@ use crate::tools::native::input::decode;
 /// The canonical input contract of the `execution` intrinsic.
 ///
 /// The contract is **action-tagged**: the action selects the variant, and
-/// each variant carries exactly the fields that action needs. `status` and
-/// `cancel` name one execution and therefore require a `target`; `list`
-/// names none and therefore accepts no `target` at all. Encoding that with
-/// one optional `target` field would have made two different requests
-/// spellable the same way and left `{"action": "status"}` structurally
-/// legal; the tagged union makes every ill-formed combination a schema
-/// violation instead of a runtime special case.
+/// each variant carries exactly the fields that action needs. `status`,
+/// `cancel`, and `steer` name one execution and therefore require a
+/// `target`, and `steer` additionally requires its `message`; `list` names
+/// none and therefore accepts no `target` at all. Encoding that with one
+/// optional `target` field would have made two different requests spellable
+/// the same way and left `{"action": "status"}` structurally legal; the
+/// tagged union makes every ill-formed combination a schema violation
+/// instead of a runtime special case — including a `message` on an action
+/// that has no use for one.
 ///
-/// The target of `status`/`cancel` is the canonical typed
+/// The target of `status`/`cancel`/`steer` is the canonical typed
 /// [`ExecutionHandle`] itself — the same handle every creation result
 /// returns — so the model echoes back the exact handle it was given instead
-/// of reconstructing a structurally identical shape. The kind is always
-/// explicit; the intrinsic never infers a kind from an id prefix and never
-/// falls through from one registry to another.
+/// of reconstructing a structurally identical shape. There is deliberately
+/// no separate steer handle and no separate steering tool. The kind is
+/// always explicit; the intrinsic never infers a kind from an id prefix and
+/// never falls through from one registry to another, so `steer` on a
+/// `tool` target fails as an unsupported kind/action combination without
+/// either registry being consulted.
 ///
 /// The root carries an explicit `"type": "object"` (`extend`) because the
 /// generated union is a root `oneOf`, and the canonical tool-schema policy
@@ -41,6 +46,14 @@ pub(super) enum ExecutionInput {
     Cancel {
         /// The explicit tagged target of the operation.
         target: ExecutionHandle,
+    },
+    /// Sends one additional guidance message into a still-running subagent
+    /// child's own conversation (Issue #193).
+    Steer {
+        /// The explicit tagged target of the operation.
+        target: ExecutionHandle,
+        /// The parent-authored guidance text.
+        message: String,
     },
     /// Returns the bounded, deterministically ordered listing of the
     /// conversation's own executions.
@@ -87,9 +100,10 @@ impl ExecutionInput {
     /// # Errors
     ///
     /// Returns the deterministic rejection message of the first input
-    /// contract violation, including an action outside the three supported
+    /// contract violation, including an action outside the four supported
     /// operations, an unknown execution kind, a `target` on `list`, a
-    /// missing `target` on `status`/`cancel`, and any unknown field.
+    /// missing `target` on `status`/`cancel`/`steer`, a missing or
+    /// non-string `message` on `steer`, and any unknown field.
     pub(super) fn parse(arguments: &serde_json::Value) -> Result<Self, String> {
         decode(super::EXECUTION_TOOL_NAME, arguments)
     }

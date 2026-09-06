@@ -1,7 +1,8 @@
-//! The `execution` runtime intrinsic (Issue #162, discovery from #180).
+//! The `execution` runtime intrinsic (Issue #162, discovery from #180,
+//! in-flight steering from #193).
 //!
-//! `execution` is the single model-facing observation, discovery, and
-//! cancellation control plane for conversation-owned asynchronous
+//! `execution` is the single model-facing observation, discovery, steering,
+//! and cancellation control plane for conversation-owned asynchronous
 //! executions. It is a **control-plane router only**: it owns model-facing
 //! schema/input validation, explicit target-kind dispatch, conversion into
 //! the owning domain's id type, invocation of the owning registry API, and
@@ -25,7 +26,7 @@
 //!   v                             v
 //! ConversationBackgroundRegistry  SubagentRegistry
 //!   |                             |
-//!   | authoritative state/cancel  | authoritative state/cancel
+//!   | authoritative state/cancel  | authoritative state/cancel/steer
 //!   | authoritative listing       | authoritative listing
 //!   v                             v
 //! BackgroundExecutionSnapshot     SubagentSnapshot
@@ -45,6 +46,7 @@
 //! ```json
 //! {"action": "status", "target": {"kind": "tool | subagent", "id": "..."}}
 //! {"action": "cancel", "target": {"kind": "tool | subagent", "id": "..."}}
+//! {"action": "steer",  "target": {"kind": "subagent", "id": "..."}, "message": "..."}
 //! {"action": "list",   "filter": {"kind": "tool | subagent", "active_only": true}}
 //! ```
 //!
@@ -54,11 +56,15 @@
 //! authority exactly like an unknown id, and cross-conversation ids remain
 //! indistinguishable from unknown ids at the owning domain boundary. The
 //! `list` filter's kind selects which authority is consulted at all, so it
-//! cannot fall through either.
+//! cannot fall through either. `steer` is subagent-only, and a
+//! `kind = tool` steer is refused as an unsupported kind/action combination
+//! **before either authority is consulted** — never by asking one registry
+//! and then the other.
 //!
 //! `status` is single-target observation, `list` is bounded discovery, and
-//! `cancel` is control. **None of them is a result channel.** The subagent
-//! status response is a bounded [`SubagentExecutionSnapshot`] projection
+//! `cancel` and `steer` are control. **None of them is a result channel.**
+//! The subagent status response is a bounded
+//! [`SubagentExecutionSnapshot`] projection
 //! and a listing entry is a narrower [`ExecutionSummary`] still; both
 //! deliberately exclude the registry's internal `detail` (Issue #178:
 //! diagnostics only, never the answer) and the live observation-plane
@@ -67,6 +73,21 @@
 //! arrives exactly once through the existing canonical inbound message
 //! path — never through `execution` — and a detached tool execution's
 //! output stays on its own domain channel.
+//!
+//! # Steering is routing, never semantics (Issue #193)
+//!
+//! `execution(steer)` owns exactly the model-facing half: the schema, the
+//! explicit action dispatch, the target-kind validation, and the minimal
+//! acknowledgement projection. Everything that decides the *outcome* lives
+//! in [`SubagentRegistry::steer`] and, below it, in the child conversation's
+//! own coordinator: whether this child may still accept guidance, how
+//! multiple accepted steers are ordered, how acceptance linearizes against
+//! cancellation intent and terminal authority, and how the accepted message
+//! reaches the ordinary child Agent Loop. This intrinsic holds no lifecycle
+//! state, no mailbox, no durability, and no process handle, and it neither
+//! creates nor observes any child conversation content.
+//!
+//! [`SubagentRegistry::steer`]: crate::runtime::subagent::SubagentRegistry::steer
 //!
 //! # Discovery: ordering, bound, and scope (Issue #180)
 //!
@@ -144,17 +165,24 @@ fn definition() -> ToolDefinition {
     ToolDefinition {
         id: crate::runtime::identity::ToolId::new("tool-execution"),
         name: EXECUTION_TOOL_NAME.to_owned(),
-        description: "Inspect, cancel, or list this conversation's asynchronous executions. \
-             \"status\" and \"cancel\" name one execution by its explicit execution handle \
-             (kind + id) as returned by the tool call that created it: a detached \
-             background tool execution has kind \"tool\", an asynchronous subagent child \
-             has kind \"subagent\". Pass the exact handle from the creation result; the \
-             kind is never guessed from the id. \"list\" takes no target and returns a \
-             bounded, deterministically ordered summary of this conversation's own \
-             executions — newest-first within each execution kind, the kinds interleaved — \
-             optionally filtered by kind and to lifecycle-active ones; it reports handles \
-             and lifecycle state only, never execution output, a subagent's final report, or a \
-             child's history."
+        description: "Inspect, steer, cancel, or list this conversation's asynchronous \
+             executions. \"status\", \"steer\", and \"cancel\" name one execution by its \
+             explicit execution handle (kind + id) as returned by the tool call that created \
+             it: a detached background tool execution has kind \"tool\", an asynchronous \
+             subagent child has kind \"subagent\". Pass the exact handle from the creation \
+             result; the kind is never guessed from the id. \"steer\" applies only to kind \
+             \"subagent\": it delivers one further message into the running child's own \
+             conversation, so use it to add or narrow guidance instead of cancelling and \
+             starting over. It does not interrupt the child's current model request or tool \
+             call — the child sees the message at its next turn — and it cannot change the \
+             child's agent, model, tools, or workspace. A success means only that the \
+             guidance was accepted for that child; the child's answer still arrives once, \
+             later, as its own message. Repeated steers are seen in the order they were \
+             accepted. \"list\" takes no target and returns a bounded, deterministically \
+             ordered summary of this conversation's own executions — newest-first within \
+             each execution kind, the kinds interleaved — optionally filtered by kind and to \
+             lifecycle-active ones; it reports handles and lifecycle state only, never \
+             execution output, a subagent's final report, or a child's history."
             .to_owned(),
         input_schema: input_schema::<ExecutionInput>(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
@@ -203,7 +231,7 @@ impl ToolExecutor for ExecutionExecutor {
         let subagents = self.subagents.clone();
         ToolExecutionHandle::settled_by_operation(
             Box::pin(async move {
-                run_execution(&background, subagents.as_ref(), &invocation.arguments)
+                run_execution(&background, subagents.as_ref(), &invocation.arguments).await
             }),
             context.cancellation.clone(),
         )
@@ -215,7 +243,7 @@ impl ToolExecutor for ExecutionExecutor {
 }
 
 /// Runs one `execution` invocation against the owning domain registry.
-fn run_execution(
+async fn run_execution(
     background: &ConversationBackgroundRegistry,
     subagents: Option<&SubagentRegistry>,
     arguments: &serde_json::Value,
@@ -223,8 +251,55 @@ fn run_execution(
     match ExecutionInput::parse(arguments) {
         Ok(ExecutionInput::Status { target }) => run_status(background, subagents, &target),
         Ok(ExecutionInput::Cancel { target }) => run_cancel(background, subagents, &target),
+        Ok(ExecutionInput::Steer { target, message }) => {
+            run_steer(subagents, &target, &message).await
+        }
         Ok(ExecutionInput::List { filter }) => run_list(background, subagents, filter),
         Err(error) => failed(error),
+    }
+}
+
+/// Routes one parent-authored steer to the subagent domain authority, which
+/// alone decides acceptance (Issue #193).
+///
+/// The dispatch is explicit and closed. A `kind = tool` target is rejected
+/// here as an unsupported kind/action combination **before any authority is
+/// consulted**: the background registry is not asked (it owns no
+/// conversation to steer) and the subagent registry is not asked either, so
+/// there is no fallback in either direction and no id is ever interpreted
+/// across domains.
+///
+/// The intrinsic owns none of the semantics: it validates the target kind,
+/// hands the message to [`SubagentRegistry::steer`], and projects the
+/// authority's answer. Whether this child may still accept guidance, how
+/// accepted guidance is ordered, how it races cancellation and terminal
+/// authority, and how it reaches the child conversation are all owned
+/// below this boundary.
+async fn run_steer(
+    subagents: Option<&SubagentRegistry>,
+    target: &ExecutionHandle,
+    message: &str,
+) -> ToolExecutionResult {
+    match target.kind {
+        ExecutionKind::Tool => failed(
+            "the \"steer\" action is not supported for kind \"tool\": a detached tool \
+             execution has no conversation to steer. Only kind \"subagent\" accepts \
+             \"steer\"."
+                .to_owned(),
+        ),
+        ExecutionKind::Subagent => {
+            let Some(subagents) = subagents else {
+                return failed(format!("unknown subagent execution {}", target.id));
+            };
+            match subagents.steer(&SubagentId::new(&target.id), message).await {
+                Ok(accepted) => json_result(&ExecutionSteerResponse {
+                    execution: ExecutionHandle::subagent(&accepted.subagent_id),
+                    state: accepted.state,
+                    accepted: true,
+                }),
+                Err(error) => failed(error.to_string()),
+            }
+        }
     }
 }
 
@@ -593,6 +668,34 @@ impl From<SubagentSnapshot> for SubagentExecutionSnapshot {
     }
 }
 
+/// The model-facing acknowledgement of one accepted `execution(steer)`
+/// (Issue #193).
+///
+/// This is a **control acknowledgement**, not a result: it carries the
+/// canonical continuation identity, the child's lifecycle state, and the
+/// acceptance fact, and nothing else. No child transcript, history, final
+/// report, or live observation ever travels through `execution` — the
+/// canonical parent-inbound publication remains the one result channel.
+///
+/// `accepted` means exactly: *the parent-authored guidance was durably
+/// accepted for this child conversation, and will reach an ordinary Agent
+/// Loop boundary before that child settles.* It does **not** mean the child
+/// model has observed it, that the in-flight provider request or tool call
+/// was interrupted, that the requested behavioral change happened, or that
+/// another child turn has finished. A steer that could not be durably
+/// accepted is a failed tool result carrying the deterministic reason, never
+/// a success with `accepted: false`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ExecutionSteerResponse {
+    /// The canonical typed continuation identity — the same handle the
+    /// caller named, never a new or steer-specific handle.
+    pub execution: ExecutionHandle,
+    /// The owning registry's authoritative lifecycle state.
+    pub state: SubagentState,
+    /// Always true: the durable acceptance contract was met.
+    pub accepted: bool,
+}
+
 /// The bounded tagged model-facing response of one `execution` call.
 ///
 /// The outer envelope carries the explicit kind. The tool variant carries
@@ -704,11 +807,89 @@ mod tests {
         assert!(filter.active_only());
     }
 
+    /// `steer` is one more branch of the same action-tagged contract: it
+    /// names one execution by the canonical handle and carries exactly the
+    /// parent-authored message (Issue #193).
+    #[test]
+    fn the_steer_action_is_a_handle_plus_a_message() {
+        let ExecutionInput::Steer { target, message } = ExecutionInput::parse(&serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": "c-1-subagent-2"},
+            "message": "Focus on cancellation ownership and ignore TUI code.",
+        }))
+        .expect("steer parses") else {
+            panic!("steer parses as steer");
+        };
+        assert_eq!(target.kind, ExecutionKind::Subagent);
+        assert_eq!(target.id, "c-1-subagent-2");
+        assert_eq!(
+            message,
+            "Focus on cancellation ownership and ignore TUI code."
+        );
+
+        // The handle type is shared with `status`/`cancel`: a `tool` target
+        // is structurally spellable and is refused by explicit dispatch as
+        // an unsupported kind/action combination, never by a second handle
+        // shape and never by trying a registry.
+        assert!(matches!(
+            ExecutionInput::parse(&serde_json::json!({
+                "action": "steer",
+                "target": {"kind": "tool", "id": "exec_1"},
+                "message": "x",
+            }))
+            .expect("a tool-kinded steer parses"),
+            ExecutionInput::Steer { target, .. } if target.kind == ExecutionKind::Tool
+        ));
+    }
+
     /// The tagged union makes every ill-formed action/field combination a
     /// schema violation rather than a runtime special case.
     #[test]
     fn the_contract_rejects_every_mismatched_action_shape() {
         for rejected in [
+            // `steer` needs both its target and its message, and nothing
+            // else: no per-steer model, tools, skills, instructions, or
+            // workspace field is spellable at all.
+            serde_json::json!({"action": "steer", "message": "no target"}),
+            serde_json::json!({
+                "action": "steer",
+                "target": {"kind": "subagent", "id": "c-1-subagent-2"},
+            }),
+            serde_json::json!({
+                "action": "steer",
+                "target": {"kind": "subagent", "id": "c-1-subagent-2"},
+                "message": 7,
+            }),
+            serde_json::json!({
+                "action": "steer",
+                "target": {"kind": "subagent", "id": "c-1-subagent-2"},
+                "message": "x",
+                "model": "some/model",
+            }),
+            serde_json::json!({
+                "action": "steer",
+                "target": {"kind": "subagent", "id": "c-1-subagent-2"},
+                "message": "x",
+                "tools": ["bash"],
+            }),
+            serde_json::json!({
+                "action": "steer",
+                "target": {"kind": "subagent", "id": "c-1-subagent-2"},
+                "message": "x",
+                "workspace": "/tmp",
+            }),
+            // A message belongs to `steer` alone.
+            serde_json::json!({
+                "action": "status",
+                "target": {"kind": "subagent", "id": "c-1-subagent-2"},
+                "message": "status takes no message",
+            }),
+            serde_json::json!({
+                "action": "cancel",
+                "target": {"kind": "subagent", "id": "c-1-subagent-2"},
+                "message": "cancel takes no message",
+            }),
+            serde_json::json!({"action": "list", "message": "list takes no message"}),
             // `status`/`cancel` name exactly one execution.
             serde_json::json!({"action": "status"}),
             serde_json::json!({"action": "cancel"}),
@@ -865,7 +1046,7 @@ mod tests {
     }
 
     /// The generated schema is a root object schema (the canonical tool
-    /// schema policy) whose branches are the three closed actions.
+    /// schema policy) whose branches are the four closed actions.
     #[test]
     fn the_generated_schema_is_the_closed_bounded_contract() {
         let schema = crate::tools::native::registration::input_schema::<ExecutionInput>();
@@ -873,7 +1054,7 @@ mod tests {
             .expect("the intrinsic schema satisfies the canonical tool schema policy");
         assert_eq!(schema["type"], "object", "a root object schema: {schema}");
         let branches = schema["oneOf"].as_array().expect("one branch per action");
-        assert_eq!(branches.len(), 3);
+        assert_eq!(branches.len(), 4);
         for forbidden in [
             "timeout",
             "timeoutMs",
@@ -912,6 +1093,28 @@ mod tests {
                         "a target operation requires its target"
                     );
                 }
+                // Steering names one execution and carries exactly the
+                // parent-authored message: no model, tools, skills,
+                // instructions, workspace, or definition authority is
+                // spellable, so a steer structurally cannot re-author the
+                // child's frozen launch authority (Issue #193).
+                "steer" => {
+                    assert_eq!(names, vec!["action", "message", "target"]);
+                    assert_eq!(properties["message"]["type"], "string");
+                    let mut required = branch["required"]
+                        .as_array()
+                        .expect("required")
+                        .iter()
+                        .map(|value| value.as_str().expect("required name").to_owned())
+                        .collect::<Vec<_>>();
+                    required.sort();
+                    assert_eq!(required, vec!["action", "message", "target"]);
+                    assert_eq!(
+                        properties["target"]["properties"]["kind"]["enum"],
+                        serde_json::json!(["tool", "subagent"]),
+                        "the handle stays the one canonical target type; the                          unsupported kind is refused by explicit dispatch, never                          by a second handle shape"
+                    );
+                }
                 "list" => {
                     assert_eq!(names, vec!["action", "filter"]);
                     let filter = properties["filter"]["properties"]
@@ -934,7 +1137,7 @@ mod tests {
             actions.push(action);
         }
         actions.sort();
-        assert_eq!(actions, vec!["cancel", "list", "status"]);
+        assert_eq!(actions, vec!["cancel", "list", "status", "steer"]);
     }
 
     #[test]

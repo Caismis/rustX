@@ -123,6 +123,16 @@ pub(crate) enum ChildControlEvent {
         /// sent.
         available: bool,
     },
+    /// One parent-authored in-flight guidance envelope arrived (Issue
+    /// #193). The semantic driver answers it through the child
+    /// conversation's own durable acceptance authority; the dispatcher only
+    /// carries it, in the reliable channel's arrival order.
+    Guidance {
+        /// Transport-only acceptance correlation identity.
+        guidance_id: u64,
+        /// The bounded parent-authored guidance text.
+        message: String,
+    },
     /// The parent violated the bounded control protocol.
     ProtocolViolation(String),
 }
@@ -677,6 +687,18 @@ impl ChildControlDispatcher {
                         }
                         if events_tx
                             .send(ChildControlEvent::InteractionProviderAvailable { available })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Ok(Some(ParentFrame::Guidance(guidance))) => {
+                        if events_tx
+                            .send(ChildControlEvent::Guidance {
+                                guidance_id: guidance.guidance_id,
+                                message: guidance.message,
+                            })
                             .await
                             .is_err()
                         {

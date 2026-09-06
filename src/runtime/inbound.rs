@@ -1120,6 +1120,24 @@ impl ConversationInboundMailbox {
         }))
     }
 
+    /// Whether the durable Pending Inbound Inbox currently holds any
+    /// accepted, not-yet-adopted item.
+    ///
+    /// This is a durable read of the same authority
+    /// [`ConversationInboundMailbox::select_pending_batch`] reads and
+    /// [`ConversationInboundMailbox::accept_draft`] writes, so a caller that
+    /// holds a lock which also serializes acceptance observes an exact
+    /// answer: no item accepted before the observation can be missed, and no
+    /// item accepted after it can be seen. The child conversation's terminal
+    /// seal (Issue #193) depends on exactly that property.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MailboxError::Durable`] on a durable read failure.
+    pub fn has_pending(&self) -> Result<bool, MailboxError> {
+        Ok(self.inbound.select_pending_batch()?.is_some())
+    }
+
     /// Atomically adopts the selected batch into the durable canonical
     /// message ledger and removes the pending records.
     ///

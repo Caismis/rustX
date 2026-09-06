@@ -170,15 +170,15 @@ pub use catalog::{
     SubagentProjectInstructionPolicy, SubagentToolSelector,
 };
 pub use process::SubagentSpawnPlan;
-#[cfg(test)]
-pub(crate) use registry::CommitBoundaryHook;
 pub(crate) use registry::InteractionPublicationAuthority;
+#[cfg(test)]
+pub(crate) use registry::{CancellationBoundaryHook, CommitBoundaryHook, TerminalAuthorityHook};
 pub use registry::{
     PreparedSubagent, SubagentAccepted, SubagentDurabilityFailureSink, SubagentListing,
     SubagentObserver, SubagentRegistry, SubagentRegistryConfig, SubagentSnapshot,
     SubagentStartError, SubagentStartOutcome, SubagentStartSpec, SubagentState,
-    SubagentTerminalMode, SubagentWorkspaceDisposal, SubagentWorkspaceDisposalError,
-    SubagentWorkspaceResourceState,
+    SubagentSteerAccepted, SubagentSteerError, SubagentTerminalMode, SubagentWorkspaceDisposal,
+    SubagentWorkspaceDisposalError, SubagentWorkspaceResourceState,
 };
 pub use resolver::{
     ResolvedSubagentSkill, ResolvedSubagentSpec, ResolvedSubagentTool, SubagentDomain,
