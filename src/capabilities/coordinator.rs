@@ -1035,11 +1035,15 @@ impl CapabilityCoordinator {
         // The epoch snapshot is taken under the shared invalidation
         // guard; the pagination itself never holds it.
         let epoch_before = self.inner.mcp_invalidation.epoch(server_id);
-        let tools = match generation.connection().acquire().await {
+        // Discovery resolves its transport through the same health-
+        // arbitrating connection path a dispatch uses, so a candidate is
+        // never built from a generation the connection already knows is
+        // unusable.
+        let listing = match generation.connection().acquire().await {
             Ok(transport) => transport.runtime().list_tools().await,
             Err(error) => Err(error),
         };
-        let tools = match tools {
+        let tools = match listing {
             Ok(tools) => tools,
             Err(error) => {
                 let close_error = generation.retire_and_close().await;
