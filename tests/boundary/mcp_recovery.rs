@@ -441,7 +441,7 @@ fn single_tool_result(
         results.len(),
         1,
         "an accepted ToolCall settles exactly once, canonically; outcome={:?}",
-        &audit.result.outcome
+        audit.result.outcome
     );
     results[0]
 }
@@ -844,7 +844,7 @@ async fn transport_loss_after_dispatch_is_unknown_and_reconnect_never_replays_it
         results.len(),
         2,
         "both accepted ToolCalls settle exactly once each; outcome={:?}",
-        &audit.result.outcome
+        audit.result.outcome
     );
     let ToolExecutionStatus::OutcomeUnknown { detail } = &results[0].status else {
         panic!(
@@ -954,7 +954,7 @@ async fn a_failed_reconnect_is_a_pre_frontier_failure_and_never_replays_the_ambi
         results.len(),
         2,
         "both accepted ToolCalls settle exactly once each; outcome={:?}",
-        &audit.result.outcome
+        audit.result.outcome
     );
     assert!(
         matches!(
@@ -1593,7 +1593,7 @@ async fn a_poisoned_generation_fails_closed_and_is_replaced_without_replay() {
         results.len(),
         2,
         "both accepted ToolCalls settle exactly once each; outcome={:?}",
-        &audit.result.outcome
+        audit.result.outcome
     );
     let ToolExecutionStatus::OutcomeUnknown { detail } = &results[0].status else {
         panic!(
