@@ -68,7 +68,13 @@ base64 = "0.22"
 getrandom = "0.3.4"
 unicode-normalization = "0.1.24"
 http = "1"
-rmcp = { version = "3.1.3", default-features = false, features = [
+# The Server-Sent Events types of rmcp's Streamable HTTP client surface.
+# rustX supplies its own `StreamableHttpClient` (`tools::mcp::http`) so a
+# cancelled tool call can terminate — and prove the release of — its own
+# in-flight HTTP request, and that trait's stream signatures name these
+# types directly. This is rmcp's own SSE crate, unified to one version.
+sse-stream = "0.2.5"
+rmcp = { version = "3.2.0", default-features = false, features = [
     "client",
     "transport-async-rw",
     "transport-streamable-http-client-reqwest",

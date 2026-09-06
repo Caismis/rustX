@@ -53,6 +53,7 @@ pub mod fixture;
 mod connection;
 mod framing;
 pub mod identity;
+mod streamable_http;
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -378,6 +379,16 @@ pub struct McpServerRuntime {
     /// Once set, this generation is poisoned — no operation on it may
     /// settle as healthy.
     protocol_violation: Arc<framing::ProtocolViolationRecorder>,
+    /// The rustX-owned local ownership of this generation's in-flight HTTP
+    /// requests (Issue #205), for Streamable HTTP only.
+    ///
+    /// Over stdio an outbound write owns no local resource that outlives it,
+    /// so there is nothing per-request to terminate and this is `None`. Over
+    /// Streamable HTTP each dispatched request is a live HTTP request whose
+    /// POST future and response body rustX must be able to terminate and
+    /// prove released before it may report unconfirmed settlement — see
+    /// [`streamable_http::McpHttpRequestOwnership`].
+    request_ownership: Option<Arc<streamable_http::McpHttpRequestOwnership>>,
     /// The first observed proof that this transport generation can no longer
     /// carry MCP traffic (Issue #205): a transport-class rmcp failure on a
     /// request, or a response channel that ended without a reply. Recording
@@ -1312,6 +1323,9 @@ impl McpServerRuntime {
         // violation check is uniform. Streamable HTTP surfaces corruption
         // through its own worker transport and is unchanged by this seam.
         let protocol_violation = framing::ProtocolViolationRecorder::new();
+        // Set by the Streamable HTTP arm only: stdio owns no per-request
+        // local HTTP state.
+        let mut request_ownership: Option<Arc<streamable_http::McpHttpRequestOwnership>> = None;
         let (service, process) = match &binding.transport {
             McpTransportConfig::Stdio {
                 program,
@@ -1440,8 +1454,18 @@ impl McpServerRuntime {
                     .collect::<Result<_, McpError>>()?;
                 transport_config.reinit_on_expired_session = false;
                 transport_config.allow_stateless = true;
-                let transport =
-                    rmcp::transport::StreamableHttpClientTransport::from_config(transport_config);
+                // rustX supplies the HTTP client rather than taking rmcp's
+                // default one, because the in-flight HTTP request of a
+                // dispatched `tools/call` is local ownership a cancelled
+                // call has to terminate and prove released. The registry
+                // returned here is that authority; it belongs to exactly
+                // this connection generation.
+                let (client, ownership) = streamable_http::McpHttpClient::new();
+                request_ownership = Some(ownership);
+                let transport = rmcp::transport::StreamableHttpClientTransport::with_client(
+                    client,
+                    transport_config,
+                );
                 let service = tokio::select! {
                     biased;
                     () = cancellation.cancelled() => Err(McpError::Discovery(
@@ -1498,6 +1522,7 @@ impl McpServerRuntime {
             invalidation,
             change_notify: Arc::new(tokio::sync::Notify::new()),
             protocol_violation,
+            request_ownership,
             transport_failure: Mutex::new(None),
             #[cfg(test)]
             close_probe: std::sync::OnceLock::new(),
@@ -1734,6 +1759,14 @@ impl McpServerRuntime {
             probe.enter().await;
         }
         self.closed.store(true, Ordering::Release);
+        // Drain owns the per-request local HTTP control primitives this
+        // generation created (Issue #205): every request rustX still owns
+        // locally is terminated here, before the service shutdown below
+        // joins the transport worker that holds their futures. No such
+        // primitive can outlive this close.
+        if let Some(ownership) = &self.request_ownership {
+            ownership.terminate_all();
+        }
         // Request native shutdown before waiting for an in-flight call. A
         // remote tools/call may need the process/transport to close before
         // its response future can settle; waiting for the read gate first
@@ -2014,8 +2047,18 @@ impl McpServerRuntime {
             report_remote_progress(context, notification);
         }
         drop(progress);
-        self.classify_post_frontier_response(response, context, started, generation)
-            .await
+        // A response that won the biased arbitration on its own is a pure
+        // response-plane outcome: this call never terminated its own
+        // transport-level request, so any transport-class failure here is
+        // genuine evidence about the connection generation.
+        self.classify_post_frontier_response(
+            McpResponseOutcome::observed(response),
+            context,
+            started,
+            generation,
+            false,
+        )
+        .await
     }
 
     /// The bounded transport-generation tag carried by MCP diagnostics.
@@ -2033,14 +2076,53 @@ impl McpServerRuntime {
     /// Settles one cancellation intent that arrived after the effect
     /// frontier (Issue #205).
     ///
-    /// The strongest cancellation the negotiated MCP protocol defines is the
-    /// `notifications/cancelled` notification; there is no protocol
-    /// acknowledgement of it, so sending it is never proof that the remote
-    /// operation stopped. The response channel is therefore retained across
-    /// the notification: rmcp resolves this request's local responder in the
-    /// same event-loop step in which it reports the notification's send
-    /// outcome, so awaiting it is bounded by that step and answers exactly
-    /// one question — did a correlated remote response exist?
+    /// # Two planes, and only one of them holds settlement authority
+    ///
+    /// ```text
+    /// remote control plane          local ownership plane
+    ///   notifications/cancelled       this request's in-flight HTTP
+    ///   best-effort, unacknowledged   request (Streamable HTTP only)
+    ///   MAY never complete            terminated and *proven released*
+    ///                                 by rustX-owned state alone
+    /// ```
+    ///
+    /// `notifications/cancelled` is the strongest cancellation the MCP
+    /// protocol defines, and the protocol defines no acknowledgement of it,
+    /// so sending it is never proof that the remote operation stopped. It is
+    /// also not allowed to hold local settlement hostage: over a transport
+    /// whose client cannot make progress on an outbound send while a
+    /// previous request is outstanding, awaiting that send would leave this
+    /// branch pending indefinitely and hand the call's only bound to the
+    /// generic Issue #204 settlement-control guard. That is architecturally
+    /// wrong — the MCP executor's own settlement plane must terminate.
+    ///
+    /// So the send is *raced*, never awaited as a prerequisite, and the
+    /// bound is rustX's own local request ownership: terminating this
+    /// request's HTTP request and awaiting the release proof of its POST
+    /// future and response body depends on no remote response, no protocol
+    /// acknowledgement, and no timer. Over stdio there is no such local
+    /// half, so the termination is already settled and the race collapses
+    /// to the cancellation send and the response channel.
+    ///
+    /// # Arbitration
+    ///
+    /// A **correlated remote response always wins**: it is proven remote
+    /// terminality, and the response channel is deliberately retained across
+    /// the whole path so a result that beat the cancellation inside rmcp
+    /// still becomes the call's outcome. rmcp resolves this request's local
+    /// responder in the same event-loop step in which it reports the
+    /// notification's send outcome, so after an observed send the response
+    /// channel is checked without waiting; and rustX's own local
+    /// termination resolves that responder too, through the ordinary
+    /// transport-send failure path. Only when no correlated remote response
+    /// can be established is the external outcome unknown. Dropping a future
+    /// is never used as evidence of anything.
+    ///
+    /// Nothing is reported until local ownership is settled: that await is
+    /// the last thing this function does before it builds a result, so
+    /// `Unconfirmed` keeps its Issue #204 meaning — every rustX-owned local
+    /// activity of this invocation is over, and only the remote effect
+    /// remains uncertain.
     async fn settle_post_frontier_cancellation(
         &self,
         mut handle: rmcp::service::RequestHandle<RoleClient>,
@@ -2048,51 +2130,58 @@ impl McpServerRuntime {
         started: Instant,
         generation: u64,
     ) -> ToolExecutionResult {
-        let notification =
-            rmcp::model::CancelledNotification::new(rmcp::model::CancelledNotificationParam::new(
-                Some(handle.id.clone()),
-                Some("rustX execution cancellation".to_owned()),
-            ));
-        let requested = self
-            .peer
-            .send_notification(notification.into())
-            .await
-            .map_err(|error| bound_error(&error.to_string()));
-        let settled = (&mut handle.rx).await;
-        match settled {
-            // A correlated remote response beat the cancellation inside
-            // rmcp: remote terminality is proven and the remote's own
-            // outcome is authoritative. The generic lifecycle then applies
-            // its documented rule to this proven settlement.
-            Ok(Ok(ServerResult::CallToolResult(result))) => {
-                translate_result(result, context, started)
-            }
-            Ok(Ok(_)) => failed_mcp(
-                "unexpected MCP tools/call response after cancellation",
-                context,
-                started,
-            ),
-            Ok(Err(rmcp::service::ServiceError::McpError(error))) => {
-                failed_mcp(&bound_error(&error.to_string()), context, started)
-            }
-            // No correlated remote response: rmcp either synthesized the
-            // local cancellation outcome or the transport failed. Either way
-            // the request may have executed remotely and its final external
-            // outcome cannot be established.
-            Ok(Err(error)) => {
-                if is_transport_loss(&error) {
-                    self.note_transport_loss(&error.to_string());
-                }
-                mcp_empty_terminal(
-                    post_dispatch_cancellation_status(requested, &self.generation_tag(generation)),
+        // Armed first and synchronously: from here on this request cannot
+        // reach the network even if its POST had not started yet.
+        let termination = self.terminate_local_request(&handle.id);
+        let outcome = self
+            .arbitrate_post_frontier_cancellation(&mut handle, &termination)
+            .await;
+        // The local ownership proof. Bounded by rustX-owned state alone, and
+        // a precondition of *reporting*, never a competitor to it.
+        termination.settled().await;
+        match outcome {
+            // A correlated remote response beat the cancellation: remote
+            // terminality is proven and the remote's own outcome is
+            // authoritative. The generic lifecycle then applies its
+            // documented rule to this proven settlement.
+            PostFrontierCancellation::Correlated(response) => {
+                self.classify_post_frontier_response(
+                    response,
                     context,
                     started,
+                    generation,
+                    termination.terminated_local_request(),
                 )
+                .await
             }
-            Err(_) => {
-                self.note_transport_loss(
-                    "the MCP response channel ended without a correlated response",
-                );
+            // No correlated remote response exists. The request may have
+            // executed remotely and its final external outcome cannot be
+            // established.
+            PostFrontierCancellation::Uncorrelated {
+                requested,
+                observed,
+            } => {
+                // A transport-class failure observed here is still genuine
+                // evidence that the generation is unusable — unless this
+                // call terminated its own transport-level request, which
+                // fully explains it.
+                if !termination.terminated_local_request() {
+                    match &observed {
+                        Some(McpResponseOutcome::Answered(answered)) => {
+                            if let Err(error) = answered.as_ref()
+                                && is_transport_loss(error)
+                            {
+                                self.note_transport_loss(&error.to_string());
+                            }
+                        }
+                        Some(McpResponseOutcome::ChannelEnded) => {
+                            self.note_transport_loss(
+                                "the MCP response channel ended without a correlated response",
+                            );
+                        }
+                        _ => {}
+                    }
+                }
                 mcp_empty_terminal(
                     post_dispatch_cancellation_status(requested, &self.generation_tag(generation)),
                     context,
@@ -2102,39 +2191,170 @@ impl McpServerRuntime {
         }
     }
 
+    /// Terminates rustX's own local ownership of one dispatched request.
+    ///
+    /// Stdio has no per-request local ownership to terminate, so it settles
+    /// immediately; Streamable HTTP terminates the request's in-flight HTTP
+    /// request and returns the proof that its POST future and response body
+    /// have been dropped.
+    fn terminate_local_request(
+        &self,
+        id: &rmcp::model::RequestId,
+    ) -> streamable_http::LocalRequestTermination {
+        self.request_ownership.as_ref().map_or(
+            streamable_http::LocalRequestTermination::Settled,
+            |ownership| ownership.terminate(id),
+        )
+    }
+
+    /// Races the best-effort protocol cancellation against the two facts
+    /// that can settle this call locally.
+    async fn arbitrate_post_frontier_cancellation(
+        &self,
+        handle: &mut rmcp::service::RequestHandle<RoleClient>,
+        termination: &streamable_http::LocalRequestTermination,
+    ) -> PostFrontierCancellation {
+        let notification =
+            rmcp::model::CancelledNotification::new(rmcp::model::CancelledNotificationParam::new(
+                Some(handle.id.clone()),
+                Some("rustX execution cancellation".to_owned()),
+            ));
+        let cancel = self.peer.send_notification(notification.into());
+        tokio::pin!(cancel);
+        // The non-correlated response-channel fact, when the channel
+        // resolved with one. rmcp's synthesized local cancellation outcome
+        // and a transport failure both land here: neither proves remote
+        // terminality, and neither ends the arbitration.
+        let mut observed: Option<McpResponseOutcome> = None;
+        let requested = loop {
+            tokio::select! {
+                biased;
+                // Proven remote terminality outranks every local fact.
+                response = &mut handle.rx, if observed.is_none() => {
+                    let response = McpResponseOutcome::observed(response);
+                    if response.is_correlated_remote_response() {
+                        return PostFrontierCancellation::Correlated(response);
+                    }
+                    observed = Some(response);
+                }
+                outcome = &mut cancel => break match outcome {
+                    Ok(()) => RemoteCancellation::Sent,
+                    Err(error) => RemoteCancellation::Failed(bound_error(&error.to_string())),
+                },
+                // The local ownership plane reached its terminal decision
+                // first, so the best-effort remote control send is abandoned
+                // rather than allowed to hold settlement.
+                //
+                // The guard is what keeps this honest. This arm exists only
+                // when rustX actually had a live local request to terminate
+                // — the Streamable HTTP case the bound is for. A transport
+                // that owns no per-request local state has no local
+                // settlement *event* here, only the trivially-already-settled
+                // fact, and racing that would abandon every cancellation send
+                // before it could leave.
+                () = termination.settled(), if termination.terminated_local_request() => {
+                    break RemoteCancellation::Abandoned;
+                }
+            }
+        };
+        // The correlated response still wins if one exists: after an
+        // observed cancellation send rmcp has already resolved this
+        // request's responder, and rustX's own local termination resolves it
+        // through the transport-send failure path. This is a check, never a
+        // wait.
+        if observed.is_none() {
+            match handle.rx.try_recv() {
+                Ok(response) => {
+                    let response = McpResponseOutcome::Answered(Box::new(response));
+                    if response.is_correlated_remote_response() {
+                        return PostFrontierCancellation::Correlated(response);
+                    }
+                    observed = Some(response);
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
+                    observed = Some(McpResponseOutcome::ChannelEnded);
+                }
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {}
+            }
+        }
+        PostFrontierCancellation::Uncorrelated {
+            requested,
+            observed,
+        }
+    }
+
     /// Classifies one post-frontier `tools/call` outcome (Issue #205).
     ///
     /// Only a correlated remote response proves remote terminality; every
-    /// other outcome leaves the external result unknown and additionally
-    /// proves this transport generation unusable.
+    /// other outcome leaves the external result unknown.
+    ///
+    /// `terminated_local_request` records whether *this call* terminated its
+    /// own transport-level request as part of settling. When it did, a
+    /// transport-send failure for this request is explained by that
+    /// termination and is therefore not independent evidence that the
+    /// connection generation itself is dead: the Streamable HTTP session
+    /// survives an aborted request, and retiring the generation over
+    /// rustX's own cancellation would force a needless reconnect on the
+    /// next call.
     async fn classify_post_frontier_response(
         &self,
-        response: Result<
-            Result<ServerResult, rmcp::service::ServiceError>,
-            tokio::sync::oneshot::error::RecvError,
-        >,
+        response: McpResponseOutcome,
         context: &ToolExecutionContext<'_>,
         started: Instant,
         generation: u64,
+        terminated_local_request: bool,
     ) -> ToolExecutionResult {
-        match response {
-            Ok(Ok(ServerResult::CallToolResult(result))) => {
-                translate_result(result, context, started)
+        let response = match response {
+            McpResponseOutcome::Answered(answered) => *answered,
+            McpResponseOutcome::ChannelEnded => {
+                if !terminated_local_request {
+                    self.note_transport_loss(
+                        "the MCP response channel ended without a correlated response",
+                    );
+                }
+                // The observation tee ends the stream on a confirmed
+                // violation, so a violation surfaced mid-call lands here as
+                // a transport close. It is a protocol failure, not an
+                // anonymous disconnect — and the generation is poisoned.
+                if let Some(diagnostic) = self.poisoned_protocol_violation().await {
+                    return mcp_empty_terminal(
+                        ToolExecutionStatus::OutcomeUnknown {
+                            detail: bound_error(&diagnostic),
+                        },
+                        context,
+                        started,
+                    );
+                }
+                // The transport closed after dispatch without a response:
+                // the remote operation may have partially or fully completed.
+                return mcp_empty_terminal(
+                    ToolExecutionStatus::OutcomeUnknown {
+                        detail: bound_error(&format!(
+                            "MCP transport closed during tools/call without a response ({})",
+                            self.generation_tag(generation)
+                        )),
+                    },
+                    context,
+                    started,
+                );
             }
-            Ok(Ok(ServerResult::InputRequiredResult(_))) => failed_mcp(
+        };
+        match response {
+            Ok(ServerResult::CallToolResult(result)) => translate_result(result, context, started),
+            Ok(ServerResult::InputRequiredResult(_)) => failed_mcp(
                 "MCP input_required results are unsupported in M7",
                 context,
                 started,
             ),
-            Ok(Ok(_)) => failed_mcp("unexpected MCP tools/call response", context, started),
+            Ok(_) => failed_mcp("unexpected MCP tools/call response", context, started),
             // A JSON-RPC error answering this request id is a correlated
             // remote response: the remote produced a terminal outcome and it
             // is a known failure, not an ambiguity.
-            Ok(Err(rmcp::service::ServiceError::McpError(error))) => {
+            Err(rmcp::service::ServiceError::McpError(error)) => {
                 failed_mcp(&bound_error(&error.to_string()), context, started)
             }
-            Ok(Err(error)) => {
-                if is_transport_loss(&error) {
+            Err(error) => {
+                if is_transport_loss(&error) && !terminated_local_request {
                     self.note_transport_loss(&error.to_string());
                 }
                 // The observation tee ends the stream on a confirmed
@@ -2162,38 +2382,89 @@ impl McpServerRuntime {
                     started,
                 )
             }
-            Err(_) => {
-                self.note_transport_loss(
-                    "the MCP response channel ended without a correlated response",
-                );
-                // The observation tee ends the stream on a confirmed
-                // violation, so a violation surfaced mid-call lands here as
-                // a transport close. It is a protocol failure, not an
-                // anonymous disconnect — and the generation is poisoned.
-                if let Some(diagnostic) = self.poisoned_protocol_violation().await {
-                    return mcp_empty_terminal(
-                        ToolExecutionStatus::OutcomeUnknown {
-                            detail: bound_error(&diagnostic),
-                        },
-                        context,
-                        started,
-                    );
-                }
-                // The transport closed after dispatch without a response:
-                // the remote operation may have partially or fully completed.
-                mcp_empty_terminal(
-                    ToolExecutionStatus::OutcomeUnknown {
-                        detail: bound_error(&format!(
-                            "MCP transport closed during tools/call without a response ({})",
-                            self.generation_tag(generation)
-                        )),
-                    },
-                    context,
-                    started,
-                )
-            }
         }
     }
+}
+
+/// One post-frontier observation of a dispatched request's response channel.
+///
+/// The distinction is the whole post-frontier contract: `Answered` is a
+/// correlated remote response — the only proof of remote terminality rustX
+/// accepts — while `ChannelEnded` is the absence of one.
+enum McpResponseOutcome {
+    /// The peer answered this request id, with a result or a JSON-RPC error,
+    /// or rmcp reported a service-level failure for it.
+    ///
+    /// Boxed because `ServerResult` is a large union of every MCP result
+    /// shape, and this value travels through one `select!` state machine.
+    Answered(Box<Result<ServerResult, rmcp::service::ServiceError>>),
+    /// The response channel ended without a correlated response.
+    ChannelEnded,
+}
+
+impl McpResponseOutcome {
+    /// Whether this observation is a **correlated remote response**: a
+    /// result, or a JSON-RPC error, that the peer produced for this request
+    /// id. It is the only proof of remote terminality rustX accepts.
+    ///
+    /// rmcp's synthesized `ServiceError::Cancelled` is deliberately *not*
+    /// one: it is a local outcome rmcp writes into the request's responder
+    /// when it reports a cancellation notification's send outcome, and it
+    /// says nothing about what the remote did.
+    const fn is_correlated_remote_response(&self) -> bool {
+        matches!(
+            self,
+            Self::Answered(answered)
+                if matches!(
+                    **answered,
+                    Ok(_) | Err(rmcp::service::ServiceError::McpError(_))
+                )
+        )
+    }
+
+    /// The observation of one resolved response channel.
+    fn observed(
+        response: Result<
+            Result<ServerResult, rmcp::service::ServiceError>,
+            tokio::sync::oneshot::error::RecvError,
+        >,
+    ) -> Self {
+        match response {
+            Ok(answered) => Self::Answered(Box::new(answered)),
+            Err(_) => Self::ChannelEnded,
+        }
+    }
+}
+
+/// How one post-frontier cancellation arbitration ended.
+enum PostFrontierCancellation {
+    /// A correlated remote response was observed, or the response channel
+    /// proved none can arrive. Either way the response plane, not the
+    /// cancellation plane, decides this call.
+    Correlated(McpResponseOutcome),
+    /// No correlated remote response exists. `requested` carries what became
+    /// of the best-effort protocol cancellation, and `observed` the
+    /// non-correlated response-channel fact when there was one.
+    Uncorrelated {
+        requested: RemoteCancellation,
+        observed: Option<McpResponseOutcome>,
+    },
+}
+
+/// What became of one call's best-effort `notifications/cancelled`.
+///
+/// None of these three is settlement evidence: remote cancellation is
+/// unacknowledged by the protocol, so even `Sent` proves only that rustX
+/// asked. They exist to make the call's diagnostic honest about *which*
+/// remote control was actually attempted.
+enum RemoteCancellation {
+    /// The notification left rustX.
+    Sent,
+    /// The send itself failed.
+    Failed(String),
+    /// Local request ownership settled first, so the send was abandoned
+    /// rather than allowed to hold local settlement authority.
+    Abandoned,
 }
 
 /// Forwards one remote progress notification through the generic progress
@@ -2777,17 +3048,28 @@ impl McpToolExecutor {
 impl ToolExecutor for McpToolExecutor {
     /// Starts one remote `tools/call`.
     ///
+    /// # Why the operation *is* the settlement plane
+    ///
     /// The whole physical operation — transport resolution, the bounded
     /// reconnect attempt it may perform, dispatch, progress forwarding, the
-    /// `notifications/cancelled` path, and post-frontier classification —
-    /// lives inside the single operation future of
-    /// [`ToolExecutionHandle::settled_by_operation`]. This executor spawns no
-    /// task and owns no process outside that future, so
-    /// [`crate::tools::executor::ToolSettlement::Unconfirmed`] carries its
-    /// required local-ownership guarantee by construction: when the
-    /// settlement plane reports unconfirmed evidence, every rustX-owned local
-    /// activity of this invocation has already ended and only the remote
-    /// external effect remains uncertain.
+    /// cancellation path (local HTTP request termination, its release proof,
+    /// and the best-effort `notifications/cancelled`), and post-frontier
+    /// classification — lives inside the single operation future of
+    /// [`ToolExecutionHandle::settled_by_operation`], and the settlement
+    /// plane takes exclusive ownership of that future and drives it to its
+    /// terminal end.
+    ///
+    /// [`ToolExecutionHandle::settled_by_operation`] is therefore still the
+    /// honest abstraction after the Streamable HTTP ownership model: it is
+    /// correct exactly when "the operation future returned" implies "all
+    /// rustX-owned local execution for this invocation is over", and it does
+    /// here. This executor spawns no task and owns no process outside that
+    /// future, and the one local resource a dispatched call *does* own
+    /// outside of Rust's stack — the in-flight Streamable HTTP request — is
+    /// terminated and **proven released inside the same future**, before it
+    /// returns anything. Nothing is left for a separate settlement plane to
+    /// reclaim, so splitting completion from settlement would add a second
+    /// ownership plane with nothing in it.
     ///
     /// The executor never chooses a canonical terminal status: it reports
     /// physical outcomes and settlement evidence, and the Agent Loop's
@@ -2798,13 +3080,14 @@ impl ToolExecutor for McpToolExecutor {
         invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
     ) -> crate::tools::executor::ToolExecutionHandle<'a> {
-        // The cancel-notification path stays inside the operation future: on
-        // cancellation the executor sends `notifications/cancelled`, keeps
-        // the response channel long enough to see whether a correlated
-        // remote response exists, and returns either that proven remote
-        // outcome or its honest `OutcomeUnknown`, which
-        // `settled_by_operation` surfaces as unconfirmed settlement
-        // evidence.
+        // The cancellation path stays inside the operation future: on
+        // cancellation the executor terminates this call's own local
+        // request ownership, issues the best-effort protocol cancellation,
+        // keeps the response channel long enough to see whether a
+        // correlated remote response exists, awaits the local release
+        // proof, and returns either that proven remote outcome or its
+        // honest `OutcomeUnknown`, which `settled_by_operation` surfaces as
+        // unconfirmed settlement evidence.
         let cancellation = context.cancellation.clone();
         crate::tools::executor::ToolExecutionHandle::settled_by_operation(
             Box::pin(async move {
@@ -3508,17 +3791,22 @@ fn failed_mcp(
 /// the final external outcome is unknown — never `Cancelled`, never
 /// `Failed`.
 fn post_dispatch_cancellation_status(
-    cancelled: Result<(), String>,
+    cancelled: RemoteCancellation,
     generation_tag: &str,
 ) -> ToolExecutionStatus {
     let detail = match cancelled {
-        Ok(()) => format!(
+        RemoteCancellation::Sent => format!(
             "cancellation was requested after dispatch, but remote termination could not be \
              confirmed ({generation_tag})"
         ),
-        Err(error) => format!(
+        RemoteCancellation::Failed(error) => format!(
             "cancellation was requested after dispatch and the cancellation request itself \
              failed ({generation_tag}): {error}"
+        ),
+        RemoteCancellation::Abandoned => format!(
+            "cancellation was requested after dispatch; this call's own local request \
+             ownership settled before the best-effort remote cancellation left rustX, so \
+             remote termination could not be confirmed ({generation_tag})"
         ),
     };
     ToolExecutionStatus::OutcomeUnknown {
@@ -3618,8 +3906,8 @@ mod tests {
     use rmcp::model::{CallToolResult, ContentBlock};
 
     use super::{
-        McpServerId, mcp_empty_terminal, mcp_tool_id, post_dispatch_cancellation_status,
-        translate_result,
+        McpServerId, RemoteCancellation, mcp_empty_terminal, mcp_tool_id,
+        post_dispatch_cancellation_status, translate_result,
     };
     use crate::runtime::identity::{ConversationId, ToolExecutionId};
     use crate::runtime::types::CancellationReason;
@@ -4190,7 +4478,7 @@ mod tests {
     #[test]
     fn post_dispatch_cancellation_is_outcome_unknown_whether_the_request_succeeded_or_failed() {
         let tag = "MCP server 'fixture' connection generation 2";
-        let accepted = post_dispatch_cancellation_status(Ok(()), tag);
+        let accepted = post_dispatch_cancellation_status(RemoteCancellation::Sent, tag);
         let ToolExecutionStatus::OutcomeUnknown { detail } = &accepted else {
             panic!("an accepted cancel request is OutcomeUnknown: {accepted:?}");
         };
@@ -4204,7 +4492,7 @@ mod tests {
         );
 
         let huge_error = "x".repeat(64 * 1024);
-        let failed = post_dispatch_cancellation_status(Err(huge_error), tag);
+        let failed = post_dispatch_cancellation_status(RemoteCancellation::Failed(huge_error), tag);
         let ToolExecutionStatus::OutcomeUnknown { detail } = &failed else {
             panic!("a failed cancel request is OutcomeUnknown: {failed:?}");
         };
