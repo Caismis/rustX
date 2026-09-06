@@ -3515,30 +3515,92 @@ id — proves terminality; transport loss, a poisoned generation, an
 acknowledged cancellation notification, and an abandoned response channel all
 settle as `OutcomeUnknown`.
 
-Cancellation propagates as `notifications/cancelled`, the strongest
-cancellation the negotiated protocol defines, and the executor **keeps the
-response channel across it**: rmcp resolves the request's local responder in
-the same event-loop step in which it reports the notification's send outcome,
-so a remote result that beat the cancellation inside rmcp still wins and is
-reported as proven terminality. MCP never selects a canonical terminal
-status; the lifecycle maps confirmed settlement to `Cancelled` or `TimedOut`
-from the winning cause. Remote progress notifications flow through the one
-generic `ProgressReporter` seam and refresh only the idle watchdog — never
-the immutable hard deadline — and the executor fabricates no heartbeats.
+Cancellation past the frontier has **two planes, and only one of them holds
+settlement authority**:
 
-Because rmcp mints a request's progress token *inside*
-`send_cancellable_request`, the dispatching call can only subscribe after the
-request is enqueued, so a server answering with an immediate progress
-notification races that subscription; and because a correlated response
-outranks progress in the executor's biased arbitration, a ready response
-would otherwise end the call with notifications still queued. Both windows
-would silently lose genuine liveness evidence — exactly the evidence the idle
-watchdog depends on — so the adapter owns a small bounded progress router
-that buffers notifications for a not-yet-subscribed token and drains them on
+```text
+remote control plane            local ownership plane
+  notifications/cancelled         this request's in-flight HTTP request
+  best-effort, unacknowledged     (Streamable HTTP only)
+  MAY never complete              terminated and proven released by
+                                  rustX-owned state alone
+```
+
+`notifications/cancelled` is the strongest cancellation the negotiated
+protocol defines, and the protocol acknowledges it in no way, so sending it
+never proves the remote stopped. It is also never an unbounded prerequisite
+of settlement. Over Streamable HTTP a dispatched `tools/call` *is* a live
+local HTTP request — its POST future while the response headers are
+outstanding, then its SSE response body — and rmcp's client cannot send while
+that request is the work it is doing, so awaiting the cancellation send would
+leave the branch pending on the very request it is trying to cancel.
+
+rustX therefore supplies the HTTP client the transport posts through
+(`src/tools/mcp/streamable_http.rs`) and owns those objects per JSON-RPC
+request id. Settlement terminates this call's HTTP request and awaits an
+explicit release proof: the wrapper drops the POST future or the response
+body **first** and releases the latch **afterwards**, so the latch is real
+ownership evidence rather than a restatement of "we stopped waiting". A
+request cancelled before its POST started is recorded so the POST is
+pre-terminated instead of reaching the network. That proof depends on no
+remote response, no protocol acknowledgement, and no timer — timing a future
+out, or dropping one and calling the drop a proof, is never settlement
+evidence here. Over stdio an outbound write owns no resource that outlives
+it, so there is no local half and the cancellation send is awaited exactly as
+before.
+
+The response channel is retained across the whole path, so a **correlated
+remote response always wins**: rmcp resolves the request's local responder in
+the same event-loop step in which it reports the notification's send outcome,
+and rustX's own local termination resolves it through the ordinary
+transport-send failure path, so after either fact the channel is *checked*
+without waiting. A call that terminated its own transport-level request does
+not read the resulting transport-send failure as evidence about the
+connection: the HTTP session survives an aborted request. Nothing is reported
+until the local ownership proof resolves, which is what keeps `Unconfirmed`
+honest — no task, no process, no in-flight HTTP request, and no response body
+of that invocation remains. Connection close terminates every request the
+generation still owns locally before joining rmcp's transport worker, so no
+per-request control primitive outlives drain. MCP never selects a canonical
+terminal status; the lifecycle maps confirmed settlement to `Cancelled` or
+`TimedOut` from the winning cause.
+
+Remote progress notifications flow through the one generic
+`ProgressReporter` seam and refresh only the idle watchdog — never the
+immutable hard deadline — and the executor fabricates no heartbeats. Because
+progress is *liveness evidence*, the router's guarantee is stated precisely:
+for every admitted in-flight request, once genuine remote progress has been
+observed, no bound in the router erases the fact that it occurred before the
+dispatching call can consume it. Payload detail is explicitly not
+guaranteed — payloads coalesce and a subscriber's queue drops on full — but
+losing the *occurrence* would turn real progress into a false idle timeout.
+
+"Has observed" marks where the adapter's ownership begins: rmcp hands
+inbound notifications to the handler on a spawned task while resolving a
+response's local responder inline, so a notification sent immediately before
+its response may not have reached the router when that response settles the
+call. rustX cannot preserve evidence it was never given, and that window is
+not a liveness hazard — it can only lose a notification when the correlated
+response has already arrived, so the call settles at once and no idle
+watchdog is consulted.
+
+Two windows inside the adapter could lose it. rmcp mints a request's progress
+token *inside* `send_cancellable_request`, so the dispatching call can only
+subscribe after the request is enqueued and a server answering immediately
+races that subscription; and because a correlated response outranks progress in the
+executor's biased arbitration, a ready response would otherwise end the call
+with notifications still queued. So the adapter owns a small bounded router:
+a not-yet-subscribed token's notifications are held as one coalesced entry in
+a FIFO pre-subscription window — the entry a just-dispatched call is about to
+claim is the last one an overflow can reach — and handed over on
 subscription, and the executor drains its subscription before classifying a
-response or settling a cancellation. Tracked unsubscribed tokens, buffered
-notifications per token, and the per-subscription queue are all bounded; the
-router only reorders delivery of notifications the peer genuinely sent.
+response or settling a cancellation. The live subscription set is bounded by
+the in-flight call set rather than by a router constant: one subscription per
+admitted call, removed by its owner's drop, so concurrency above any fixed
+cache size cannot starve a call of its own progress. A full delivery queue
+cannot erase an occurrence either, because it is full precisely when that
+many undelivered proofs are already in the subscriber's hands. The router
+only reorders and coalesces notifications the peer genuinely sent.
 
 **`McpConnection` (`src/tools/mcp/connection.rs`) is the stable connection
 owner** of one configured server, and it is what a published capability
@@ -3563,14 +3625,37 @@ reached a terminal classification before any replacement generation exists.
 
 **Capability refresh is publish-on-success**, and capability knowledge is
 kept separate from transport availability. When an MCP server's refresh
-cannot produce a complete validated generation, the candidate carries that
+cannot produce a complete validated generation, the candidate may carry that
 server's last-known-good registrations forward verbatim — executors included,
-so they remain bound to the same connection owner — and commit *retains* its
-published physical generation instead of retiring it; the source is reported
-`Unavailable` in the availability plane while its catalog stays
+so they remain bound to the same connection owner — and commit then *retains*
+its published physical generation instead of retiring it; the source is
+reported `Unavailable` in the availability plane while its catalog stays
 authoritative. A refresh that changes nothing else is a no-op that fabricates
 no revision. Only a complete validated candidate replaces a generation, at
 the single snapshot swap under the capability state lock.
+
+**Carry-forward is legal only while the binding identity is unchanged.**
+
+```text
+published S/B1/G1, candidate S/B1, refresh fails => G1 carried forward
+published S/B1/G1, candidate S/B2, refresh fails => nothing carried
+```
+
+A server id alone is not sufficient identity for this fallback. The reused
+registrations carry their executors, and those executors dispatch through the
+connection the *published* binding negotiated, so reusing them under a
+different binding would publish metadata saying `S -> B2` while every
+executor of `S` still talks to `B1` — a split-brain authority in which
+endpoint, executable, arguments, environment, headers, credentials, cwd, and
+policy all disagree with the transport that runs the call. The comparison is
+the domain equality of `McpServerBinding` against the frozen binding set the
+published snapshot carries, never a digest or a `tools/list` result standing
+in for one. When the binding did change and its replacement cannot validate,
+the new binding becomes the published configured desired state, its source is
+`Unavailable`, the server publishes no tools at all, and the previous
+binding's generation retires with the commit: capability knowledge,
+availability, and configured desired state stay separate facts, but published
+execution authority stays internally coherent.
 
 Drain closes publication authority: closing a connection cancels its
 ownership root first (so a connect in flight settles its own process and
