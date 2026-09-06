@@ -546,6 +546,16 @@ pub struct ConversationInboundMailbox {
     /// acceptance between two waits is never missed. The wake is leaf-only:
     /// the coordinator waits on it and never notifies it.
     wake: Arc<tokio::sync::Notify>,
+    /// Test-only fault seam for [`ConversationInboundMailbox::has_pending`]
+    /// (Issue #193).
+    ///
+    /// It exists so the terminal seal's *fail-closed* contract can be proven
+    /// deterministically without arming a store-wide select fault that the
+    /// coordinator's own admission loop would race for. It is armed by
+    /// count, consumed by exactly the pending probe, and is compiled out of
+    /// production entirely.
+    #[cfg(test)]
+    pending_probe_faults: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl ConversationInboundMailbox {
@@ -597,6 +607,8 @@ impl ConversationInboundMailbox {
             })),
             inbound,
             wake: Arc::new(tokio::sync::Notify::new()),
+            #[cfg(test)]
+            pending_probe_faults: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -1135,7 +1147,31 @@ impl ConversationInboundMailbox {
     ///
     /// Returns [`MailboxError::Durable`] on a durable read failure.
     pub fn has_pending(&self) -> Result<bool, MailboxError> {
+        #[cfg(test)]
+        if self
+            .pending_probe_faults
+            .fetch_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |remaining| remaining.checked_sub(1),
+            )
+            .is_ok()
+        {
+            return Err(MailboxError::Durable(
+                crate::durable::ConversationStoreError::Storage(
+                    "injected pending-inbox probe failure".to_owned(),
+                ),
+            ));
+        }
         Ok(self.inbound.select_pending_batch()?.is_some())
+    }
+
+    /// Arms `count` consecutive durable failures of
+    /// [`ConversationInboundMailbox::has_pending`] (test-only, Issue #193).
+    #[cfg(test)]
+    pub(crate) fn arm_pending_probe_failures(&self, count: usize) {
+        self.pending_probe_faults
+            .fetch_add(count, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Atomically adopts the selected batch into the durable canonical

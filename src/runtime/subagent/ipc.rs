@@ -357,10 +357,15 @@ pub(crate) struct GuidanceFrame {
 /// The child conversation is the durable acceptance authority: `Accepted`
 /// means the guidance committed into the child's own Pending Inbound Inbox
 /// under the one coordinator lock, ahead of that conversation's terminal
-/// seal, and is therefore guaranteed an ordinary Agent Loop opportunity. It
-/// never means the child model has already observed the guidance, that any
-/// provider request or tool call was interrupted, or that the requested
-/// behavioral change happened.
+/// seal. It never means the child model has already observed the guidance,
+/// that any provider request or tool call was interrupted, or that the
+/// requested behavioral change happened.
+///
+/// It is also **not** the final word on the parent's `accepted` answer: the
+/// parent registry arbitrates this answer against its own cancellation
+/// linearization point before reporting anything (see
+/// `SubagentRegistry::steer`). A child that answers `Accepted` for a steer
+/// the parent has meanwhile cancelled is still refused at the parent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct GuidanceResultFrame {
@@ -375,8 +380,11 @@ pub(crate) struct GuidanceResultFrame {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ChildGuidanceOutcome {
     /// The guidance is durably accepted into the child conversation's
-    /// Pending Inbound Inbox and will reach an ordinary Agent Loop boundary
-    /// before this child conversation settles.
+    /// Pending Inbound Inbox, ahead of that conversation's terminal seal.
+    ///
+    /// A **naturally completing** child therefore cannot publish a terminal
+    /// that predates it. A cancellation, or physical loss of the child, may
+    /// still end the conversation with the guidance unobserved.
     Accepted,
     /// The child conversation refused the guidance, with the bounded
     /// deterministic reason.

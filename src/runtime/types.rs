@@ -460,6 +460,16 @@ pub(crate) enum DurableOperation {
     /// The conversation-owned subagent settlement owner exhausted its
     /// bounded terminal publication budget.
     SubagentTerminalPublication,
+    /// A subagent child conversation could not *positively verify* its
+    /// durable Pending Inbound Inbox at its terminal seal (Issue #193).
+    ///
+    /// This is deliberately non-transient. The seal is a one-shot terminal
+    /// verification: the attempt whose boundary would have surfaced the
+    /// pending item has already settled, so a failed read can never be
+    /// turned into a proof by waiting, and an unproven inbox must never be
+    /// read as an empty one. The child therefore fails closed instead of
+    /// publishing a terminal it cannot justify.
+    ParentGuidanceSeal,
 }
 
 impl DurableOperation {
@@ -481,6 +491,7 @@ impl DurableOperation {
             Self::EventJournal => "event_journal",
             Self::BackgroundTerminalPublication => "background_terminal_publication",
             Self::SubagentTerminalPublication => "subagent_terminal_publication",
+            Self::ParentGuidanceSeal => "parent_guidance_seal",
         }
     }
 }

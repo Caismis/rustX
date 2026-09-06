@@ -2146,8 +2146,11 @@ whether this child may still accept guidance, how accepted guidance is
 ordered, how acceptance linearizes against cancellation intent and
 terminal authority, and how the message reaches the child's Agent Loop —
 belongs to `SubagentRegistry::steer` and, below it, to the child
-conversation's own coordinator. A child's final report continues to arrive
-exactly once through the canonical parent inbound publication.
+conversation's own coordinator — including the ownership refusal of a
+Workflow-owned `AgentRun`, whose semantic input is authored by the compiled
+Workflow program through the `WorkflowRuntime` and never by this control
+plane. A child's final report continues to arrive exactly once through the
+canonical parent inbound publication.
 
 The bundle also owns the conversation's `ConversationTodoList`: the task
 list the native `todo` tool mutates. It is deliberately *not* a second

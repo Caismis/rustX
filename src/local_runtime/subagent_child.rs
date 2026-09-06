@@ -514,7 +514,9 @@ pub(crate) async fn serve_child_delegation(
     // inbound acceptance — whether it may seal. `Open` means semantic work
     // is still owed and exactly one further ordinary attempt terminal
     // follows; `Sealed` means no accepted guidance remains unobserved and
-    // none can be accepted afterwards.
+    // none can be accepted afterwards; `DurabilityFailed` means the runtime
+    // could not *prove* either, and the child then fails closed rather than
+    // publishing an answer it cannot justify.
     //
     // This is the same one logical child, the same conversation, the same
     // process incarnation, the same registry record, and still exactly one
@@ -541,6 +543,15 @@ pub(crate) async fn serve_child_delegation(
         match runtime.seal_parent_guidance(observed_terminals).await {
             ParentGuidanceSeal::Sealed => break terminal,
             ParentGuidanceSeal::Open => {}
+            // Fail closed: an unverifiable pending inbox is not an empty
+            // one. The runtime already committed its absorbing
+            // durability-failure fact; the completed attempt's answer is
+            // deliberately discarded, because it may predate an accepted,
+            // never-adopted steer. The child still reports exactly one
+            // terminal, and it is a failure.
+            ParentGuidanceSeal::DurabilityFailed { diagnostic } => {
+                break AttemptTerminal::Failed(diagnostic);
+            }
         }
     };
     let frame = match terminal {
@@ -1942,6 +1953,147 @@ mod tests {
             .await
             .expect("serve task")
             .expect("serve loop");
+    }
+
+    /// **The terminal seal fails closed (Issue #193 review finding #2).**
+    ///
+    /// A durable read failure is not a proof that the Pending Inbound Inbox
+    /// is empty, so it must never be folded into "nothing pending". This
+    /// test establishes exactly the window in which that folding would be
+    /// observable, and proves the child refuses to seal:
+    ///
+    /// 1. **the steer is durably accepted** — `submit_parent_guidance`
+    ///    returns `Ok` while the seal is parked before the coordinator lock;
+    /// 2. **it has not been adopted** — the canonical ledger still contains
+    ///    only the delegation, because no attempt has run since;
+    /// 3. **the seal evaluates** — the gate is released, and the seal is the
+    ///    only caller of the probe it is about to make;
+    /// 4. **the durable pending read fails** — one narrow injected fault on
+    ///    exactly that probe;
+    /// 5. **the seal does not commit** — the child breaks out with a failed
+    ///    terminal rather than a sealed one;
+    /// 6. **the earlier answer is not published** — the reported frame
+    ///    carries no content at all, so `first answer` never reaches the
+    ///    parent as a successful terminal;
+    /// 7. **the runtime is fail-closed** — the absorbing durability-failure
+    ///    fact is committed, and every later inbound admission is refused
+    ///    with it;
+    /// 8. **exactly one terminal** — the wire closes immediately after the
+    ///    single result frame.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_unverifiable_pending_inbox_fails_the_terminal_seal_closed() {
+        let dir = tempfile::tempdir().expect("temp root");
+        let seal_gate = Arc::new(Gate::default());
+        let admission_gate = Arc::new(Gate::default());
+        let model = Arc::new(FakeModel::new(vec![answer("first answer")]));
+        let runtime = child_test_runtime_with_seal_gate(
+            &dir,
+            None,
+            Some(admission_gate.clone()),
+            Some(seal_gate.clone()),
+            ConversationId::new("conv-child-seal-unverifiable"),
+            model.clone(),
+        )
+        .await;
+        let mut fixture = serve_child(&runtime);
+
+        seal_gate.arm();
+        delegate(&mut fixture.parent, "delegated task").await;
+        tokio::task::spawn_blocking({
+            let seal_gate = Arc::clone(&seal_gate);
+            move || seal_gate.wait_entered()
+        })
+        .await
+        .expect("the seal parks after the attempt terminal");
+
+        // (1) durably accepted, (2) held unadopted: the admission gate parks
+        // the coordinator at the entrance of `admit_next_attempt`, before it
+        // takes the coordinator lock, so the guidance provably sits in the
+        // Pending Inbound Inbox with no attempt admitted for it.
+        admission_gate.arm();
+        runtime
+            .submit_parent_guidance(
+                UserSource::Agent {
+                    agent_id: AgentId::new("agent-parent"),
+                },
+                vec![UserContentBlock::Text(TextBlock {
+                    text: "unadopted guidance".to_owned(),
+                })],
+            )
+            .expect("guidance accepted before the seal evaluates");
+        tokio::task::spawn_blocking({
+            let admission_gate = Arc::clone(&admission_gate);
+            move || admission_gate.wait_entered()
+        })
+        .await
+        .expect("the coordinator parks before adopting the guidance");
+        assert_eq!(
+            adopted_guidance(&runtime),
+            vec!["delegated task".to_owned()],
+            "the accepted guidance is still pending, never adopted"
+        );
+
+        // (3)+(4): the only probe the seal makes fails.
+        runtime.arm_seal_probe_failures(1);
+        seal_gate.release();
+
+        // (5)+(6): no sealed terminal, and no earlier answer published.
+        let result = read_result(&mut fixture.parent).await;
+        assert_eq!(
+            result.status,
+            ChildResultStatus::Failed,
+            "an unverifiable pending inbox can never produce a successful terminal"
+        );
+        assert_eq!(
+            result.content, None,
+            "the answer that predates the accepted guidance is never published"
+        );
+        let diagnostic = result.diagnostic.clone().expect("a failure diagnostic");
+        assert!(
+            diagnostic.contains("could not verify the pending inbound inbox"),
+            "the diagnostic names the unproven seal, not a semantic failure: {diagnostic}"
+        );
+
+        // (7): the runtime followed its existing absorbing fail-closed
+        // durability contract.
+        let failure = runtime
+            .durability_failure()
+            .expect("the absorbing durability-failure fact is committed");
+        assert_eq!(
+            failure.operation,
+            crate::runtime::types::DurableOperation::ParentGuidanceSeal,
+            "the failure is attributed to the seal's own durable operation"
+        );
+        assert_eq!(failure.diagnostic, diagnostic);
+
+        // The parked admission may now proceed; the absorbing durability
+        // fact refuses it, and the child's drain can complete.
+        admission_gate.release();
+
+        // (8): exactly one terminal frame.
+        let after = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            crate::runtime::subagent::ipc::read_child_frame(&mut fixture.parent),
+        )
+        .await
+        .expect("wire close liveness")
+        .expect("child frame");
+        assert_eq!(after, None, "exactly one terminal result frame is written");
+        assert_eq!(
+            model.requests().len(),
+            1,
+            "the failed seal never opened another model turn"
+        );
+        fixture
+            .serve
+            .await
+            .expect("serve task")
+            .expect("serve loop");
+        assert_eq!(
+            adopted_guidance(&runtime),
+            vec!["delegated task".to_owned()],
+            "the unverifiable guidance is never adopted after the failure"
+        );
     }
 
     /// A committed one-shot cancellation intent refuses guidance under the

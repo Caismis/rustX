@@ -208,6 +208,23 @@ struct SubagentRecord {
     workspace_unresolved: Option<WorkspaceUnresolvedRecord>,
     lifecycle: SubagentLifecycle,
     cancel_reason: Option<CancellationReason>,
+    /// The parent-authored steer tickets this record has admitted but not
+    /// yet committed (Issue #193).
+    ///
+    /// This is the whole steer/cancel arbitration state, and it lives here —
+    /// under the registry mutex — precisely because that mutex is the *one*
+    /// authority that totally orders steer admission, cancellation-intent
+    /// commit, and steer commit. A ticket is pushed at admission, dropped by
+    /// the cancellation linearization point in [`SubagentRegistry::cancel`],
+    /// and removed at commit; a steer becomes `accepted` only if its ticket
+    /// survived to its own commit. Transport ordering proves nothing here
+    /// and is never consulted.
+    ///
+    /// The vector holds one `u64` per outstanding steer. It is drained by
+    /// every commit and by every cancellation, so it only retains an entry
+    /// for a steer whose caller was itself dropped mid-flight — bounded by
+    /// this child's own lifetime, and freed with its record.
+    outstanding_guidance: Vec<u64>,
     /// The one live deadline task, owned by this record and aborted as soon
     /// as cancellation intent or terminal settlement becomes authoritative.
     deadline_task: Option<tokio::task::JoinHandle<()>>,
@@ -613,6 +630,12 @@ pub struct SubagentListing {
 /// It carries identity and lifecycle only. A steer is a **control
 /// acknowledgement**, never a result channel: no child transcript, history,
 /// answer, or observation ever travels through it.
+///
+/// Its exact meaning is stated once, on [`SubagentRegistry::steer`]: the
+/// guidance is durably in the child's own conversation inbox and no
+/// cancellation intent had committed up to that point. A *later*
+/// cancellation, or physical loss of the child, may still prevent the child
+/// from ever observing it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubagentSteerAccepted {
     /// The child that accepted the guidance — the same one the caller named,
@@ -641,12 +664,27 @@ pub enum SubagentSteerError {
         /// The offending byte length.
         bytes: usize,
     },
-    /// The child's cancellation intent already committed at the registry's
-    /// cancellation linearization point. Cancellation is absorbing: no steer
-    /// may move a child back toward running.
+    /// A cancellation intent committed for this child at the registry's
+    /// cancellation linearization point — either before the steer was
+    /// admitted, or while it was still outstanding. Cancellation is
+    /// absorbing and always wins this race: no steer may move a child back
+    /// toward running, and no steer that raced a cancellation is ever
+    /// reported accepted.
     CancellationCommitted {
         /// The committed first-winner cause.
         reason: CancellationReason,
+    },
+    /// The child is a Workflow-owned `AgentRun`. Its semantic input is
+    /// authored by the compiled Workflow program through the
+    /// `WorkflowRuntime`, so the generic control plane never authors into
+    /// that conversation. This is an ownership fact, not a lifecycle one:
+    /// it holds for every state of such a child, and it is decided before
+    /// any guidance envelope exists.
+    WorkflowOwned {
+        /// The Workflow that owns this child's semantic input.
+        workflow_id: WorkflowId,
+        /// The Workflow node that owns this `AgentRun`.
+        node_id: String,
     },
     /// Terminal authority already won: the child is settling or settled, so
     /// no semantic input can still reach an Agent Loop boundary.
@@ -661,8 +699,10 @@ pub enum SubagentSteerError {
         /// The bounded deterministic refusal reason.
         detail: String,
     },
-    /// The child's control plane is gone: the guidance never reached the
-    /// child conversation, so nothing was accepted.
+    /// The child's control plane could not take the envelope — the driver
+    /// is gone, or its bounded control lane is saturated. Either way the
+    /// guidance never reached the child conversation, so nothing was
+    /// accepted and no ticket was armed.
     ControlLost,
 }
 
@@ -678,7 +718,14 @@ impl core::fmt::Display for SubagentSteerError {
             ),
             Self::CancellationCommitted { reason } => write!(
                 f,
-                "the subagent cancellation intent is already committed ({reason:?}): a cancelled child is never steered"
+                "the subagent cancellation intent is committed ({reason:?}): a cancelled child is never steered"
+            ),
+            Self::WorkflowOwned {
+                workflow_id,
+                node_id,
+            } => write!(
+                f,
+                "steering is not supported for workflow-owned subagent executions: this child is the AgentRun of workflow {workflow_id} node {node_id}, whose semantic input is authored by the workflow"
             ),
             Self::Settled { state } => write!(
                 f,
@@ -687,9 +734,9 @@ impl core::fmt::Display for SubagentSteerError {
             Self::ChildRefused { detail } => {
                 write!(f, "the child conversation refused the guidance: {detail}")
             }
-            Self::ControlLost => {
-                f.write_str("the subagent control plane is gone: the guidance was not delivered")
-            }
+            Self::ControlLost => f.write_str(
+                "the subagent control plane did not take the guidance: nothing was delivered to the child",
+            ),
         }
     }
 }
@@ -1219,6 +1266,7 @@ impl SubagentRegistry {
             workspace_unresolved: None,
             lifecycle,
             cancel_reason: None,
+            outstanding_guidance: Vec::new(),
             deadline_task: None,
             control: None,
             detail,
@@ -1308,6 +1356,7 @@ impl SubagentRegistry {
             }),
             lifecycle,
             cancel_reason: None,
+            outstanding_guidance: Vec::new(),
             deadline_task: None,
             control: None,
             detail,
@@ -1407,6 +1456,7 @@ impl SubagentRegistry {
             workspace_unresolved: None,
             lifecycle,
             cancel_reason: None,
+            outstanding_guidance: Vec::new(),
             deadline_task: None,
             control: None,
             detail: Some(detail),
@@ -1879,6 +1929,7 @@ impl SubagentRegistry {
                         workspace_unresolved: None,
                         lifecycle: SubagentLifecycle::Running,
                         cancel_reason: None,
+                        outstanding_guidance: Vec::new(),
                         deadline_task: None,
                         control: None,
                         detail: None,
@@ -2409,6 +2460,14 @@ impl SubagentRegistry {
                 // owns the reason; later sources can only observe it.
                 record.lifecycle = SubagentLifecycle::Cancelling;
                 record.cancel_reason = Some(reason);
+                // The same instant is the steer invalidation commit (Issue
+                // #193). Every steer ticket admitted but not yet committed
+                // is dropped here, under this mutex, so no such steer can
+                // ever be reported accepted afterwards — whatever the child
+                // does with the envelope already on the wire. Cancellation
+                // is absorbing and outranks steering by construction rather
+                // than by transport ordering.
+                record.outstanding_guidance.clear();
                 if let Some(control) = &record.control {
                     let _ = control.try_send(super::process::DriverCommand::Cancel { reason });
                 }
@@ -2433,33 +2492,51 @@ impl SubagentRegistry {
     /// or terminal lifecycle is created, and the driver task remains a pure
     /// transport for the envelope.
     ///
-    /// # The two linearization points
+    /// # One arbitration authority: the steer ticket
     ///
-    /// Acceptance is decided by exactly two authorities, in this order:
+    /// Steering and cancellation are arbitrated by **this mutex alone**. It
+    /// is the same critical section that commits `Running -> Cancelling`
+    /// ([`SubagentRegistry::cancel`]) and `... -> PublishingTerminal`
+    /// ([`SubagentRegistry::settle_from_driver`]), so all three events —
+    /// steer admission, cancellation-intent commit, and steer commit — have
+    /// one total order.
     ///
-    /// 1. **The registry mutex (here).** The same critical section that
-    ///    commits `Running -> Cancelling` ([`SubagentRegistry::cancel`]) and
-    ///    `... -> PublishingTerminal`
-    ///    ([`SubagentRegistry::settle_from_driver`]) decides whether this
-    ///    child may be offered guidance at all. A cancellation intent or a
-    ///    terminal candidate that acquires this mutex first therefore
-    ///    refuses the steer outright; a steer admitted first cannot be
-    ///    retroactively unadmitted, but it also cannot resurrect anything —
-    ///    admission mutates no lifecycle state whatsoever.
-    /// 2. **The child conversation's coordinator lock (there).** The
-    ///    authoritative *durable* acceptance is the child's own Pending
-    ///    Inbound Inbox commit, taken under the one lock that also owns the
-    ///    child's committed cancellation intent and its terminal seal. That
-    ///    is what makes `Ok` mean what it says.
+    /// A steer runs in two phases against that order:
     ///
-    /// Because the parent's terminal authority is downstream of the child's
-    /// seal — the terminal candidate is built from the child's `Result`
-    /// frame, which the child sends only after sealing — a durably accepted
-    /// steer provably precedes the terminal commit and is guaranteed an
-    /// ordinary Agent Loop opportunity before terminal settlement. A later
-    /// cancellation or physical child loss still supersedes every pending
-    /// semantic input; that is cancellation semantics, not a steering
-    /// guarantee.
+    /// 1. **Admission** pushes a *ticket* onto the record and hands the
+    ///    envelope to the driver. Admission mutates no lifecycle state, so
+    ///    it can never resurrect anything, and it is not yet an acceptance.
+    /// 2. **Commit** takes the mutex again after the child conversation has
+    ///    durably answered and removes the ticket. The steer is accepted
+    ///    **only if its ticket was still there**.
+    ///
+    /// [`SubagentRegistry::cancel`] drops every outstanding ticket at its
+    /// cancellation linearization point. Therefore *any* cancellation intent
+    /// that commits before this steer commits — and in particular any
+    /// cancellation that commits before the child's durable acceptance, which
+    /// strictly precedes the commit — makes this steer deterministically
+    /// unacceptable. Cancellation is absorbing and always wins the race.
+    ///
+    /// The child conversation's own coordinator lock remains the *durable*
+    /// authority: it decides whether the guidance entered the Pending
+    /// Inbound Inbox at all, and it refuses guidance behind its own terminal
+    /// seal or its own committed cancellation intent. A steer must pass both
+    /// authorities; neither alone can report acceptance.
+    ///
+    /// Transport ordering is deliberately **not** part of the argument: the
+    /// reliable control lane is FIFO, but a frame's position on a wire is
+    /// not a semantic commit, and nothing here relies on one.
+    ///
+    /// # What `Ok` means
+    ///
+    /// Exactly: *the guidance was durably committed into this child's own
+    /// conversation inbound inbox, and no cancellation intent had committed
+    /// for this child at any point up to that commit.* It follows that a
+    /// **naturally completing** child cannot publish a terminal that
+    /// predates the guidance — the child's terminal seal enforces that. It
+    /// does **not** promise observation in the face of a *later*
+    /// cancellation or physical child loss: cancellation stays authoritative
+    /// and may terminate the child with the guidance unobserved.
     ///
     /// Multiple accepted steers preserve their acceptance order through the
     /// child's durable `InboundSequence` domain, never through scheduling.
@@ -2468,7 +2545,7 @@ impl SubagentRegistry {
     ///
     /// Returns the deterministic [`SubagentSteerError`] of the refusing
     /// authority. Nothing is ever silently dropped, and `Ok` is returned
-    /// only after the child conversation durably accepted the guidance.
+    /// only after both authorities agreed.
     pub async fn steer(
         &self,
         subagent_id: &SubagentId,
@@ -2478,18 +2555,59 @@ impl SubagentRegistry {
         if message.trim().is_empty() || bytes > MAX_TASK_BYTES {
             return Err(SubagentSteerError::InvalidMessage { bytes });
         }
-        let receiver = {
-            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let (guidance_id, receiver) = self.admit_guidance(subagent_id, message)?;
+        // The envelope is on the reliable control lane; the child's answer is
+        // authoritative for durability. A dropped sender means the driver
+        // settled without an answer, which is a refusal — never an
+        // optimistic acceptance.
+        let child_outcome = receiver.await;
+        self.commit_guidance(subagent_id, guidance_id, child_outcome)
+    }
+
+    /// Phase one of [`SubagentRegistry::steer`]: arbitrate ownership and
+    /// lifecycle, hand the envelope to the driver, and arm the steer ticket
+    /// — all inside the one arbitration mutex, so no cancellation can
+    /// interleave between the hand-off and the ticket.
+    fn admit_guidance(
+        &self,
+        subagent_id: &SubagentId,
+        message: &str,
+    ) -> Result<
+        (
+            u64,
+            tokio::sync::oneshot::Receiver<super::ipc::ChildGuidanceOutcome>,
+        ),
+        SubagentSteerError,
+    > {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        {
             let Some(&index) = state.index.get(subagent_id) else {
                 return Err(SubagentSteerError::Unknown {
                     subagent_id: subagent_id.clone(),
                 });
             };
-            let record = &state.records[index];
-            // This mutex is the cancellation and terminal linearization
-            // point of this domain. Reading the lifecycle inside it — rather
-            // than as an unrelated `is_running()` probe — is what gives the
-            // refusal a total order against both of them.
+            let record = &mut state.records[index];
+            // Ownership outranks lifecycle. A Workflow-owned `AgentRun`'s
+            // semantic input — profile, task, bound inputs, frozen output
+            // schema — belongs to the compiled Workflow program, so the
+            // generic control plane must not author into that conversation
+            // at all. The refusal is structural and therefore checked before
+            // anything else about this child's state, and provably before
+            // any Guidance frame exists.
+            if let SubagentTerminalMode::WorkflowOutput {
+                workflow_id,
+                node_id,
+                ..
+            } = &record.terminal
+            {
+                return Err(SubagentSteerError::WorkflowOwned {
+                    workflow_id: workflow_id.clone(),
+                    node_id: node_id.clone(),
+                });
+            }
+            // Reading the lifecycle inside this mutex — rather than as an
+            // unrelated `is_running()` probe — is what gives the refusal a
+            // total order against both cancellation and terminal authority.
             match record.lifecycle {
                 SubagentLifecycle::Running => {}
                 SubagentLifecycle::Cancelling => {
@@ -2515,13 +2633,6 @@ impl SubagentRegistry {
             let guidance_id = state.next_guidance_id;
             state.next_guidance_id = guidance_id.saturating_add(1);
             let (outcome, receiver) = tokio::sync::oneshot::channel();
-            // The driver hand-off happens INSIDE this critical section, and
-            // so does the cancellation hand-off of `cancel`. The reliable
-            // control lane is FIFO, so the frames the child receives are in
-            // exactly this mutex's arbitration order: a steer admitted before
-            // a cancellation intent reaches the child before its `Cancel`
-            // frame, and a steer can never overtake a cancellation that
-            // already committed.
             if control
                 .try_send(super::process::DriverCommand::Route(
                     super::process::ChildBoundRoute::Guidance {
@@ -2534,34 +2645,72 @@ impl SubagentRegistry {
             {
                 return Err(SubagentSteerError::ControlLost);
             }
-            receiver
-        };
-        // The envelope is on the reliable control lane; the child's answer is
-        // authoritative. A dropped sender means the driver settled without an
-        // answer, which is a refusal — never an optimistic acceptance.
-        let outcome = receiver
-            .await
-            .map_err(|_| SubagentSteerError::ChildRefused {
-                detail: "the child settled before the guidance was accepted".to_owned(),
-            })?;
-        match outcome {
-            super::ipc::ChildGuidanceOutcome::Accepted => {}
-            super::ipc::ChildGuidanceOutcome::Refused(refusal) => {
-                return Err(SubagentSteerError::ChildRefused {
-                    detail: refusal.to_string(),
-                });
-            }
+            // The ticket is armed only once the envelope is provably on the
+            // driver's lane, and inside the same critical section.
+            state.records[index].outstanding_guidance.push(guidance_id);
+            Ok((guidance_id, receiver))
         }
-        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let Some(&index) = state.index.get(subagent_id) else {
-            return Err(SubagentSteerError::Unknown {
-                subagent_id: subagent_id.clone(),
-            });
+    }
+
+    /// Phase two of [`SubagentRegistry::steer`]: the same arbitration mutex
+    /// removes the ticket and decides the winner.
+    ///
+    /// A missing ticket means a cancellation intent committed while this
+    /// steer was outstanding — and therefore before the child's durable
+    /// acceptance, which strictly precedes this commit. Cancellation is the
+    /// absorbing authority, so the steer is refused whatever the child
+    /// answered.
+    fn commit_guidance(
+        &self,
+        subagent_id: &SubagentId,
+        guidance_id: u64,
+        child_outcome: Result<
+            super::ipc::ChildGuidanceOutcome,
+            tokio::sync::oneshot::error::RecvError,
+        >,
+    ) -> Result<SubagentSteerAccepted, SubagentSteerError> {
+        let (survived, cancel_reason, state) = {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let Some(&index) = state.index.get(subagent_id) else {
+                return Err(SubagentSteerError::Unknown {
+                    subagent_id: subagent_id.clone(),
+                });
+            };
+            let record = &mut state.records[index];
+            let survived = match record
+                .outstanding_guidance
+                .iter()
+                .position(|&id| id == guidance_id)
+            {
+                Some(position) => {
+                    record.outstanding_guidance.remove(position);
+                    true
+                }
+                None => false,
+            };
+            (survived, record.cancel_reason, record.snapshot().state)
         };
-        Ok(SubagentSteerAccepted {
-            subagent_id: subagent_id.clone(),
-            state: state.records[index].snapshot().state,
-        })
+        if !survived {
+            // No answer derived from a refused steer is ever published,
+            // because this child's terminal is the cancellation's.
+            return Err(SubagentSteerError::CancellationCommitted {
+                reason: cancel_reason.unwrap_or(CancellationReason::UserRequested),
+            });
+        }
+        match child_outcome {
+            Ok(super::ipc::ChildGuidanceOutcome::Accepted) => Ok(SubagentSteerAccepted {
+                subagent_id: subagent_id.clone(),
+                state,
+            }),
+            Ok(super::ipc::ChildGuidanceOutcome::Refused(refusal)) => {
+                Err(SubagentSteerError::ChildRefused {
+                    detail: refusal.to_string(),
+                })
+            }
+            Err(_) => Err(SubagentSteerError::ChildRefused {
+                detail: "the child settled before the guidance was accepted".to_owned(),
+            }),
+        }
     }
 
     /// Cancels every active subagent (runtime drain).
@@ -4359,6 +4508,36 @@ mod tests {
             );
             self.send_result(status, content).await;
         }
+
+        /// Awaits the delegation **and** the cancellation, then answers with
+        /// one terminal result.
+        ///
+        /// The second read is the point of this helper. A cancelled child's
+        /// terminal is only well defined once the driver has actually
+        /// delivered the `Cancel` frame: a scripted peer that answers and
+        /// drops its socket while the driver is still writing that frame
+        /// makes the driver observe a broken pipe and classify the child as
+        /// `Interrupted`. Reading the `Cancel` frame first establishes that
+        /// ordering as a linearization instead of leaving it to whichever
+        /// `select!` branch happens to be polled, and it is also what a real
+        /// cancelled child does: observe the cancellation, then answer.
+        async fn cancelled_after_delegation(
+            mut self,
+            status: ChildResultStatus,
+            content: Option<&str>,
+        ) {
+            let frame = self.read_frame().await;
+            assert!(
+                matches!(frame, ParentFrame::Delegate(_)),
+                "the committed child is delegated first"
+            );
+            let frame = self.read_frame().await;
+            assert!(
+                matches!(frame, ParentFrame::Cancel { .. }),
+                "the cancellation reaches the child before it answers: {frame:?}"
+            );
+            self.send_result(status, content).await;
+        }
     }
 
     /// A Builtin-only frozen specification: the registry owns live child
@@ -6136,7 +6315,7 @@ mod tests {
             .cancel(&explicit.subagent_id, CancellationReason::UserRequested)
             .expect("known child");
         explicit_child
-            .complete(ChildResultStatus::Cancelled, None)
+            .cancelled_after_delegation(ChildResultStatus::Cancelled, None)
             .await;
         let explicit_settled = plane
             .registry
@@ -6161,7 +6340,7 @@ mod tests {
         plane.monotonic_clock.advance(100);
         deadline_done.await.expect("the deadline cancellation ran");
         deadline_child
-            .complete(ChildResultStatus::Cancelled, None)
+            .cancelled_after_delegation(ChildResultStatus::Cancelled, None)
             .await;
         let deadline_settled = plane
             .registry
@@ -7688,6 +7867,82 @@ mod tests {
         );
     }
 
+    /// **Workflow ownership is enforced by the domain authority itself**
+    /// (Issue #193).
+    ///
+    /// The refusal is asserted here, directly against
+    /// [`SubagentRegistry::steer`], and not only at the model-facing
+    /// `execution` boundary: the registry API is reachable from in-process
+    /// callers, so the rule has to live where the ownership fact lives. It
+    /// is decided from `SubagentTerminalMode` alone, ahead of every
+    /// lifecycle branch, so it is an ownership answer rather than a timing
+    /// one — and it holds while the child is `Running`, which is exactly
+    /// when an ordinary child would be steerable.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_registry_authority_refuses_to_steer_a_workflow_owned_child() {
+        let plane = plane(4);
+        let child = stage_exit0(&plane);
+        let accepted = start(&plane, &workflow_spec("produce the node output")).await;
+        assert_eq!(
+            plane
+                .registry
+                .snapshot(&accepted.subagent_id)
+                .expect("record")
+                .state,
+            SubagentState::Running,
+            "an ordinary child in this state would be steerable"
+        );
+
+        let refused = plane
+            .registry
+            .steer(&accepted.subagent_id, "the workflow owns this instruction")
+            .await
+            .expect_err("a Workflow-owned AgentRun is never steerable");
+        let SubagentSteerError::WorkflowOwned {
+            workflow_id,
+            node_id,
+        } = &refused
+        else {
+            panic!("the refusal names Workflow ownership, not a lifecycle: {refused:?}");
+        };
+        assert_eq!(workflow_id.as_str(), "test_workflow");
+        assert_eq!(node_id, "agent");
+        assert!(
+            refused
+                .to_string()
+                .contains("steering is not supported for workflow-owned subagent executions"),
+            "the bounded message is stable: {refused}"
+        );
+        assert_eq!(
+            plane
+                .registry
+                .snapshot(&accepted.subagent_id)
+                .expect("record")
+                .state,
+            SubagentState::Running,
+            "the refusal mutates no lifecycle state"
+        );
+
+        // The child's own terminal path is untouched by the refusal.
+        child
+            .complete(
+                ChildResultStatus::Succeeded,
+                Some(r#"{"summary":"answer"}"#),
+            )
+            .await;
+        let settled = plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
+        assert_eq!(settled.state, SubagentState::Succeeded);
+        assert_eq!(
+            plane.registry.workflow_agent_output(&accepted.subagent_id),
+            Some(serde_json::json!({"summary": "answer"})),
+            "the frozen Workflow output contract is unchanged"
+        );
+    }
+
     #[tokio::test]
     async fn cancel_of_an_unknown_or_terminal_subagent_is_a_noop() {
         let plane = plane(4);
@@ -7885,6 +8140,7 @@ mod tests {
             workspace_unresolved: None,
             lifecycle,
             cancel_reason: None,
+            outstanding_guidance: Vec::new(),
             deadline_task: None,
             control: None,
             detail: None,

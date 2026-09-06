@@ -132,9 +132,45 @@ async fn start_subagent(
     plane: &SubagentPlane,
     task: &str,
 ) -> rustx::runtime::subagent::SubagentAccepted {
+    start_with_spec(plane, spec(task)).await
+}
+
+/// The Workflow-owned `AgentRun` shape: the same child machinery, with the
+/// reserved `workflow_output` terminal protocol and its frozen schema
+/// (Issue #83). Its semantic input is owned by the compiled Workflow
+/// program, which is why it is never steerable (Issue #193).
+fn workflow_spec(task: &str) -> SubagentStartSpec {
+    SubagentStartSpec {
+        terminal: rustx::runtime::subagent::SubagentTerminalMode::WorkflowOutput {
+            output_schema: serde_json::json!({
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "required": ["summary"],
+                "additionalProperties": false
+            }),
+            workflow_id: rustx::runtime::workflow::WorkflowId::parse("test_workflow")
+                .expect("workflow id"),
+            run_id: ToolCallId::new("workflow-run"),
+            node_id: "agent".to_owned(),
+        },
+        ..spec(task)
+    }
+}
+
+async fn start_workflow_subagent(
+    plane: &SubagentPlane,
+    task: &str,
+) -> rustx::runtime::subagent::SubagentAccepted {
+    start_with_spec(plane, workflow_spec(task)).await
+}
+
+async fn start_with_spec(
+    plane: &SubagentPlane,
+    spec: SubagentStartSpec,
+) -> rustx::runtime::subagent::SubagentAccepted {
     let prepared = plane
         .registry
-        .prepare(&spec(task), &CancellationSignal::new())
+        .prepare(&spec, &CancellationSignal::new())
         .await
         .expect("prepared");
     match plane
@@ -1778,6 +1814,26 @@ impl ScriptedChild {
         guidance.message
     }
 
+    /// Awaits the cancellation frame, then answers with one terminal
+    /// result. Reading the `Cancel` frame first is what makes the child's
+    /// terminal well defined: it establishes that the driver has delivered
+    /// the cancellation before the peer answers and closes.
+    async fn cancelled_after_delegation(
+        mut self,
+        status: ChildResultStatus,
+        content: Option<&str>,
+    ) {
+        self.take_delegation().await;
+        assert!(
+            matches!(
+                self.read_frame().await,
+                crate::runtime::subagent::ipc::ParentFrame::Cancel { .. }
+            ),
+            "the cancellation reaches the child before it answers"
+        );
+        self.send_result(status, content).await;
+    }
+
     /// Sends the terminal result frame.
     async fn send_result(&mut self, status: ChildResultStatus, content: Option<&str>) {
         crate::runtime::subagent::ipc::write_child_frame(
@@ -2079,7 +2135,7 @@ async fn cancellation_intent_and_steer_share_one_arbitration_boundary() {
     .await;
     let message = failure_message(&refused);
     assert!(
-        message.contains("cancellation intent is already committed"),
+        message.contains("cancellation intent is committed"),
         "a committed cancellation intent refuses every later steer: {message}"
     );
     assert_eq!(
@@ -2225,5 +2281,431 @@ async fn a_child_that_settles_without_answering_refuses_the_steer() {
     assert!(
         message.contains("settled before the guidance was accepted"),
         "an unanswered envelope is a refusal, never an optimistic acceptance: {message}"
+    );
+}
+
+/// **The critical cancellation/steer race (Issue #193 review finding #1).**
+///
+/// This is the interleaving the ticket design exists for, and it is the one
+/// that transport FIFO ordering cannot decide:
+///
+/// 1. the steer passes parent-side registry admission and its envelope is
+///    handed to the driver;
+/// 2. the child has **not** durably accepted it yet;
+/// 3. the parent's cancellation intent commits;
+/// 4. only then is the child's acceptance answer produced.
+///
+/// Every one of those four points is a proven synchronization point here,
+/// not a hope:
+///
+/// - **(1) handed off from the registry**: the test *is* the child, and it
+///   reads the `Guidance` frame off the real control socket. A frame it has
+///   read provably left the registry's admission critical section.
+/// - **(2) not yet durably accepted**: the test holds the envelope without
+///   writing any `GuidanceResult`. The parent's `execution(steer)` call is
+///   still parked on the answer, so no acceptance exists anywhere.
+/// - **(3) cancellation committed**: `cancel` returns the authoritative
+///   snapshot, and the assertion on `Cancelling` is the commit itself.
+/// - **(4) acceptance attempted afterwards**: only now does the child answer
+///   — and it answers **`Accepted`**, deliberately. That is the adversarial
+///   case: even a child that durably committed the guidance cannot make this
+///   steer accepted, because the registry's cancellation linearization point
+///   dropped its ticket. The child-side refusal is proven separately by
+///   `guidance_after_the_committed_cancellation_intent_is_refused`; this test
+///   proves the parent never reports acceptance *regardless* of what the
+///   child did.
+///
+/// The linearization point being proven is the registry mutex: it totally
+/// orders steer admission, the `Running -> Cancelling` commit, and the steer
+/// commit, and a steer is accepted only if its ticket survived from the
+/// first to the third.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cancellation_committed_before_child_acceptance_refuses_the_in_flight_steer() {
+    let plane = subagent_plane();
+    let mut child = stage_exit0(&plane);
+    let accepted_child = start_subagent(&plane, "survey").await;
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    let id = accepted_child.subagent_id.to_string();
+    child.take_delegation().await;
+
+    // (1)+(2): the child receives the envelope and deliberately withholds
+    // the answer. `answered` is the barrier the test releases in step (4).
+    let (release_answer, answer_now) = tokio::sync::oneshot::channel::<()>();
+    let (envelope_read, envelope_is_held) = tokio::sync::oneshot::channel::<()>();
+    let child_side = tokio::spawn(async move {
+        let crate::runtime::subagent::ipc::ParentFrame::Guidance(guidance) =
+            child.read_frame().await
+        else {
+            panic!("the steer routes exactly one guidance envelope to this child");
+        };
+        envelope_read
+            .send(())
+            .expect("the test observes the held envelope");
+        answer_now.await.expect("the test releases the answer");
+        crate::runtime::subagent::ipc::write_child_frame(
+            &mut child.peer,
+            &ChildFrame::GuidanceResult(crate::runtime::subagent::ipc::GuidanceResultFrame {
+                guidance_id: guidance.guidance_id,
+                // Adversarial: the child claims durable acceptance.
+                outcome: crate::runtime::subagent::ipc::ChildGuidanceOutcome::Accepted,
+            }),
+        )
+        .await
+        .expect("guidance answer");
+        child
+    });
+    let steering = run_execution(
+        &fixture,
+        serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": id.clone()},
+            "message": "routed before the cancellation, answered after it",
+        }),
+    );
+    tokio::pin!(steering);
+    // The steer future is polled until it is provably parked on the child's
+    // answer: the envelope has been read by the child side, and the call has
+    // not returned.
+    let steering = tokio::select! {
+        _ = &mut steering => panic!("the steer cannot settle before the child answers"),
+        held = envelope_is_held => {
+            held.expect("the child holds the routed envelope");
+            steering
+        }
+    };
+
+    // (3): the cancellation intent commits while the steer is outstanding.
+    let cancelled = plane
+        .registry
+        .cancel(
+            &accepted_child.subagent_id,
+            rustx::runtime::types::CancellationReason::UserRequested,
+        )
+        .expect("known child");
+    assert_eq!(
+        cancelled.state,
+        SubagentState::Cancelling,
+        "the cancellation intent is committed before the child answers"
+    );
+
+    // (4): only now does the child answer, and it answers `Accepted`.
+    release_answer
+        .send(())
+        .expect("the child answers after the cancellation commit");
+    let outcome = steering.await;
+    let _child = child_side.await.expect("child side");
+
+    // (5)+(6): the steer cannot become accepted.
+    assert!(
+        matches!(outcome.status, ToolExecutionStatus::Failed { .. }),
+        "a steer that raced a committed cancellation is refused, never accepted: {:?}",
+        outcome.status
+    );
+    let message = failure_message(&outcome);
+    assert!(
+        message.contains("cancellation intent is committed"),
+        "the refusal names the cancellation authority that won: {message}"
+    );
+
+    // (7)+(8): no resurrection. The child stays on its cancellation path and
+    // the refused steer mutated no lifecycle state.
+    let snapshot = plane
+        .registry
+        .snapshot(&accepted_child.subagent_id)
+        .expect("record");
+    assert_eq!(
+        snapshot.state,
+        SubagentState::Cancelling,
+        "a refused steer never moves a cancelling child back toward running"
+    );
+    assert_eq!(
+        snapshot.cancel_reason,
+        Some(rustx::runtime::types::CancellationReason::UserRequested),
+        "the committed cancellation cause is untouched by the refused steer"
+    );
+}
+
+/// **A cancellation *after* an accepted steer (Issue #193 contract).**
+///
+/// The documented contract is asymmetric on purpose, and this test pins the
+/// second half of it: a steer whose ticket survived to its commit is
+/// reported `accepted: true`, and a *later* cancellation still terminates
+/// the child. The acknowledgement therefore never claims the child observed
+/// the guidance — it claims only that the guidance was durably in the
+/// child's conversation with no cancellation committed up to that point.
+///
+/// The ordering is established by the parent's own return value: the steer
+/// call has returned before `cancel` is invoked, so the acceptance provably
+/// precedes the cancellation commit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cancellation_after_an_accepted_steer_still_settles_the_child_cancelled() {
+    let plane = subagent_plane();
+    let mut child = stage_exit0(&plane);
+    let accepted_child = start_subagent(&plane, "survey").await;
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    let id = accepted_child.subagent_id.to_string();
+    child.take_delegation().await;
+
+    let child_side = tokio::spawn(async move {
+        let message = child.answer_guidance(accepted()).await;
+        (child, message)
+    });
+    let accepted_steer = run_execution(
+        &fixture,
+        serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": id.clone()},
+            "message": "accepted, then superseded by cancellation",
+        }),
+    )
+    .await;
+    let (mut child, delivered) = child_side.await.expect("child side");
+    assert_eq!(
+        json_content(&accepted_steer)["accepted"],
+        serde_json::json!(true),
+        "the steer committed before any cancellation intent existed"
+    );
+    assert_eq!(delivered, "accepted, then superseded by cancellation");
+
+    // The later cancellation is authoritative: it supersedes the accepted
+    // guidance rather than waiting for it to be observed.
+    let cancelled = plane
+        .registry
+        .cancel(
+            &accepted_child.subagent_id,
+            rustx::runtime::types::CancellationReason::UserRequested,
+        )
+        .expect("known child");
+    assert_eq!(cancelled.state, SubagentState::Cancelling);
+    assert!(
+        matches!(
+            child.read_frame().await,
+            crate::runtime::subagent::ipc::ParentFrame::Cancel { .. }
+        ),
+        "the cancellation reaches the child that holds the accepted guidance"
+    );
+    child.send_result(ChildResultStatus::Cancelled, None).await;
+    let settled = plane
+        .registry
+        .wait_until_settled(&accepted_child.subagent_id)
+        .await
+        .expect("settled");
+    assert_eq!(
+        settled.state,
+        SubagentState::Cancelled,
+        "cancellation stays authoritative over an already accepted steer"
+    );
+    assert_eq!(
+        settled.cancel_reason,
+        Some(rustx::runtime::types::CancellationReason::UserRequested)
+    );
+
+    // The one result channel published no answer: an accepted steer never
+    // turns a cancelled child into a reporting one.
+    let pending = plane.store.select_pending_batch().expect("pending");
+    let answers: Vec<String> = pending
+        .into_iter()
+        .flat_map(|batch| batch.items)
+        .filter_map(|item| match item.message.content.first() {
+            Some(rustx::message::types::UserContentBlock::Text(text)) => Some(text.text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        answers.iter().all(|text| !text.contains("accepted, then")),
+        "no answer derived from the superseded guidance is ever published: {answers:?}"
+    );
+}
+
+/// **Workflow ownership (Issue #193 review finding #3).**
+///
+/// A Workflow-owned `AgentRun` is refused deterministically by the subagent
+/// domain authority itself, in every lifecycle state, and the refusal is
+/// decided **before any guidance envelope exists**. That last part is what
+/// the second half of this test proves: after the refusal, the very next
+/// frame the child receives is the `Cancel` frame, so no `Guidance` frame
+/// was ever written to it.
+///
+/// Cancel symmetry is not steer symmetry: cancel is lifecycle control the
+/// parent runtime owns for every child it supervises, while steer is
+/// semantic conversation authorship, which for these children belongs to the
+/// compiled Workflow program.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_workflow_owned_child_refuses_steering_before_any_guidance_frame_exists() {
+    let plane = subagent_plane();
+    let mut child = stage_exit0(&plane);
+    let accepted_child = start_workflow_subagent(&plane, "produce the node output").await;
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    let id = accepted_child.subagent_id.to_string();
+    child.take_delegation().await;
+
+    let refused = run_execution(
+        &fixture,
+        serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": id},
+            "message": "the workflow owns this child's instructions",
+        }),
+    )
+    .await;
+    assert!(matches!(refused.status, ToolExecutionStatus::Failed { .. }));
+    let message = failure_message(&refused);
+    assert!(
+        message.contains("steering is not supported for workflow-owned subagent executions"),
+        "the refusal names Workflow ownership, not a lifecycle accident: {message}"
+    );
+    assert_eq!(
+        plane
+            .registry
+            .snapshot(&accepted_child.subagent_id)
+            .expect("record")
+            .state,
+        SubagentState::Running,
+        "the refusal mutates no lifecycle state"
+    );
+
+    // No Guidance frame was written: the next frame this child sees is the
+    // cancellation, which is written only now.
+    plane
+        .registry
+        .cancel(
+            &accepted_child.subagent_id,
+            rustx::runtime::types::CancellationReason::UserRequested,
+        )
+        .expect("known child");
+    assert!(
+        matches!(
+            child.read_frame().await,
+            crate::runtime::subagent::ipc::ParentFrame::Cancel { .. }
+        ),
+        "the refused steer never reached the child's control channel"
+    );
+}
+
+/// Workflow-owned children remain fully cancellable, and their frozen
+/// structured output contract is untouched by the steering restriction: the
+/// same child that refuses every steer still settles through the ordinary
+/// Workflow terminal path with its validated output.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_workflow_owned_child_keeps_its_cancellation_and_output_contract() {
+    // Cancellation half.
+    let plane = subagent_plane();
+    let child = stage_exit0(&plane);
+    let cancelled_child = start_workflow_subagent(&plane, "cancelled node").await;
+    plane
+        .registry
+        .cancel(
+            &cancelled_child.subagent_id,
+            rustx::runtime::types::CancellationReason::UserRequested,
+        )
+        .expect("known child");
+    child
+        .cancelled_after_delegation(ChildResultStatus::Cancelled, None)
+        .await;
+    let settled = plane
+        .registry
+        .wait_until_settled(&cancelled_child.subagent_id)
+        .await
+        .expect("settled");
+    assert_eq!(
+        settled.state,
+        SubagentState::Cancelled,
+        "the steering restriction does not weaken Workflow cancellation"
+    );
+    assert_eq!(
+        settled.cancel_reason,
+        Some(rustx::runtime::types::CancellationReason::UserRequested)
+    );
+
+    // Output-contract half: a second Workflow child, steered at and refused,
+    // still settles with its validated structured output.
+    let other = subagent_plane_for("conv-193-workflow-output");
+    let mut child = stage_exit0(&other);
+    let running = start_workflow_subagent(&other, "answering node").await;
+    let fixture = execution_fixture(Some(other.registry.clone()));
+    child.take_delegation().await;
+    let refused = run_execution(
+        &fixture,
+        serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": running.subagent_id.to_string()},
+            "message": "refused",
+        }),
+    )
+    .await;
+    assert!(matches!(refused.status, ToolExecutionStatus::Failed { .. }));
+    child
+        .send_result(
+            ChildResultStatus::Succeeded,
+            Some(r#"{"summary":"the node answer"}"#),
+        )
+        .await;
+    let settled = other
+        .registry
+        .wait_until_settled(&running.subagent_id)
+        .await
+        .expect("settled");
+    assert_eq!(
+        settled.state,
+        SubagentState::Succeeded,
+        "the Workflow child's own terminal path is unchanged"
+    );
+    assert_eq!(
+        other
+            .registry
+            .workflow_agent_output(&running.subagent_id)
+            .expect("the validated Workflow output is still delivered"),
+        serde_json::json!({"summary": "the node answer"}),
+        "the frozen output schema contract is untouched"
+    );
+}
+
+/// A normal asynchronous subagent in the very same registry is steerable:
+/// the Workflow restriction is scoped to ownership, not to steering as such.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_workflow_restriction_leaves_normal_subagent_steering_intact() {
+    let plane = subagent_plane();
+    let mut normal = stage_exit0(&plane);
+    let normal_child = start_subagent(&plane, "normal survey").await;
+    let mut workflow = stage_exit0(&plane);
+    let workflow_child = start_workflow_subagent(&plane, "workflow node").await;
+    let fixture = execution_fixture(Some(plane.registry.clone()));
+    normal.take_delegation().await;
+    workflow.take_delegation().await;
+
+    let child_side = tokio::spawn(async move {
+        let message = normal.answer_guidance(accepted()).await;
+        (normal, message)
+    });
+    let steered = run_execution(
+        &fixture,
+        serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": normal_child.subagent_id.to_string()},
+            "message": "narrow the survey",
+        }),
+    )
+    .await;
+    let (_normal, delivered) = child_side.await.expect("child side");
+    assert_eq!(
+        json_content(&steered)["accepted"],
+        serde_json::json!(true),
+        "an ordinary asynchronous subagent remains steerable"
+    );
+    assert_eq!(delivered, "narrow the survey");
+
+    let refused = run_execution(
+        &fixture,
+        serde_json::json!({
+            "action": "steer",
+            "target": {"kind": "subagent", "id": workflow_child.subagent_id.to_string()},
+            "message": "still refused",
+        }),
+    )
+    .await;
+    assert!(
+        failure_message(&refused)
+            .contains("steering is not supported for workflow-owned subagent executions"),
+        "the sibling Workflow child is refused by ownership, in the same registry"
     );
 }

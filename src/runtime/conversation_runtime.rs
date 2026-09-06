@@ -4013,11 +4013,18 @@ impl ConversationRuntime {
     /// # The acceptance contract
     ///
     /// Success means exactly: *the guidance is durably accepted into this
-    /// child conversation's Pending Inbound Inbox, ahead of the
-    /// conversation's terminal seal, and will therefore reach an ordinary
-    /// Agent Loop boundary before this conversation settles.* It does not
-    /// mean the child model has observed it, that the in-flight provider
-    /// request or tool call was interrupted, or that anything changed yet.
+    /// child conversation's Pending Inbound Inbox, ahead of this
+    /// conversation's terminal seal.* Because the seal is what lets the
+    /// one-shot child driver publish a terminal at all, it follows that a
+    /// **naturally completing** child cannot publish an answer that
+    /// predates this guidance.
+    ///
+    /// It does **not** mean the child model has observed it, that the
+    /// in-flight provider request or tool call was interrupted, that
+    /// anything changed yet, or that observation is guaranteed: a later
+    /// cancellation of this conversation, or physical loss of the child
+    /// process, legitimately ends the conversation with accepted guidance
+    /// unobserved. Cancellation stays authoritative.
     ///
     /// Three refusals and the durable acceptance all commit under the **one
     /// coordinator lock**, which is what makes the guarantee a linearization
@@ -4030,6 +4037,10 @@ impl ConversationRuntime {
     ///   ([`InboundAdmissionError::GuidanceCancelled`]) — cancellation is
     ///   never overtaken and a child is never steered back toward running;
     /// - the ordinary lifecycle/durability gates.
+    ///
+    /// This is the *child* half only. The parent registry arbitrates this
+    /// answer against its own cancellation linearization point before it
+    /// reports `accepted` to the model.
     ///
     /// Multiple accepted guidance messages preserve their acceptance order
     /// by the durable inbox's own `InboundSequence` domain; no scheduler
@@ -4050,25 +4061,44 @@ impl ConversationRuntime {
     }
 
     /// Commits this child conversation's **terminal seal** for
-    /// parent-authored guidance (Issue #193), or reports that semantic work
-    /// is still owed.
+    /// parent-authored guidance (Issue #193), reports that semantic work is
+    /// still owed, or fails closed.
     ///
     /// `observed_terminals` is how many attempt terminals the caller has
     /// already consumed. Under the one coordinator lock — the same lock that
-    /// owns durable inbound acceptance — the seal commits only when nothing
-    /// can still carry accepted guidance into a model turn:
+    /// owns durable inbound acceptance — the seal commits only when the
+    /// runtime **positively proves** that nothing can still carry accepted
+    /// guidance into a model turn:
     ///
     /// - no admitted attempt is unobserved (`admitted_attempts` does not
     ///   exceed `observed_terminals`);
     /// - no attempt is live;
-    /// - the durable Pending Inbound Inbox is empty.
+    /// - the durable Pending Inbound Inbox is *proven* empty.
     ///
     /// Because acceptance and the seal share that lock, a guidance accepted
     /// before the seal is necessarily visible to it — the seal then answers
     /// [`ParentGuidanceSeal::Open`] and the ordinary coordinator admits the
     /// turn that observes it — and a guidance arriving after the seal is
     /// necessarily refused. There is no interleaving in which a durably
-    /// accepted guidance is silently discarded by a terminal.
+    /// accepted guidance is silently discarded by a natural terminal.
+    ///
+    /// # Failing closed
+    ///
+    /// A durable read failure is **not** evidence that the inbox is empty,
+    /// so it can never be folded into `Ok(false)`. The three answers are
+    /// exactly:
+    ///
+    /// - `Ok(true)`  -> [`ParentGuidanceSeal::Open`]: semantic work remains;
+    /// - `Ok(false)` -> eligible to seal;
+    /// - `Err(..)`   -> [`ParentGuidanceSeal::DurabilityFailed`]: the seal
+    ///   does **not** commit and the caller must not publish a successful
+    ///   terminal.
+    ///
+    /// The failure is routed into the runtime's one absorbing
+    /// durability-failure authority ([`DurabilityGate::commit_failure`], via
+    /// [`DurableOperation::ParentGuidanceSeal`], which is non-transient by
+    /// construction) before it is returned, so the degraded state is
+    /// observable exactly once and the runtime rejects further durable work.
     ///
     /// The seal is absorbing. It is used only by the one-shot subagent child
     /// driver; an ordinary interactive conversation never seals, because its
@@ -4109,14 +4139,27 @@ impl ConversationRuntime {
                 if state.current_attempt.is_none() {
                     // Accepted guidance still pending means the ordinary
                     // coordinator will admit the attempt that adopts it, so
-                    // the child owes one more terminal observation. A durable
-                    // read failure cannot be resolved by waiting and the
-                    // attempt that would have surfaced it has already
-                    // settled, so it seals rather than spins: the child's
-                    // terminal classification is owned by the attempt
-                    // outcome, never by this read.
-                    if self.inner.mailbox.has_pending().unwrap_or(false) {
-                        return ParentGuidanceSeal::Open;
+                    // the child owes one more terminal observation.
+                    //
+                    // The seal needs a *positive* proof of emptiness. An
+                    // unreadable inbox proves nothing, so it can never be
+                    // read as "nothing pending": the runtime enters its
+                    // absorbing durability-failure state and the caller is
+                    // told the seal did not commit.
+                    match self.inner.mailbox.has_pending() {
+                        Ok(true) => return ParentGuidanceSeal::Open,
+                        Ok(false) => {}
+                        Err(error) => {
+                            let diagnostic = format!(
+                                "the child terminal seal could not verify the pending inbound inbox: {error}"
+                            );
+                            drop(state);
+                            self.inner.commit_failure_and_observe(
+                                DurableOperation::ParentGuidanceSeal,
+                                diagnostic.clone(),
+                            );
+                            return ParentGuidanceSeal::DurabilityFailed { diagnostic };
+                        }
                     }
                     state.parent_guidance_sealed = true;
                     return ParentGuidanceSeal::Sealed;
@@ -4126,6 +4169,25 @@ impl ConversationRuntime {
             // exactly that settlement rather than polling.
             settled.await;
         }
+    }
+
+    /// The runtime's one absorbing durability-failure fact, if committed
+    /// (test-only): the same fact every durable admission gate reads.
+    #[cfg(test)]
+    pub(crate) fn durability_failure(&self) -> Option<crate::runtime::types::DurabilityFailure> {
+        self.inner.durability_gate.failure()
+    }
+
+    /// Arms `count` consecutive durable failures of the terminal seal's
+    /// pending-inbox probe (test-only, Issue #193).
+    ///
+    /// It targets exactly [`ConversationInboundMailbox::has_pending`], which
+    /// only the seal calls, so the fail-closed contract can be proven
+    /// without arming a store-wide select fault that the coordinator's own
+    /// admission loop would race for.
+    #[cfg(test)]
+    pub(crate) fn arm_seal_probe_failures(&self, count: usize) {
+        self.inner.mailbox.arm_pending_probe_failures(count);
     }
 
     /// The shared admission path of every trusted in-process inbound
@@ -5053,7 +5115,7 @@ impl SemanticInboundClass {
 
 /// The result of one child-conversation terminal seal evaluation (Issue
 /// #193).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ParentGuidanceSeal {
     /// The seal committed: no accepted guidance remains unobserved and none
     /// can be accepted afterwards. The child may report its terminal.
@@ -5062,6 +5124,15 @@ pub(crate) enum ParentGuidanceSeal {
     /// attempt, or accepted guidance still pending adoption. The child must
     /// observe another ordinary attempt terminal before it may seal.
     Open,
+    /// The seal could not be *proven*: the durable Pending Inbound Inbox
+    /// read failed, so the runtime cannot rule out an accepted, unadopted
+    /// guidance. The runtime has committed its absorbing durability-failure
+    /// fact; the child must fail closed and must not publish a successful
+    /// terminal.
+    DurabilityFailed {
+        /// The bounded diagnostic of the failed durable read.
+        diagnostic: String,
+    },
 }
 
 /// A successful complete runtime resource/capability publication.

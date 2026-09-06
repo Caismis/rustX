@@ -1766,10 +1766,12 @@ execution(steer)            model-facing control plane: schema, explicit
                             minimal acknowledgement projection
   |
   v
-SubagentRegistry::steer     the subagent/conversation authority: whether this
-                            child may still be offered guidance, and the
-                            registry-mutex linearization against cancellation
-                            intent and terminal authority
+SubagentRegistry::steer     the subagent/conversation authority: ownership
+                            (a Workflow-owned AgentRun is refused outright),
+                            whether this child may still be offered guidance,
+                            and the registry-mutex arbitration of the steer
+                            ticket against cancellation intent and terminal
+                            authority
   |
   v
 child durable inbound       ConversationRuntime::submit_parent_guidance under
@@ -1812,43 +1814,79 @@ side.
   becomes semantically visible at the next ordinary Agent Loop boundary
   where newly accepted conversation input can participate in a model turn.
 - **`accepted` has exactly one meaning.** It means *the parent-authored
-  guidance was durably accepted for this child conversation, and will reach
-  an ordinary Agent Loop boundary before that child settles*. It does not
-  mean the child model has observed it, that anything in flight was
-  interrupted, that the requested behavioral change happened, or that
-  another child turn finished. A steer that cannot be durably accepted is a
-  bounded deterministic failure — unknown child, malformed target, empty or
-  oversized message, `kind = tool` + `action = steer`, terminal child,
-  committed cancellation intent, or a child-side refusal — never silence and
-  never `accepted` without the durable commit.
+  guidance was durably committed into this child's own conversation inbound
+  inbox, and no cancellation intent had committed for this child up to that
+  point*. It does not mean the child model has observed it, that anything in
+  flight was interrupted, that the requested behavioral change happened, or
+  that another child turn finished — and it does not promise observation
+  against a *later* cancellation or physical child loss. A steer that cannot
+  be accepted is a bounded deterministic failure — unknown child, malformed
+  target, empty or oversized message, `kind = tool` + `action = steer`, a
+  Workflow-owned child, a terminal child, a committed cancellation intent, or
+  a child-side refusal — never silence and never `accepted` without both
+  commits.
 - **Acceptance order is durable order.** Multiple accepted steers are
   observed in exactly their acceptance order, because acceptance *is* the
   child's durable Pending Inbound Inbox commit and the ordinary safe-boundary
   drain adopts that sequence domain in order. No scheduler ordering is
   involved, and no new mailbox or scheduler framework exists.
-- **There are exactly two acceptance linearization points, and they compose.**
-  The **registry mutex** is the same critical section that commits
-  `Running -> Cancelling` and `... -> PublishingTerminal`, so a committed
-  cancellation intent or terminal candidate refuses a steer outright, and an
-  admitted steer mutates no lifecycle state whatsoever. The **child
-  coordinator lock** is the same critical section that owns the child's
-  durable inbound acceptance, its committed one-shot cancellation intent,
-  and its terminal seal, so the authoritative acceptance is decided there.
+- **The registry mutex is the one steer/cancel arbitration authority.**
+  Transport ordering is not a semantic commit, so nothing relies on the
+  reliable control lane being FIFO. Instead a steer holds a **ticket** on its
+  registry record: the ticket is armed inside the same critical section that
+  hands the envelope to the driver, it is *dropped* by the same critical
+  section that commits `Running -> Cancelling`, and the steer is reported
+  accepted only if it can remove its own ticket when it commits — which
+  happens strictly after the child answered. That single mutex therefore
+  totally orders admission, cancellation-intent commit, and steer commit.
+- **Cancellation always wins the race.** Any cancellation intent that commits
+  before a steer's commit — and therefore any cancellation that commits
+  before the child's durable acceptance, which strictly precedes that commit
+  — makes the steer deterministically unacceptable. A steer submitted after a
+  committed cancellation intent is refused outright by the same mutex. The
+  refusal is honest rather than optimistic: a refused steer's envelope may
+  physically have reached the child, but the cancellation that refused it is
+  absorbing, so the child's terminal is the cancellation's and no answer
+  derived from that guidance is ever published.
+- **Cancellation after an accepted steer is still authoritative.** A steer
+  that committed before any cancellation stays `accepted: true`, and a later
+  cancellation may still terminate the child with the guidance unobserved.
+  The acknowledgement deliberately claims nothing stronger; the runtime never
+  delays or weakens a cancellation to give accepted guidance a turn.
 - **The child conversation's terminal seal is the terminal linearization
-  point for guidance.** The seal commits only when nothing can still carry
-  accepted guidance into a model turn: no admitted attempt is unobserved by
-  the child driver, no attempt is live, and the durable pending inbox is
-  empty. Because the seal and the durable acceptance share the one
-  coordinator lock, a guidance accepted before the seal is necessarily
-  visible to it — the seal then reports `Open`, the ordinary coordinator
-  admits the turn that observes it, and only that turn's outcome is
-  reported — and a guidance arriving after the seal is necessarily refused.
-  The parent's terminal authority is strictly downstream of that seal,
-  because the terminal candidate is built from the child's `Result` frame
-  and the child sends it only after sealing. There is therefore no
-  interleaving in which a durably accepted steer is discarded by a terminal.
-  Cancellation and physical child loss still supersede every pending
-  semantic input; that is cancellation semantics, not a steering guarantee.
+  point for guidance, and it fails closed.** The seal commits only when the
+  runtime *positively proves* that nothing can still carry accepted guidance
+  into a model turn: no admitted attempt is unobserved by the child driver,
+  no attempt is live, and the durable pending inbox is **proven** empty. A
+  durable read failure is not a proof of emptiness: it commits the runtime's
+  absorbing `DurabilityFailed` fact (durable operation
+  `parent_guidance_seal`, non-transient by construction) and the child
+  reports a failed terminal instead of the answer it could not justify.
+  Because the seal and the durable acceptance share the one coordinator lock,
+  a guidance accepted before the seal is necessarily visible to it — the seal
+  then reports `Open`, the ordinary coordinator admits the turn that observes
+  it, and only that turn's outcome is reported — and a guidance arriving
+  after the seal is necessarily refused. The parent's terminal authority is
+  strictly downstream of that seal, because the terminal candidate is built
+  from the child's `Result` frame and the child sends it only after sealing.
+  A **naturally completing** child therefore cannot publish an answer that
+  predates an accepted steer.
+- **Physical loss makes no promise either.** A child that dies, is orphaned,
+  or loses its control plane may end with accepted guidance unobserved. The
+  contract is stated as what was committed, never as what will be seen.
+- **Workflow-owned children are never steerable.** A child whose terminal
+  mode is `WorkflowOutput` is an `AgentRun` of a compiled Workflow program:
+  its profile, task, bound inputs, and frozen output schema are authored by
+  the `WorkflowRuntime`, so the generic control plane must not author into
+  that conversation. `SubagentRegistry::steer` refuses it deterministically —
+  in the domain authority itself, not only at the model-facing layer, and
+  from the ownership fact alone, ahead of every lifecycle branch, so no
+  `Guidance` frame is ever written. Cancel symmetry is not steer symmetry:
+  cancel is lifecycle control the parent runtime owns for every child it
+  supervises, and Workflow cancellation and Workflow output-schema validation
+  are unchanged. Any future Workflow steering belongs on the
+  `WorkflowRuntime -> AgentRun -> child conversation` path, never as a
+  capability inherited from a shared registry implementation.
 - **No resurrection.** `Cancelling -> Running`, `Cancelled -> Running`, and
   `Succeeded -> Running` remain impossible. Terminal states stay absorbing,
   and a refused steer changes no state at all.
@@ -2241,7 +2279,7 @@ side.
   either `UnixStream`; there is no listener and no network service.
 - **Anchor acknowledgements route by exact typed identity.** Two units with
   outstanding offers cannot open each other's start gates.
-- **The subagent IPC version is 14 and there is no compatibility decoding.** A
+- **The subagent IPC version is 15 and there is no compatibility decoding.** A
   peer that does not speak exactly this version exits before composing
   anything. The typed `Cancel` payload carries the parent registry's semantic
   `CancellationReason`; only pre-ownership preparation cancellation uses an
@@ -2257,13 +2295,15 @@ side.
   the conflated workspace path with explicit logical-child and physical-
   worktree facts. Version 13 carries the frozen definition-level
   whole-lifecycle execution deadline in `ResolvedSubagentSpec`; only the
-  parent registry enforces it after ownership commits. Version 14 adds the
-  parent-authored guidance envelope (`Guidance`) and the child
-  conversation's authoritative acceptance answer (`GuidanceResult`) of
-  Issue #193; the envelope carries a bounded message plus a transport
-  correlation id and nothing else, so no launch authority is spellable on
-  the wire. HITL traffic is never a control acknowledgement and never uses
-  the disposable observation lane.
+  parent registry enforces it after ownership commits. Version 14 carries
+  the parent's frozen generic tool execution-liveness deadline policy of
+  Issue #204, inherited unchanged by the child runtime's foreground Tool
+  lifecycle. Version 15 adds the parent-authored guidance envelope
+  (`Guidance`) and the child conversation's authoritative acceptance answer
+  (`GuidanceResult`) of Issue #193; the envelope carries a bounded message
+  plus a transport correlation id and nothing else, so no launch authority
+  is spellable on the wire. HITL traffic is never a control acknowledgement
+  and never uses the disposable observation lane.
 
 ## Issues #146, #187, and #189: deterministic, scope-preserving worktree isolation
 

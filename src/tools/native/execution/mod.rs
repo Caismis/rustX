@@ -175,10 +175,13 @@ fn definition() -> ToolDefinition {
              conversation, so use it to add or narrow guidance instead of cancelling and \
              starting over. It does not interrupt the child's current model request or tool \
              call — the child sees the message at its next turn — and it cannot change the \
-             child's agent, model, tools, or workspace. A success means only that the \
-             guidance was accepted for that child; the child's answer still arrives once, \
-             later, as its own message. Repeated steers are seen in the order they were \
-             accepted. \"list\" takes no target and returns a bounded, deterministically \
+             child's agent, model, tools, or workspace. A success means the guidance was \
+             accepted into that child's conversation, so a child that finishes on its own \
+             will have seen it; cancelling the child afterwards still ends it, seen or not. \
+             Steering a subagent started by a workflow is refused: a workflow owns its \
+             children's instructions. The child's answer still arrives once, later, as its \
+             own message. Repeated steers are seen in the order they were accepted. \
+             \"list\" takes no target and returns a bounded, deterministically \
              ordered summary of this conversation's own executions — newest-first within \
              each execution kind, the kinds interleaved — optionally filtered by kind and to \
              lifecycle-active ones; it reports handles and lifecycle state only, never \
@@ -271,10 +274,12 @@ async fn run_execution(
 ///
 /// The intrinsic owns none of the semantics: it validates the target kind,
 /// hands the message to [`SubagentRegistry::steer`], and projects the
-/// authority's answer. Whether this child may still accept guidance, how
-/// accepted guidance is ordered, how it races cancellation and terminal
-/// authority, and how it reaches the child conversation are all owned
-/// below this boundary.
+/// authority's answer. Whether this child may still accept guidance —
+/// including the ownership refusal of a Workflow-owned `AgentRun`, whose
+/// semantic input belongs to the compiled Workflow program — how accepted
+/// guidance is ordered, how it races cancellation and terminal authority,
+/// and how it reaches the child conversation are all owned below this
+/// boundary.
 async fn run_steer(
     subagents: Option<&SubagentRegistry>,
     target: &ExecutionHandle,
@@ -678,13 +683,24 @@ impl From<SubagentSnapshot> for SubagentExecutionSnapshot {
 /// canonical parent-inbound publication remains the one result channel.
 ///
 /// `accepted` means exactly: *the parent-authored guidance was durably
-/// accepted for this child conversation, and will reach an ordinary Agent
-/// Loop boundary before that child settles.* It does **not** mean the child
-/// model has observed it, that the in-flight provider request or tool call
-/// was interrupted, that the requested behavioral change happened, or that
-/// another child turn has finished. A steer that could not be durably
-/// accepted is a failed tool result carrying the deterministic reason, never
-/// a success with `accepted: false`.
+/// committed into this child's own conversation inbound inbox, and no
+/// cancellation intent had committed for this child up to that point.*
+///
+/// What follows from it: a child that goes on to complete **naturally**
+/// cannot publish a terminal that predates the guidance — the child
+/// conversation's terminal seal enforces that.
+///
+/// What does **not** follow: it does not mean the child model has observed
+/// the guidance, that the in-flight provider request or tool call was
+/// interrupted, that the requested behavioral change happened, or that
+/// another child turn has finished. It also promises nothing against a
+/// *later* cancellation or physical loss of the child: cancellation remains
+/// authoritative and may end the child with the guidance unobserved.
+///
+/// A steer that could not be accepted is a failed tool result carrying the
+/// deterministic reason, never a success with `accepted: false`. A steer
+/// that raced a cancellation is always refused, never accepted, and a
+/// Workflow-owned child refuses every steer outright.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ExecutionSteerResponse {
     /// The canonical typed continuation identity — the same handle the
@@ -692,7 +708,9 @@ pub struct ExecutionSteerResponse {
     pub execution: ExecutionHandle,
     /// The owning registry's authoritative lifecycle state.
     pub state: SubagentState,
-    /// Always true: the durable acceptance contract was met.
+    /// Always true: both the child's durable acceptance and the registry's
+    /// cancellation arbitration agreed. A refusal is a failed tool result,
+    /// so `false` is never serialized.
     pub accepted: bool,
 }
 
