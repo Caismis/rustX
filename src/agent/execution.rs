@@ -6309,6 +6309,18 @@ impl ProgressReporter for ForegroundProgressFanout<'_> {
         // both consumers observe the same bounded value and the durable
         // path is byte-identical to the un-fanned-out one.
         let bounded = crate::tools::limits::bound_tool_progress(progress);
+        // The idle watchdog is refreshed FIRST, before the durable buffer
+        // append and before any live observer callback. Liveness evidence
+        // belongs to the lifecycle that owns the deadline, and an installed
+        // observer is arbitrary consumer code: refreshing after it would let
+        // an observer's own work sit between the executor's evidence and the
+        // watchdog that depends on it, and would stamp the refresh with a
+        // later clock reading than the report actually carries. Ordering it
+        // first also makes the refresh a happens-before of every downstream
+        // progress observation.
+        if let Some(liveness) = self.liveness {
+            liveness.sender.send_replace(liveness.clock.now_millis());
+        }
         self.buffer.report(bounded.clone());
         if let Some(observer) = self.observer {
             observer.observe_tool_progress(
@@ -6317,9 +6329,6 @@ impl ProgressReporter for ForegroundProgressFanout<'_> {
                 &self.buffer.tool_id,
                 &bounded,
             );
-        }
-        if let Some(liveness) = self.liveness {
-            liveness.sender.send_replace(liveness.clock.now_millis());
         }
     }
 }

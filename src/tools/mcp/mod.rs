@@ -50,6 +50,7 @@
 #[doc(hidden)]
 pub mod fixture;
 
+mod connection;
 mod framing;
 pub mod identity;
 
@@ -92,6 +93,8 @@ use crate::tools::types::{
     ToolInvocation, ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy, ToolResultContent,
 };
 use crate::tools::workspace::Workspace;
+
+pub(crate) use connection::McpConnection;
 
 /// The MCP protocol revisions rustX offers, most preferred first.
 ///
@@ -377,6 +380,14 @@ pub struct McpServerRuntime {
     /// Once set, this generation is poisoned — no operation on it may
     /// settle as healthy.
     protocol_violation: Arc<framing::ProtocolViolationRecorder>,
+    /// The first observed proof that this transport generation can no longer
+    /// carry MCP traffic (Issue #205): a transport-class rmcp failure on a
+    /// request, or a response channel that ended without a reply. Recording
+    /// it is monotonic and idempotent — repeated loss signals never produce
+    /// a second retirement — and the owning [`connection::McpConnection`]
+    /// reads it to retire this generation before any later request is
+    /// dispatched.
+    transport_failure: Mutex<Option<String>>,
     /// Test-only close synchronization/fault seam, installed at most once.
     #[cfg(test)]
     close_probe: std::sync::OnceLock<Arc<test_sync::CloseProbe>>,
@@ -551,7 +562,14 @@ pub(crate) struct McpRuntimeGeneration {
 
 struct McpRuntimeGenerationInner {
     server_id: McpServerId,
-    runtime: Arc<McpServerRuntime>,
+    /// The stable connection owner of this server (Issue #205).
+    ///
+    /// A published capability generation owns one connection, and the
+    /// connection owns whichever transport generation is currently
+    /// authoritative. Executors bind to the connection, so a replaced
+    /// transport is served immediately by every already-admitted tool
+    /// without touching published capability knowledge.
+    connection: Arc<connection::McpConnection>,
     retirement: Weak<McpRuntimeRetirementRegistryInner>,
     handle: tokio::runtime::Handle,
     lifecycle_admission: Mutex<Option<LifecycleAdmission>>,
@@ -642,9 +660,14 @@ impl std::fmt::Debug for McpRuntimeGeneration {
 }
 
 impl McpRuntimeGeneration {
-    pub(crate) fn from_connected(
+    /// The publication owner of one MCP connection.
+    ///
+    /// The connection — not a single transport — is what a published
+    /// capability generation owns. Retiring this owner closes the connection
+    /// and every transport generation it ever established.
+    pub(crate) fn from_connection(
         server_id: McpServerId,
-        runtime: Arc<McpServerRuntime>,
+        connection: Arc<connection::McpConnection>,
         lifecycle_admission: Option<LifecycleAdmission>,
         handle: tokio::runtime::Handle,
         retirement: &Arc<McpRuntimeRetirementRegistry>,
@@ -652,7 +675,7 @@ impl McpRuntimeGeneration {
         Self {
             inner: Arc::new(McpRuntimeGenerationInner {
                 server_id,
-                runtime,
+                connection,
                 retirement: Arc::downgrade(&retirement.inner),
                 handle,
                 lifecycle_admission: Mutex::new(lifecycle_admission),
@@ -669,14 +692,14 @@ impl McpRuntimeGeneration {
         }
     }
 
-    #[cfg(test)]
+    /// The server identity this published generation serves.
     pub(crate) fn server_id(&self) -> &McpServerId {
         &self.inner.server_id
     }
 
-    #[cfg(test)]
-    pub(crate) fn runtime(&self) -> Arc<McpServerRuntime> {
-        self.inner.runtime.clone()
+    /// The stable connection owner of this published generation.
+    pub(crate) fn connection(&self) -> &Arc<connection::McpConnection> {
+        &self.inner.connection
     }
 
     pub(crate) fn binding(&self) -> McpRuntimeBinding {
@@ -746,8 +769,8 @@ impl McpRuntimeBinding {
         })
     }
 
-    pub(crate) fn runtime(&self) -> &Arc<McpServerRuntime> {
-        &self.inner.runtime
+    pub(crate) fn connection(&self) -> &Arc<connection::McpConnection> {
+        &self.inner.connection
     }
 }
 
@@ -794,11 +817,17 @@ impl McpRuntimeLeaseSet {
         Some(Self { leases })
     }
 
+    /// Whether one of these leases resolves to the given published
+    /// transport (deterministic ownership tests only).
     #[cfg(test)]
     pub(crate) fn contains_runtime(&self, runtime: &Arc<McpServerRuntime>) -> bool {
-        self.leases
-            .iter()
-            .any(|lease| Arc::ptr_eq(&lease.inner.runtime, runtime))
+        self.leases.iter().any(|lease| {
+            lease
+                .inner
+                .connection
+                .published_runtime()
+                .is_some_and(|published| Arc::ptr_eq(&published, runtime))
+        })
     }
 }
 
@@ -851,8 +880,15 @@ impl McpRuntimeGenerationInner {
         };
         let inner = self.clone();
         self.handle.spawn(async move {
-            let result = inner.runtime.close().await;
-            let failure = result.err().map(|error| error.to_string());
+            // Closing the connection drives every transport generation it
+            // established — the current one and any retired-but-unclosed
+            // predecessor — to the same physical settlement proof.
+            let failures = inner.connection.close().await;
+            let failure = if failures.is_empty() {
+                None
+            } else {
+                Some(failures.join("; "))
+            };
             {
                 let mut state = inner.state.lock().expect("MCP generation lock poisoned");
                 state.physical_settlement_proven = failure.is_none();
@@ -866,10 +902,9 @@ impl McpRuntimeGenerationInner {
                     // The completion signal below must remain later than this
                     // entire terminal-outcome publication sequence.
                     #[cfg(test)]
-                    inner
-                        .runtime
-                        .wait_before_retirement_failure_publication()
-                        .await;
+                    if let Some(runtime) = inner.connection.published_runtime() {
+                        runtime.wait_before_retirement_failure_publication().await;
+                    }
                     registry.record_failure(&inner.server_id, &failure);
                 }
                 registry.reap();
@@ -1465,6 +1500,7 @@ impl McpServerRuntime {
             invalidation,
             change_notify: Arc::new(tokio::sync::Notify::new()),
             protocol_violation,
+            transport_failure: Mutex::new(None),
             #[cfg(test)]
             close_probe: std::sync::OnceLock::new(),
         });
@@ -1557,6 +1593,62 @@ impl McpServerRuntime {
         &self.protocol_version
     }
 
+    /// The proven reason this transport generation can no longer serve MCP
+    /// traffic, when one exists (Issue #205).
+    ///
+    /// This is the connection owner's health arbitration input, and it is
+    /// deliberately made of proofs only:
+    ///
+    /// - the runtime was closed (drain, generation retirement, or the
+    ///   fail-closed protocol poison);
+    /// - a confirmed structurally invalid MCP/JSON-RPC peer message was
+    ///   observed by the framing seam;
+    /// - an earlier operation observed a transport-class failure on this
+    ///   generation.
+    ///
+    /// A tool call that merely *failed* (a remote error result, an
+    /// unsupported response shape) proves nothing about the transport and
+    /// never appears here.
+    pub(crate) fn unusable_reason(&self) -> Option<String> {
+        if let Some(violation) = self.protocol_violation.violation() {
+            return Some(protocol_violation_call_diagnostic(
+                &self.server_id,
+                &violation,
+            ));
+        }
+        if let Some(failure) = self
+            .transport_failure
+            .lock()
+            .expect("MCP transport failure lock poisoned")
+            .clone()
+        {
+            return Some(failure);
+        }
+        if self.closed.load(Ordering::Acquire) {
+            return Some(format!(
+                "the MCP server runtime of '{}' is closed",
+                self.server_id
+            ));
+        }
+        None
+    }
+
+    /// Records the first proof that this transport generation is unusable.
+    ///
+    /// Monotonic and idempotent: the first proof wins, and every later loss
+    /// signal for the same generation is absorbed. Repeated transport-loss
+    /// observations therefore cannot produce a second retirement, a second
+    /// replacement, or a second canonical settlement.
+    fn note_transport_loss(&self, reason: &str) {
+        let mut failure = self
+            .transport_failure
+            .lock()
+            .expect("MCP transport failure lock poisoned");
+        if failure.is_none() {
+            *failure = Some(bound_error(reason));
+        }
+    }
+
     /// The invalidation epoch at the current observation point.
     #[must_use]
     pub fn change_epoch(&self) -> u64 {
@@ -1608,6 +1700,14 @@ impl McpServerRuntime {
                 if let Some(violation) = self.protocol_violation.violation() {
                     self.poison_after_protocol_violation().await;
                     return Err(protocol_violation_error(&self.server_id, &violation));
+                }
+                // A transport-class catalog failure proves this generation
+                // unusable; a correlated remote `tools/list` error does not
+                // and leaves the transport healthy.
+                if let rmcp::service::ServiceError::TransportClosed
+                | rmcp::service::ServiceError::TransportSend(_) = &error
+                {
+                    self.note_transport_loss(&error.to_string());
                 }
                 return Err(McpError::Discovery(bound_error(&error.to_string())));
             }
@@ -1747,14 +1847,69 @@ impl McpServerRuntime {
         ))
     }
 
+    /// Executes one remote `tools/call` on this transport generation.
+    ///
+    /// # The external-effect frontier (Issue #205)
+    ///
+    /// The frontier is the **exact instant
+    /// [`rmcp::Peer::send_cancellable_request`] returns `Ok`**, and this is
+    /// the strongest fact rustX can establish over rmcp's request path:
+    ///
+    /// ```text
+    /// send_cancellable_request(..) -> Err
+    ///     the request was never accepted by the service event loop, so it
+    ///     was never serialized and never written to the transport
+    ///     => before the frontier: no remote side effect was possible
+    ///
+    /// send_cancellable_request(..) -> Ok
+    ///     the request is enqueued on the peer's outbound channel; the
+    ///     service loop may already have serialized and written it
+    ///     => at/after the frontier: a remote side effect may have occurred
+    /// ```
+    ///
+    /// rmcp's `Err` is produced by exactly one condition — the outbound
+    /// `mpsc` send failing because the service event loop is gone — so it
+    /// proves the message was never enqueued. `Ok` proves only enqueueing:
+    /// the write happens in the service loop's own spawned send task, and
+    /// nothing observable to this call distinguishes "not yet written" from
+    /// "written and being executed". The frontier is therefore drawn at
+    /// enqueue, deliberately conservatively, rather than at any convenient
+    /// polling behaviour of the response future.
+    ///
+    /// Past the frontier, only a **correlated remote response** — a
+    /// `CallToolResult`, or a JSON-RPC error answering this request id —
+    /// proves remote terminality. Everything else (transport loss, a
+    /// poisoned generation, a cancellation notification rmcp acknowledged,
+    /// an abandoned response channel) leaves the external outcome unknown
+    /// under the Issue #202 contract.
+    ///
+    /// # Cancellation
+    ///
+    /// Cancellation intent delivered before the frontier settles the call as
+    /// a proven [`ToolExecutionStatus::Cancelled`]: no request exists, so no
+    /// remote effect is possible. After the frontier, the executor sends
+    /// `notifications/cancelled` — the strongest cancellation the MCP
+    /// protocol defines — and then **keeps the response channel** so a
+    /// remote result that beat the cancellation inside rmcp still wins and
+    /// is reported as proven remote terminality. Only when no correlated
+    /// remote response exists is the outcome unknown; dropping the response
+    /// future is never used as evidence of anything.
     async fn call(
         &self,
         remote_name: &str,
         arguments: serde_json::Value,
         context: &ToolExecutionContext<'_>,
+        generation: u64,
     ) -> ToolExecutionResult {
         let _call_gate = self.call_gate.read().await;
         let started = Instant::now();
+        // ---------- before the external-effect frontier ----------
+        //
+        // Every rejection below happens while no request exists, so each one
+        // is a proven ordinary outcome: rustX can prove no remote side
+        // effect was possible, and claiming an unknown external outcome here
+        // would be dishonest in the opposite direction.
+        //
         // A generation that already violated the protocol never serves
         // another call as healthy, whether the violation arrived during an
         // earlier call or while the connection was idle.
@@ -1767,6 +1922,21 @@ impl McpServerRuntime {
         let serde_json::Value::Object(arguments) = arguments else {
             return failed_mcp("MCP tool arguments must be a JSON object", context, started);
         };
+        // The pre-frontier cancellation checkpoint. Without it an execution
+        // whose cancellation/deadline intent already won arbitration would
+        // still dispatch a fresh remote request and then have to report the
+        // external ambiguity it just created. Observing intent here settles
+        // the call as a proven cancellation instead.
+        if context.cancellation.is_cancelled() {
+            return mcp_empty_terminal(
+                ToolExecutionStatus::Cancelled {
+                    reason: context.cancellation.reason(),
+                    phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
+                },
+                context,
+                started,
+            );
+        }
         let params = CallToolRequestParams::new(remote_name.to_owned()).with_arguments(arguments);
         let request = ClientRequest::CallToolRequest(CallToolRequest::new(params));
         let mut handle = match self
@@ -1776,9 +1946,28 @@ impl McpServerRuntime {
         {
             Ok(handle) => handle,
             Err(error) => {
-                return failed_mcp(&bound_error(&error.to_string()), context, started);
+                // rmcp rejects a request here only when its service event
+                // loop is gone, so the request was never enqueued, never
+                // serialized, and never written: the frontier was not
+                // crossed and this is an ordinary failure. The generation
+                // itself is proven unusable.
+                self.note_transport_loss(&format!(
+                    "the MCP service of '{}' is gone: {error}",
+                    self.server_id
+                ));
+                return failed_mcp(
+                    &format!(
+                        "the MCP request was refused before dispatch and never reached the \
+                         transport ({}): {}",
+                        self.generation_tag(generation),
+                        bound_error(&error.to_string())
+                    ),
+                    context,
+                    started,
+                );
             }
         };
+        // ---------- the external-effect frontier is crossed ----------
         let mut progress = self
             .handler
             .progress
@@ -1787,21 +1976,25 @@ impl McpServerRuntime {
         let response = loop {
             tokio::select! {
                 biased;
-                response = &mut handle.rx => break Some(response),
+                // A correlated remote response always outranks cancellation
+                // intent: it is proven remote terminality, and this bias is
+                // the deterministic winner of the response-versus-
+                // cancellation race.
+                response = &mut handle.rx => break response,
                 () = context.cancellation.cancelled() => {
-                    let cancelled = handle
-                        .cancel(Some("rustX execution cancellation".to_owned()))
-                        .await
-                        .map_err(|error| bound_error(&error.to_string()));
                     drop(progress);
-                    return mcp_empty_terminal(
-                        post_dispatch_cancellation_status(cancelled),
-                        context,
-                        started,
-                    );
+                    return self
+                        .settle_post_frontier_cancellation(handle, context, started, generation)
+                        .await;
                 }
                 progress_item = progress.next() => {
                     if let Some(progress_item) = progress_item {
+                        // Genuine remote liveness evidence, forwarded through
+                        // the one generic progress seam. It refreshes the
+                        // Agent Loop's idle watchdog and can never extend the
+                        // generic hard deadline, which this adapter neither
+                        // owns nor observes.
+                        //
                         // The shared canonical normalization drops non-finite
                         // `completed`/`total` values; the remote value needs
                         // no adapter-local filter.
@@ -1815,22 +2008,158 @@ impl McpServerRuntime {
             }
         };
         drop(progress);
-        let response = match response {
-            Some(Ok(Ok(ServerResult::CallToolResult(result)))) => result,
-            Some(Ok(Ok(ServerResult::InputRequiredResult(_)))) => {
-                return failed_mcp(
-                    "MCP input_required results are unsupported in M7",
+        self.classify_post_frontier_response(response, context, started, generation)
+            .await
+    }
+
+    /// The bounded transport-generation tag carried by MCP diagnostics.
+    ///
+    /// It is what correlates one call's outcome with one concrete negotiated
+    /// transport authority: an ambiguous call names the generation it died
+    /// on, and a later successful call names the replacement.
+    fn generation_tag(&self, generation: u64) -> String {
+        format!(
+            "MCP server '{}' connection generation {generation}",
+            self.server_id
+        )
+    }
+
+    /// Settles one cancellation intent that arrived after the effect
+    /// frontier (Issue #205).
+    ///
+    /// The strongest cancellation the negotiated MCP protocol defines is the
+    /// `notifications/cancelled` notification; there is no protocol
+    /// acknowledgement of it, so sending it is never proof that the remote
+    /// operation stopped. The response channel is therefore retained across
+    /// the notification: rmcp resolves this request's local responder in the
+    /// same event-loop step in which it reports the notification's send
+    /// outcome, so awaiting it is bounded by that step and answers exactly
+    /// one question — did a correlated remote response exist?
+    async fn settle_post_frontier_cancellation(
+        &self,
+        mut handle: rmcp::service::RequestHandle<RoleClient>,
+        context: &ToolExecutionContext<'_>,
+        started: Instant,
+        generation: u64,
+    ) -> ToolExecutionResult {
+        let notification =
+            rmcp::model::CancelledNotification::new(rmcp::model::CancelledNotificationParam::new(
+                Some(handle.id.clone()),
+                Some("rustX execution cancellation".to_owned()),
+            ));
+        let requested = self
+            .peer
+            .send_notification(notification.into())
+            .await
+            .map_err(|error| bound_error(&error.to_string()));
+        let settled = (&mut handle.rx).await;
+        match settled {
+            // A correlated remote response beat the cancellation inside
+            // rmcp: remote terminality is proven and the remote's own
+            // outcome is authoritative. The generic lifecycle then applies
+            // its documented rule to this proven settlement.
+            Ok(Ok(ServerResult::CallToolResult(result))) => {
+                translate_result(result, context, started)
+            }
+            Ok(Ok(_)) => failed_mcp(
+                "unexpected MCP tools/call response after cancellation",
+                context,
+                started,
+            ),
+            Ok(Err(rmcp::service::ServiceError::McpError(error))) => {
+                failed_mcp(&bound_error(&error.to_string()), context, started)
+            }
+            // No correlated remote response: rmcp either synthesized the
+            // local cancellation outcome or the transport failed. Either way
+            // the request may have executed remotely and its final external
+            // outcome cannot be established.
+            Ok(Err(error)) => {
+                if is_transport_loss(&error) {
+                    self.note_transport_loss(&error.to_string());
+                }
+                mcp_empty_terminal(
+                    post_dispatch_cancellation_status(requested, &self.generation_tag(generation)),
                     context,
                     started,
+                )
+            }
+            Err(_) => {
+                self.note_transport_loss(
+                    "the MCP response channel ended without a correlated response",
                 );
+                mcp_empty_terminal(
+                    post_dispatch_cancellation_status(requested, &self.generation_tag(generation)),
+                    context,
+                    started,
+                )
             }
-            Some(Ok(Ok(_))) => {
-                return failed_mcp("unexpected MCP tools/call response", context, started);
+        }
+    }
+
+    /// Classifies one post-frontier `tools/call` outcome (Issue #205).
+    ///
+    /// Only a correlated remote response proves remote terminality; every
+    /// other outcome leaves the external result unknown and additionally
+    /// proves this transport generation unusable.
+    async fn classify_post_frontier_response(
+        &self,
+        response: Result<
+            Result<ServerResult, rmcp::service::ServiceError>,
+            tokio::sync::oneshot::error::RecvError,
+        >,
+        context: &ToolExecutionContext<'_>,
+        started: Instant,
+        generation: u64,
+    ) -> ToolExecutionResult {
+        match response {
+            Ok(Ok(ServerResult::CallToolResult(result))) => {
+                translate_result(result, context, started)
             }
-            Some(Ok(Err(error))) => {
-                return failed_mcp(&bound_error(&error.to_string()), context, started);
+            Ok(Ok(ServerResult::InputRequiredResult(_))) => failed_mcp(
+                "MCP input_required results are unsupported in M7",
+                context,
+                started,
+            ),
+            Ok(Ok(_)) => failed_mcp("unexpected MCP tools/call response", context, started),
+            // A JSON-RPC error answering this request id is a correlated
+            // remote response: the remote produced a terminal outcome and it
+            // is a known failure, not an ambiguity.
+            Ok(Err(rmcp::service::ServiceError::McpError(error))) => {
+                failed_mcp(&bound_error(&error.to_string()), context, started)
             }
-            Some(Err(_)) | None => {
+            Ok(Err(error)) => {
+                if is_transport_loss(&error) {
+                    self.note_transport_loss(&error.to_string());
+                }
+                // The observation tee ends the stream on a confirmed
+                // violation, so a violation surfaced mid-call can land here.
+                // It is a protocol failure, not an anonymous disconnect —
+                // and the generation is poisoned.
+                if let Some(diagnostic) = self.poisoned_protocol_violation().await {
+                    return mcp_empty_terminal(
+                        ToolExecutionStatus::OutcomeUnknown {
+                            detail: bound_error(&diagnostic),
+                        },
+                        context,
+                        started,
+                    );
+                }
+                mcp_empty_terminal(
+                    ToolExecutionStatus::OutcomeUnknown {
+                        detail: bound_error(&format!(
+                            "the dispatched MCP tools/call produced no correlated remote \
+                             response ({}): {error}",
+                            self.generation_tag(generation)
+                        )),
+                    },
+                    context,
+                    started,
+                )
+            }
+            Err(_) => {
+                self.note_transport_loss(
+                    "the MCP response channel ended without a correlated response",
+                );
                 // The observation tee ends the stream on a confirmed
                 // violation, so a violation surfaced mid-call lands here as
                 // a transport close. It is a protocol failure, not an
@@ -1846,18 +2175,33 @@ impl McpServerRuntime {
                 }
                 // The transport closed after dispatch without a response:
                 // the remote operation may have partially or fully completed.
-                return mcp_empty_terminal(
+                mcp_empty_terminal(
                     ToolExecutionStatus::OutcomeUnknown {
-                        detail: "MCP transport closed during tools/call without a response"
-                            .to_owned(),
+                        detail: bound_error(&format!(
+                            "MCP transport closed during tools/call without a response ({})",
+                            self.generation_tag(generation)
+                        )),
                     },
                     context,
                     started,
-                );
+                )
             }
-        };
-        translate_result(response, context, started)
+        }
     }
+}
+
+/// Whether one rmcp service failure is transport-class evidence that the
+/// connection generation itself can no longer carry MCP traffic
+/// (Issue #205).
+///
+/// A remote error *result* proves the opposite — the transport delivered a
+/// correlated answer — and never appears here.
+fn is_transport_loss(error: &rmcp::service::ServiceError) -> bool {
+    matches!(
+        error,
+        rmcp::service::ServiceError::TransportClosed
+            | rmcp::service::ServiceError::TransportSend(_)
+    )
 }
 
 /// The discovery-time protocol-violation error: names the server identity
@@ -2011,7 +2355,15 @@ impl TryFrom<rmcp::model::Tool> for CanonicalMcpTool {
 /// One canonical executor bound to the exact server runtime captured at
 /// capability preparation.
 pub struct McpToolExecutor {
-    runtime: Arc<McpServerRuntime>,
+    /// The **stable connection owner**, never one transport generation
+    /// (Issue #205).
+    ///
+    /// The executor is long-lived: it is registered once per discovered
+    /// remote tool and outlives any single transport. Binding it to the
+    /// connection is what makes a replaced generation immediately usable by
+    /// every already-admitted tool, and what keeps a dead transport from
+    /// permanently poisoning a published capability generation.
+    connection: Arc<connection::McpConnection>,
     /// The generation binding is present for coordinator-owned tools. Direct
     /// public adapter users retain the standalone runtime path and explicitly
     /// own/close that runtime themselves.
@@ -2021,10 +2373,14 @@ pub struct McpToolExecutor {
 
 impl McpToolExecutor {
     /// Creates an executor bound to one discovered remote name.
+    ///
+    /// The caller owns the runtime and closes it itself, so the executor's
+    /// connection is *fixed*: it serves exactly this transport and never
+    /// establishes a replacement.
     #[must_use]
     pub fn new(runtime: Arc<McpServerRuntime>, remote_name: String) -> Self {
         Self {
-            runtime,
+            connection: connection::McpConnection::fixed(runtime),
             binding: None,
             remote_name,
         }
@@ -2032,7 +2388,7 @@ impl McpToolExecutor {
 
     fn new_owned(binding: McpRuntimeBinding, remote_name: String) -> Self {
         Self {
-            runtime: binding.runtime().clone(),
+            connection: binding.connection().clone(),
             binding: Some(binding),
             remote_name,
         }
@@ -2040,18 +2396,40 @@ impl McpToolExecutor {
 }
 
 impl ToolExecutor for McpToolExecutor {
+    /// Starts one remote `tools/call`.
+    ///
+    /// The whole physical operation — transport resolution, the bounded
+    /// reconnect attempt it may perform, dispatch, progress forwarding, the
+    /// `notifications/cancelled` path, and post-frontier classification —
+    /// lives inside the single operation future of
+    /// [`ToolExecutionHandle::settled_by_operation`]. This executor spawns no
+    /// task and owns no process outside that future, so
+    /// [`crate::tools::executor::ToolSettlement::Unconfirmed`] carries its
+    /// required local-ownership guarantee by construction: when the
+    /// settlement plane reports unconfirmed evidence, every rustX-owned local
+    /// activity of this invocation has already ended and only the remote
+    /// external effect remains uncertain.
+    ///
+    /// The executor never chooses a canonical terminal status: it reports
+    /// physical outcomes and settlement evidence, and the Agent Loop's
+    /// generic lifecycle owns deadlines, cancellation intent, and the
+    /// canonical `ToolResult`.
     fn start<'a>(
         &'a self,
         invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
     ) -> crate::tools::executor::ToolExecutionHandle<'a> {
         // The cancel-notification path stays inside the operation future: on
-        // cancellation the executor sends `notifications/cancelled` and
-        // returns its honest `OutcomeUnknown`, which `settled_by_operation`
-        // surfaces as unconfirmed settlement evidence.
+        // cancellation the executor sends `notifications/cancelled`, keeps
+        // the response channel long enough to see whether a correlated
+        // remote response exists, and returns either that proven remote
+        // outcome or its honest `OutcomeUnknown`, which
+        // `settled_by_operation` surfaces as unconfirmed settlement
+        // evidence.
         let cancellation = context.cancellation.clone();
         crate::tools::executor::ToolExecutionHandle::settled_by_operation(
             Box::pin(async move {
+                let started = Instant::now();
                 let lease = self
                     .binding
                     .as_ref()
@@ -2060,11 +2438,38 @@ impl ToolExecutor for McpToolExecutor {
                     return failed_mcp(
                         "MCP server runtime generation is physically retired",
                         &context,
-                        Instant::now(),
+                        started,
                     );
                 }
-                self.runtime
-                    .call(&self.remote_name, invocation.arguments, &context)
+                // Transport resolution happens strictly before this call's
+                // own external-effect frontier: a dead generation is retired
+                // and at most one bounded replacement attempt is made here.
+                // A failure is therefore an ordinary pre-frontier failure of
+                // this one call — no remote side effect was possible, and no
+                // previously dispatched request is ever handed to the
+                // replacement.
+                let generation = match self.connection.acquire().await {
+                    Ok(generation) => generation,
+                    Err(error) => {
+                        let facts = self.connection.recent_diagnostic();
+                        return failed_mcp(
+                            &format!(
+                                "no MCP transport was available to dispatch the call, so it \
+                                 never reached the server: {error}; connection history: {facts}"
+                            ),
+                            &context,
+                            started,
+                        );
+                    }
+                };
+                generation
+                    .runtime()
+                    .call(
+                        &self.remote_name,
+                        invocation.arguments,
+                        &context,
+                        generation.generation(),
+                    )
                     .await
             }),
             cancellation,
@@ -2073,7 +2478,9 @@ impl ToolExecutor for McpToolExecutor {
 
     // The executor forwards genuine remote MCP progress notifications to
     // `context.progress.report(...)`, so a configured idle-liveness window
-    // is honestly informed.
+    // is honestly informed. It fabricates no heartbeats: a server that sends
+    // no progress notifications simply stays bounded by the generic hard
+    // deadline.
     fn progress_capability(&self) -> ToolProgressCapability {
         ToolProgressCapability::Meaningful
     }
@@ -2087,6 +2494,9 @@ pub fn definitions(
     runtime: &Arc<McpServerRuntime>,
     tools: Vec<CanonicalMcpTool>,
 ) -> Vec<(ToolDefinition, Arc<dyn ToolExecutor>)> {
+    // One fixed connection is shared by the whole catalog: the caller owns
+    // this runtime and closes it, so no generation is ever replaced here.
+    let connection = connection::McpConnection::fixed(runtime.clone());
     tools
         .into_iter()
         .map(|tool| {
@@ -2106,7 +2516,11 @@ pub fn definitions(
             };
             (
                 definition,
-                Arc::new(McpToolExecutor::new(runtime.clone(), tool.name)) as Arc<dyn ToolExecutor>,
+                Arc::new(McpToolExecutor {
+                    connection: connection.clone(),
+                    binding: None,
+                    remote_name: tool.name,
+                }) as Arc<dyn ToolExecutor>,
             )
         })
         .collect()
@@ -2714,11 +3128,18 @@ fn failed_mcp(
 /// terminated; a failed cancellation request proves even less. Either way
 /// the final external outcome is unknown — never `Cancelled`, never
 /// `Failed`.
-fn post_dispatch_cancellation_status(cancelled: Result<(), String>) -> ToolExecutionStatus {
+fn post_dispatch_cancellation_status(
+    cancelled: Result<(), String>,
+    generation_tag: &str,
+) -> ToolExecutionStatus {
     let detail = match cancelled {
-        Ok(()) => "cancellation was requested after dispatch, but remote termination could not be confirmed".to_owned(),
+        Ok(()) => format!(
+            "cancellation was requested after dispatch, but remote termination could not be \
+             confirmed ({generation_tag})"
+        ),
         Err(error) => format!(
-            "cancellation was requested after dispatch and the cancellation request itself failed: {error}"
+            "cancellation was requested after dispatch and the cancellation request itself \
+             failed ({generation_tag}): {error}"
         ),
     };
     ToolExecutionStatus::OutcomeUnknown {
@@ -3389,7 +3810,8 @@ mod tests {
     /// because neither proves the remote operation terminated.
     #[test]
     fn post_dispatch_cancellation_is_outcome_unknown_whether_the_request_succeeded_or_failed() {
-        let accepted = post_dispatch_cancellation_status(Ok(()));
+        let tag = "MCP server 'fixture' connection generation 2";
+        let accepted = post_dispatch_cancellation_status(Ok(()), tag);
         let ToolExecutionStatus::OutcomeUnknown { detail } = &accepted else {
             panic!("an accepted cancel request is OutcomeUnknown: {accepted:?}");
         };
@@ -3397,9 +3819,13 @@ mod tests {
             detail.contains("remote termination could not be confirmed"),
             "the accepted-request detail names the unproven termination: {detail}"
         );
+        assert!(
+            detail.contains(tag),
+            "the detail correlates the ambiguity with its connection generation: {detail}"
+        );
 
         let huge_error = "x".repeat(64 * 1024);
-        let failed = post_dispatch_cancellation_status(Err(huge_error));
+        let failed = post_dispatch_cancellation_status(Err(huge_error), tag);
         let ToolExecutionStatus::OutcomeUnknown { detail } = &failed else {
             panic!("a failed cancel request is OutcomeUnknown: {failed:?}");
         };

@@ -21,6 +21,7 @@
 
 pub mod legacy;
 pub mod raw;
+pub mod recovery;
 
 use std::borrow::Cow;
 use std::io::Write;
