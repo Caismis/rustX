@@ -1179,13 +1179,36 @@ mod unix_tests {
             error.contains("MCP protocol violation"),
             "the rejection carries the protocol fact: {error}"
         );
+        // rmcp answers the violating peer with a bounded Invalid Request on
+        // its own outbound path, after the violation has already settled the
+        // call. Nothing the test awaited above orders that write against the
+        // transport teardown, so closing first can leave the peer reading
+        // EOF with the reply still in flight and its journal short by that
+        // one entry. Wait for the durable journal fact instead — it is
+        // level-triggered and stays true once written — and only then settle
+        // physically. The timeout is a liveness guard, not the proof.
+        let journal_path = workspace_dir.path().join("raw-journal");
+        tokio::time::timeout(std::time::Duration::from_mins(1), async {
+            loop {
+                if rustx::tools::mcp::fixture::raw::read_journal(&journal_path)
+                    .iter()
+                    .any(|entry| {
+                        entry == rustx::tools::mcp::fixture::raw::JOURNAL_CLIENT_PROTOCOL_ERROR
+                    })
+                {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("rmcp answers the peer with a bounded Invalid Request");
+
         // Physical settlement of the poisoned generation still goes through
         // the ordinary close ownership. The fixture process has exited once
         // close returns, so its journal is complete.
         runtime.close().await.expect("physical settlement");
-        let journal = rustx::tools::mcp::fixture::raw::read_journal(
-            &workspace_dir.path().join("raw-journal"),
-        );
+        let journal = rustx::tools::mcp::fixture::raw::read_journal(&journal_path);
         assert!(
             journal
                 .iter()
