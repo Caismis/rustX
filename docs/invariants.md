@@ -3770,6 +3770,21 @@ those belong to the generic lifecycle of "Tool execution liveness deadlines
   declares `ToolProgressCapability::Meaningful` because it forwards genuine
   remote notifications; it fabricates no heartbeats, and a server that sends
   none stays bounded by the hard deadline alone.
+- **Genuine remote liveness evidence is never silently discarded.** Two
+  windows could lose it and both are closed. An MCP client cannot know a
+  request's progress token before the request exists — rmcp mints it inside
+  `send_cancellable_request` — so a server that answers with a progress
+  notification immediately races the dispatching call's subscription: the
+  adapter's own bounded progress router buffers notifications for a token
+  with no subscriber yet and drains them into the subscription when it is
+  created. And because a correlated response outranks progress in the
+  executor's biased arbitration, the executor drains the subscription before
+  classifying the response or settling a cancellation, so notifications the
+  peer already delivered on the same ordered transport are reported before
+  the terminal result — durable fact order stays terminal-last. Every bound
+  is explicit: tracked unsubscribed tokens, notifications buffered per token,
+  and the delivery queue of a subscribed token. The router reorders delivery
+  of notifications the peer genuinely sent; it never invents one.
 
 ### Connection generations
 

@@ -1295,8 +1295,9 @@ async fn a_failed_capability_refresh_keeps_the_last_known_good_generation() {
     assert_eq!(
         published,
         vec![
+            recovery::TOOL_ANNOUNCE.to_owned(),
             recovery::TOOL_ECHO.to_owned(),
-            recovery::TOOL_HANG.to_owned()
+            recovery::TOOL_HANG.to_owned(),
         ],
         "G1 is the validated last-known-good catalog"
     );
@@ -1396,8 +1397,9 @@ async fn a_successful_refresh_atomically_replaces_the_previous_generation() {
     assert_eq!(
         capability.definition_names(),
         vec![
+            recovery::TOOL_ANNOUNCE.to_owned(),
             recovery::TOOL_ECHO.to_owned(),
-            recovery::TOOL_HANG.to_owned()
+            recovery::TOOL_HANG.to_owned(),
         ]
     );
 
@@ -1411,8 +1413,9 @@ async fn a_successful_refresh_atomically_replaces_the_previous_generation() {
     assert_eq!(
         capability.definition_names(),
         vec![
+            recovery::TOOL_ANNOUNCE.to_owned(),
             recovery::TOOL_ECHO.to_owned(),
-            recovery::TOOL_HANG.to_owned()
+            recovery::TOOL_HANG.to_owned(),
         ],
         "a prepared candidate is not authoritative until it commits"
     );
@@ -1424,6 +1427,7 @@ async fn a_successful_refresh_atomically_replaces_the_previous_generation() {
     assert_eq!(
         capability.definition_names(),
         vec![
+            recovery::TOOL_ANNOUNCE.to_owned(),
             recovery::TOOL_ECHO.to_owned(),
             recovery::TOOL_EXTRA.to_owned(),
             recovery::TOOL_HANG.to_owned(),
@@ -1444,8 +1448,9 @@ async fn a_successful_refresh_atomically_replaces_the_previous_generation() {
             .map(|definition| definition.name)
             .collect::<Vec<_>>(),
         vec![
+            recovery::TOOL_ANNOUNCE.to_owned(),
             recovery::TOOL_ECHO.to_owned(),
-            recovery::TOOL_HANG.to_owned()
+            recovery::TOOL_HANG.to_owned(),
         ],
         "the previously pinned snapshot is an immutable value"
     );
@@ -1481,6 +1486,7 @@ async fn tool_admission_never_observes_a_candidate_under_construction() {
     )
     .await;
     let authoritative = vec![
+        recovery::TOOL_ANNOUNCE.to_owned(),
         recovery::TOOL_ECHO.to_owned(),
         recovery::TOOL_HANG.to_owned(),
     ];
@@ -1522,6 +1528,7 @@ async fn tool_admission_never_observes_a_candidate_under_construction() {
     assert_eq!(
         capability.definition_names(),
         vec![
+            recovery::TOOL_ANNOUNCE.to_owned(),
             recovery::TOOL_ECHO.to_owned(),
             recovery::TOOL_EXTRA.to_owned(),
             recovery::TOOL_HANG.to_owned(),
@@ -1620,5 +1627,84 @@ async fn a_poisoned_generation_fails_closed_and_is_replaced_without_replay() {
         2,
         "the poisoned invocation was never resubmitted to the replacement"
     );
+    drop(capability);
+}
+
+/// Issue #205: remote liveness evidence that arrives immediately before the
+/// correlated response is never discarded, in either direction of the two
+/// races an MCP client cannot avoid.
+///
+/// The `announce` tool emits one progress notification and then answers, with
+/// no gate between them, so on the one ordered transport the notification
+/// always precedes the response. Two things could still lose it, and this
+/// test covers both:
+///
+/// - **the subscription window.** rmcp mints a request's progress token
+///   inside `send_cancellable_request`, so the dispatching call can only
+///   subscribe after the request is enqueued. A notification that arrives
+///   first is buffered by the adapter's progress router and drained into the
+///   subscription when it is created.
+/// - **the biased arbitration.** A correlated response outranks progress in
+///   the executor's `select!`, so a response that is already ready would
+///   otherwise end the call with the notification still queued. The executor
+///   drains the subscription before classifying the response.
+///
+/// The assertion is exact rather than "at least one": the executor forwards
+/// what the server sent and fabricates nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn remote_progress_delivered_just_before_the_response_is_never_discarded() {
+    if recovery::serve_if_recovery_fixture_mode().await {
+        return;
+    }
+    let fixture = common::native_fixture();
+    let control = recovery::RecoveryControl::new(fixture.dir().path());
+    let capability = recovery_capability(
+        &fixture.runtime,
+        "boundary_suites::mcp_recovery::remote_progress_delivered_just_before_the_response_is_never_discarded",
+        &control,
+        &recovery::RecoveryScript::default(),
+    )
+    .await;
+    let audit = run_mcp_call(
+        &fixture,
+        capability.coordinator.acquire_attempt_lease(),
+        "announce",
+        recovery::TOOL_ANNOUNCE,
+        ToolExecutionDeadlinePolicy {
+            hard_deadline: Duration::from_mins(1),
+            idle_liveness: None,
+        },
+        |_controls| async move {},
+    )
+    .await;
+
+    let result = single_tool_result(&audit);
+    assert!(
+        matches!(result.status, ToolExecutionStatus::Success),
+        "the correlated remote response is the terminal outcome: {:?}",
+        result.status
+    );
+    let progress_facts: Vec<&RuntimeEvent> = audit
+        .event_history
+        .iter()
+        .filter(|event| matches!(event, RuntimeEvent::ToolExecutionProgress { .. }))
+        .collect();
+    assert_eq!(
+        progress_facts.len(),
+        1,
+        "the one remote notification the server sent is forwarded exactly once: {progress_facts:?}"
+    );
+    let RuntimeEvent::ToolExecutionProgress { progress, .. } = progress_facts[0] else {
+        unreachable!("filtered above")
+    };
+    assert_eq!(progress.completed, Some(1.0));
+    assert_eq!(progress.total, Some(4.0));
+    // Terminal-last: the liveness fact precedes the call's terminal fact.
+    let facts = execution_facts(&audit);
+    assert!(matches!(
+        facts.last(),
+        Some(RuntimeEvent::ToolExecutionCompleted { .. })
+    ));
+    assert_eq!(control.accepted_calls(recovery::TOOL_ANNOUNCE), 1);
     drop(capability);
 }

@@ -3526,6 +3526,20 @@ from the winning cause. Remote progress notifications flow through the one
 generic `ProgressReporter` seam and refresh only the idle watchdog — never
 the immutable hard deadline — and the executor fabricates no heartbeats.
 
+Because rmcp mints a request's progress token *inside*
+`send_cancellable_request`, the dispatching call can only subscribe after the
+request is enqueued, so a server answering with an immediate progress
+notification races that subscription; and because a correlated response
+outranks progress in the executor's biased arbitration, a ready response
+would otherwise end the call with notifications still queued. Both windows
+would silently lose genuine liveness evidence — exactly the evidence the idle
+watchdog depends on — so the adapter owns a small bounded progress router
+that buffers notifications for a not-yet-subscribed token and drains them on
+subscription, and the executor drains its subscription before classifying a
+response or settling a cancellation. Tracked unsubscribed tokens, buffered
+notifications per token, and the per-subscription queue are all bounded; the
+router only reorders delivery of notifications the peer genuinely sent.
+
 **`McpConnection` (`src/tools/mcp/connection.rs`) is the stable connection
 owner** of one configured server, and it is what a published capability
 generation and every discovered executor bind to. Underneath it, one

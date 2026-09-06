@@ -94,6 +94,16 @@ pub const TOOL_ECHO: &str = "echo";
 /// The tool that emits its dispatch progress notification and then never
 /// answers, keeping the transport open and healthy.
 pub const TOOL_HANG: &str = "hang";
+/// The tool that emits exactly one progress notification and then answers
+/// immediately, with no gate between the two.
+///
+/// It is the deterministic regression for "remote liveness evidence that
+/// arrives just before the correlated response is never discarded": the
+/// notification and the response leave the server in that order on one
+/// ordered byte stream, and the client subscribes to the request's progress
+/// token only after dispatching it, so both the pre-subscription window and
+/// the biased response-versus-progress arbitration are exercised at once.
+pub const TOOL_ANNOUNCE: &str = "announce";
 /// The tool published only by the generations named in
 /// [`RECOVERY_EXTRA_TOOL_GENERATIONS_ENV`]: the observable catalog change of
 /// a successful capability refresh.
@@ -106,6 +116,7 @@ pub const TOOL_EXTRA: &str = "extra";
 #[must_use]
 pub fn catalog(with_extra: bool) -> Vec<Tool> {
     let mut tools = vec![
+        super::fixture_tool_named(TOOL_ANNOUNCE),
         super::fixture_tool_named(TOOL_ECHO),
         super::fixture_tool_named(TOOL_HANG),
     ];
@@ -575,6 +586,14 @@ async fn serve_call(
         // exist: the transport dies with the call in flight.
         record(journal, JOURNAL_DIED);
         std::process::exit(0);
+    }
+    if tool == TOOL_ANNOUNCE
+        && let Some(token) = progress_token.clone()
+    {
+        let mut params = ProgressNotificationParam::new(token, 1.0);
+        params.total = Some(4.0);
+        params.message = Some(format!("{TOOL_ANNOUNCE} working"));
+        write_progress(output, params).await;
     }
     if tool == TOOL_HANG {
         // Additional remote liveness evidence, each emitted exactly when the

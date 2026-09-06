@@ -61,8 +61,6 @@ use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
 
 use base64::Engine;
-use futures_util::StreamExt;
-use rmcp::handler::client::progress::ProgressDispatcher;
 use rmcp::model::{
     CallToolRequest, CallToolRequestParams, CallToolResult, ClientCapabilities, ClientInfo,
     ClientRequest, ContentBlock, Implementation, ProgressNotificationParam, ProtocolVersion,
@@ -1968,11 +1966,13 @@ impl McpServerRuntime {
             }
         };
         // ---------- the external-effect frontier is crossed ----------
+        // Subscribing after dispatch is unavoidable — rmcp mints the token
+        // inside the request — so the router, not the subscription, is what
+        // makes an immediately answered progress notification observable.
         let mut progress = self
             .handler
             .progress
-            .subscribe(handle.progress_token.clone())
-            .await;
+            .subscribe(handle.progress_token.clone());
         let response = loop {
             tokio::select! {
                 biased;
@@ -1982,31 +1982,37 @@ impl McpServerRuntime {
                 // cancellation race.
                 response = &mut handle.rx => break response,
                 () = context.cancellation.cancelled() => {
+                    // Liveness evidence that already arrived is never
+                    // discarded by arbitration: it genuinely happened before
+                    // the cancellation intent won.
+                    for notification in progress.drain() {
+                        report_remote_progress(context, notification);
+                    }
                     drop(progress);
                     return self
                         .settle_post_frontier_cancellation(handle, context, started, generation)
                         .await;
                 }
-                progress_item = progress.next() => {
+                progress_item = progress.recv() => {
+                    // Genuine remote liveness evidence, forwarded through the
+                    // one generic progress seam. It refreshes the Agent
+                    // Loop's idle watchdog and can never extend the generic
+                    // hard deadline, which this adapter neither owns nor
+                    // observes.
                     if let Some(progress_item) = progress_item {
-                        // Genuine remote liveness evidence, forwarded through
-                        // the one generic progress seam. It refreshes the
-                        // Agent Loop's idle watchdog and can never extend the
-                        // generic hard deadline, which this adapter neither
-                        // owns nor observes.
-                        //
-                        // The shared canonical normalization drops non-finite
-                        // `completed`/`total` values; the remote value needs
-                        // no adapter-local filter.
-                        context.progress.report(bound_tool_progress(crate::tools::types::ToolProgress {
-                            message: progress_item.message,
-                            completed: Some(progress_item.progress),
-                            total: progress_item.total,
-                        }));
+                        report_remote_progress(context, progress_item);
                     }
                 }
             }
         };
+        // A correlated response winning the biased arbitration must not
+        // silently discard liveness evidence the peer already delivered on
+        // the same ordered transport: those notifications genuinely arrived
+        // before the response, and they are reported before the terminal
+        // result so the durable fact order stays terminal-last.
+        for notification in progress.drain() {
+            report_remote_progress(context, notification);
+        }
         drop(progress);
         self.classify_post_frontier_response(response, context, started, generation)
             .await
@@ -2190,6 +2196,24 @@ impl McpServerRuntime {
     }
 }
 
+/// Forwards one remote progress notification through the generic progress
+/// seam.
+///
+/// The shared canonical normalization drops non-finite `completed`/`total`
+/// values, so the remote value needs no adapter-local filter.
+fn report_remote_progress(
+    context: &ToolExecutionContext<'_>,
+    notification: ProgressNotificationParam,
+) {
+    context
+        .progress
+        .report(bound_tool_progress(crate::tools::types::ToolProgress {
+            message: notification.message,
+            completed: Some(notification.progress),
+            total: notification.total,
+        }));
+}
+
 /// Whether one rmcp service failure is transport-class evidence that the
 /// connection generation itself can no longer carry MCP traffic
 /// (Issue #205).
@@ -2202,6 +2226,184 @@ fn is_transport_loss(error: &rmcp::service::ServiceError) -> bool {
         rmcp::service::ServiceError::TransportClosed
             | rmcp::service::ServiceError::TransportSend(_)
     )
+}
+
+/// How many progress tokens the router may track without a subscriber.
+///
+/// A remote peer chooses progress tokens, so the set of tokens rustX has
+/// never subscribed to is peer-controlled and must be bounded. When the
+/// bound is reached the oldest unsubscribed token is evicted.
+const MAX_TRACKED_PROGRESS_TOKENS: usize = 16;
+/// How many notifications one unsubscribed token may buffer.
+const MAX_BUFFERED_PROGRESS_NOTIFICATIONS: usize = 8;
+/// The delivery capacity of one subscribed token.
+const PROGRESS_SUBSCRIPTION_CAPACITY: usize = 16;
+
+/// Routes remote progress notifications to the in-flight `tools/call` that
+/// owns their token (Issue #205).
+///
+/// # Why this is not rmcp's dispatcher
+///
+/// An MCP client cannot know a request's progress token before the request
+/// exists: rmcp mints the token inside `send_cancellable_request`, so the
+/// dispatching call can only subscribe *after* the request was enqueued. A
+/// server that answers with a progress notification immediately therefore
+/// races that subscription, and a dispatcher that drops unroutable
+/// notifications silently loses genuine remote liveness evidence — the exact
+/// evidence the generic idle watchdog depends on.
+///
+/// This router closes that window by buffering a bounded number of
+/// notifications for a token nobody has subscribed to yet, and draining them
+/// into the subscription the moment it is created. Everything stays bounded:
+/// the number of tracked unsubscribed tokens, the notifications buffered per
+/// token, and the delivery queue of a subscribed token. Nothing is ever
+/// fabricated — the router only reorders delivery of notifications the peer
+/// genuinely sent.
+#[derive(Default)]
+struct McpProgressRouter {
+    state: Mutex<ProgressRouterState>,
+}
+
+#[derive(Default)]
+struct ProgressRouterState {
+    slots: std::collections::HashMap<rmcp::model::ProgressToken, ProgressSlot>,
+    /// Monotonic insertion sequence, used only to evict the oldest
+    /// unsubscribed token when the tracked-token bound is reached.
+    next_sequence: u64,
+}
+
+enum ProgressSlot {
+    /// Notifications that arrived before the dispatching call subscribed.
+    Buffered {
+        sequence: u64,
+        notifications: std::collections::VecDeque<ProgressNotificationParam>,
+    },
+    /// The dispatching call's delivery channel.
+    Subscribed(tokio::sync::mpsc::Sender<ProgressNotificationParam>),
+}
+
+impl McpProgressRouter {
+    /// Delivers one remote progress notification, buffering it when its
+    /// token has no subscriber yet.
+    fn deliver(&self, notification: ProgressNotificationParam) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("MCP progress router lock poisoned");
+        let token = notification.progress_token.clone();
+        match state.slots.get_mut(&token) {
+            Some(ProgressSlot::Subscribed(sender)) => {
+                // Bounded, drop-on-full: progress is liveness evidence, not
+                // a delivery-guaranteed stream, and a consumer that cannot
+                // keep up is already live by construction.
+                let _ = sender.try_send(notification);
+            }
+            Some(ProgressSlot::Buffered { notifications, .. }) => {
+                if notifications.len() == MAX_BUFFERED_PROGRESS_NOTIFICATIONS {
+                    notifications.pop_front();
+                }
+                notifications.push_back(notification);
+            }
+            None => {
+                if state.slots.len() >= MAX_TRACKED_PROGRESS_TOKENS {
+                    state.evict_oldest_buffered();
+                }
+                if state.slots.len() >= MAX_TRACKED_PROGRESS_TOKENS {
+                    // Every tracked token belongs to a live subscription;
+                    // an unknown token is dropped rather than displacing one.
+                    return;
+                }
+                let sequence = state.next_sequence;
+                state.next_sequence += 1;
+                state.slots.insert(
+                    token,
+                    ProgressSlot::Buffered {
+                        sequence,
+                        notifications: std::collections::VecDeque::from([notification]),
+                    },
+                );
+            }
+        }
+    }
+
+    /// Subscribes the dispatching call to its request's progress token,
+    /// draining anything that arrived before this call.
+    fn subscribe(self: &Arc<Self>, token: rmcp::model::ProgressToken) -> McpProgressSubscription {
+        let (sender, receiver) = tokio::sync::mpsc::channel(PROGRESS_SUBSCRIPTION_CAPACITY);
+        {
+            let mut state = self
+                .state
+                .lock()
+                .expect("MCP progress router lock poisoned");
+            if let Some(ProgressSlot::Buffered { notifications, .. }) = state.slots.remove(&token) {
+                for notification in notifications {
+                    let _ = sender.try_send(notification);
+                }
+            }
+            state
+                .slots
+                .insert(token.clone(), ProgressSlot::Subscribed(sender));
+        }
+        McpProgressSubscription {
+            router: Arc::clone(self),
+            token,
+            receiver,
+        }
+    }
+
+    fn unsubscribe(&self, token: &rmcp::model::ProgressToken) {
+        self.state
+            .lock()
+            .expect("MCP progress router lock poisoned")
+            .slots
+            .remove(token);
+    }
+}
+
+impl ProgressRouterState {
+    fn evict_oldest_buffered(&mut self) {
+        let oldest = self
+            .slots
+            .iter()
+            .filter_map(|(token, slot)| match slot {
+                ProgressSlot::Buffered { sequence, .. } => Some((*sequence, token.clone())),
+                ProgressSlot::Subscribed(_) => None,
+            })
+            .min_by_key(|(sequence, _)| *sequence)
+            .map(|(_, token)| token);
+        if let Some(token) = oldest {
+            self.slots.remove(&token);
+        }
+    }
+}
+
+/// One in-flight call's progress subscription. Dropping it unsubscribes.
+struct McpProgressSubscription {
+    router: Arc<McpProgressRouter>,
+    token: rmcp::model::ProgressToken,
+    receiver: tokio::sync::mpsc::Receiver<ProgressNotificationParam>,
+}
+
+impl McpProgressSubscription {
+    async fn recv(&mut self) -> Option<ProgressNotificationParam> {
+        self.receiver.recv().await
+    }
+
+    /// Takes every notification already delivered to this subscription
+    /// without waiting for another.
+    fn drain(&mut self) -> Vec<ProgressNotificationParam> {
+        let mut drained = Vec::new();
+        while let Ok(notification) = self.receiver.try_recv() {
+            drained.push(notification);
+        }
+        drained
+    }
+}
+
+impl Drop for McpProgressSubscription {
+    fn drop(&mut self) {
+        self.router.unsubscribe(&self.token);
+    }
 }
 
 /// The discovery-time protocol-violation error: names the server identity
@@ -2604,7 +2806,7 @@ struct ToolListChangedSink {
 #[derive(Clone)]
 struct McpClientHandler {
     info: ClientInfo,
-    progress: ProgressDispatcher,
+    progress: Arc<McpProgressRouter>,
     /// Installed at most once, and only for a legacy-revision connection.
     tool_list_changed: Arc<std::sync::OnceLock<ToolListChangedSink>>,
 }
@@ -2621,7 +2823,7 @@ impl McpClientHandler {
             // request's `_meta`. Keeping it equal to the lifecycle's
             // `legacy_version` keeps the two paths from disagreeing.
             .with_protocol_version(legacy_handshake_version()),
-            progress: ProgressDispatcher::new(),
+            progress: Arc::new(McpProgressRouter::default()),
             tool_list_changed: Arc::new(std::sync::OnceLock::new()),
         }
     }
@@ -2640,7 +2842,7 @@ impl ClientHandler for McpClientHandler {
         params: ProgressNotificationParam,
         _context: rmcp::service::NotificationContext<RoleClient>,
     ) {
-        self.progress.handle_notification(params).await;
+        self.progress.deliver(params);
     }
 
     async fn on_tool_list_changed(&self, _context: rmcp::service::NotificationContext<RoleClient>) {
