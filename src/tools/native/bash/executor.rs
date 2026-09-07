@@ -551,7 +551,7 @@ async fn run_bash_unix(
     // dispatch allocated and advertised, from the first fragment on.
     let mut foreground_capture = None;
     let mut background_capture = None;
-    let mut combined_task = if let Some(established) = background_output {
+    let combined_task = if let Some(established) = background_output {
         let sink = established.sink;
         #[cfg(test)]
         let append_watch: AppendWatch = control.map(|control| control.background_appends.clone());
@@ -609,6 +609,7 @@ async fn run_bash_unix(
         )));
     }
     drop(combined_tx);
+    let mut combined_task = Some(combined_task);
 
     // The runner drives the owned process tree to its terminal state. The
     // outcome intent and lifecycle settlement are distinct: the runner
@@ -638,7 +639,12 @@ async fn run_bash_unix(
         if let Some(handle) = &stderr_task {
             handle.abort();
         }
-        combined_task.abort();
+        if let Some(handle) = &combined_task {
+            handle.abort();
+        }
+        // Abort requests are not settlement. Await destruction of every
+        // capture owner before publishing the terminal result or output.
+        let _ = await_drain(&mut stdout_task, &mut stderr_task, &mut combined_task).await;
         Box::new(Err(
             "the bash output capture was force-finalized after the bounded settlement window"
                 .to_owned(),

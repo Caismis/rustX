@@ -874,7 +874,10 @@ async fn issue136_mixed_batch_preserves_order_and_phases() {
             phase: ToolCancellationPhase::BeforeStart,
         }
     ));
-    assert_eq!(b_calls.borrow().len(), 1, "B crossed the executor frontier");
+    assert!(
+        b_calls.borrow().is_empty(),
+        "B crossed the logical start frontier but cancellation prevents physical dispatch"
+    );
     assert!(c_calls.borrow().is_empty(), "C never crossed the frontier");
     assert_eq!(
         audit

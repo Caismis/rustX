@@ -5004,8 +5004,9 @@ impl<'a> AgentExecution<'a> {
     /// the operation's ownership moved to the settlement plane), so dropping
     /// it is never "cleanup by destructor".
     ///
-    /// The canonical `OutcomeUnknown` comes ONLY from explicit
-    /// [`ToolSettlement::Unconfirmed`] evidence or from the settlement
+    /// The canonical `OutcomeUnknown` comes from executor outcome evidence
+    /// (including a contained operation panic with unprovable effects),
+    /// explicit [`ToolSettlement::Unconfirmed`] evidence, or from the settlement
     /// control-plane guard [`TOOL_SETTLEMENT_CONTROL_GUARD`] — never from
     /// "the execution future did not return". The two paths stay
     /// type-distinct: executor-returned `Unconfirmed` means all rustX-owned
@@ -5127,7 +5128,7 @@ impl<'a> AgentExecution<'a> {
         let crate::tools::executor::ToolExecutionHandle {
             completion,
             settlement,
-        } = executor.start(invocation.clone(), context);
+        } = crate::tools::executor::start_tool_execution(&*executor, invocation.clone(), context);
         tokio::pin!(completion);
         tokio::pin!(settlement);
         let hard_wait = self.monotonic_clock.wait_until_millis(hard_deadline_millis);

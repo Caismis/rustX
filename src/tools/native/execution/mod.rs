@@ -107,7 +107,7 @@
 //! - **cancellation observed after the frontier, child decision unknown** —
 //!   the child may still durably accept the already-routed envelope, so
 //!   local ownership settles finitely and the settlement reports
-//!   [`ToolSettlement::Unconfirmed`] (honest outcome-unknown), never a
+//!   [`crate::tools::executor::ToolSettlement::Unconfirmed`] (honest outcome-unknown), never a
 //!   fabricated cancellation and never a wait for the settlement control-
 //!   plane guard;
 //! - **the child's durable decision reached the operation** — the steer's
@@ -124,7 +124,7 @@
 //!
 //! [`ToolExecutionHandle::settled_by_operation`]: crate::tools::executor::ToolExecutionHandle::settled_by_operation
 //! [`ExecutionCancellation`]: crate::runtime::cancellation::ExecutionCancellation
-//! [`ToolSettlement::Unconfirmed`]: crate::tools::executor::ToolSettlement::Unconfirmed
+//! [`crate::tools::executor::ToolSettlement::Unconfirmed`]: crate::tools::executor::ToolSettlement::Unconfirmed
 //!
 //! # Discovery: ordering, bound, and scope (Issue #180)
 //!
@@ -165,16 +165,13 @@ use crate::tools::background::{
 };
 use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::execution::{ExecutionHandle, ExecutionKind, MAX_LISTED_EXECUTIONS};
-use crate::tools::executor::{
-    ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolSettlement,
-};
+use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
 use crate::tools::types::{
     ToolCancellationPhase, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
     ToolResultContent,
 };
-use futures_util::future::BoxFuture;
 
 use input::{ExecutionFilter, ExecutionInput};
 
@@ -484,18 +481,16 @@ async fn run_steer_tool_operation(
 /// plane drives it while no cancellation/deadline intent has won, and once
 /// intent wins the owning lifecycle awaits ONLY the settlement plane, which
 /// takes exclusive ownership of the same operation and drives it to its
-/// classified end. This is the same ownership shape as
-/// [`ToolExecutionHandle::settled_by_operation`], but the steer operation
-/// observes the cancellation itself and ends in a typed
-/// [`SteerToolEnd`], so the settlement plane can classify the steer effect
-/// against its frontier instead of blindly waiting for the child:
+/// classified end. [`ToolExecutionHandle::settled_by_operation`] owns that
+/// transfer. The steer operation observes cancellation and maps its typed
+/// [`SteerToolEnd`] to physical evidence at the domain-owned effect frontier:
 ///
 /// - a natural steer result (child decision) is confirmed settlement
 ///   evidence of that result;
 /// - a cancellation observed before the steer effect frontier is a
 ///   confirmed no-effect cancellation;
 /// - a cancellation observed after the frontier with the child undecided is
-///   [`ToolSettlement::Unconfirmed`] — the envelope may still be durably
+///   [`crate::tools::executor::ToolSettlement::Unconfirmed`] — the envelope may still be durably
 ///   accepted by the child — returned promptly, with no dependence on the
 ///   settlement control-plane guard and no synthesized subagent
 ///   cancellation.
@@ -505,58 +500,15 @@ fn steer_tool_handle<'a>(
     message: String,
     cancellation: ExecutionCancellation,
 ) -> ToolExecutionHandle<'a> {
-    let operation = Box::pin(run_steer_tool_operation(
-        subagents,
-        target,
-        message,
-        cancellation.clone(),
-    ));
-    let slot: std::sync::Arc<std::sync::Mutex<Option<BoxFuture<'a, SteerToolEnd>>>> =
-        std::sync::Arc::new(std::sync::Mutex::new(Some(operation)));
-    let completion_slot = std::sync::Arc::clone(&slot);
-    let completion: BoxFuture<'a, ToolExecutionResult> =
-        Box::pin(futures_util::future::poll_fn(move |cx| {
-            let mut guard = completion_slot.lock().expect("steer operation slot lock");
-            match guard.as_mut() {
-                Some(operation) => match operation.as_mut().poll(cx) {
-                    std::task::Poll::Ready(end) => std::task::Poll::Ready(steer_end_result(end)),
-                    std::task::Poll::Pending => std::task::Poll::Pending,
-                },
-                // The settlement plane owns the operation now; the owning
-                // lifecycle never polls this plane again after cancellation
-                // won arbitration.
-                None => std::task::Poll::Pending,
-            }
-        }));
-    let settlement: BoxFuture<'a, ToolSettlement> = Box::pin(async move {
-        cancellation.cancelled().await;
-        let operation = slot
-            .lock()
-            .expect("steer operation slot lock")
-            .take()
-            .expect("the settlement plane is awaited only while the operation is still owned");
-        match operation.await {
-            // The child's durable decision reached the operation: the steer
-            // result is the confirmed settlement evidence (Issue #204 keeps
-            // a known completion that won the physical race).
-            SteerToolEnd::Result(result) => ToolSettlement::Confirmed(result),
-            // Cancellation before the steer effect frontier: the no-effect
-            // cancellation is confirmed.
-            SteerToolEnd::CancelledBeforeSteerEffect { .. } => {
-                ToolSettlement::Confirmed(steer_cancelled_result(cancellation.reason()))
-            }
-            // Cancellation after the frontier, child decision unknown: the
-            // steer operation was abandoned (its ticket guard cleaned the
-            // registry ticket), every rustX-owned local execution ownership
-            // of this call is settled, and only the child-side fate of the
-            // already-routed envelope remains unprovable — the honest
-            // outcome-unknown evidence, never a fabricated cancellation.
-            SteerToolEnd::CancelledAwaitingChildDecision => ToolSettlement::Unconfirmed {
-                detail: steer_effect_uncertain_detail(),
-            },
-        }
-    });
-    ToolExecutionHandle::new(completion, settlement)
+    let operation_cancellation = cancellation.clone();
+    ToolExecutionHandle::settled_by_operation(
+        Box::pin(async move {
+            steer_end_result(
+                run_steer_tool_operation(subagents, target, message, operation_cancellation).await,
+            )
+        }),
+        cancellation,
+    )
 }
 
 /// Maps a classified steer operation end to the [`ToolExecutionResult`] the
