@@ -87,53 +87,76 @@ const CONFIG: &str = r#"{
 }"#;
 
 const WORKFLOW: &str = r"description: Review the request with a native child agent.
-input:
-  type: object
-  properties:
-    task:
-      type: string
-  required: [task]
-  additionalProperties: false
-output:
-  type: object
-  properties:
-    summary:
-      type: string
-  required: [summary]
-  additionalProperties: false
-entry: review
-nodes:
-  review:
-    type: agent
-    profile: reviewer
-    task: Review the request and commit the result.
-    input:
+block:
+  input:
+    type: object
+    properties:
       task:
-        ref: args.task
-    output:
-      type: object
-      properties:
-        passed:
-          type: boolean
-        summary:
-          type: string
-      required: [passed, summary]
-      additionalProperties: false
-  decision:
-    type: branch
-    condition:
-      ref: review.passed
-  success:
-    type: return
-    output:
+        type: string
+    required:
+    - task
+    additionalProperties: false
+  output:
+    type: object
+    properties:
       summary:
-        ref: review.summary
-  failure:
-    type: return
-    output:
-      summary:
-        ref: args.task
-edges:
+        type: string
+    required:
+    - summary
+    additionalProperties: false
+  entry: review
+  nodes:
+    review:
+      type: agent
+      profile: reviewer
+      task: Review the request and commit the result.
+      input:
+        task:
+          type: reference
+          path:
+          - args
+          - task
+      output:
+        type: object
+        properties:
+          passed:
+            type: boolean
+          summary:
+            type: string
+        required:
+        - passed
+        - summary
+        additionalProperties: false
+    decision:
+      type: branch
+      condition:
+        type: boolean
+        value:
+          type: reference
+          path:
+          - review
+          - passed
+    success:
+      type: return
+      output:
+        type: object
+        fields:
+          summary:
+            type: reference
+            path:
+            - review
+            - summary
+    failure:
+      type: return
+      output:
+        type: object
+        fields:
+          summary:
+            type: reference
+            path:
+            - args
+            - task
+  edges:
   - from: review
     to: decision
   - from: decision
@@ -400,12 +423,44 @@ async fn registered_workflow_can_remain_out_of_main_model_admission() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_yaml_workflow_runs_through_one_native_child_and_returns_one_bounded_result() {
+async fn admitted_workflow_freezes_files_resources_and_keeps_one_parent_history_boundary() {
     let Some(emulator) = ProviderEmulator::start("workflow_output").await else {
         return;
     };
     let driver = Driver::start(&emulator).await;
     driver.submit();
+    emulator.await_gate("workflow-child-admitted").await;
+    // The real child's model request proves native admission and profile
+    // materialization already happened. Edit every relevant source while
+    // that child is held before its terminal output, without a timing race.
+    let workspace = driver.root.path().join("workspace");
+    std::fs::write(
+        workspace.join(".agents/workflows/review_pr.yaml"),
+        r"
+description: Changed future workflow
+block:
+  input: {type: object}
+  output: {type: object, properties: {summary: {type: string}}, required: [summary]}
+  entry: done
+  nodes:
+    done:
+      type: return
+      output: {type: literal, value: {summary: changed future output}}
+  edges: []
+",
+    )
+    .expect("replace future program");
+    std::fs::write(
+        workspace.join(".agents/subagents/reviewer/instructions.md"),
+        "CHANGED FUTURE PROFILE\n",
+    )
+    .expect("replace future profile");
+    std::fs::write(
+        driver.root.path().join("rustx.jsonc"),
+        CONFIG.replace("\"main\": [\"review_pr\"]", "\"main\": []"),
+    )
+    .expect("replace future exposure");
+    emulator.release_gate("workflow-child-admitted").await;
     let (events, outcome) = driver.settle().await;
 
     assert!(
@@ -434,5 +489,36 @@ async fn a_yaml_workflow_runs_through_one_native_child_and_returns_one_bounded_r
 
     let requests = emulator.requests().await;
     assert_eq!(requests.len(), 3, "parent, child, then parent continuation");
+    assert!(
+        !serde_json::to_string(&requests)
+            .unwrap()
+            .contains("CHANGED FUTURE PROFILE")
+    );
+    driver
+        .runtime
+        .host()
+        .reload_resources()
+        .await
+        .expect("publish edited resources for future attempts");
+    assert!(
+        driver
+            .runtime
+            .runtime()
+            .runtime_resources()
+            .workflows()
+            .main()
+            .is_empty()
+    );
+    assert_eq!(
+        driver
+            .runtime
+            .runtime()
+            .runtime_resources()
+            .workflows()
+            .get(&WorkflowId::parse("review_pr").unwrap())
+            .unwrap()
+            .description(),
+        "Changed future workflow"
+    );
     emulator.finish().await;
 }

@@ -2137,6 +2137,7 @@ impl RuntimeInner {
                 .flatten()
                 .map(|models| {
                     crate::runtime::subagent::AttemptSubagentContext::new(
+                        attempt_id.clone(),
                         Arc::clone(&resources),
                         model_config,
                         models,
@@ -8332,16 +8333,20 @@ mod tests {
                 crate::runtime::WorkflowId::parse("reload_workflow").expect("workflow id"),
                 crate::runtime::WorkflowDefinition {
                     description: description.to_owned(),
-                    input: empty_object(),
-                    output: empty_object(),
-                    entry: "done".to_owned(),
-                    nodes: std::collections::BTreeMap::from([(
-                        "done".to_owned(),
-                        crate::runtime::WorkflowNodeDefinition::Return {
-                            output: std::collections::BTreeMap::new(),
-                        },
-                    )]),
-                    edges: Vec::new(),
+                    block: crate::runtime::WorkflowBlock {
+                        input: empty_object(),
+                        output: empty_object(),
+                        entry: "done".to_owned(),
+                        nodes: std::collections::BTreeMap::from([(
+                            "done".to_owned(),
+                            crate::runtime::WorkflowNodeDefinition::Return {
+                                output: crate::runtime::WorkflowValue::Literal {
+                                    value: serde_json::json!({}),
+                                },
+                            },
+                        )]),
+                        edges: Vec::new(),
+                    },
                 },
                 &std::collections::BTreeSet::new(),
             )
@@ -15988,7 +15993,8 @@ mod tests {
 
         let workflow_id =
             crate::runtime::workflow::WorkflowId::parse("drain_workflow").expect("workflow id");
-        let run_id = ToolCallId::new("workflow-drain-run");
+        let node_instance = crate::runtime::workflow::test_instance("drain_workflow", "review");
+        let run_id = node_instance.block.run.clone();
         let prepared = subagents
             .prepare(
                 &crate::runtime::subagent::SubagentStartSpec {
@@ -16006,7 +16012,7 @@ mod tests {
                         }),
                         workflow_id,
                         run_id,
-                        node_id: "review".to_owned(),
+                        node_id: Box::new(node_instance),
                     },
                 },
                 &CancellationSignal::new(),

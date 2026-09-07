@@ -105,6 +105,9 @@ async fn checked_in_review_workflow_runs_through_the_existing_provider_emulator(
         })])
         .expect("inbound accepted");
 
+    emulator.await_gate("workflow-child-admitted").await;
+    emulator.release_gate("workflow-child-admitted").await;
+
     let stream = events;
     let outcome = loop {
         let delivery = tokio::time::timeout(std::time::Duration::from_secs(30), stream.next())

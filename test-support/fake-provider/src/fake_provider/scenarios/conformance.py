@@ -247,6 +247,7 @@ def workflow_output() -> Scenario:
                 tools_include=("workflow_output",),
             ),
             Stream(
+                Gate("workflow-child-admitted"),
                 ToolCall(
                     "call-workflow-output",
                     "workflow_output",

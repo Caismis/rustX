@@ -1187,6 +1187,10 @@ impl RuntimeClientProjection {
             // workflow-local values or child transcripts as a second
             // conversation surface.
             RuntimeEvent::WorkflowStarted { .. }
+            | RuntimeEvent::WorkflowBlockStarted { .. }
+            | RuntimeEvent::WorkflowBlockSettled { .. }
+            | RuntimeEvent::WorkflowNodeStarted { .. }
+            | RuntimeEvent::WorkflowNodeSettled { .. }
             | RuntimeEvent::WorkflowAgentAdmitted { .. }
             | RuntimeEvent::WorkflowAgentOutputCommitted { .. }
             | RuntimeEvent::WorkflowBranchSelected { .. }

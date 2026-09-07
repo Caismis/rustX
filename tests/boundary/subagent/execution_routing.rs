@@ -150,8 +150,13 @@ fn workflow_spec(task: &str) -> SubagentStartSpec {
             }),
             workflow_id: rustx::runtime::workflow::WorkflowId::parse("test_workflow")
                 .expect("workflow id"),
-            run_id: ToolCallId::new("workflow-run"),
-            node_id: "agent".to_owned(),
+            run_id: crate::runtime::workflow::test_instance("test_workflow", "agent")
+                .block
+                .run,
+            node_id: Box::new(crate::runtime::workflow::test_instance(
+                "test_workflow",
+                "agent",
+            )),
         },
         ..spec(task)
     }

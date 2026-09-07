@@ -41,7 +41,7 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 23 is the only accepted schema; version 22 and every older
+schema version 24 is the only accepted schema; version 23 and every older
 development schema fail explicitly at open and are not migrated. Version 10
 froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation
@@ -2738,11 +2738,19 @@ the launch-boundary policy inheritance.
   interpolation or expression language.
 - **Agent reasoning and control flow are separate.** Agent invokes one
   Workflow-admitted named Subagent profile with its frozen native resources;
-  Branch consumes only a committed boolean and chooses one deterministic
-  successor. Parallel is a keyed finite set of one-Agent children, uses
-  native Subagent capacity, settles all admitted children, and reports
+  Branch consumes typed boolean/equality/composition predicates and chooses
+  one successor. Parallel is a keyed finite set of lexical blocks using
+  the same executor as the root, waits on native Subagent capacity,
+  settles all admitted children, and reports
   failures in definition-key order. It never turns execution failure into a
   value.
+- **Blocks own lexical data and Return.** Explicit inputs and committed local
+  producers are the only readable values. Return completes exactly its block;
+  only root completion can terminalize the WorkflowRun. Run-owned count/byte
+  budgets never reset on child entry. Native child settlement precedes block
+  terminal, which precedes Workflow terminal. Static definition paths and
+  native execution instances are distinct. See the complete
+  [WF-01 contracts and accounting points](workflow-programs.md).
 - **`workflow_output` is the only successful Workflow Agent terminal.** The
   canonical Tool registry rejects the model-facing name for every ordinary
   Tool origin, so a Workflow child receives exactly one reserved protocol

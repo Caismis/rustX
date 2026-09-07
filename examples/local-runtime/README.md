@@ -289,8 +289,12 @@ which is statically checked and compiled into an immutable `WorkflowProgram`;
 `WorkflowRuntime` executes that program over the existing named
 `SubagentRuntime`. The bounded v1 vocabulary is `Agent`, `Branch`,
 `Parallel`, and `Return`. Agent tasks are fixed strings, data movement uses
-explicit typed `{ref: ...}` bindings, Branch consumes only a committed
-boolean, and Parallel is a keyed all-settle set of one-Agent branches.
+tagged references (`{type: reference, path: [args, task]}`), literals and
+object/array constructions. Branch consumes a typed predicate. Root and
+Parallel branches use identical lexical `block` graphs; a branch receives
+explicit inputs and exports only its declared Return value. Parallel is
+keyed and all-settle, including when native capacity requires waiting.
+See [the scoped program grammar and limits](../../docs/workflow-programs.md).
 
 Workflow Agent children complete successfully only through the reserved
 `workflow_output` terminal protocol. It is not an ordinary Tool Plane call;

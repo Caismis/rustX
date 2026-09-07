@@ -635,6 +635,7 @@ mod tests {
 
         DirtyParentPlane {
             subagent_context: AttemptSubagentContext::new(
+                crate::runtime::identity::AttemptId::new("native-subagent-test-attempt"),
                 resources,
                 SessionModelConfig::of(model),
                 models,

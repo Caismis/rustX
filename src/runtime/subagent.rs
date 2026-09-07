@@ -248,6 +248,7 @@ pub struct AttemptSubagentContext {
 }
 
 struct AttemptSubagentContextInner {
+    attempt_id: crate::runtime::identity::AttemptId,
     resources: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
     model: crate::model::session::SessionModelConfig,
     models: crate::model::invocation::ModelBindingRegistry,
@@ -273,6 +274,7 @@ impl AttemptSubagentContext {
     /// state and never a composition-time capture.
     #[must_use]
     pub fn new(
+        attempt_id: crate::runtime::identity::AttemptId,
         resources: Arc<crate::runtime::resources::RuntimeResourceSnapshot>,
         model: crate::model::session::SessionModelConfig,
         models: crate::model::invocation::ModelBindingRegistry,
@@ -280,12 +282,19 @@ impl AttemptSubagentContext {
     ) -> Self {
         Self {
             inner: Arc::new(AttemptSubagentContextInner {
+                attempt_id,
                 resources,
                 model,
                 models,
                 approval_mode,
             }),
         }
+    }
+
+    /// The native admitted attempt that owns this frozen execution context.
+    #[must_use]
+    pub fn attempt_id(&self) -> &crate::runtime::identity::AttemptId {
+        &self.inner.attempt_id
     }
 
     /// The immutable runtime resource generation the invoking attempt owns.
@@ -742,8 +751,8 @@ pub(crate) fn workflow_output_event(
     conversation_id: &ConversationId,
     subagent_id: &SubagentId,
     workflow_id: &crate::runtime::workflow::WorkflowId,
-    run_id: &ToolCallId,
-    node_id: &str,
+    run_id: &crate::runtime::workflow::WorkflowRunId,
+    node_id: &crate::runtime::workflow::WorkflowNodeInstance,
     output: serde_json::Value,
     timestamp: DateTime<Utc>,
 ) -> RuntimeEventEnvelope {
