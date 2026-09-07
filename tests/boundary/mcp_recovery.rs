@@ -2572,3 +2572,403 @@ async fn drain_terminates_every_streamable_http_request_the_generation_still_own
     assert_eq!(server.control.accepted_calls(), 1);
     server.shutdown().await;
 }
+
+/// How many concurrent in-flight MCP calls the pre-subscription regression
+/// holds open at once.
+///
+/// It is deliberately far above the router's removed 32-entry
+/// pre-subscription window. Nothing in the architecture bounded how many
+/// admitted requests could sit inside that window simultaneously, which is
+/// precisely why bounding it by capacity was the wrong shape: past 32, a
+/// legitimate live request's only liveness evidence became an eviction
+/// candidate.
+const PRE_SUBSCRIPTION_CONCURRENCY: usize = 64;
+
+/// Issue #205 review finding: genuine remote progress that arrives **before**
+/// the dispatching executor has completed its subscription registration is
+/// never lost, at a concurrency far above the removed pre-subscription
+/// window, and therefore never turns into a false idle timeout.
+///
+/// This is the end-to-end shape of the hole. Every one of these calls is a
+/// real MCP `tools/call` over a real Streamable HTTP transport, admitted by
+/// the generic Issue #204 lifecycle, and every one of them has its server
+/// answer with genuine progress while it is still inside the window that
+/// used to be a bounded FIFO cache.
+///
+/// # Synchronization proof
+///
+/// Every claimed interleaving is proven by a rendezvous, never by a sleep;
+/// the only wall clock is the suite's outer anti-hang guard.
+///
+/// 1. **every call is admitted and crosses its dispatch frontier.** The
+///    [`PRE_SUBSCRIPTION_CONCURRENCY`] calls are one parallel batch of a
+///    single model turn, so they are in flight simultaneously by
+///    construction. `ProgressSubscriptionRace` parks each one at the exact
+///    instant *after* `send_cancellable_request` returned `Ok` — the effect
+///    frontier — and *before* `McpProgressRouter::subscribe`;
+/// 2. **no subscription exists yet.** `wait_parked(N)` resolves only when
+///    all N calls are simultaneously inside that window. A parked call has
+///    provably not registered its subscription;
+/// 3. **every server emitted genuine progress.** `wait_accepted(N)` is the
+///    server's own fact: [`streamable_http::TOOL_PULSE`] emits its dispatch
+///    notification *before* it publishes the acceptance;
+/// 4. **that progress reached the MCP client before the subscription.**
+///    `wait_pre_subscription_progress(N)` resolves only once the router has
+///    recorded, for every parked request's own progress token, a delivery
+///    that landed while that token had no subscriber. That is the claimed
+///    interleaving stated exactly, per request, with no timing inference;
+/// 5. **no request completes yet.** `TOOL_PULSE` never answers.
+///
+/// Only then is the race released, every call subscribes and claims the
+/// evidence the router held for it, and the manual clock advances.
+///
+/// ```text
+/// t=0    N calls parked pre-subscription, N genuine progress notifications
+///        already delivered to the router and owned by their requests
+/// t=0    release -> every call subscribes and claims its own evidence
+///                -> every idle window becomes 0..1000
+/// t=900  (advance)  no window has expired
+/// t=900  N released pulses -> every idle window becomes 900..1900
+/// t=1100 (advance)  a call whose pre-subscription evidence had been evicted
+///                   would still hold the window 0..1000 and fire Idle here
+/// t=1800 (advance)  the immutable hard deadline bounds every call
+/// ```
+///
+/// Under the removed bound this test could not pass: 64 requests share a
+/// 32-entry FIFO, so 32 of them would have had their only progress
+/// occurrence evicted by another *legitimate* request before they could
+/// claim it, and would have fired a false idle deadline at t=1100.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn progress_that_beats_every_subscription_still_refreshes_every_idle_watchdog() {
+    let fixture = common::native_fixture();
+    let server =
+        streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
+    let mut binding = server.binding();
+    binding.policy.concurrency = rustx::tools::types::ToolConcurrencyPolicy::Parallel;
+    let capability = http_capability(
+        &fixture.runtime,
+        &McpServerId::new("http-pre-subscription"),
+        binding,
+    )
+    .await;
+    let lease = capability.coordinator.acquire_attempt_lease();
+    let control = server.control.clone();
+    let concurrency = u32::try_from(PRE_SUBSCRIPTION_CONCURRENCY).expect("small concurrency");
+    // Installed before the batch starts, and uninstalled with the guard, so
+    // no other suite in this binary can be parked by it: the race is scoped
+    // to this one tool name.
+    let (race, _race_guard) = rustx::tools::mcp::test_sync::ProgressSubscriptionRace::install(
+        streamable_http::TOOL_PULSE,
+    );
+    let parking = Arc::clone(&race);
+    let audit = run_parallel_mcp_calls(
+        &fixture,
+        lease,
+        "http-pre-subscription",
+        streamable_http::TOOL_PULSE,
+        PRE_SUBSCRIPTION_CONCURRENCY,
+        ToolExecutionDeadlinePolicy {
+            hard_deadline: Duration::from_millis(1800),
+            idle_liveness: Some(Duration::from_secs(1)),
+        },
+        move |mut controls| async move {
+            controls.wait_started().await;
+            // Every call is admitted and has crossed its effect frontier,
+            // and none of them has registered a subscription.
+            parking.wait_parked(PRE_SUBSCRIPTION_CONCURRENCY).await;
+            // Every server entered its handler, and emitted its dispatch
+            // progress notification before publishing that fact.
+            control.wait_accepted(concurrency).await;
+            // The claim under test: for every one of those still-parked
+            // requests, its own progress reached the MCP client while it had
+            // no subscriber.
+            parking
+                .wait_pre_subscription_progress(PRE_SUBSCRIPTION_CONCURRENCY)
+                .await;
+            assert_eq!(
+                parking.parked_requests(),
+                PRE_SUBSCRIPTION_CONCURRENCY,
+                "every request is still inside the pre-subscription window"
+            );
+            // Only now may the calls subscribe and claim the evidence the
+            // router owned on their behalf.
+            parking.release();
+            // Every claimed notification was forwarded, so every call's idle
+            // window was refreshed at t=0.
+            controls.wait_progress_at_least(concurrency).await;
+            // 900 < 1000: every window survives this advance.
+            controls.clock.advance(900);
+            control.release();
+            control.wait_pulsed(concurrency).await;
+            // Every released pulse was forwarded, so every window is now
+            // 900..1900.
+            controls.wait_progress_at_least(concurrency * 2).await;
+            // t = 1100: a call whose pre-subscription evidence had been
+            // evicted would still hold the window 0..1000 and fire Idle here.
+            controls.clock.advance(200);
+            // t = 1800: the immutable hard deadline, still inside every
+            // refreshed idle window.
+            controls.clock.advance(700);
+        },
+    )
+    .await;
+
+    let facts = execution_facts(&audit);
+    assert_eq!(
+        facts
+            .iter()
+            .filter(|fact| matches!(
+                fact,
+                RuntimeEvent::ToolExecutionDeadlineFired {
+                    kind: ToolDeadlineKind::Idle,
+                    ..
+                }
+            ))
+            .count(),
+        0,
+        "progress that beat every subscription still reached every admitted call's \
+         idle watchdog, so no false idle deadline fires"
+    );
+    assert_eq!(
+        facts
+            .iter()
+            .filter(|fact| matches!(
+                fact,
+                RuntimeEvent::ToolExecutionDeadlineFired {
+                    kind: ToolDeadlineKind::Hard,
+                    ..
+                }
+            ))
+            .count(),
+        PRE_SUBSCRIPTION_CONCURRENCY,
+        "the immutable hard deadline is what bounds every call"
+    );
+    let results = tool_results(&audit);
+    assert_eq!(
+        results.len(),
+        PRE_SUBSCRIPTION_CONCURRENCY,
+        "every call settles exactly once, canonically"
+    );
+    for result in &results {
+        assert!(
+            matches!(result.status, ToolExecutionStatus::OutcomeUnknown { .. }),
+            "the hard deadline bounds a call with no correlated remote response: {:?}",
+            result.status
+        );
+    }
+    assert_eq!(
+        audit
+            .event_history
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::ToolExecutionProgress { .. }))
+            .count(),
+        PRE_SUBSCRIPTION_CONCURRENCY * 2,
+        "every remote pulse of every concurrent call was forwarded as durable \
+         liveness evidence; none was discarded and none was fabricated"
+    );
+    drop(capability);
+    server.shutdown().await;
+}
+
+/// Issue #205 review finding: a normal successful Streamable HTTP request
+/// cleans up its own lifecycle state, so the ownership registry's memory
+/// bound is the in-flight request count and never the count of requests the
+/// connection generation has ever served.
+///
+/// # Synchronization proof
+///
+/// No race and no clock: each call is awaited to its canonical terminal
+/// result before the next begins, and every one of them is a complete
+/// success — the POST registered, the response body was consumed, and the
+/// correlated remote response was delivered. The registry is then read
+/// **without closing the connection**, which is the whole point: close is
+/// not allowed to be the thing that cleans up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn successful_streamable_http_requests_leave_no_request_lifecycle_state() {
+    let fixture = common::native_fixture();
+    let server =
+        streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
+    let runtime = rustx::tools::mcp::McpServerRuntime::connect(
+        &McpServerId::new("http-cleanup"),
+        &server.binding(),
+        fixture.runtime.workspace(),
+        Arc::new(rustx::tools::mcp::McpInvalidationState::new()),
+    )
+    .await
+    .expect("HTTP MCP connect");
+    let executor = rustx::tools::mcp::McpToolExecutor::new(
+        Arc::clone(&runtime),
+        streamable_http::TOOL_ECHO.to_owned(),
+    );
+
+    for index in 0..32 {
+        let result = tokio::time::timeout(
+            Duration::from_mins(1),
+            direct_executor_call(&fixture, &executor, streamable_http::TOOL_ECHO, index),
+        )
+        .await
+        .expect("anti-hang guard: an answered HTTP call settles");
+        assert!(
+            matches!(result.status, ToolExecutionStatus::Success),
+            "call {index} is an ordinary success: {:?}",
+            result.status
+        );
+        assert!(
+            runtime.outstanding_http_requests() <= 1,
+            "call {index} left no state from any earlier call behind: the bound is \
+             the in-flight request count, not the count of requests this generation \
+             has served (observed {})",
+            runtime.outstanding_http_requests()
+        );
+    }
+    // The registry returns to empty **without closing the connection**: close
+    // is not allowed to be the thing that cleans up. The last call's entry is
+    // forgotten once rmcp finishes releasing its outbound send, which is the
+    // one part of the exchange the executor does not await, so this waits for
+    // that monotone condition under an anti-hang guard rather than asserting
+    // an instant.
+    tokio::time::timeout(Duration::from_mins(1), async {
+        while runtime.outstanding_http_requests() != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("anti-hang guard: every completed request forgets its own lifecycle state");
+    runtime.close().await.expect("physical settlement");
+    server.shutdown().await;
+}
+
+/// Executes one MCP tool directly through the executor boundary with an
+/// uncancelled context, and returns its canonical result.
+async fn direct_executor_call(
+    fixture: &common::NativeFixture,
+    executor: &rustx::tools::mcp::McpToolExecutor,
+    tool_name: &str,
+    index: usize,
+) -> rustx::tools::types::ToolExecutionResult {
+    struct NoProgress;
+    impl rustx::tools::executor::ProgressReporter for NoProgress {
+        fn report(&self, _progress: rustx::tools::types::ToolProgress) {}
+    }
+
+    let progress = NoProgress;
+    let context = rustx::tools::executor::ToolExecutionContext::new(
+        fixture.runtime.conversation_id(),
+        None,
+        rustx::runtime::ExecutionCancellation::detached(
+            rustx::runtime::CancellationSignal::new(),
+            CancellationReason::UserRequested,
+        ),
+        fixture.runtime.workspace(),
+        &progress,
+        fixture.runtime.artifacts(),
+        fixture.runtime.tool_output(),
+        fixture.runtime.environment(),
+    );
+    let invocation = rustx::tools::types::ToolInvocation {
+        call_id: rustx::runtime::identity::ToolCallId::new(format!("http-cleanup-call-{index}")),
+        tool_id: rustx::runtime::identity::ToolId::new("http-cleanup-tool"),
+        tool_name: tool_name.to_owned(),
+        mode: rustx::tools::types::ToolInvocationMode::Foreground,
+        arguments: serde_json::json!({}),
+    };
+    rustx::tools::executor::ToolExecutor::start(executor, invocation, context)
+        .completion
+        .await
+}
+
+/// Issue #205 review finding: a Streamable HTTP request cancelled **before**
+/// its dispatch is owned never reaches the server, settles at the correct
+/// local ownership point, and leaves no request lifecycle state behind.
+///
+/// This is the `NotYetRegistered` transition proven end to end, over the real
+/// transport, against a real server that can say whether it ever saw the
+/// call.
+///
+/// # Synchronization proof
+///
+/// - `OutboundDispatchPause` parks the outbound send of exactly this tool
+///   between its progress admission and its dispatch ownership. A parked
+///   request is admitted and has provably begun no local activity, which is
+///   the `NotYetRegistered` state stated as an interleaving rather than
+///   inferred from a missing record;
+/// - `wait_entered` resolves only once that dispatch is actually parked, so
+///   everything after it is provably inside that window;
+/// - `cross_hard_deadline` advances the manual clock across exactly the
+///   deadline the generic lifecycle published through its own arming signal,
+///   so the cancellation intent lands while the dispatch is still parked;
+/// - the pause is released only after the call has settled, so the dispatch
+///   that then attempts to proceed is provably attempting it *after* a
+///   terminal outcome — and is refused;
+/// - `accepted_calls() == 0` is the server's own fact that the request never
+///   reached it.
+///
+/// The only wall clock is the outer anti-hang guard.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_streamable_http_request_cancelled_before_dispatch_never_reaches_the_server() {
+    let fixture = common::native_fixture();
+    let server =
+        streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
+    let capability = http_capability(
+        &fixture.runtime,
+        &McpServerId::new("http-pre-dispatch"),
+        server.binding(),
+    )
+    .await;
+    let lease = capability.coordinator.acquire_attempt_lease();
+    // Installed after discovery, so only the tool call is parked: the
+    // handshake and `tools/list` are not tool invocations and are never
+    // tracked by this seam at all.
+    let (pause, _pause_guard) =
+        rustx::tools::mcp::test_sync::OutboundDispatchPause::install(streamable_http::TOOL_ECHO);
+    let parking = Arc::clone(&pause);
+    let audit = run_mcp_call(
+        &fixture,
+        lease,
+        "http-pre-dispatch",
+        streamable_http::TOOL_ECHO,
+        ToolExecutionDeadlinePolicy {
+            hard_deadline: Duration::from_millis(1500),
+            idle_liveness: None,
+        },
+        move |mut controls| async move {
+            controls.wait_started().await;
+            // The request is admitted and its outbound dispatch is parked
+            // before any local activity of it exists.
+            parking.wait_entered().await;
+            // The cancellation intent lands inside that window.
+            controls.cross_hard_deadline().await;
+        },
+    )
+    .await;
+
+    // The call settled inside the MCP settlement plane: no generic
+    // settlement-control failure had to bound it.
+    let facts = execution_facts(&audit);
+    assert!(
+        !facts.iter().any(|fact| matches!(
+            fact,
+            RuntimeEvent::ToolExecutionSettlementControlFailed { .. }
+        )),
+        "the MCP executor settled the call itself: {facts:?}"
+    );
+    let result = single_tool_result(&audit);
+    assert!(
+        matches!(result.status, ToolExecutionStatus::OutcomeUnknown { .. }),
+        "a request that crossed its effect frontier settles as OutcomeUnknown: {:?}",
+        result.status
+    );
+    // Only now may the parked dispatch continue — provably after the call
+    // reached a terminal outcome.
+    pause.release();
+    // The server's own fact: the request was refused before the transport and
+    // never reached it, so no remote side effect happened after the terminal
+    // result.
+    assert_eq!(
+        server.control.accepted_calls(),
+        0,
+        "a request terminated before its dispatch never reaches the server"
+    );
+    drop(capability);
+    server.shutdown().await;
+}

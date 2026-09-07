@@ -2132,6 +2132,18 @@ impl McpServerRuntime {
         }
     }
 
+    /// How many request lifecycle entries this generation's Streamable HTTP
+    /// ownership registry currently holds.
+    ///
+    /// The memory bound of the local request ownership layer, exposed so a
+    /// boundary regression can assert it directly rather than infer it.
+    #[cfg(test)]
+    pub(crate) fn outstanding_http_requests(&self) -> usize {
+        self.request_ownership
+            .as_ref()
+            .map_or(0, |ownership| ownership.outstanding_requests())
+    }
+
     /// Installs the test-only close synchronization/fault seam.
     #[cfg(test)]
     #[allow(dead_code)]
