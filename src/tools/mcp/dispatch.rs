@@ -42,6 +42,45 @@
 //! request's token is known and live, so a known token never has to compete
 //! with peer-controlled traffic for capacity.
 //!
+//! # Why ownership is taken in the prologue and not in the future
+//!
+//! rmcp's service loop *calls* `Transport::send` in its own event-handling
+//! body and only then spawns the returned future onto a `JoinSet`. Those are
+//! two different instants:
+//!
+//! ```text
+//! A  the request is accepted onto the peer's outbound mpsc
+//! B  the service loop dequeues it
+//! C  Transport::send(..) is called          <-- the synchronous prologue
+//! D  the returned future is first polled    <-- can be much later
+//! E  rmcp's worker transport receives it
+//! F  the Streamable HTTP POST begins
+//! G  the remote effect occurs
+//! ```
+//!
+//! Taking dispatch ownership inside the returned future — at `D` — leaves
+//! `C..D` owned by nobody while a fully-formed request sits inside a live
+//! future that will dispatch it. A cancellation landing in that window used
+//! to see "nothing local began", settle, drop the invocation's admission,
+//! and let the entry be forgotten; the future then woke, found no entry, and
+//! **created a fresh uncancelled one**, dispatching a `tools/call` after its
+//! canonical terminal result already existed.
+//!
+//! So the decision is frozen at `C`, before the future exists:
+//! [`crate::tools::mcp::streamable_http::McpHttpRequestOwnership::begin_dispatch`]
+//! either grants ownership or refuses, and a refused request never even has
+//! an inner send future constructed for it — which matters, because rmcp's
+//! `WorkerTransport::send` registers a request cancellation entry in its own
+//! synchronous prologue. `A..C` is not a gap either: it is the lifecycle's
+//! explicit `AwaitingDispatch` phase, and a settlement there waits for this
+//! seam to arrive and refuse.
+//!
+//! One more check happens after the prologue and immediately before the
+//! inner send could be polled, because a termination can land in `C..D`
+//! too. If it did, the inner send future is dropped **unpolled** and the
+//! ownership is consumed as an explicit refusal, which is the fact the
+//! waiting settlement is released by.
+//!
 //! # What this seam is not
 //!
 //! It is an ownership seam, not a policy layer and not a second protocol
@@ -174,20 +213,26 @@ impl McpDispatchSeam {
         Some(invocation)
     }
 
-    /// Takes dispatch ownership of one tool invocation, immediately before
-    /// its message is handed to the transport.
+    /// Takes dispatch ownership of one tool invocation inside
+    /// `Transport::send`'s synchronous prologue.
     ///
-    /// Deliberately as late as possible: every cancellation that lands
-    /// before this point gets the clean
-    /// [`crate::tools::mcp::streamable_http::LocalRequestTermination::PreDispatchTerminated`]
-    /// outcome — nothing local began, and the refusal here guarantees
-    /// nothing local ever will — rather than a settlement that has to wait
-    /// for a local owner it did not need to create.
+    /// Deliberately as early as the seam can see the request: every
+    /// cancellation that lands before this point is refused here, and every
+    /// cancellation that lands after it finds a lifecycle entry with an
+    /// owner, so no interval of the request is unowned.
     fn begin_dispatch(&self, id: &RequestId) -> OutboundDispatch {
         self.ownership.as_ref().map_or_else(
             || OutboundDispatch::Owned(DispatchOwnership::none()),
             |ownership| ownership.begin_dispatch(id),
         )
+    }
+
+    /// Declares this generation's outbound seam over, so a request still
+    /// waiting for it can stop waiting.
+    fn no_further_dispatch(&self) {
+        if let Some(ownership) = &self.ownership {
+            ownership.no_further_dispatch();
+        }
     }
 
     /// The inbound terminal-correlation point.
@@ -216,6 +261,23 @@ impl<T> ObservingTransport<T> {
     }
 }
 
+/// Awaits the inner transport's send, when one was constructed.
+///
+/// The `None` arm is unreachable by construction — the prologue builds an
+/// inner send for every message it does not refuse, and every refusal
+/// returns before this point — and it is written as a locally terminated
+/// request rather than a panic so a future edit cannot turn an ownership
+/// mistake into a runtime abort.
+async fn deliver<F, E>(inner: Option<F>) -> Result<(), McpTransportError<E>>
+where
+    F: Future<Output = Result<(), E>> + Send,
+{
+    match inner {
+        Some(send) => send.await.map_err(McpTransportError::Transport),
+        None => Err(McpTransportError::LocallyTerminated),
+    }
+}
+
 impl<T> Transport<RoleClient> for ObservingTransport<T>
 where
     T: Transport<RoleClient> + Send,
@@ -226,40 +288,83 @@ where
         &mut self,
         item: ClientJsonRpcMessage,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
-        // Synchronous, and before `item` reaches the transport: this is the
-        // progress-token linearization point the whole module exists for.
+        // ---- the synchronous prologue: everything below is decided before
+        // ---- this function returns, and therefore before rmcp can poll,
+        // ---- delay, or drop anything belonging to this request.
+        //
+        // The progress-token linearization point the whole module exists for.
         let invocation = self.seam.admit_progress(&item);
-        // The inner send future is constructed here because it needs the
-        // transport, but it is not polled until the dispatch is owned below,
-        // so nothing has been handed to the wire yet.
-        let inner = self.inner.send(item);
-        let seam = Arc::clone(&self.seam);
+        // The dispatch linearization point. Frozen here rather than in the
+        // returned future, so no interval of this request is unowned.
+        let dispatch = invocation
+            .as_ref()
+            .map(|invocation| self.seam.begin_dispatch(&invocation.id));
+        // A refused request never even has an inner send constructed for it:
+        // rmcp's worker transport registers the request in its own
+        // synchronous prologue, so constructing one would leave transport
+        // state behind for a request that must not exist below rustX.
+        let inner = match &dispatch {
+            Some(OutboundDispatch::Refused) => None,
+            Some(OutboundDispatch::Owned(_)) | None => Some(self.inner.send(item)),
+        };
+        #[cfg(test)]
+        let probe = invocation
+            .as_ref()
+            .map(|invocation| (invocation.tool.clone(), invocation.id.clone()));
         async move {
-            let Some(invocation) = invocation else {
+            let guard = match dispatch {
                 // Not a tool invocation: no settlement can ever terminate it,
                 // so it owns nothing and passes straight through.
-                return inner.await.map_err(McpTransportError::Transport);
-            };
-            // Test-only: holds one tool invocation between its admission and
-            // its dispatch ownership, which is the window in which a
-            // cancellation is provably pre-dispatch. No production path
-            // installs a pause.
-            #[cfg(test)]
-            crate::tools::mcp::test_sync::park_before_outbound_dispatch(&invocation.tool).await;
-            let guard = match seam.begin_dispatch(&invocation.id) {
-                OutboundDispatch::Owned(guard) => guard,
-                OutboundDispatch::Refused => {
-                    // The tool call was already settled. Dropping the inner
-                    // send future without polling it is what keeps the
-                    // request off the network entirely.
-                    drop(inner);
+                None => return deliver(inner).await,
+                // Already terminated when the prologue ran, or a duplicate
+                // send for a live request id. Nothing of this request exists
+                // below rustX, and the refusal was recorded on its lifecycle
+                // entry, which is what releases the settlement waiting for
+                // this participant.
+                Some(OutboundDispatch::Refused) => {
+                    #[cfg(test)]
+                    if let Some((tool, id)) = &probe {
+                        crate::tools::mcp::test_sync::note_outbound_dispatch(tool, id, true);
+                    }
                     return Err(McpTransportError::LocallyTerminated);
                 }
+                Some(OutboundDispatch::Owned(guard)) => guard,
             };
+            // Test-only: holds one owned tool invocation between the
+            // prologue and the first poll of the inner send — the exact
+            // window in which the request has an outbound participant and
+            // has not reached the transport. No production path installs a
+            // pause.
+            #[cfg(test)]
+            if let Some((tool, id)) = &probe {
+                crate::tools::mcp::test_sync::park_before_outbound_dispatch(
+                    tool,
+                    id,
+                    guard.termination(),
+                )
+                .await;
+            }
+            // The last decision before any remote effect. A termination that
+            // landed after the prologue must still refuse: dropping the
+            // inner send future *without polling it* is what keeps the
+            // request off the network entirely.
+            if guard.terminated() {
+                drop(inner);
+                guard.refuse();
+                #[cfg(test)]
+                if let Some((tool, id)) = &probe {
+                    crate::tools::mcp::test_sync::note_outbound_dispatch(tool, id, true);
+                }
+                return Err(McpTransportError::LocallyTerminated);
+            }
+            #[cfg(test)]
+            if let Some((tool, id)) = &probe {
+                crate::tools::mcp::test_sync::note_outbound_dispatch(tool, id, false);
+            }
             // Dispatch ownership lives exactly as long as this send does,
             // unless the POST takes the baton first.
             let _guard = guard;
-            inner.await.map_err(McpTransportError::Transport)
+            deliver(inner).await
         }
     }
 
@@ -272,9 +377,26 @@ where
     }
 
     async fn close(&mut self) -> Result<(), Self::Error> {
+        // rmcp calls this from its service loop *after* that loop has broken
+        // out of its event select, so no further peer request can reach
+        // `send`. Publishing that fact here is what bounds a settlement
+        // still waiting for an outbound participant that will now never
+        // arrive.
+        self.seam.no_further_dispatch();
         self.inner
             .close()
             .await
             .map_err(McpTransportError::Transport)
+    }
+}
+
+/// The backstop for every path that ends the service loop without reaching
+/// [`Transport::close`] — an aborted serve task, or a runtime shutdown that
+/// simply drops it. The transport is the service loop's own local, so its
+/// drop is the last instant at which a new outbound dispatch could have
+/// existed.
+impl<T> Drop for ObservingTransport<T> {
+    fn drop(&mut self) {
+        self.seam.no_further_dispatch();
     }
 }

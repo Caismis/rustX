@@ -34,28 +34,43 @@
 //! reads:
 //!
 //! ```text
-//!                     admit(id) / begin_dispatch(id)
-//!                                  |
-//!                                  v
-//!                        +---------------------+
-//!                        |  NotYetRegistered   |   nothing local has begun
-//!                        +---------------------+
-//!                                  |  Transport::send takes dispatch
-//!                                  |  ownership, then McpHttpClient's POST
-//!                                  |  takes HTTP ownership
-//!                                  v
-//!                        +---------------------+
-//!                        |        Live         |   >= 1 local owner
-//!                        +---------------------+
-//!                                  |  every local owner dropped
-//!                                  |  (POST future, then SSE body)
-//!                                  v
-//!                        +---------------------+
-//!                        |      Released       |   no local activity remains
-//!                        +---------------------+
-//!                                  |  the invocation's admission guard drops
-//!                                  v
-//!                             (forgotten)
+//!   admit(id)                    begin_dispatch(id)
+//!   the executor, one statement   the outbound seam, inside
+//!   after its effect frontier     `Transport::send`'s synchronous prologue
+//!            \                   /
+//!             v                 v      whichever arrives first creates it
+//!         +-----------------------------+
+//!         |      AwaitingDispatch        |  the request is on rmcp's peer
+//!         +-----------------------------+  outbound queue; nothing local
+//!             |                    |       has begun, and the outbound
+//!             |                    |       participant has not arrived
+//!             |                    |
+//!   Transport::send prologue    the generation's outbound seam ends
+//!   takes ownership             (`no_further_dispatch`): the participant
+//!             |                  can never arrive
+//!             v                    |
+//!         +-----------------+       |
+//!         |  DispatchOwned  |       |   the send future owns the request
+//!         +-----------------+       |   and has not handed it to the
+//!             |         |           |   inner transport, or is awaiting it
+//!             |         |           |
+//!   the POST  |         | the send refuses the request, or resolves,
+//!   registers |         | or is dropped
+//!             v         |           |
+//!         +-------------+           |
+//!         |  HttpOwned  |           |   the POST future, then the SSE
+//!         +-------------+           |   response body it produced
+//!             |                     |
+//!   every HTTP owner dropped        |
+//!             |                     |
+//!             v                     v
+//!         +--------------------------------+
+//!         |            Released            |  no local participant of this
+//!         +--------------------------------+  request can dispatch it or
+//!                        |                    hold HTTP activity again
+//!         the invocation's admission guard drops
+//!                        v
+//!                   (forgotten)
 //! ```
 //!
 //! **Absence never means "not yet registered".** The previous shape inferred
@@ -67,15 +82,24 @@
 //! generation closed. An explicit `Released` state answers that question
 //! instead of guessing it, and creates nothing.
 //!
-//! # The two local owners
+//! # The three local participants, and why the first one is not optional
 //!
-//! A request's local activity has two owners, and "no local activity
-//! remains" means both are gone:
+//! A request's local activity has three participants, and "no local activity
+//! remains" means all three are terminal:
 //!
-//! - **dispatch ownership** is taken synchronously inside `Transport::send`
-//!   ([`crate::tools::mcp::dispatch`]) and held by the future that carries
-//!   the message to rmcp's transport worker. It covers the window in which
-//!   the POST has not started but is still going to;
+//! - **the outbound dispatch participant.** `Peer::send_cancellable_request`
+//!   returning `Ok` only enqueues the request on rmcp's peer channel. rmcp's
+//!   service loop dequeues it later and calls [`Transport::send`], whose
+//!   **synchronous prologue** is where
+//!   [`crate::tools::mcp::dispatch`] takes dispatch ownership. Between those
+//!   two instants the request has no local owner and is nevertheless still
+//!   fully capable of reaching the network, so `AwaitingDispatch` is a real
+//!   ownership state and not a gap. Treating it as "nothing pending" is what
+//!   let a terminated invocation's entry be forgotten and then *recreated*
+//!   by the very send that was supposed to observe the termination;
+//! - **dispatch ownership** is held by the future `Transport::send` returned,
+//!   from before it is first polled until it resolves, is dropped, or hands
+//!   the baton to the POST;
 //! - **HTTP ownership** is taken by [`McpHttpClient`] — the
 //!   [`StreamableHttpClient`] rmcp actually posts through — and held for
 //!   exactly as long as any HTTP activity of that request exists: the POST
@@ -86,20 +110,45 @@
 //! **dropping the inner POST future or the inner response body first, and
 //! releasing its ownership only afterwards**, so awaiting the release latch
 //! is a real ownership proof rather than a restatement of "we stopped
-//! waiting". A request terminated while it is still `NotYetRegistered` never
-//! reaches the network at all: `Transport::send` refuses it before it is
-//! handed to rmcp's transport, and any POST that somehow still starts finds
-//! the token already cancelled.
+//! waiting". A request terminated while it is still `AwaitingDispatch` or
+//! `DispatchOwned` never reaches the network at all: the seam refuses it
+//! before the message is handed to rmcp's transport, and that refusal — not
+//! an assumption about it — is what releases the latch.
+//!
+//! # The terminal ordering contract
+//!
+//! > Terminal Tool settlement happens-after every local participant capable
+//! > of later dispatching that `RequestId` has become terminal.
+//!
+//! The release latch is what makes that a fact rather than a hope. It fires
+//! only when the entry reaches `Released`, and `Released` is reachable only
+//! when the outbound participant has arrived and decided, or has been proven
+//! unable to arrive because the generation's outbound seam is over.
+//!
+//! # One monotone lifecycle per request id
+//!
+//! > Request lifecycle authority is created once per `RequestId` per
+//! > connection generation and may only move toward terminality. It is never
+//! > resurrected.
+//!
+//! An entry is removed only once its phase is `Released` — every participant
+//! terminal — *and* no invocation still holds it, so a late participant can
+//! never find its own entry missing and create a fresh, uncancelled one in
+//! its place. rmcp calls `Transport::send` exactly once per outbound request
+//! id, which is the structural premise the create-on-first-arrival path
+//! rests on; after `no_further_dispatch` the seam creates nothing at all and
+//! refuses unconditionally.
 //!
 //! # Boundedness
 //!
 //! One small entry per tool-invocation request this generation has admitted
 //! and not yet forgotten — that is, `O(in-flight tool calls)`, never
 //! `O(requests ever raced)`. Every entry has a request-local forget point
-//! (its invocation's admission guard), so normal completion cleans up its
-//! own state without waiting for the connection to close; close only clears
-//! whatever is still genuinely in flight. No task is spawned, nothing is
-//! retried, and nothing survives the connection generation.
+//! (its invocation's admission guard together with its outbound
+//! participant's decision), so normal completion cleans up its own state
+//! without waiting for the connection to close; the end of the outbound seam
+//! only clears whatever is still genuinely open. No task is spawned, nothing
+//! is retried, and nothing survives the connection generation.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -150,93 +199,78 @@ impl ReleaseLatch {
 
 /// One tool-invocation request's local lifecycle inside one connection
 /// generation.
-///
-/// The state is derived from the two ownership flags rather than stored
-/// twice: see [`RequestLifecycle::state`].
 struct RequestLifecycle {
     /// Cancels every local activity of this request. It exists from the
     /// entry's creation, so a termination that arrives before any local
     /// activity exists still binds every activity that starts afterwards.
     terminate: CancellationToken,
-    /// Resolves once no rustX-owned local activity of this request remains.
+    /// Resolves once no rustX-owned local participant of this request
+    /// remains — including one that has not reached the outbound seam yet.
     release: Arc<ReleaseLatch>,
-    /// Which local owner, if any, holds this request's physical activity.
-    owner: LocalOwner,
+    /// Which local participant currently owns this request, and whether any
+    /// can still act.
+    phase: RequestPhase,
     /// An MCP invocation still holds this entry. Its admission guard is the
     /// request-local forget point.
     admitted: bool,
     /// The outbound dispatch seam created this entry and the invocation's
     /// admission has not arrived yet. It always does — the executor admits
     /// its request id with no await between the effect frontier and the
-    /// admission — so this is only ever open across one interleaving.
+    /// admission — so this is only ever open across one interleaving, and it
+    /// is what stops a completed exchange from forgetting an entry the
+    /// admission would then have to recreate.
     awaiting_admission: bool,
+    /// Test-only: whether the outbound participant reached the seam and
+    /// **refused** the request, rather than dispatching it.
+    #[cfg(test)]
+    dispatch_refused: bool,
 }
 
-/// Which local object currently owns one request's physical activity.
+/// Where one request's local ownership is, as a single monotone phase.
 ///
-/// Exactly one at a time, because ownership is a **baton**: the outbound
-/// dispatch hands it to the POST the moment the POST registers. Holding both
-/// would make a cancellation's local settlement wait for rmcp to resolve an
-/// outbound send, which is precisely the dependency the Streamable HTTP
-/// contract removes.
+/// Ownership is a **baton, never two parallel owners**: the outbound
+/// participant hands it to the POST the moment the POST registers. Holding
+/// both would make a cancellation's local settlement wait for rmcp to
+/// resolve an outbound send, which is precisely the dependency the
+/// Streamable HTTP contract removes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LocalOwner {
-    /// No local activity of this request has begun.
-    None,
-    /// The outbound dispatch future (`Transport::send`) owns it: the request
-    /// has left the peer's outbound queue and its POST has not started.
-    Dispatch,
+enum RequestPhase {
+    /// The request is on rmcp's peer outbound queue. Nothing local has
+    /// begun, and the outbound participant has not reached the seam — but it
+    /// exists, and it is still capable of dispatching this request.
+    AwaitingDispatch,
+    /// `Transport::send`'s synchronous prologue took dispatch ownership. The
+    /// send future holds it until it refuses the request, resolves, is
+    /// dropped, or hands the baton to the POST.
+    DispatchOwned,
     /// An HTTP request guard owns it: the POST future while it awaits
     /// response headers, and then the SSE response body it produced.
-    Http,
-    /// Every local owner has been and gone.
-    Released,
-}
-
-/// The explicit state of one request's local lifecycle.
-///
-/// It is what a cancellation reads. Deriving it from [`LocalOwner`] keeps one
-/// source of truth: there is no way to be `Released` and still own the
-/// response body, and no way to be `NotYetRegistered` after any local owner
-/// has existed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RequestState {
-    /// Admitted; no local activity of this request has begun.
-    NotYetRegistered,
-    /// A local owner exists: the outbound dispatch, the POST future, or the
-    /// response body stream.
-    Live,
-    /// Every local owner has been dropped. No local activity remains and,
-    /// because the entry still exists, this is *known* rather than inferred
-    /// from an absent record.
+    HttpOwned,
+    /// Terminal. Every local participant of this request has been and gone:
+    /// the outbound participant refused it, dispatched and released it, or
+    /// was proven unable to arrive, and no HTTP owner remains. No local
+    /// participant can dispatch this request or hold HTTP activity for it
+    /// ever again.
     Released,
 }
 
 impl RequestLifecycle {
-    fn new(terminate: CancellationToken) -> Self {
+    fn new(phase: RequestPhase) -> Self {
         Self {
-            terminate,
+            terminate: CancellationToken::new(),
             release: Arc::new(ReleaseLatch::default()),
-            owner: LocalOwner::None,
+            phase,
             admitted: false,
             awaiting_admission: false,
+            #[cfg(test)]
+            dispatch_refused: false,
         }
     }
 
-    const fn state(&self) -> RequestState {
-        match self.owner {
-            LocalOwner::None => RequestState::NotYetRegistered,
-            LocalOwner::Dispatch | LocalOwner::Http => RequestState::Live,
-            LocalOwner::Released => RequestState::Released,
-        }
-    }
-
-    /// Whether this entry has reached its own terminal forget point: no
-    /// local owner remains and no invocation still holds it.
+    /// Whether this entry has reached its own terminal forget point: every
+    /// local participant is terminal and no invocation still holds it.
     const fn forgettable(&self) -> bool {
-        !matches!(self.owner, LocalOwner::Dispatch | LocalOwner::Http)
-            && !self.admitted
-            && !self.awaiting_admission
+        matches!(self.phase, RequestPhase::Released) && !self.admitted && !self.awaiting_admission
     }
 }
 
@@ -245,6 +279,11 @@ struct OwnershipState {
     /// One entry per tool-invocation request of this generation that has
     /// been admitted and not yet forgotten.
     requests: HashMap<RequestId, RequestLifecycle>,
+    /// rmcp's service loop for this generation has ended, so no further
+    /// `Transport::send` can be called for a peer request. From that point
+    /// an `AwaitingDispatch` participant is proven unable to arrive, and the
+    /// seam creates no lifecycle authority at all.
+    dispatch_closed: bool,
 }
 
 /// The rustX-owned local request ownership of one Streamable HTTP
@@ -257,28 +296,30 @@ pub(crate) struct McpHttpRequestOwnership {
 /// What terminating one request's local ownership found, and the proof that
 /// it is settled.
 ///
-/// The four cases carry genuinely different settlement evidence, so they are
-/// not collapsed: `settled()` is the executor's local settlement bound, and
-/// it depends on rustX-owned state only — no remote response, no protocol
-/// acknowledgement, and no timer participates in it.
+/// The three cases carry genuinely different settlement evidence, so they
+/// are not collapsed: `settled()` is the executor's local settlement bound,
+/// and it depends on rustX-owned state only — no remote response, no
+/// protocol acknowledgement, and no timer participates in it.
 pub(crate) enum LocalRequestTermination {
     /// This transport owns no per-request local state at all. Over stdio an
     /// outbound write owns no resource that outlives it, so there is no
     /// local half of the request to terminate or to prove released.
     NoLocalOwnership,
-    /// No local activity of this request had begun, and none can begin: the
-    /// request's token is cancelled, so the outbound dispatch seam refuses
-    /// to hand it to rmcp's transport and any POST that still starts is
-    /// pre-terminated before it can reach the network.
-    PreDispatchTerminated,
-    /// Every local owner of this request had already been dropped before the
-    /// termination. The local half finished on its own; nothing was
-    /// terminated and nothing is pending. **No record is created**: this
-    /// request can never register again.
+    /// Every local participant of this request was already terminal before
+    /// the termination: the outbound seam had decided and no HTTP owner
+    /// remained. Nothing was terminated and nothing is pending. **No record
+    /// is created**: this request can never dispatch or register again.
     AlreadyReleased,
-    /// A local owner existed and was terminated. The latch resolves once
-    /// that owner — the outbound dispatch future, the POST future, or the
-    /// response body it produced — has actually been dropped.
+    /// A local participant existed and was terminated. The latch resolves
+    /// once every one of them is terminal — the outbound participant that
+    /// has not reached the seam yet, the send future, the POST future, or
+    /// the response body it produced.
+    ///
+    /// This deliberately covers the pre-dispatch case. A request still on
+    /// rmcp's peer outbound queue has a participant that *will* run and is
+    /// *capable of dispatching*, so cancelling its token is intent, not
+    /// evidence; the evidence is that participant reaching the seam and
+    /// refusing, or the generation's outbound seam ending first.
     TerminatedPendingRelease(Arc<ReleaseLatch>),
 }
 
@@ -291,27 +332,24 @@ impl LocalRequestTermination {
     /// qualify: nothing was terminated there, so a transport failure is
     /// still the transport's own fact.
     pub(crate) const fn terminated_local_request(&self) -> bool {
-        matches!(
-            self,
-            Self::PreDispatchTerminated | Self::TerminatedPendingRelease(_)
-        )
+        matches!(self, Self::TerminatedPendingRelease(_))
     }
 
     /// Whether [`Self::settled`] is a real event rather than an
     /// already-settled fact.
     ///
-    /// Only a termination that is waiting for a local owner to be dropped
-    /// can settle *later* than the caller, so only that case may be raced
-    /// against the best-effort remote cancellation send.
+    /// Only a termination that is waiting for a local participant to reach
+    /// its terminal state can settle *later* than the caller, so only that
+    /// case may be raced against the best-effort remote cancellation send.
     pub(crate) const fn awaits_release(&self) -> bool {
         matches!(self, Self::TerminatedPendingRelease(_))
     }
 
-    /// Awaits the proof that no rustX-owned local activity of this request
-    /// remains.
+    /// Awaits the proof that no rustX-owned local participant of this
+    /// request remains, and that none can act again.
     pub(crate) async fn settled(&self) {
         match self {
-            Self::NoLocalOwnership | Self::PreDispatchTerminated | Self::AlreadyReleased => (),
+            Self::NoLocalOwnership | Self::AlreadyReleased => (),
             Self::TerminatedPendingRelease(latch) => latch.released().await,
         }
     }
@@ -324,7 +362,10 @@ impl LocalRequestTermination {
 /// invocation ends, whatever its outcome. That drop is the request-local
 /// forget point: it is why normal completion cleans up its own state instead
 /// of leaving one entry per historical request behind until the connection
-/// generation closes.
+/// generation closes. It is deliberately *not* sufficient on its own: an
+/// entry whose outbound participant has not decided yet outlives the
+/// admission, because forgetting it is exactly what would let that
+/// participant recreate uncancelled authority.
 pub(crate) struct McpRequestAdmission {
     ownership: Arc<McpHttpRequestOwnership>,
     id: RequestId,
@@ -334,7 +375,9 @@ impl McpRequestAdmission {
     /// Terminates the local ownership of this admitted request.
     ///
     /// Synchronous and unconditional: from the moment it returns, this
-    /// request cannot reach the network even if no POST has started yet.
+    /// request cannot reach the network — the outbound seam refuses every
+    /// participant of a cancelled entry, and any POST that somehow still
+    /// starts finds the token already cancelled.
     pub(crate) fn terminate(&self) -> LocalRequestTermination {
         self.ownership.terminate(&self.id)
     }
@@ -346,24 +389,61 @@ impl Drop for McpRequestAdmission {
     }
 }
 
-/// The outbound dispatch's hold on one request's lifecycle entry.
+/// The outbound dispatch participant's hold on one request's lifecycle
+/// entry.
 ///
-/// Held by the future that carries the message to rmcp's transport worker,
-/// so the window in which a POST has not started but is still going to is
-/// owned rather than guessed.
+/// Taken in `Transport::send`'s **synchronous prologue**, so the decision is
+/// frozen before the returned send future exists — let alone is polled. The
+/// future then carries this guard, and the window in which a POST has not
+/// started but is still going to is owned rather than guessed.
 pub(crate) struct DispatchOwnership {
     /// `None` over a transport with no per-request lifecycle — stdio, where
     /// an outbound write owns no resource that outlives it.
     ownership: Option<Arc<McpHttpRequestOwnership>>,
     id: Option<RequestId>,
+    /// This request's own termination token, captured when ownership was
+    /// taken. Reading it needs no lock and is what the send future consults
+    /// immediately before it would hand the message to the inner transport.
+    terminate: CancellationToken,
 }
 
 impl DispatchOwnership {
     /// The ownership of a transport that has no per-request lifecycle.
-    pub(crate) const fn none() -> Self {
+    pub(crate) fn none() -> Self {
         Self {
             ownership: None,
             id: None,
+            terminate: CancellationToken::new(),
+        }
+    }
+
+    /// Whether the tool invocation this dispatch belongs to has already been
+    /// terminated.
+    ///
+    /// Checked once more after the prologue, immediately before the message
+    /// could be handed to the inner transport: a termination that landed in
+    /// between must still refuse rather than dispatch.
+    pub(crate) fn terminated(&self) -> bool {
+        self.terminate.is_cancelled()
+    }
+
+    /// This request's own termination token, so a test seam can await the
+    /// *applied* termination rather than assume one.
+    #[cfg(test)]
+    pub(crate) const fn termination(&self) -> &CancellationToken {
+        &self.terminate
+    }
+
+    /// Consumes this ownership as an explicit refusal: the participant
+    /// reached the seam, observed the termination, and will never dispatch.
+    ///
+    /// This is the fact a pre-dispatch settlement waits for, so it releases
+    /// the request's latch exactly as a dropped dispatch does — but it is
+    /// recorded distinctly, because "refused" and "dispatched, then
+    /// released" are different histories.
+    pub(crate) fn refuse(mut self) {
+        if let (Some(ownership), Some(id)) = (self.ownership.take(), self.id.take()) {
+            ownership.end_dispatch(&id, true);
         }
     }
 }
@@ -371,7 +451,7 @@ impl DispatchOwnership {
 impl Drop for DispatchOwnership {
     fn drop(&mut self) {
         if let (Some(ownership), Some(id)) = (&self.ownership, &self.id) {
-            ownership.release_dispatch(id);
+            ownership.end_dispatch(id, false);
         }
     }
 }
@@ -379,10 +459,13 @@ impl Drop for DispatchOwnership {
 /// What the outbound dispatch seam may do with one request.
 pub(crate) enum OutboundDispatch {
     /// The request may go to the transport; the guard owns it until the
-    /// outbound send future resolves or is dropped.
+    /// outbound send future resolves, refuses, or is dropped.
     Owned(DispatchOwnership),
-    /// The request was terminated before it was dispatched, so it must never
-    /// be handed to the transport at all.
+    /// The request must never be handed to the transport at all: it was
+    /// terminated before this participant reached the seam, this generation
+    /// no longer dispatches anything, or the request id already has a live
+    /// owner. The refusal is recorded on the entry, so a settlement waiting
+    /// for this participant is released by it.
     Refused,
 }
 
@@ -397,12 +480,21 @@ impl McpHttpRequestOwnership {
     pub(crate) fn admit(self: &Arc<Self>, id: &RequestId) -> McpRequestAdmission {
         {
             let mut state = self.state.lock().expect("MCP HTTP ownership lock poisoned");
+            // A generation whose outbound seam is over can never dispatch,
+            // so an entry created now is born with every participant already
+            // terminal rather than waiting for one that cannot arrive.
+            let phase = if state.dispatch_closed {
+                RequestPhase::Released
+            } else {
+                RequestPhase::AwaitingDispatch
+            };
             let entry = state
                 .requests
                 .entry(id.clone())
-                .or_insert_with(|| RequestLifecycle::new(CancellationToken::new()));
+                .or_insert_with(|| RequestLifecycle::new(phase));
             entry.admitted = true;
             entry.awaiting_admission = false;
+            Self::settle_entry(&mut state, id);
         }
         McpRequestAdmission {
             ownership: Arc::clone(self),
@@ -411,50 +503,99 @@ impl McpHttpRequestOwnership {
     }
 
     /// Takes dispatch ownership of one outbound tool-invocation request, or
-    /// refuses it because it has already been terminated.
+    /// refuses it.
     ///
-    /// Called synchronously inside `Transport::send`, before the message can
-    /// be handed to rmcp's transport. Refusing here is what makes
-    /// [`LocalRequestTermination::PreDispatchTerminated`] honest: the
-    /// request never reaches the network, and no local activity of it will
-    /// ever be created.
+    /// Called **synchronously inside `Transport::send`**, before the inner
+    /// send future is even constructed. That is the linearization point of
+    /// the whole lifecycle: from the instant this returns, whether this
+    /// request may reach the network is decided, and a termination that
+    /// arrives afterwards is answered by the guard rather than by a state
+    /// this participant might never read.
     ///
-    /// The ownership this takes covers exactly one window — the request has
-    /// left the peer's outbound queue and its POST has not registered yet —
-    /// and is handed to the HTTP guard the moment it does.
+    /// Refusing here is what makes a pre-dispatch settlement honest: the
+    /// request never reaches the network, the refusal is recorded on the one
+    /// lifecycle entry, and the settlement waiting for this participant is
+    /// released by it.
     pub(crate) fn begin_dispatch(self: &Arc<Self>, id: &RequestId) -> OutboundDispatch {
         let mut state = self.state.lock().expect("MCP HTTP ownership lock poisoned");
+        if state.dispatch_closed {
+            // The generation's outbound seam is over. Nothing it produces
+            // may create lifecycle authority for a request again, which is
+            // the one path by which a forgotten entry could be resurrected.
+            return OutboundDispatch::Refused;
+        }
         let entry = state.requests.entry(id.clone()).or_insert_with(|| {
-            let mut fresh = RequestLifecycle::new(CancellationToken::new());
+            let mut fresh = RequestLifecycle::new(RequestPhase::AwaitingDispatch);
             fresh.awaiting_admission = true;
             fresh
         });
-        if entry.terminate.is_cancelled() {
-            return OutboundDispatch::Refused;
-        }
-        if !matches!(entry.owner, LocalOwner::None) {
+        let refused = if entry.terminate.is_cancelled() {
+            // The invocation already terminated. Consuming the participant
+            // here is the evidence its settlement is waiting for.
+            if matches!(entry.phase, RequestPhase::AwaitingDispatch) {
+                entry.phase = RequestPhase::Released;
+                #[cfg(test)]
+                {
+                    entry.dispatch_refused = true;
+                }
+            }
+            true
+        } else if matches!(entry.phase, RequestPhase::AwaitingDispatch) {
+            entry.phase = RequestPhase::DispatchOwned;
+            false
+        } else {
             // Fail closed. One request id is dispatched exactly once per
             // connection generation, so a second outbound send for the same
             // id is either a duplicate or a replay; neither may silently
-            // overwrite the ownership state of the request already using it.
+            // overwrite the ownership state the request already using it
+            // holds, and neither may release it.
+            true
+        };
+        if refused {
+            Self::settle_entry(&mut state, id);
             return OutboundDispatch::Refused;
         }
-        entry.owner = LocalOwner::Dispatch;
+        let terminate = state
+            .requests
+            .get(id)
+            .expect("the entry this call just owned")
+            .terminate
+            .clone();
         drop(state);
         OutboundDispatch::Owned(DispatchOwnership {
             ownership: Some(Arc::clone(self)),
             id: Some(id.clone()),
+            terminate,
         })
     }
 
     /// Registers one request's in-flight HTTP activity and returns the guard
     /// that owns it.
     ///
+    /// # The baton is a precondition, not a formality
+    ///
+    /// A tracked `tools/call` POST exists only because the send future this
+    /// seam gave dispatch ownership to handed the message to rmcp's worker,
+    /// and that future holds its ownership until the worker answers. A
+    /// tracked registration therefore **requires `DispatchOwned`**, and
+    /// every other phase is refused with a pre-cancelled, untracked guard:
+    ///
+    /// - `Released` — the request is terminal. Re-entering HTTP ownership
+    ///   from there would resurrect a request whose release proof has
+    ///   already been published and whose settlement may already have been
+    ///   reported;
+    /// - `HttpOwned` — a live HTTP ownership already exists and is not
+    ///   overwritten;
+    /// - `AwaitingDispatch` — no participant has taken the baton, so no POST
+    ///   of this request can exist yet.
+    ///
+    /// A request with no lifecycle entry — every request rustX sends that is
+    /// not a tool invocation — owns no state a settlement could terminate
+    /// and is registered as untracked.
+    ///
     /// The guard's token is already cancelled when the request was
-    /// terminated before its POST started, so the POST is pre-terminated
-    /// instead of reaching the network. A request with no lifecycle entry —
-    /// every request rustX sends that is not a tool invocation — owns no
-    /// state a settlement could terminate and is registered as untracked.
+    /// terminated after its dispatch was owned, so the POST is
+    /// pre-terminated instead of reaching the network.
     fn register(self: &Arc<Self>, id: RequestId) -> RequestOwnershipGuard {
         let mut state = self.state.lock().expect("MCP HTTP ownership lock poisoned");
         let Some(entry) = state.requests.get_mut(&id) else {
@@ -466,11 +607,10 @@ impl McpHttpRequestOwnership {
                 terminate: CancellationToken::new(),
             };
         };
-        if matches!(entry.owner, LocalOwner::Http) {
-            // Fail closed: a live HTTP ownership for this id already exists
-            // and is not overwritten. The duplicate registration is given a
-            // pre-cancelled, untracked guard, so it cannot reach the network
-            // and cannot release someone else's ownership.
+        if !matches!(entry.phase, RequestPhase::DispatchOwned) {
+            // Fail closed: the registration is given a pre-cancelled,
+            // untracked guard, so it cannot reach the network and cannot
+            // release ownership that is not its own.
             let refused = CancellationToken::new();
             refused.cancel();
             return RequestOwnershipGuard {
@@ -481,7 +621,7 @@ impl McpHttpRequestOwnership {
         }
         // The baton passes here: the POST future and the response body are
         // the request's real local activity from now on.
-        entry.owner = LocalOwner::Http;
+        entry.phase = RequestPhase::HttpOwned;
         let terminate = entry.terminate.clone();
         drop(state);
         RequestOwnershipGuard {
@@ -492,7 +632,7 @@ impl McpHttpRequestOwnership {
     }
 
     /// Terminates the local ownership of one request, reading its explicit
-    /// state rather than inferring one from an absent record.
+    /// phase rather than inferring one from an absent record.
     fn terminate(&self, id: &RequestId) -> LocalRequestTermination {
         let mut state = self.state.lock().expect("MCP HTTP ownership lock poisoned");
         let Some(entry) = state.requests.get_mut(id) else {
@@ -504,10 +644,11 @@ impl McpHttpRequestOwnership {
             return LocalRequestTermination::NoLocalOwnership;
         };
         entry.terminate.cancel();
-        match entry.state() {
-            RequestState::NotYetRegistered => LocalRequestTermination::PreDispatchTerminated,
-            RequestState::Released => LocalRequestTermination::AlreadyReleased,
-            RequestState::Live => {
+        match entry.phase {
+            RequestPhase::Released => LocalRequestTermination::AlreadyReleased,
+            RequestPhase::AwaitingDispatch
+            | RequestPhase::DispatchOwned
+            | RequestPhase::HttpOwned => {
                 LocalRequestTermination::TerminatedPendingRelease(Arc::clone(&entry.release))
             }
         }
@@ -515,16 +656,42 @@ impl McpHttpRequestOwnership {
 
     /// Terminates every request this generation still owns locally.
     ///
-    /// Connection close calls this before it awaits rmcp's transport
-    /// shutdown, so drain owns the per-request control primitives introduced
-    /// here rather than inheriting them.
+    /// Connection close calls this before it awaits rmcp's service shutdown,
+    /// so drain owns the per-request control primitives introduced here
+    /// rather than inheriting them. It decides nothing: an outbound
+    /// participant that has not reached the seam yet is still capable of
+    /// dispatching at this instant, and only [`Self::no_further_dispatch`]
+    /// may claim otherwise.
     pub(crate) fn terminate_all(&self) {
         let mut state = self.state.lock().expect("MCP HTTP ownership lock poisoned");
         for entry in state.requests.values_mut() {
             entry.terminate.cancel();
-            // After close no POST of this generation can start, so an entry
-            // that only existed to bind a dispatch that will never happen
-            // has nothing left to protect.
+        }
+    }
+
+    /// Declares that this generation's outbound seam is over: no further
+    /// `Transport::send` can be called for a peer request.
+    ///
+    /// rmcp calls `Transport::close` from its service loop **after** that
+    /// loop has broken out of its event select, and dropping the transport
+    /// is the backstop for every path that never reaches close, so this is
+    /// the exact instant an `AwaitingDispatch` participant becomes provably
+    /// unable to arrive. Publishing that fact is what keeps a pre-dispatch
+    /// settlement bounded when the connection dies underneath it, and it is
+    /// the only place allowed to reach `Released` without a participant's
+    /// own decision.
+    pub(crate) fn no_further_dispatch(&self) {
+        let mut state = self.state.lock().expect("MCP HTTP ownership lock poisoned");
+        state.dispatch_closed = true;
+        for entry in state.requests.values_mut() {
+            entry.terminate.cancel();
+            if matches!(entry.phase, RequestPhase::AwaitingDispatch) {
+                entry.phase = RequestPhase::Released;
+                entry.release.release();
+            }
+            // No dispatch of this generation can arrive, so an entry kept
+            // open only to bind an admission that never came has nothing
+            // left to protect.
             entry.awaiting_admission = false;
         }
         state.requests.retain(|_, entry| !entry.forgettable());
@@ -537,25 +704,35 @@ impl McpHttpRequestOwnership {
         let Some(entry) = state.requests.get_mut(id) else {
             return;
         };
-        if matches!(entry.owner, LocalOwner::Http) {
-            entry.owner = LocalOwner::Released;
+        if matches!(entry.phase, RequestPhase::HttpOwned) {
+            entry.phase = RequestPhase::Released;
         }
         Self::settle_entry(&mut state, id);
     }
 
-    /// Releases one request's dispatch ownership.
+    /// Ends one request's outbound dispatch participation.
+    ///
+    /// `refused` records *why*: the participant observed the termination and
+    /// never handed the message on, rather than having dispatched it and
+    /// then released. Either way the participant is terminal, which is what
+    /// the release proof is about.
     ///
     /// A no-op once the POST has taken the baton: from that point the HTTP
     /// guard is what owns the request, and the outbound send resolving says
     /// nothing about it.
-    fn release_dispatch(&self, id: &RequestId) {
+    fn end_dispatch(&self, id: &RequestId, refused: bool) {
         let mut state = self.state.lock().expect("MCP HTTP ownership lock poisoned");
         let Some(entry) = state.requests.get_mut(id) else {
             return;
         };
-        if matches!(entry.owner, LocalOwner::Dispatch) {
-            entry.owner = LocalOwner::Released;
+        if matches!(entry.phase, RequestPhase::DispatchOwned) {
+            entry.phase = RequestPhase::Released;
+            #[cfg(test)]
+            {
+                entry.dispatch_refused = refused;
+            }
         }
+        let _ = refused;
         Self::settle_entry(&mut state, id);
     }
 
@@ -570,8 +747,8 @@ impl McpHttpRequestOwnership {
         Self::settle_entry(&mut state, id);
     }
 
-    /// Fires the release proof once no local owner remains, and forgets the
-    /// entry once nothing holds it at all.
+    /// Fires the release proof once every local participant is terminal, and
+    /// forgets the entry once nothing holds it at all.
     ///
     /// The latch is released *after* the caller has already dropped the
     /// object that owned the request — the POST future, the response body,
@@ -581,7 +758,7 @@ impl McpHttpRequestOwnership {
         let Some(entry) = state.requests.get_mut(id) else {
             return;
         };
-        if matches!(entry.owner, LocalOwner::Released) {
+        if matches!(entry.phase, RequestPhase::Released) {
             entry.release.release();
         }
         if entry.forgettable() {
@@ -602,15 +779,27 @@ impl McpHttpRequestOwnership {
             .len()
     }
 
-    /// The explicit lifecycle state of one request, when it is still known.
+    /// The explicit lifecycle phase of one request, when it is still known.
     #[cfg(test)]
-    fn state_of(&self, id: &RequestId) -> Option<RequestState> {
+    fn phase_of(&self, id: &RequestId) -> Option<RequestPhase> {
         self.state
             .lock()
             .expect("MCP HTTP ownership lock poisoned")
             .requests
             .get(id)
-            .map(RequestLifecycle::state)
+            .map(|entry| entry.phase)
+    }
+
+    /// Whether one request's outbound participant reached the seam and
+    /// refused, when the entry is still known.
+    #[cfg(test)]
+    fn dispatch_refused(&self, id: &RequestId) -> Option<bool> {
+        self.state
+            .lock()
+            .expect("MCP HTTP ownership lock poisoned")
+            .requests
+            .get(id)
+            .map(|entry| entry.dispatch_refused)
     }
 }
 
@@ -901,16 +1090,17 @@ impl StreamableHttpClient for McpHttpClient {
 /// (Issue #205).
 ///
 /// These pin the state machine itself, with no transport, no server, and no
-/// timer: every transition is driven explicitly, so "the POST has not
-/// registered yet" and "the POST already finished" are two different proven
-/// states rather than two readings of the same missing record.
+/// timer: every transition is driven explicitly, so "the outbound
+/// participant has not arrived yet", "the POST has not registered yet" and
+/// "the POST already finished" are three different proven states rather than
+/// three readings of the same missing record.
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use rmcp::model::RequestId;
 
-    use super::{LocalRequestTermination, McpHttpRequestOwnership, OutboundDispatch, RequestState};
+    use super::{LocalRequestTermination, McpHttpRequestOwnership, OutboundDispatch, RequestPhase};
 
     fn id(value: i64) -> RequestId {
         RequestId::Number(value)
@@ -924,25 +1114,38 @@ mod tests {
         }
     }
 
+    /// Whether a future is still pending after every already-runnable task
+    /// of this single-threaded test has had a chance to run.
+    ///
+    /// This is a scheduling fact, not a timing one: `yield_now` hands the
+    /// runtime every task that is ready, so a proof that stays pending
+    /// across it is pending because nothing has released it.
+    async fn still_pending(future: impl std::future::Future<Output = ()>) -> bool {
+        tokio::pin!(future);
+        for _ in 0..64 {
+            if futures_util::poll!(future.as_mut()).is_ready() {
+                return false;
+            }
+            tokio::task::yield_now().await;
+        }
+        true
+    }
+
     /// The release proof is a proof: it must not resolve while any local
-    /// owner of the request — the outbound dispatch future, the POST future,
-    /// or the response body that future produced — is still alive.
+    /// participant of the request — the outbound participant that has not
+    /// reached the seam, the send future, the POST future, or the response
+    /// body that future produced — can still act.
     #[tokio::test]
     async fn the_release_proof_resolves_only_after_every_local_owner_is_dropped() {
         let ownership = Arc::new(McpHttpRequestOwnership::default());
         let admission = ownership.admit(&id(1));
         let dispatching = dispatch(&ownership, 1);
-        // While only the outbound dispatch owns the request, that is the
-        // owner a termination has to wait for.
+        // While only the outbound send owns the request, that is the owner a
+        // termination has to wait for.
         let pre_registration = admission.terminate();
         assert!(pre_registration.awaits_release());
         assert!(
-            tokio::time::timeout(
-                std::time::Duration::from_millis(50),
-                pre_registration.settled()
-            )
-            .await
-            .is_err(),
+            still_pending(pre_registration.settled()).await,
             "the proof does not resolve while the outbound dispatch owns the request"
         );
         let guard = ownership.register(id(1));
@@ -950,63 +1153,70 @@ mod tests {
             guard.terminate.is_cancelled(),
             "the POST inherits the termination and is pre-terminated"
         );
-        // The baton passed to the POST, so the outbound dispatch future
+        // The baton passed to the POST, so the outbound send future
         // resolving is no longer what settlement waits for.
         drop(dispatching);
         assert!(
-            tokio::time::timeout(
-                std::time::Duration::from_millis(50),
-                pre_registration.settled()
-            )
-            .await
-            .is_err(),
+            still_pending(pre_registration.settled()).await,
             "the proof does not resolve while the POST owns the request"
         );
         drop(guard);
         tokio::time::timeout(
-            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(30),
             pre_registration.settled(),
         )
         .await
-        .expect("dropping the owning guard releases the proof");
+        .expect("anti-hang guard: dropping the owning guard releases the proof");
         drop(admission);
         assert_eq!(ownership.outstanding_requests(), 0);
     }
 
-    /// **Cancellation before POST registration.** The request is admitted,
-    /// registration has not happened, and the cancellation wins.
+    /// **Cancellation before the outbound seam consumed the request.** The
+    /// request is admitted, rmcp has not called `Transport::send` for it yet,
+    /// and the cancellation wins.
     ///
-    /// The settlement is honest without waiting for anything, because
-    /// nothing local exists *and nothing local can come to exist*: the
-    /// outbound dispatch seam refuses the request, so it is never handed to
-    /// the transport and never reaches the network. The entry is forgotten
-    /// at the invocation's own forget point.
+    /// The settlement is *not* immediate, and that is the whole finding: an
+    /// outbound participant exists on rmcp's peer queue and is still capable
+    /// of dispatching. Settlement completes exactly when that participant
+    /// arrives and refuses — never merely because a token was set.
     #[tokio::test]
-    async fn cancellation_before_registration_refuses_the_dispatch_that_follows() {
+    async fn cancellation_before_dispatch_settles_only_when_the_seam_refuses() {
         let ownership = Arc::new(McpHttpRequestOwnership::default());
         let admission = ownership.admit(&id(7));
         assert_eq!(
-            ownership.state_of(&id(7)),
-            Some(RequestState::NotYetRegistered)
+            ownership.phase_of(&id(7)),
+            Some(RequestPhase::AwaitingDispatch),
+            "the outbound participant exists and has not reached the seam"
         );
         let termination = admission.terminate();
-        assert!(
-            matches!(termination, LocalRequestTermination::PreDispatchTerminated),
-            "nothing local had begun and nothing local can begin"
-        );
         assert!(termination.terminated_local_request());
-        assert!(!termination.awaits_release(), "there is nothing to await");
-        termination.settled().await;
-        // The outbound send is only reached now — and is refused, so the
+        assert!(
+            termination.awaits_release(),
+            "an outbound participant that can still dispatch is a pending local owner"
+        );
+        assert!(
+            still_pending(termination.settled()).await,
+            "settlement cannot complete while an outbound participant may still dispatch"
+        );
+        // The outbound seam is only reached now — and refuses, so the
         // request never leaves rustX.
         assert!(
             matches!(ownership.begin_dispatch(&id(7)), OutboundDispatch::Refused),
             "a terminated request is never handed to the transport"
         );
-        // Any POST that somehow still started would be pre-terminated.
+        assert_eq!(
+            ownership.dispatch_refused(&id(7)),
+            Some(true),
+            "the refusal is recorded on the one lifecycle entry"
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(30), termination.settled())
+            .await
+            .expect("anti-hang guard: the refusal releases the settlement");
+        // Any POST that somehow still started owns no baton and can never
+        // reach the network.
         assert!(
             ownership.register(id(7)).terminate.is_cancelled(),
-            "the POST is pre-terminated and never reaches the network"
+            "a request with no dispatch ownership never registers an HTTP owner"
         );
         drop(admission);
         assert_eq!(
@@ -1014,6 +1224,83 @@ mod tests {
             0,
             "the invocation's own forget point clears the entry"
         );
+    }
+
+    /// **The connection dies before the outbound participant arrives.** The
+    /// participant can never reach the seam, so the generation says so
+    /// explicitly rather than leaving the settlement waiting forever.
+    #[tokio::test]
+    async fn an_outbound_participant_that_can_never_arrive_settles_the_termination() {
+        let ownership = Arc::new(McpHttpRequestOwnership::default());
+        let admission = ownership.admit(&id(21));
+        let termination = admission.terminate();
+        assert!(
+            still_pending(termination.settled()).await,
+            "the participant has not arrived and has not been proven unable to"
+        );
+        // rmcp's service loop ended: `Transport::close` (or the transport's
+        // own drop) publishes that no further send can be called.
+        ownership.no_further_dispatch();
+        tokio::time::timeout(std::time::Duration::from_secs(30), termination.settled())
+            .await
+            .expect("anti-hang guard: a participant proven unable to arrive settles it");
+        assert!(
+            matches!(ownership.begin_dispatch(&id(21)), OutboundDispatch::Refused),
+            "the closed seam refuses unconditionally"
+        );
+        drop(admission);
+        assert_eq!(ownership.outstanding_requests(), 0);
+    }
+
+    /// **A stale outbound continuation can never recreate lifecycle
+    /// authority.** This is the review finding, pinned at the state machine
+    /// with no transport and no timer.
+    ///
+    /// The old shape settled a pre-dispatch cancellation immediately, let
+    /// the admission drop forget the entry, and then let the outbound
+    /// participant's `entry(id).or_insert_with(..)` mint a **fresh,
+    /// uncancelled** entry — dispatching a `tools/call` after its canonical
+    /// terminal result already existed.
+    #[tokio::test]
+    async fn a_stale_outbound_continuation_never_resurrects_a_terminal_request() {
+        let ownership = Arc::new(McpHttpRequestOwnership::default());
+        let admission = ownership.admit(&id(31));
+        let termination = admission.terminate();
+        // The invocation is done with its entry: it settles, reports, and
+        // drops its admission. Under the old shape this was the point at
+        // which the entry disappeared.
+        drop(admission);
+        assert_eq!(
+            ownership.phase_of(&id(31)),
+            Some(RequestPhase::AwaitingDispatch),
+            "the entry outlives the admission precisely because a participant may still act"
+        );
+        // The stale participant finally runs.
+        assert!(
+            matches!(ownership.begin_dispatch(&id(31)), OutboundDispatch::Refused),
+            "the participant attaches to the lifecycle entry it belongs to and fails closed"
+        );
+        assert_eq!(
+            ownership.phase_of(&id(31)),
+            None,
+            "the refusal is the entry's last transition, so it is forgotten by it"
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(30), termination.settled())
+            .await
+            .expect("anti-hang guard: the refusal releases the settlement");
+        assert_eq!(
+            ownership.outstanding_requests(),
+            0,
+            "the registry reaches zero once every participant is terminal"
+        );
+        // And a participant arriving after the entry is gone creates nothing
+        // executable: one request id gets one monotone lifecycle.
+        ownership.no_further_dispatch();
+        assert!(
+            matches!(ownership.begin_dispatch(&id(31)), OutboundDispatch::Refused),
+            "a terminal request id never transitions back to executable"
+        );
+        assert_eq!(ownership.outstanding_requests(), 0);
     }
 
     /// **Cancellation while live.** A POST owns the request; cancellation
@@ -1025,7 +1312,7 @@ mod tests {
         let admission = ownership.admit(&id(2));
         let dispatching = dispatch(&ownership, 2);
         let guard = ownership.register(id(2));
-        assert_eq!(ownership.state_of(&id(2)), Some(RequestState::Live));
+        assert_eq!(ownership.phase_of(&id(2)), Some(RequestPhase::HttpOwned));
         let termination = admission.terminate();
         assert!(
             termination.awaits_release(),
@@ -1035,29 +1322,28 @@ mod tests {
         // proof: settlement must never depend on rmcp servicing a send.
         drop(dispatching);
         assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(50), termination.settled())
-                .await
-                .is_err(),
+            still_pending(termination.settled()).await,
             "the POST still owns this request"
         );
         drop(guard);
-        tokio::time::timeout(std::time::Duration::from_secs(5), termination.settled())
+        tokio::time::timeout(std::time::Duration::from_secs(30), termination.settled())
             .await
-            .expect("the release proof resolves");
-        assert_eq!(ownership.state_of(&id(2)), Some(RequestState::Released));
+            .expect("anti-hang guard: the release proof resolves");
+        assert_eq!(ownership.phase_of(&id(2)), Some(RequestPhase::Released));
     }
 
     /// **The response released before `handle.rx` delivery.** This is the
     /// race the previous shape could not see.
     ///
-    /// Every local owner of the request has been dropped — the POST finished
-    /// and its body is gone — but rmcp has not delivered the correlated
-    /// response into the executor's channel yet, so a deadline or
-    /// cancellation can still land here. Under the old shape the request id
-    /// was simply absent from the live map, which was read as "the POST has
-    /// not started yet", and a pre-termination record was created for a
-    /// request that could never register again and then survived until the
-    /// connection generation closed.
+    /// Every local participant of the request is terminal — the POST
+    /// finished, its body is gone, and the outbound send already handed the
+    /// baton on — but rmcp has not delivered the correlated response into
+    /// the executor's channel yet, so a deadline or cancellation can still
+    /// land here. Under the old shape the request id was simply absent from
+    /// the live map, which was read as "the POST has not started yet", and a
+    /// pre-termination record was created for a request that could never
+    /// register again and then survived until the connection generation
+    /// closed.
     #[tokio::test]
     async fn cancellation_after_release_creates_no_record_and_leaks_nothing() {
         let ownership = Arc::new(McpHttpRequestOwnership::default());
@@ -1066,11 +1352,12 @@ mod tests {
         let guard = ownership.register(id(3));
         // The HTTP exchange completes normally: body consumed, POST done.
         // The outbound send future is still pending — rmcp has not resolved
-        // it yet — and that deliberately does not hold the request open.
+        // it yet — and that deliberately does not hold the request open,
+        // because the baton left it when the POST registered.
         drop(guard);
         assert_eq!(
-            ownership.state_of(&id(3)),
-            Some(RequestState::Released),
+            ownership.phase_of(&id(3)),
+            Some(RequestPhase::Released),
             "the completed request is known to be released, not inferred to be unstarted"
         );
         // The correlated response has not reached the executor yet; the
@@ -1078,15 +1365,15 @@ mod tests {
         let termination = admission.terminate();
         assert!(
             matches!(termination, LocalRequestTermination::AlreadyReleased),
-            "the local half is already settled, so nothing was terminated"
+            "every local participant is already terminal, so nothing was terminated"
         );
         assert!(
             !termination.terminated_local_request(),
             "nothing was terminated, so a transport failure is still the transport's own fact"
         );
         termination.settled().await;
-        // No future registration can occur, and no record was created to
-        // stop one.
+        // No future dispatch and no future registration can occur, and no
+        // record was created to stop one.
         assert!(
             matches!(ownership.begin_dispatch(&id(3)), OutboundDispatch::Refused),
             "a released request id is never dispatched again"
@@ -1098,6 +1385,79 @@ mod tests {
             0,
             "the race leaves no request lifecycle state behind"
         );
+    }
+
+    /// **`Released -> HttpOwned` is impossible.** A tracked POST registration
+    /// requires the dispatch baton, so a released request cannot acquire a
+    /// second HTTP owner, and its release proof stays terminal.
+    #[tokio::test]
+    async fn a_released_request_never_takes_http_ownership_again() {
+        let ownership = Arc::new(McpHttpRequestOwnership::default());
+        let admission = ownership.admit(&id(41));
+        let dispatching = dispatch(&ownership, 41);
+        let live = ownership.register(id(41));
+        assert_eq!(ownership.phase_of(&id(41)), Some(RequestPhase::HttpOwned));
+        drop(live);
+        drop(dispatching);
+        assert_eq!(ownership.phase_of(&id(41)), Some(RequestPhase::Released));
+        // The release proof has already been published for this request.
+        let release_proof = admission.terminate();
+        assert!(matches!(
+            release_proof,
+            LocalRequestTermination::AlreadyReleased
+        ));
+
+        // A stale or duplicate POST registration arrives.
+        let stale = ownership.register(id(41));
+        assert!(
+            stale.terminate.is_cancelled(),
+            "a registration with no dispatch baton is pre-cancelled and never reaches the network"
+        );
+        assert_eq!(
+            ownership.phase_of(&id(41)),
+            Some(RequestPhase::Released),
+            "the released request stays released: no second HTTP owner appears"
+        );
+        // Dropping the refused guard releases nothing that belongs to the
+        // request, and the original release proof stays terminal.
+        drop(stale);
+        assert_eq!(ownership.phase_of(&id(41)), Some(RequestPhase::Released));
+        release_proof.settled().await;
+        // A duplicate dispatch after release fails closed the same way.
+        assert!(
+            matches!(ownership.begin_dispatch(&id(41)), OutboundDispatch::Refused),
+            "one request id gets one monotone lifecycle"
+        );
+        assert_eq!(ownership.phase_of(&id(41)), Some(RequestPhase::Released));
+        drop(admission);
+        assert_eq!(ownership.outstanding_requests(), 0);
+    }
+
+    /// A POST cannot register before the outbound participant has taken the
+    /// baton: no local activity of a request can exist before its dispatch
+    /// is owned.
+    #[tokio::test]
+    async fn a_post_without_the_dispatch_baton_is_refused() {
+        let ownership = Arc::new(McpHttpRequestOwnership::default());
+        let admission = ownership.admit(&id(43));
+        let premature = ownership.register(id(43));
+        assert!(
+            premature.terminate.is_cancelled(),
+            "an AwaitingDispatch request has no POST to register"
+        );
+        assert_eq!(
+            ownership.phase_of(&id(43)),
+            Some(RequestPhase::AwaitingDispatch),
+            "the refused registration changed nothing"
+        );
+        drop(premature);
+        let dispatching = dispatch(&ownership, 43);
+        let live = ownership.register(id(43));
+        assert!(!live.terminate.is_cancelled());
+        drop(live);
+        drop(dispatching);
+        drop(admission);
+        assert_eq!(ownership.outstanding_requests(), 0);
     }
 
     /// **Normal successful requests clean up their own state.** No
@@ -1186,12 +1546,16 @@ mod tests {
         let admissions: Vec<_> = (0..outstanding)
             .map(|value| ownership.admit(&id(value)))
             .collect();
-        for admission in &admissions {
-            assert!(matches!(
-                admission.terminate(),
-                LocalRequestTermination::PreDispatchTerminated
-            ));
-        }
+        let terminations: Vec<_> = admissions
+            .iter()
+            .map(McpRequestAdmissionExt::terminate_admission)
+            .collect();
+        assert!(
+            terminations
+                .iter()
+                .all(LocalRequestTermination::awaits_release),
+            "each one waits for its own outbound participant"
+        );
         // Dispatch order is rmcp's, not settlement's, so the oldest
         // termination must hold as surely as the newest.
         for value in (0..outstanding).rev() {
@@ -1203,6 +1567,11 @@ mod tests {
                 "request {value} was terminated before dispatch and must never reach \
                  the transport"
             );
+        }
+        for termination in &terminations {
+            tokio::time::timeout(std::time::Duration::from_secs(30), termination.settled())
+                .await
+                .expect("anti-hang guard: every refusal releases its own settlement");
         }
         drop(admissions);
         assert_eq!(ownership.outstanding_requests(), 0);
@@ -1220,8 +1589,12 @@ mod tests {
             matches!(ownership.begin_dispatch(&id(5)), OutboundDispatch::Refused),
             "a second outbound send for a live request id is refused"
         );
+        assert_eq!(
+            ownership.phase_of(&id(5)),
+            Some(RequestPhase::DispatchOwned),
+            "the refused duplicate did not disturb the live dispatch ownership"
+        );
         let live = ownership.register(id(5));
-        drop(dispatching);
         let duplicate = ownership.register(id(5));
         assert!(
             duplicate.terminate.is_cancelled(),
@@ -1234,10 +1607,12 @@ mod tests {
         // The refused duplicate owns nothing, so dropping it releases
         // nothing that belongs to the live request.
         drop(duplicate);
-        assert_eq!(ownership.state_of(&id(5)), Some(RequestState::Live));
+        assert_eq!(ownership.phase_of(&id(5)), Some(RequestPhase::HttpOwned));
         drop(live);
-        assert_eq!(ownership.state_of(&id(5)), Some(RequestState::Released));
+        assert_eq!(ownership.phase_of(&id(5)), Some(RequestPhase::Released));
+        drop(dispatching);
         drop(admission);
+        assert_eq!(ownership.outstanding_requests(), 0);
     }
 
     /// A request that is not a tool invocation has no lifecycle entry, so
@@ -1253,10 +1628,10 @@ mod tests {
         assert_eq!(ownership.outstanding_requests(), 0);
     }
 
-    /// Close terminates every request the generation still owns, so drain
-    /// inherits no live per-request control primitive — and it clears the
-    /// entries that only existed to bind a dispatch that can no longer
-    /// happen.
+    /// The generation's outbound seam ending terminates every request it
+    /// still owns, so drain inherits no live per-request control primitive —
+    /// and it clears the entries that only existed to bind a dispatch that
+    /// can no longer happen.
     #[tokio::test]
     async fn close_terminates_and_clears_what_the_generation_still_owns() {
         let ownership = Arc::new(McpHttpRequestOwnership::default());
@@ -1268,8 +1643,13 @@ mod tests {
             ownership.begin_dispatch(&id(99)),
             OutboundDispatch::Owned(_)
         ));
+        // Runtime close cancels every request; it decides nothing about
+        // participants that have not arrived.
         ownership.terminate_all();
         assert!(guards.iter().all(|guard| guard.terminate.is_cancelled()));
+        // The transport's own close then publishes that no dispatch can
+        // arrive again.
+        ownership.no_further_dispatch();
         drop(guards);
         drop(dispatches);
         drop(admissions);
@@ -1278,5 +1658,17 @@ mod tests {
             0,
             "close leaves no request lifecycle state alive"
         );
+    }
+
+    /// A borrow-free way to call [`super::McpRequestAdmission::terminate`]
+    /// through a shared reference in an iterator chain.
+    trait McpRequestAdmissionExt {
+        fn terminate_admission(&self) -> LocalRequestTermination;
+    }
+
+    impl McpRequestAdmissionExt for super::McpRequestAdmission {
+        fn terminate_admission(&self) -> LocalRequestTermination {
+            self.terminate()
+        }
     }
 }

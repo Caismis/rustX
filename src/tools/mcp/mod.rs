@@ -1244,6 +1244,79 @@ pub(crate) mod test_sync {
         }
     }
 
+    /// The process-global registry of one kind of installed MCP test probe.
+    ///
+    /// # Why not a single `Option`
+    ///
+    /// Tests in one Rust test binary run concurrently. A single slot makes
+    /// installation and removal *ownership bugs*: installing a second probe
+    /// silently replaces the first, and either guard's drop clears whichever
+    /// probe happens to be current — so one test can uninstall another's
+    /// synchronization state and never know.
+    ///
+    /// Every probe is instead registered under its own identity token, and a
+    /// guard removes **only the registration it created**. Concurrent probes
+    /// coexist; lookup is by the scoped tool name a probe was installed for,
+    /// and every MCP fixture mints tool names that belong to exactly one
+    /// fixture instance, so a probe can never match another test's call.
+    struct ProbeRegistry<T> {
+        installed: Mutex<Vec<(u64, Arc<T>)>>,
+    }
+
+    /// The identity of one probe registration. Monotone for the process, so
+    /// a stale guard can never name a live registration.
+    static NEXT_PROBE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+    impl<T> ProbeRegistry<T> {
+        const fn new() -> Self {
+            Self {
+                installed: Mutex::new(Vec::new()),
+            }
+        }
+
+        /// Registers one probe and returns the identity that owns it.
+        fn install(&self, probe: Arc<T>) -> u64 {
+            let id = NEXT_PROBE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.installed
+                .lock()
+                .expect("MCP probe registry lock poisoned")
+                .push((id, probe));
+            id
+        }
+
+        /// Removes exactly the registration `id` names, and nothing else.
+        fn remove(&self, id: u64) {
+            self.installed
+                .lock()
+                .expect("MCP probe registry lock poisoned")
+                .retain(|(installed, _)| *installed != id);
+        }
+
+        /// Every installed probe.
+        ///
+        /// The router's observations carry no tool name, so a fact they
+        /// record is offered to every installed probe; each one keeps only
+        /// what belongs to the requests it actually parked.
+        fn all(&self) -> Vec<Arc<T>> {
+            self.installed
+                .lock()
+                .expect("MCP probe registry lock poisoned")
+                .iter()
+                .map(|(_, probe)| Arc::clone(probe))
+                .collect()
+        }
+
+        /// The installed probe matching `predicate`, when one is installed.
+        fn find(&self, predicate: impl Fn(&T) -> bool) -> Option<Arc<T>> {
+            self.installed
+                .lock()
+                .expect("MCP probe registry lock poisoned")
+                .iter()
+                .find(|(_, probe)| predicate(probe))
+                .map(|(_, probe)| Arc::clone(probe))
+        }
+    }
+
     /// The deterministic proof seam for the MCP progress pre-subscription
     /// race (Issue #205).
     ///
@@ -1254,9 +1327,9 @@ pub(crate) mod test_sync {
     /// not subscribed, which is exactly that window, held open deliberately
     /// and for as many concurrent calls as a test wants.
     ///
-    /// Installation is scoped to one tool name, so a race installed by one
-    /// test never parks another test's calls even though both run in the
-    /// same binary.
+    /// Installation is scoped to one fixture-unique tool name, so a race
+    /// installed by one test can never park another test's calls even though
+    /// both run in the same binary.
     pub(crate) struct ProgressSubscriptionRace {
         tool: String,
         state: Mutex<ProgressRaceState>,
@@ -1278,15 +1351,16 @@ pub(crate) mod test_sync {
         pre_subscription: std::collections::HashSet<rmcp::model::ProgressToken>,
     }
 
-    static PROGRESS_RACE: std::sync::RwLock<Option<Arc<ProgressSubscriptionRace>>> =
-        std::sync::RwLock::new(None);
+    static PROGRESS_RACES: ProbeRegistry<ProgressSubscriptionRace> = ProbeRegistry::new();
 
-    /// Uninstalls the installed race when the test that installed it ends.
-    pub(crate) struct ProgressRaceGuard;
+    /// Uninstalls **only** the race its own installation created.
+    pub(crate) struct ProgressRaceGuard {
+        id: u64,
+    }
 
     impl Drop for ProgressRaceGuard {
         fn drop(&mut self) {
-            *PROGRESS_RACE.write().expect("progress race lock") = None;
+            PROGRESS_RACES.remove(self.id);
         }
     }
 
@@ -1301,8 +1375,8 @@ pub(crate) mod test_sync {
                 progressed: tokio::sync::Notify::new(),
                 release: tokio::sync::Notify::new(),
             });
-            *PROGRESS_RACE.write().expect("progress race lock") = Some(Arc::clone(&race));
-            (race, ProgressRaceGuard)
+            let id = PROGRESS_RACES.install(Arc::clone(&race));
+            (race, ProgressRaceGuard { id })
         }
 
         /// Resolves once at least `count` calls are parked in the
@@ -1362,32 +1436,58 @@ pub(crate) mod test_sync {
         }
     }
 
-    /// Parks one outbound tool invocation between its progress admission and
-    /// its dispatch ownership (Issue #205).
+    /// Parks one outbound tool invocation **after** `Transport::send`'s
+    /// synchronous prologue has taken its dispatch ownership and **before**
+    /// the inner transport send can be polled (Issue #205).
     ///
-    /// That window is exactly "the request has been admitted and nothing
-    /// local has begun", so a cancellation that lands while a call is parked
-    /// here is provably pre-dispatch — and the request provably never
-    /// reaches the network afterwards, because the dispatch it then attempts
-    /// is refused.
+    /// That window is exactly "this request has an outbound participant that
+    /// owns it and has not reached the transport", so a cancellation landing
+    /// while a call is parked here is provably pre-dispatch — and the
+    /// settlement of that cancellation is provably unable to complete until
+    /// the parked participant observes the termination and refuses.
+    ///
+    /// It also records what each parked participant then *decided*, which is
+    /// the rendezvous a regression needs: "the outbound participant refused
+    /// this request" is a fact the test waits for, never one it assumes from
+    /// having released a pause.
     pub(crate) struct OutboundDispatchPause {
         tool: String,
-        state: Mutex<PauseState>,
+        state: Mutex<OutboundPauseState>,
         entered: tokio::sync::Notify,
+        decided: tokio::sync::Notify,
         release: tokio::sync::Notify,
     }
 
-    static OUTBOUND_PAUSE: std::sync::RwLock<Option<Arc<OutboundDispatchPause>>> =
-        std::sync::RwLock::new(None);
+    #[derive(Default)]
+    struct OutboundPauseState {
+        released: bool,
+        /// The requests currently parked at the outbound seam.
+        parked: std::collections::HashSet<rmcp::model::RequestId>,
+        /// Each parked request's own termination token, captured when it
+        /// parked. A cancellation token is **level-triggered**, so awaiting
+        /// one is a proof that cannot be missed however the two tasks
+        /// interleave — which is what makes "the invocation has terminated"
+        /// a fact a test waits for rather than one it assumes from having
+        /// advanced a clock.
+        terminations:
+            std::collections::HashMap<rmcp::model::RequestId, tokio_util::sync::CancellationToken>,
+        /// The requests whose outbound participant refused to dispatch.
+        refused: std::collections::HashSet<rmcp::model::RequestId>,
+        /// The requests whose outbound participant handed the message to the
+        /// inner transport.
+        dispatched: std::collections::HashSet<rmcp::model::RequestId>,
+    }
 
-    /// Uninstalls the installed pause when the test that installed it ends.
-    pub(crate) struct OutboundDispatchPauseGuard;
+    static OUTBOUND_PAUSES: ProbeRegistry<OutboundDispatchPause> = ProbeRegistry::new();
+
+    /// Uninstalls **only** the pause its own installation created.
+    pub(crate) struct OutboundDispatchPauseGuard {
+        id: u64,
+    }
 
     impl Drop for OutboundDispatchPauseGuard {
         fn drop(&mut self) {
-            *OUTBOUND_PAUSE
-                .write()
-                .expect("outbound dispatch pause lock") = None;
+            OUTBOUND_PAUSES.remove(self.id);
         }
     }
 
@@ -1396,32 +1496,116 @@ pub(crate) mod test_sync {
         pub(crate) fn install(tool: &str) -> (Arc<Self>, OutboundDispatchPauseGuard) {
             let pause = Arc::new(Self {
                 tool: tool.to_owned(),
-                state: Mutex::new(PauseState::default()),
+                state: Mutex::new(OutboundPauseState::default()),
                 entered: tokio::sync::Notify::new(),
+                decided: tokio::sync::Notify::new(),
                 release: tokio::sync::Notify::new(),
             });
-            *OUTBOUND_PAUSE
-                .write()
-                .expect("outbound dispatch pause lock") = Some(Arc::clone(&pause));
-            (pause, OutboundDispatchPauseGuard)
+            let id = OUTBOUND_PAUSES.install(Arc::clone(&pause));
+            (pause, OutboundDispatchPauseGuard { id })
         }
 
-        /// Resolves once an outbound dispatch of the paused tool is parked.
-        pub(crate) async fn wait_entered(&self) {
+        /// Resolves once at least `count` outbound dispatches of the paused
+        /// tool are parked at the seam at the same time.
+        pub(crate) async fn wait_parked(&self, count: usize) {
             loop {
                 let entered = self.entered.notified();
                 tokio::pin!(entered);
                 entered.as_mut().enable();
-                if self
-                    .state
-                    .lock()
-                    .expect("outbound dispatch pause lock")
-                    .entered
-                {
+                if self.parked_requests() >= count {
                     return;
                 }
                 entered.await;
             }
+        }
+
+        /// How many outbound dispatches are parked at the seam right now.
+        pub(crate) fn parked_requests(&self) -> usize {
+            self.state
+                .lock()
+                .expect("outbound dispatch pause lock")
+                .parked
+                .len()
+        }
+
+        /// Resolves once at least `count` parked requests have had their
+        /// invocation terminated.
+        ///
+        /// This is the ordering point a pre-dispatch regression needs before
+        /// it releases anything: advancing a clock only *causes* a
+        /// cancellation, and the participant must observe a termination that
+        /// has already been applied, not one that is on its way.
+        pub(crate) async fn wait_terminated(&self, count: usize) {
+            loop {
+                let tokens: Vec<_> = self
+                    .state
+                    .lock()
+                    .expect("outbound dispatch pause lock")
+                    .terminations
+                    .values()
+                    .cloned()
+                    .collect();
+                if tokens.iter().filter(|token| token.is_cancelled()).count() >= count {
+                    return;
+                }
+                let Some(pending) = tokens.into_iter().find(|token| !token.is_cancelled()) else {
+                    // Fewer parked requests than `count` exist yet; wait for
+                    // the next one to park.
+                    let entered = self.entered.notified();
+                    tokio::pin!(entered);
+                    entered.as_mut().enable();
+                    if self.parked_requests() >= count {
+                        continue;
+                    }
+                    entered.await;
+                    continue;
+                };
+                pending.cancelled().await;
+            }
+        }
+
+        /// Resolves once at least `count` outbound participants have made
+        /// their dispatch decision — refused, or handed the message on.
+        ///
+        /// This is the rendezvous that makes a pre-dispatch regression a
+        /// proof: releasing a pause only lets the participant run, and a
+        /// test that asserts immediately afterwards is asserting about a
+        /// continuation that may not have been scheduled yet.
+        pub(crate) async fn wait_decided(&self, count: usize) {
+            loop {
+                let decided = self.decided.notified();
+                tokio::pin!(decided);
+                decided.as_mut().enable();
+                if self.decisions() >= count {
+                    return;
+                }
+                decided.await;
+            }
+        }
+
+        /// How many outbound participants have decided.
+        pub(crate) fn decisions(&self) -> usize {
+            let state = self.state.lock().expect("outbound dispatch pause lock");
+            state.refused.len() + state.dispatched.len()
+        }
+
+        /// How many outbound participants refused to dispatch their request.
+        pub(crate) fn refusals(&self) -> usize {
+            self.state
+                .lock()
+                .expect("outbound dispatch pause lock")
+                .refused
+                .len()
+        }
+
+        /// How many outbound participants handed their request to the inner
+        /// transport.
+        pub(crate) fn dispatches(&self) -> usize {
+            self.state
+                .lock()
+                .expect("outbound dispatch pause lock")
+                .dispatched
+                .len()
         }
 
         /// Releases every parked dispatch.
@@ -1434,25 +1618,23 @@ pub(crate) mod test_sync {
         }
     }
 
-    /// Parks one outbound tool invocation, when a pause is installed for its
-    /// tool.
-    pub(crate) async fn park_before_outbound_dispatch(tool: &str) {
-        let Some(pause) = OUTBOUND_PAUSE
-            .read()
-            .expect("outbound dispatch pause lock")
-            .clone()
-        else {
+    /// Parks one owned outbound tool invocation, when a pause is installed
+    /// for its tool.
+    pub(crate) async fn park_before_outbound_dispatch(
+        tool: &str,
+        id: &rmcp::model::RequestId,
+        terminate: &tokio_util::sync::CancellationToken,
+    ) {
+        let Some(pause) = OUTBOUND_PAUSES.find(|pause| pause.tool == tool) else {
             return;
         };
-        if pause.tool != tool {
-            return;
-        }
         {
             let mut state = pause.state.lock().expect("outbound dispatch pause lock");
             if state.released {
                 return;
             }
-            state.entered = true;
+            state.parked.insert(id.clone());
+            state.terminations.insert(id.clone(), terminate.clone());
         }
         pause.entered.notify_waiters();
         loop {
@@ -1465,10 +1647,32 @@ pub(crate) mod test_sync {
                 .expect("outbound dispatch pause lock")
                 .released
             {
-                return;
+                break;
             }
             released.await;
         }
+        pause
+            .state
+            .lock()
+            .expect("outbound dispatch pause lock")
+            .parked
+            .remove(id);
+    }
+
+    /// Records what one outbound participant decided at the seam.
+    pub(crate) fn note_outbound_dispatch(tool: &str, id: &rmcp::model::RequestId, refused: bool) {
+        let Some(pause) = OUTBOUND_PAUSES.find(|pause| pause.tool == tool) else {
+            return;
+        };
+        {
+            let mut state = pause.state.lock().expect("outbound dispatch pause lock");
+            if refused {
+                state.refused.insert(id.clone());
+            } else {
+                state.dispatched.insert(id.clone());
+            }
+        }
+        pause.decided.notify_waiters();
     }
 
     /// Records what the outbound dispatch seam registered for one request.
@@ -1476,39 +1680,34 @@ pub(crate) mod test_sync {
         id: &rmcp::model::RequestId,
         token: &rmcp::model::ProgressToken,
     ) {
-        let Some(race) = PROGRESS_RACE.read().expect("progress race lock").clone() else {
-            return;
-        };
-        race.state
-            .lock()
-            .expect("progress race lock")
-            .tokens
-            .insert(id.clone(), token.clone());
+        for race in PROGRESS_RACES.all() {
+            race.state
+                .lock()
+                .expect("progress race lock")
+                .tokens
+                .insert(id.clone(), token.clone());
+        }
     }
 
     /// Records that the router observed progress for a token whose
     /// dispatching call had not subscribed yet.
     pub(crate) fn note_pre_subscription_progress(token: &rmcp::model::ProgressToken) {
-        let Some(race) = PROGRESS_RACE.read().expect("progress race lock").clone() else {
-            return;
-        };
-        race.state
-            .lock()
-            .expect("progress race lock")
-            .pre_subscription
-            .insert(token.clone());
-        race.progressed.notify_waiters();
+        for race in PROGRESS_RACES.all() {
+            race.state
+                .lock()
+                .expect("progress race lock")
+                .pre_subscription
+                .insert(token.clone());
+            race.progressed.notify_waiters();
+        }
     }
 
     /// Parks one dispatched call between its effect frontier and its
     /// progress subscription, when a race is installed for its tool.
     pub(crate) async fn park_before_progress_subscription(tool: &str, id: &rmcp::model::RequestId) {
-        let Some(race) = PROGRESS_RACE.read().expect("progress race lock").clone() else {
+        let Some(race) = PROGRESS_RACES.find(|race| race.tool == tool) else {
             return;
         };
-        if race.tool != tool {
-            return;
-        }
         {
             let mut state = race.state.lock().expect("progress race lock");
             if state.released {
@@ -2450,18 +2649,32 @@ impl McpServerRuntime {
     /// remote response, no protocol acknowledgement, and no timer.
     ///
     /// What "terminating the local half" means is read from the request's
-    /// **explicit lifecycle state**, never inferred from an absent record:
+    /// **explicit lifecycle phase**, never inferred from an absent record:
     ///
     /// ```text
-    /// NotYetRegistered  nothing local began, and the outbound dispatch seam
-    ///                   now refuses this request, so nothing local ever will
-    ///                   -> settled, and no record is created
-    /// Live              the outbound dispatch future, the POST future, or
-    ///                   the response body owns it
+    /// AwaitingDispatch  the request is on rmcp's peer outbound queue: no
+    ///                   local activity has begun, and an outbound
+    ///                   participant that is still capable of dispatching it
+    ///                   has not reached the seam
+    ///                   -> terminate it and await the release proof, which
+    ///                      that participant publishes when it arrives and
+    ///                      refuses (or which the end of the generation's
+    ///                      outbound seam publishes when it never can)
+    /// DispatchOwned     the send future owns it and has not handed it to
+    ///                   the inner transport
     ///                   -> terminate it and await the release proof
-    /// Released          the local half already finished on its own
+    /// HttpOwned         the POST future or the response body owns it
+    ///                   -> terminate it and await the release proof
+    /// Released          every local participant is already terminal
     ///                   -> nothing to terminate, and no record is created
     /// ```
+    ///
+    /// The first row is the Issue #205 review finding stated as a phase.
+    /// Treating it as "nothing pending" reported settlement while a live
+    /// rmcp send future for the same request id was still going to run — and
+    /// that future then recreated the lifecycle entry the settlement had
+    /// forgotten and dispatched the call. Settlement now happens-after every
+    /// participant that could dispatch has become terminal.
     ///
     /// Over stdio there is no local half at all, so the termination is
     /// already settled and the race collapses to the cancellation send and
@@ -3627,19 +3840,29 @@ impl ToolExecutor for McpToolExecutor {
     /// reported once that request's lifecycle state says no local owner
     /// remains:
     ///
-    /// - `Live` — the release proof is **awaited** before anything is
-    ///   reported, and it fires only after the POST future or the response
-    ///   body was actually dropped;
-    /// - `NotYetRegistered` — nothing local began, and the outbound dispatch
-    ///   seam refuses the request from that point, so nothing local ever
-    ///   will;
-    /// - `Released` — every local owner had already been dropped.
+    /// - `AwaitingDispatch` — the outbound participant has not reached the
+    ///   seam yet, so the release proof is **awaited** and fires when that
+    ///   participant arrives and refuses, or when the generation's outbound
+    ///   seam ends and it provably never can;
+    /// - `DispatchOwned` / `HttpOwned` — the release proof is **awaited**
+    ///   before anything is reported, and it fires only after the send
+    ///   future, the POST future, or the response body was actually dropped;
+    /// - `Released` — every local participant was already terminal.
+    ///
+    /// The first case is why the claim holds for the *whole* invocation and
+    /// not merely for its HTTP half: when this future returns, no rmcp send
+    /// future for this request id can still dispatch it, so
+    /// `Unconfirmed` keeps its Issue #204 meaning — every rustX-owned local
+    /// activity of the invocation is over, and only the remote effect
+    /// remains uncertain.
     ///
     /// The invocation's admission guard is a stack local of that same
-    /// future, so the request's lifecycle entry is also forgotten when it
-    /// returns. Nothing is left for a separate settlement plane to reclaim,
-    /// so splitting completion from settlement would add a second ownership
-    /// plane with nothing in it.
+    /// future. It is deliberately *not* the whole forget point: an entry
+    /// whose outbound participant has not decided yet outlives it, because
+    /// forgetting such an entry is exactly what let a stale send recreate
+    /// uncancelled authority. Nothing is left for a separate settlement
+    /// plane to reclaim, so splitting completion from settlement would add a
+    /// second ownership plane with nothing in it.
     ///
     /// The executor never chooses a canonical terminal status: it reports
     /// physical outcomes and settlement evidence, and the Agent Loop's
