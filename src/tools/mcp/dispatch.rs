@@ -350,11 +350,17 @@ where
             // request off the network entirely.
             if guard.terminated() {
                 drop(inner);
-                guard.refuse();
+                // Recorded *before* the ownership is consumed. Consuming it
+                // publishes this request's release proof, which can settle a
+                // waiting invocation immediately — so a decision recorded
+                // afterwards would be a fact that lags the very settlement
+                // it is evidence for, and a regression waiting on it would
+                // race the runtime rather than order it.
                 #[cfg(test)]
                 if let Some((tool, id)) = &probe {
                     crate::tools::mcp::test_sync::note_outbound_dispatch(tool, id, true);
                 }
+                guard.refuse();
                 return Err(McpTransportError::LocallyTerminated);
             }
             #[cfg(test)]
