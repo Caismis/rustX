@@ -51,6 +51,7 @@
 pub mod fixture;
 
 mod connection;
+mod dispatch;
 mod framing;
 pub mod identity;
 mod streamable_http;
@@ -1016,7 +1017,7 @@ impl<'a> OwnedConnect<'a> {
 #[cfg(test)]
 #[allow(dead_code)]
 pub(crate) mod test_sync {
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     /// A deterministic close seam for one retained MCP runtime: it records
     /// that `close` was entered, optionally parks there, and optionally makes
@@ -1242,6 +1243,186 @@ pub(crate) mod test_sync {
             self.release.notify_waiters();
         }
     }
+
+    /// The deterministic proof seam for the MCP progress pre-subscription
+    /// race (Issue #205).
+    ///
+    /// The race it makes observable is the one no capacity bound could ever
+    /// have been safe for: a server answering a request with genuine progress
+    /// **before** the dispatching executor has completed its subscription
+    /// registration. A parked call has crossed its effect frontier and has
+    /// not subscribed, which is exactly that window, held open deliberately
+    /// and for as many concurrent calls as a test wants.
+    ///
+    /// Installation is scoped to one tool name, so a race installed by one
+    /// test never parks another test's calls even though both run in the
+    /// same binary.
+    pub(crate) struct ProgressSubscriptionRace {
+        tool: String,
+        state: Mutex<ProgressRaceState>,
+        parked: tokio::sync::Notify,
+        progressed: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+
+    #[derive(Default)]
+    struct ProgressRaceState {
+        released: bool,
+        /// The requests currently parked between their effect frontier and
+        /// their progress subscription.
+        parked: std::collections::HashSet<rmcp::model::RequestId>,
+        /// What the outbound dispatch seam registered for each request.
+        tokens: std::collections::HashMap<rmcp::model::RequestId, rmcp::model::ProgressToken>,
+        /// The tokens whose progress the router observed while no
+        /// subscriber existed for them.
+        pre_subscription: std::collections::HashSet<rmcp::model::ProgressToken>,
+    }
+
+    static PROGRESS_RACE: std::sync::RwLock<Option<Arc<ProgressSubscriptionRace>>> =
+        std::sync::RwLock::new(None);
+
+    /// Uninstalls the installed race when the test that installed it ends.
+    pub(crate) struct ProgressRaceGuard;
+
+    impl Drop for ProgressRaceGuard {
+        fn drop(&mut self) {
+            *PROGRESS_RACE.write().expect("progress race lock") = None;
+        }
+    }
+
+    impl ProgressSubscriptionRace {
+        /// Installs a race that parks every dispatch of `tool` between its
+        /// effect frontier and its progress subscription.
+        pub(crate) fn install(tool: &str) -> (Arc<Self>, ProgressRaceGuard) {
+            let race = Arc::new(Self {
+                tool: tool.to_owned(),
+                state: Mutex::new(ProgressRaceState::default()),
+                parked: tokio::sync::Notify::new(),
+                progressed: tokio::sync::Notify::new(),
+                release: tokio::sync::Notify::new(),
+            });
+            *PROGRESS_RACE.write().expect("progress race lock") = Some(Arc::clone(&race));
+            (race, ProgressRaceGuard)
+        }
+
+        /// Resolves once at least `count` calls are parked in the
+        /// pre-subscription window at the same time.
+        pub(crate) async fn wait_parked(&self, count: usize) {
+            loop {
+                let parked = self.parked.notified();
+                tokio::pin!(parked);
+                parked.as_mut().enable();
+                if self.state.lock().expect("progress race lock").parked.len() >= count {
+                    return;
+                }
+                parked.await;
+            }
+        }
+
+        /// Resolves once every one of `count` parked requests has had
+        /// genuine remote progress delivered for its own token *while it was
+        /// still parked* — that is, once progress has provably beaten all
+        /// `count` subscription registrations.
+        pub(crate) async fn wait_pre_subscription_progress(&self, count: usize) {
+            loop {
+                let progressed = self.progressed.notified();
+                tokio::pin!(progressed);
+                progressed.as_mut().enable();
+                if self.parked_requests() >= count
+                    && self.every_parked_request_has_pre_subscription_progress()
+                {
+                    return;
+                }
+                progressed.await;
+            }
+        }
+
+        /// Whether every currently parked request has already had genuine
+        /// remote progress delivered for its own token — that is, whether
+        /// progress provably beat every one of those subscriptions.
+        pub(crate) fn every_parked_request_has_pre_subscription_progress(&self) -> bool {
+            let state = self.state.lock().expect("progress race lock");
+            state.parked.iter().all(|id| {
+                state
+                    .tokens
+                    .get(id)
+                    .is_some_and(|token| state.pre_subscription.contains(token))
+            })
+        }
+
+        /// How many parked requests there are right now.
+        pub(crate) fn parked_requests(&self) -> usize {
+            self.state.lock().expect("progress race lock").parked.len()
+        }
+
+        /// Releases every parked call, and every call that parks later.
+        pub(crate) fn release(&self) {
+            self.state.lock().expect("progress race lock").released = true;
+            self.release.notify_waiters();
+        }
+    }
+
+    /// Records what the outbound dispatch seam registered for one request.
+    pub(crate) fn note_progress_admission(
+        id: &rmcp::model::RequestId,
+        token: &rmcp::model::ProgressToken,
+    ) {
+        let Some(race) = PROGRESS_RACE.read().expect("progress race lock").clone() else {
+            return;
+        };
+        race.state
+            .lock()
+            .expect("progress race lock")
+            .tokens
+            .insert(id.clone(), token.clone());
+    }
+
+    /// Records that the router observed progress for a token whose
+    /// dispatching call had not subscribed yet.
+    pub(crate) fn note_pre_subscription_progress(token: &rmcp::model::ProgressToken) {
+        let Some(race) = PROGRESS_RACE.read().expect("progress race lock").clone() else {
+            return;
+        };
+        race.state
+            .lock()
+            .expect("progress race lock")
+            .pre_subscription
+            .insert(token.clone());
+        race.progressed.notify_waiters();
+    }
+
+    /// Parks one dispatched call between its effect frontier and its
+    /// progress subscription, when a race is installed for its tool.
+    pub(crate) async fn park_before_progress_subscription(tool: &str, id: &rmcp::model::RequestId) {
+        let Some(race) = PROGRESS_RACE.read().expect("progress race lock").clone() else {
+            return;
+        };
+        if race.tool != tool {
+            return;
+        }
+        {
+            let mut state = race.state.lock().expect("progress race lock");
+            if state.released {
+                return;
+            }
+            state.parked.insert(id.clone());
+        }
+        race.parked.notify_waiters();
+        loop {
+            let released = race.release.notified();
+            tokio::pin!(released);
+            released.as_mut().enable();
+            if race.state.lock().expect("progress race lock").released {
+                break;
+            }
+            released.await;
+        }
+        race.state
+            .lock()
+            .expect("progress race lock")
+            .parked
+            .remove(id);
+    }
 }
 
 impl McpServerRuntime {
@@ -1393,6 +1574,16 @@ impl McpServerRuntime {
                     framing::ViolationObservingReader::new(stdout, protocol_violation.clone()),
                     stdin,
                 );
+                // The outbound ownership seam. Stdio owns no per-request
+                // local half, so the seam here carries only the progress
+                // token linearization: a request's token becomes known
+                // before the request can reach the server.
+                let transport = dispatch::ObservingTransport::new(
+                    transport,
+                    Arc::new(dispatch::McpDispatchSeam::new(Arc::clone(
+                        &handler.progress,
+                    ))),
+                );
                 // A handshake failure explicitly awaits the same physical
                 // settlement proof as normal runtime drain. Dropping the
                 // process handle would only request shutdown and would leave
@@ -1465,6 +1656,14 @@ impl McpServerRuntime {
                 let transport = rmcp::transport::StreamableHttpClientTransport::with_client(
                     client,
                     transport_config,
+                );
+                // The outbound ownership seam: a request's progress token
+                // becomes known before the request can reach the server.
+                let transport = dispatch::ObservingTransport::new(
+                    transport,
+                    Arc::new(dispatch::McpDispatchSeam::new(Arc::clone(
+                        &handler.progress,
+                    ))),
                 );
                 let service = tokio::select! {
                     biased;
@@ -1999,13 +2198,21 @@ impl McpServerRuntime {
             }
         };
         // ---------- the external-effect frontier is crossed ----------
+        // Test-only: holds this call inside the pre-subscription window so a
+        // regression can prove that genuine remote progress arrived before
+        // the subscription registration completed. No production path
+        // installs a race, so this is a lock read that returns immediately.
+        #[cfg(test)]
+        test_sync::park_before_progress_subscription(remote_name, &handle.id).await;
         // Subscribing after dispatch is unavoidable — rmcp mints the token
-        // inside the request — so the router, not the subscription, is what
-        // makes an immediately answered progress notification observable.
+        // inside the request — but it is no longer a race: the outbound
+        // dispatch seam registered this token as known and live before the
+        // request could reach the server, so anything the peer sent for it
+        // is already owned and is claimed here.
         let mut progress = self
             .handler
             .progress
-            .subscribe(handle.progress_token.clone());
+            .subscribe(handle.id.clone(), handle.progress_token.clone());
         let response = loop {
             tokio::select! {
                 biased;
@@ -2499,72 +2706,104 @@ fn is_transport_loss(error: &rmcp::service::ServiceError) -> bool {
     )
 }
 
-/// How many *unsubscribed* progress tokens the router may hold in its
-/// pre-subscription window.
-///
-/// This bounds only the window between rmcp minting a request's progress
-/// token and the dispatching call subscribing to it. The set of tokens that
-/// appear on the wire is peer-controlled, so it must be bounded; the set of
-/// tokens rustX is actually *waiting on* is not — it is one per in-flight
-/// MCP call, and each call owns its own subscription. Eviction is
-/// therefore strictly FIFO over unsubscribed tokens only: a token that just
-/// entered the pre-subscription window is the newest entry and is the last
-/// one an overflow can reach.
-const MAX_PENDING_PROGRESS_TOKENS: usize = 32;
 /// The delivery capacity of one subscribed token.
+///
+/// Bounding a subscriber's queue can never erase a liveness *occurrence*: a
+/// full queue is a queue whose subscriber already holds this many
+/// undelivered proofs that the remote is alive.
 const PROGRESS_SUBSCRIPTION_CAPACITY: usize = 16;
 
 /// Routes remote progress notifications to the in-flight `tools/call` that
 /// owns their token (Issue #205).
 ///
-/// # Why this is not rmcp's dispatcher
+/// # Two classes of progress token, and only one of them may be discarded
 ///
-/// An MCP client cannot know a request's progress token before the request
-/// exists: rmcp mints the token inside `send_cancellable_request`, so the
-/// dispatching call can only subscribe *after* the request was enqueued. A
+/// MCP progress is not telemetry. It is the idle-liveness evidence the
+/// generic Agent Loop watchdog consumes, so discarding it can turn genuine
+/// remote progress into a *false* idle timeout. But the set of tokens that
+/// can appear on the wire is peer-controlled, so something must be bounded.
+/// The router therefore separates the two completely:
+///
+/// ```text
+/// known live request token                 unknown / unsolicited token
+///   minted by rmcp for a rustX request       any other progress token a
+///   and registered by the outbound           peer chooses to emit
+///   dispatch seam before the request
+///   can reach the server
+///
+///   O(1) state per token                     no per-token state at all
+///   never evicted by capacity                counted, then dropped
+///   removed at the request's own
+///   terminal forget point
+/// ```
+///
+/// Unsolicited progress occupies **no storage**, so peer-controlled traffic
+/// has no capacity to consume and therefore nothing of a live request's to
+/// displace. There is no shared queue and no eviction policy between the two
+/// classes, because they do not share a container.
+///
+/// # How a token becomes known, and why there is no unowned window
+///
+/// rmcp mints a request's progress token *inside*
+/// `Peer::send_cancellable_request`, so the dispatching call cannot know it
+/// beforehand and can only subscribe after the request was enqueued. A
 /// server that answers with a progress notification immediately therefore
-/// races that subscription, and a dispatcher that drops unroutable
-/// notifications silently loses genuine remote liveness evidence — the exact
-/// evidence the generic idle watchdog depends on.
+/// races that subscription. Bounding a speculative pre-subscription cache
+/// cannot fix that: nothing bounds how many admitted requests are inside
+/// that window at once, so any capacity there can evict a legitimate live
+/// request's only liveness evidence.
 ///
-/// # The bounded liveness invariant
+/// The window is closed by ownership instead of by capacity.
+/// [`dispatch::McpDispatchSeam`] is the transport rustX hands to rmcp, and
+/// it registers a request's `(RequestId, ProgressToken)` pair
+/// **synchronously inside `Transport::send`**, before the message is handed
+/// to the wire. That registration therefore *happens-before* the server can
+/// receive the request, which happens-before the server can emit any
+/// progress for its token, which happens-before that notification can reach
+/// this router. The linearization point is causal, not a timing hope:
 ///
-/// MCP progress is not only telemetry: it is the idle-liveness evidence the
-/// generic Agent Loop watchdog consumes, so losing it can turn genuine
-/// remote progress into a *false* idle timeout. The router therefore
-/// guarantees exactly one thing, and deliberately not more:
+/// ```text
+/// send_cancellable_request -> Ok        the request exists
+///   Transport::send  -> admit(id, token)   <-- the token becomes known here
+///     bytes on the wire
+///       server receives the request
+///         server emits progress for the token
+///           router.deliver(..)                <-- always after admit
+/// executor        -> subscribe(id, token)     <-- may be anywhere after Ok
+/// ```
 ///
-/// > For every admitted in-flight MCP request, once the router has observed
-/// > genuine remote progress for that request, no bound in this router
-/// > erases the fact that progress occurred before the dispatching call can
-/// > consume it.
+/// `subscribe` may run before or after `admit`; both create the same entry,
+/// so neither order can lose evidence.
 ///
-/// Payload detail is explicitly *not* guaranteed. Two places coalesce:
+/// # The invariant
 ///
-/// - **the pre-subscription window** keeps one entry per unsubscribed
-///   token, coalescing repeated notifications onto the latest payload and
-///   counting the occurrences. The window is bounded by
-///   [`MAX_PENDING_PROGRESS_TOKENS`] and evicts FIFO, so the newest entry —
-///   which is exactly the one a call that just dispatched is about to claim
-///   — is the last one an overflow can reach;
-/// - **a subscribed token's delivery queue** is bounded by
-///   [`PROGRESS_SUBSCRIPTION_CAPACITY`] and drops on full. Dropping there
-///   can never erase an occurrence: the queue is full precisely because
-///   [`PROGRESS_SUBSCRIPTION_CAPACITY`] undelivered notifications are
-///   already waiting for the same subscriber, so the liveness fact is
-///   already in its hands.
+/// > Every admitted MCP request that rustX can identify as belonging to a
+/// > live local `ToolCall` retains at least one liveness occurrence once
+/// > genuine remote progress for that request has been observed, until that
+/// > `ToolCall` consumes or terminates that liveness state.
 ///
-/// What the router no longer does is bound the number of *subscribed*
-/// tokens. A subscription exists only while one in-flight `tools/call`
-/// holds it, and every subscription is removed by its owner's `Drop`, so
-/// the live set is bounded by the Agent Loop's own in-flight call set
-/// rather than by a router constant. The previous global 16-token cache
-/// mixed the two: a seventeenth concurrent call could find the cache full
-/// of live subscriptions and have its only progress notification discarded,
-/// which is precisely the false-idle-timeout case this invariant forbids.
+/// Payload detail is explicitly *not* guaranteed, and two places coalesce:
 ///
-/// Nothing is ever fabricated — the router only reorders and coalesces
+/// - an admitted token with no subscriber yet keeps **one** entry: the
+///   latest payload plus an occurrence count. Repeated notifications
+///   collapse onto it, so the state is O(1) per live request and no
+///   occurrence is lost;
+/// - a subscribed token's delivery queue is bounded by
+///   [`PROGRESS_SUBSCRIPTION_CAPACITY`] and drops on full, which cannot
+///   erase an occurrence because the queue is full precisely when that many
+///   undelivered proofs are already in the subscriber's hands.
+///
+/// Nothing is ever fabricated: the router only reorders and coalesces
 /// delivery of notifications the peer genuinely sent.
+///
+/// # Boundedness
+///
+/// Live state is one small entry per rustX request of this connection
+/// generation that has been dispatched and has not yet reached its terminal
+/// forget point — never a router constant. Entries are removed by the
+/// dispatching call's subscription guard (`Drop`), or, for a request whose
+/// executor is gone, by the correlated response the inbound seam observes.
+/// The whole router belongs to one connection generation and dies with it.
 #[derive(Default)]
 struct McpProgressRouter {
     state: Mutex<ProgressRouterState>,
@@ -2572,20 +2811,43 @@ struct McpProgressRouter {
 
 #[derive(Default)]
 struct ProgressRouterState {
-    /// One entry per live subscription. Bounded by the in-flight MCP call
-    /// set, never by a router constant: each entry is removed by
-    /// [`McpProgressSubscription`]'s `Drop`.
-    subscribed: std::collections::HashMap<rmcp::model::ProgressToken, ProgressSubscriber>,
-    /// The bounded pre-subscription window, in arrival order.
-    pending: std::collections::VecDeque<(rmcp::model::ProgressToken, PendingProgress)>,
+    /// One entry per known live request token. **No capacity eviction.**
+    live: std::collections::HashMap<rmcp::model::ProgressToken, LiveProgress>,
+    /// The progress token of each dispatched request that has not reached
+    /// its terminal forget point, so a correlated response can forget the
+    /// progress state of a request whose executor is gone.
+    tokens: std::collections::HashMap<rmcp::model::RequestId, rmcp::model::ProgressToken>,
+    /// Unsolicited peer progress: counted, never stored.
+    unsolicited: UnsolicitedProgress,
+}
+
+/// What the router retains about progress for tokens no rustX request owns.
+///
+/// Deliberately O(1) and payload-free. An unknown token is peer-controlled,
+/// so it gets a counter and the most recent token value for diagnostics —
+/// never storage a flood could grow and never storage a live request's
+/// evidence has to compete for.
+#[derive(Default)]
+struct UnsolicitedProgress {
+    dropped: u64,
+    last: Option<rmcp::model::ProgressToken>,
+}
+
+/// The liveness state of one known live request token.
+enum LiveProgress {
+    /// The dispatching call has not subscribed yet. O(1) coalesced evidence.
+    Pending(PendingProgress),
+    /// The dispatching call owns delivery.
+    Subscribed(ProgressSubscriber),
 }
 
 type ProgressSubscriber = tokio::sync::mpsc::Sender<ProgressNotificationParam>;
 
-/// The coalesced pre-subscription evidence of one token.
+/// The coalesced pre-subscription evidence of one known live token.
+#[derive(Default)]
 struct PendingProgress {
-    /// The most recent payload the peer sent for this token.
-    latest: ProgressNotificationParam,
+    /// The most recent payload the peer sent for this token, when any.
+    latest: Option<ProgressNotificationParam>,
     /// How many notifications this entry represents. Only its non-zeroness
     /// is load-bearing — it is the liveness occurrence — but retaining the
     /// count keeps the coalescing honest in diagnostics.
@@ -2593,86 +2855,155 @@ struct PendingProgress {
 }
 
 impl McpProgressRouter {
-    /// Delivers one remote progress notification, holding it in the bounded
-    /// pre-subscription window when its token has no subscriber yet.
+    /// Registers one dispatched request's progress token as **known and
+    /// live**, before the request can reach the server.
+    ///
+    /// Called from [`dispatch::McpDispatchSeam`] inside `Transport::send`.
+    /// From this point the token can never be treated as unsolicited and can
+    /// never be evicted by peer-controlled traffic.
+    fn admit(&self, id: &rmcp::model::RequestId, token: &rmcp::model::ProgressToken) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("MCP progress router lock poisoned");
+        state.tokens.insert(id.clone(), token.clone());
+        state
+            .live
+            .entry(token.clone())
+            .or_insert_with(|| LiveProgress::Pending(PendingProgress::default()));
+        #[cfg(test)]
+        test_sync::note_progress_admission(id, token);
+    }
+
+    /// Delivers one remote progress notification.
     fn deliver(&self, notification: ProgressNotificationParam) {
         let mut state = self
             .state
             .lock()
             .expect("MCP progress router lock poisoned");
         let token = notification.progress_token.clone();
-        if let Some(sender) = state.subscribed.get(&token) {
-            // Bounded, drop-on-full. This cannot erase a liveness
-            // occurrence: a full queue is a queue whose subscriber already
-            // holds `PROGRESS_SUBSCRIPTION_CAPACITY` undelivered proofs that
-            // the remote is alive.
-            let _ = sender.try_send(notification);
+        let Some(live) = state.live.get_mut(&token) else {
+            // No rustX request owns this token, so no `ToolCall` will ever
+            // consume it. It gets a counter, not storage.
+            state.unsolicited.dropped = state.unsolicited.dropped.saturating_add(1);
+            state.unsolicited.last = Some(token);
             return;
+        };
+        match live {
+            LiveProgress::Subscribed(sender) => {
+                // Bounded, drop-on-full. This cannot erase a liveness
+                // occurrence: a full queue is a queue whose subscriber
+                // already holds `PROGRESS_SUBSCRIPTION_CAPACITY` undelivered
+                // proofs that the remote is alive.
+                let _ = sender.try_send(notification);
+            }
+            LiveProgress::Pending(pending) => {
+                pending.latest = Some(notification);
+                pending.occurrences = pending.occurrences.saturating_add(1);
+                #[cfg(test)]
+                test_sync::note_pre_subscription_progress(&token);
+            }
         }
-        if let Some((_, pending)) = state
-            .pending
-            .iter_mut()
-            .find(|(pending_token, _)| pending_token == &token)
-        {
-            pending.latest = notification;
-            pending.occurrences = pending.occurrences.saturating_add(1);
-            return;
-        }
-        if state.pending.len() == MAX_PENDING_PROGRESS_TOKENS {
-            state.pending.pop_front();
-        }
-        state.pending.push_back((
-            token,
-            PendingProgress {
-                latest: notification,
-                occurrences: 1,
-            },
-        ));
     }
 
     /// Subscribes the dispatching call to its request's progress token,
     /// claiming anything that arrived before this call.
-    fn subscribe(self: &Arc<Self>, token: rmcp::model::ProgressToken) -> McpProgressSubscription {
+    fn subscribe(
+        self: &Arc<Self>,
+        id: rmcp::model::RequestId,
+        token: rmcp::model::ProgressToken,
+    ) -> McpProgressSubscription {
         let (sender, receiver) = tokio::sync::mpsc::channel(PROGRESS_SUBSCRIPTION_CAPACITY);
         {
             let mut state = self
                 .state
                 .lock()
                 .expect("MCP progress router lock poisoned");
-            if let Some(index) = state
-                .pending
-                .iter()
-                .position(|(pending_token, _)| pending_token == &token)
-            {
-                let (_, pending) = state
-                    .pending
-                    .remove(index)
-                    .expect("the index was just located");
+            state.tokens.insert(id.clone(), token.clone());
+            let claimed = match state.live.remove(&token) {
+                // Whatever the outbound seam admitted, or an earlier
+                // delivery coalesced, belongs to this call.
+                Some(LiveProgress::Pending(pending)) => pending.latest,
+                // A token is minted once per request, so this is
+                // unreachable in practice; taking the newest subscriber is
+                // the fail-safe direction because the dispatching call is
+                // the only consumer that can report the evidence.
+                Some(LiveProgress::Subscribed(_)) | None => None,
+            };
+            if let Some(latest) = claimed {
                 // The coalesced payload carries the liveness occurrence the
-                // pre-subscription window preserved.
-                let _ = sender.try_send(pending.latest);
+                // pre-subscription state preserved.
+                let _ = sender.try_send(latest);
             }
-            state.subscribed.insert(token.clone(), sender);
+            state
+                .live
+                .insert(token.clone(), LiveProgress::Subscribed(sender));
         }
         McpProgressSubscription {
             router: Arc::clone(self),
+            id,
             token,
             receiver,
         }
     }
 
-    fn unsubscribe(&self, token: &rmcp::model::ProgressToken) {
+    /// Forgets one request's progress state at its terminal point.
+    fn forget(&self, id: &rmcp::model::RequestId, token: &rmcp::model::ProgressToken) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("MCP progress router lock poisoned");
+        state.tokens.remove(id);
+        state.live.remove(token);
+    }
+
+    /// Forgets the progress state of a request the peer has answered.
+    ///
+    /// This is the terminal forget point for a dispatched request whose
+    /// dispatching call is gone — the only way an admitted token could
+    /// otherwise outlive the invocation that owns it. A request whose call
+    /// still holds a subscription keeps its state until that guard drops:
+    /// the response has not been reported yet, and evidence delivered
+    /// alongside it is still the call's to consume.
+    fn settle(&self, id: &rmcp::model::RequestId) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("MCP progress router lock poisoned");
+        let Some(token) = state.tokens.remove(id) else {
+            return;
+        };
+        if matches!(state.live.get(&token), Some(LiveProgress::Pending(_))) {
+            state.live.remove(&token);
+        }
+    }
+
+    /// How many known live request tokens this router currently holds.
+    #[cfg(test)]
+    fn live_tokens(&self) -> usize {
         self.state
             .lock()
             .expect("MCP progress router lock poisoned")
-            .subscribed
-            .remove(token);
+            .live
+            .len()
+    }
+
+    /// How many unsolicited progress notifications were counted and dropped.
+    #[cfg(test)]
+    fn unsolicited_dropped(&self) -> u64 {
+        self.state
+            .lock()
+            .expect("MCP progress router lock poisoned")
+            .unsolicited
+            .dropped
     }
 }
 
-/// One in-flight call's progress subscription. Dropping it unsubscribes.
+/// One in-flight call's progress subscription. Dropping it is the request's
+/// own terminal forget point for progress state.
 struct McpProgressSubscription {
     router: Arc<McpProgressRouter>,
+    id: rmcp::model::RequestId,
     token: rmcp::model::ProgressToken,
     receiver: tokio::sync::mpsc::Receiver<ProgressNotificationParam>,
 }
@@ -2695,113 +3026,126 @@ impl McpProgressSubscription {
 
 impl Drop for McpProgressSubscription {
     fn drop(&mut self) {
-        self.router.unsubscribe(&self.token);
+        self.router.forget(&self.id, &self.token);
     }
 }
 
-/// Deterministic capacity regressions for the bounded progress router
-/// (Issue #205 review finding 3).
+/// Deterministic regressions for the progress ownership contract
+/// (Issue #205).
 ///
-/// MCP progress is idle-liveness evidence, so a bound that can silently
+/// MCP progress is idle-liveness evidence, so state that can silently
 /// discard the only progress report of an admitted in-flight call turns
 /// genuine remote progress into a false idle timeout. These exercise the
-/// capacity boundary directly: no clock, no transport, no sleep — the
+/// ownership boundary directly: no clock, no transport, no sleep — the
 /// router's own admission and delivery decisions are the whole contract.
 #[cfg(test)]
 mod progress_router_tests {
     use std::sync::Arc;
 
-    use rmcp::model::{NumberOrString, ProgressNotificationParam, ProgressToken};
+    use rmcp::model::{NumberOrString, ProgressNotificationParam, ProgressToken, RequestId};
 
-    use super::{MAX_PENDING_PROGRESS_TOKENS, McpProgressRouter, PROGRESS_SUBSCRIPTION_CAPACITY};
+    use super::{LiveProgress, McpProgressRouter, PROGRESS_SUBSCRIPTION_CAPACITY};
 
     fn token(value: u32) -> ProgressToken {
         ProgressToken(NumberOrString::Number(value.into()))
+    }
+
+    fn id(value: i64) -> RequestId {
+        RequestId::Number(value)
     }
 
     fn notification(value: u32, progress: f64) -> ProgressNotificationParam {
         ProgressNotificationParam::new(token(value), progress)
     }
 
-    /// The exact shape the old global 16-token cache broke: more concurrent
-    /// in-flight calls than that cache could track, each of which must still
-    /// receive its own remote progress.
+    /// A known live request keeps its liveness occurrence under any amount
+    /// of payload pressure, and the payload it keeps is the most recent one.
     ///
-    /// Every subscription is one admitted in-flight MCP request, and each is
-    /// owned by its own call, so the live set is bounded by the Agent Loop's
-    /// in-flight call set rather than by a router constant. Delivering to all
-    /// of them is what keeps the idle watchdog honest at concurrency above
-    /// the old bound.
+    /// This is the coalescing contract stated exactly: detail may be
+    /// collapsed, the occurrence may not be lost.
     #[test]
-    fn every_admitted_call_receives_its_own_progress_above_the_old_token_bound() {
+    fn a_known_live_request_keeps_its_occurrence_under_payload_pressure() {
         let router = Arc::new(McpProgressRouter::default());
-        let concurrent = 64_u32;
-        let mut subscriptions: Vec<_> = (0..concurrent)
-            .map(|index| router.subscribe(token(index)))
-            .collect();
+        router.admit(&id(1), &token(7));
+        for pulse in 0..5_000 {
+            router.deliver(notification(7, f64::from(pulse)));
+        }
+        let mut subscription = router.subscribe(id(1), token(7));
+        let delivered = subscription.drain();
+        assert_eq!(
+            delivered.len(),
+            1,
+            "one known live request holds one O(1) coalesced entry"
+        );
+        assert!(
+            (delivered[0].progress - 4_999.0).abs() < f64::EPSILON,
+            "coalescing keeps the most recent payload"
+        );
+    }
+
+    /// Peer-controlled unknown tokens can never evict a known `ToolCall`'s
+    /// liveness evidence, because they occupy no storage to evict it from.
+    ///
+    /// This is the finding the old fixed-size FIFO window failed: an unknown
+    /// token displaced an admitted request's only progress occurrence once
+    /// the window was full.
+    #[test]
+    fn unknown_peer_token_pressure_never_evicts_a_known_live_request() {
+        let router = Arc::new(McpProgressRouter::default());
+        // One admitted request, with its only progress notification already
+        // delivered before it could subscribe.
+        router.admit(&id(1), &token(1));
+        router.deliver(notification(1, 0.5));
+        // A peer flood, orders of magnitude above any cache a bounded
+        // pre-subscription window could have had.
+        for unknown in 1_000..101_000_u32 {
+            router.deliver(notification(unknown, 1.0));
+        }
+        assert_eq!(
+            router.live_tokens(),
+            1,
+            "unsolicited progress is counted, never stored, so the live set is \
+             bounded by rustX's own admitted requests"
+        );
+        assert_eq!(router.unsolicited_dropped(), 100_000);
+        let mut subscription = router.subscribe(id(1), token(1));
+        let delivered = subscription.drain();
+        assert_eq!(
+            delivered.len(),
+            1,
+            "the admitted request still owns its liveness evidence"
+        );
+        assert!((delivered[0].progress - 0.5).abs() < f64::EPSILON);
+    }
+
+    /// Far more concurrent admitted requests than the removed bound, every
+    /// one of them racing its own subscription, and every one still
+    /// observing its own remote liveness evidence.
+    #[test]
+    fn every_admitted_request_keeps_its_own_evidence_far_above_the_removed_bound() {
+        let router = Arc::new(McpProgressRouter::default());
+        let concurrent = 1_024_u32;
+        // The whole batch crosses its dispatch frontier first, and every
+        // server answers with progress, before any of them subscribes: the
+        // pre-subscription window, held open for all of them at once.
+        for index in 0..concurrent {
+            router.admit(&id(i64::from(index)), &token(index));
+        }
         for index in 0..concurrent {
             router.deliver(notification(index, f64::from(index)));
         }
-        for (index, subscription) in subscriptions.iter_mut().enumerate() {
+        for index in 0..concurrent {
+            let mut subscription = router.subscribe(id(i64::from(index)), token(index));
             let delivered = subscription.drain();
             assert_eq!(
                 delivered.len(),
                 1,
-                "call {index} must observe its own remote liveness evidence"
+                "request {index} must observe its own remote liveness evidence"
             );
             #[allow(clippy::cast_precision_loss)]
-            let expected = index as f64;
+            let expected = f64::from(index);
             assert!((delivered[0].progress - expected).abs() < f64::EPSILON);
         }
-    }
-
-    /// The pre-subscription window: a notification that arrives before the
-    /// dispatching call subscribed is still claimed by that call, even while
-    /// many other calls hold live subscriptions.
-    ///
-    /// Under the old bound this notification was the first thing dropped —
-    /// the tracked-token cache was full of live subscriptions and an unknown
-    /// token displaced nothing — so the call's only liveness evidence was
-    /// erased before it could ever be consumed.
-    #[test]
-    fn a_pre_subscription_notification_survives_a_full_live_subscription_set() {
-        let router = Arc::new(McpProgressRouter::default());
-        let live: Vec<_> = (0..64_u32)
-            .map(|index| router.subscribe(token(index)))
-            .collect();
-        // The dispatching call has not subscribed yet: rmcp mints the token
-        // inside `send_cancellable_request`, so this window always exists.
-        router.deliver(notification(1_000, 0.5));
-        let mut late = router.subscribe(token(1_000));
-        let delivered = late.drain();
-        assert_eq!(
-            delivered.len(),
-            1,
-            "the pre-subscription window is claimed by the call that owns the token"
-        );
-        assert!((delivered[0].progress - 0.5).abs() < f64::EPSILON);
-        drop(live);
-    }
-
-    /// Payload may be coalesced; the liveness occurrence may not be lost.
-    ///
-    /// Many notifications for one unsubscribed token collapse onto the
-    /// latest payload plus an occurrence count, so the window stays O(1) per
-    /// token — and the subscribing call still observes that progress
-    /// happened.
-    #[test]
-    fn pre_subscription_pressure_coalesces_payload_but_keeps_the_occurrence() {
-        let router = Arc::new(McpProgressRouter::default());
-        for pulse in 0..500 {
-            router.deliver(notification(7, f64::from(pulse)));
-        }
-        let mut subscription = router.subscribe(token(7));
-        let delivered = subscription.drain();
-        assert_eq!(delivered.len(), 1, "the window keeps one entry per token");
-        assert!(
-            (delivered[0].progress - 499.0).abs() < f64::EPSILON,
-            "coalescing keeps the most recent payload"
-        );
     }
 
     /// A subscriber's queue overflowing never erases the liveness fact: the
@@ -2810,7 +3154,8 @@ mod progress_router_tests {
     #[test]
     fn a_full_subscription_queue_still_holds_undelivered_liveness_evidence() {
         let router = Arc::new(McpProgressRouter::default());
-        let mut subscription = router.subscribe(token(3));
+        router.admit(&id(3), &token(3));
+        let mut subscription = router.subscribe(id(3), token(3));
         for pulse in 0..(PROGRESS_SUBSCRIPTION_CAPACITY * 4) {
             #[allow(clippy::cast_precision_loss)]
             router.deliver(notification(3, pulse as f64));
@@ -2827,29 +3172,70 @@ mod progress_router_tests {
         );
     }
 
-    /// The pre-subscription window is bounded, and its eviction is FIFO, so
-    /// the entry a just-dispatched call is about to claim is the last one an
-    /// overflow can reach.
+    /// A settled request leaves no token state behind, so nothing
+    /// accumulates for the connection generation's lifetime.
     #[test]
-    fn the_pre_subscription_window_is_bounded_and_evicts_the_oldest_first() {
+    fn a_settled_request_forgets_its_token_state() {
         let router = Arc::new(McpProgressRouter::default());
-        for index in 0..u32::try_from(MAX_PENDING_PROGRESS_TOKENS).expect("small bound") {
+        for index in 0..256_u32 {
+            router.admit(&id(i64::from(index)), &token(index));
             router.deliver(notification(index, 1.0));
+            let subscription = router.subscribe(id(i64::from(index)), token(index));
+            drop(subscription);
         }
-        // One more unsubscribed token than the window holds: the oldest is
-        // evicted, the newest is retained.
-        let overflow = u32::try_from(MAX_PENDING_PROGRESS_TOKENS).expect("small bound");
-        router.deliver(notification(overflow, 2.0));
-        let mut newest = router.subscribe(token(overflow));
         assert_eq!(
-            newest.drain().len(),
-            1,
-            "the newest pre-subscription entry survives an overflow"
+            router.live_tokens(),
+            0,
+            "the dispatching call's subscription guard is the request's own \
+             terminal forget point"
         );
-        let mut oldest = router.subscribe(token(0));
+    }
+
+    /// A request whose dispatching call is gone is forgotten by its own
+    /// correlated response, so an admitted token cannot outlive the
+    /// invocation that owned it.
+    #[test]
+    fn a_correlated_response_forgets_an_unsubscribed_request() {
+        let router = Arc::new(McpProgressRouter::default());
+        router.admit(&id(9), &token(9));
+        router.deliver(notification(9, 1.0));
+        assert_eq!(router.live_tokens(), 1);
+        router.settle(&id(9));
+        assert_eq!(
+            router.live_tokens(),
+            0,
+            "the inbound correlated response is the terminal forget point of a \
+             request no call is waiting on"
+        );
+    }
+
+    /// A response arriving while the dispatching call still holds its
+    /// subscription must not take the evidence away from it: the call has
+    /// not reported the response yet, and progress delivered alongside it is
+    /// still the call's to drain.
+    #[test]
+    fn a_correlated_response_never_disarms_a_live_subscription() {
+        let router = Arc::new(McpProgressRouter::default());
+        router.admit(&id(4), &token(4));
+        let mut subscription = router.subscribe(id(4), token(4));
+        router.deliver(notification(4, 1.0));
+        router.settle(&id(4));
         assert!(
-            oldest.drain().is_empty(),
-            "the oldest unsubscribed entry is the one evicted"
+            matches!(
+                router
+                    .state
+                    .lock()
+                    .expect("MCP progress router lock poisoned")
+                    .live
+                    .get(&token(4)),
+                Some(LiveProgress::Subscribed(_))
+            ),
+            "the subscription still owns the token"
+        );
+        assert_eq!(
+            subscription.drain().len(),
+            1,
+            "evidence delivered before the response is still reported"
         );
     }
 }
