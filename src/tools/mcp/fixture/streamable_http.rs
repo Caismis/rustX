@@ -69,9 +69,18 @@ pub const TOOL_WITHHOLD: &str = "http-withhold";
 /// watchdog must see.
 pub const TOOL_PULSE: &str = "http-pulse";
 
+/// The identity of the next fixture instance.
+///
+/// Every fixture mints tool names that belong to exactly one instance, which
+/// is what makes a tool-name-scoped test probe genuinely test-scoped: tests
+/// in one binary run concurrently, and two of them asking for "the echo
+/// tool" must not be the same key.
+static NEXT_FIXTURE_SCOPE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// The parent's control and observation handle on one HTTP fixture.
 #[derive(Clone)]
 pub struct HttpFixtureControl {
+    scope: u64,
     accepted: watch::Sender<u32>,
     terminated: watch::Sender<u32>,
     pulsed: watch::Sender<u32>,
@@ -90,11 +99,35 @@ impl HttpFixtureControl {
     #[must_use]
     pub fn new() -> Self {
         Self {
+            scope: NEXT_FIXTURE_SCOPE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             accepted: watch::channel(0).0,
             terminated: watch::channel(0).0,
             pulsed: watch::channel(0).0,
             release: watch::channel(false).0,
         }
+    }
+
+    /// This fixture instance's own name for one catalog tool.
+    fn scoped(&self, base: &str) -> String {
+        format!("{base}-{}", self.scope)
+    }
+
+    /// This fixture's [`TOOL_ECHO`].
+    #[must_use]
+    pub fn echo(&self) -> String {
+        self.scoped(TOOL_ECHO)
+    }
+
+    /// This fixture's [`TOOL_PULSE`].
+    #[must_use]
+    pub fn pulse(&self) -> String {
+        self.scoped(TOOL_PULSE)
+    }
+
+    /// This fixture's [`TOOL_WITHHOLD`].
+    #[must_use]
+    pub fn withhold(&self) -> String {
+        self.scoped(TOOL_WITHHOLD)
     }
 
     /// Resolves once at least `count` `tools/call` invocations have entered
@@ -174,11 +207,11 @@ impl HttpFixtureServer {
         Self { control }
     }
 
-    fn catalog() -> Vec<Tool> {
+    fn catalog(&self) -> Vec<Tool> {
         vec![
-            super::fixture_tool_named(TOOL_ECHO),
-            super::fixture_tool_named(TOOL_PULSE),
-            super::fixture_tool_named(TOOL_WITHHOLD),
+            super::fixture_tool_named(&self.control.echo()),
+            super::fixture_tool_named(&self.control.pulse()),
+            super::fixture_tool_named(&self.control.withhold()),
         ]
     }
 
@@ -223,7 +256,7 @@ impl ServerHandler for HttpFixtureServer {
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        Self::catalog().into_iter().find(|tool| tool.name == *name)
+        self.catalog().into_iter().find(|tool| tool.name == *name)
     }
 
     fn list_tools(
@@ -232,7 +265,7 @@ impl ServerHandler for HttpFixtureServer {
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListToolsResult, rmcp::ErrorData>> + Send {
         std::future::ready(Ok(ListToolsResult {
-            tools: Self::catalog(),
+            tools: self.catalog(),
             ..Default::default()
         }))
     }
@@ -243,12 +276,20 @@ impl ServerHandler for HttpFixtureServer {
         context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<CallToolResponse, rmcp::ErrorData>> + Send {
         let control = self.control.clone();
+        let echo = control.echo();
+        let pulse = control.pulse();
+        let withhold = control.withhold();
         async move {
             match request.name.as_ref() {
-                TOOL_ECHO => {
+                name if name == echo => {
+                    // Counted like every other tool of this fixture, so
+                    // `accepted_calls() == 0` is evidence that a request
+                    // never arrived rather than evidence that this tool
+                    // never counted.
+                    control.accepted.send_modify(|accepted| *accepted += 1);
                     Ok(CallToolResult::success(vec![ContentBlock::text("http echo")]).into())
                 }
-                TOOL_PULSE => {
+                name if name == pulse => {
                     Self::notify(&context, 1.0).await?;
                     control.accepted.send_modify(|accepted| *accepted += 1);
                     let mut release = control.release.subscribe();
@@ -268,7 +309,7 @@ impl ServerHandler for HttpFixtureServer {
                         None,
                     ))
                 }
-                TOOL_WITHHOLD => {
+                name if name == withhold => {
                     control.accepted.send_modify(|accepted| *accepted += 1);
                     let mut release = control.release.subscribe();
                     tokio::select! {
