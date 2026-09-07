@@ -173,7 +173,9 @@ impl ToolExecutor for ControlledExecutor {
 
 fn background_invocation(tool: &str) -> ToolInvocation {
     ToolInvocation {
-        call_id: ToolCallId::new("call-1"),
+        id: rustx::tools::types::ToolInvocationId::Agent {
+            call_id: ToolCallId::new("call-1"),
+        },
         tool_id: ToolId::new(format!("tool-{tool}")),
         tool_name: tool.to_owned(),
         mode: ToolInvocationMode::Background,

@@ -1,7 +1,7 @@
 //! Generic foreground Tool-execution liveness deadlines (Issue #204).
 //!
 //! One admitted foreground tool execution is bounded by at most two
-//! deadlines, both owned by the Agent Loop's generic execution lifecycle —
+//! deadlines, both owned by the caller-independent native invocation lifecycle —
 //! never independently by an executor:
 //!
 //! - the **hard deadline** bounds the total execution lifetime, measured
@@ -74,6 +74,27 @@ pub const DEFAULT_TOOL_HARD_DEADLINE: Duration = Duration::from_mins(2);
 /// facts.
 pub const TOOL_SETTLEMENT_CONTROL_GUARD: Duration = Duration::from_secs(30);
 
+/// Trusted registration-owned selection; never model invocation metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ForegroundPolicy {
+    #[default]
+    Leaf,
+    /// A composite first drains counted native descendants, whose own
+    /// settlement guards remain authoritative. It then has the same finite
+    /// control guard for its own settlement plane, never a competing timer.
+    Composite { total: ToolExecutionDeadlinePolicy },
+}
+
+impl ForegroundPolicy {
+    #[must_use]
+    pub const fn resolve(self, leaf: ToolExecutionDeadlinePolicy) -> ToolExecutionDeadlinePolicy {
+        match self {
+            Self::Leaf => leaf,
+            Self::Composite { total } => total,
+        }
+    }
+}
+
 /// The immutable execution-liveness policy of one runtime.
 ///
 /// The policy is current launch configuration, never model input, durable
@@ -81,9 +102,8 @@ pub const TOOL_SETTLEMENT_CONTROL_GUARD: Duration = Duration::from_secs(30);
 /// execution authority at admission, so a running `ToolCall` can never
 /// observe a later policy value, and it is inherited by subagent children
 /// through their typed startup specification exactly like the model timeout
-/// policy (Issue #138). There is deliberately one generic policy for every
-/// foreground tool: no executor-specific deadline knobs exist in the Agent
-/// Loop.
+/// policy (Issue #138). Trusted composite registrations select their finite
+/// total policy through `ForegroundPolicy`; both use the same native driver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ToolExecutionDeadlinePolicy {
     /// The total maximum execution lifetime of one admitted foreground call,

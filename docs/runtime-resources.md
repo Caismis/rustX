@@ -1,5 +1,27 @@
 # Runtime resources and executable authority
 
+`capabilities::selection` owns `ToolSelector` and exact source-qualified Tool
+resolution. Named Subagents and fixed Workflows consume it directly. Selector
+serialization is unchanged; managed Python remains MCP-origin.
+
+Foreground Leaf/Composite policy is immutable registration metadata, not an
+executor trait declaration or model-facing schema field. Catalog equality includes
+this policy but deliberately excludes executor pointer identity. Explicit reload's
+`force_publish` and frozen MCP binding comparison publish changed materializations
+even with identical definitions. Old snapshots retain their immutable catalog and
+executor Arcs; they cannot see a replacement executor through a new generation.
+
+WF-02 retains executable registrations (including frozen foreground policy) in
+the generation's `AvailableToolCatalog`, independently of its active model
+`ToolRegistry`. A fixed Workflow explicitly admits source-qualified Builtin/MCP
+selectors and resolves them using the same availability and identity rules as
+named subagents. Managed Python retains its synthesized MCP source identity.
+An inactive but available capability can serve a Workflow without widening the
+model surface. Unavailable sources, unknown selectors, changed identities and
+ineligible orchestration capabilities fail closed. Registration reconstruction
+preserves its private admitted policy; fixed-leaf preparation rejects Composite
+substitution. No later resource reload replaces in-flight authority.
+
 `RuntimeResourceSnapshot` is the immutable process-local owner of loaded
 resource-derived authority. One generation contains the ordered project
 context files and concatenated bytes, the compact Skill catalog and discovered

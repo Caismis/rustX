@@ -300,8 +300,8 @@ pub struct PreToolView<'a> {
     pub attempt_id: &'a AttemptId,
     /// The primary model turn that issued the call.
     pub turn: u32,
-    /// The canonical model-issued call identity.
-    pub call_id: &'a ToolCallId,
+    /// Correlation with the caller's invocation authority.
+    pub invocation_id: &'a crate::tools::types::ToolInvocationId,
     /// The registry-resolved tool identity.
     pub tool_id: &'a ToolId,
     /// The registry-resolved model-facing name.
@@ -312,13 +312,10 @@ pub struct PreToolView<'a> {
     pub mode: ToolInvocationMode,
     /// The schema-validated business arguments.
     pub arguments: &'a serde_json::Value,
-    /// The exact model-issued arguments of the canonical `ToolCall`, before
-    /// reserved-metadata stripping and normalization.
-    ///
-    /// This is the value the Message Ledger owns by value, so it is the one an
-    /// approval audit subject can pin verifiably. It is descriptive data only;
-    /// a policy never receives a channel to replace it.
-    pub canonical_arguments: &'a serde_json::Value,
+    /// The caller's auditable argument source: Agent canonical arguments
+    /// before normalization, or Workflow's exact prepared arguments.
+    /// This is descriptive evidence, never a policy replacement channel.
+    pub audit_arguments: &'a serde_json::Value,
     /// The tool-owned approval policy resolved by preflight.
     pub approval_policy: ToolApprovalPolicy,
 }
@@ -332,13 +329,13 @@ impl PreToolView<'_> {
     pub(crate) fn approval_facts(&self, reason: impl Into<String>) -> ApprovalFacts {
         ApprovalFacts {
             turn: self.turn,
-            call_id: self.call_id.clone(),
+            invocation_id: self.invocation_id.clone(),
             tool_id: self.tool_id.clone(),
             tool_name: self.tool_name.to_owned(),
             origin: self.origin.clone(),
             mode: self.mode,
             arguments: self.arguments.clone(),
-            canonical_arguments: self.canonical_arguments.clone(),
+            audit_arguments: self.audit_arguments.clone(),
             reason: reason.into(),
         }
     }
@@ -880,7 +877,7 @@ mod tests {
     fn view<'a>(
         conversation_id: &'a ConversationId,
         attempt_id: &'a AttemptId,
-        call_id: &'a ToolCallId,
+        invocation_id: &'a crate::tools::types::ToolInvocationId,
         tool_id: &'a ToolId,
         origin: &'a ToolOrigin,
         arguments: &'a serde_json::Value,
@@ -890,13 +887,13 @@ mod tests {
             conversation_id,
             attempt_id,
             turn: 1,
-            call_id,
+            invocation_id,
             tool_id,
             tool_name: "write",
             origin,
             mode: ToolInvocationMode::Foreground,
             arguments,
-            canonical_arguments: arguments,
+            audit_arguments: arguments,
             approval_policy,
         }
     }
@@ -905,7 +902,9 @@ mod tests {
     async fn approval_mode_changes_only_the_effective_approval_decision() {
         let conversation_id = ConversationId::new("approval-policy-conversation");
         let attempt_id = AttemptId::new("approval-policy-attempt");
-        let call_id = ToolCallId::new("approval-policy-call");
+        let call_id = crate::tools::types::ToolInvocationId::Agent {
+            call_id: ToolCallId::new("approval-policy-call"),
+        };
         let tool_id = ToolId::new("tool-write");
         let origin = ToolOrigin::Builtin;
         let arguments = serde_json::json!({"path": "same.txt", "content": "same"});

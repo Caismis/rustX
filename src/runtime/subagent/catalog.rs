@@ -22,6 +22,7 @@
 //!
 //! [`RuntimeResourceSnapshot`]: crate::runtime::resources::RuntimeResourceSnapshot
 
+use crate::capabilities::selection::ToolSelector;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,7 +32,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::model::catalog::ModelRef;
-use crate::runtime::identity::McpServerId;
 use crate::runtime::resources::ProjectContextFile;
 
 /// The maximum number of named agents one catalog may admit.
@@ -168,49 +168,6 @@ impl core::fmt::Display for SubagentNameError {
 }
 
 impl std::error::Error for SubagentNameError {}
-
-/// One source-qualified capability selection of a named definition.
-///
-/// The origins share **one** selection vocabulary and **one**
-/// resolution core: the selector names the origin explicitly so resolution
-/// can never confuse a Builtin `read` with an MCP server's `read`, and the
-/// frozen resolution keeps the exact canonical identity of the origin it
-/// came from. Managed Python tool packages are selected through the `Mcp`
-/// origin under their synthesized server identity (Issue #174).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(tag = "origin", rename_all = "snake_case", deny_unknown_fields)]
-pub enum SubagentToolSelector {
-    /// A runtime built-in/native capability, selected by its canonical
-    /// model-facing name.
-    Builtin {
-        /// The canonical model-facing name.
-        name: String,
-    },
-    /// One tool of one configured MCP server.
-    Mcp {
-        /// The authoritative MCP server identity.
-        server_id: McpServerId,
-        /// The canonical tool name as the server publishes it.
-        name: String,
-    },
-}
-
-impl SubagentToolSelector {
-    /// The canonical selection text used by digests and diagnostics.
-    #[must_use]
-    pub fn canonical(&self) -> String {
-        match self {
-            Self::Builtin { name } => format!("builtin:{name}"),
-            Self::Mcp { server_id, name } => format!("mcp:{server_id}/{name}"),
-        }
-    }
-}
-
-impl core::fmt::Display for SubagentToolSelector {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str(&self.canonical())
-    }
-}
 
 /// The project-instruction policy of one named definition.
 ///
@@ -358,7 +315,7 @@ pub struct SubagentDefinition {
     instructions_source: PathBuf,
     model: Option<ModelRef>,
     execution_deadline: Option<SubagentExecutionDeadline>,
-    tools: Vec<SubagentToolSelector>,
+    tools: Vec<ToolSelector>,
     skills: Vec<String>,
     project_instructions: SubagentProjectInstructionPolicy,
     workspace_policy: super::workspace::SubagentWorkspacePolicy,
@@ -386,7 +343,7 @@ impl SubagentDefinition {
         instructions_source: PathBuf,
         model: Option<ModelRef>,
         execution_deadline: Option<SubagentExecutionDeadline>,
-        tools: Vec<SubagentToolSelector>,
+        tools: Vec<ToolSelector>,
         skills: Vec<String>,
         project_instructions: SubagentProjectInstructionPolicy,
         workspace_policy: super::workspace::SubagentWorkspacePolicy,
@@ -421,7 +378,7 @@ impl SubagentDefinition {
         if let Some(selector) = tools.iter().find(|selector| {
             matches!(
                 selector,
-                SubagentToolSelector::Builtin { name }
+                ToolSelector::Builtin { name }
                     if name == crate::tools::native::SUBAGENT_TOOL_NAME
             )
         }) {
@@ -433,7 +390,7 @@ impl SubagentDefinition {
         if let Some(selector) = tools.iter().find(|selector| {
             matches!(
                 selector,
-                SubagentToolSelector::Builtin { name }
+                ToolSelector::Builtin { name }
                     if CHILD_UNSAFE_BUILTIN_TOOLS.contains(&name.as_str())
             )
         }) {
@@ -517,7 +474,7 @@ impl SubagentDefinition {
 
     /// The canonically ordered typed Tool selectors.
     #[must_use]
-    pub fn tools(&self) -> &[SubagentToolSelector] {
+    pub fn tools(&self) -> &[ToolSelector] {
         &self.tools
     }
 
@@ -807,7 +764,7 @@ fn compute_digest(
     instructions: &str,
     model: Option<&ModelRef>,
     execution_deadline: Option<SubagentExecutionDeadline>,
-    tools: &[SubagentToolSelector],
+    tools: &[ToolSelector],
     skills: &[String],
     project_instructions: &SubagentProjectInstructionPolicy,
     workspace_policy: super::workspace::SubagentWorkspacePolicy,
@@ -894,8 +851,9 @@ mod tests {
     use super::{
         MAX_SUBAGENT_EXECUTION_DEADLINE_MS, SubagentCatalog, SubagentDefinition,
         SubagentDefinitionError, SubagentExecutionDeadline, SubagentExecutionDeadlineError,
-        SubagentName, SubagentNameError, SubagentProjectInstructionPolicy, SubagentToolSelector,
+        SubagentName, SubagentNameError, SubagentProjectInstructionPolicy,
     };
+    use crate::capabilities::selection::ToolSelector;
     use crate::runtime::identity::McpServerId;
     use crate::runtime::resources::ProjectContextFile;
     use crate::runtime::subagent::SubagentWorkspacePolicy;
@@ -909,7 +867,7 @@ mod tests {
 
     fn definition(
         name: &str,
-        tools: Vec<SubagentToolSelector>,
+        tools: Vec<ToolSelector>,
         skills: Vec<String>,
     ) -> Result<SubagentDefinition, SubagentDefinitionError> {
         SubagentDefinition::new(
@@ -956,13 +914,13 @@ mod tests {
         let ordered = definition(
             "explore",
             vec![
-                SubagentToolSelector::Builtin {
+                ToolSelector::Builtin {
                     name: "glob".to_owned(),
                 },
-                SubagentToolSelector::Builtin {
+                ToolSelector::Builtin {
                     name: "read".to_owned(),
                 },
-                SubagentToolSelector::Mcp {
+                ToolSelector::Mcp {
                     server_id: McpServerId::new("github"),
                     name: "get_issue".to_owned(),
                 },
@@ -973,17 +931,17 @@ mod tests {
         let shuffled = definition(
             "explore",
             vec![
-                SubagentToolSelector::Mcp {
+                ToolSelector::Mcp {
                     server_id: McpServerId::new("github"),
                     name: "get_issue".to_owned(),
                 },
-                SubagentToolSelector::Builtin {
+                ToolSelector::Builtin {
                     name: "read".to_owned(),
                 },
-                SubagentToolSelector::Builtin {
+                ToolSelector::Builtin {
                     name: "read".to_owned(),
                 },
-                SubagentToolSelector::Builtin {
+                ToolSelector::Builtin {
                     name: "glob".to_owned(),
                 },
             ],
@@ -998,7 +956,7 @@ mod tests {
     fn semantically_different_definitions_have_different_digests() {
         let base = definition(
             "explore",
-            vec![SubagentToolSelector::Builtin {
+            vec![ToolSelector::Builtin {
                 name: "read".to_owned(),
             }],
             Vec::new(),
@@ -1007,10 +965,10 @@ mod tests {
         let more_tools = definition(
             "explore",
             vec![
-                SubagentToolSelector::Builtin {
+                ToolSelector::Builtin {
                     name: "read".to_owned(),
                 },
-                SubagentToolSelector::Builtin {
+                ToolSelector::Builtin {
                     name: "grep".to_owned(),
                 },
             ],
@@ -1019,7 +977,7 @@ mod tests {
         .expect("definition");
         let other_origin = definition(
             "explore",
-            vec![SubagentToolSelector::Mcp {
+            vec![ToolSelector::Mcp {
                 server_id: crate::runtime::identity::McpServerId::new("server-1"),
                 name: "read".to_owned(),
             }],
@@ -1028,7 +986,7 @@ mod tests {
         .expect("definition");
         let other_name = definition(
             "research",
-            vec![SubagentToolSelector::Builtin {
+            vec![ToolSelector::Builtin {
                 name: "read".to_owned(),
             }],
             Vec::new(),
@@ -1036,7 +994,7 @@ mod tests {
         .expect("definition");
         let with_skill = definition(
             "explore",
-            vec![SubagentToolSelector::Builtin {
+            vec![ToolSelector::Builtin {
                 name: "read".to_owned(),
             }],
             vec!["navigation".to_owned()],
@@ -1235,7 +1193,7 @@ mod tests {
         assert!(matches!(
             definition(
                 "explore",
-                vec![SubagentToolSelector::Builtin {
+                vec![ToolSelector::Builtin {
                     name: "subagent".to_owned()
                 }],
                 Vec::new(),
@@ -1245,7 +1203,7 @@ mod tests {
         assert!(matches!(
             definition(
                 "explore",
-                vec![SubagentToolSelector::Builtin {
+                vec![ToolSelector::Builtin {
                     name: "execution".to_owned()
                 }],
                 Vec::new(),
@@ -1255,7 +1213,7 @@ mod tests {
         assert!(
             definition(
                 "explore",
-                vec![SubagentToolSelector::Builtin {
+                vec![ToolSelector::Builtin {
                     name: "ask_user".to_owned()
                 }],
                 Vec::new(),

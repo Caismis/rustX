@@ -38,6 +38,7 @@ pub(super) fn static_retained_bound(block: &WorkflowBlockProgram) -> usize {
     for node in block.nodes.values() {
         bytes = bytes.saturating_add(match node {
             WorkflowNodeProgram::Agent(agent) => schema_value_bound(&agent.output_schema),
+            WorkflowNodeProgram::Tool { result, .. } => schema_value_bound(&result.schema()),
             WorkflowNodeProgram::Branch { .. } => 0,
             WorkflowNodeProgram::Return { .. } => schema_value_bound(&block.output_schema),
             WorkflowNodeProgram::Parallel {
@@ -215,7 +216,7 @@ impl WorkflowRuntime {
             {
                 let mut budgets = run.budgets.lock().expect("run budgets");
                 if cancellation.is_cancelled() {
-                    return Err(WorkflowRunError::Cancelled(cancellation.reason()));
+                    return Err(WorkflowRunError::from_cancellation(cancellation));
                 }
                 let agent = usize::from(matches!(node, WorkflowNodeProgram::Agent(_)));
                 if budgets.nodes >= run.program.total_nodes
@@ -235,7 +236,43 @@ impl WorkflowRuntime {
                 },
             );
             let result: Result<Option<BlockOutput<'_>>, WorkflowRunError> = async {
+                // This lease owns the complete admission/settlement future,
+                // including approval or staged Agent cleanup. It retires only
+                // after the native owner returned; it is not outcome authority.
+                let _native_owner = if matches!(
+                    node,
+                    WorkflowNodeProgram::Agent(_) | WorkflowNodeProgram::Tool { .. }
+                ) {
+                    context
+                        .native
+                        .as_ref()
+                        .map(|services| services.descendants.enter())
+                } else {
+                    None
+                };
                 match node {
+                    WorkflowNodeProgram::Tool {
+                        selector,
+                        arguments,
+                        result,
+                    } => {
+                        let arguments = evaluate_value(arguments, &input, &values)?;
+                        let native = self
+                            .invoke_tool(
+                                run,
+                                context,
+                                &node_instance,
+                                selector,
+                                arguments,
+                                cancellation,
+                            )
+                            .await?;
+                        let value = result.project(&native, &node_instance)?;
+                        reservation.retain(&value)?;
+                        // Sole local commit: only validated successful output.
+                        values.insert(node_id.clone(), value);
+                        Ok(None)
+                    }
                     WorkflowNodeProgram::Agent(agent) => {
                         let child = self
                             .admit_agent(
@@ -327,10 +364,7 @@ impl WorkflowRuntime {
                                     results.insert((*key).clone(), output.value.clone());
                                 }
                                 Err(error) => {
-                                    failures.insert(
-                                        (*key).clone(),
-                                        super::bound_workflow_diagnostic(error.to_string()),
-                                    );
+                                    failures.insert((*key).clone(), error.clone());
                                 }
                             }
                         }
@@ -344,18 +378,14 @@ impl WorkflowRuntime {
                                 failed: failures.keys().cloned().collect(),
                             },
                         );
-                        if cancellation.is_cancelled() {
-                            return Err(WorkflowRunError::Cancelled(cancellation.reason()));
-                        }
                         if !failures.is_empty() {
                             return Err(WorkflowRunError::ParallelFailed {
                                 node: node_instance.to_string(),
-                                detail: failures
-                                    .into_iter()
-                                    .map(|(key, error)| format!("{key}: {error}"))
-                                    .collect::<Vec<_>>()
-                                    .join("; "),
+                                failures,
                             });
+                        }
+                        if cancellation.is_cancelled() {
+                            return Err(WorkflowRunError::from_cancellation(cancellation));
                         }
                         let value = Value::Object(results);
                         validate_commit(output_schema, &value)?;
@@ -405,7 +435,7 @@ impl WorkflowRuntime {
     }
 }
 
-fn validate_commit(schema: &Value, value: &Value) -> Result<(), WorkflowRunError> {
+pub(super) fn validate_commit(schema: &Value, value: &Value) -> Result<(), WorkflowRunError> {
     let validator = jsonschema::Validator::new(schema)
         .map_err(|error| WorkflowRunError::InvalidValue(error.to_string()))?;
     if !validator.is_valid(value) {
@@ -419,8 +449,21 @@ fn validate_commit(schema: &Value, value: &Value) -> Result<(), WorkflowRunError
 fn outcome<T>(result: &Result<T, WorkflowRunError>) -> WorkflowExecutionOutcome {
     match result {
         Ok(_) => WorkflowExecutionOutcome::Completed,
-        Err(WorkflowRunError::Cancelled(_)) => WorkflowExecutionOutcome::Cancelled,
-        Err(_) => WorkflowExecutionOutcome::Failed,
+        Err(error) => match error.execution_status() {
+            crate::tools::types::ToolExecutionStatus::Cancelled { .. } => {
+                WorkflowExecutionOutcome::Cancelled
+            }
+            crate::tools::types::ToolExecutionStatus::Denied { .. } => {
+                WorkflowExecutionOutcome::Denied
+            }
+            crate::tools::types::ToolExecutionStatus::TimedOut => {
+                WorkflowExecutionOutcome::TimedOut
+            }
+            crate::tools::types::ToolExecutionStatus::OutcomeUnknown { .. } => {
+                WorkflowExecutionOutcome::OutcomeUnknown
+            }
+            _ => WorkflowExecutionOutcome::Failed,
+        },
     }
 }
 

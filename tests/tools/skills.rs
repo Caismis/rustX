@@ -503,7 +503,9 @@ async fn bash_reaches_skill_assets_through_the_published_location() {
     let result = executor
         .start(
             rustx::tools::types::ToolInvocation {
-                call_id: rustx::runtime::identity::ToolCallId::new("call-copy"),
+                id: rustx::tools::types::ToolInvocationId::Agent {
+                    call_id: rustx::runtime::identity::ToolCallId::new("call-copy"),
+                },
                 tool_id: rustx::runtime::identity::ToolId::new("tool-bash"),
                 tool_name: "bash".to_owned(),
                 mode: rustx::tools::types::ToolInvocationMode::Foreground,
@@ -573,7 +575,9 @@ async fn bash_cd_cannot_redefine_the_skill_root() {
     .expect("native tools");
     let executor = registry.executor(&rustx::runtime::identity::ToolId::new("tool-bash"));
     let invocation = rustx::tools::types::ToolInvocation {
-        call_id: rustx::runtime::identity::ToolCallId::new("call-1"),
+        id: rustx::tools::types::ToolInvocationId::Agent {
+            call_id: rustx::runtime::identity::ToolCallId::new("call-1"),
+        },
         tool_id: rustx::runtime::identity::ToolId::new("tool-bash"),
         tool_name: "bash".to_owned(),
         mode: rustx::tools::types::ToolInvocationMode::Foreground,

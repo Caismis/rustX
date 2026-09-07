@@ -57,6 +57,8 @@ pub(crate) mod subagent;
 mod support;
 mod todo;
 mod workflow;
+#[cfg(test)]
+pub(crate) use workflow::test_executor as test_workflow_executor;
 mod write;
 
 #[cfg(test)]
@@ -228,8 +230,11 @@ pub fn register_native_tools(
             executor,
             normalizer,
             mandatory,
+            foreground,
         } = registration;
-        registry.register_with_activation_metadata(definition, executor, normalizer, mandatory)?;
+        registry.register_with_activation_metadata(
+            definition, executor, normalizer, mandatory, foreground,
+        )?;
     }
     Ok(())
 }
@@ -253,8 +258,11 @@ pub(crate) fn register_workflow_tools(
             executor,
             normalizer,
             mandatory,
+            foreground,
         } = registration;
-        registry.register_with_activation_metadata(definition, executor, normalizer, mandatory)?;
+        registry.register_with_activation_metadata(
+            definition, executor, normalizer, mandatory, foreground,
+        )?;
     }
     Ok(())
 }
@@ -420,6 +428,7 @@ pub fn register_subagent_child_tools(
             executor,
             normalizer,
             false,
+            crate::tools::deadline::ForegroundPolicy::Leaf,
         )?;
     }
     Ok(())

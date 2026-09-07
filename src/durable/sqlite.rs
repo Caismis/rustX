@@ -196,7 +196,9 @@ use super::inbox::{
 /// Version 23 preserves Denied in detached terminal facts (Issue #206).
 /// Version 24 adds Workflow block/node instance lifecycle facts (Issue #217).
 /// Older stores are rejected; there is no compatibility decoding.
-pub const SQLITE_SCHEMA_VERSION: i64 = 24;
+/// The current version adds typed native deadline interruption to interaction
+/// outcomes and durable approval settlement, without fabricating user intent.
+pub const SQLITE_SCHEMA_VERSION: i64 = 26;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -3416,6 +3418,12 @@ fn require_interaction_envelope<'a>(
     Ok((attempt_id, turn_id))
 }
 
+fn native_approval_key(id: &crate::tools::types::ToolInvocationId) -> String {
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(serde_json::to_vec(id).expect("invocation identity"));
+    format!("native-approval:{digest:x}")
+}
+
 /// Verifies that one Approval audit subject describes the canonical `ToolCall`
 /// it names **in the generation its own envelope names** (Issue #109).
 ///
@@ -3439,21 +3447,24 @@ fn require_interaction_envelope<'a>(
 /// the exact canonical Assistant ToolCall this approval may describe
 /// ```
 ///
-/// Every real Approval reaches this with a publication owner: the Agent Loop
+/// Every Agent Approval reaches this with a publication owner: the Agent Loop
 /// commits an Assistant message through `commit_canonical_publication` and
 /// refuses to commit one at all without an open stream, so a canonical
 /// `ToolCall` without a frozen `(attempt, turn, message_id)` owner cannot occur
 /// on the approval path. There is deliberately no lenient fallback for a state
 /// the runtime cannot produce and no database can already contain.
+/// Workflow subjects instead pin exact prepared invocation facts in this
+/// interaction transaction, without consulting observational native events.
 fn validate_approval_subject_against_canonical(
     transaction: &Transaction<'_>,
+    conversation_id: &ConversationId,
     interaction_id: &InteractionId,
     attempt_id: &AttemptId,
     turn_id: &TurnId,
     subject: &InteractionSubject,
 ) -> Result<(), ConversationStoreError> {
     let InteractionSubject::Approval {
-        call_id,
+        invocation_id,
         tool_id,
         tool_name,
         arguments_digest,
@@ -3461,6 +3472,35 @@ fn validate_approval_subject_against_canonical(
     } = subject
     else {
         return Ok(());
+    };
+    let call_id = match invocation_id {
+        crate::tools::types::ToolInvocationId::Agent { call_id } => call_id,
+        crate::tools::types::ToolInvocationId::Workflow { node } => {
+            if node.block.run.attempt_id != *attempt_id
+                || node.block.run.conversation_id != *conversation_id
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "approval attempt differs from native invocation owner".into(),
+                ));
+            }
+            // The interaction-request transaction is the exact preparation audit
+            // boundary. Native execution events are observations, not authority.
+            // The coordinator supplies this immutable subject only after preflight.
+            let key = native_approval_key(invocation_id);
+            let exists: bool = transaction
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM lifecycle_state WHERE lifecycle_key=?1)",
+                    [&key],
+                    |row| row.get(0),
+                )
+                .map_err(|error| storage(error.to_string()))?;
+            if exists {
+                return Err(ConversationStoreError::InvalidReference(
+                    "native invocation already has a pinned approval subject".into(),
+                ));
+            }
+            return Ok(());
+        }
     };
     // 1. The generation that is asking must be the generation that proposed
     //    the call. This is the check that makes "turn 2 approved turn 1's
@@ -6987,6 +7027,7 @@ fn validate_event_reference(
             })?;
             validate_approval_subject_against_canonical(
                 transaction,
+                &envelope.conversation_id,
                 interaction_id,
                 attempt_id,
                 turn_id,
@@ -7831,8 +7872,20 @@ fn lifecycle_keys(event: &RuntimeEventEnvelope) -> Vec<(String, bool)> {
     // the attempt's own terminal transition. An interaction that stays open
     // across a restart is durable evidence of an unanswered prompt; it is
     // never an instruction to recreate a waiter.
-    if let RuntimeEvent::InteractionRequested { interaction_id, .. } = &event.event {
-        return vec![(format!("interaction:{interaction_id}"), false)];
+    if let RuntimeEvent::InteractionRequested {
+        interaction_id,
+        subject,
+    } = &event.event
+    {
+        let mut keys = vec![(format!("interaction:{interaction_id}"), false)];
+        if let InteractionSubject::Approval {
+            invocation_id: id @ crate::tools::types::ToolInvocationId::Workflow { .. },
+            ..
+        } = subject
+        {
+            keys.push((native_approval_key(id), true));
+        }
+        return keys;
     }
     if let RuntimeEvent::InteractionSettled { interaction_id, .. } = &event.event {
         return vec![(format!("interaction:{interaction_id}"), true)];

@@ -91,7 +91,9 @@ async fn run_tool_unchecked(
     executor
         .start(
             ToolInvocation {
-                call_id: ToolCallId::new("call-unchecked"),
+                id: rustx::tools::types::ToolInvocationId::Agent {
+                    call_id: ToolCallId::new("call-unchecked"),
+                },
                 tool_id: definition.id,
                 tool_name: name.to_owned(),
                 mode: ToolInvocationMode::Foreground,

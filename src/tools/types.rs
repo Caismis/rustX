@@ -243,7 +243,31 @@ pub struct ToolCallStart {
     pub name: String,
 }
 
-/// The canonical runtime-owned invocation delivered to a [`ToolExecutor`].
+/// Caller correlation for one native invocation. Capability source is
+/// independently represented by [`ToolOrigin`].
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(tag = "caller", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ToolInvocationId {
+    /// An accepted canonical Assistant call, owned by the Agent Loop.
+    Agent { call_id: ToolCallId },
+    /// A concrete fixed-program node visit, owned by `WorkflowRuntime`.
+    Workflow {
+        node: Box<crate::runtime::workflow::WorkflowNodeInstance>,
+    },
+}
+
+impl ToolInvocationId {
+    /// Returns canonical correlation only for an Agent caller.
+    #[must_use]
+    pub fn canonical_call_id(&self) -> Option<&ToolCallId> {
+        match self {
+            Self::Agent { call_id } => Some(call_id),
+            Self::Workflow { .. } => None,
+        }
+    }
+}
+
+/// The caller-neutral runtime-owned invocation delivered to a [`ToolExecutor`].
 ///
 /// An invocation contains only runtime-owned execution data: the logical
 /// call identity, the tool identity, the model-facing tool name, the
@@ -254,8 +278,8 @@ pub struct ToolCallStart {
 /// [`ToolExecutor`]: crate::tools::executor::ToolExecutor
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolInvocation {
-    /// The logical model-issued tool call identity.
-    pub call_id: ToolCallId,
+    /// Correlation with the caller's concrete invocation authority.
+    pub id: ToolInvocationId,
     /// The canonical tool identity.
     pub tool_id: ToolId,
     /// The model-facing tool name at call time.
@@ -732,7 +756,7 @@ pub enum ToolCancellationPhase {
 /// success, generic failure, confirmed timeout, or confirmed cancellation,
 /// and every non-success status produces bounded model-facing feedback
 /// through [`Self::feedback_text`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolExecutionStatus {
     /// The tool completed successfully and the outcome is known.

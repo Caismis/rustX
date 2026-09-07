@@ -132,7 +132,9 @@ mod unix_tests {
         rustx::tools::executor::ToolExecutor::start(
             executor.as_ref(),
             rustx::tools::types::ToolInvocation {
-                call_id: rustx::runtime::identity::ToolCallId::new("canonical-call"),
+                id: rustx::tools::types::ToolInvocationId::Agent {
+                    call_id: rustx::runtime::identity::ToolCallId::new("canonical-call"),
+                },
                 tool_id: definition.id.clone(),
                 tool_name: name.to_owned(),
                 mode: rustx::tools::types::ToolInvocationMode::Foreground,
@@ -929,7 +931,9 @@ mod unix_tests {
         rustx::tools::executor::ToolExecutor::start(
             executor,
             rustx::tools::types::ToolInvocation {
-                call_id: rustx::runtime::identity::ToolCallId::new(call_id),
+                id: rustx::tools::types::ToolInvocationId::Agent {
+                    call_id: rustx::runtime::identity::ToolCallId::new(call_id),
+                },
                 tool_id: definition.id.clone(),
                 tool_name: "echo".to_owned(),
                 mode: rustx::tools::types::ToolInvocationMode::Foreground,

@@ -188,8 +188,8 @@
   // one immutable WorkflowProgram; it is not a scripting language or an
   // expression/interpolation engine.
   "workflows": {
-    "definitions": ["review_pr", "parallel_review"],
-    "main": ["review_pr", "parallel_review"],
+    "definitions": ["review_pr", "parallel_review", "greeting_check"],
+    "main": ["review_pr", "parallel_review", "greeting_check"],
   },
 
   // Only this explicitly authorized environment reaches tools.

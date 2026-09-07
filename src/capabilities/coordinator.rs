@@ -513,7 +513,7 @@ impl CapabilityCoordinator {
             CapabilityRevision::default(),
             config.base_tool_registry.clone(),
             Arc::new(AvailableToolCatalog::new(
-                config.base_tool_registry.definitions(),
+                config.base_tool_registry.registrations(),
             )),
             initial_skills,
             None,
@@ -1362,16 +1362,17 @@ impl CapabilityCoordinator {
             return None;
         }
         let carried: Vec<ToolRegistration> = snapshot
-            .tool_registry()
+            .available_tools()
             .registrations()
-            .into_iter()
-            .filter(|registration| {
+            .iter()
+            .filter(|&registration| {
                 matches!(
                     &registration.definition.origin,
                     crate::tools::types::ToolOrigin::Mcp { server_id: owner }
                         if owner == server_id
                 )
             })
+            .cloned()
             .collect();
         if carried.is_empty() {
             None
@@ -3193,7 +3194,9 @@ mod mcp_race_tests {
         let result = crate::tools::executor::ToolExecutor::start(
             executor.as_ref(),
             crate::tools::types::ToolInvocation {
-                call_id: crate::runtime::identity::ToolCallId::new("mutate"),
+                id: crate::tools::types::ToolInvocationId::Agent {
+                    call_id: crate::runtime::identity::ToolCallId::new("mutate"),
+                },
                 tool_id: definitions[mutate_index].0.id.clone(),
                 tool_name: "mutate".to_owned(),
                 mode: crate::tools::types::ToolInvocationMode::Foreground,
@@ -3478,6 +3481,10 @@ mod mcp_race_tests {
         let v1_snapshot = coordinator.commit(candidate_v1).expect("commit v1");
         assert_eq!(v1_snapshot.revision().get(), 1);
 
+        let frozen_registration = v1_snapshot.available_tools().registrations().iter()
+            .find(|entry| matches!(&entry.definition.origin, crate::tools::types::ToolOrigin::Mcp { server_id: id } if id == &server_id))
+            .expect("available MCP registration").clone();
+
         // The old execution is admitted before the source/runtime change:
         // it holds a direct generation lease on the old physical runtime.
         let old_leases = v1_snapshot
@@ -3494,6 +3501,18 @@ mod mcp_race_tests {
         let candidate_v2 = coordinator.prepare_candidate().await.expect("prepare v2");
         let v2_snapshot = coordinator.commit(candidate_v2).expect("commit v2");
         assert_eq!(v2_snapshot.revision().get(), 2);
+        let old = v1_snapshot
+            .available_tools()
+            .registration(&frozen_registration.definition)
+            .unwrap();
+        let new = v2_snapshot
+            .available_tools()
+            .registration(&frozen_registration.definition)
+            .unwrap();
+        // Pointer comparison here proves retention, not semantic catalog equality:
+        // old immutable availability cannot expose the new materialization.
+        assert!(Arc::ptr_eq(&old.executor, &frozen_registration.executor));
+        assert!(!Arc::ptr_eq(&old.executor, &new.executor));
         let v2_runtime = coordinator
             .current_mcp_runtime(&server_id)
             .expect("v2 runtime");

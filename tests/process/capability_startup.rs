@@ -184,7 +184,9 @@ async fn prove_native_tool_executes(runtime: &LocalConversationRuntime) {
     let result = rustx::tools::executor::ToolExecutor::start(
         executor.as_ref(),
         rustx::tools::types::ToolInvocation {
-            call_id: rustx::runtime::identity::ToolCallId::new("issue81-bash"),
+            id: rustx::tools::types::ToolInvocationId::Agent {
+                call_id: rustx::runtime::identity::ToolCallId::new("issue81-bash"),
+            },
             tool_id: bash.id.clone(),
             tool_name: "bash".to_owned(),
             mode: rustx::tools::types::ToolInvocationMode::Foreground,

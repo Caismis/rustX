@@ -5093,9 +5093,10 @@ mod tests {
     use std::sync::Arc;
 
     use super::super::SubagentTerminalState;
-    use super::super::catalog::{SubagentExecutionDeadline, SubagentToolSelector};
+    use super::super::catalog::SubagentExecutionDeadline;
     use super::super::ipc::{ChildFrame, ChildResultStatus, ParentFrame, ResultFrame};
     use super::*;
+    use crate::capabilities::selection::ToolSelector;
     use crate::durable::ConversationStore;
     use crate::runtime::types::{CancellationReason, SystemClock};
 
@@ -5639,7 +5640,7 @@ mod tests {
         // The selector vocabulary is unchanged: #145 removed a physical
         // limitation, not a capability model.
         assert_eq!(
-            SubagentToolSelector::Mcp {
+            ToolSelector::Mcp {
                 server_id: crate::runtime::identity::McpServerId::new("github"),
                 name: "get_issue".to_owned(),
             }

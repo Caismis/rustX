@@ -640,7 +640,9 @@ async fn direct_mcp_call(
     rustx::tools::executor::ToolExecutor::start(
         executor.as_ref(),
         rustx::tools::types::ToolInvocation {
-            call_id: rustx::runtime::identity::ToolCallId::new("direct-call"),
+            id: rustx::tools::types::ToolInvocationId::Agent {
+                call_id: rustx::runtime::identity::ToolCallId::new("direct-call"),
+            },
             tool_id: definition.id.clone(),
             tool_name: tool_name.to_owned(),
             mode: rustx::tools::types::ToolInvocationMode::Foreground,
@@ -2891,7 +2893,9 @@ async fn drain_terminates_every_streamable_http_request_the_generation_still_own
         fixture.runtime.environment(),
     );
     let invocation = rustx::tools::types::ToolInvocation {
-        call_id: rustx::runtime::identity::ToolCallId::new("http-drain-call"),
+        id: rustx::tools::types::ToolInvocationId::Agent {
+            call_id: rustx::runtime::identity::ToolCallId::new("http-drain-call"),
+        },
         tool_id: rustx::runtime::identity::ToolId::new("http-drain-tool"),
         tool_name: server.control.withhold(),
         mode: rustx::tools::types::ToolInvocationMode::Foreground,
@@ -3225,7 +3229,11 @@ async fn direct_executor_call(
         fixture.runtime.environment(),
     );
     let invocation = rustx::tools::types::ToolInvocation {
-        call_id: rustx::runtime::identity::ToolCallId::new(format!("http-cleanup-call-{index}")),
+        id: rustx::tools::types::ToolInvocationId::Agent {
+            call_id: rustx::runtime::identity::ToolCallId::new(format!(
+                "http-cleanup-call-{index}"
+            )),
+        },
         tool_id: rustx::runtime::identity::ToolId::new("http-cleanup-tool"),
         tool_name: tool_name.to_owned(),
         mode: rustx::tools::types::ToolInvocationMode::Foreground,
@@ -3446,7 +3454,9 @@ async fn a_terminal_tool_call_never_dispatches_from_its_stale_outbound_send() {
         fixture.runtime.environment(),
     );
     let invocation = rustx::tools::types::ToolInvocation {
-        call_id: rustx::runtime::identity::ToolCallId::new("http-stale-send-call"),
+        id: rustx::tools::types::ToolInvocationId::Agent {
+            call_id: rustx::runtime::identity::ToolCallId::new("http-stale-send-call"),
+        },
         tool_id: rustx::runtime::identity::ToolId::new("http-stale-send-tool"),
         tool_name: echo.clone(),
         mode: rustx::tools::types::ToolInvocationMode::Foreground,

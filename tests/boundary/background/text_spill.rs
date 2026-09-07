@@ -773,7 +773,9 @@ async fn genuine_artifacts_still_publish_as_file_blocks_in_the_terminal_inbound(
 
     let fixture = fixture();
     let invocation = ToolInvocation {
-        call_id: ToolCallId::new("call-artifact"),
+        id: rustx::tools::types::ToolInvocationId::Agent {
+            call_id: ToolCallId::new("call-artifact"),
+        },
         tool_id: ToolId::new("tool-artifact"),
         tool_name: "artifact".to_owned(),
         mode: ToolInvocationMode::Background,

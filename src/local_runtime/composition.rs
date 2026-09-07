@@ -1089,6 +1089,9 @@ fn validate_workflow_tool_name_collisions(
     candidate: &crate::capabilities::PreparedCapabilityCandidate,
     workflows: &WorkflowCatalog,
 ) -> Result<(), RuntimeResourceLoadError> {
+    workflows
+        .validate_capabilities(candidate.available_tools(), candidate.availability())
+        .map_err(RuntimeResourceLoadError::new)?;
     for workflow_id in workflows.main() {
         let expected_id = format!("tool-workflow-{workflow_id}");
         if workflow_id.as_str() == crate::tools::native::SUBAGENT_TOOL_NAME {

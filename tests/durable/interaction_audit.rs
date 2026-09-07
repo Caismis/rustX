@@ -166,7 +166,7 @@ fn canonical_arguments() -> serde_json::Value {
 /// The one approval subject that truthfully describes that canonical call.
 fn approval_subject() -> InteractionSubject {
     InteractionSubject::Approval {
-        call_id: call_id(),
+        invocation_id: rustx::tools::types::ToolInvocationId::Agent { call_id: call_id() },
         tool_id: ToolId::new("tool-alpha"),
         tool_name: "alpha".to_owned(),
         arguments_digest: interaction_arguments_digest(&canonical_arguments()),
@@ -379,7 +379,9 @@ impl Generation {
     /// canonical call.
     fn approval_subject(&self) -> InteractionSubject {
         InteractionSubject::Approval {
-            call_id: self.call.id.clone(),
+            invocation_id: rustx::tools::types::ToolInvocationId::Agent {
+                call_id: self.call.id.clone(),
+            },
             tool_id: self.call.tool_id.clone(),
             tool_name: self.call.name.clone(),
             arguments_digest: interaction_arguments_digest(&self.call.arguments),
@@ -930,7 +932,10 @@ fn the_approval_subject_pins_the_exact_canonical_arguments() {
         subject:
             InteractionSubject::Approval {
                 arguments_digest,
-                call_id: subject_call,
+                invocation_id:
+                    rustx::tools::types::ToolInvocationId::Agent {
+                        call_id: subject_call,
+                    },
                 ..
             },
         ..
@@ -958,7 +963,7 @@ fn the_approval_subject_pins_the_exact_canonical_arguments() {
     // record, and the durable authority refuses it outright.
     let second = InteractionId::for_attempt(&attempt(), 2);
     let InteractionSubject::Approval {
-        call_id: c,
+        invocation_id: rustx::tools::types::ToolInvocationId::Agent { call_id: c },
         tool_id: t,
         tool_name: n,
         reason: r,
@@ -972,7 +977,7 @@ fn the_approval_subject_pins_the_exact_canonical_arguments() {
             store.append_interaction_audit(requested(
                 &second,
                 InteractionSubject::Approval {
-                    call_id: c,
+                    invocation_id: rustx::tools::types::ToolInvocationId::Agent { call_id: c },
                     tool_id: t,
                     tool_name: n,
                     arguments_digest: interaction_arguments_digest(
@@ -985,6 +990,93 @@ fn the_approval_subject_pins_the_exact_canonical_arguments() {
         ),
         "a digest that pins arguments the canonical ToolCall never carried is refused"
     );
+}
+
+#[test]
+fn workflow_approval_pins_prepared_native_identity_without_a_canonical_leaf_call() {
+    use rustx::runtime::workflow::{
+        WorkflowBlockInstance, WorkflowDefinitionPath, WorkflowId, WorkflowNodeInstance,
+        WorkflowRunId,
+    };
+    use rustx::tools::types::ToolInvocationId;
+    let store = policy_boundary_store();
+    let invocation_id = ToolInvocationId::Workflow {
+        node: Box::new(WorkflowNodeInstance {
+            block: WorkflowBlockInstance {
+                run: WorkflowRunId {
+                    conversation_id: conversation_id(),
+                    attempt_id: attempt(),
+                    invocation: 0,
+                },
+                definition: WorkflowDefinitionPath {
+                    workflow_id: WorkflowId::parse("check").unwrap(),
+                    blocks: Vec::new(),
+                },
+                invocations: Vec::new(),
+            },
+            node: "leaf".into(),
+            visit: 0,
+        }),
+    };
+    let subject = InteractionSubject::Approval {
+        invocation_id: invocation_id.clone(),
+        tool_id: ToolId::new("inactive-check"),
+        tool_name: "check".into(),
+        arguments_digest: interaction_arguments_digest(&serde_json::json!({"prepared":true})),
+        reason: "exact invocation".into(),
+    };
+    // Requested itself commits the exact preparation subject, with no native
+    // Prepared event and no canonical leaf ToolCall prerequisite.
+    store
+        .append_interaction_audit(requested(&interaction_id(), subject.clone()))
+        .unwrap();
+    for mutation in 0..3 {
+        let mut changed = subject.clone();
+        if let InteractionSubject::Approval {
+            arguments_digest,
+            tool_id,
+            ..
+        } = &mut changed
+        {
+            if mutation == 1 {
+                *arguments_digest =
+                    interaction_arguments_digest(&serde_json::json!({"prepared":false}));
+            }
+            if mutation == 2 {
+                *tool_id = ToolId::new("different-tool");
+            }
+        }
+        assert!(
+            store
+                .append_interaction_audit(requested(
+                    &InteractionId::for_attempt(&attempt(), 10 + mutation),
+                    changed,
+                ))
+                .is_err(),
+            "one invocation cannot acquire a replacement approval subject"
+        );
+    }
+    let mut next_visit = subject;
+    if let InteractionSubject::Approval {
+        invocation_id: ToolInvocationId::Workflow { node },
+        ..
+    } = &mut next_visit
+    {
+        node.visit += 1;
+    }
+    // A new visit needs a new interaction identity; the prior response cannot
+    // route to it. Reusing the old interaction identity is rejected.
+    assert!(
+        store
+            .append_interaction_audit(requested(&interaction_id(), next_visit.clone()))
+            .is_err()
+    );
+    store
+        .append_interaction_audit(requested(
+            &InteractionId::for_attempt(&attempt(), 20),
+            next_visit,
+        ))
+        .unwrap();
 }
 
 /// The exact argument value the canonical Assistant `ToolCall` holds by value.
@@ -1019,7 +1111,9 @@ fn an_approval_subject_must_match_the_canonical_tool_call_it_references() {
     let digest = interaction_arguments_digest(&canonical_arguments());
 
     let missing = InteractionSubject::Approval {
-        call_id: ToolCallId::new("call-that-was-never-proposed"),
+        invocation_id: rustx::tools::types::ToolInvocationId::Agent {
+            call_id: ToolCallId::new("call-that-was-never-proposed"),
+        },
         tool_id: ToolId::new("tool-alpha"),
         tool_name: "alpha".to_owned(),
         arguments_digest: digest.clone(),
@@ -1037,7 +1131,7 @@ fn an_approval_subject_must_match_the_canonical_tool_call_it_references() {
     );
 
     let wrong_tool_id = InteractionSubject::Approval {
-        call_id: call_id(),
+        invocation_id: rustx::tools::types::ToolInvocationId::Agent { call_id: call_id() },
         tool_id: ToolId::new("tool-beta"),
         tool_name: "alpha".to_owned(),
         arguments_digest: digest.clone(),
@@ -1055,7 +1149,7 @@ fn an_approval_subject_must_match_the_canonical_tool_call_it_references() {
     );
 
     let wrong_tool_name = InteractionSubject::Approval {
-        call_id: call_id(),
+        invocation_id: rustx::tools::types::ToolInvocationId::Agent { call_id: call_id() },
         tool_id: ToolId::new("tool-alpha"),
         tool_name: "beta".to_owned(),
         arguments_digest: digest,
@@ -1219,7 +1313,10 @@ fn an_approval_commits_in_the_exact_generation_that_proposed_its_call() {
             .expect("and settles exactly once");
 
         let InteractionSubject::Approval {
-            call_id: subject_call,
+            invocation_id:
+                rustx::tools::types::ToolInvocationId::Agent {
+                    call_id: subject_call,
+                },
             tool_id: subject_tool,
             tool_name: subject_name,
             arguments_digest,
@@ -1331,7 +1428,7 @@ fn interaction_audit_payload_bounds_are_durable_invariants() {
     );
     refused(
         InteractionSubject::Approval {
-            call_id: call_id(),
+            invocation_id: rustx::tools::types::ToolInvocationId::Agent { call_id: call_id() },
             tool_id: ToolId::new("tool-alpha"),
             tool_name: "alpha".to_owned(),
             arguments_digest: "not-a-sha-256-digest".to_owned(),
@@ -1341,7 +1438,7 @@ fn interaction_audit_payload_bounds_are_durable_invariants() {
     );
     refused(
         InteractionSubject::Approval {
-            call_id: call_id(),
+            invocation_id: rustx::tools::types::ToolInvocationId::Agent { call_id: call_id() },
             tool_id: ToolId::new("tool-alpha"),
             tool_name: "alpha".to_owned(),
             arguments_digest: interaction_arguments_digest(&canonical_arguments()).to_uppercase(),
@@ -1351,7 +1448,7 @@ fn interaction_audit_payload_bounds_are_durable_invariants() {
     );
     refused(
         InteractionSubject::Approval {
-            call_id: call_id(),
+            invocation_id: rustx::tools::types::ToolInvocationId::Agent { call_id: call_id() },
             tool_id: ToolId::new("tool-alpha"),
             tool_name: "alpha".to_owned(),
             arguments_digest: interaction_arguments_digest(&canonical_arguments()),

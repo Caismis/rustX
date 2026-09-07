@@ -2207,7 +2207,9 @@ mod tests {
     async fn live_background_mutation_after_capture_cannot_change_the_generation() {
         let fixture = crate::scripted_suites::common::tool_runtime("agent-status-freeze");
         let invocation = crate::tools::types::ToolInvocation {
-            call_id: crate::runtime::identity::ToolCallId::new("call-freeze"),
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: crate::runtime::identity::ToolCallId::new("call-freeze"),
+            },
             tool_id: crate::runtime::identity::ToolId::new("tool-background"),
             tool_name: "background".to_owned(),
             mode: crate::tools::types::ToolInvocationMode::Background,
@@ -2780,7 +2782,9 @@ mod tests {
     async fn semantic_order_and_background_failure_isolation_are_deterministic() {
         let fixture = crate::scripted_suites::common::tool_runtime("agent-status-order");
         let invocation = crate::tools::types::ToolInvocation {
-            call_id: crate::runtime::identity::ToolCallId::new("call-1"),
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: crate::runtime::identity::ToolCallId::new("call-1"),
+            },
             tool_id: crate::runtime::identity::ToolId::new("tool-background"),
             tool_name: "background".to_owned(),
             mode: crate::tools::types::ToolInvocationMode::Background,

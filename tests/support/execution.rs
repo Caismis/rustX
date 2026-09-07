@@ -89,7 +89,9 @@ pub(crate) fn subagent_plane_for(conversation: &str) -> SubagentPlane {
 /// runtime, mirroring `m5_background`'s fixture.
 pub(crate) fn background_invocation(tool: &str) -> ToolInvocation {
     ToolInvocation {
-        call_id: ToolCallId::new("call-162-bg"),
+        id: rustx::tools::types::ToolInvocationId::Agent {
+            call_id: ToolCallId::new("call-162-bg"),
+        },
         tool_id: rustx::runtime::identity::ToolId::new(format!("tool-{tool}")),
         tool_name: tool.to_owned(),
         mode: ToolInvocationMode::Background,
@@ -143,6 +145,7 @@ pub(crate) fn execution_fixture(subagents: Option<SubagentRegistry>) -> Executio
             registration.executor,
             registration.normalizer,
             false,
+            registration.foreground,
         )
         .expect("execution registers");
     ExecutionFixture {

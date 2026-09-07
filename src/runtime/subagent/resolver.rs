@@ -68,9 +68,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::capabilities::{
-    AvailableToolCatalog, CapabilityAvailability, CapabilitySourceId, CapabilitySourceState,
-};
+use crate::capabilities::{AvailableToolCatalog, CapabilityAvailability};
 use crate::model::frozen::FrozenModelSpec;
 use crate::model::invocation::ModelBindingRegistry;
 use crate::model::session::SessionModelConfig;
@@ -79,13 +77,14 @@ use crate::runtime::identity::{McpServerId, McpToolIdentity, ToolId};
 use crate::runtime::resources::{ProjectContextFile, RuntimeResourceSnapshot};
 use crate::skills::{SkillCatalogEntry, SkillSnapshot};
 use crate::tools::mcp::{McpServerBinding, McpServerBindings};
-use crate::tools::types::{ToolDefinition, ToolOrigin};
+use crate::tools::types::ToolDefinition;
 
 use super::catalog::{
     SubagentCatalog, SubagentDefinition, SubagentDefinitionDigest, SubagentExecutionDeadline,
-    SubagentName, SubagentToolSelector,
+    SubagentName,
 };
 use super::workspace::SubagentWorkspacePolicy;
+use crate::capabilities::selection::ToolSelector;
 
 /// One frozen capability identity of a resolved child.
 ///
@@ -368,12 +367,12 @@ impl core::fmt::Display for SubagentResolutionError {
                 reason,
             } => write!(
                 formatter,
-                "the subagent requires {selector}, but capability source {source} is \
+                "the invocation requires {selector}, but capability source {source} is \
                  unavailable in this runtime generation: {reason}"
             ),
             Self::UnknownCapability { selector } => write!(
                 formatter,
-                "the subagent requires {selector}, which this runtime generation does not \
+                "the invocation requires {selector}, which this runtime generation does not \
                  authorize"
             ),
             Self::UnknownSkill { skill } => write!(
@@ -534,38 +533,40 @@ impl SubagentResolver {
     }
 }
 
-/// The one per-selector capability-selection core.
-///
-/// Both callers below go through exactly this function, so there is a single
-/// source-qualified matching rule and a single place where the two typed
-/// outcomes — *the source is unavailable* and *the selection is invalid* —
-/// are distinguished.
+/// Subagent-specific admission and physical identity freezing after generic
+/// capability selection. Source matching and availability classification belong
+/// exclusively to `capabilities::selection`; both Subagent call sites consume
+/// that owner here before freezing the child launch identity.
 fn resolve_selector(
-    selector: &SubagentToolSelector,
+    selector: &ToolSelector,
     available: &AvailableToolCatalog,
     availability: &CapabilityAvailability,
 ) -> Result<ResolvedSubagentTool, SubagentResolutionError> {
-    // Source availability is consulted first and only for origins that
-    // *have* an optional source. An unavailable source is a runtime health
-    // fact about this generation, not a statement that the selection is
-    // wrong, so it is reported as its own typed outcome.
-    if let Some(source) = optional_source(selector)
-        && let Some(CapabilitySourceState::Unavailable { reason }) = availability.get(&source)
+    let definition =
+        crate::capabilities::selection::resolve_selector(selector, available, availability)
+            .map_err(|error| match error {
+                crate::capabilities::selection::ToolSelectionError::SourceUnavailable {
+                    selector,
+                    source,
+                    reason,
+                } => SubagentResolutionError::SourceUnavailable {
+                    selector,
+                    source,
+                    reason,
+                },
+                crate::capabilities::selection::ToolSelectionError::UnknownCapability {
+                    selector,
+                } => SubagentResolutionError::UnknownCapability { selector },
+            })?;
+    if definition
+        .id
+        .as_str()
+        .starts_with(crate::runtime::workflow::WORKFLOW_TOOL_ID_PREFIX)
     {
-        return Err(SubagentResolutionError::SourceUnavailable {
+        return Err(SubagentResolutionError::UnknownCapability {
             selector: selector.canonical(),
-            source: source.to_string(),
-            reason: reason.clone(),
         });
     }
-    let definition = available
-        .tools()
-        .iter()
-        .map(|tool| &tool.definition)
-        .find(|candidate| matches_selector(candidate, selector))
-        .ok_or_else(|| SubagentResolutionError::UnknownCapability {
-            selector: selector.canonical(),
-        })?;
     Ok(freeze_tool(selector, definition))
 }
 
@@ -616,55 +617,10 @@ fn validate_selectors_for_admission(
     Ok(())
 }
 
-/// The optional capability source one selector depends on, when its origin
-/// has one. Builtin capabilities are the runtime's own base registry and
-/// have no availability state at all.
-fn optional_source(selector: &SubagentToolSelector) -> Option<CapabilitySourceId> {
-    match selector {
-        SubagentToolSelector::Builtin { .. } => None,
-        SubagentToolSelector::Mcp { server_id, .. } => {
-            Some(CapabilitySourceId::Mcp(server_id.clone()))
-        }
-    }
-}
-
-/// Whether one admitted definition is exactly the capability a selector
-/// names. Origin identity participates, so a Builtin `read` and an MCP
-/// server's `read` are never interchangeable.
-fn matches_selector(definition: &ToolDefinition, selector: &SubagentToolSelector) -> bool {
-    // A Workflow is a parent-plane orchestration capability, not a child
-    // capability. Its reserved identity is excluded before ordinary Builtin
-    // selector matching, so a named profile cannot create recursive
-    // Workflow-to-Workflow composition through the child Tool Plane.
-    if definition
-        .id
-        .as_str()
-        .starts_with(crate::runtime::workflow::WORKFLOW_TOOL_ID_PREFIX)
-    {
-        return false;
-    }
-    match (selector, &definition.origin) {
-        (SubagentToolSelector::Builtin { name }, ToolOrigin::Builtin) => definition.name == *name,
-        (
-            SubagentToolSelector::Mcp {
-                server_id,
-                name: selected,
-            },
-            ToolOrigin::Mcp {
-                server_id: admitted,
-            },
-        ) => definition.name == *selected && admitted == server_id,
-        _ => false,
-    }
-}
-
 /// Freezes one admitted definition into its exact source-qualified identity.
-fn freeze_tool(
-    selector: &SubagentToolSelector,
-    definition: &ToolDefinition,
-) -> ResolvedSubagentTool {
+fn freeze_tool(selector: &ToolSelector, definition: &ToolDefinition) -> ResolvedSubagentTool {
     match (selector, &definition.origin) {
-        (SubagentToolSelector::Mcp { server_id, .. }, _) => ResolvedSubagentTool::Mcp {
+        (ToolSelector::Mcp { server_id, .. }, _) => ResolvedSubagentTool::Mcp {
             server_id: server_id.clone(),
             tool_id: definition.id.clone(),
             name: definition.name.clone(),
@@ -863,6 +819,7 @@ mod tests {
         ResolvedSubagentTool, SubagentResolutionError, freeze_tool, render_agent_routing,
         resolve_tools, validate_selectors_for_admission,
     };
+    use crate::capabilities::selection::ToolSelector;
     use crate::capabilities::{
         AvailableToolCatalog, CapabilityAvailability, CapabilitySourceId, CapabilitySourceState,
     };
@@ -870,7 +827,6 @@ mod tests {
     use crate::runtime::subagent::SubagentWorkspacePolicy;
     use crate::runtime::subagent::catalog::{
         SubagentCatalog, SubagentDefinition, SubagentName, SubagentProjectInstructionPolicy,
-        SubagentToolSelector,
     };
     use crate::tools::types::{
         ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin,
@@ -891,8 +847,35 @@ mod tests {
         }
     }
 
+    fn catalog(definitions: Vec<ToolDefinition>) -> AvailableToolCatalog {
+        struct UnusedExecutor;
+        impl crate::tools::executor::ToolExecutor for UnusedExecutor {
+            fn start<'a>(
+                &'a self,
+                _: crate::tools::types::ToolInvocation,
+                _: crate::tools::executor::ToolExecutionContext<'a>,
+            ) -> crate::tools::executor::ToolExecutionHandle<'a> {
+                panic!("selector tests never execute tools")
+            }
+            fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+                crate::tools::deadline::ToolProgressCapability::None
+            }
+        }
+        AvailableToolCatalog::new(
+            definitions
+                .into_iter()
+                .map(|definition| {
+                    crate::tools::executor::ToolRegistration::plain(
+                        definition,
+                        std::sync::Arc::new(UnusedExecutor),
+                    )
+                })
+                .collect(),
+        )
+    }
+
     fn available() -> AvailableToolCatalog {
-        AvailableToolCatalog::new(vec![
+        catalog(vec![
             tool("read", ToolOrigin::Builtin),
             tool("grep", ToolOrigin::Builtin),
             tool(
@@ -912,7 +895,7 @@ mod tests {
         ])
     }
 
-    fn definition(tools: Vec<SubagentToolSelector>) -> SubagentDefinition {
+    fn definition(tools: Vec<ToolSelector>) -> SubagentDefinition {
         SubagentDefinition::new(
             SubagentName::parse("explore").expect("name"),
             "description".to_owned(),
@@ -948,14 +931,14 @@ mod tests {
     fn every_origin_freezes_its_exact_source_identity() {
         let resolved = resolve_tools(
             &definition(vec![
-                SubagentToolSelector::Builtin {
+                ToolSelector::Builtin {
                     name: "read".to_owned(),
                 },
-                SubagentToolSelector::Mcp {
+                ToolSelector::Mcp {
                     server_id: McpServerId::new("github"),
                     name: "get_issue".to_owned(),
                 },
-                SubagentToolSelector::Mcp {
+                ToolSelector::Mcp {
                     server_id: McpServerId::new("python:symbols"),
                     name: "repository_symbols".to_owned(),
                 },
@@ -1013,13 +996,13 @@ mod tests {
 
         let tools = vec![
             freeze_tool(
-                &SubagentToolSelector::Builtin {
+                &ToolSelector::Builtin {
                     name: "read".to_owned(),
                 },
                 &tool("read", ToolOrigin::Builtin),
             ),
             freeze_tool(
-                &SubagentToolSelector::Mcp {
+                &ToolSelector::Mcp {
                     server_id: github.clone(),
                     name: "get_issue".to_owned(),
                 },
@@ -1042,7 +1025,7 @@ mod tests {
 
         // A Builtin-only agent needs no external plane whatsoever.
         let builtin_only = vec![freeze_tool(
-            &SubagentToolSelector::Builtin {
+            &ToolSelector::Builtin {
                 name: "read".to_owned(),
             },
             &tool("read", ToolOrigin::Builtin),
@@ -1064,7 +1047,7 @@ mod tests {
             },
         );
         let frozen = freeze_tool(
-            &SubagentToolSelector::Mcp {
+            &ToolSelector::Mcp {
                 server_id: McpServerId::new("github"),
                 name: "get_issue".to_owned(),
             },
@@ -1086,7 +1069,7 @@ mod tests {
     fn origin_identity_is_never_collapsed_into_a_bare_name() {
         // The same bare name exists under two origins; a Builtin selector
         // must never resolve to the MCP capability and vice versa.
-        let catalog = AvailableToolCatalog::new(vec![
+        let catalog = catalog(vec![
             tool("search", ToolOrigin::Builtin),
             tool(
                 "search",
@@ -1096,7 +1079,7 @@ mod tests {
             ),
         ]);
         let builtin = resolve_tools(
-            &definition(vec![SubagentToolSelector::Builtin {
+            &definition(vec![ToolSelector::Builtin {
                 name: "search".to_owned(),
             }]),
             &catalog,
@@ -1105,7 +1088,7 @@ mod tests {
         .expect("builtin resolution");
         assert!(matches!(builtin[0], ResolvedSubagentTool::Builtin { .. }));
         let mcp = resolve_tools(
-            &definition(vec![SubagentToolSelector::Mcp {
+            &definition(vec![ToolSelector::Mcp {
                 server_id: McpServerId::new("github"),
                 name: "search".to_owned(),
             }]),
@@ -1116,7 +1099,7 @@ mod tests {
         assert!(matches!(mcp[0], ResolvedSubagentTool::Mcp { .. }));
         assert_eq!(
             resolve_tools(
-                &definition(vec![SubagentToolSelector::Mcp {
+                &definition(vec![ToolSelector::Mcp {
                     server_id: McpServerId::new("other"),
                     name: "search".to_owned(),
                 }]),
@@ -1139,10 +1122,10 @@ mod tests {
         // The MCP capability is absent from the available catalog precisely
         // because its source failed; the outcome must still be the
         // source-unavailable fact, not "unknown capability".
-        let catalog = AvailableToolCatalog::new(vec![tool("read", ToolOrigin::Builtin)]);
+        let catalog = catalog(vec![tool("read", ToolOrigin::Builtin)]);
         assert!(matches!(
             resolve_tools(
-                &definition(vec![SubagentToolSelector::Mcp {
+                &definition(vec![ToolSelector::Mcp {
                     server_id: McpServerId::new("github"),
                     name: "get_issue".to_owned(),
                 }]),
@@ -1153,7 +1136,7 @@ mod tests {
         ));
         assert_eq!(
             resolve_tools(
-                &definition(vec![SubagentToolSelector::Builtin {
+                &definition(vec![ToolSelector::Builtin {
                     name: "write".to_owned()
                 }]),
                 &catalog,
@@ -1230,18 +1213,18 @@ mod tests {
             },
         );
         let definition = definition(vec![
-            SubagentToolSelector::Mcp {
+            ToolSelector::Mcp {
                 server_id: McpServerId::new("github"),
                 name: "get_issue".to_owned(),
             },
-            SubagentToolSelector::Mcp {
+            ToolSelector::Mcp {
                 server_id: McpServerId::new("python:symbols"),
                 name: "not_a_real_tool".to_owned(),
             },
         ]);
         assert_eq!(
             definition.tools().first(),
-            Some(&SubagentToolSelector::Mcp {
+            Some(&ToolSelector::Mcp {
                 server_id: McpServerId::new("github"),
                 name: "get_issue".to_owned(),
             }),
@@ -1275,10 +1258,10 @@ mod tests {
             },
         );
         let definition = definition(vec![
-            SubagentToolSelector::Builtin {
+            ToolSelector::Builtin {
                 name: "read".to_owned(),
             },
-            SubagentToolSelector::Mcp {
+            ToolSelector::Mcp {
                 server_id: McpServerId::new("github"),
                 name: "get_issue".to_owned(),
             },

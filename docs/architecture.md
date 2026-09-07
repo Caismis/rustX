@@ -1,5 +1,26 @@
 # Architecture
 
+## Native invocation ownership
+
+| Concern | Owner |
+| --- | --- |
+| Canonical Agent ToolCall/ToolResult framing | Agent Loop |
+| Fixed Workflow graph and local values | WorkflowRuntime |
+| Source-qualified Tool selection | capabilities::selection |
+| Trusted Leaf/Composite policy | Tool registration/admission |
+| Foreground arbitration and typed cancellation provenance | shared ForegroundInvocation lifecycle |
+| Physical execution, cancellation and settlement evidence | ToolExecutor |
+| Human Tool approval rendezvous | InteractionCoordinator |
+| Durable exact preparation/approval subject | durable interaction authority |
+| Ordinary native execution facts | best-effort Event Journal observation |
+| Canonical conversation truth | canonical history/store |
+
+An Ask decision commits its immutable interaction subject before prompt publication;
+ordinary Prepared/Started/progress facts have no permission authority. Native
+cancellation winners publish an absorbing typed cause before signalling descendants.
+Composite deadlines never borrow the attempt's default cancellation reason.
+See [Tool lifecycle](tool-lifecycle.md) for frontiers and settlement semantics.
+
 ## 1. Architectural objective
 
 rustX is an execution kernel, not an agent application framework and not a control plane. Its responsibility is to execute an immutable runtime manifest, produce durable execution facts, and expose stable runtime-owned contracts to higher-level systems.
@@ -30,7 +51,15 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 24. Version 24 adds scoped
+The SQLite schema is development schema version 26. Version 26 adds typed native
+deadline interruption to interaction outcomes/audit settlements; Runtime Client 19
+and child IPC 17 mirror it. Version 25 added caller-neutral
+approval correlation and native Workflow invocation facts with typed Workflow
+failure status. Runtime Client 18 mirrors approval identity; child IPC 16 mirrors
+the new invocation-bearing interaction data. No migration or compatibility
+decoding is provided. The Event Journal envelope version remains 1: framing is
+unchanged; the development durable schema gates its changed payload vocabulary.
+Version 24 adds scoped
 Workflow lifecycle facts and concrete instance correlations (Issue #217).
 Version 23 preserved `Denied` in background terminal facts (Issue #206). An incompatible database
 fails explicitly; there is no migration chain, legacy reader, compatibility
@@ -926,12 +955,12 @@ message/types.rs           MessageBlock (User/Assistant/Tool), provenance
                            UserMessageBlock.timestamp (persisted inbound
                            instant; absent for derived compaction summaries),
                            ContentBlockIndex, content enums per role
-                           input schema, ToolInvocationPolicy with independent
+                           input schema, ToolDefinition with independent
                            execution/concurrency/approval axes,
                            ToolReplayPolicy, ToolOrigin), ModelToolDefinition
                            (the compiled model-facing definition), ToolCall,
                            ToolCallStart, ToolInvocation (stripped/validated
-                           canonical invocation), ToolExecutionResult,
+                           caller-neutral invocation with ToolInvocationId), ToolExecutionResult,
                            ToolExecutionStatus, ToolProgress, TruncationState
 agent/lifecycle.rs          required PreToolPolicy / PreToolView seam and
                            AttemptLifecycle interaction rendezvous binding
@@ -1956,9 +1985,11 @@ validating ToolRegistry (definition + Arc<dyn ToolExecutor>)
 preflight: resolve -> extract reserved metadata -> strip -> tool-owned business-argument
             normalize -> canonical JSON Schema validate
         |
-ToolInvocation (stripped/validated business arguments + resolved mode)
+ToolInvocation (caller-neutral identity + validated business arguments + resolved mode)
         |
-ToolExecutor::execute(ToolInvocation, ToolExecutionContext)
+shared native invocation -> ToolExecutor::start(ToolInvocation, ToolExecutionContext)
+        |
+ToolExecutionHandle (completion and physical settlement planes)
         |
 ToolExecutionResult
 ```
@@ -3498,9 +3529,9 @@ package's stdout corruption is diagnosed through its synthesized
 Python-specific parser and FastMCP has no separate framing contract.
 #### MCP liveness, connection generations, and recovery (Issue #205)
 
-MCP is a Tool executor and transport adapter. The Agent Loop's generic
-Issue #204 lifecycle remains the only generic deadline owner and the only
-canonical status authority; MCP owns physical execution, external-effect
+MCP is a Tool executor and transport adapter. The shared native invocation
+lifecycle (extracted from Issue #204 by WF-02) is the generic deadline and
+settlement consumer. The Agent Loop alone commits canonical results; MCP owns physical execution, external-effect
 certainty, connection health, protocol cancellation, and capability
 acquisition.
 
@@ -4237,7 +4268,9 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
-The current Runtime Client protocol is version 17. Version 17 preserves
+The current Runtime Client protocol is version 19. Version 19 adds typed deadline
+interruption of approval waits. Version 18 distinguishes
+Agent and Workflow approval invocation identity. Version 17 preserves
 `denied` in background lifecycle projections. Version 16 introduced the
 Tool outcome certainty vocabulary. It carries Issue #202's
 explicit tool outcome certainty: the canonical `ToolExecutionStatus`

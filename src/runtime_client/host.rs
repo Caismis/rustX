@@ -4199,7 +4199,9 @@ mod tests {
             .background()
             .prepare_dispatch(
                 &ToolInvocation {
-                    call_id: ToolCallId::new("call-bg"),
+                    id: crate::tools::types::ToolInvocationId::Agent {
+                        call_id: ToolCallId::new("call-bg"),
+                    },
                     tool_id: ToolId::new("tool-bg"),
                     tool_name: "bg".to_owned(),
                     mode: ToolInvocationMode::Background,
@@ -4771,6 +4773,7 @@ mod tests {
     /// conversation runtime, and terminates both workers — deterministically,
     /// and without depending on process exit.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
     async fn releasing_the_last_owner_destroys_the_host_and_exits_the_workers() {
         let (_adapter, fixture) =
             host_fixture_with_native_tools(Vec::new(), ToolRegistry::new(), status_engine(), true)
@@ -4809,7 +4812,9 @@ mod tests {
             .background()
             .prepare_dispatch(
                 &ToolInvocation {
-                    call_id: ToolCallId::new("call-lifetime"),
+                    id: crate::tools::types::ToolInvocationId::Agent {
+                        call_id: ToolCallId::new("call-lifetime"),
+                    },
                     tool_id: ToolId::new("tool-bg"),
                     tool_name: "bg".to_owned(),
                     mode: ToolInvocationMode::Background,
@@ -4946,7 +4951,9 @@ mod tests {
         let prepared = registry
             .prepare_dispatch(
                 &ToolInvocation {
-                    call_id: ToolCallId::new("call-after"),
+                    id: crate::tools::types::ToolInvocationId::Agent {
+                        call_id: ToolCallId::new("call-after"),
+                    },
                     tool_id: ToolId::new("tool-bg"),
                     tool_name: "bg".to_owned(),
                     mode: ToolInvocationMode::Background,
@@ -5052,7 +5059,9 @@ mod tests {
             .background()
             .prepare_dispatch(
                 &ToolInvocation {
-                    call_id: ToolCallId::new("call-bg"),
+                    id: crate::tools::types::ToolInvocationId::Agent {
+                        call_id: ToolCallId::new("call-bg"),
+                    },
                     tool_id: ToolId::new("tool-bg"),
                     tool_name: "bg".to_owned(),
                     mode: ToolInvocationMode::Background,
@@ -5608,7 +5617,9 @@ mod tests {
             .background()
             .prepare_dispatch(
                 &ToolInvocation {
-                    call_id: ToolCallId::new("call-bg"),
+                    id: crate::tools::types::ToolInvocationId::Agent {
+                        call_id: ToolCallId::new("call-bg"),
+                    },
                     tool_id: ToolId::new("tool-bg"),
                     tool_name: "bg".to_owned(),
                     mode: ToolInvocationMode::Background,
@@ -5694,7 +5705,9 @@ mod tests {
             .background()
             .prepare_dispatch(
                 &ToolInvocation {
-                    call_id: ToolCallId::new("call-bg"),
+                    id: crate::tools::types::ToolInvocationId::Agent {
+                        call_id: ToolCallId::new("call-bg"),
+                    },
                     tool_id: ToolId::new("tool-bg"),
                     tool_name: "bg".to_owned(),
                     mode: ToolInvocationMode::Background,
@@ -7837,7 +7850,9 @@ mod tests {
         let prepared = registry
             .prepare_dispatch(
                 &ToolInvocation {
-                    call_id: ToolCallId::new("call-bg"),
+                    id: crate::tools::types::ToolInvocationId::Agent {
+                        call_id: ToolCallId::new("call-bg"),
+                    },
                     tool_id: ToolId::new("tool-bg"),
                     tool_name: "bg".to_owned(),
                     mode: ToolInvocationMode::Background,
@@ -7929,7 +7944,9 @@ mod tests {
                 registry
                     .prepare_dispatch(
                         &ToolInvocation {
-                            call_id: ToolCallId::new("call-bg-2"),
+                            id: crate::tools::types::ToolInvocationId::Agent {
+                                call_id: ToolCallId::new("call-bg-2"),
+                            },
                             tool_id: ToolId::new("tool-bg"),
                             tool_name: "bg".to_owned(),
                             mode: ToolInvocationMode::Background,
@@ -8126,7 +8143,9 @@ mod tests {
     /// A background invocation for the ownership-transfer tests.
     fn claim_background_invocation(call_id: &str) -> ToolInvocation {
         ToolInvocation {
-            call_id: ToolCallId::new(call_id),
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new(call_id),
+            },
             tool_id: ToolId::new("tool-bg"),
             tool_name: "bg".to_owned(),
             mode: ToolInvocationMode::Background,

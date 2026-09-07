@@ -415,7 +415,9 @@ mod tests {
         let context = |call: &str, path: &str| {
             (
                 ToolInvocation {
-                    call_id: ToolCallId::new(call),
+                    id: crate::tools::types::ToolInvocationId::Agent {
+                        call_id: ToolCallId::new(call),
+                    },
                     tool_id: ToolId::new("tool-read"),
                     tool_name: NAME.to_owned(),
                     mode: ToolInvocationMode::Foreground,
@@ -602,7 +604,9 @@ mod tests {
             signal: &'a crate::runtime::CancellationSignal,
         ) -> futures_util::future::BoxFuture<'a, ToolExecutionResult> {
             let invocation = ToolInvocation {
-                call_id: ToolCallId::new(call),
+                id: crate::tools::types::ToolInvocationId::Agent {
+                    call_id: ToolCallId::new(call),
+                },
                 tool_id: ToolId::new(super::TOOL_ID),
                 tool_name: super::NAME.to_owned(),
                 mode: ToolInvocationMode::Foreground,

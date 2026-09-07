@@ -1,3 +1,4 @@
+import { invocationLabel } from "../../presentation/invocation.ts";
 /**
  * The semantic transcript grammar.
  *
@@ -349,7 +350,7 @@ function renderInteractionRequested(
   const lines = [role.meta("▌ historical interaction · requested · not actionable")];
   if (entry.subject.type === "approval") {
     lines.push(
-      role.warning(`approval · ${entry.subject.tool_name} · proposed call ${entry.subject.call_id}`),
+      role.warning(`approval · ${entry.subject.tool_name} · ${invocationLabel(entry.subject.invocation_id)}`),
       ...bar(entry.subject.reason, style.dim),
       ...bar(`arguments digest: ${entry.subject.arguments_digest}`, style.dim),
     );
@@ -396,6 +397,8 @@ function settlementLabel(
   settlement: TranscriptInteractionSettled["settlement"],
 ): string {
   switch (settlement.type) {
+    case "deadline_expired":
+      return "deadline expired";
     case "approved":
       return "approved";
     case "denied":

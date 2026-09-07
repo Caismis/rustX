@@ -9,7 +9,9 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::runtime::identity::{ToolCallId, ToolId};
+#[cfg(test)]
+use crate::runtime::identity::ToolCallId;
+use crate::runtime::identity::ToolId;
 use crate::runtime::types::CancellationReason;
 
 /// Maximum number of questions in one foreground questionnaire.
@@ -175,8 +177,8 @@ pub enum QuestionnaireResponse {
 pub enum InteractionSubject {
     /// A tool invocation was held at the pre-tool policy boundary.
     Approval {
-        /// The canonical model-issued call identity.
-        call_id: ToolCallId,
+        /// Caller-neutral invocation correlation.
+        invocation_id: crate::tools::types::ToolInvocationId,
         /// The registry-resolved tool identity.
         tool_id: ToolId,
         /// The model-facing tool name.
@@ -197,6 +199,10 @@ pub enum InteractionSubject {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InteractionSettlement {
+    /// A native execution deadline interrupted the approval rendezvous.
+    DeadlineExpired {
+        kind: crate::tools::deadline::ToolDeadlineKind,
+    },
     /// A client allowed the exact approval subject.
     Approved,
     /// A client denied the exact approval subject.
@@ -471,13 +477,16 @@ pub fn normalize_questionnaire_response(
 pub fn validate_interaction_subject(subject: &InteractionSubject) -> Result<(), String> {
     match subject {
         InteractionSubject::Approval {
-            call_id,
+            invocation_id,
             tool_id,
             tool_name,
             arguments_digest,
             reason,
         } => {
-            if call_id.as_str().is_empty() {
+            if invocation_id
+                .canonical_call_id()
+                .is_some_and(|id| id.as_str().is_empty())
+            {
                 return Err("approval subject must name a non-empty tool call".to_owned());
             }
             if tool_id.as_str().is_empty() {
@@ -517,7 +526,10 @@ pub fn validate_interaction_settlement(
     settlement: &InteractionSettlement,
 ) -> Result<(), String> {
     match (subject, settlement) {
-        (_, InteractionSettlement::Cancelled { .. })
+        (
+            _,
+            InteractionSettlement::Cancelled { .. } | InteractionSettlement::DeadlineExpired { .. },
+        )
         | (InteractionSubject::Approval { .. }, InteractionSettlement::Approved) => Ok(()),
         (InteractionSubject::Approval { .. }, InteractionSettlement::Denied { reason }) => {
             if reason.chars().count() > MAX_APPROVAL_DENIAL_REASON_CHARS {
@@ -582,7 +594,9 @@ mod tests {
 
     fn approval(reason: &str) -> InteractionSubject {
         InteractionSubject::Approval {
-            call_id: ToolCallId::new("call-1"),
+            invocation_id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new("call-1"),
+            },
             tool_id: ToolId::new("tool.read"),
             tool_name: "read".to_owned(),
             arguments_digest: interaction_arguments_digest(&serde_json::json!({"path": "a"})),

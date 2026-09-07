@@ -28,9 +28,12 @@ use super::subagent::SubagentName;
 
 mod execution;
 mod expressions;
+mod tool;
 use expressions::{
     evaluate_predicate, evaluate_value, valid_local_key, validate_predicate, value_schema,
 };
+pub use tool::WorkflowToolResult;
+use tool::default_workflow_timeout_ms;
 
 /// Runtime-owned identity, independent of model `ToolCall` text.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -74,6 +77,9 @@ pub enum WorkflowExecutionOutcome {
     Completed,
     Failed,
     Cancelled,
+    Denied,
+    TimedOut,
+    OutcomeUnknown,
 }
 
 impl fmt::Display for WorkflowNodeInstance {
@@ -242,6 +248,12 @@ impl std::error::Error for WorkflowIdError {}
 pub struct WorkflowDefinition {
     /// The model-facing description of the workflow Tool.
     pub description: String,
+    /// Explicit capability admission, independent of main model exposure.
+    #[serde(default)]
+    pub tools: BTreeSet<crate::capabilities::selection::ToolSelector>,
+    /// Trusted finite total foreground lifetime, including descendant waits.
+    #[serde(default = "default_workflow_timeout_ms")]
+    pub timeout_ms: u64,
     /// The root lexical execution scope.
     pub block: WorkflowBlock,
 }
@@ -268,6 +280,12 @@ pub struct WorkflowBlock {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 pub enum WorkflowNodeDefinition {
+    /// One statically selected, explicitly admitted foreground capability.
+    Tool {
+        selector: crate::capabilities::selection::ToolSelector,
+        arguments: WorkflowValue,
+        result: WorkflowToolResult,
+    },
     /// One execution of an admitted named Subagent profile.
     Agent {
         /// The native named profile to resolve at `AgentRun` admission.
@@ -414,6 +432,8 @@ pub struct WorkflowProgram {
     block: WorkflowBlockProgram,
     total_nodes: usize,
     retained_bound: usize,
+    tools: BTreeSet<crate::capabilities::selection::ToolSelector>,
+    timeout_ms: u64,
 }
 
 /// Immutable compiled graph shared by root and every nested branch.
@@ -428,6 +448,11 @@ pub struct WorkflowBlockProgram {
 }
 
 impl WorkflowProgram {
+    /// The admitted total wall-clock budget. Every step consumes this budget.
+    #[must_use]
+    pub fn timeout_ms(&self) -> u64 {
+        self.timeout_ms
+    }
     /// Compiles and validates one definition for one configured identity.
     ///
     /// # Errors
@@ -488,6 +513,11 @@ impl WorkflowProgram {
 /// A compiled node whose references and schemas have been admitted.
 #[derive(Debug, Clone)]
 pub enum WorkflowNodeProgram {
+    Tool {
+        selector: crate::capabilities::selection::ToolSelector,
+        arguments: WorkflowValue,
+        result: WorkflowToolResult,
+    },
     /// One admitted `AgentRun` template.
     Agent(WorkflowAgentProgram),
     /// One boolean Branch.
@@ -684,6 +714,11 @@ fn compile_program(
     definition: WorkflowDefinition,
     workflow_profiles: &BTreeSet<SubagentName>,
 ) -> Result<WorkflowProgram, WorkflowCompileError> {
+    if definition.timeout_ms == 0 || definition.timeout_ms > 86_400_000 {
+        return Err(WorkflowCompileError::InvalidField(
+            "timeout_ms must be 1..=86400000".into(),
+        ));
+    }
     if definition.description.trim().is_empty() {
         return Err(WorkflowCompileError::InvalidField(format!(
             "workflow {id} has an empty description"
@@ -703,6 +738,7 @@ fn compile_program(
     let block = compile_block(
         definition.block,
         workflow_profiles,
+        &definition.tools,
         Vec::new(),
         &mut total_nodes,
     )?;
@@ -718,6 +754,8 @@ fn compile_program(
         block,
         total_nodes,
         retained_bound,
+        tools: definition.tools,
+        timeout_ms: definition.timeout_ms,
     })
 }
 
@@ -725,6 +763,7 @@ fn compile_program(
 fn compile_block(
     definition: WorkflowBlock,
     workflow_profiles: &BTreeSet<SubagentName>,
+    admitted_tools: &BTreeSet<crate::capabilities::selection::ToolSelector>,
     path: Vec<String>,
     total_nodes: &mut usize,
 ) -> Result<WorkflowBlockProgram, WorkflowCompileError> {
@@ -862,6 +901,34 @@ fn compile_block(
             intersect_schema_maps(&predecessors)
         };
         let compiled = match node {
+            WorkflowNodeDefinition::Tool {
+                selector,
+                arguments,
+                result,
+            } => {
+                if !admitted_tools.contains(selector) {
+                    return Err(WorkflowCompileError::InvalidField(format!(
+                        "Tool {node_id} selects unadmitted capability {selector}"
+                    )));
+                }
+                let input = value_schema(arguments, &available_before, &node_id, 0)?;
+                if schema_type(&input) != Some("object") {
+                    return Err(WorkflowCompileError::InvalidField(
+                        "Tool arguments must construct an object".into(),
+                    ));
+                }
+                let output = result.schema();
+                validate_workflow_schema(&output, "Tool result")?;
+                available_after.insert(
+                    node_id.clone(),
+                    available_before.with_prefix(&node_id, &output),
+                );
+                WorkflowNodeProgram::Tool {
+                    selector: selector.clone(),
+                    arguments: arguments.clone(),
+                    result: result.clone(),
+                }
+            }
             WorkflowNodeDefinition::Agent {
                 profile,
                 task,
@@ -933,6 +1000,7 @@ fn compile_block(
                     let block = compile_block(
                         branch.block.clone(),
                         workflow_profiles,
+                        admitted_tools,
                         child_path,
                         total_nodes,
                     )?;
@@ -1657,7 +1725,7 @@ pub enum WorkflowTerminalState {
     /// One validated workflow output was committed.
     Completed(Value),
     /// The workflow failed before producing a result.
-    Failed(String),
+    Failed(WorkflowRunError),
     /// Cancellation won the workflow terminal race.
     Cancelled(crate::runtime::types::CancellationReason),
 }
@@ -1673,6 +1741,8 @@ pub struct WorkflowRun {
     run_id: WorkflowRunId,
     budgets: std::sync::Mutex<execution::RunBudgets>,
     terminal: Option<WorkflowTerminalState>,
+    tools:
+        BTreeMap<crate::capabilities::selection::ToolSelector, crate::tools::types::ToolDefinition>,
 }
 
 impl fmt::Debug for WorkflowRun {
@@ -1683,6 +1753,7 @@ impl fmt::Debug for WorkflowRun {
             .field("run_id", &self.run_id)
             .field("budgets", &self.budgets)
             .field("terminal", &self.terminal)
+            .field("tools", &self.tools)
             .finish()
     }
 }
@@ -1695,6 +1766,7 @@ impl WorkflowRun {
             run_id,
             budgets: std::sync::Mutex::new(budgets),
             terminal: None,
+            tools: BTreeMap::new(),
         }
     }
 
@@ -1828,16 +1900,21 @@ impl WorkflowRuntime {
                 run_id: run.run_id.clone(),
             },
         );
-        let execution = self
-            .execute_block(&run, &program.block, &context, input, &cancellation)
-            .await
-            .map(|output| output.value.clone());
+        let execution = match tool::freeze(&program, &context) {
+            Ok(tools) => {
+                run.tools = tools;
+                self.execute_block(&run, &program.block, &context, input, &cancellation)
+                    .await
+                    .map(|output| output.value.clone())
+            }
+            Err(error) => Err(error),
+        };
         // Run terminal frontier. The shared block executor has already
         // validated its result and settled all owned native work. No await
         // separates this cancellation observation from the unique run commit.
         let execution = match execution {
             Ok(_) if cancellation.is_cancelled() => {
-                Err(WorkflowRunError::Cancelled(cancellation.reason()))
+                Err(WorkflowRunError::from_cancellation(&cancellation))
             }
             result => result,
         };
@@ -1858,7 +1935,7 @@ impl WorkflowRuntime {
                     WorkflowRunError::Cancelled(reason) => {
                         WorkflowTerminalState::Cancelled(*reason)
                     }
-                    _ => WorkflowTerminalState::Failed(error.to_string()),
+                    _ => WorkflowTerminalState::Failed(error.clone()),
                 };
                 run.settle(terminal)?;
                 match &error {
@@ -1876,6 +1953,7 @@ impl WorkflowRuntime {
                             workflow_id: program.id().clone(),
                             run_id: run.run_id.clone(),
                             diagnostic: bound_workflow_text(error.to_string()),
+                            status: error.execution_status(),
                         },
                     ),
                 }
@@ -1969,7 +2047,7 @@ impl WorkflowRuntime {
             .await
             .map_err(|error| match error {
                 crate::runtime::subagent::SubagentStartError::Cancelled => {
-                    WorkflowRunError::Cancelled(cancellation.reason())
+                    WorkflowRunError::from_cancellation(cancellation)
                 }
                 error => WorkflowRunError::ChildStart {
                     node: node_id.to_string(),
@@ -1982,7 +2060,7 @@ impl WorkflowRuntime {
             .await
             .map_err(|error| match error {
                 crate::runtime::subagent::SubagentStartError::Cancelled => {
-                    WorkflowRunError::Cancelled(cancellation.reason())
+                    WorkflowRunError::from_cancellation(cancellation)
                 }
                 error => WorkflowRunError::ChildStart {
                     node: node_id.to_string(),
@@ -1990,7 +2068,7 @@ impl WorkflowRuntime {
                 },
             })?;
         let crate::runtime::subagent::SubagentStartOutcome::Accepted(accepted) = accepted else {
-            return Err(WorkflowRunError::Cancelled(cancellation.reason()));
+            return Err(WorkflowRunError::from_cancellation(cancellation));
         };
         self.emit_observability(
             run,
@@ -2016,7 +2094,14 @@ impl WorkflowRuntime {
         let snapshot = tokio::select! {
             biased;
             () = cancellation.cancelled() => {
-                let _ = self.subagents.cancel(&subagent_id, cancellation.reason());
+                // The child owns a separate attempt. Parent deadline intent is
+                // ParentCancelled there, never a fabricated user request; this
+                // Workflow retains the exact deadline in its typed run outcome.
+                let reason = match cancellation.native_cause() {
+                    crate::tools::deadline::ToolCancellationCause::Attempt(reason) => reason,
+                    crate::tools::deadline::ToolCancellationCause::Deadline(_) => crate::runtime::types::CancellationReason::ParentCancelled,
+                };
+                let _ = self.subagents.cancel(&subagent_id, reason);
                 let snapshot = (&mut wait).await;
                 // The native child settlement is the cross-process
                 // observation of the workflow_output latch. If that
@@ -2030,10 +2115,10 @@ impl WorkflowRuntime {
                             &subagent_id,
                             node_id,
                             output_schema,
-                            cancellation.reason(),
+                            cancellation,
                         );
                 }
-                return Err(WorkflowRunError::Cancelled(cancellation.reason()));
+                return Err(WorkflowRunError::from_cancellation(cancellation));
             }
             snapshot = &mut wait => snapshot,
         };
@@ -2041,13 +2126,7 @@ impl WorkflowRuntime {
             node: node_id.to_string(),
             detail: "the native SubagentRegistry lost the child record".to_owned(),
         })?;
-        self.settled_agent_value(
-            snapshot,
-            &subagent_id,
-            node_id,
-            output_schema,
-            cancellation.reason(),
-        )
+        self.settled_agent_value(snapshot, &subagent_id, node_id, output_schema, cancellation)
     }
 
     fn settled_agent_value(
@@ -2056,7 +2135,7 @@ impl WorkflowRuntime {
         subagent_id: &crate::runtime::identity::SubagentId,
         node_id: &WorkflowNodeInstance,
         output_schema: &Value,
-        cancellation_reason: crate::runtime::types::CancellationReason,
+        cancellation: &crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<Value, WorkflowRunError> {
         match snapshot.state {
             crate::runtime::subagent::SubagentState::Succeeded => {
@@ -2099,7 +2178,7 @@ impl WorkflowRuntime {
                 Ok(value)
             }
             crate::runtime::subagent::SubagentState::Cancelled => {
-                Err(WorkflowRunError::Cancelled(cancellation_reason))
+                Err(WorkflowRunError::from_cancellation(cancellation))
             }
             state => Err(WorkflowRunError::ChildFailed {
                 node: node_id.to_string(),
@@ -2117,6 +2196,17 @@ impl WorkflowRuntime {
 /// never converted into workflow-local values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkflowRunError {
+    SourceUnavailable(String),
+    InvalidSelector(String),
+    CapabilityNotAdmitted(String),
+    IneligibleCapability(String),
+    IdentityChanged(String),
+    InvocationAuthority(String),
+    /// A native leaf settled without successful business output.
+    ToolFailed {
+        node: String,
+        status: crate::tools::types::ToolExecutionStatus,
+    },
     /// Input did not satisfy the frozen workflow schema.
     InvalidInput(String),
     /// The Return value did not satisfy the frozen workflow schema.
@@ -2126,28 +2216,103 @@ pub enum WorkflowRunError {
     /// A committed reference could not be resolved at runtime.
     InvalidValue(String),
     /// A child could not be admitted.
-    ChildStart { node: String, detail: String },
+    ChildStart {
+        node: String,
+        detail: String,
+    },
     /// A child settled unsuccessfully.
-    ChildFailed { node: String, detail: String },
+    ChildFailed {
+        node: String,
+        detail: String,
+    },
     /// One or more keyed parallel branches failed, in key order.
-    ParallelFailed { node: String, detail: String },
+    ParallelFailed {
+        node: String,
+        failures: BTreeMap<String, WorkflowRunError>,
+    },
     /// Cancellation won terminal settlement.
     Cancelled(crate::runtime::types::CancellationReason),
+    /// An ancestor native deadline interrupted this scope.
+    Deadline(crate::tools::deadline::ToolDeadlineKind),
     /// A terminal transition was attempted twice.
     TerminalAlreadySettled,
 }
 
 impl WorkflowRunError {
+    fn from_cancellation(
+        cancellation: &crate::runtime::cancellation::ExecutionCancellation,
+    ) -> Self {
+        match cancellation.native_cause() {
+            crate::tools::deadline::ToolCancellationCause::Attempt(reason) => {
+                Self::Cancelled(reason)
+            }
+            crate::tools::deadline::ToolCancellationCause::Deadline(kind) => Self::Deadline(kind),
+        }
+    }
+    /// Preserve native execution certainty at every composite boundary.
+    #[must_use]
+    pub fn execution_status(&self) -> crate::tools::types::ToolExecutionStatus {
+        use crate::tools::types::{ToolCancellationPhase, ToolExecutionStatus as Status};
+        match self {
+            Self::ToolFailed { status, .. } => status.clone(),
+            Self::Deadline(_) => Status::TimedOut,
+            Self::Cancelled(reason) => Status::Cancelled {
+                reason: *reason,
+                phase: ToolCancellationPhase::DuringExecution,
+            },
+            Self::ParallelFailed { failures, .. } => {
+                let statuses = failures
+                    .values()
+                    .map(Self::execution_status)
+                    .collect::<Vec<_>>();
+                statuses
+                    .iter()
+                    .find(|s| matches!(s, Status::OutcomeUnknown { .. }))
+                    .or_else(|| statuses.first())
+                    .cloned()
+                    .unwrap_or_else(|| Status::Failed {
+                        error: self.to_string(),
+                    })
+            }
+            _ => Status::Failed {
+                error: self.to_string(),
+            },
+        }
+    }
     /// Whether this error represents the native cancellation terminal.
     #[must_use]
-    pub const fn is_cancelled(&self) -> bool {
-        matches!(self, Self::Cancelled(_))
+    pub fn is_cancelled(&self) -> bool {
+        matches!(
+            self.execution_status(),
+            crate::tools::types::ToolExecutionStatus::Cancelled { .. }
+        )
     }
 }
 
 impl fmt::Display for WorkflowRunError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ToolFailed { node, status } => {
+                write!(formatter, "Workflow Tool {node:?}: {status:?}")
+            }
+            Self::SourceUnavailable(detail) => {
+                write!(formatter, "capability source unavailable: {detail}")
+            }
+            Self::InvalidSelector(detail) => {
+                write!(formatter, "invalid capability selector: {detail}")
+            }
+            Self::CapabilityNotAdmitted(detail) => {
+                write!(formatter, "capability not admitted: {detail}")
+            }
+            Self::IneligibleCapability(detail) => {
+                write!(formatter, "ineligible Workflow leaf: {detail}")
+            }
+            Self::IdentityChanged(detail) => {
+                write!(formatter, "frozen capability identity changed: {detail}")
+            }
+            Self::InvocationAuthority(detail) => {
+                write!(formatter, "native invocation authority failed: {detail}")
+            }
             Self::InvalidInput(detail) => write!(formatter, "invalid workflow input: {detail}"),
             Self::InvalidOutput(detail) => write!(formatter, "invalid workflow output: {detail}"),
             Self::InvalidProgram(detail) => write!(formatter, "invalid workflow program: {detail}"),
@@ -2161,10 +2326,18 @@ impl fmt::Display for WorkflowRunError {
             Self::ChildFailed { node, detail } => {
                 write!(formatter, "Workflow Agent {node:?} failed: {detail}")
             }
-            Self::ParallelFailed { node, detail } => {
-                write!(formatter, "Parallel {node:?} failed: {detail}")
+            Self::ParallelFailed { node, failures } => {
+                write!(formatter, "Parallel {node:?} failed: ")?;
+                for (key, failure) in failures {
+                    write!(formatter, "{key}: {failure}; ")?;
+                }
+                Ok(())
             }
             Self::Cancelled(reason) => write!(formatter, "workflow cancelled: {reason:?}"),
+            Self::Deadline(kind) => write!(
+                formatter,
+                "workflow interrupted by ancestor {kind:?} deadline"
+            ),
             Self::TerminalAlreadySettled => {
                 formatter.write_str("workflow terminal state was already settled")
             }
@@ -2198,6 +2371,7 @@ fn single_successor(
 #[cfg(test)]
 mod tests {
     mod scoped;
+    mod tools;
     use super::*;
     use serde_json::json;
     use std::sync::{Arc, Barrier};
@@ -2327,6 +2501,8 @@ mod tests {
         output: Value,
     ) -> WorkflowDefinition {
         WorkflowDefinition {
+            tools: std::collections::BTreeSet::default(),
+            timeout_ms: 600_000,
             description: "Test workflow".to_owned(),
             block: WorkflowBlock {
                 input: schema(json!({"task": {"type": "string"}}), &["task"]),
@@ -2633,6 +2809,8 @@ mod tests {
     fn snapshot_test_program(result_field: &str, description: &str) -> Arc<WorkflowProgram> {
         let branch_output = schema(json!({"summary": {"type": "string"}}), &["summary"]);
         let definition = WorkflowDefinition {
+            tools: std::collections::BTreeSet::default(),
+            timeout_ms: 600_000,
             description: description.to_owned(),
             block: WorkflowBlock {
                 input: schema(json!({}), &[]),
@@ -2682,6 +2860,8 @@ mod tests {
             WorkflowProgram::compile(
                 WorkflowId::parse("event_journal_workflow").expect("event workflow id"),
                 WorkflowDefinition {
+                    tools: std::collections::BTreeSet::default(),
+                    timeout_ms: 600_000,
                     description: "Event journal test workflow".to_owned(),
                     block: WorkflowBlock {
                         input: output.clone(),
@@ -2836,7 +3016,8 @@ mod tests {
             .await
             .expect("workflow task")
             .expect_err("parallel failure");
-        let WorkflowRunError::ParallelFailed { detail, .. } = error else {
+        let detail = error.to_string();
+        let WorkflowRunError::ParallelFailed { .. } = error else {
             panic!("expected keyed parallel failure");
         };
         assert!(
@@ -3124,6 +3305,8 @@ mod tests {
             &["passed", "summary"],
         );
         let definition = WorkflowDefinition {
+            tools: std::collections::BTreeSet::default(),
+            timeout_ms: 600_000,
             description: "Review".to_owned(),
             block: WorkflowBlock {
                 input: schema(json!({"task": {"type": "string"}}), &["task"]),
@@ -3171,6 +3354,8 @@ mod tests {
     #[test]
     fn rejects_branch_without_boolean_condition_or_complete_ports() {
         let definition = WorkflowDefinition {
+            tools: std::collections::BTreeSet::default(),
+            timeout_ms: 600_000,
             description: "Branch".to_owned(),
             block: WorkflowBlock {
                 input: schema(json!({"flag": {"type": "string"}}), &["flag"]),
@@ -3291,6 +3476,8 @@ block:
             },
         };
         let missing_ports = WorkflowDefinition {
+            tools: std::collections::BTreeSet::default(),
+            timeout_ms: 600_000,
             description: "Branch".to_owned(),
             block: WorkflowBlock {
                 input: schema(json!({"flag": {"type": "boolean"}}), &["flag"]),
@@ -3468,6 +3655,8 @@ block:
         ));
 
         let optional_input = WorkflowDefinition {
+            tools: std::collections::BTreeSet::default(),
+            timeout_ms: 600_000,
             description: "Optional nested input".to_owned(),
             block: WorkflowBlock {
                 input: schema(

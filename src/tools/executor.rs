@@ -144,6 +144,28 @@ pub struct ToolExecutionContext<'a> {
 }
 
 impl<'a> ToolExecutionContext<'a> {
+    /// Borrows the same authorized resources for the native lifecycle's
+    /// subordinate cancellation and progress scopes. No workspace is rebased.
+    pub(crate) fn reborrow<'b>(
+        &'b self,
+        cancellation: ExecutionCancellation,
+        progress: &'b dyn ProgressReporter,
+    ) -> ToolExecutionContext<'b> {
+        ToolExecutionContext {
+            conversation_id: self.conversation_id,
+            execution_id: self.execution_id,
+            cancellation,
+            workspace: self.workspace,
+            progress,
+            artifacts: self.artifacts,
+            tool_output: self.tool_output,
+            environment: self.environment,
+            questionnaire_requester: self.questionnaire_requester.clone(),
+            todos: self.todos.clone(),
+            subagent: self.subagent.clone(),
+        }
+    }
+
     /// Constructs a detached execution context without native interaction
     /// authority. Runtime-owned foreground dispatch adds its bounded
     /// Questionnaire requester through the crate-private builder below.
@@ -265,7 +287,7 @@ impl<'a> ToolExecutionContext<'a> {
 ///
 /// [`ToolExecutionStatus::Failed`]: crate::tools::types::ToolExecutionStatus::Failed
 pub trait ToolExecutor: Send + Sync {
-    /// Constructs the handle of one canonical invocation.
+    /// Constructs the handle of one caller-neutral native invocation.
     ///
     /// This method must not dispatch physical work. Dispatch and its cleanup
     /// live inside the returned handle, so cancellation before the first
@@ -687,6 +709,7 @@ impl Clone for ToolRegistry {
                     entry.executor.clone(),
                     entry.normalizer,
                     entry.mandatory,
+                    entry.foreground,
                 )
                 .expect("a validated registry clones without registration errors");
         }
@@ -705,6 +728,7 @@ pub(crate) type BusinessArgumentNormalizer =
 /// derives the immutable active registry.
 #[derive(Clone)]
 pub(crate) struct ToolRegistration {
+    foreground: crate::tools::deadline::ForegroundPolicy,
     pub(crate) definition: ToolDefinition,
     pub(crate) executor: Arc<dyn ToolExecutor>,
     pub(crate) normalizer: BusinessArgumentNormalizer,
@@ -714,11 +738,62 @@ pub(crate) struct ToolRegistration {
     pub(crate) mandatory: bool,
 }
 
+impl std::fmt::Debug for ToolRegistration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolRegistration")
+            .field("definition", &self.definition)
+            .field("foreground", &self.foreground)
+            .finish_non_exhaustive()
+    }
+}
+
 impl ToolRegistration {
+    pub(crate) fn foreground(&self) -> crate::tools::deadline::ForegroundPolicy {
+        self.foreground
+    }
+    /// Prepares a fixed foreground invocation against an exact frozen
+    /// definition. Runtime metadata is never accepted as business input.
+    pub(crate) fn prepare_fixed(
+        &self,
+        id: crate::tools::types::ToolInvocationId,
+        expected: &ToolDefinition,
+        arguments: &serde_json::Value,
+    ) -> Result<PreflightOutcome, String> {
+        let entry = self;
+        if entry.definition != *expected
+            || entry.foreground != crate::tools::deadline::ForegroundPolicy::Leaf
+        {
+            return Err("frozen capability identity changed".into());
+        }
+        if matches!(
+            expected.execution_policy,
+            crate::tools::types::ToolExecutionPolicy::BackgroundOnly
+        ) {
+            return Err("background-only capability is not a foreground leaf".into());
+        }
+        if arguments.as_object().is_some_and(|fields| {
+            fields.keys().any(|key| {
+                crate::tools::schema::is_reserved_property(key) || key == EXECUTION_MODE_FIELD
+            })
+        }) {
+            return Ok(PreflightOutcome::Rejected {
+                tool_id: expected.id.clone(),
+                origin: expected.origin.clone(),
+                error: "fixed invocation arguments contain execution metadata".into(),
+            });
+        }
+        Ok(ToolRegistry::prepare_arguments(
+            entry,
+            id,
+            crate::tools::types::ToolInvocationMode::Foreground,
+            arguments,
+        ))
+    }
     /// Creates a registration for a discovered non-native Tool whose
     /// arguments use the canonical schema unchanged.
     pub(crate) fn plain(definition: ToolDefinition, executor: Arc<dyn ToolExecutor>) -> Self {
         Self {
+            foreground: crate::tools::deadline::ForegroundPolicy::Leaf,
             definition,
             executor,
             normalizer: identity_arguments,
@@ -791,7 +866,13 @@ impl ToolRegistry {
         executor: Arc<dyn ToolExecutor>,
         normalizer: BusinessArgumentNormalizer,
     ) -> Result<(), ToolRegistryError> {
-        self.register_with_activation_metadata(definition, executor, normalizer, false)
+        self.register_with_activation_metadata(
+            definition,
+            executor,
+            normalizer,
+            false,
+            crate::tools::deadline::ForegroundPolicy::Leaf,
+        )
     }
 
     /// Registers one validated Tool with internal activation metadata.
@@ -805,6 +886,7 @@ impl ToolRegistry {
         executor: Arc<dyn ToolExecutor>,
         normalizer: BusinessArgumentNormalizer,
         mandatory: bool,
+        foreground: crate::tools::deadline::ForegroundPolicy,
     ) -> Result<(), ToolRegistryError> {
         if definition.id.as_str().is_empty() {
             return Err(ToolRegistryError::InvalidIdentity(format!(
@@ -867,10 +949,20 @@ impl ToolRegistry {
                  sequential execution with approval disabled"
             )));
         }
+        if let crate::tools::deadline::ForegroundPolicy::Composite { total } = foreground
+            && (!total.is_positive()
+                || total.hard_deadline > std::time::Duration::from_hours(24)
+                || total.idle_liveness.is_some())
+        {
+            return Err(ToolRegistryError::InvalidPolicy(
+                "composite policy must be finite, positive, at most 24 hours, and hard-only".into(),
+            ));
+        }
         self.by_id.insert(definition.id.clone(), self.entries.len());
         self.by_name
             .insert(definition.name.clone(), self.entries.len());
         self.entries.push(ToolRegistration {
+            foreground,
             definition,
             executor,
             normalizer,
@@ -912,6 +1004,7 @@ impl ToolRegistry {
                 registration.executor,
                 registration.normalizer,
                 registration.mandatory,
+                registration.foreground,
             )?;
         }
         Ok(registry)
@@ -1014,27 +1107,43 @@ impl ToolRegistry {
                     });
                 }
             };
-        let normalized = match (entry.normalizer)(&stripped) {
+        Ok(Self::prepare_arguments(
+            entry,
+            crate::tools::types::ToolInvocationId::Agent {
+                call_id: call.id.clone(),
+            },
+            mode,
+            &stripped,
+        ))
+    }
+
+    fn prepare_arguments(
+        entry: &ToolRegistration,
+        id: crate::tools::types::ToolInvocationId,
+        mode: crate::tools::types::ToolInvocationMode,
+        arguments: &serde_json::Value,
+    ) -> PreflightOutcome {
+        let normalized = match (entry.normalizer)(arguments) {
             Ok(arguments) => arguments,
             Err(error) => {
-                return Ok(PreflightOutcome::Rejected {
+                return PreflightOutcome::Rejected {
                     tool_id: entry.definition.id.clone(),
                     origin: entry.definition.origin.clone(),
                     error,
-                });
+                };
             }
         };
         if let Err(error) = validate_business_arguments(&entry.definition.input_schema, &normalized)
         {
-            return Ok(PreflightOutcome::Rejected {
+            return PreflightOutcome::Rejected {
                 tool_id: entry.definition.id.clone(),
                 origin: entry.definition.origin.clone(),
                 error: error.to_string(),
-            });
+            };
         }
-        Ok(PreflightOutcome::Ready(PreparedInvocation {
+        PreflightOutcome::Ready(PreparedInvocation {
             invocation: ToolInvocation {
-                call_id: call.id.clone(),
+                id,
                 tool_id: entry.definition.id.clone(),
                 tool_name: entry.definition.name.clone(),
                 mode,
@@ -1048,7 +1157,7 @@ impl ToolRegistry {
             // idle-liveness contract is frozen even if a later registry
             // generation would declare otherwise.
             progress_capability: entry.executor.progress_capability(),
-        }))
+        })
     }
 
     /// The executor of a preflighted tool.
@@ -1064,6 +1173,13 @@ impl ToolRegistry {
             .get(tool_id)
             .expect("preflighted tools are registered");
         self.entries[index].executor.clone()
+    }
+
+    pub(crate) fn foreground_policy(
+        &self,
+        tool_id: &ToolId,
+    ) -> crate::tools::deadline::ForegroundPolicy {
+        self.entries[self.by_id[tool_id]].foreground
     }
 
     /// Resolves a canonical call to its registered entry, requiring the id

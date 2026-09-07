@@ -124,18 +124,12 @@ use crate::runtime::identity::{
     ToolCallId, ToolId, TurnId,
 };
 use crate::runtime::inbound::{FreshInboundTurn, InitialTurnTrigger, MailboxError};
-use crate::runtime::interaction::{
-    ApprovalDecision, InteractionFailure, InteractionOutcome, InteractionResponse,
-};
+use crate::runtime::interaction::InteractionFailure;
 use crate::runtime::types::{CancellationReason, RuntimeError};
 use crate::tools::background::BackgroundDispatchOutcome;
-use crate::tools::deadline::{
-    TOOL_SETTLEMENT_CONTROL_GUARD, ToolCancellationCause, ToolDeadlineKind,
-    ToolExecutionDeadlinePolicy, ToolProgressCapability, ToolSettlementCertainty, deadline_after,
-};
+use crate::tools::deadline::{ToolExecutionDeadlinePolicy, ToolProgressCapability};
 use crate::tools::executor::{
     PreflightOutcome, PreparedInvocation, ProgressReporter, ToolExecutionContext, ToolRegistry,
-    ToolSettlement,
 };
 use crate::tools::runtime::ConversationToolRuntime;
 use crate::tools::types::{
@@ -146,8 +140,8 @@ use crate::tools::types::{
 use super::assembly::ModelEventAssembler;
 use super::cancellation::{AgentCancellation, StartAdjudication};
 use super::lifecycle::{
-    AttemptLifecycle, ObservedToolInvocation, PreStepBatch, PreStepDecision, PreToolDecision,
-    PreToolView, ToolResultObservation,
+    AttemptLifecycle, ObservedToolInvocation, PreStepBatch, PreStepDecision, PreToolView,
+    ToolResultObservation,
 };
 use super::observer::{AgentExecutionObserver, AgentStatusObservation};
 use super::state::{ExecutionState, ExecutionStateMachine};
@@ -4608,7 +4602,6 @@ impl<'a> AgentExecution<'a> {
         &self,
         slots: &mut [CallSlot],
     ) -> Result<(), InteractionFailure> {
-        let policy = self.lifecycle.pre_tool_policy();
         for slot in slots {
             if slot.result.is_some() {
                 continue;
@@ -4626,82 +4619,21 @@ impl<'a> AgentExecution<'a> {
                 conversation_id: &self.request.conversation_id,
                 attempt_id: &self.request.attempt_id,
                 turn: self.turn,
-                call_id: &slot.call.id,
+                invocation_id: &invocation.id,
                 tool_id: &invocation.tool_id,
                 tool_name: &invocation.tool_name,
                 origin: &prepared.origin,
                 mode: invocation.mode,
                 arguments: &invocation.arguments,
-                canonical_arguments: &slot.call.arguments,
+                audit_arguments: &slot.call.arguments,
                 approval_policy: prepared.approval,
             };
-            // A policy future is allowed to settle, but its result is not
-            // consumed after cancellation becomes observable at this
-            // extension boundary. This single checkpoint applies uniformly
-            // to Allow, Deny, Ask, and policy errors.
-            let raw_decision = policy.evaluate(&view).await;
-            if self.cancellation.is_cancelled() {
-                slot.result = Some(cancelled_result(self.cancellation.reason()));
-                continue;
-            }
-            let decision = match raw_decision {
-                Ok(decision) => decision,
-                Err(error) => PreToolDecision::Deny {
-                    reason: format!("pre-tool policy failed closed: {}", error.message),
-                },
-            };
-            let resolution = match decision {
-                PreToolDecision::Allow => PreToolResolution::Allow,
-                PreToolDecision::Deny { reason } => PreToolResolution::Denied(reason),
-                PreToolDecision::Ask { reason } => {
-                    let facts = view.approval_facts(reason);
-                    let outcome = self
-                        .lifecycle
-                        .request_approval(
-                            self.request.attempt_id.clone(),
-                            facts,
-                            self.cancellation.execution_cancellation(),
-                        )
-                        .await;
-                    // The interaction terminal winner owns the rendezvous,
-                    // but it never grants execution authority. Apply the
-                    // same post-await cancellation precedence before the
-                    // Responded/Denied value is consumed.
-                    if self.cancellation.is_cancelled() {
-                        PreToolResolution::Cancelled(self.cancellation.reason())
-                    } else {
-                        match outcome {
-                            Ok(InteractionOutcome::Responded { response }) => match response {
-                                InteractionResponse::Approval { decision } => match decision {
-                                    ApprovalDecision::Allow => PreToolResolution::Allow,
-                                    ApprovalDecision::Deny { reason } => {
-                                        PreToolResolution::Denied(reason)
-                                    }
-                                },
-                                InteractionResponse::Questionnaire { .. } => {
-                                    PreToolResolution::Denied(
-                                        "approval interaction returned a questionnaire response"
-                                            .to_owned(),
-                                    )
-                                }
-                            },
-                            Ok(InteractionOutcome::Cancelled { reason }) => {
-                                PreToolResolution::Cancelled(reason)
-                            }
-                            Err(failure) if failure.is_unavailable() => PreToolResolution::Denied(
-                                "interaction provider unavailable; approval failed closed"
-                                    .to_owned(),
-                            ),
-                            Err(failure) => return Err(failure),
-                        }
-                    }
-                }
-            };
-            slot.result = match resolution {
-                PreToolResolution::Allow => None,
-                PreToolResolution::Denied(reason) => Some(denied_result(&reason)),
-                PreToolResolution::Cancelled(reason) => Some(cancelled_result(reason)),
-            };
+            slot.result = crate::tools::invocation::authorize(
+                &self.lifecycle,
+                &view,
+                &self.cancellation.execution_cancellation(),
+            )
+            .await?;
         }
         Ok(())
     }
@@ -4953,145 +4885,27 @@ impl<'a> AgentExecution<'a> {
         }
     }
 
-    /// Runs one foreground invocation under the generic execution-liveness
-    /// lifecycle (Issue #204).
-    ///
-    /// The execution receives an `ExecutionCancellation` **child view** of the
-    /// attempt's signal in its context. Native foreground work derives child
-    /// signals from that view, so observable attempt cancellation physically
-    /// reaches the subordinate operation without handing it cancellation
-    /// authority over the attempt. The lifecycle additionally retains the
-    /// child view's owner-side trigger, so a deadline winner cancels exactly
-    /// this execution without touching attempt cancellation or its
-    /// provenance.
-    ///
-    /// # Deadlines and winner arbitration
-    ///
-    /// The lifecycle owns the deadlines of the policy frozen at attempt
-    /// admission, both measured from this call's executor-start frontier —
-    /// the one monotonic clock reading taken just before the executor future
-    /// is created; queueing, scheduling-barrier, and approval time before
-    /// that frontier is attempt lifecycle, never execution lifetime:
-    ///
-    /// - the **hard deadline** — the immutable total execution lifetime.
-    ///   Progress never extends it.
-    /// - the **idle-liveness deadline** — enabled only when the frozen policy
-    ///   carries an idle window **and** the admitted executor declared
-    ///   [`ToolProgressCapability::Meaningful`] at invocation resolution
-    ///   (both frozen into this call's execution authority). Every executor
-    ///   progress report tapped from the progress fanout refreshes it. No
-    ///   executor ever fabricates heartbeat reports to satisfy it, and an
-    ///   executor without meaningful progress runs under the hard deadline
-    ///   only.
-    ///
-    /// The biased `select!` below is the one winner-arbitration point, with
-    /// the contractual readiness order: attempt cancellation first, then the
-    /// hard deadline, then the idle deadline, then physical completion. A
-    /// deadline winner is cancellation/liveness **intent**, never settlement
-    /// (Issue #202): the lifecycle cancels this execution's signal and then
-    /// transitions to the executor's settlement authority below.
-    ///
-    /// # Finite settlement
-    ///
-    /// Once cancellation/deadline intent wins, the lifecycle awaits the
-    /// executor's settlement authority — the independent
-    /// cancellation/settlement control plane of the started handle — which
-    /// returns typed [`ToolSettlement`] evidence and is the *normal*
-    /// settlement mechanism, awaited without a timeout of its own. The
-    /// completion future is dropped after settlement only as an empty
-    /// poller shell: it owns nothing by then (with
-    /// [`crate::tools::executor::ToolExecutionHandle::settled_by_operation`]
-    /// the operation's ownership moved to the settlement plane), so dropping
-    /// it is never "cleanup by destructor".
-    ///
-    /// The canonical `OutcomeUnknown` comes from executor outcome evidence
-    /// (including a contained operation panic with unprovable effects),
-    /// explicit [`ToolSettlement::Unconfirmed`] evidence, or from the settlement
-    /// control-plane guard [`TOOL_SETTLEMENT_CONTROL_GUARD`] — never from
-    /// "the execution future did not return". The two paths stay
-    /// type-distinct: executor-returned `Unconfirmed` means all rustX-owned
-    /// local execution ownership settled and only external terminality is
-    /// unprovable; guard expiry is a settlement control-plane failure (an
-    /// executor settlement-contract violation) that proves nothing about
-    /// physical execution. The journal keeps them apart:
-    /// `ToolExecutionSettlementObserved { Unconfirmed }` is emitted only for
-    /// executor-returned evidence, while guard expiry journals
-    /// `ToolExecutionSettlementControlFailed` and never a
-    /// settlement-observed fact. On the guard path the lifecycle commits
-    /// `OutcomeUnknown`, drops the handle — which for a conforming executor
-    /// consumes all remaining rustX-owned local execution ownership — and
-    /// the closed call slot guarantees no late executor state can publish
-    /// canonical facts.
-    ///
-    /// The winner of the arbitration freezes provenance, and proven
-    /// settlement evidence then selects the canonical status: an
-    /// executor-proven cancellation settlement becomes `Cancelled` with the
-    /// attempt's reason (attempt winner) or `TimedOut` (deadline winner);
-    /// anything else the executor itself settled — a known completion that
-    /// won the physical race or an executor-proven timeout — survives
-    /// untouched, and unconfirmed settlement evidence settles the call as
-    /// the honest `OutcomeUnknown`. A physical-result winner preserves an
-    /// executor's cancellation reason and only normalizes its phase.
-    #[allow(clippy::too_many_lines)] // one linear settlement pipeline
+    /// Caller resources and canonical observation surround the native driver.
+    #[allow(clippy::too_many_lines)] // Caller context and canonical fact projection stay together.
     async fn run_foreground(
         &self,
         invocation: &ToolInvocation,
         progress_capability: ToolProgressCapability,
         todos: Option<crate::tools::todo::TodoWriter>,
     ) -> (ToolExecutionResult, Vec<RuntimeEvent>) {
+        use crate::tools::invocation::InvocationFact;
+        let call_id = invocation
+            .id
+            .canonical_call_id()
+            .expect("Agent-owned invocation");
         let executor = self.tool_registry().executor(&invocation.tool_id);
-        let buffer =
-            ForegroundProgressBuffer::new(invocation.call_id.clone(), invocation.tool_id.clone());
-        // The executor-start frontier: the one monotonic clock reading both
-        // the hard deadline and the initial idle-liveness window of this
-        // call are measured from.
-        let started_at = self.monotonic_clock.now_millis();
-        let hard_deadline_millis = self.tool_deadline_policy.hard_deadline_millis(started_at);
-        // The frontier now exists as an absolute value; a manual-clock test
-        // may cross it from here on.
-        #[cfg(test)]
-        if let Some(signal) = self
-            .tool_deadline_armed
-            .lock()
-            .expect("tool deadline armed signal lock")
-            .as_ref()
-        {
-            signal.armed(hard_deadline_millis);
-        }
-        // The effective idle-liveness window of this admitted execution: the
-        // frozen runtime idle policy applies exactly when the admitted
-        // executor declared meaningful progress capability, frozen at
-        // invocation resolution. Both inputs are admission-frozen, so the
-        // running call's liveness contract can never change mid-execution.
-        let effective_idle = self
-            .tool_deadline_policy
-            .effective_idle_liveness(progress_capability);
-        // The per-call cancellation child: attempt cancellation still
-        // propagates into the execution, while a deadline winner cancels
-        // exactly this execution through the owner-side trigger.
-        let (deadline_trigger, execution_cancellation) =
-            self.cancellation.execution_cancellation().child_execution();
-        // The idle-liveness tap: the executor's progress reports are the
-        // only liveness evidence, observed through the existing progress
-        // seam. When this call's effective policy has no idle window no tap
-        // exists at all — an executor that cannot produce honest progress
-        // participates in the hard deadline only.
-        let (liveness_sender, mut liveness_rx) = tokio::sync::watch::channel(started_at);
-        let liveness_tap = effective_idle.map(|_| ToolExecutionLivenessTap {
-            clock: &*self.monotonic_clock,
-            sender: liveness_sender,
-        });
-        // The progress fanout (Issue #178): every report feeds the durable
-        // buffer exactly as before AND, when an observer is installed, the
-        // live observation seam as one disposable, latest-value observation
-        // while the tool still executes. The durable commit path is
-        // untouched. The idle-liveness tap only refreshes the watchdog.
+        let buffer = ForegroundProgressBuffer::new(call_id.clone(), invocation.tool_id.clone());
         let progress = ForegroundProgressFanout {
             buffer: &buffer,
             observer: self.observer,
             attempt_id: &self.request.attempt_id,
-            liveness: liveness_tap.as_ref(),
         };
+        let execution_cancellation = self.cancellation.execution_cancellation();
         let context = ToolExecutionContext::new(
             &self.request.conversation_id,
             None,
@@ -5122,282 +4936,83 @@ impl<'a> AgentExecution<'a> {
         // resources, so a reload that commits a newer generation mid-attempt
         // cannot be observed by this invocation.
         let context = match &self.subagent_context {
-            Some(subagent) => context.with_subagent_context(subagent.clone()),
+            Some(subagent) => {
+                let mut subagent = subagent.clone();
+                subagent.native = Some(Arc::new(
+                    crate::tools::invocation::NativeInvocationServices {
+                        lifecycle: self.lifecycle.clone(),
+                        runtime: self.tool_runtime.clone(),
+                        clock: self.monotonic_clock.clone(),
+                        leaf_policy: self.tool_deadline_policy,
+                        turn: self.turn,
+                        scheduling: Arc::new(tokio::sync::RwLock::new(())),
+                        descendants: crate::tools::invocation::NativeChildScope::default(),
+                    },
+                ));
+                context.with_subagent_context(subagent)
+            }
             None => context,
         };
-        let crate::tools::executor::ToolExecutionHandle {
-            completion,
-            settlement,
-        } = crate::tools::executor::start_tool_execution(&*executor, invocation.clone(), context);
-        tokio::pin!(completion);
-        tokio::pin!(settlement);
-        let hard_wait = self.monotonic_clock.wait_until_millis(hard_deadline_millis);
-        // The idle watchdog: waits out the current progress window, and a
-        // refresh observation starts a fresh window. The window is measured
-        // from the *timestamp of the newest observed progress*, so a window
-        // that expires while an unconsumed refresh is pending recomputes
-        // from that refresh instead of firing — the cut is defined by
-        // observation time, never by poll scheduling. A dropped tap (the
-        // execution ended) parks the watchdog forever; the hard deadline and
-        // completion arms remain the bounds.
-        let idle_wait: futures_util::future::BoxFuture<'_, ()> = match effective_idle {
-            Some(idle) => Box::pin(async move {
-                let idle_millis = u64::try_from(idle.as_millis()).unwrap_or(u64::MAX);
-                let mut observed = *liveness_rx.borrow_and_update();
-                loop {
-                    let window = observed.saturating_add(idle_millis);
-                    tokio::select! {
-                        biased;
-                        () = self.monotonic_clock.wait_until_millis(window) => {
-                            let latest = *liveness_rx.borrow_and_update();
-                            if latest == observed {
-                                break;
-                            }
-                            observed = latest;
-                        },
-                        changed = liveness_rx.changed() => {
-                            match changed {
-                                Ok(()) => {
-                                    observed = *liveness_rx.borrow_and_update();
-                                }
-                                Err(_) => std::future::pending::<()>().await,
-                            }
-                        }
-                    }
-                }
-            }),
-            None => Box::pin(std::future::pending()),
-        };
-        let winner = tokio::select! {
-            biased;
-            () = self.cancellation.cancelled() => {
-                // Read the absorbing reason at the same boundary that makes
-                // cancellation the winner. The later physical settlement
-                // phase must not consult mutable attempt cancellation state
-                // again.
-                let reason = self.cancellation.reason();
-                #[cfg(test)]
-                self.park_after_tool_cancellation_settlement();
-                ToolSettlementWinner::Cancellation(reason)
-            },
-            () = hard_wait => {
-                // Deadline expiration is cancellation intent, not proof of
-                // settlement: cancel exactly this execution and collect its
-                // physical settlement evidence below.
-                deadline_trigger.cancel();
-                ToolSettlementWinner::Deadline(ToolDeadlineKind::Hard)
-            },
-            () = idle_wait => {
-                deadline_trigger.cancel();
-                ToolSettlementWinner::Deadline(ToolDeadlineKind::Idle)
-            },
-            result = completion.as_mut() => {
-                // This pause is after the select branch has won and before
-                // result normalization, so a cancellation requested here is
-                // provably too late to reclaim physical settlement authority.
-                #[cfg(test)]
-                self.park_after_tool_physical_settlement();
-                ToolSettlementWinner::Physical(result)
-            },
-        };
-        let mut deadline_fired = None;
-        // The cancellation/settlement control-plane facts of this call: the
-        // delivered cancellation cause, the certainty the executor's
-        // settlement authority returned, and the settlement control-plane
-        // failure the lifecycle itself detected when the authority never
-        // returned. Exactly one of the latter two is present, and both are
-        // present only when a non-physical winner drove the settlement phase.
-        let mut cancellation_requested: Option<ToolCancellationCause> = None;
-        let mut settlement_certainty: Option<ToolSettlementCertainty> = None;
-        let mut settlement_control_failed: Option<String> = None;
-        let result = match winner {
-            ToolSettlementWinner::Physical(mut result) => {
-                if let ToolExecutionStatus::Cancelled { reason, .. } = &result.status {
-                    // The executor was invoked after this slot crossed the
-                    // frontier, so an executor-produced cancellation is
-                    // in-flight. Its physical reason was already authoritative
-                    // when this branch won and must not be replaced by a later
-                    // attempt cancellation.
-                    result.status = ToolExecutionStatus::Cancelled {
-                        reason: *reason,
-                        phase: ToolCancellationPhase::DuringExecution,
-                    };
-                }
-                result
-            }
-            ToolSettlementWinner::Cancellation(reason) => {
-                cancellation_requested = Some(ToolCancellationCause::Attempt(reason));
-                match self.await_settlement_authority(settlement.as_mut()).await {
-                    SettlementAuthorityOutcome::Settled(ToolSettlement::Confirmed(mut result)) => {
-                        settlement_certainty = Some(ToolSettlementCertainty::Confirmed);
-                        result.status = match result.status {
-                            // The executor proved physical cancellation
-                            // settlement (for example a killed and reaped
-                            // local process tree); the attempt cancellation
-                            // authority owns the canonical reason and phase.
-                            ToolExecutionStatus::Cancelled { .. } => {
-                                ToolExecutionStatus::Cancelled {
-                                    reason,
-                                    phase: ToolCancellationPhase::DuringExecution,
-                                }
-                            }
-                            // A cancellation *request* is not a confirmed
-                            // cancellation result. Whatever the executor
-                            // itself settled is authoritative: a known
-                            // completion that won the physical race or a
-                            // proven terminal timeout must not be overwritten
-                            // by the request.
-                            settled => settled,
-                        };
-                        result
-                    }
-                    // The executor's settlement authority returned: all
-                    // rustX-owned local execution ownership settled, but
-                    // terminality past the external-effect frontier is
-                    // unproven — the canonical outcome is unknown, not a
-                    // confirmed cancellation.
-                    SettlementAuthorityOutcome::Settled(ToolSettlement::Unconfirmed { detail }) => {
-                        settlement_certainty = Some(ToolSettlementCertainty::Unconfirmed);
-                        unconfirmed_settlement_result(detail)
-                    }
-                    // The executor's settlement authority never returned:
-                    // a lifecycle-detected settlement-contract violation,
-                    // journaled as its own typed fact — never as observed
-                    // executor evidence.
-                    SettlementAuthorityOutcome::ControlPlaneFailed { detail } => {
-                        settlement_control_failed = Some(detail.clone());
-                        unconfirmed_settlement_result(detail)
-                    }
-                }
-            }
-            ToolSettlementWinner::Deadline(kind) => {
-                deadline_fired = Some(kind);
-                cancellation_requested = Some(ToolCancellationCause::Deadline(kind));
-                match self.await_settlement_authority(settlement.as_mut()).await {
-                    SettlementAuthorityOutcome::Settled(ToolSettlement::Confirmed(mut result)) => {
-                        settlement_certainty = Some(ToolSettlementCertainty::Confirmed);
-                        result.status = match result.status {
-                            // The executor proved physical settlement after
-                            // the deadline's cancellation intent (for example
-                            // a killed and reaped local process tree): the
-                            // execution was stopped and proven unable to
-                            // continue because its deadline expired, so the
-                            // canonical outcome is the proven timeout.
-                            ToolExecutionStatus::Cancelled { .. } => ToolExecutionStatus::TimedOut,
-                            // A deadline winner never manufactures certainty
-                            // the executor did not prove: a known completion
-                            // or failure that won the physical race and an
-                            // executor-proven timeout both survive.
-                            settled => settled,
-                        };
-                        result
-                    }
-                    // The executor's settlement authority returned: all
-                    // rustX-owned local execution ownership settled, but
-                    // terminality past the external-effect frontier is
-                    // unproven — the canonical outcome is `OutcomeUnknown`,
-                    // never `TimedOut`.
-                    SettlementAuthorityOutcome::Settled(ToolSettlement::Unconfirmed { detail }) => {
-                        settlement_certainty = Some(ToolSettlementCertainty::Unconfirmed);
-                        unconfirmed_settlement_result(detail)
-                    }
-                    // The executor's settlement authority never returned:
-                    // a lifecycle-detected settlement-contract violation,
-                    // journaled as its own typed fact — never as observed
-                    // executor evidence, and never `TimedOut`.
-                    SettlementAuthorityOutcome::ControlPlaneFailed { detail } => {
-                        settlement_control_failed = Some(detail.clone());
-                        unconfirmed_settlement_result(detail)
-                    }
-                }
+
+        #[cfg(test)]
+        let armed = |deadline| {
+            if let Some(signal) = self
+                .tool_deadline_armed
+                .lock()
+                .expect("deadline signal")
+                .as_ref()
+            {
+                signal.armed(deadline);
             }
         };
+        #[cfg(test)]
+        let cancellation_won = || self.park_after_tool_cancellation_settlement();
+        #[cfg(test)]
+        let completion_won = || self.park_after_tool_physical_settlement();
+        let driver = crate::tools::invocation::ForegroundInvocation {
+            clock: &*self.monotonic_clock,
+            policy: self.tool_deadline_policy,
+            registration: self.tool_registry().foreground_policy(&invocation.tool_id),
+            #[cfg(test)]
+            deadline_armed: Some(&armed),
+            #[cfg(test)]
+            cancellation_won: Some(&cancellation_won),
+            #[cfg(test)]
+            completion_won: Some(&completion_won),
+        };
+        let (result, facts) = driver
+            .execute(&*executor, invocation.clone(), progress_capability, context)
+            .await;
         let mut events = buffer.take();
-        if let Some(kind) = deadline_fired {
-            // The intent fact lands after the retained progress evidence and
-            // before the cancellation/settlement facts and the terminal
-            // completion event, preserving the durable terminal-last ordering
-            // of this call's execution facts.
-            events.push(RuntimeEvent::ToolExecutionDeadlineFired {
-                tool_call_id: invocation.call_id.clone(),
+        events.extend(facts.into_iter().map(|fact| match fact {
+            InvocationFact::Deadline { kind } => RuntimeEvent::ToolExecutionDeadlineFired {
+                tool_call_id: call_id.clone(),
                 tool_id: invocation.tool_id.clone(),
                 kind,
-            });
-        }
-        if let Some(cause) = cancellation_requested {
-            // The control-plane facts of the settlement phase: physical
-            // cancellation was actually delivered to the executor. Then
-            // exactly one settlement fact: the executor's own typed certainty
-            // when its settlement authority returned, or the lifecycle's
-            // settlement control-plane failure when it never did — the two
-            // are type-distinct and never collapsed.
-            events.push(RuntimeEvent::ToolExecutionCancellationRequested {
-                tool_call_id: invocation.call_id.clone(),
-                tool_id: invocation.tool_id.clone(),
-                cause,
-            });
-            match (settlement_certainty, settlement_control_failed) {
-                (Some(certainty), None) => {
-                    events.push(RuntimeEvent::ToolExecutionSettlementObserved {
-                        tool_call_id: invocation.call_id.clone(),
-                        tool_id: invocation.tool_id.clone(),
-                        certainty,
-                    });
-                }
-                (None, Some(reason)) => {
-                    events.push(RuntimeEvent::ToolExecutionSettlementControlFailed {
-                        tool_call_id: invocation.call_id.clone(),
-                        tool_id: invocation.tool_id.clone(),
-                        reason,
-                    });
-                }
-                // The settlement phase always resolves to exactly one fact.
-                _ => {
-                    unreachable!("a cancellation request settles with exactly one settlement fact")
+            },
+            InvocationFact::CancellationRequested { cause } => {
+                RuntimeEvent::ToolExecutionCancellationRequested {
+                    tool_call_id: call_id.clone(),
+                    tool_id: invocation.tool_id.clone(),
+                    cause,
                 }
             }
-        }
+            InvocationFact::SettlementObserved { certainty } => {
+                RuntimeEvent::ToolExecutionSettlementObserved {
+                    tool_call_id: call_id.clone(),
+                    tool_id: invocation.tool_id.clone(),
+                    certainty,
+                }
+            }
+            InvocationFact::SettlementControlFailed { reason } => {
+                RuntimeEvent::ToolExecutionSettlementControlFailed {
+                    tool_call_id: call_id.clone(),
+                    tool_id: invocation.tool_id.clone(),
+                    reason,
+                }
+            }
+        }));
         (result, events)
-    }
-
-    /// Awaits the executor's settlement authority after cancellation/deadline
-    /// intent won the arbitration (Issue #204).
-    ///
-    /// The settlement control plane is the normal settlement mechanism and
-    /// is awaited without a timeout of its own; typed evidence that arrives
-    /// (which always wins a tie with the guard's expiry) is authoritative
-    /// and returned as [`SettlementAuthorityOutcome::Settled`].
-    /// [`TOOL_SETTLEMENT_CONTROL_GUARD`] exists ONLY as liveness protection
-    /// against a broken executor whose settlement plane never returns: its
-    /// expiry is a settlement control-plane failure, never settlement
-    /// evidence — it never implies the physical operation stopped — so it
-    /// returns the lifecycle-generated
-    /// [`SettlementAuthorityOutcome::ControlPlaneFailed`], which the caller
-    /// commits as `OutcomeUnknown` and journals as its own typed fact, then
-    /// drops the handle. For a conforming
-    /// [`crate::tools::executor::ToolExecutionHandle`] that drop consumes
-    /// all rustX-owned local execution ownership: the executor never spawned
-    /// unmanaged local tasks or processes outside the handle futures, so
-    /// dropping them cancels the in-process operation itself.
-    async fn await_settlement_authority(
-        &self,
-        settlement: impl Future<Output = ToolSettlement>,
-    ) -> SettlementAuthorityOutcome {
-        let guard_deadline = deadline_after(
-            self.monotonic_clock.now_millis(),
-            TOOL_SETTLEMENT_CONTROL_GUARD,
-        );
-        let guard_wait = self.monotonic_clock.wait_until_millis(guard_deadline);
-        tokio::pin!(guard_wait);
-        tokio::select! {
-            biased;
-            evidence = settlement => SettlementAuthorityOutcome::Settled(evidence),
-            () = guard_wait => SettlementAuthorityOutcome::ControlPlaneFailed {
-                detail: "the executor's settlement control plane did not return within the guard \
-                         window after the cancellation request; this is an executor settlement-contract \
-                         violation, not proof about the physical operation".to_owned(),
-            },
-        }
     }
 
     /// Dispatches one background invocation through the conversation-owned
@@ -6013,45 +5628,6 @@ struct CallSlot {
     execution_facts: Vec<RuntimeEvent>,
 }
 
-/// The frozen winner of one foreground execution arbitration.
-///
-/// The winner is the linearization point of the race between attempt
-/// cancellation, the execution's generic deadlines, and physical completion
-/// (Issue #204). The cancellation reason is captured with the winner so
-/// later requests cannot rewrite a physical result that already owns
-/// settlement authority; a deadline winner carries only its kind — the
-/// canonical status is selected from the executor's settlement evidence, and
-/// a deadline can never rewrite executor-proven outcomes.
-enum ToolSettlementWinner {
-    Cancellation(CancellationReason),
-    Deadline(ToolDeadlineKind),
-    Physical(ToolExecutionResult),
-}
-
-/// The lifecycle-level outcome of awaiting the executor's settlement
-/// authority (Issue #204).
-///
-/// The two variants are type-distinct facts that must never be collapsed:
-/// [`SettlementAuthorityOutcome::Settled`] carries the executor's own
-/// settlement evidence — its settlement control plane returned — while
-/// [`SettlementAuthorityOutcome::ControlPlaneFailed`] is generated by the
-/// lifecycle itself when the settlement control-plane guard expired because
-/// the executor violated its settlement contract and never returned. Both
-/// map to the canonical `OutcomeUnknown` when certainty cannot be proven,
-/// but they journal differently: only executor evidence produces
-/// `ToolExecutionSettlementObserved`; a control-plane failure produces
-/// `ToolExecutionSettlementControlFailed`.
-enum SettlementAuthorityOutcome {
-    /// The executor's settlement authority returned typed evidence.
-    Settled(ToolSettlement),
-    /// The settlement control-plane guard expired: the executor's
-    /// settlement authority never returned after the cancellation request.
-    ControlPlaneFailed {
-        /// The lifecycle's record of the settlement-contract violation.
-        detail: String,
-    },
-}
-
 /// The immutable facts of one settled call of a structurally settled batch.
 ///
 /// These are copies of exactly what was committed as canonical history, kept
@@ -6067,16 +5643,6 @@ struct SettledCall {
     /// the call before invocation resolution.
     invocation: Option<ObservedToolInvocation>,
     result: ToolExecutionResult,
-}
-
-/// The result of one pre-tool policy/interaction boundary.
-enum PreToolResolution {
-    /// The existing Tool Plane start frontier may consider the call.
-    Allow,
-    /// The call receives a policy-denied result slot; no executor starts.
-    Denied(String),
-    /// The owner cancellation closed the start frontier.
-    Cancelled(CancellationReason),
 }
 
 /// One deterministic scheduling phase of a tool-call batch.
@@ -6131,23 +5697,6 @@ fn failed_result(error: &str) -> ToolExecutionResult {
     }
 }
 
-/// A policy-denied result is a normal structural Tool Plane result, distinct
-/// from executor failure. It occupies exactly one canonical call slot and
-/// carries no execution-start fact.
-fn denied_result(reason: &str) -> ToolExecutionResult {
-    ToolExecutionResult {
-        status: ToolExecutionStatus::Denied {
-            reason: reason.to_owned(),
-        },
-        content: Vec::new(),
-        duration_ms: 0,
-        exit_code: None,
-        artifacts: Vec::new(),
-        truncation: None,
-        managed_output: None,
-    }
-}
-
 /// A cancelled tool result carrying the attempt cancellation reason.
 fn cancelled_result(reason: CancellationReason) -> ToolExecutionResult {
     ToolExecutionResult {
@@ -6155,34 +5704,6 @@ fn cancelled_result(reason: CancellationReason) -> ToolExecutionResult {
             reason,
             phase: ToolCancellationPhase::BeforeStart,
         },
-        content: Vec::new(),
-        duration_ms: 0,
-        exit_code: None,
-        artifacts: Vec::new(),
-        truncation: None,
-        managed_output: None,
-    }
-}
-
-/// The canonical result of an admitted call whose cancellation/deadline
-/// intent won but whose physical settlement stayed unproven (Issue #204):
-/// the executor's settlement authority returned
-/// [`ToolSettlement::Unconfirmed`] — its own honest post-frontier evidence,
-/// with all rustX-owned local execution ownership already settled — or the
-/// settlement control-plane guard fired on a contract-violating executor
-/// (a lifecycle-detected failure that proves nothing about physical
-/// execution).
-///
-/// The call crossed its executor-start frontier, so it may have crossed the
-/// external-effect frontier; with terminality unprovable the honest outcome
-/// under the Issue #202 certainty contract is `OutcomeUnknown` — never
-/// `TimedOut` (unproven settlement is not "the operation stopped"),
-/// never a fabricated cancellation, and never a fabricated failure. The
-/// detail is the evidence's own: the executor's frontier description, or the
-/// guard's contract-violation record.
-fn unconfirmed_settlement_result(detail: String) -> ToolExecutionResult {
-    ToolExecutionResult {
-        status: ToolExecutionStatus::OutcomeUnknown { detail },
         content: Vec::new(),
         duration_ms: 0,
         exit_code: None,
@@ -6283,25 +5804,6 @@ struct ForegroundProgressFanout<'a> {
     observer: Option<&'a dyn AgentExecutionObserver>,
     /// The owning attempt.
     attempt_id: &'a AttemptId,
-    /// The idle-liveness tap of the invocation (Issue #204), present only
-    /// when the call's effective idle policy (frozen runtime idle window ∧
-    /// the admitted executor's meaningful-progress capability) enables the
-    /// idle deadline.
-    liveness: Option<&'a ToolExecutionLivenessTap<'a>>,
-}
-
-/// The idle-liveness tap of one foreground invocation (Issue #204).
-///
-/// Every executor progress report is liveness evidence: the tap publishes
-/// the report's monotonic timestamp to the lifecycle's idle watchdog, which
-/// starts a fresh idle window from it. The tap never feeds the durable
-/// buffer and never manufactures reports — executors without honest progress
-/// declare [`ToolProgressCapability::None`] and simply have no tap.
-struct ToolExecutionLivenessTap<'a> {
-    /// The runtime monotonic clock stamping each observation.
-    clock: &'a dyn MonotonicClock,
-    /// The latest progress observation of the owning execution.
-    sender: tokio::sync::watch::Sender<u64>,
 }
 
 impl ProgressReporter for ForegroundProgressFanout<'_> {
@@ -6310,18 +5812,8 @@ impl ProgressReporter for ForegroundProgressFanout<'_> {
         // both consumers observe the same bounded value and the durable
         // path is byte-identical to the un-fanned-out one.
         let bounded = crate::tools::limits::bound_tool_progress(progress);
-        // The idle watchdog is refreshed FIRST, before the durable buffer
-        // append and before any live observer callback. Liveness evidence
-        // belongs to the lifecycle that owns the deadline, and an installed
-        // observer is arbitrary consumer code: refreshing after it would let
-        // an observer's own work sit between the executor's evidence and the
-        // watchdog that depends on it, and would stamp the refresh with a
-        // later clock reading than the report actually carries. Ordering it
-        // first also makes the refresh a happens-before of every downstream
-        // progress observation.
-        if let Some(liveness) = self.liveness {
-            liveness.sender.send_replace(liveness.clock.now_millis());
-        }
+        // The shared native driver already stamped genuine liveness before
+        // this caller-specific observation can delay it.
         self.buffer.report(bounded.clone());
         if let Some(observer) = self.observer {
             observer.observe_tool_progress(

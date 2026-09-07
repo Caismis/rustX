@@ -173,6 +173,11 @@ impl ToolExecutor for AskUserExecutor {
                     })
                     .await;
                 match outcome {
+                    Ok(InteractionOutcome::DeadlineExpired { .. }) => {
+                        crate::tools::invocation::terminal(
+                            crate::tools::types::ToolExecutionStatus::TimedOut,
+                        )
+                    }
                     Ok(InteractionOutcome::Responded {
                         response: InteractionResponse::Questionnaire { response },
                     }) => questionnaire_result(&specification, &response),

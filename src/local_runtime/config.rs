@@ -16,6 +16,7 @@ use std::time::Duration;
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::capabilities::selection::ToolSelector;
 use crate::context::{AgentStatusConfig, SessionContextPolicy};
 use crate::model::catalog::ModelRef;
 use crate::model::deadline::{
@@ -25,8 +26,7 @@ use crate::model::session::SessionModelConfig;
 use crate::runtime::ApprovalMode;
 use crate::runtime::identity::{AgentId, McpServerId};
 use crate::runtime::subagent::{
-    MAX_SUBAGENT_DEFINITIONS, SubagentExecutionDeadline, SubagentName, SubagentToolSelector,
-    SubagentWorkspacePolicy,
+    MAX_SUBAGENT_DEFINITIONS, SubagentExecutionDeadline, SubagentName, SubagentWorkspacePolicy,
 };
 use crate::runtime::workflow::{MAX_WORKFLOW_DEFINITIONS, WorkflowId};
 use crate::tools::environment::{ToolEnvironment, ToolEnvironmentError};
@@ -234,14 +234,14 @@ pub struct SubagentToolsDocument {
 impl SubagentToolsDocument {
     /// The typed selectors this document expresses.
     #[must_use]
-    pub fn selectors(&self) -> Vec<SubagentToolSelector> {
-        let mut selectors: Vec<SubagentToolSelector> = self
+    pub fn selectors(&self) -> Vec<ToolSelector> {
+        let mut selectors: Vec<ToolSelector> = self
             .builtin
             .iter()
-            .map(|name| SubagentToolSelector::Builtin { name: name.clone() })
+            .map(|name| ToolSelector::Builtin { name: name.clone() })
             .collect();
         for (server_id, names) in &self.mcp {
-            selectors.extend(names.iter().map(|name| SubagentToolSelector::Mcp {
+            selectors.extend(names.iter().map(|name| ToolSelector::Mcp {
                 server_id: server_id.clone(),
                 name: name.clone(),
             }));
@@ -560,8 +560,8 @@ impl CurrentRuntimeConfig {
             }
             for selector in document.tools.selectors() {
                 let empty = match &selector {
-                    SubagentToolSelector::Builtin { name } => name.trim().is_empty(),
-                    SubagentToolSelector::Mcp { server_id, name } => {
+                    ToolSelector::Builtin { name } => name.trim().is_empty(),
+                    ToolSelector::Mcp { server_id, name } => {
                         server_id.as_str().is_empty() || name.trim().is_empty()
                     }
                 };

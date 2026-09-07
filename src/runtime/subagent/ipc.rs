@@ -84,7 +84,9 @@ use super::workspace::WorkspaceSnapshot;
 /// fd 0 and never uses the disposable activity lane.
 /// There is no compatibility decoding: a peer that does not speak exactly
 /// this version exits before composing anything.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 15;
+/// The current version adds typed native deadline interruption to interaction
+/// outcomes and durable approval settlement, without fabricating user intent.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 17;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///

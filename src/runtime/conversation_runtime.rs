@@ -8332,6 +8332,8 @@ mod tests {
             crate::runtime::WorkflowProgram::compile(
                 crate::runtime::WorkflowId::parse("reload_workflow").expect("workflow id"),
                 crate::runtime::WorkflowDefinition {
+                    tools: std::collections::BTreeSet::default(),
+                    timeout_ms: 600_000,
                     description: description.to_owned(),
                     block: crate::runtime::WorkflowBlock {
                         input: empty_object(),
@@ -9636,7 +9638,9 @@ mod tests {
             release: Arc::new(tokio::sync::Notify::new()),
         });
         let invocation = ToolInvocation {
-            call_id: ToolCallId::new("background-mcp-call"),
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new("background-mcp-call"),
+            },
             tool_id: ToolId::new("background-mcp-tool"),
             tool_name: "background-mcp-tool".to_owned(),
             mode: ToolInvocationMode::Background,
@@ -9750,7 +9754,9 @@ mod tests {
         let old_result = old_executor
             .start(
                 ToolInvocation {
-                    call_id: ToolCallId::new("old-generation-call"),
+                    id: crate::tools::types::ToolInvocationId::Agent {
+                        call_id: ToolCallId::new("old-generation-call"),
+                    },
                     tool_id: old_definition.id,
                     tool_name: "echo".to_owned(),
                     mode: ToolInvocationMode::Foreground,
@@ -9890,7 +9896,9 @@ mod tests {
             release: Arc::new(tokio::sync::Notify::new()),
         });
         let invocation = ToolInvocation {
-            call_id: ToolCallId::new("background-late-failure-call"),
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new("background-late-failure-call"),
+            },
             tool_id: ToolId::new("background-late-failure-tool"),
             tool_name: "background-late-failure-tool".to_owned(),
             mode: ToolInvocationMode::Background,
@@ -10576,13 +10584,15 @@ mod tests {
                 AttemptId::new("late-attempt"),
                 ApprovalFacts {
                     turn: 0,
-                    call_id: ToolCallId::new("late-call"),
+                    invocation_id: crate::tools::types::ToolInvocationId::Agent {
+                        call_id: ToolCallId::new("late-call"),
+                    },
                     tool_id: ToolId::new("late-tool"),
                     tool_name: "late".to_owned(),
                     origin: ToolOrigin::Builtin,
                     mode: crate::tools::types::ToolInvocationMode::Foreground,
                     arguments: serde_json::json!({}),
-                    canonical_arguments: serde_json::json!({}),
+                    audit_arguments: serde_json::json!({}),
                     reason: "must not publish after drain".to_owned(),
                 },
                 AgentCancellation::new(CancellationReason::RuntimeShutdown)
@@ -12254,7 +12264,9 @@ mod tests {
         call_id: &str,
     ) -> crate::runtime::identity::ToolExecutionId {
         let invocation = crate::tools::types::ToolInvocation {
-            call_id: ToolCallId::new(call_id),
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new(call_id),
+            },
             tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
             tool_name: "bash".to_owned(),
             mode: crate::tools::types::ToolInvocationMode::Background,
@@ -12995,7 +13007,9 @@ mod tests {
         let executor: Arc<dyn crate::tools::executor::ToolExecutor> =
             Arc::new(GatedBackgroundExecutor::new().0);
         let invocation = crate::tools::types::ToolInvocation {
-            call_id: ToolCallId::new("call-rejected-bg"),
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new("call-rejected-bg"),
+            },
             tool_id: ToolId::new("tool-bash"),
             tool_name: "bash".to_owned(),
             mode: crate::tools::types::ToolInvocationMode::Background,
@@ -13154,7 +13168,9 @@ mod tests {
         let (executor, mut started, release) = GatedBackgroundExecutor::new();
         let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
         let invocation = crate::tools::types::ToolInvocation {
-            call_id: ToolCallId::new("call-racing-bg"),
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new("call-racing-bg"),
+            },
             tool_id: ToolId::new("tool-bash"),
             tool_name: "bash".to_owned(),
             mode: crate::tools::types::ToolInvocationMode::Background,
@@ -13310,7 +13326,9 @@ mod tests {
         let (executor, mut started, release) = GatedBackgroundExecutor::new();
         let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
         let invocation = crate::tools::types::ToolInvocation {
-            call_id: crate::runtime::identity::ToolCallId::new("call-1"),
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: crate::runtime::identity::ToolCallId::new("call-1"),
+            },
             tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
             tool_name: "bash".to_owned(),
             mode: crate::tools::types::ToolInvocationMode::Background,
@@ -13588,7 +13606,9 @@ mod tests {
         let executor: Arc<dyn crate::tools::executor::ToolExecutor> =
             Arc::new(GatedBackgroundExecutor::new().0);
         let invocation = crate::tools::types::ToolInvocation {
-            call_id: ToolCallId::new("call-rejected-bg"),
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new("call-rejected-bg"),
+            },
             tool_id: ToolId::new("tool-bash"),
             tool_name: "bash".to_owned(),
             mode: crate::tools::types::ToolInvocationMode::Background,
@@ -15840,7 +15860,9 @@ mod tests {
         let (executor, mut started, release) = GatedBackgroundExecutor::new();
         let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
         let invocation = crate::tools::types::ToolInvocation {
-            call_id: crate::runtime::identity::ToolCallId::new("call-m9c-background"),
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: crate::runtime::identity::ToolCallId::new("call-m9c-background"),
+            },
             tool_id: crate::runtime::identity::ToolId::new("tool-m9c-background"),
             tool_name: "background_gate".to_owned(),
             mode: crate::tools::types::ToolInvocationMode::Background,

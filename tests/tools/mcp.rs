@@ -99,7 +99,9 @@ mod unix_tests {
         let result = rustx::tools::executor::ToolExecutor::start(
             executor.as_ref(),
             rustx::tools::types::ToolInvocation {
-                call_id: rustx::runtime::identity::ToolCallId::new("call"),
+                id: rustx::tools::types::ToolInvocationId::Agent {
+                    call_id: rustx::runtime::identity::ToolCallId::new("call"),
+                },
                 tool_id: definitions[mutate_index].0.id.clone(),
                 tool_name: "mutate".to_owned(),
                 mode: rustx::tools::types::ToolInvocationMode::Foreground,
@@ -156,7 +158,9 @@ mod unix_tests {
         let slow_future = rustx::tools::executor::ToolExecutor::start(
             slow_executor.as_ref(),
             rustx::tools::types::ToolInvocation {
-                call_id: rustx::runtime::identity::ToolCallId::new("slow-call"),
+                id: rustx::tools::types::ToolInvocationId::Agent {
+                    call_id: rustx::runtime::identity::ToolCallId::new("slow-call"),
+                },
                 tool_id: definitions[slow_index].0.id.clone(),
                 tool_name: "slow".to_owned(),
                 mode: rustx::tools::types::ToolInvocationMode::Foreground,
@@ -305,9 +309,11 @@ mod unix_tests {
             let result = rustx::tools::executor::ToolExecutor::start(
                 executor.as_ref(),
                 rustx::tools::types::ToolInvocation {
-                    call_id: rustx::runtime::identity::ToolCallId::new(format!(
-                        "call-{server_name}"
-                    )),
+                    id: rustx::tools::types::ToolInvocationId::Agent {
+                        call_id: rustx::runtime::identity::ToolCallId::new(format!(
+                            "call-{server_name}"
+                        )),
+                    },
                     tool_id: definition.id,
                     tool_name: "echo".to_owned(),
                     mode: rustx::tools::types::ToolInvocationMode::Foreground,
@@ -461,7 +467,9 @@ mod unix_tests {
         )
         .expect("tool runtime");
         let invocation = rustx::tools::types::ToolInvocation {
-            call_id: rustx::runtime::identity::ToolCallId::new("mcp-background-call"),
+            id: rustx::tools::types::ToolInvocationId::Agent {
+                call_id: rustx::runtime::identity::ToolCallId::new("mcp-background-call"),
+            },
             tool_id: definition.id,
             tool_name: "echo".to_owned(),
             mode: rustx::tools::types::ToolInvocationMode::Background,
@@ -607,7 +615,9 @@ mod unix_tests {
         let result = rustx::tools::executor::ToolExecutor::start(
             executor.as_ref(),
             rustx::tools::types::ToolInvocation {
-                call_id: rustx::runtime::identity::ToolCallId::new("http-call"),
+                id: rustx::tools::types::ToolInvocationId::Agent {
+                    call_id: rustx::runtime::identity::ToolCallId::new("http-call"),
+                },
                 tool_id: rustx::runtime::identity::ToolId::new(rustx::tools::mcp::mcp_tool_id(
                     &server_id, "mutate",
                 )),
@@ -664,7 +674,9 @@ mod unix_tests {
         let slow_future = rustx::tools::executor::ToolExecutor::start(
             slow_executor.as_ref(),
             rustx::tools::types::ToolInvocation {
-                call_id: rustx::runtime::identity::ToolCallId::new("http-slow"),
+                id: rustx::tools::types::ToolInvocationId::Agent {
+                    call_id: rustx::runtime::identity::ToolCallId::new("http-slow"),
+                },
                 tool_id: rustx::runtime::identity::ToolId::new(rustx::tools::mcp::mcp_tool_id(
                     &server_id, "slow",
                 )),
@@ -1004,7 +1016,9 @@ mod unix_tests {
         rustx::tools::executor::ToolExecutor::start(
             executor,
             rustx::tools::types::ToolInvocation {
-                call_id: rustx::runtime::identity::ToolCallId::new(call_id),
+                id: rustx::tools::types::ToolInvocationId::Agent {
+                    call_id: rustx::runtime::identity::ToolCallId::new(call_id),
+                },
                 tool_id: definition.id.clone(),
                 tool_name: "echo".to_owned(),
                 mode: rustx::tools::types::ToolInvocationMode::Foreground,

@@ -7,6 +7,17 @@ mailbox integration.
 
 ## 1. What the Agent Loop owns
 
+WF-02 extracts caller-independent foreground invocation into
+`tools::invocation`. The Agent Loop retains accepted Assistant ToolCalls, call
+slots, outer sibling ordering, atomic ToolResult batch commit and canonical
+history. WorkflowRuntime owns graph progression, concrete node identity, typed
+bindings, validated local values and scope settlement. Both use the same native
+normalization, approval and foreground deadline/cancellation/settlement owner;
+executors still own physical execution and evidence. A fixed Tool node has a
+Workflow invocation identity, never a fabricated model ToolCall. Outer Sequential
+ordering holds no capacity token needed by nested leaves; leaf scheduling is
+separate from canonical sibling ordering. See `docs/workflow-programs.md`.
+
 The loop (`src/agent`) executes one attempt to its single terminal outcome:
 
 - attempt lifecycle (`AttemptStarted` → one terminal settlement candidate,
@@ -1599,8 +1610,9 @@ foreground lifecycle or a background execution redesign.
 
 #### 7.1.2 Execution liveness deadlines (Issue #204)
 
-Every started foreground execution is bounded by the generic lifecycle's
-`ToolExecutionDeadlinePolicy`, frozen at attempt admission and never visible
+Every started foreground execution is bounded by the shared native lifecycle's
+resolved `ToolExecutionDeadlinePolicy`: the attempt-frozen ordinary leaf policy
+or a trusted registration's frozen composite total policy. It is never visible
 to executors as a mutable runtime handle. The policy owns two deadlines per
 started call, both measured from the call's executor-start frontier:
 
@@ -1637,7 +1649,7 @@ Started (executor-start frontier; ToolExecutionStarted)
 The `ToolExecutor` boundary splits one started execution into two planes:
 `start` returns a `ToolExecutionHandle { completion, settlement }` — the
 physical completion plane plus the independent cancellation/settlement
-control plane, both executor-owned. One biased `select!` in `run_foreground`
+control plane, both executor-owned. One biased `select!` in `ForegroundInvocation::execute`
 is the single winner-arbitration point with the contractual readiness order
 attempt cancellation > hard deadline > idle deadline > physical completion;
 the winner freezes provenance. While no intent has won, the lifecycle drives

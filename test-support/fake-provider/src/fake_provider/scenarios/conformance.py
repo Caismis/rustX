@@ -269,6 +269,43 @@ def workflow_output() -> Scenario:
     )
 
 
+def workflow_tool() -> Scenario:
+    """Tool-only Workflow adds no provider request and exposes no leaf tool."""
+    return Scenario(
+        "workflow_tool",
+        Step(
+            Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
+                   body_contains=("workflow conformance request",),
+                   tools_include=("review_pr",), body_excludes=('"name":"glob"',)),
+            Stream(ToolCall("call-review-pr", "review_pr",
+                            '{"task":"workflow conformance request"}'), Finish("tool_calls")),
+        ),
+        Step(
+            Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
+                   body_contains=("review_pr.yaml",), tools_include=("review_pr",),
+                   body_excludes=("workflow_output",)),
+            Stream(Text("workflow conformance complete"), Finish("stop")),
+        ),
+    )
+
+
+def workflow_greeting() -> Scenario:
+    """The checked-in managed Python verifier returns successful false findings."""
+    return Scenario(
+        "workflow_greeting",
+        Step(
+            Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
+                   tools_include=("greeting_check",)),
+            Stream(ToolCall("call-greeting-check", "greeting_check", '{}'), Finish("tool_calls")),
+        ),
+        Step(
+            Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
+                   body_contains=("Hello, !",), tools_include=("greeting_check",)),
+            Stream(Text("project check found the empty-name failure"), Finish("stop")),
+        ),
+    )
+
+
 def provider_http_error() -> Scenario:
     """A deterministic permanent provider failure with no retry or extra turn."""
     return Scenario(
@@ -513,6 +550,8 @@ SCENARIOS = {
     "tool_call_continuation": tool_call_continuation,
     "skill_read_turn": skill_read_turn,
     "workflow_output": workflow_output,
+    "workflow_tool": workflow_tool,
+    "workflow_greeting": workflow_greeting,
     "provider_http_error": provider_http_error,
     "gated_stream_cancellation": gated_stream_cancellation,
     "restart_after_request_start": restart_after_request_start,

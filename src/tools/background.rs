@@ -1004,7 +1004,11 @@ impl ConversationBackgroundRegistry {
             record: BackgroundRecord {
                 executor_started: false,
                 execution_id: execution_id.clone(),
-                tool_call_id: invocation.call_id.clone(),
+                tool_call_id: invocation
+                    .id
+                    .canonical_call_id()
+                    .expect("Agent-owned invocation")
+                    .clone(),
                 tool_id: invocation.tool_id.clone(),
                 tool_name: invocation.tool_name.clone(),
                 lifecycle: BackgroundLifecycle::Starting,
@@ -2618,7 +2622,9 @@ mod tests {
 
     fn background_invocation(tool: &str) -> ToolInvocation {
         ToolInvocation {
-            call_id: ToolCallId::new("call-1"),
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new("call-1"),
+            },
             tool_id: ToolId::new(format!("tool-{tool}")),
             tool_name: tool.to_owned(),
             mode: ToolInvocationMode::Background,
@@ -3839,7 +3845,9 @@ mod tests {
         let executor: Arc<dyn ToolExecutor> =
             Arc::new(EnvironmentRecordingExecutor(observed.clone()));
         let invocation = ToolInvocation {
-            call_id: ToolCallId::new("background-environment"),
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new("background-environment"),
+            },
             tool_id: ToolId::new("tool-read"),
             tool_name: "read".to_owned(),
             mode: ToolInvocationMode::Background,
@@ -4074,7 +4082,9 @@ mod tests {
         let executor: Arc<dyn ToolExecutor> =
             Arc::new(crate::tools::native::BashTool::with_test_control(control));
         let invocation = ToolInvocation {
-            call_id: ToolCallId::new("call-live"),
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new("call-live"),
+            },
             tool_id: ToolId::new("tool-bash"),
             tool_name: "bash".to_owned(),
             mode: ToolInvocationMode::Background,
@@ -4126,7 +4136,9 @@ mod tests {
         // The ordinary native Read tool inspects the live output.
         let reporter = NoopProgress;
         let read_invocation = ToolInvocation {
-            call_id: ToolCallId::new("call-read"),
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new("call-read"),
+            },
             tool_id: ToolId::new("tool-read"),
             tool_name: "read".to_owned(),
             mode: ToolInvocationMode::Foreground,
@@ -4166,7 +4178,9 @@ mod tests {
 
         // Grep searches the same live file while the execution runs.
         let grep_invocation = ToolInvocation {
-            call_id: ToolCallId::new("call-grep"),
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new("call-grep"),
+            },
             tool_id: ToolId::new("tool-grep"),
             tool_name: "grep".to_owned(),
             mode: ToolInvocationMode::Foreground,
@@ -4278,7 +4292,9 @@ mod tests {
                 crate::tools::native::BashTestControl::new(),
             ));
         let invocation = ToolInvocation {
-            call_id: ToolCallId::new("call-tiny"),
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new("call-tiny"),
+            },
             tool_id: ToolId::new("tool-bash"),
             tool_name: "bash".to_owned(),
             mode: ToolInvocationMode::Background,
@@ -4358,7 +4374,9 @@ mod tests {
                 crate::tools::native::BashTestControl::new(),
             ));
         let invocation = ToolInvocation {
-            call_id: ToolCallId::new("call-sink-fail"),
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new("call-sink-fail"),
+            },
             tool_id: ToolId::new("tool-bash"),
             tool_name: "bash".to_owned(),
             mode: ToolInvocationMode::Background,
@@ -4458,7 +4476,9 @@ mod tests {
                 crate::tools::native::BashTestControl::new(),
             ));
         let invocation = ToolInvocation {
-            call_id: ToolCallId::new("call-sink-open"),
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new("call-sink-open"),
+            },
             tool_id: ToolId::new("tool-bash"),
             tool_name: "bash".to_owned(),
             mode: ToolInvocationMode::Background,
@@ -4581,7 +4601,9 @@ mod tests {
                 crate::tools::native::BashTestControl::new().fail_supervisor_spawn(),
             ));
         let invocation = ToolInvocation {
-            call_id: ToolCallId::new("call-spawn-fail"),
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new("call-spawn-fail"),
+            },
             tool_id: ToolId::new("tool-bash"),
             tool_name: "bash".to_owned(),
             mode: ToolInvocationMode::Background,
@@ -4682,7 +4704,9 @@ mod tests {
                 crate::tools::native::BashTestControl::new(),
             ));
         let invocation = ToolInvocation {
-            call_id: ToolCallId::new("call-parse-fail"),
+            id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new("call-parse-fail"),
+            },
             tool_id: ToolId::new("tool-bash"),
             tool_name: "bash".to_owned(),
             mode: ToolInvocationMode::Background,
