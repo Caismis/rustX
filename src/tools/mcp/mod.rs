@@ -942,11 +942,15 @@ impl McpRuntimeGenerationInner {
     /// underlying `close()` future to return.
     async fn wait_close_attempt(&self) {
         loop {
-            if self.close_attempt_finished() {
-                return;
-            }
+            // The waiter must join the list *before* the flag is read.
+            // `Notify::notified()` does not register until it is polled or
+            // explicitly enabled, and `notify_waiters` stores no permit, so
+            // creating the future and only then checking leaves a window in
+            // which the notification reaches nobody and this call waits
+            // forever.
             let notified = self.close_finished.notified();
             tokio::pin!(notified);
+            notified.as_mut().enable();
             if self.close_attempt_finished() {
                 return;
             }
@@ -1461,6 +1465,9 @@ pub(crate) mod test_sync {
     #[derive(Default)]
     struct OutboundPauseState {
         released: bool,
+        /// The requests whose MCP settlement plane has finished everything
+        /// except the local-ownership proof.
+        awaiting_local_proof: std::collections::HashSet<rmcp::model::RequestId>,
         /// The requests currently parked at the outbound seam.
         parked: std::collections::HashSet<rmcp::model::RequestId>,
         /// Each parked request's own termination token, captured when it
@@ -1564,6 +1571,42 @@ pub(crate) mod test_sync {
             }
         }
 
+        /// Resolves once at least `count` of this pause's requests have
+        /// reached the point where the MCP settlement plane has nothing left
+        /// to do but await the local-ownership proof.
+        ///
+        /// This is the discriminating ordering point of the whole
+        /// regression. Everything before it — the best-effort
+        /// `notifications/cancelled` send and the response-channel
+        /// arbitration — involves real network work whose duration bounds
+        /// nothing; everything after it is a single `await` on the release
+        /// proof and the construction of a result. So a settlement that is
+        /// still pending *after* this fact is pending because a local
+        /// participant has not become terminal, and an implementation that
+        /// treated the pre-dispatch phase as "nothing pending" settles
+        /// within a poll or two of it.
+        pub(crate) async fn wait_awaiting_local_proof(&self, count: usize) {
+            loop {
+                let decided = self.decided.notified();
+                tokio::pin!(decided);
+                decided.as_mut().enable();
+                if self.requests_awaiting_local_proof() >= count {
+                    return;
+                }
+                decided.await;
+            }
+        }
+
+        /// How many of this pause's requests are awaiting only the
+        /// local-ownership proof.
+        pub(crate) fn requests_awaiting_local_proof(&self) -> usize {
+            self.state
+                .lock()
+                .expect("outbound dispatch pause lock")
+                .awaiting_local_proof
+                .len()
+        }
+
         /// Resolves once at least `count` outbound participants have made
         /// their dispatch decision — refused, or handed the message on.
         ///
@@ -1657,6 +1700,29 @@ pub(crate) mod test_sync {
             .expect("outbound dispatch pause lock")
             .parked
             .remove(id);
+    }
+
+    /// Records that one request's MCP settlement plane has completed
+    /// everything except awaiting the local-ownership proof.
+    ///
+    /// Offered to whichever installed pause already knows this request — the
+    /// settlement plane has no tool name at that point, and a pause records
+    /// the termination token of every request it parked.
+    pub(crate) fn note_awaiting_local_proof(id: &rmcp::model::RequestId) {
+        for pause in OUTBOUND_PAUSES.all() {
+            let known = {
+                let mut state = pause.state.lock().expect("outbound dispatch pause lock");
+                if state.terminations.contains_key(id) {
+                    state.awaiting_local_proof.insert(id.clone());
+                    true
+                } else {
+                    false
+                }
+            };
+            if known {
+                pause.decided.notify_waiters();
+            }
+        }
     }
 
     /// Records what one outbound participant decided at the seam.
@@ -2193,7 +2259,12 @@ impl McpServerRuntime {
     /// Waits for a newer tools/list invalidation epoch without polling.
     pub async fn wait_for_change(&self, observed_epoch: u64) {
         loop {
+            // Registered before the epoch is read, for the reason above: an
+            // unenabled `Notified` is not yet a waiter, and the invalidation
+            // notify stores no permit.
             let notified = self.change_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             if self.change_epoch() != observed_epoch {
                 return;
             }
@@ -2713,6 +2784,14 @@ impl McpServerRuntime {
         let outcome = self
             .arbitrate_post_frontier_cancellation(&mut handle, &termination)
             .await;
+        // Test-only: everything the MCP settlement plane can do before the
+        // local-ownership proof is now done — the best-effort protocol
+        // cancellation has been raced and the response channel arbitrated.
+        // A regression uses this to distinguish "settlement is waiting for a
+        // local participant" from "settlement had nothing to wait for",
+        // without timing the network work above.
+        #[cfg(test)]
+        test_sync::note_awaiting_local_proof(&handle.id);
         // The local ownership proof. Bounded by rustX-owned state alone, and
         // a precondition of *reporting*, never a competitor to it.
         termination.settled().await;

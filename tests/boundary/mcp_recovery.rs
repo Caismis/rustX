@@ -2811,27 +2811,35 @@ async fn successful_streamable_http_requests_leave_no_request_lifecycle_state() 
             "call {index} is an ordinary success: {:?}",
             result.status
         );
-        assert!(
-            runtime.outstanding_http_requests() <= 1,
-            "call {index} left no state from any earlier call behind: the bound is \
-             the in-flight request count, not the count of requests this generation \
-             has served (observed {})",
-            runtime.outstanding_http_requests()
-        );
+        // Each completed exchange returns the registry to empty **on its
+        // own**, with the connection still open, so nothing from an earlier
+        // call can survive into a later one: the bound is the in-flight
+        // request count, never the count of requests this generation has
+        // served. This is level-triggered on a monotone condition — the
+        // executor does not await rmcp releasing its outbound send, which is
+        // the one part of the exchange that can still be settling when the
+        // canonical result arrives — rather than asserted at an instant
+        // nothing orders.
+        tokio::time::timeout(Duration::from_mins(1), async {
+            while runtime.outstanding_http_requests() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "anti-hang guard: call {index} forgets its own lifecycle state (observed {})",
+                runtime.outstanding_http_requests()
+            )
+        });
     }
-    // The registry returns to empty **without closing the connection**: close
-    // is not allowed to be the thing that cleans up. The last call's entry is
-    // forgotten once rmcp finishes releasing its outbound send, which is the
-    // one part of the exchange the executor does not await, so this waits for
-    // that monotone condition under an anti-hang guard rather than asserting
-    // an instant.
-    tokio::time::timeout(Duration::from_mins(1), async {
-        while runtime.outstanding_http_requests() != 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("anti-hang guard: every completed request forgets its own lifecycle state");
+    // ...and it is still empty after the last one, with the connection open:
+    // close is not allowed to be the thing that cleans up.
+    assert_eq!(
+        runtime.outstanding_http_requests(),
+        0,
+        "every completed request forgot its own lifecycle state before close"
+    );
     runtime.close().await.expect("physical settlement");
     server.shutdown().await;
 }
@@ -3026,11 +3034,15 @@ async fn a_streamable_http_request_cancelled_before_dispatch_never_reaches_the_s
 /// 3. cancellation wins while it is parked, and `wait_terminated(1)` proves
 ///    the MCP settlement plane applied it to this exact request — a
 ///    cancellation token is level-triggered, so that proof cannot be missed;
-/// 4. the operation future is polled to exhaustion of the runtime's ready
-///    work and **stays pending**: settlement cannot complete while a
-///    participant that can still dispatch has not consumed the termination.
-///    This is the assertion that fails on the previous implementation, which
-///    settled here immediately;
+/// 4. `wait_awaiting_local_proof(1)` proves the MCP settlement plane has
+///    finished everything except the local-ownership proof — the
+///    best-effort `notifications/cancelled` and the response arbitration are
+///    over, so nothing that remains involves the network. The operation
+///    future is then polled to exhaustion of the runtime's ready work and
+///    **stays pending**: settlement cannot complete while a participant that
+///    can still dispatch has not consumed the termination. This is the
+///    assertion that fails on the previous implementation, which had nothing
+///    to wait for at this point;
 /// 5. the participant is released, and `wait_decided(1)` is its own recorded
 ///    decision;
 /// 6. `refusals() == 1` says it refused rather than dispatched;
@@ -3094,9 +3106,13 @@ async fn a_terminal_tool_call_never_dispatches_from_its_stale_outbound_send() {
     // (2) rmcp has called `Transport::send` for this request and its
     // participant is parked before the inner transport.
     //
-    // The operation future is driven by this task, so every rendezvous is
+    // The operation future is driven by this task, so this rendezvous is
     // awaited *while polling it* — and a call that settled early would be
-    // caught here rather than silently satisfy a later assertion.
+    // caught here rather than silently satisfy a later assertion. Racing the
+    // two is sound at this point and at (3): settlement there would require a
+    // termination that has not been requested yet, so the competing arm
+    // cannot legitimately become ready at all. At (5) it can, which is why
+    // that step does not race.
     tokio::time::timeout(Duration::from_mins(1), async {
         tokio::select! {
             biased;
@@ -3124,10 +3140,30 @@ async fn a_terminal_tool_call_never_dispatches_from_its_stale_outbound_send() {
     .await
     .expect("anti-hang guard: the termination is applied to the parked request");
 
-    // (4) Settlement cannot complete while that participant can still
-    // dispatch. Yielding hands the runtime every task that is ready, so a
-    // future still pending afterwards is pending because nothing released
-    // it — not because it has not been scheduled.
+    // (4) The MCP settlement plane has finished everything it can before the
+    // local-ownership proof: the best-effort `notifications/cancelled` was
+    // raced and the response channel arbitrated. This is the discriminating
+    // ordering point — everything before it is real network work whose
+    // duration bounds nothing, and everything after it is one `await` on the
+    // release proof plus building a result.
+    tokio::time::timeout(Duration::from_mins(1), async {
+        tokio::select! {
+            biased;
+            () = pause.wait_awaiting_local_proof(1) => {}
+            _ = completion.as_mut() => {
+                panic!("the call settled before its settlement plane reached the local proof")
+            }
+        }
+    })
+    .await
+    .expect("anti-hang guard: the settlement plane reaches the local-ownership proof");
+
+    // Settlement still cannot complete, because a participant that can still
+    // dispatch has not consumed the termination. Yielding hands the runtime
+    // every task that is ready, so a future still pending afterwards is
+    // pending because nothing released it — not because it has not been
+    // scheduled. An implementation that read the pre-dispatch phase as
+    // "nothing pending" resolves here within a poll or two.
     for _ in 0..256 {
         assert!(
             futures_util::poll!(completion.as_mut()).is_pending(),
@@ -3143,18 +3179,20 @@ async fn a_terminal_tool_call_never_dispatches_from_its_stale_outbound_send() {
     );
 
     // (5) Release it, and wait for its own recorded decision.
+    //
+    // Deliberately *not* raced against the operation future. The refusal
+    // publishes this request's release proof, so once the participant has
+    // decided the settlement may complete at any instant — and a
+    // `select!` polls its arms in sequence, so an arm that was Pending when
+    // it was polled can become ready before the next arm is. Racing them
+    // here would test the scheduler, not the ordering. The ordering proof is
+    // step (4): settlement is provably pending for as long as the
+    // participant has not decided. The operation needs no driving here — the
+    // outbound participant is rmcp's own task — and it is awaited below.
     pause.release();
-    tokio::time::timeout(Duration::from_mins(1), async {
-        tokio::select! {
-            biased;
-            () = pause.wait_decided(1) => {}
-            _ = completion.as_mut() => {
-                panic!("the call settled before its outbound participant decided")
-            }
-        }
-    })
-    .await
-    .expect("anti-hang guard: the released participant reaches its decision");
+    tokio::time::timeout(Duration::from_mins(1), pause.wait_decided(1))
+        .await
+        .expect("anti-hang guard: the released participant reaches its decision");
     // (6) It refused, rather than dispatching after a terminal settlement.
     assert_eq!(pause.refusals(), 1, "the outbound participant refused");
     assert_eq!(pause.dispatches(), 0, "and dispatched nothing");

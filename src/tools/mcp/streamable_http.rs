@@ -187,13 +187,21 @@ impl ReleaseLatch {
     }
 
     async fn released(&self) {
-        // Register before the check: a release racing this call must not be
-        // able to fall between the two.
-        let notified = self.notify.notified();
-        if self.released.load(Ordering::Acquire) {
-            return;
+        // `Notify::notified()` does not join the waiter list until it is
+        // polled or explicitly enabled, and `notify_waiters` stores no
+        // permit — so merely *creating* the future before the check leaves a
+        // window in which a release reaches no waiter and this call waits
+        // forever. Enabling it inside the loop closes that window: the
+        // waiter is registered before the flag is read, every iteration.
+        loop {
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.released.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
         }
-        notified.await;
     }
 }
 
