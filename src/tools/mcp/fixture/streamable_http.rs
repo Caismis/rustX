@@ -68,6 +68,15 @@ pub const TOOL_WITHHOLD: &str = "http-withhold";
 /// notification is genuine remote liveness evidence the generic idle
 /// watchdog must see.
 pub const TOOL_PULSE: &str = "http-pulse";
+/// The tool that emits one genuine progress notification and then answers
+/// with its correlated response, with nothing in between and no gate.
+///
+/// Both messages travel the same ordered stream of this call's own POST, so
+/// the client observes the progress and then the answer. It is the shape the
+/// Issue #205 progress-ownership contract is about: a server fast enough to
+/// answer while the dispatching call is still between its effect frontier
+/// and its progress subscription.
+pub const TOOL_ANNOUNCE: &str = "http-announce";
 
 /// The identity of the next fixture instance.
 ///
@@ -122,6 +131,12 @@ impl HttpFixtureControl {
     #[must_use]
     pub fn pulse(&self) -> String {
         self.scoped(TOOL_PULSE)
+    }
+
+    /// This fixture's [`TOOL_ANNOUNCE`].
+    #[must_use]
+    pub fn announce(&self) -> String {
+        self.scoped(TOOL_ANNOUNCE)
     }
 
     /// This fixture's [`TOOL_WITHHOLD`].
@@ -212,6 +227,7 @@ impl HttpFixtureServer {
             super::fixture_tool_named(&self.control.echo()),
             super::fixture_tool_named(&self.control.pulse()),
             super::fixture_tool_named(&self.control.withhold()),
+            super::fixture_tool_named(&self.control.announce()),
         ]
     }
 
@@ -279,6 +295,7 @@ impl ServerHandler for HttpFixtureServer {
         let echo = control.echo();
         let pulse = control.pulse();
         let withhold = control.withhold();
+        let announce = control.announce();
         async move {
             match request.name.as_ref() {
                 name if name == echo => {
@@ -308,6 +325,15 @@ impl ServerHandler for HttpFixtureServer {
                         "the client terminated its HTTP request",
                         None,
                     ))
+                }
+                name if name == announce => {
+                    // Progress first, then the correlated answer, on this
+                    // request's own ordered stream. The acceptance fact is
+                    // published between them, so a parent that awaits it
+                    // knows the notification is already on the wire.
+                    Self::notify(&context, 1.0).await?;
+                    control.accepted.send_modify(|accepted| *accepted += 1);
+                    Ok(CallToolResult::success(vec![ContentBlock::text("http announced")]).into())
                 }
                 name if name == withhold => {
                     control.accepted.send_modify(|accepted| *accepted += 1);

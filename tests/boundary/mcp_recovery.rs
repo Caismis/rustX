@@ -138,17 +138,59 @@ impl McpCapability {
 // Agent Loop driver
 // ---------------------------------------------------------------------------
 
+/// One observation on the runtime's own publication path, recorded in the
+/// order the runtime published it.
+///
+/// Both variants are written from the runtime's observer callbacks, which is
+/// a single defined ordering boundary — never from a test task sampling
+/// state — so the position of one relative to the other is a genuine
+/// happens-before rather than an inference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OrderedObservation {
+    /// The generic progress seam forwarded one MCP progress report.
+    Progress,
+    /// The canonical terminal `ToolExecutionCompleted` fact was published.
+    Completed,
+}
+
+/// The ordered log of those observations for one attempt.
+#[derive(Default)]
+struct OrderedObservations {
+    facts: std::sync::Mutex<Vec<OrderedObservation>>,
+}
+
+impl OrderedObservations {
+    fn record(&self, fact: OrderedObservation) {
+        self.facts
+            .lock()
+            .expect("ordered observation lock")
+            .push(fact);
+    }
+
+    fn facts(&self) -> Vec<OrderedObservation> {
+        self.facts.lock().expect("ordered observation lock").clone()
+    }
+}
+
 /// Observes the durable execution facts a controller needs: the start fact
 /// and every forwarded MCP progress report.
 struct ExecutionSignals {
     started: watch::Sender<bool>,
     progress: watch::Sender<u32>,
+    /// Installed only by a scenario whose contract is about the order of the
+    /// live progress seam relative to the terminal fact.
+    ordered: Option<Arc<OrderedObservations>>,
 }
 
 impl AgentExecutionObserver for ExecutionSignals {
     fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent) {
         if matches!(event, RuntimeEvent::ToolExecutionStarted { .. }) {
             self.started.send_replace(true);
+        }
+        if matches!(event, RuntimeEvent::ToolExecutionCompleted { .. })
+            && let Some(ordered) = &self.ordered
+        {
+            ordered.record(OrderedObservation::Completed);
         }
     }
 
@@ -167,6 +209,9 @@ impl AgentExecutionObserver for ExecutionSignals {
         _tool_id: &rustx::runtime::identity::ToolId,
         _progress: &rustx::tools::types::ToolProgress,
     ) {
+        if let Some(ordered) = &self.ordered {
+            ordered.record(OrderedObservation::Progress);
+        }
         self.progress.send_modify(|count| *count += 1);
     }
 
@@ -273,7 +318,10 @@ where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
     let turns: Vec<Vec<&str>> = tool_names.iter().map(|name| vec![*name]).collect();
-    run_mcp_turns(fixture, capability, attempt, &turns, policy, controller).await
+    run_mcp_turns(
+        fixture, capability, attempt, &turns, policy, None, controller,
+    )
+    .await
 }
 
 /// Runs one attempt over the given model turns: one entry per turn, each
@@ -284,6 +332,7 @@ async fn run_mcp_turns<C, F>(
     attempt: &str,
     turn_tools: &[Vec<&str>],
     policy: ToolExecutionDeadlinePolicy,
+    ordered: Option<Arc<OrderedObservations>>,
     controller: C,
 ) -> common::DurableExecutionAudit
 where
@@ -393,6 +442,7 @@ where
     let observer = ExecutionSignals {
         started: started_sender,
         progress: progress_sender,
+        ordered,
     };
     execution.observe(&observer);
     let (armed_signal, armed) =
@@ -445,6 +495,35 @@ where
         attempt,
         &[vec![tool_name; count]],
         policy,
+        None,
+        controller,
+    )
+    .await
+}
+
+/// Runs one attempt with exactly one MCP tool call, recording the order in
+/// which the runtime published that call's live progress reports and its
+/// terminal fact.
+async fn run_mcp_call_ordered<C, F>(
+    fixture: &common::NativeFixture,
+    capability: rustx::capabilities::AttemptCapabilityLease,
+    attempt: &str,
+    tool_name: &str,
+    policy: ToolExecutionDeadlinePolicy,
+    ordered: &Arc<OrderedObservations>,
+    controller: C,
+) -> common::DurableExecutionAudit
+where
+    C: FnOnce(Controls) -> F + Send + 'static,
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    run_mcp_turns(
+        fixture,
+        capability,
+        attempt,
+        &[vec![tool_name]],
+        policy,
+        Some(Arc::clone(ordered)),
         controller,
     )
     .await
@@ -2481,6 +2560,165 @@ async fn concurrent_mcp_progress_refreshes_every_idle_watchdog_above_the_old_rou
         PROGRESS_CONCURRENCY * 2,
         "every remote pulse of every concurrent call was forwarded as durable \
          liveness evidence; none was discarded and none was fabricated"
+    );
+    drop(capability);
+    server.shutdown().await;
+}
+
+/// Issue #205 review finding, end to end: a correlated remote response never
+/// deletes progress the dispatching `ToolCall` has not claimed yet, and that
+/// progress is still reported **before** the terminal `ToolResult`.
+///
+/// The reachable ordering this pins is the one the executor cannot design
+/// away: rmcp mints a request's progress token *inside* the request, so a
+/// call is unavoidably between its effect frontier and `progress.subscribe`
+/// for a while, and a fast server can emit genuine progress *and* answer
+/// inside that window. The reviewed implementation treated that answer as
+/// proof that no caller remained, deleted the buffered occurrence, and let
+/// the biased response arm report a terminal result with the liveness
+/// evidence silently gone.
+///
+/// # Synchronization proof
+///
+/// Every claimed interleaving is a fact this test waits for; the only wall
+/// clock is the suite's anti-hang guard, and the manual clock never moves.
+///
+/// 1. **the call is admitted and past its effect frontier.**
+///    `ProgressSubscriptionRace` parks it at the exact instant after
+///    `send_cancellable_request` returned `Ok` — where its progress lease
+///    already exists — and before `McpProgressLease::subscribe`;
+/// 2. **no subscription exists.** `wait_parked(1)` resolves only inside that
+///    window;
+/// 3. **the server ran.** `wait_accepted(1)` is the server's own fact, and
+///    [`streamable_http::TOOL_ANNOUNCE`] publishes it *after* its progress
+///    notification is on this request's own ordered stream and *before* it
+///    returns the correlated result;
+/// 4. **the progress reached the router with no subscriber.**
+///    `wait_pre_subscription_progress(1)` resolves only once the router has
+///    recorded a delivery for this request's own token that landed while
+///    that token had no subscriber;
+/// 5. **the correlated response reached the inbound seam.**
+///    `wait_answered(1)` resolves only once `ObservingTransport::receive`
+///    has correlated the response to this request id — the exact instant at
+///    which the reviewed implementation deleted the evidence;
+/// 6. **the caller is still parked, and still owns its evidence.**
+///    `every_parked_request_retains_its_progress()` is a settled fact, not a
+///    sample: a parked call can neither subscribe nor relinquish, so nothing
+///    can change it while the assertion runs. This is the assertion that
+///    fails on the reviewed implementation;
+/// 7. only then is the call released, so it subscribes *after* its response
+///    is already resolved and claims the buffered occurrence.
+///
+/// The ordering claim itself is read from
+/// [`OrderedObservations`], written on the runtime's own publication path —
+/// the live progress seam and the terminal `ToolExecutionCompleted` fact —
+/// so `[Progress, Completed]` is a happens-before, not a vector-position
+/// inference.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_correlated_response_never_deletes_progress_the_caller_has_not_claimed() {
+    let fixture = common::native_fixture();
+    let server =
+        streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
+    let capability = http_capability(
+        &fixture.runtime,
+        &McpServerId::new("http-progress-retention"),
+        server.binding(),
+    )
+    .await;
+    let lease = capability.coordinator.acquire_attempt_lease();
+    let announce = server.control.announce();
+    let control = server.control.clone();
+    let (race, _race_guard) =
+        rustx::tools::mcp::test_sync::ProgressSubscriptionRace::install(&announce);
+    let parking = Arc::clone(&race);
+    let ordered = Arc::new(OrderedObservations::default());
+    let audit = run_mcp_call_ordered(
+        &fixture,
+        lease,
+        "http-progress-retention",
+        &announce,
+        ToolExecutionDeadlinePolicy {
+            hard_deadline: Duration::from_mins(10),
+            idle_liveness: Some(Duration::from_secs(1)),
+        },
+        &ordered,
+        move |mut controls| async move {
+            controls.wait_started().await;
+            // The call has crossed its effect frontier and holds its progress
+            // lease; it has not subscribed.
+            parking.wait_parked(1).await;
+            // The server entered its handler, having already emitted its
+            // progress notification.
+            control.wait_accepted(1).await;
+            // That progress reached the router while the token had no
+            // subscriber.
+            parking.wait_pre_subscription_progress(1).await;
+            // And the correlated response reached the inbound seam.
+            parking.wait_answered(1).await;
+            assert_eq!(
+                parking.parked_requests(),
+                1,
+                "the dispatching call is still inside the pre-subscription window"
+            );
+            assert!(
+                parking.every_parked_request_retains_its_progress(),
+                "a correlated response ends remote execution; it does not end the \
+                 dispatching call's progress ownership, so the observed occurrence \
+                 is still there to be claimed"
+            );
+            // Only now may the call subscribe — after its response is
+            // already resolved.
+            parking.release();
+            // The claimed occurrence was forwarded through the generic
+            // progress seam.
+            controls.wait_progress_at_least(1).await;
+        },
+    )
+    .await;
+
+    assert!(
+        race.every_parked_request_reached_its_forget_point(),
+        "the call claimed its buffered evidence and then relinquished it, and the \
+         answered request was forgotten: no progress state outlives the ToolCall"
+    );
+    assert_eq!(
+        ordered.facts(),
+        vec![OrderedObservation::Progress, OrderedObservation::Completed],
+        "genuine progress observed before the correlated response is reported \
+         before the terminal ToolResult, even though it was claimed after that \
+         response had already resolved"
+    );
+    let facts = execution_facts(&audit);
+    assert_eq!(
+        facts
+            .iter()
+            .filter(|fact| matches!(fact, RuntimeEvent::ToolExecutionCompleted { .. }))
+            .count(),
+        1,
+        "the accepted ToolCall settles exactly once"
+    );
+    assert_eq!(
+        facts
+            .iter()
+            .filter(|fact| matches!(fact, RuntimeEvent::ToolExecutionDeadlineFired { .. }))
+            .count(),
+        0,
+        "no deadline participates in this ordering"
+    );
+    let result = single_tool_result(&audit);
+    assert!(
+        matches!(result.status, ToolExecutionStatus::Success),
+        "the correlated response is the call's outcome: {:?}",
+        result.status
+    );
+    assert_eq!(
+        audit
+            .event_history
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::ToolExecutionProgress { .. }))
+            .count(),
+        1,
+        "the one genuine remote occurrence is durable, and none is fabricated"
     );
     drop(capability);
     server.shutdown().await;

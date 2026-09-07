@@ -81,6 +81,26 @@
 //! ownership is consumed as an explicit refusal, which is the fact the
 //! waiting settlement is released by.
 //!
+//! # The inbound half: a response is not a caller's disappearance
+//!
+//! The same seam observes inbound messages, and it correlates exactly one
+//! fact there: *this request will receive no further correlated answer*.
+//!
+//! ```text
+//! ServerJsonRpcMessage::Response / ::Error   -> the remote request is over
+//! OutboundDispatch::Refused                  -> it never started, and never will
+//! ```
+//!
+//! Neither says anything about the **dispatching call**, which may still be
+//! between its effect frontier and its progress subscription — rmcp mints
+//! the progress token inside the request, so that window is unavoidable and
+//! a fast server can answer inside it. Reading a correlated response as
+//! proof that no caller remains deleted the very evidence
+//! [`crate::tools::mcp::McpProgressRouter`] exists to keep. So this seam
+//! only ever completes the *remote* dimension of a request's progress
+//! ownership; the caller's own `McpProgressLease` completes the other, and
+//! the router forgets the request when both are terminal.
+//!
 //! # What this seam is not
 //!
 //! It is an ownership seam, not a policy layer and not a second protocol
@@ -237,14 +257,28 @@ impl McpDispatchSeam {
 
     /// The inbound terminal-correlation point.
     ///
-    /// A correlated response is the terminal forget point of the progress
-    /// state of a request whose dispatching call is gone. A request whose
-    /// call still holds its subscription keeps its state until that guard
-    /// drops.
+    /// A correlated answer — a `CallToolResult` or a JSON-RPC error for this
+    /// request id — ends the request's **remote** execution. It is
+    /// deliberately not read as evidence about the dispatching call: that
+    /// call may still be between its effect frontier and its subscription,
+    /// and deleting the progress it has not claimed yet would discard
+    /// genuine liveness evidence it is still entitled to. The router forgets
+    /// the request only once the caller has relinquished it too.
     fn observe_inbound(&self, message: &ServerJsonRpcMessage) {
         if let Some(id) = answered_request(message) {
-            self.progress.settle(id);
+            self.progress.mark_remote_terminal(id);
         }
+    }
+
+    /// The outbound terminal-correlation point.
+    ///
+    /// A request rustX refused to dispatch never reaches the network, so no
+    /// correlated response can ever arrive for it. That is the same remote
+    /// terminality an answer carries, and recording it is what gives a
+    /// refused request the request-local forget point an inbound answer
+    /// would otherwise have provided.
+    fn no_dispatch(&self, id: &RequestId) {
+        self.progress.mark_remote_terminal(id);
     }
 }
 
@@ -311,6 +345,11 @@ where
         let probe = invocation
             .as_ref()
             .map(|invocation| (invocation.tool.clone(), invocation.id.clone()));
+        // The refusal arms below report this request's remote terminality,
+        // so the seam that admitted its progress token is also the seam that
+        // releases it when the request never reaches the network.
+        let invocation_id = invocation.map(|invocation| invocation.id);
+        let seam = Arc::clone(&self.seam);
         async move {
             let guard = match dispatch {
                 // Not a tool invocation: no settlement can ever terminate it,
@@ -322,6 +361,9 @@ where
                 // entry, which is what releases the settlement waiting for
                 // this participant.
                 Some(OutboundDispatch::Refused) => {
+                    if let Some(id) = &invocation_id {
+                        seam.no_dispatch(id);
+                    }
                     #[cfg(test)]
                     if let Some((tool, id)) = &probe {
                         crate::tools::mcp::test_sync::note_outbound_dispatch(tool, id, true);
@@ -350,6 +392,9 @@ where
             // request off the network entirely.
             if guard.terminated() {
                 drop(inner);
+                if let Some(id) = &invocation_id {
+                    seam.no_dispatch(id);
+                }
                 // Recorded *before* the ownership is consumed. Consuming it
                 // publishes this request's release proof, which can settle a
                 // waiting invocation immediately — so a decision recorded
@@ -404,5 +449,122 @@ where
 impl<T> Drop for ObservingTransport<T> {
     fn drop(&mut self) {
         self.seam.no_further_dispatch();
+    }
+}
+
+/// Deterministic regressions for the seam's correlation rules (Issue #205).
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use rmcp::model::{
+        CallToolRequest, CallToolRequestParams, ClientJsonRpcMessage, ClientRequest, ErrorData,
+        GetMeta as _, JsonRpcMessage, NumberOrString, ProgressNotificationParam, ProgressToken,
+        RequestId, ServerJsonRpcMessage,
+    };
+
+    use super::{McpDispatchSeam, answered_request};
+    use crate::tools::mcp::McpProgressRouter;
+
+    fn id(value: i64) -> RequestId {
+        RequestId::Number(value)
+    }
+
+    fn token(value: u32) -> ProgressToken {
+        ProgressToken(NumberOrString::Number(value.into()))
+    }
+
+    fn seam(progress: &Arc<McpProgressRouter>) -> McpDispatchSeam {
+        McpDispatchSeam::new(Arc::clone(progress), None)
+    }
+
+    /// One outbound `tools/call`, shaped exactly as rmcp hands it to
+    /// `Transport::send`: request id and `_meta.progressToken` already set.
+    fn tool_call(id: RequestId, token: &ProgressToken) -> ClientJsonRpcMessage {
+        let mut request = ClientRequest::CallToolRequest(CallToolRequest::new(
+            CallToolRequestParams::new("seam-probe"),
+        ));
+        request.get_meta_mut().set_progress_token(token.clone());
+        JsonRpcMessage::request(request, id)
+    }
+
+    /// Both shapes of correlated answer are one rule, so retention can never
+    /// become accidentally success-only: a JSON-RPC error ends the remote
+    /// request exactly as a result does, and a notification ends nothing.
+    #[test]
+    fn a_correlated_answer_is_either_a_result_or_an_error() {
+        let response: ServerJsonRpcMessage =
+            JsonRpcMessage::response(rmcp::model::ServerResult::empty(()), id(1));
+        assert_eq!(answered_request(&response), Some(&id(1)));
+        let error: ServerJsonRpcMessage = JsonRpcMessage::error(
+            ErrorData::internal_error("remote failure", None),
+            Some(id(2)),
+        );
+        assert_eq!(answered_request(&error), Some(&id(2)));
+        // A parse-level error the peer could not attribute answers nothing.
+        let unattributed: ServerJsonRpcMessage =
+            JsonRpcMessage::error(ErrorData::parse_error("unreadable", None), None);
+        assert_eq!(answered_request(&unattributed), None);
+    }
+
+    /// Neither kind of correlated answer may take pre-subscription evidence
+    /// away from a dispatching call that has not claimed it yet, and both
+    /// complete the remote dimension so the caller's relinquish forgets the
+    /// request.
+    #[test]
+    fn neither_kind_of_answer_deletes_evidence_the_caller_has_not_claimed() {
+        for (index, answer) in [
+            JsonRpcMessage::response(rmcp::model::ServerResult::empty(()), id(1)),
+            JsonRpcMessage::error(
+                ErrorData::internal_error("remote failure", None),
+                Some(id(1)),
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let progress = Arc::new(McpProgressRouter::default());
+            let seam = seam(&progress);
+            seam.admit_progress(&tool_call(id(1), &token(1)))
+                .expect("a tools/call is a tracked invocation");
+            let lease = progress.lease(id(1), token(1));
+            progress.deliver(ProgressNotificationParam::new(token(1), 1.0));
+            seam.observe_inbound(&answer);
+            assert_eq!(
+                progress.pending_occurrences(&id(1)),
+                Some(1),
+                "answer {index} ends the remote request, not the caller's ownership"
+            );
+            assert_eq!(
+                lease.subscribe().drain().len(),
+                1,
+                "answer {index} leaves the buffered occurrence for its call to claim"
+            );
+            drop(lease);
+            assert_eq!(
+                progress.tracked_requests(),
+                0,
+                "answer {index} and the caller's relinquish are the forget point"
+            );
+        }
+    }
+
+    /// A request the seam refused to dispatch can never be answered, so the
+    /// refusal itself is its remote terminality and it still reaches a
+    /// request-local forget point.
+    #[test]
+    fn a_refused_dispatch_releases_the_progress_state_it_admitted() {
+        let progress = Arc::new(McpProgressRouter::default());
+        let seam = seam(&progress);
+        seam.admit_progress(&tool_call(id(4), &token(4)))
+            .expect("a tools/call is a tracked invocation");
+        drop(progress.lease(id(4), token(4)));
+        assert_eq!(
+            progress.tracked_requests(),
+            1,
+            "the remote side is still open until the seam refuses"
+        );
+        seam.no_dispatch(&id(4));
+        assert_eq!(progress.tracked_requests(), 0);
     }
 }

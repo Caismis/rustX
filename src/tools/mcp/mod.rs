@@ -1339,20 +1339,43 @@ pub(crate) mod test_sync {
         state: Mutex<ProgressRaceState>,
         parked: tokio::sync::Notify,
         progressed: tokio::sync::Notify,
+        answered: tokio::sync::Notify,
         release: tokio::sync::Notify,
     }
+
+    /// One request, qualified by the connection generation that owns it.
+    ///
+    /// rmcp mints request ids and progress tokens per peer, so two live MCP
+    /// connections in one test binary share both number spaces. A probe that
+    /// keyed facts on the bare id would attribute another connection's
+    /// request to its own — which is a flake, not a contract.
+    type ProgressRequestKey = (u64, rmcp::model::RequestId);
+    /// One progress token, qualified the same way.
+    type ProgressTokenKey = (u64, rmcp::model::ProgressToken);
 
     #[derive(Default)]
     struct ProgressRaceState {
         released: bool,
         /// The requests currently parked between their effect frontier and
         /// their progress subscription.
-        parked: std::collections::HashSet<rmcp::model::RequestId>,
+        parked: std::collections::HashSet<ProgressRequestKey>,
+        /// Every request this race has ever parked, never cleared, so a
+        /// released call's terminal facts are still attributable.
+        seen: std::collections::HashSet<ProgressRequestKey>,
         /// What the outbound dispatch seam registered for each request.
-        tokens: std::collections::HashMap<rmcp::model::RequestId, rmcp::model::ProgressToken>,
+        tokens: std::collections::HashMap<ProgressRequestKey, rmcp::model::ProgressToken>,
         /// The tokens whose progress the router observed while no
         /// subscriber existed for them.
-        pre_subscription: std::collections::HashSet<rmcp::model::ProgressToken>,
+        pre_subscription: std::collections::HashSet<ProgressTokenKey>,
+        /// The requests whose pre-subscription evidence a subscription
+        /// atomically claimed.
+        claimed: std::collections::HashSet<ProgressRequestKey>,
+        /// The requests the router reached a terminal forget point for.
+        forgotten: std::collections::HashSet<ProgressRequestKey>,
+        /// The requests the inbound seam observed a correlated answer for —
+        /// or that the outbound seam refused, which answers them the same
+        /// way.
+        answered: std::collections::HashSet<ProgressRequestKey>,
     }
 
     static PROGRESS_RACES: ProbeRegistry<ProgressSubscriptionRace> = ProbeRegistry::new();
@@ -1377,6 +1400,7 @@ pub(crate) mod test_sync {
                 state: Mutex::new(ProgressRaceState::default()),
                 parked: tokio::sync::Notify::new(),
                 progressed: tokio::sync::Notify::new(),
+                answered: tokio::sync::Notify::new(),
                 release: tokio::sync::Notify::new(),
             });
             let id = PROGRESS_RACES.install(Arc::clone(&race));
@@ -1420,12 +1444,71 @@ pub(crate) mod test_sync {
         /// progress provably beat every one of those subscriptions.
         pub(crate) fn every_parked_request_has_pre_subscription_progress(&self) -> bool {
             let state = self.state.lock().expect("progress race lock");
-            state.parked.iter().all(|id| {
+            state.parked.iter().all(|key| {
                 state
                     .tokens
-                    .get(id)
-                    .is_some_and(|token| state.pre_subscription.contains(token))
+                    .get(key)
+                    .is_some_and(|token| state.pre_subscription.contains(&(key.0, token.clone())))
             })
+        }
+
+        /// Resolves once the inbound seam has observed a correlated answer
+        /// for at least `count` of the requests this race parked.
+        ///
+        /// This is the ordering point the Issue #205 retention regression
+        /// needs: it is the exact instant at which the old implementation
+        /// deleted a parked call's evidence.
+        pub(crate) async fn wait_answered(&self, count: usize) {
+            loop {
+                let answered = self.answered.notified();
+                tokio::pin!(answered);
+                answered.as_mut().enable();
+                if self.answered_requests() >= count {
+                    return;
+                }
+                answered.await;
+            }
+        }
+
+        /// How many parked requests the peer has answered.
+        pub(crate) fn answered_requests(&self) -> usize {
+            let state = self.state.lock().expect("progress race lock");
+            state
+                .parked
+                .iter()
+                .filter(|key| state.answered.contains(*key))
+                .count()
+        }
+
+        /// Whether every currently parked request still **owns** the
+        /// pre-subscription progress the router observed for it: the
+        /// occurrence was recorded, and neither a subscription claimed it
+        /// nor a forget point discarded it.
+        ///
+        /// A parked call cannot subscribe and cannot relinquish, so this is
+        /// a settled fact rather than a sampled one.
+        pub(crate) fn every_parked_request_retains_its_progress(&self) -> bool {
+            let state = self.state.lock().expect("progress race lock");
+            !state.parked.is_empty()
+                && state.parked.iter().all(|key| {
+                    state.tokens.get(key).is_some_and(|token| {
+                        state.pre_subscription.contains(&(key.0, token.clone()))
+                            && !state.claimed.contains(key)
+                            && !state.forgotten.contains(key)
+                    })
+                })
+        }
+
+        /// Whether every request this race ever parked has claimed its
+        /// buffered evidence and then reached the router's terminal forget
+        /// point, leaving no progress state behind for it.
+        pub(crate) fn every_parked_request_reached_its_forget_point(&self) -> bool {
+            let state = self.state.lock().expect("progress race lock");
+            !state.seen.is_empty()
+                && state
+                    .seen
+                    .iter()
+                    .all(|key| state.claimed.contains(key) && state.forgotten.contains(key))
         }
 
         /// How many parked requests there are right now.
@@ -1742,7 +1825,13 @@ pub(crate) mod test_sync {
     }
 
     /// Records what the outbound dispatch seam registered for one request.
+    ///
+    /// Every router fact is qualified by the identity of the connection
+    /// generation's router that produced it, so a race installed by one test
+    /// never attributes another live connection's identically numbered
+    /// request to a call of its own.
     pub(crate) fn note_progress_admission(
+        scope: u64,
         id: &rmcp::model::RequestId,
         token: &rmcp::model::ProgressToken,
     ) {
@@ -1751,35 +1840,79 @@ pub(crate) mod test_sync {
                 .lock()
                 .expect("progress race lock")
                 .tokens
-                .insert(id.clone(), token.clone());
+                .insert((scope, id.clone()), token.clone());
         }
     }
 
     /// Records that the router observed progress for a token whose
     /// dispatching call had not subscribed yet.
-    pub(crate) fn note_pre_subscription_progress(token: &rmcp::model::ProgressToken) {
+    pub(crate) fn note_pre_subscription_progress(scope: u64, token: &rmcp::model::ProgressToken) {
         for race in PROGRESS_RACES.all() {
             race.state
                 .lock()
                 .expect("progress race lock")
                 .pre_subscription
-                .insert(token.clone());
+                .insert((scope, token.clone()));
             race.progressed.notify_waiters();
+        }
+    }
+
+    /// Records that one subscription atomically claimed the
+    /// pre-subscription evidence the router held for its request.
+    pub(crate) fn note_progress_claimed(scope: u64, id: &rmcp::model::RequestId) {
+        for race in PROGRESS_RACES.all() {
+            race.state
+                .lock()
+                .expect("progress race lock")
+                .claimed
+                .insert((scope, id.clone()));
+        }
+    }
+
+    /// Records that one request reached the router's terminal forget point:
+    /// both its remote answer and its caller's progress ownership are over.
+    pub(crate) fn note_progress_forgotten(scope: u64, id: &rmcp::model::RequestId) {
+        for race in PROGRESS_RACES.all() {
+            race.state
+                .lock()
+                .expect("progress race lock")
+                .forgotten
+                .insert((scope, id.clone()));
+        }
+    }
+
+    /// Records that no correlated answer can arrive for one request any
+    /// more, which is what the inbound seam observes on a response and the
+    /// outbound seam records on a refusal.
+    pub(crate) fn note_remote_terminal(scope: u64, id: &rmcp::model::RequestId) {
+        for race in PROGRESS_RACES.all() {
+            race.state
+                .lock()
+                .expect("progress race lock")
+                .answered
+                .insert((scope, id.clone()));
+            race.answered.notify_waiters();
         }
     }
 
     /// Parks one dispatched call between its effect frontier and its
     /// progress subscription, when a race is installed for its tool.
-    pub(crate) async fn park_before_progress_subscription(tool: &str, id: &rmcp::model::RequestId) {
+    pub(crate) async fn park_before_progress_subscription(
+        tool: &str,
+        id: &rmcp::model::RequestId,
+        scope: u64,
+    ) {
         let Some(race) = PROGRESS_RACES.find(|race| race.tool == tool) else {
             return;
         };
+        let key = (scope, id.clone());
         {
             let mut state = race.state.lock().expect("progress race lock");
             if state.released {
                 return;
             }
-            state.parked.insert(id.clone());
+            state.parked.insert(key.clone());
+            state.seen.insert(key.clone());
         }
         race.parked.notify_waiters();
         loop {
@@ -1795,7 +1928,7 @@ pub(crate) mod test_sync {
             .lock()
             .expect("progress race lock")
             .parked
-            .remove(id);
+            .remove(&key);
     }
 }
 
@@ -2603,21 +2736,36 @@ impl McpServerRuntime {
         // point, which is why normal completion cleans up its own state
         // instead of leaving one record per historical request behind.
         let admission = self.admit_local_request(&handle.id);
+        // This call's progress-consumer ownership, taken in the same
+        // await-free step as the admission above and released only when this
+        // frame ends — however it ends. It is what makes "a correlated
+        // response arrived" and "the dispatching caller is gone" two
+        // independent facts: the router forgets this request's progress only
+        // once both are true, so a response can never delete evidence this
+        // call has not claimed yet, and a call that exits before subscribing
+        // still leaves nothing behind.
+        let progress_lease = self
+            .handler
+            .progress
+            .lease(handle.id.clone(), handle.progress_token.clone());
         // Test-only: holds this call inside the pre-subscription window so a
         // regression can prove that genuine remote progress arrived before
         // the subscription registration completed. No production path
         // installs a race, so this is a lock read that returns immediately.
         #[cfg(test)]
-        test_sync::park_before_progress_subscription(remote_name, &handle.id).await;
+        test_sync::park_before_progress_subscription(
+            remote_name,
+            &handle.id,
+            self.handler.progress.scope(),
+        )
+        .await;
         // Subscribing after dispatch is unavoidable — rmcp mints the token
         // inside the request — but it is no longer a race: the outbound
         // dispatch seam registered this token as known and live before the
         // request could reach the server, so anything the peer sent for it
-        // is already owned and is claimed here.
-        let mut progress = self
-            .handler
-            .progress
-            .subscribe(handle.id.clone(), handle.progress_token.clone());
+        // is already owned and is claimed here, including evidence the peer
+        // sent before it answered.
+        let mut progress = progress_lease.subscribe();
         let response = loop {
             tokio::select! {
                 biased;
@@ -2630,10 +2778,13 @@ impl McpServerRuntime {
                     // Liveness evidence that already arrived is never
                     // discarded by arbitration: it genuinely happened before
                     // the cancellation intent won.
-                    for notification in progress.drain() {
-                        report_remote_progress(context, notification);
-                    }
+                    drain_remote_progress(context, &mut progress);
                     drop(progress);
+                    // This call stops consuming progress here, so it
+                    // relinquishes here: the settlement below is about the
+                    // remote dimension, and the two are forgotten together
+                    // once both are terminal.
+                    drop(progress_lease);
                     return self
                         .settle_post_frontier_cancellation(
                             handle,
@@ -2661,10 +2812,13 @@ impl McpServerRuntime {
         // the same ordered transport: those notifications genuinely arrived
         // before the response, and they are reported before the terminal
         // result so the durable fact order stays terminal-last.
-        for notification in progress.drain() {
-            report_remote_progress(context, notification);
-        }
+        drain_remote_progress(context, &mut progress);
         drop(progress);
+        // Every occurrence this call owned has now been reported, so its
+        // progress-consumer ownership ends. The correlated response already
+        // completed the remote dimension at the inbound seam, which makes
+        // this the request's terminal forget point.
+        drop(progress_lease);
         // A response that won the biased arbitration on its own is a pure
         // response-plane outcome: this call never terminated its own
         // transport-level request, so any transport-class failure here is
@@ -3155,6 +3309,21 @@ fn report_remote_progress(
         }));
 }
 
+/// Reports every occurrence this call already owns, in arrival order.
+///
+/// Liveness evidence the peer delivered before a terminal outcome genuinely
+/// happened first, so it is reported before that outcome is committed —
+/// including evidence the call claimed from the router only after its
+/// response had already resolved.
+fn drain_remote_progress(
+    context: &ToolExecutionContext<'_>,
+    progress: &mut McpProgressSubscription,
+) {
+    for notification in progress.drain() {
+        report_remote_progress(context, notification);
+    }
+}
+
 /// Whether one rmcp service failure is transport-class evidence that the
 /// connection generation itself can no longer carry MCP traffic
 /// (Issue #205).
@@ -3227,23 +3396,95 @@ const PROGRESS_SUBSCRIPTION_CAPACITY: usize = 16;
 ///
 /// ```text
 /// send_cancellable_request -> Ok        the request exists
+///   executor -> lease(id, token)           <-- caller ownership begins here
 ///   Transport::send  -> admit(id, token)   <-- the token becomes known here
 ///     bytes on the wire
 ///       server receives the request
 ///         server emits progress for the token
 ///           router.deliver(..)                <-- always after admit
-/// executor        -> subscribe(id, token)     <-- may be anywhere after Ok
+/// executor        -> lease.subscribe()        <-- may be anywhere after Ok
 /// ```
 ///
 /// `subscribe` may run before or after `admit`; both create the same entry,
 /// so neither order can lose evidence.
+///
+/// # Two ownership dimensions, and why neither stands in for the other
+///
+/// A dispatched request's progress state answers to two facts that are
+/// ordered by nothing:
+///
+/// ```text
+/// remote ownership                    caller ownership
+///   Open      a correlated response     AwaitingSubscription  the call owns
+///             for this request may                            progress and
+///             still arrive                                    has not
+///                                                             claimed
+///   Terminal  the peer answered it,                           delivery yet
+///             or rustX refused to       Subscribed            the call owns
+///             dispatch it, so no                              delivery
+///             correlated response                             directly
+///             can arrive any more       Relinquished          the call is
+///                                                             gone
+/// ```
+///
+/// > **A correlated response ends remote execution. It does not end the
+/// > dispatching caller's progress-consumer ownership.**
+///
+/// That is the Issue #205 review finding stated as a rule. The peer may
+/// answer while the executor is still between
+/// `send_cancellable_request -> Ok` and its subscription, and treating that
+/// response as proof that no caller remains deleted exactly the evidence
+/// this router exists to keep: genuine progress observed for a live
+/// `ToolCall`, discarded before that call could claim it, after which the
+/// biased response arm reported a terminal result with the liveness
+/// occurrence silently gone.
+///
+/// So the two dimensions are tracked separately and the forget point is
+/// their conjunction:
+///
+/// ```text
+/// caller \ remote        Open                       Terminal
+/// AwaitingSubscription   retain the evidence        retain the evidence
+/// Subscribed             the subscriber owns it     the subscriber owns it
+/// Relinquished           keep the record            forget the request
+/// ```
+///
+/// > **Progress state is forgotten only once both remote response ownership
+/// > and local consumer ownership are terminal.**
+///
+/// A relinquished request keeps no payload and no delivery index — nothing
+/// is deliverable to a caller that no longer exists — but its record
+/// survives until the remote dimension is terminal too. That record is
+/// load-bearing: `Transport::send` can run *after* the executor returned, so
+/// an admission arriving then would otherwise re-create an owned entry for a
+/// request that has no owner left to forget it.
+///
+/// # Who owns each transition
+///
+/// ```text
+/// admit(id, token)             the outbound dispatch seam, in
+///                              Transport::send's synchronous prologue
+/// deliver(notification)        the inbound progress notification
+/// lease(id, token).subscribe() the dispatching call, claiming buffered
+///                              evidence atomically
+/// drop(McpProgressLease)       the dispatching call relinquishing progress
+///                              ownership, on *every* exit path
+/// mark_remote_terminal(id)     the inbound seam on a correlated response,
+///                              and the outbound seam on a refused dispatch
+/// ```
+///
+/// [`McpProgressLease`] is the whole caller side: it is taken the instant
+/// the request id exists and dropped when the executor's call frame ends,
+/// so cancellation, a deadline, transport loss, protocol corruption, a send
+/// failure and ordinary completion all relinquish through the same RAII
+/// owner rather than through per-branch cleanup.
 ///
 /// # The invariant
 ///
 /// > Every admitted MCP request that rustX can identify as belonging to a
 /// > live local `ToolCall` retains at least one liveness occurrence once
 /// > genuine remote progress for that request has been observed, until that
-/// > `ToolCall` consumes or terminates that liveness state.
+/// > `ToolCall` consumes or relinquishes that liveness state.
 ///
 /// Payload detail is explicitly *not* guaranteed, and two places coalesce:
 ///
@@ -3262,29 +3503,53 @@ const PROGRESS_SUBSCRIPTION_CAPACITY: usize = 16;
 /// # Boundedness
 ///
 /// Live state is one small entry per rustX request of this connection
-/// generation that has been dispatched and has not yet reached its terminal
-/// forget point — never a router constant. Entries are removed by the
-/// dispatching call's subscription guard (`Drop`), or, for a request whose
-/// executor is gone, by the correlated response the inbound seam observes.
+/// generation that has been dispatched and has not yet reached the terminal
+/// forget point above — never a router constant, and never one entry per
+/// request ever answered. A request that is answered while its call is gone,
+/// and a request whose call relinquished after it was answered, are both
+/// removed outright. The residue is a request rustX abandoned while the
+/// remote side stayed genuinely open — a cancelled call whose server never
+/// answered — which keeps a payload-free record until this generation ends.
 /// The whole router belongs to one connection generation and dies with it.
-#[derive(Default)]
+#[cfg_attr(not(test), derive(Default))]
 struct McpProgressRouter {
     state: Mutex<ProgressRouterState>,
+    /// Identifies this connection generation's router to test probes.
+    ///
+    /// rmcp mints request ids and progress tokens per peer, so two live
+    /// connections in one test binary share both number spaces; a probe that
+    /// keyed facts on the bare id would attribute one connection's request
+    /// to another's call.
+    #[cfg(test)]
+    scope: u64,
+}
+
+#[cfg(test)]
+impl Default for McpProgressRouter {
+    fn default() -> Self {
+        static NEXT_ROUTER_SCOPE: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(1);
+        Self {
+            state: Mutex::default(),
+            scope: NEXT_ROUTER_SCOPE.fetch_add(1, Ordering::Relaxed),
+        }
+    }
 }
 
 #[derive(Default)]
 struct ProgressRouterState {
-    /// One entry per known live request token. **No capacity eviction.**
-    live: std::collections::HashMap<rmcp::model::ProgressToken, LiveProgress>,
-    /// The progress token of each dispatched request that has not reached
-    /// its terminal forget point, so a correlated response can forget the
-    /// progress state of a request whose executor is gone.
-    tokens: std::collections::HashMap<rmcp::model::RequestId, rmcp::model::ProgressToken>,
+    /// One entry per request that has been admitted or leased and has not
+    /// reached its terminal forget point. **No capacity eviction.**
+    requests: std::collections::HashMap<rmcp::model::RequestId, RequestProgress>,
+    /// The delivery index. A token appears here exactly while some caller
+    /// can still consume progress for it, which is what makes a relinquished
+    /// request's later notifications unsolicited rather than stored.
+    owners: std::collections::HashMap<rmcp::model::ProgressToken, rmcp::model::RequestId>,
     /// Unsolicited peer progress: counted, never stored.
     unsolicited: UnsolicitedProgress,
 }
 
-/// What the router retains about progress for tokens no rustX request owns.
+/// What the router retains about progress for tokens no rustX caller owns.
 ///
 /// Deliberately O(1) and payload-free. An unknown token is peer-controlled,
 /// so it gets a counter and the most recent token value for diagnostics —
@@ -3296,12 +3561,37 @@ struct UnsolicitedProgress {
     last: Option<rmcp::model::ProgressToken>,
 }
 
-/// The liveness state of one known live request token.
-enum LiveProgress {
-    /// The dispatching call has not subscribed yet. O(1) coalesced evidence.
-    Pending(PendingProgress),
-    /// The dispatching call owns delivery.
+/// The progress state of one dispatched request, on both dimensions.
+struct RequestProgress {
+    /// The token rmcp minted for this request.
+    token: rmcp::model::ProgressToken,
+    caller: CallerOwnership,
+    remote: RemoteOwnership,
+}
+
+/// Where the dispatching call's progress-consumer ownership stands.
+enum CallerOwnership {
+    /// The dispatching call owns this request's progress and has not claimed
+    /// delivery yet. O(1) coalesced evidence waits here for it — including
+    /// across a correlated response, which says nothing about this
+    /// dimension.
+    AwaitingSubscription(PendingProgress),
+    /// The dispatching call owns delivery directly.
     Subscribed(ProgressSubscriber),
+    /// The dispatching call is gone. Nothing is deliverable any more, and
+    /// the record exists only so the remote dimension has something to
+    /// finish, and so a late admission cannot resurrect an owner.
+    Relinquished,
+}
+
+/// Whether a correlated response for this request can still arrive.
+#[derive(PartialEq, Eq)]
+enum RemoteOwnership {
+    /// The peer has neither answered the request nor been refused it.
+    Open,
+    /// The peer answered this request, or rustX refused to dispatch it. No
+    /// correlated response can ever arrive for it again.
+    Terminal,
 }
 
 type ProgressSubscriber = tokio::sync::mpsc::Sender<ProgressNotificationParam>;
@@ -3324,18 +3614,30 @@ impl McpProgressRouter {
     /// Called from [`dispatch::McpDispatchSeam`] inside `Transport::send`.
     /// From this point the token can never be treated as unsolicited and can
     /// never be evicted by peer-controlled traffic.
+    ///
+    /// An admission never overwrites an existing entry. The dispatching
+    /// call's own lease may already have subscribed, and — because this runs
+    /// in rmcp's service loop rather than in the caller's task — it may
+    /// already have relinquished; in the second case re-creating an owned
+    /// entry would leave state with no caller left to forget it.
     fn admit(&self, id: &rmcp::model::RequestId, token: &rmcp::model::ProgressToken) {
         let mut state = self
             .state
             .lock()
             .expect("MCP progress router lock poisoned");
-        state.tokens.insert(id.clone(), token.clone());
-        state
-            .live
-            .entry(token.clone())
-            .or_insert_with(|| LiveProgress::Pending(PendingProgress::default()));
+        if !state.requests.contains_key(id) {
+            state.requests.insert(
+                id.clone(),
+                RequestProgress {
+                    token: token.clone(),
+                    caller: CallerOwnership::AwaitingSubscription(PendingProgress::default()),
+                    remote: RemoteOwnership::Open,
+                },
+            );
+            state.owners.insert(token.clone(), id.clone());
+        }
         #[cfg(test)]
-        test_sync::note_progress_admission(id, token);
+        test_sync::note_progress_admission(self.scope, id, token);
     }
 
     /// Delivers one remote progress notification.
@@ -3345,110 +3647,238 @@ impl McpProgressRouter {
             .lock()
             .expect("MCP progress router lock poisoned");
         let token = notification.progress_token.clone();
-        let Some(live) = state.live.get_mut(&token) else {
-            // No rustX request owns this token, so no `ToolCall` will ever
-            // consume it. It gets a counter, not storage.
+        // No caller owns this token: either the peer invented it, or the
+        // request that owned it has relinquished. Either way no `ToolCall`
+        // will ever consume it, so it gets a counter, not storage.
+        let owner = state.owners.get(&token).cloned();
+        let live = owner.and_then(|id| state.requests.get_mut(&id));
+        let Some(live) = live else {
             state.unsolicited.dropped = state.unsolicited.dropped.saturating_add(1);
             state.unsolicited.last = Some(token);
             return;
         };
-        match live {
-            LiveProgress::Subscribed(sender) => {
+        match &mut live.caller {
+            CallerOwnership::Subscribed(sender) => {
                 // Bounded, drop-on-full. This cannot erase a liveness
                 // occurrence: a full queue is a queue whose subscriber
                 // already holds `PROGRESS_SUBSCRIPTION_CAPACITY` undelivered
                 // proofs that the remote is alive.
                 let _ = sender.try_send(notification);
             }
-            LiveProgress::Pending(pending) => {
+            CallerOwnership::AwaitingSubscription(pending) => {
                 pending.latest = Some(notification);
                 pending.occurrences = pending.occurrences.saturating_add(1);
                 #[cfg(test)]
-                test_sync::note_pre_subscription_progress(&token);
+                test_sync::note_pre_subscription_progress(self.scope, &token);
+            }
+            // Unreachable: relinquishing removes the delivery index, so no
+            // owner is found for such a token above. Counted rather than
+            // stored, which is the fail-safe direction.
+            CallerOwnership::Relinquished => {
+                state.unsolicited.dropped = state.unsolicited.dropped.saturating_add(1);
+                state.unsolicited.last = Some(token);
             }
         }
     }
 
-    /// Subscribes the dispatching call to its request's progress token,
-    /// claiming anything that arrived before this call.
-    fn subscribe(
+    /// Takes the dispatching call's progress-consumer ownership of one
+    /// request.
+    ///
+    /// The lease is the caller half of the two dimensions above, and it is
+    /// deliberately taken *before* the call can park, fail or be cancelled:
+    /// dropping it is the single relinquish point every exit path shares.
+    fn lease(
         self: &Arc<Self>,
         id: rmcp::model::RequestId,
         token: rmcp::model::ProgressToken,
+    ) -> McpProgressLease {
+        McpProgressLease {
+            router: Arc::clone(self),
+            id,
+            token,
+        }
+    }
+
+    /// Claims delivery of one leased request's progress, taking anything
+    /// that arrived before this call with it.
+    ///
+    /// A request the peer has already answered may still be subscribed to:
+    /// the response ends remote execution, and this call is still alive
+    /// until it has processed that response and settled.
+    fn subscribe(
+        &self,
+        id: &rmcp::model::RequestId,
+        token: &rmcp::model::ProgressToken,
     ) -> McpProgressSubscription {
         let (sender, receiver) = tokio::sync::mpsc::channel(PROGRESS_SUBSCRIPTION_CAPACITY);
+        let claim = sender.clone();
         {
             let mut state = self
                 .state
                 .lock()
                 .expect("MCP progress router lock poisoned");
-            state.tokens.insert(id.clone(), token.clone());
-            let claimed = match state.live.remove(&token) {
-                // Whatever the outbound seam admitted, or an earlier
-                // delivery coalesced, belongs to this call.
-                Some(LiveProgress::Pending(pending)) => pending.latest,
-                // A token is minted once per request, so this is
-                // unreachable in practice; taking the newest subscriber is
-                // the fail-safe direction because the dispatching call is
-                // the only consumer that can report the evidence.
-                Some(LiveProgress::Subscribed(_)) | None => None,
+            let claimed = match state.requests.get_mut(id) {
+                // Unreachable while a lease exists, and fail-closed if it
+                // ever becomes reachable: a relinquished request is not
+                // resurrected by a subscription.
+                Some(entry) if matches!(entry.caller, CallerOwnership::Relinquished) => None,
+                Some(entry) => {
+                    match std::mem::replace(&mut entry.caller, CallerOwnership::Subscribed(sender))
+                    {
+                        // Whatever the outbound seam admitted, or an earlier
+                        // delivery coalesced, belongs to this call —
+                        // including across a correlated response.
+                        CallerOwnership::AwaitingSubscription(pending) => pending.latest,
+                        // A token is minted once per request, so this is
+                        // unreachable in practice; taking the newest
+                        // subscriber is the fail-safe direction because the
+                        // dispatching call is the only consumer that can
+                        // report the evidence.
+                        CallerOwnership::Subscribed(_) | CallerOwnership::Relinquished => None,
+                    }
+                }
+                // The subscription beat the outbound seam's admission. Both
+                // orders create the same entry.
+                None => {
+                    state.requests.insert(
+                        id.clone(),
+                        RequestProgress {
+                            token: token.clone(),
+                            caller: CallerOwnership::Subscribed(sender),
+                            remote: RemoteOwnership::Open,
+                        },
+                    );
+                    state.owners.insert(token.clone(), id.clone());
+                    None
+                }
             };
             if let Some(latest) = claimed {
                 // The coalesced payload carries the liveness occurrence the
                 // pre-subscription state preserved.
-                let _ = sender.try_send(latest);
+                let _ = claim.try_send(latest);
+                #[cfg(test)]
+                test_sync::note_progress_claimed(self.scope, id);
             }
-            state
-                .live
-                .insert(token.clone(), LiveProgress::Subscribed(sender));
         }
-        McpProgressSubscription {
-            router: Arc::clone(self),
-            id,
-            token,
-            receiver,
-        }
+        McpProgressSubscription { receiver }
     }
 
-    /// Forgets one request's progress state at its terminal point.
-    fn forget(&self, id: &rmcp::model::RequestId, token: &rmcp::model::ProgressToken) {
-        let mut state = self
-            .state
-            .lock()
-            .expect("MCP progress router lock poisoned");
-        state.tokens.remove(id);
-        state.live.remove(token);
-    }
-
-    /// Forgets the progress state of a request the peer has answered.
+    /// The dispatching call relinquishes its progress-consumer ownership of
+    /// one request. Called exactly once, by [`McpProgressLease`]'s `Drop`.
     ///
-    /// This is the terminal forget point for a dispatched request whose
-    /// dispatching call is gone — the only way an admitted token could
-    /// otherwise outlive the invocation that owns it. A request whose call
-    /// still holds a subscription keeps its state until that guard drops:
-    /// the response has not been reported yet, and evidence delivered
-    /// alongside it is still the call's to consume.
-    fn settle(&self, id: &rmcp::model::RequestId) {
+    /// Nothing is deliverable to a caller that no longer exists, so the
+    /// payload and the delivery index go immediately. The record itself
+    /// survives until the remote dimension is terminal too.
+    fn relinquish(&self, id: &rmcp::model::RequestId, token: &rmcp::model::ProgressToken) {
         let mut state = self
             .state
             .lock()
             .expect("MCP progress router lock poisoned");
-        let Some(token) = state.tokens.remove(id) else {
+        state.owners.remove(token);
+        let forget = if let Some(entry) = state.requests.get_mut(id) {
+            entry.caller = CallerOwnership::Relinquished;
+            entry.remote == RemoteOwnership::Terminal
+        } else {
+            // The relinquish beat the outbound seam's admission, which can
+            // still run: the record is what stops that admission from
+            // creating an owned entry nothing would forget.
+            state.requests.insert(
+                id.clone(),
+                RequestProgress {
+                    token: token.clone(),
+                    caller: CallerOwnership::Relinquished,
+                    remote: RemoteOwnership::Open,
+                },
+            );
+            false
+        };
+        if forget {
+            state.requests.remove(id);
+            #[cfg(test)]
+            test_sync::note_progress_forgotten(self.scope, id);
+        }
+    }
+
+    /// Records that no correlated response for this request can arrive any
+    /// more: the peer answered it, or rustX refused to dispatch it.
+    ///
+    /// This is **not** evidence that the dispatching call is gone, and it
+    /// therefore never removes evidence a live call has not claimed yet. It
+    /// completes the remote dimension, and forgets the request only when the
+    /// caller dimension is already terminal.
+    fn mark_remote_terminal(&self, id: &rmcp::model::RequestId) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("MCP progress router lock poisoned");
+        let Some(entry) = state.requests.get_mut(id) else {
             return;
         };
-        if matches!(state.live.get(&token), Some(LiveProgress::Pending(_))) {
-            state.live.remove(&token);
+        entry.remote = RemoteOwnership::Terminal;
+        let token = entry.token.clone();
+        let forget = matches!(entry.caller, CallerOwnership::Relinquished);
+        if forget {
+            state.requests.remove(id);
+            state.owners.remove(&token);
+            #[cfg(test)]
+            test_sync::note_progress_forgotten(self.scope, id);
         }
+        #[cfg(test)]
+        test_sync::note_remote_terminal(self.scope, id);
     }
 
-    /// How many known live request tokens this router currently holds.
+    /// This router's probe identity.
     #[cfg(test)]
-    fn live_tokens(&self) -> usize {
+    const fn scope(&self) -> u64 {
+        self.scope
+    }
+
+    /// How many requests this router currently tracks on either dimension.
+    #[cfg(test)]
+    fn tracked_requests(&self) -> usize {
         self.state
             .lock()
             .expect("MCP progress router lock poisoned")
-            .live
+            .requests
             .len()
+    }
+
+    /// How many tokens can still be delivered to a caller.
+    #[cfg(test)]
+    fn deliverable_tokens(&self) -> usize {
+        self.state
+            .lock()
+            .expect("MCP progress router lock poisoned")
+            .owners
+            .len()
+    }
+
+    /// The coalesced pre-subscription occurrence count of one request, when
+    /// it is still waiting for its call to claim delivery.
+    #[cfg(test)]
+    fn pending_occurrences(&self, id: &rmcp::model::RequestId) -> Option<u32> {
+        match &self
+            .state
+            .lock()
+            .expect("MCP progress router lock poisoned")
+            .requests
+            .get(id)?
+            .caller
+        {
+            CallerOwnership::AwaitingSubscription(pending) => Some(pending.occurrences),
+            CallerOwnership::Subscribed(_) | CallerOwnership::Relinquished => None,
+        }
+    }
+
+    /// Whether one request's call currently owns delivery.
+    #[cfg(test)]
+    fn is_subscribed(&self, id: &rmcp::model::RequestId) -> bool {
+        self.state
+            .lock()
+            .expect("MCP progress router lock poisoned")
+            .requests
+            .get(id)
+            .is_some_and(|entry| matches!(entry.caller, CallerOwnership::Subscribed(_)))
     }
 
     /// How many unsolicited progress notifications were counted and dropped.
@@ -3462,12 +3892,39 @@ impl McpProgressRouter {
     }
 }
 
-/// One in-flight call's progress subscription. Dropping it is the request's
-/// own terminal forget point for progress state.
-struct McpProgressSubscription {
+/// One dispatching call's progress-consumer ownership of its own request.
+///
+/// It is taken as soon as the request id exists and dropped when the call's
+/// frame ends, whichever way it ends — a correlated response, cancellation,
+/// a deadline, transport loss, protocol corruption, a refused dispatch, or a
+/// panic. That is why no exit branch carries its own progress cleanup: the
+/// lease *is* the caller dimension of the ownership model, and dropping it
+/// is the only way to relinquish.
+struct McpProgressLease {
     router: Arc<McpProgressRouter>,
     id: rmcp::model::RequestId,
     token: rmcp::model::ProgressToken,
+}
+
+impl McpProgressLease {
+    /// Claims delivery of this request's progress, taking every occurrence
+    /// observed before this moment with it.
+    fn subscribe(&self) -> McpProgressSubscription {
+        self.router.subscribe(&self.id, &self.token)
+    }
+}
+
+impl Drop for McpProgressLease {
+    fn drop(&mut self) {
+        self.router.relinquish(&self.id, &self.token);
+    }
+}
+
+/// One in-flight call's claimed progress delivery.
+///
+/// Dropping it stops delivery; it is **not** the request's forget point,
+/// which belongs to [`McpProgressLease`] alone.
+struct McpProgressSubscription {
     receiver: tokio::sync::mpsc::Receiver<ProgressNotificationParam>,
 }
 
@@ -3487,12 +3944,6 @@ impl McpProgressSubscription {
     }
 }
 
-impl Drop for McpProgressSubscription {
-    fn drop(&mut self) {
-        self.router.forget(&self.id, &self.token);
-    }
-}
-
 /// Deterministic regressions for the progress ownership contract
 /// (Issue #205).
 ///
@@ -3500,14 +3951,15 @@ impl Drop for McpProgressSubscription {
 /// discard the only progress report of an admitted in-flight call turns
 /// genuine remote progress into a false idle timeout. These exercise the
 /// ownership boundary directly: no clock, no transport, no sleep — the
-/// router's own admission and delivery decisions are the whole contract.
+/// router's own admission, delivery and ownership decisions are the whole
+/// contract.
 #[cfg(test)]
 mod progress_router_tests {
     use std::sync::Arc;
 
     use rmcp::model::{NumberOrString, ProgressNotificationParam, ProgressToken, RequestId};
 
-    use super::{LiveProgress, McpProgressRouter, PROGRESS_SUBSCRIPTION_CAPACITY};
+    use super::{McpProgressRouter, PROGRESS_SUBSCRIPTION_CAPACITY};
 
     fn token(value: u32) -> ProgressToken {
         ProgressToken(NumberOrString::Number(value.into()))
@@ -3530,11 +3982,11 @@ mod progress_router_tests {
     fn a_known_live_request_keeps_its_occurrence_under_payload_pressure() {
         let router = Arc::new(McpProgressRouter::default());
         router.admit(&id(1), &token(7));
+        let lease = router.lease(id(1), token(7));
         for pulse in 0..5_000 {
             router.deliver(notification(7, f64::from(pulse)));
         }
-        let mut subscription = router.subscribe(id(1), token(7));
-        let delivered = subscription.drain();
+        let delivered = lease.subscribe().drain();
         assert_eq!(
             delivered.len(),
             1,
@@ -3558,6 +4010,7 @@ mod progress_router_tests {
         // One admitted request, with its only progress notification already
         // delivered before it could subscribe.
         router.admit(&id(1), &token(1));
+        let lease = router.lease(id(1), token(1));
         router.deliver(notification(1, 0.5));
         // A peer flood, orders of magnitude above any cache a bounded
         // pre-subscription window could have had.
@@ -3565,14 +4018,13 @@ mod progress_router_tests {
             router.deliver(notification(unknown, 1.0));
         }
         assert_eq!(
-            router.live_tokens(),
+            router.tracked_requests(),
             1,
             "unsolicited progress is counted, never stored, so the live set is \
              bounded by rustX's own admitted requests"
         );
         assert_eq!(router.unsolicited_dropped(), 100_000);
-        let mut subscription = router.subscribe(id(1), token(1));
-        let delivered = subscription.drain();
+        let delivered = lease.subscribe().drain();
         assert_eq!(
             delivered.len(),
             1,
@@ -3591,22 +4043,24 @@ mod progress_router_tests {
         // The whole batch crosses its dispatch frontier first, and every
         // server answers with progress, before any of them subscribes: the
         // pre-subscription window, held open for all of them at once.
-        for index in 0..concurrent {
-            router.admit(&id(i64::from(index)), &token(index));
-        }
+        let leases: Vec<_> = (0..concurrent)
+            .map(|index| {
+                router.admit(&id(i64::from(index)), &token(index));
+                router.lease(id(i64::from(index)), token(index))
+            })
+            .collect();
         for index in 0..concurrent {
             router.deliver(notification(index, f64::from(index)));
         }
-        for index in 0..concurrent {
-            let mut subscription = router.subscribe(id(i64::from(index)), token(index));
-            let delivered = subscription.drain();
+        for (index, lease) in leases.iter().enumerate() {
+            let delivered = lease.subscribe().drain();
             assert_eq!(
                 delivered.len(),
                 1,
                 "request {index} must observe its own remote liveness evidence"
             );
             #[allow(clippy::cast_precision_loss)]
-            let expected = f64::from(index);
+            let expected = index as f64;
             assert!((delivered[0].progress - expected).abs() < f64::EPSILON);
         }
     }
@@ -3618,7 +4072,8 @@ mod progress_router_tests {
     fn a_full_subscription_queue_still_holds_undelivered_liveness_evidence() {
         let router = Arc::new(McpProgressRouter::default());
         router.admit(&id(3), &token(3));
-        let mut subscription = router.subscribe(id(3), token(3));
+        let lease = router.lease(id(3), token(3));
+        let mut subscription = lease.subscribe();
         for pulse in 0..(PROGRESS_SUBSCRIPTION_CAPACITY * 4) {
             #[allow(clippy::cast_precision_loss)]
             router.deliver(notification(3, pulse as f64));
@@ -3635,71 +4090,220 @@ mod progress_router_tests {
         );
     }
 
-    /// A settled request leaves no token state behind, so nothing
-    /// accumulates for the connection generation's lifetime.
+    /// **The Issue #205 review finding, stated directly.**
+    ///
+    /// A correlated response ends remote execution; it says nothing about
+    /// whether the dispatching call still exists. Here the peer answers
+    /// while the call is provably still between its effect frontier and its
+    /// subscription — the reachable ordering the executor cannot avoid,
+    /// because rmcp mints the progress token inside the request — and the
+    /// genuine progress it already observed must still be there to claim.
+    ///
+    /// Under the reviewed implementation `settle` removed the pending
+    /// entry here and this test fails at the `pending_occurrences` assertion.
     #[test]
-    fn a_settled_request_forgets_its_token_state() {
+    fn a_correlated_response_never_deletes_pre_subscription_progress() {
+        let router = Arc::new(McpProgressRouter::default());
+        // 1. the outbound seam admits the request inside `Transport::send`.
+        router.admit(&id(5), &token(5));
+        // 2. the dispatching call owns progress from the instant its request
+        //    id exists, and has not claimed delivery yet.
+        let lease = router.lease(id(5), token(5));
+        // 3. genuine remote progress arrives first.
+        router.deliver(notification(5, 0.25));
+        assert_eq!(
+            router.pending_occurrences(&id(5)),
+            Some(1),
+            "the observed occurrence is owned by the live call"
+        );
+        // 4. the peer's correlated response arrives while the call is still
+        //    parked before `subscribe`.
+        router.mark_remote_terminal(&id(5));
+        // 5. the evidence is still the call's.
+        assert_eq!(
+            router.pending_occurrences(&id(5)),
+            Some(1),
+            "a correlated response is not proof that the dispatching caller \
+             relinquished its progress ownership"
+        );
+        assert_eq!(router.tracked_requests(), 1);
+        // 6. the call finally claims delivery, and gets it.
+        let delivered = lease.subscribe().drain();
+        assert_eq!(
+            delivered.len(),
+            1,
+            "the buffered occurrence is claimed by the subscription that \
+             followed the response"
+        );
+        assert!((delivered[0].progress - 0.25).abs() < f64::EPSILON);
+        // 7. only the caller's own relinquish is terminal.
+        drop(lease);
+        assert_eq!(
+            router.tracked_requests(),
+            0,
+            "both dimensions are terminal, so the request is forgotten"
+        );
+        assert_eq!(router.deliverable_tokens(), 0);
+    }
+
+    /// A call that never subscribes still relinquishes: the lease is the
+    /// caller dimension, so cancellation, a deadline or any other exit
+    /// before the subscription leaves no retained token.
+    #[test]
+    fn a_call_that_never_subscribes_relinquishes_its_progress_state() {
+        let router = Arc::new(McpProgressRouter::default());
+        router.admit(&id(7), &token(7));
+        let lease = router.lease(id(7), token(7));
+        router.deliver(notification(7, 1.0));
+        drop(lease);
+        assert_eq!(
+            router.deliverable_tokens(),
+            0,
+            "nothing is deliverable to a caller that no longer exists"
+        );
+        router.deliver(notification(7, 2.0));
+        assert_eq!(
+            router.unsolicited_dropped(),
+            1,
+            "progress for a relinquished token is counted, never stored"
+        );
+        router.mark_remote_terminal(&id(7));
+        assert_eq!(
+            router.tracked_requests(),
+            0,
+            "both dimensions terminal is the forget point"
+        );
+    }
+
+    /// A request rustX refused to dispatch can never be answered, so the
+    /// refusal is its remote terminality and it reaches the same forget
+    /// point as an answered one.
+    #[test]
+    fn a_refused_dispatch_reaches_the_same_forget_point() {
+        let router = Arc::new(McpProgressRouter::default());
+        router.admit(&id(8), &token(8));
+        let lease = router.lease(id(8), token(8));
+        drop(lease);
+        assert_eq!(
+            router.tracked_requests(),
+            1,
+            "the remote side is still open"
+        );
+        router.mark_remote_terminal(&id(8));
+        assert_eq!(router.tracked_requests(), 0);
+    }
+
+    /// `Transport::send` runs in rmcp's service loop, so an admission can
+    /// arrive after the dispatching call has already returned. It must not
+    /// re-create an owned entry: nothing would be left to forget it.
+    #[test]
+    fn a_late_admission_never_resurrects_a_relinquished_request() {
+        let router = Arc::new(McpProgressRouter::default());
+        let lease = router.lease(id(9), token(9));
+        drop(lease);
+        router.admit(&id(9), &token(9));
+        router.deliver(notification(9, 1.0));
+        assert_eq!(
+            router.pending_occurrences(&id(9)),
+            None,
+            "a relinquished request owns no evidence"
+        );
+        assert_eq!(router.unsolicited_dropped(), 1);
+        router.mark_remote_terminal(&id(9));
+        assert_eq!(router.tracked_requests(), 0);
+    }
+
+    /// Every ordering of the four events, and none of them leaks or loses.
+    ///
+    /// The two dimensions are ordered by nothing, so the contract is stated
+    /// as a table rather than as one happy path: what each ordering must
+    /// preserve is the occurrence, and what each must reach is zero.
+    #[test]
+    fn every_ownership_ordering_preserves_evidence_and_returns_to_baseline() {
+        // admit -> subscribe -> progress -> response
+        let router = Arc::new(McpProgressRouter::default());
+        router.admit(&id(1), &token(1));
+        let lease = router.lease(id(1), token(1));
+        let mut subscription = lease.subscribe();
+        router.deliver(notification(1, 1.0));
+        router.mark_remote_terminal(&id(1));
+        assert!(
+            router.is_subscribed(&id(1)),
+            "a response never disarms a live subscription"
+        );
+        assert_eq!(subscription.drain().len(), 1);
+        drop(lease);
+        assert_eq!(router.tracked_requests(), 0);
+
+        // admit -> progress -> subscribe -> response
+        let router = Arc::new(McpProgressRouter::default());
+        router.admit(&id(2), &token(2));
+        let lease = router.lease(id(2), token(2));
+        router.deliver(notification(2, 1.0));
+        let mut subscription = lease.subscribe();
+        router.mark_remote_terminal(&id(2));
+        assert_eq!(subscription.drain().len(), 1);
+        drop(lease);
+        assert_eq!(router.tracked_requests(), 0);
+
+        // admit -> progress -> response -> subscribe (the review finding)
+        let router = Arc::new(McpProgressRouter::default());
+        router.admit(&id(3), &token(3));
+        let lease = router.lease(id(3), token(3));
+        router.deliver(notification(3, 1.0));
+        router.mark_remote_terminal(&id(3));
+        assert_eq!(lease.subscribe().drain().len(), 1);
+        drop(lease);
+        assert_eq!(router.tracked_requests(), 0);
+
+        // admit -> response -> subscribe, with no progress at all
+        let router = Arc::new(McpProgressRouter::default());
+        router.admit(&id(4), &token(4));
+        let lease = router.lease(id(4), token(4));
+        router.mark_remote_terminal(&id(4));
+        let mut subscription = lease.subscribe();
+        assert!(subscription.drain().is_empty());
+        drop(lease);
+        assert_eq!(router.tracked_requests(), 0);
+
+        // admit -> relinquish -> response
+        let router = Arc::new(McpProgressRouter::default());
+        router.admit(&id(5), &token(5));
+        drop(router.lease(id(5), token(5)));
+        router.mark_remote_terminal(&id(5));
+        assert_eq!(router.tracked_requests(), 0);
+
+        // subscribe -> admit: the subscription beat the outbound seam
+        let router = Arc::new(McpProgressRouter::default());
+        let lease = router.lease(id(6), token(6));
+        let mut subscription = lease.subscribe();
+        router.admit(&id(6), &token(6));
+        router.deliver(notification(6, 1.0));
+        assert_eq!(subscription.drain().len(), 1);
+        drop(lease);
+        router.mark_remote_terminal(&id(6));
+        assert_eq!(router.tracked_requests(), 0);
+    }
+
+    /// A long run of complete request lifecycles leaves the router at its
+    /// baseline cardinality, so nothing accumulates per historical request.
+    #[test]
+    fn a_completed_request_lifecycle_returns_the_router_to_baseline() {
         let router = Arc::new(McpProgressRouter::default());
         for index in 0..256_u32 {
             router.admit(&id(i64::from(index)), &token(index));
+            let lease = router.lease(id(i64::from(index)), token(index));
             router.deliver(notification(index, 1.0));
-            let subscription = router.subscribe(id(i64::from(index)), token(index));
-            drop(subscription);
+            router.mark_remote_terminal(&id(i64::from(index)));
+            assert_eq!(lease.subscribe().drain().len(), 1);
+            drop(lease);
         }
         assert_eq!(
-            router.live_tokens(),
+            router.tracked_requests(),
             0,
-            "the dispatching call's subscription guard is the request's own \
-             terminal forget point"
+            "state is bounded by live request lifecycles, never by history"
         );
-    }
-
-    /// A request whose dispatching call is gone is forgotten by its own
-    /// correlated response, so an admitted token cannot outlive the
-    /// invocation that owned it.
-    #[test]
-    fn a_correlated_response_forgets_an_unsubscribed_request() {
-        let router = Arc::new(McpProgressRouter::default());
-        router.admit(&id(9), &token(9));
-        router.deliver(notification(9, 1.0));
-        assert_eq!(router.live_tokens(), 1);
-        router.settle(&id(9));
-        assert_eq!(
-            router.live_tokens(),
-            0,
-            "the inbound correlated response is the terminal forget point of a \
-             request no call is waiting on"
-        );
-    }
-
-    /// A response arriving while the dispatching call still holds its
-    /// subscription must not take the evidence away from it: the call has
-    /// not reported the response yet, and progress delivered alongside it is
-    /// still the call's to drain.
-    #[test]
-    fn a_correlated_response_never_disarms_a_live_subscription() {
-        let router = Arc::new(McpProgressRouter::default());
-        router.admit(&id(4), &token(4));
-        let mut subscription = router.subscribe(id(4), token(4));
-        router.deliver(notification(4, 1.0));
-        router.settle(&id(4));
-        assert!(
-            matches!(
-                router
-                    .state
-                    .lock()
-                    .expect("MCP progress router lock poisoned")
-                    .live
-                    .get(&token(4)),
-                Some(LiveProgress::Subscribed(_))
-            ),
-            "the subscription still owns the token"
-        );
-        assert_eq!(
-            subscription.drain().len(),
-            1,
-            "evidence delivered before the response is still reported"
-        );
+        assert_eq!(router.deliverable_tokens(), 0);
     }
 }
 
