@@ -2097,7 +2097,10 @@ async fn approval_allow_executes_the_exact_prepared_invocation() {
         .first()
         .cloned()
         .expect("approval facts");
-    assert_eq!(facts.call_id, ToolCallId::new("call-a"));
+    assert_eq!(
+        facts.invocation_id.canonical_call_id(),
+        Some(&ToolCallId::new("call-a"))
+    );
     assert_eq!(facts.tool_id, ToolId::new("tool-alpha"));
     assert_eq!(facts.tool_name, "alpha");
     assert_eq!(facts.origin, ToolOrigin::Builtin);
@@ -2118,7 +2121,9 @@ async fn approval_allow_executes_the_exact_prepared_invocation() {
     assert_eq!(
         tool_handle.invocations(),
         vec![ToolInvocation {
-            call_id: ToolCallId::new("call-a"),
+            id: rustx::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new("call-a")
+            },
             tool_id: ToolId::new("tool-alpha"),
             tool_name: "alpha".to_owned(),
             mode: ToolInvocationMode::Foreground,

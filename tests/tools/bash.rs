@@ -355,7 +355,9 @@ async fn bash_background_cancellation_uses_the_same_process_group_path() {
         .registry
         .executor(&rustx::runtime::identity::ToolId::new("tool-bash"));
     let invocation = ToolInvocation {
-        call_id: rustx::runtime::identity::ToolCallId::new("call-bg"),
+        id: rustx::tools::types::ToolInvocationId::Agent {
+            call_id: rustx::runtime::identity::ToolCallId::new("call-bg"),
+        },
         tool_id: rustx::runtime::identity::ToolId::new("tool-bash"),
         tool_name: "bash".to_owned(),
         mode: ToolInvocationMode::Background,
@@ -413,7 +415,9 @@ async fn bash_natural_exit_beats_late_cancel_in_the_registry() {
         .registry
         .executor(&rustx::runtime::identity::ToolId::new("tool-bash"));
     let invocation = ToolInvocation {
-        call_id: rustx::runtime::identity::ToolCallId::new("call-bg"),
+        id: rustx::tools::types::ToolInvocationId::Agent {
+            call_id: rustx::runtime::identity::ToolCallId::new("call-bg"),
+        },
         tool_id: rustx::runtime::identity::ToolId::new("tool-bash"),
         tool_name: "bash".to_owned(),
         mode: ToolInvocationMode::Background,

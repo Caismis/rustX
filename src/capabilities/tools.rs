@@ -8,7 +8,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::tools::executor::{ToolRegistration, ToolRegistry, validate_model_facing_name};
+use crate::tools::executor::{ToolRegistration, ToolRegistry};
 use crate::tools::types::{ToolDefinition, ToolOrigin};
 
 /// Startup activation controls supplied by current runtime/project settings
@@ -42,21 +42,52 @@ pub struct AvailableTool {
 }
 
 /// The immutable available Tool catalog of one capability candidate.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct AvailableToolCatalog {
     tools: Vec<AvailableTool>,
+    registrations: Vec<ToolRegistration>,
+}
+
+impl PartialEq for AvailableToolCatalog {
+    fn eq(&self, other: &Self) -> bool {
+        self.tools == other.tools
+            && self
+                .registrations
+                .iter()
+                .map(|entry| entry.foreground)
+                .eq(other.registrations.iter().map(|entry| entry.foreground))
+    }
 }
 
 impl AvailableToolCatalog {
     /// Creates an available catalog in deterministic registration order.
     #[must_use]
-    pub fn new(definitions: Vec<ToolDefinition>) -> Self {
+    pub(crate) fn new(registrations: Vec<ToolRegistration>) -> Self {
         Self {
-            tools: definitions
-                .into_iter()
+            tools: registrations
+                .iter()
+                .map(|entry| entry.definition.clone())
                 .map(|definition| AvailableTool { definition })
                 .collect(),
+            registrations,
         }
+    }
+
+    /// The exact executable registrations of this authorized generation.
+    /// Model exposure is independently selected and never widened here.
+    #[must_use]
+    pub(crate) fn registrations(&self) -> &[ToolRegistration] {
+        &self.registrations
+    }
+
+    pub(crate) fn registration(
+        &self,
+        expected: &ToolDefinition,
+    ) -> Result<&ToolRegistration, String> {
+        self.registrations
+            .iter()
+            .find(|entry| entry.definition.id == expected.id && entry.definition == *expected)
+            .ok_or_else(|| "frozen capability identity changed or disappeared".into())
     }
 
     /// Every available Tool definition, including inactive definitions.
@@ -90,15 +121,13 @@ pub(crate) fn select_tools(
     // allowlist), but it must never hide an identity collision with a
     // runtime-owned protocol name.
     for registration in available {
-        validate_model_facing_name(&registration.definition.name)
+        // Validate each available capability even when activation hides it.
+        // A one-entry registry reuses native registration validation without
+        // treating same-name, source-qualified available tools as collisions.
+        ToolRegistry::from_registrations([registration.clone()])
             .map_err(|error| format!("available Tool selection is invalid: {error}"))?;
     }
-    let available_catalog = AvailableToolCatalog::new(
-        available
-            .iter()
-            .map(|registration| registration.definition.clone())
-            .collect(),
-    );
+    let available_catalog = AvailableToolCatalog::new(available.to_vec());
     let eligible = available
         .iter()
         .filter(|registration| {

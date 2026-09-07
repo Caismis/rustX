@@ -740,7 +740,10 @@ async fn tool_receives_exact_canonical_arguments() {
     );
     assert_eq!(received[0].tool_name, "alpha");
     assert_eq!(received[0].tool_id, ToolId::new("tool-alpha"));
-    assert_eq!(received[0].call_id, ToolCallId::new("call-1"));
+    assert_eq!(
+        received[0].id.canonical_call_id(),
+        Some(&ToolCallId::new("call-1"))
+    );
     assert_single_terminal(&result.event_history);
 }
 

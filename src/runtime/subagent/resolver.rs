@@ -368,12 +368,12 @@ impl core::fmt::Display for SubagentResolutionError {
                 reason,
             } => write!(
                 formatter,
-                "the subagent requires {selector}, but capability source {source} is \
+                "the invocation requires {selector}, but capability source {source} is \
                  unavailable in this runtime generation: {reason}"
             ),
             Self::UnknownCapability { selector } => write!(
                 formatter,
-                "the subagent requires {selector}, which this runtime generation does not \
+                "the invocation requires {selector}, which this runtime generation does not \
                  authorize"
             ),
             Self::UnknownSkill { skill } => write!(
@@ -540,7 +540,7 @@ impl SubagentResolver {
 /// source-qualified matching rule and a single place where the two typed
 /// outcomes — *the source is unavailable* and *the selection is invalid* —
 /// are distinguished.
-fn resolve_selector(
+pub(crate) fn resolve_selector(
     selector: &SubagentToolSelector,
     available: &AvailableToolCatalog,
     availability: &CapabilityAvailability,
@@ -891,8 +891,35 @@ mod tests {
         }
     }
 
+    fn catalog(definitions: Vec<ToolDefinition>) -> AvailableToolCatalog {
+        struct UnusedExecutor;
+        impl crate::tools::executor::ToolExecutor for UnusedExecutor {
+            fn start<'a>(
+                &'a self,
+                _: crate::tools::types::ToolInvocation,
+                _: crate::tools::executor::ToolExecutionContext<'a>,
+            ) -> crate::tools::executor::ToolExecutionHandle<'a> {
+                panic!("selector tests never execute tools")
+            }
+            fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+                crate::tools::deadline::ToolProgressCapability::None
+            }
+        }
+        AvailableToolCatalog::new(
+            definitions
+                .into_iter()
+                .map(|definition| {
+                    crate::tools::executor::ToolRegistration::plain(
+                        definition,
+                        std::sync::Arc::new(UnusedExecutor),
+                    )
+                })
+                .collect(),
+        )
+    }
+
     fn available() -> AvailableToolCatalog {
-        AvailableToolCatalog::new(vec![
+        catalog(vec![
             tool("read", ToolOrigin::Builtin),
             tool("grep", ToolOrigin::Builtin),
             tool(
@@ -1086,7 +1113,7 @@ mod tests {
     fn origin_identity_is_never_collapsed_into_a_bare_name() {
         // The same bare name exists under two origins; a Builtin selector
         // must never resolve to the MCP capability and vice versa.
-        let catalog = AvailableToolCatalog::new(vec![
+        let catalog = catalog(vec![
             tool("search", ToolOrigin::Builtin),
             tool(
                 "search",
@@ -1139,7 +1166,7 @@ mod tests {
         // The MCP capability is absent from the available catalog precisely
         // because its source failed; the outcome must still be the
         // source-unavailable fact, not "unknown capability".
-        let catalog = AvailableToolCatalog::new(vec![tool("read", ToolOrigin::Builtin)]);
+        let catalog = catalog(vec![tool("read", ToolOrigin::Builtin)]);
         assert!(matches!(
             resolve_tools(
                 &definition(vec![SubagentToolSelector::Mcp {

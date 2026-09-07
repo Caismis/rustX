@@ -214,7 +214,9 @@ fn dispatch_background(
 ) -> rustx::runtime::identity::ToolExecutionId {
     let executor: Arc<dyn rustx::tools::executor::ToolExecutor> = Arc::new(ParkedBackgroundTool);
     let invocation = rustx::tools::types::ToolInvocation {
-        call_id: rustx::runtime::identity::ToolCallId::new("call-binding-seam"),
+        id: rustx::tools::types::ToolInvocationId::Agent {
+            call_id: rustx::runtime::identity::ToolCallId::new("call-binding-seam"),
+        },
         tool_id: rustx::runtime::identity::ToolId::new("tool-binding-seam"),
         tool_name: "binding-seam".to_owned(),
         mode: rustx::tools::types::ToolInvocationMode::Background,

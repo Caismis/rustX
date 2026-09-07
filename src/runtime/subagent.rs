@@ -245,6 +245,7 @@ use crate::runtime::types::ApprovalMode;
 #[derive(Clone)]
 pub struct AttemptSubagentContext {
     inner: Arc<AttemptSubagentContextInner>,
+    pub(crate) native: Option<Arc<crate::tools::invocation::NativeInvocationServices>>,
 }
 
 struct AttemptSubagentContextInner {
@@ -288,6 +289,7 @@ impl AttemptSubagentContext {
                 models,
                 approval_mode,
             }),
+            native: None,
         }
     }
 

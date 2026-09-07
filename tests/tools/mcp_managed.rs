@@ -193,7 +193,9 @@ impl ConnectedServer {
         ToolExecutor::start(
             executor.as_ref(),
             ToolInvocation {
-                call_id: ToolCallId::new(format!("call-{name}")),
+                id: rustx::tools::types::ToolInvocationId::Agent {
+                    call_id: ToolCallId::new(format!("call-{name}")),
+                },
                 tool_id: definition.id.clone(),
                 tool_name: name.to_owned(),
                 mode: ToolInvocationMode::Foreground,
@@ -722,7 +724,9 @@ async fn call_through_snapshot(
     ToolExecutor::start(
         executor.as_ref(),
         ToolInvocation {
-            call_id: ToolCallId::new(format!("call-{name}")),
+            id: rustx::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new(format!("call-{name}")),
+            },
             tool_id,
             tool_name: name.to_owned(),
             mode: ToolInvocationMode::Foreground,

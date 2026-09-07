@@ -1,3 +1,4 @@
+import { invocationLabel } from "../../presentation/invocation.ts";
 /**
  * The activity area: work that is not conversation content.
  *
@@ -407,7 +408,7 @@ function renderInteraction(
   return [
     `${focused ? role.accent("→") : role.pending("?")} ${role.toolTitle(style.bold(clipText(kind.tool_name, HEADER_BUDGET.maxChars)))} ${role.meta(identity)}`,
     `  ${role.meta(source)}`,
-    `  ${role.meta(`${kind.mode} · ${originLabel(kind.origin)} · call ${kind.call_id}`)}`,
+    `  ${role.meta(`${kind.mode} · ${originLabel(kind.origin)} · ${invocationLabel(kind.invocation_id)}`)}`,
     ...preview(toLines(kind.reason), context, "reason line").map(
       (line) => `  ${line}`,
     ),

@@ -210,6 +210,12 @@ pub struct RuntimeEventEnvelope {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeEvent {
+    /// Execution evidence without invented canonical model framing.
+    NativeToolInvocation {
+        invocation_id: crate::tools::types::ToolInvocationId,
+        tool_id: ToolId,
+        fact: crate::tools::invocation::NativeInvocationFact,
+    },
     /// An attempt started executing.
     AttemptStarted {
         /// The attempt identity.
@@ -777,6 +783,8 @@ pub enum RuntimeEvent {
         run_id: crate::runtime::workflow::WorkflowRunId,
         /// A bounded runtime diagnostic; it never contains child transcript.
         diagnostic: String,
+        /// Native execution certainty, independent of business findings.
+        status: crate::tools::types::ToolExecutionStatus,
     },
     /// A `WorkflowRun` was cancelled after its owned children drained.
     WorkflowCancelled {

@@ -196,7 +196,7 @@ use super::inbox::{
 /// Version 23 preserves Denied in detached terminal facts (Issue #206).
 /// Version 24 adds Workflow block/node instance lifecycle facts (Issue #217).
 /// Older stores are rejected; there is no compatibility decoding.
-pub const SQLITE_SCHEMA_VERSION: i64 = 24;
+pub const SQLITE_SCHEMA_VERSION: i64 = 25;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -3453,7 +3453,7 @@ fn validate_approval_subject_against_canonical(
     subject: &InteractionSubject,
 ) -> Result<(), ConversationStoreError> {
     let InteractionSubject::Approval {
-        call_id,
+        invocation_id,
         tool_id,
         tool_name,
         arguments_digest,
@@ -3461,6 +3461,49 @@ fn validate_approval_subject_against_canonical(
     } = subject
     else {
         return Ok(());
+    };
+    let call_id = match invocation_id {
+        crate::tools::types::ToolInvocationId::Agent { call_id } => call_id,
+        crate::tools::types::ToolInvocationId::Workflow { node } => {
+            if node.block.run.attempt_id != *attempt_id {
+                return Err(ConversationStoreError::InvalidReference(
+                    "approval attempt differs from native invocation owner".into(),
+                ));
+            }
+            let id = crate::tools::invocation::preparation_event_id(invocation_id);
+            let json: Option<String> = transaction
+                .query_row(
+                    "SELECT event_json FROM events WHERE event_id=?1",
+                    [id.as_str()],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| storage(error.to_string()))?;
+            let envelope: RuntimeEventEnvelope = decode(
+                &json.ok_or_else(|| {
+                    ConversationStoreError::InvalidReference(
+                        "native invocation has no prepared audit fact".into(),
+                    )
+                })?,
+                "native invocation preparation",
+            )?;
+            let expected = RuntimeEvent::NativeToolInvocation {
+                invocation_id: invocation_id.clone(),
+                tool_id: tool_id.clone(),
+                fact: crate::tools::invocation::NativeInvocationFact::Prepared {
+                    tool_name: tool_name.clone(),
+                    arguments_digest: arguments_digest.clone(),
+                },
+            };
+            if envelope.event != expected
+                || envelope.conversation_id != node.block.run.conversation_id
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "approval does not match exact prepared native invocation".into(),
+                ));
+            }
+            return Ok(());
+        }
     };
     // 1. The generation that is asking must be the generation that proposed
     //    the call. This is the check that makes "turn 2 approved turn 1's

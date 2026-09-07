@@ -46,6 +46,8 @@ fn wrap(block: WorkflowBlock, count: usize) -> WorkflowBlock {
 
 fn compile_block_fixture(block: WorkflowBlock) -> Result<WorkflowProgram, WorkflowCompileError> {
     compile_test(WorkflowDefinition {
+        tools: std::collections::BTreeSet::default(),
+        timeout_ms: 600_000,
         description: "scoped test".into(),
         block,
     })
@@ -208,6 +210,8 @@ fn nested_program_and_expression_limits_are_aggregate() {
     };
     assert!(value_schema(&bad_reference, &SchemaMap::default(), "reference", 0).is_err());
     let mut definition = WorkflowDefinition {
+        tools: std::collections::BTreeSet::default(),
+        timeout_ms: 600_000,
         description: "large aggregate".into(),
         block: wrap(empty_block(), 32),
     };
@@ -490,10 +494,7 @@ async fn cancellation_committed_before_node_admission_frontier_starts_no_child()
     entered_rx.await.unwrap();
     signal.cancel();
     release_tx.send(()).unwrap();
-    assert!(matches!(
-        task.await.unwrap(),
-        Err(WorkflowRunError::Cancelled(_))
-    ));
+    assert!(task.await.unwrap().unwrap_err().is_cancelled());
     assert!(
         plane.registry.all_snapshots().is_empty(),
         "zero child admissions, hence zero native model starts"
@@ -536,10 +537,7 @@ async fn cancellation_wakes_native_capacity_waiter_and_drains_owned_child() {
         .expect("beta reached actual native capacity wait");
     signal.cancel();
     alpha.cancel_after_delegate().await;
-    assert!(matches!(
-        task.await.unwrap(),
-        Err(WorkflowRunError::Cancelled(_))
-    ));
+    assert!(task.await.unwrap().unwrap_err().is_cancelled());
     assert_eq!(plane.registry.all_snapshots().len(), 1);
     assert!(plane.registry.unsettled_snapshot().is_empty());
     assert!(

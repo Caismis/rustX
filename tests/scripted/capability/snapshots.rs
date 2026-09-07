@@ -1458,7 +1458,9 @@ impl ToolExecutor for RecordingParkingExecutor {
 
 fn background_invocation() -> ToolInvocation {
     ToolInvocation {
-        call_id: ToolCallId::new("call-1"),
+        id: rustx::tools::types::ToolInvocationId::Agent {
+            call_id: ToolCallId::new("call-1"),
+        },
         tool_id: ToolId::new("tool-bg"),
         tool_name: "bg".to_owned(),
         mode: ToolInvocationMode::Background,

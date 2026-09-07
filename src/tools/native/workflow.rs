@@ -11,7 +11,7 @@ use crate::runtime::workflow::{WorkflowCatalog, WorkflowProgram, WorkflowRuntime
 use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::native::registration::NativeToolRegistration;
-use crate::tools::native::support::{cancelled_result, failed_result, success_json};
+use crate::tools::native::support::{failed_result, success_json};
 use crate::tools::types::{
     ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolInvocation,
     ToolOrigin, ToolReplayPolicy,
@@ -59,7 +59,23 @@ struct WorkflowToolExecutor {
     program: Arc<WorkflowProgram>,
 }
 
+#[cfg(test)]
+pub(crate) fn test_executor(
+    runtime: WorkflowRuntime,
+    program: Arc<WorkflowProgram>,
+) -> Arc<dyn ToolExecutor> {
+    Arc::new(WorkflowToolExecutor { runtime, program })
+}
+
 impl ToolExecutor for WorkflowToolExecutor {
+    fn foreground_policy(&self) -> crate::tools::deadline::ForegroundPolicy {
+        crate::tools::deadline::ForegroundPolicy::Composite {
+            total: crate::tools::deadline::ToolExecutionDeadlinePolicy::new(
+                std::time::Duration::from_millis(self.program.timeout_ms()),
+                None,
+            ),
+        }
+    }
     fn start<'a>(
         &'a self,
         invocation: ToolInvocation,
@@ -75,7 +91,11 @@ impl ToolExecutor for WorkflowToolExecutor {
         };
         let runtime = self.runtime.clone();
         let program = Arc::clone(&self.program);
-        let run_id = invocation.call_id.clone();
+        let run_id = invocation
+            .id
+            .canonical_call_id()
+            .expect("Agent-owned invocation")
+            .clone();
         let operation_cancellation = context.cancellation.clone();
         ToolExecutionHandle::settled_by_operation(
             Box::pin(async move {
@@ -90,10 +110,7 @@ impl ToolExecutor for WorkflowToolExecutor {
                     .await
                 {
                     Ok(value) => success_json(value),
-                    Err(error) if error.is_cancelled() => {
-                        cancelled_result(operation_cancellation.reason())
-                    }
-                    Err(error) => failed_result(error.to_string()),
+                    Err(error) => crate::tools::invocation::terminal(error.execution_status()),
                 }
             }),
             context.cancellation.clone(),

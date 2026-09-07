@@ -513,7 +513,7 @@ impl CapabilityCoordinator {
             CapabilityRevision::default(),
             config.base_tool_registry.clone(),
             Arc::new(AvailableToolCatalog::new(
-                config.base_tool_registry.definitions(),
+                config.base_tool_registry.registrations(),
             )),
             initial_skills,
             None,
@@ -1362,16 +1362,17 @@ impl CapabilityCoordinator {
             return None;
         }
         let carried: Vec<ToolRegistration> = snapshot
-            .tool_registry()
+            .available_tools()
             .registrations()
-            .into_iter()
-            .filter(|registration| {
+            .iter()
+            .filter(|&registration| {
                 matches!(
                     &registration.definition.origin,
                     crate::tools::types::ToolOrigin::Mcp { server_id: owner }
                         if owner == server_id
                 )
             })
+            .cloned()
             .collect();
         if carried.is_empty() {
             None
@@ -3193,7 +3194,9 @@ mod mcp_race_tests {
         let result = crate::tools::executor::ToolExecutor::start(
             executor.as_ref(),
             crate::tools::types::ToolInvocation {
-                call_id: crate::runtime::identity::ToolCallId::new("mutate"),
+                id: crate::tools::types::ToolInvocationId::Agent {
+                    call_id: crate::runtime::identity::ToolCallId::new("mutate"),
+                },
                 tool_id: definitions[mutate_index].0.id.clone(),
                 tool_name: "mutate".to_owned(),
                 mode: crate::tools::types::ToolInvocationMode::Foreground,

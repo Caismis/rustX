@@ -1189,6 +1189,7 @@ impl RuntimeClientProjection {
             RuntimeEvent::WorkflowStarted { .. }
             | RuntimeEvent::WorkflowBlockStarted { .. }
             | RuntimeEvent::WorkflowBlockSettled { .. }
+            | RuntimeEvent::NativeToolInvocation { .. }
             | RuntimeEvent::WorkflowNodeStarted { .. }
             | RuntimeEvent::WorkflowNodeSettled { .. }
             | RuntimeEvent::WorkflowAgentAdmitted { .. }
@@ -4902,6 +4903,7 @@ mod tests {
     /// pending event adds exactly one deterministic snapshot entry, and its
     /// terminal event removes that entry without touching canonical messages.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn interaction_pending_and_settled_fold_into_snapshot_and_events() {
         let mut projection = projection();
         let request = InteractionRequest {
@@ -4910,7 +4912,9 @@ mod tests {
             attempt_id: attempt(),
             turn: 2,
             kind: InteractionKind::Approval {
-                call_id: ToolCallId::new("call-1"),
+                invocation_id: crate::tools::types::ToolInvocationId::Agent {
+                    call_id: ToolCallId::new("call-1"),
+                },
                 tool_id: ToolId::new("tool-alpha"),
                 tool_name: "alpha".to_owned(),
                 origin: crate::tools::types::ToolOrigin::Builtin,
@@ -4925,7 +4929,9 @@ mod tests {
             RuntimeEvent::InteractionRequested {
                 interaction_id: request.id.clone(),
                 subject: InteractionSubject::Approval {
-                    call_id: ToolCallId::new("call-1"),
+                    invocation_id: crate::tools::types::ToolInvocationId::Agent {
+                        call_id: ToolCallId::new("call-1"),
+                    },
                     tool_id: ToolId::new("tool-alpha"),
                     tool_name: "alpha".to_owned(),
                     arguments_digest: "0".repeat(64),
@@ -5020,7 +5026,9 @@ mod tests {
             attempt_id: attempt(),
             turn: 1,
             kind: InteractionKind::Approval {
-                call_id: ToolCallId::new(format!("{id}-call")),
+                invocation_id: crate::tools::types::ToolInvocationId::Agent {
+                    call_id: ToolCallId::new(format!("{id}-call")),
+                },
                 tool_id: ToolId::new("tool-alpha"),
                 tool_name: "alpha".to_owned(),
                 origin: crate::tools::types::ToolOrigin::Builtin,

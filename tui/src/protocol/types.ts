@@ -47,7 +47,7 @@
  * version 11's subagent activity projection; and version 9's closed
  * `interrupted` lifecycle vocabulary. Older schemas are not decoded.
  */
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 17;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 18;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -420,6 +420,21 @@ export type InteractionResponse =
       response: QuestionnaireResponse;
     };
 
+export type ToolInvocationId =
+  | { caller: "agent"; call_id: ToolCallId }
+  | {
+      caller: "workflow";
+      node: {
+        block: {
+          run: { conversation_id: ConversationId; attempt_id: AttemptId; invocation: number };
+          definition: { workflow_id: string; blocks: string[] };
+          invocations: number[];
+        };
+        node: string;
+        visit: number;
+      };
+    };
+
 export type InteractionRequest = {
   id: InteractionId;
   conversation_id: ConversationId;
@@ -428,7 +443,7 @@ export type InteractionRequest = {
   kind:
     | {
         type: "approval";
-        call_id: ToolCallId;
+        invocation_id: ToolInvocationId;
         tool_id: ToolId;
         tool_name: string;
         origin: ToolOrigin;
@@ -467,7 +482,7 @@ export type InteractionOutcome =
 export type InteractionSubject =
   | {
       type: "approval";
-      call_id: ToolCallId;
+      invocation_id: ToolInvocationId;
       tool_id: ToolId;
       tool_name: string;
       arguments_digest: string;

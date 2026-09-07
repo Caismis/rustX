@@ -1,3 +1,4 @@
+import { invocationLabel } from "../../presentation/invocation.ts";
 /**
  * The one human-input surface for every live runtime interaction.
  *
@@ -494,7 +495,7 @@ export class HumanInteractionOverlay implements PopupContent {
       ),
       `${role.toolTitle(style.bold(clipText(kind.tool_name, HEADER_BUDGET.maxChars)))} ${role.meta(interactionRefLabel(routed.interaction))}`,
       role.meta(
-        `${kind.mode} · ${originLabel(kind.origin)} · call ${clipText(kind.call_id, HEADER_BUDGET.maxChars)}`,
+        `${kind.mode} · ${originLabel(kind.origin)} · ${clipText(invocationLabel(kind.invocation_id), HEADER_BUDGET.maxChars)}`,
       ),
     ];
     const foot = this.#inFlight.has(key)

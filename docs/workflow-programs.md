@@ -1,6 +1,6 @@
 # Fixed scoped Workflow programs
 
-WF-01 (#217) extends the native Workflow foundation (#83). A registered
+WF-01 (#217) and WF-02 (#218) extend the native Workflow foundation (#83). A registered
 Workflow remains one foreground Tool. Configuration explicitly registers
 `.agents/workflows/<id>.yaml` and separately exposes it through
 `workflows.main`. Profiles must belong to `subagents.workflow`. Files do not
@@ -8,11 +8,129 @@ grant admission, and a block never rediscovers capabilities or resources.
 
 ## Authoring and lexical scope
 
-A definition contains `description` and `block`. Every block contains
+A definition contains `description`, `block`, an optional explicit `tools`
+admission set, and trusted `timeout_ms` (default 600000). Every block contains
 `input` and `output` JSON Schemas, `entry`, `nodes`, and `edges`. Parallel
 branches contain an `input` value expression and another `block` of exactly
 the same shape. There is no Block node, callable subworkflow, conversation,
-or independent job. The node vocabulary is Agent, Branch, Parallel, Return.
+or independent job. The node vocabulary is Agent, Tool, Branch, Parallel, Return.
+
+## Fixed native Tool nodes (WF-02)
+
+```yaml
+description: Check the project.
+tools:
+  - {origin: mcp, server_id: 'python:verify-greeting', name: verify_greeting}
+timeout_ms: 600000
+block:
+  input: {type: object, properties: {}, additionalProperties: false}
+  output: &findings
+    type: object
+    properties:
+      passed: {type: boolean}
+      failures: {type: array, items: {type: object}}
+    required: [passed, failures]
+    additionalProperties: false
+  entry: check
+  nodes:
+    check:
+      type: tool
+      selector: {origin: mcp, server_id: 'python:verify-greeting', name: verify_greeting}
+      arguments: {type: literal, value: {}}
+      result: {type: json, part: 1, schema: *findings}
+    done:
+      type: return
+      output: {type: reference, path: [check]}
+  edges: [{from: check, to: done}]
+```
+
+Builtin selectors are `{origin: builtin, name: <name>}`; MCP selectors also
+require `server_id`. Managed Python uses its existing synthesized
+`python:<package>` MCP identity. Selectors must occur in the definition's
+explicit `tools` admission set. The compiler checks admission, typed lexical
+bindings, object arguments, and the closed result schema. The invoking
+resource generation resolves the actual capability and native input schema;
+normalization and complete input validation remain authoritative at invocation.
+Arguments use only the existing value AST. Selector, mode, identity, approval,
+and deadlines are never model input. A model-selectable ordinary leaf is
+prepared as foreground without changing its canonical definition.
+
+Workflow authority comes from the invoking attempt's immutable available
+capability registrations, **not** its model-visible registry. Source availability,
+invalid selectors, changed identity, missing explicit admission and ineligible
+leaves fail closed. Available-but-inactive capabilities remain invisible to the
+parent model. Admission rejects background-only capabilities, composites,
+Workflow dispatch, subagents, execution control and interactive intrinsics.
+No rediscovery or current-file lookup can replace a frozen registration.
+The workspace/environment is the ordinary invoking Tool context; WF-03 leases
+and workspace handoff are not implemented.
+
+`result` projects exactly one zero-based native `ToolExecutionResult.content`
+part. `type: json` requires `ToolResultContent::Json` and a declared closed
+Workflow `schema`. `type: text` requires a Text part and produces a typed string.
+Missing/wrong-kind parts fail; other parts are not retained. Multiple parts
+are never concatenated or searched. JSON-looking text is never parsed.
+MCP structuredContent is its native JSON part after ordinary content parts;
+overflow previews are text, not complete JSON, and fail a JSON contract.
+Projection validates the actual value and all WF-01 byte/depth/accounting
+bounds before committing the node-local value. Oversized output fails without
+a partial local commit or implicit spill-file parsing.
+
+Only native `Success` may become business data: `{passed: false, failures: [...]}`
+is valid successful output. Failed, Denied, Cancelled, TimedOut and OutcomeUnknown
+remain typed execution outcomes through node, block, run and outer ToolResult.
+Parallel retains every keyed child error; OutcomeUnknown dominates the outer
+summary, otherwise the first failing definition key supplies its typed status.
+Child outcomes are immutable. Diagnostics are bounded without replacing status
+or claiming that remote effects stopped.
+
+`ToolInvocationId` separates Agent `ToolCallId` correlation from Workflow's
+concrete `WorkflowNodeInstance`. A Tool node creates no Assistant, model turn,
+canonical call slot or ToolResult message. Native preparation/start/progress/
+settlement/completion facts belong to the Event Journal, never parent history.
+The ordinary approval rendezvous gates the exact normalized, validated invocation;
+Allow/Deny has no argument-replacement channel. Rejection or denial starts no executor.
+
+The caller-independent foreground owner in `tools::invocation` drives one
+physical handle, genuine progress, cancellation, hard/idle deadlines and typed
+settlement. The Agent Loop still owns canonical calls, sibling ordering and atomic
+ToolResult batches. WorkflowRuntime owns only graph admission, bindings, projection,
+local commits and all-settle block/run settlement. Executors own physical work,
+cancellation, cleanup and evidence. No graph progresses in an executor.
+
+The outer registration freezes one positive finite hard-only total policy
+(`timeout_ms`, maximum 24 hours). Its immutable deadline starts at the outer
+native execution-start frontier, after outer permission approval. All nodes,
+capacity waits and nested permission waits consume it. Steps and progress never
+reset it. Each leaf retains its ordinary frozen hard/eligible idle policy and
+also observes ancestor cancellation. No artificial idle heartbeat is emitted.
+
+Observable cancellation before node admission prevents any leaf start. After
+approval and the leaf scheduling gate, cancellation is checked again before the
+native start fact; construction and first poll retain native cancellation guards.
+Once started, cancellation requests physical settlement rather than dropping
+the operation. A validated successful node value commits once; the root result
+still crosses its own cancellation-vs-terminal frontier before outer publication.
+Native terminal facts are last in their scope; one accepted outer call receives
+one canonical result. Leaf settlement-control guard expiry means control-plane
+failure and OutcomeUnknown, never proof of stop. A native child-scope lease
+counts each owned Agent/Tool admission-and-settlement future. The composite
+first drains these owners, then starts its own finite 30-second control guard,
+instead of racing descendant cleanup with an equal timer. A broken composite
+with no children still expires as control failure/OutcomeUnknown. The scope
+counter owns no result, graph or executor and emits no heartbeat. Parallel joins
+all owned branches, including cancellation and failure paths.
+
+Outer Sequential is call ordering, not a held descendant capacity token. Fixed
+leaf invocations use one shared fair read/write scheduling gate: sequential
+leaves are exclusive, parallel leaves share it. The outer composite never holds
+that gate, nor an Agent registry capacity slot, while awaiting descendants.
+Thus capacity one is usable without weakening ordinary outer sibling ordering.
+
+The copyable `greeting_check` example uses an ordinary managed Python tool over
+two fixed project checks. Findings are machine-derived, not log-keyword inference;
+load/contract failures remain native execution failures. It adds no process
+supervisor, verifier service, retry, Review, Loop or dynamic graph.
 
 ```yaml
 description: Return an explicitly projected greeting.
@@ -303,11 +421,12 @@ outer siblings remain sequential, and no replay/resume is introduced.
 The Event Journal adds bounded block/node start and terminal facts and typed
 instance associations. It remains best-effort observation for ordinary
 Workflow lifecycle; the native child output/terminal pair retains its atomic
-durable contract. SQLite development schema 24 replaces 23. The event
-envelope stays version 1 because its framing is unchanged. Child IPC and
-Runtime Client/TUI wire contracts are unchanged; the client projector explicitly
-ignores these new journal-only facts pending WF-06.
+durable contract. WF-02 uses SQLite development schema 25, child IPC 16 and
+Runtime Client/TUI 18 for caller-neutral approval identity and typed execution
+facts. The event envelope stays version 1 because framing is unchanged. The
+client projector explicitly ignores journal-only execution facts pending WF-06;
+approval remains on the existing human interaction surface.
 
-Tool/deadline composition (#218), workspace handoff (#219), Review/ask_user
+Tool/deadline composition is WF-02 (#218). Workspace handoff (#219), Review/ask_user
 (#220), Loop (#221), full projection (#222), and reference workflows (#223)
-remain outside WF-01.
+remain outside WF-01/WF-02.

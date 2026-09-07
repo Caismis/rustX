@@ -141,7 +141,7 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
             .iter()
             .map(rustx::runtime::workflow::WorkflowId::as_str)
             .collect::<Vec<_>>(),
-        vec!["review_pr", "parallel_review"]
+        vec!["review_pr", "parallel_review", "greeting_check"]
     );
     assert_eq!(config.workflows.main, config.workflows.definitions);
 
@@ -163,7 +163,15 @@ fn committed_echo_package_is_discovered_by_production_python_discovery() {
     let workspace = Workspace::new(&workspace_path).expect("example workspace");
     let discovered = rustx::tools::python::discover_python_packages(&workspace)
         .expect("example tool packages must be discoverable");
-    assert_eq!(discovered.len(), 1);
+    assert_eq!(discovered.len(), 2);
+    let verifier = discovered
+        .iter()
+        .find(|package| package.server_id.as_str() == "python:verify-greeting")
+        .expect("project verifier package");
+    assert!(
+        verifier.outcome.is_ok(),
+        "the verifier package must be valid"
+    );
 
     let echo = &discovered[0];
     assert_eq!(echo.server_id.as_str(), "python:echo");

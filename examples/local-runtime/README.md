@@ -20,19 +20,22 @@ examples/local-runtime/
 ├── rustx.jsonc
 ├── workspace/
 │   ├── AGENTS.md
+│   ├── greeting.py
 │   └── .agents/
 │       ├── skills/
 │       │   └── review-guidance/SKILL.md
 │       ├── tools/
-│       │   └── echo/
-│       │       ├── server.py
-│       │       └── requirements.txt
+│       │   ├── echo/
+│       │   │   ├── server.py
+│       │   │   └── requirements.txt
+│       │   └── verify-greeting/{server.py,requirements.txt}
 │       ├── subagents/
 │       │   ├── navigator/{instructions.md,AGENTS.md}
 │       │   └── reviewer/{instructions.md,AGENTS.md}
 │       └── workflows/
 │           ├── review_pr.yaml
-│           └── parallel_review.yaml
+│           ├── parallel_review.yaml
+│           └── greeting_check.yaml
 └── .rustx/        # runtime-root; generated state, normally absent initially
 ```
 
@@ -511,3 +514,20 @@ pnpm --dir tui start \
 
 The TUI passes the paths through unchanged; the Rust runtime remains the sole
 owner of model, session, tool, capability, and MCP semantics.
+
+## WF-02 project check
+
+`greeting_check` invokes the ordinary managed Python `verify_greeting` capability
+through a fixed Tool node, without any internal model request. The two fixed
+cases check `workspace/greeting.py`; its empty-name case intentionally fails.
+The checker returns native successful structured findings with `passed: false`.
+Missing source, import errors or an invalid return contract remain native Tool
+failures. The Workflow selects JSON part 1 explicitly; it never parses the text
+summary. Repairing the project file and making a new invocation is manual—there
+is no automatic retry, Loop, Review or workspace handoff in WF-02.
+
+Use the existing launch option `--exclude-tools verify_greeting` to keep this
+capability inactive for the parent model while `greeting_check` can still invoke
+its explicitly admitted `python:verify-greeting` source. Workflow admission does
+not activate a capability; ordinary Python discovery/model activation remains
+independent. The composed verifier test exercises this inactive-leaf setup.

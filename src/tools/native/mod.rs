@@ -57,6 +57,8 @@ pub(crate) mod subagent;
 mod support;
 mod todo;
 mod workflow;
+#[cfg(test)]
+pub(crate) use workflow::test_executor as test_workflow_executor;
 mod write;
 
 #[cfg(test)]

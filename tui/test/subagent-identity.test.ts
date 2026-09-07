@@ -23,8 +23,8 @@ import {
 } from "./support/fixtures.ts";
 
 describe("subagent identity", () => {
-  it("negotiates v17, which preserves background denial alongside tool outcome certainty", () => {
-    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 17);
+  it("negotiates v18, which adds caller-neutral approval identity", () => {
+    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 18);
   });
 
   it("carries agent and definition_digest from the snapshot", () => {

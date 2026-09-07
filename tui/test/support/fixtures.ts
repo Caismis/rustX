@@ -54,7 +54,7 @@ export function approvalInteraction(
     turn: 2,
     kind: {
       type: "approval",
-      call_id: "call-1",
+      invocation_id: { caller: "agent", call_id: "call-1" },
       tool_id: "tool-bash",
       tool_name: "bash",
       origin: "builtin",

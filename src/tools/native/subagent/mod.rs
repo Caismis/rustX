@@ -239,7 +239,11 @@ impl ToolExecutor for SubagentExecutor {
                     approval_mode: subagent_context.approval_mode(),
                     task: input.task,
                     context: input.context,
-                    tool_call_id: invocation.call_id.clone(),
+                    tool_call_id: invocation
+                        .id
+                        .canonical_call_id()
+                        .expect("Agent-owned invocation")
+                        .clone(),
                     terminal: SubagentTerminalMode::Normal,
                 };
                 // One attempt-derived cancellation authority owns the whole
@@ -705,7 +709,9 @@ mod tests {
         let result = executor
             .start(
                 ToolInvocation {
-                    call_id: crate::runtime::identity::ToolCallId::new("call-1"),
+                    id: crate::tools::types::ToolInvocationId::Agent {
+                        call_id: crate::runtime::identity::ToolCallId::new("call-1"),
+                    },
                     tool_id: crate::runtime::identity::ToolId::new("tool-subagent"),
                     tool_name: SUBAGENT_TOOL_NAME.to_owned(),
                     mode: crate::tools::types::ToolInvocationMode::Foreground,

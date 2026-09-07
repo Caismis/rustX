@@ -1,5 +1,29 @@
 # Canonical Tool lifecycle
 
+WF-02 separates canonical framing from native invocation. `ToolInvocation.id`
+is a caller-neutral `ToolInvocationId`: Agent correlation contains its accepted
+`ToolCallId`; Workflow correlation contains its concrete `WorkflowNodeInstance`.
+Capability `ToolOrigin` remains Builtin/MCP and is not caller identity.
+
+One shared argument preparation helper performs normalization and native schema
+validation. The shared permission gate consumes those immutable prepared facts.
+`tools::invocation::ForegroundInvocation` owns the single foreground driver:
+start protection, genuine progress, hard/idle arbitration, cancellation and
+physical settlement-plane consumption. Callers publish their own execution facts;
+only the Agent Loop owns canonical slots and atomic ordered ToolResult batches.
+Workflow Tool nodes neither synthesize model calls nor append internal history.
+
+Trusted registrations freeze `ForegroundPolicy`: ordinary Leaf uses the current
+ordinary finite execution policy; Composite supplies a validated finite hard-only
+total policy. Workflow defaults to ten minutes (at most 24 hours), ordinary Tools
+still default to two minutes. Both start at their native execution-start frontier.
+Progress and nested nodes cannot extend a total deadline. Descendants retain their
+own leaf deadlines and also observe ancestor cancellation. Composite cleanup drains
+the descendant settlement owners; their control guards remain authoritative rather
+than competing with an equal outer guard. Guard expiry is control-plane failure,
+never proof of physical stop. See [Workflow programs](workflow-programs.md) for
+projection, typed certainty, exact frontiers and fixed leaf admission.
+
 For every accepted canonical ToolCall, its owning generic Tool lifecycle must
 reach exactly one canonical ToolResult. Invocation-local failures settle as
 results. A failure before trustworthy call identity exists, or loss of runtime
@@ -39,8 +63,9 @@ admission without accidentally starting a synchronous mutation when settlement
 first polls an otherwise-unstarted future. The owning lifecycle selects the
 canonical cancellation phase from its logical start frontier.
 
-The Agent Loop owns call slots, scheduling, frozen foreground deadline policy,
-cancellation arbitration, and `commit_tool_result_batch`. That commit appends
+The Agent Loop owns canonical call slots, sibling ordering and
+`commit_tool_result_batch`; the shared native driver owns the resolved frozen
+foreground policy and invocation cancellation arbitration. The batch commit appends
 all sibling ToolMessages and their canonical facts atomically. The conversation
 structural authority rejects duplicate ToolCall and ToolResult identities.
 Physical completion order never changes canonical model-call order. Cancellation
@@ -58,7 +83,7 @@ feedback from typed status, never error substrings.
 | Status | Evidence required |
 | --- | --- |
 | Success | Known successful completion |
-| Failed | Known invocation/business/execution failure |
+| Failed | Known invocation/execution failure |
 | Denied | Policy or approval refusal |
 | Cancelled | Never started, or confirmed physical cancellation |
 | TimedOut | Deadline intent plus confirmed physical cancellation/terminality |
@@ -165,3 +190,10 @@ Workflow, or Subagent canonical lifecycle was introduced.
 Runtime Client protocol 17 and SQLite development schema 23 carry the new
 background denial vocabulary. Old versions are rejected, with no migrations or
 compatibility decoding. The Event Journal envelope shape is unchanged.
+Composite settlement retains a finite control guard: native child-scope leases
+cover admitted child futures through physical settlement. The composite's guard
+starts only after these owners drain (immediately if there are none), so child
+cleanup does not compete with an equal outer timer. A composite that then fails
+to settle still produces control-plane failure and OutcomeUnknown, not a false
+confirmed timeout. The scope counter is ownership accounting, not another outcome
+state machine or an executor registry.

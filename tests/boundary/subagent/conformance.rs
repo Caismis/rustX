@@ -2371,7 +2371,7 @@ async fn child_approval_allow_routes_to_child_and_runs_exact_invocation() {
     .await;
     match &routed.request.kind {
         rustx::runtime::InteractionKind::Approval {
-            call_id,
+            invocation_id: rustx::tools::types::ToolInvocationId::Agent { call_id },
             tool_id,
             tool_name,
             arguments,
@@ -2385,7 +2385,7 @@ async fn child_approval_allow_routes_to_child_and_runs_exact_invocation() {
             assert_eq!(tool_name, "approved_tool");
             assert_eq!(arguments, &invocation_arguments);
         }
-        other @ rustx::runtime::InteractionKind::Questionnaire { .. } => {
+        other => {
             panic!("unexpected routed interaction: {other:?}")
         }
     }
@@ -2440,7 +2440,9 @@ async fn child_approval_allow_routes_to_child_and_runs_exact_invocation() {
     assert_eq!(
         calls[0],
         rustx::tools::types::ToolInvocation {
-            call_id: ToolCallId::new("call-approval-allow"),
+            id: rustx::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new("call-approval-allow")
+            },
             tool_id: rustx::runtime::identity::ToolId::new("tool-approved"),
             tool_name: "approved_tool".to_owned(),
             mode: rustx::tools::types::ToolInvocationMode::Foreground,

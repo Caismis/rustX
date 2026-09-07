@@ -32,6 +32,90 @@ use rustx::runtime_client::{
 };
 
 const MODEL: &str = "workflow-model";
+const TOOL_WORKFLOW: &str = r"description: Inspect registered workflow files.
+tools: [{origin: builtin, name: glob}]
+timeout_ms: 10000
+block:
+  input:
+    type: object
+    properties: {task: {type: string}}
+    required: [task]
+    additionalProperties: false
+  output:
+    type: object
+    properties: {files: {type: string}}
+    required: [files]
+    additionalProperties: false
+  entry: inspect
+  nodes:
+    inspect:
+      type: tool
+      selector: {origin: builtin, name: glob}
+      arguments:
+        type: literal
+        value: {path: .agents/workflows, pattern: '*.yaml'}
+      result: {type: text, part: 0}
+    done:
+      type: return
+      output:
+        type: object
+        fields: {files: {type: reference, path: [inspect]}}
+  edges: [{from: inspect, to: done}]
+";
+
+#[tokio::test]
+async fn fixed_tool_only_has_one_outer_result_and_zero_additional_provider_requests() {
+    let Some(emulator) = ProviderEmulator::start("workflow_tool").await else {
+        return;
+    };
+    let driver = Driver::start_with_workflow(&emulator, TOOL_WORKFLOW).await;
+    assert!(
+        !driver
+            .runtime
+            .runtime()
+            .runtime_resources()
+            .capability()
+            .tool_registry()
+            .names()
+            .contains(&"glob")
+    );
+    driver.submit();
+    let (events, outcome) = driver.settle().await;
+    assert!(
+        matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, RuntimeClientEvent::ToolExecutionSettled { .. }))
+            .count(),
+        1
+    );
+    let requests = emulator.requests().await;
+    assert_eq!(
+        requests.len(),
+        2,
+        "parent call and continuation; no internal model turn"
+    );
+    let (snapshot, _) = driver.runtime.host().snapshot().unwrap();
+    let messages = serde_json::to_string(&snapshot.messages).unwrap();
+    assert!(messages.contains("review_pr.yaml"));
+    assert_eq!(
+        snapshot
+            .messages
+            .iter()
+            .filter(|message| matches!(message, rustx::message::types::MessageBlock::Tool(_)))
+            .count(),
+        1
+    );
+    assert!(
+        !messages.contains("tool-glob"),
+        "internal native execution is not canonical history"
+    );
+    emulator.finish().await;
+}
+
 const KEY: &str = "RUSTX_ISSUE83_KEY";
 
 fn models_json_for_base_url(base_url: &str) -> String {
@@ -178,6 +262,10 @@ struct Driver {
 
 impl Driver {
     async fn start(emulator: &ProviderEmulator) -> Self {
+        Self::start_with_workflow(emulator, WORKFLOW).await
+    }
+
+    async fn start_with_workflow(emulator: &ProviderEmulator, workflow: &str) -> Self {
         let root = tempfile::tempdir().expect("temp root");
         let workspace = root.path().join("workspace");
         std::fs::create_dir_all(workspace.join(".agents/subagents/reviewer"))
@@ -191,7 +279,7 @@ impl Driver {
             "Review requests carefully.\n",
         )
         .expect("reviewer instructions");
-        std::fs::write(workspace.join(".agents/workflows/review_pr.yaml"), WORKFLOW)
+        std::fs::write(workspace.join(".agents/workflows/review_pr.yaml"), workflow)
             .expect("workflow YAML");
         // This deliberately is not registered. It is also malformed, proving
         // that the loader uses configured ids rather than scanning the YAML
@@ -296,6 +384,10 @@ impl Driver {
                     if let RuntimeClientEvent::AttemptSettled { outcome, .. } = &event {
                         let outcome = outcome.clone();
                         events.push(event);
+                        // The client terminal observation precedes transfer
+                        // back to the runtime's idle slot. Await the native
+                        // handoff notification before attempting reload.
+                        self.runtime.runtime().settlement_signal().notified().await;
                         return (events, outcome);
                     }
                     events.push(event);

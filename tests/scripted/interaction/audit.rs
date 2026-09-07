@@ -529,7 +529,7 @@ async fn requested_fact_commits_before_the_prompt_reaches_a_client() {
     assert!(matches!(
         subject,
         InteractionSubject::Approval {
-            ref call_id,
+            invocation_id: rustx::tools::types::ToolInvocationId::Agent { ref call_id },
             ref tool_id,
             ref tool_name,
             ref reason,

@@ -59,9 +59,9 @@ use crate::events::interaction::{
 };
 use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use crate::runtime::cancellation::ExecutionCancellation;
-use crate::runtime::identity::{
-    AttemptId, ConversationId, EventId, InteractionId, ToolCallId, ToolId, TurnId,
-};
+#[cfg(test)]
+use crate::runtime::identity::ToolCallId;
+use crate::runtime::identity::{AttemptId, ConversationId, EventId, InteractionId, ToolId, TurnId};
 use crate::runtime::subagent::SubagentName;
 use crate::runtime::types::{CancellationReason, ConversationLifecycle, LifecycleAdmission};
 use crate::tools::types::{ToolInvocationMode, ToolOrigin};
@@ -78,8 +78,8 @@ pub use crate::events::interaction::{
 pub enum InteractionKind {
     /// Ask a client whether the already-resolved tool invocation may start.
     Approval {
-        /// The canonical model-issued call identity.
-        call_id: ToolCallId,
+        /// Caller-neutral invocation correlation.
+        invocation_id: crate::tools::types::ToolInvocationId,
         /// The canonical registry-resolved tool identity.
         tool_id: ToolId,
         /// The safe model-facing tool name.
@@ -371,8 +371,8 @@ impl core::fmt::Display for InteractionFailure {
 pub(crate) struct ApprovalFacts {
     /// The model turn.
     pub(crate) turn: u32,
-    /// The model-issued call identity.
-    pub(crate) call_id: ToolCallId,
+    /// Caller-neutral invocation correlation.
+    pub(crate) invocation_id: crate::tools::types::ToolInvocationId,
     /// The registry-resolved tool identity.
     pub(crate) tool_id: ToolId,
     /// The registry-resolved model-facing name.
@@ -384,13 +384,10 @@ pub(crate) struct ApprovalFacts {
     /// The schema-validated business arguments. These are what a client
     /// renders: they are the exact invocation that will run.
     pub(crate) arguments: serde_json::Value,
-    /// The exact model-issued arguments of the canonical `ToolCall`, before
-    /// reserved-metadata stripping and normalization.
-    ///
-    /// The durable audit subject pins *this* value, because this is the value
-    /// the Message Ledger already owns by value and therefore the only one the
-    /// durable authority can verify the subject against.
-    pub(crate) canonical_arguments: serde_json::Value,
+    /// Auditable caller-owned arguments: the Agent's canonical proposal or
+    /// the Workflow node's prepared native invocation. The audit verifies
+    /// the digest against that caller's already-committed preparation facts.
+    pub(crate) audit_arguments: serde_json::Value,
     /// The bounded policy explanation.
     pub(crate) reason: String,
 }
@@ -409,10 +406,10 @@ impl ApprovalFacts {
         id: InteractionId,
     ) -> (InteractionRequest, InteractionSubject) {
         let subject = InteractionSubject::Approval {
-            call_id: self.call_id.clone(),
+            invocation_id: self.invocation_id.clone(),
             tool_id: self.tool_id.clone(),
             tool_name: self.tool_name.clone(),
-            arguments_digest: interaction_arguments_digest(&self.canonical_arguments),
+            arguments_digest: interaction_arguments_digest(&self.audit_arguments),
             reason: self.reason.clone(),
         };
         let request = InteractionRequest {
@@ -421,7 +418,7 @@ impl ApprovalFacts {
             attempt_id,
             turn: self.turn,
             kind: InteractionKind::Approval {
-                call_id: self.call_id,
+                invocation_id: self.invocation_id,
                 tool_id: self.tool_id,
                 tool_name: self.tool_name,
                 origin: self.origin,
@@ -2186,13 +2183,15 @@ mod tests {
     fn facts(call: &str) -> ApprovalFacts {
         ApprovalFacts {
             turn: 3,
-            call_id: ToolCallId::new(call),
+            invocation_id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: ToolCallId::new(call),
+            },
             tool_id: ToolId::new("tool.read"),
             tool_name: "read".to_owned(),
             origin: ToolOrigin::Builtin,
             mode: ToolInvocationMode::Foreground,
             arguments: serde_json::json!({"path":"a"}),
-            canonical_arguments: serde_json::json!({"path":"a"}),
+            audit_arguments: serde_json::json!({"path":"a"}),
             reason: "native test policy".to_owned(),
         }
     }
@@ -3610,7 +3609,7 @@ mod tests {
         assert!(
             matches!(
                 seen.as_slice(),
-                [RuntimeEvent::InteractionRequested { interaction_id, subject: InteractionSubject::Approval { call_id, tool_name, .. } }]
+                [RuntimeEvent::InteractionRequested { interaction_id, subject: InteractionSubject::Approval { invocation_id: crate::tools::types::ToolInvocationId::Agent { call_id }, tool_name, .. } }]
                     if *interaction_id == ticket.id
                         && *call_id == ToolCallId::new("c1")
                         && tool_name == "read"

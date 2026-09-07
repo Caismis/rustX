@@ -45,7 +45,9 @@ fn fixture() -> (
 
 fn invocation(command: &str) -> ToolInvocation {
     ToolInvocation {
-        call_id: ToolCallId::new("call-1"),
+        id: crate::tools::types::ToolInvocationId::Agent {
+            call_id: ToolCallId::new("call-1"),
+        },
         tool_id: ToolId::new("tool-bash"),
         tool_name: NAME.to_owned(),
         mode: ToolInvocationMode::Foreground,
@@ -57,7 +59,9 @@ fn invocation(command: &str) -> ToolInvocation {
 /// boundary converts it to the internal `Duration`.
 fn invocation_with_timeout(command: &str, timeout_seconds: u64) -> ToolInvocation {
     ToolInvocation {
-        call_id: ToolCallId::new("call-1"),
+        id: crate::tools::types::ToolInvocationId::Agent {
+            call_id: ToolCallId::new("call-1"),
+        },
         tool_id: ToolId::new("tool-bash"),
         tool_name: NAME.to_owned(),
         mode: ToolInvocationMode::Foreground,

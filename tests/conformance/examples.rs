@@ -45,7 +45,22 @@ fn example_models_for_emulator(emulator: &ProviderEmulator) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn checked_in_review_workflow_runs_through_the_existing_provider_emulator() {
-    let Some(emulator) = ProviderEmulator::start("workflow_output").await else {
+    run_example(
+        "workflow_output",
+        Some("workflow-child-admitted"),
+        "native workflow child committed",
+        3,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn checked_in_verifier_returns_business_false_through_native_python_workflow() {
+    run_example("workflow_greeting", None, "Hello, !", 2).await;
+}
+
+async fn run_example(scenario: &str, gate: Option<&str>, expected: &str, request_count: usize) {
+    let Some(emulator) = ProviderEmulator::start(scenario).await else {
         return;
     };
     let root = tempfile::tempdir().expect("temporary runtime root");
@@ -72,7 +87,7 @@ async fn checked_in_review_workflow_runs_through_the_existing_provider_emulator(
             startup_session: StartupSession::Empty,
             session_name: None,
             tools: None,
-            exclude_tools: Vec::new(),
+            exclude_tools: vec!["verify_greeting".into()], // Workflow-only authority, never model exposure
             workspace,
             runtime_root: root.path().join("runtime-root"),
         },
@@ -105,8 +120,10 @@ async fn checked_in_review_workflow_runs_through_the_existing_provider_emulator(
         })])
         .expect("inbound accepted");
 
-    emulator.await_gate("workflow-child-admitted").await;
-    emulator.release_gate("workflow-child-admitted").await;
+    if let Some(gate) = gate {
+        emulator.await_gate(gate).await;
+        emulator.release_gate(gate).await;
+    }
 
     let stream = events;
     let outcome = loop {
@@ -125,11 +142,35 @@ async fn checked_in_review_workflow_runs_through_the_existing_provider_emulator(
     let requests = emulator.requests().await;
     assert!(
         matches!(outcome, RuntimeClientOutcome::Completed { .. }),
-        "checked-in Workflow outcome: {outcome:?}"
+        "checked-in Workflow outcome: {outcome:?}; requests: {requests:?}"
     );
-    let snapshot = runtime.host().snapshot().expect("snapshot");
+    let (snapshot, _) = runtime.host().snapshot().expect("snapshot");
+    if scenario == "workflow_greeting" {
+        let results = snapshot
+            .messages
+            .iter()
+            .filter_map(|message| match message {
+                rustx::message::types::MessageBlock::Tool(tool) => Some(&tool.result),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            results.len(),
+            1,
+            "only the outer Workflow result is canonical"
+        );
+        assert_eq!(
+            results[0].status,
+            rustx::tools::types::ToolExecutionStatus::Success
+        );
+        assert!(results[0].content.iter().any(|part| matches!(part,rustx::tools::types::ToolResultContent::Json {value} if value["passed"] == false && value["failures"].as_array().is_some_and(|failures| failures.len()==1))));
+    }
     let snapshot_json = serde_json::to_string(&snapshot).expect("snapshot JSON");
-    assert!(snapshot_json.contains("native workflow child committed"));
-    assert_eq!(requests.len(), 3, "parent, child, then parent continuation");
+    assert!(snapshot_json.contains(expected), "{snapshot_json}");
+    assert_eq!(
+        requests.len(),
+        request_count,
+        "only expected parent/Agent requests"
+    );
     emulator.finish().await;
 }

@@ -1490,7 +1490,9 @@ mod tests {
             attempt_id: AttemptId::new("attempt-1"),
             turn: 1,
             kind: InteractionKind::Approval {
-                call_id: ToolCallId::new("call-1"),
+                invocation_id: crate::tools::types::ToolInvocationId::Agent {
+                    call_id: ToolCallId::new("call-1"),
+                },
                 tool_id: ToolId::new("tool-1"),
                 tool_name: "probe".to_owned(),
                 origin: ToolOrigin::Builtin,
