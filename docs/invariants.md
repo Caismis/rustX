@@ -3625,15 +3625,17 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   monotonic (`exec_1`, `exec_2`, ...) with checked exhaustion; they are
   allocated under the same synchronization boundary that owns background
   records.
-- The public lifecycle is `Starting -> Running -> Cancelling -> terminal`,
-  with the five terminal states (`Succeeded`, `Failed`, `Cancelled`,
-  `TimedOut`, `OutcomeUnknown`) absorbing; exactly one terminal transition
+- Starting, Running, and Cancelling can settle directly or retain a candidate
+  in PublishingTerminal until durable publication succeeds. The six terminal
+  states (`Succeeded`, `Failed`, `Denied`, `Cancelled`, `TimedOut`,
+  `OutcomeUnknown`) are absorbing; exactly one terminal transition
   settles an execution. `Cancelling` is non-terminal: it means cancellation
   intent committed and the cancellation was requested — terminal certainty
   is still pending, and it is not a confirmed cancellation. When the
   executor returns, its proven settlement decides the terminal state: an
   executor-proven cancellation settles as `Cancelled` with the
-  registry-retained reason and the `DuringExecution` phase, while every
+  registry-retained reason and the phase derived from its logical start
+  frontier (`BeforeStart` or `DuringExecution`), while every
   other executor-proven outcome (`Success`, `Failed`, `Denied`, `TimedOut`,
   `OutcomeUnknown`) settles under its own truthful lifecycle state.
 - The dispatch ownership commit is the background linearization point: the

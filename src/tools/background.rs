@@ -236,16 +236,17 @@ const BACKGROUND_CANCEL_REASON: CancellationReason = CancellationReason::UserReq
 /// ```text
 /// Starting  → Running
 /// Starting  → Cancelling
-/// Starting  → Succeeded / Failed / TimedOut / OutcomeUnknown
+/// Starting  → Succeeded / Failed / Denied / Cancelled / TimedOut / OutcomeUnknown
 /// Running   → Cancelling
-/// Running   → Succeeded / Failed / TimedOut / OutcomeUnknown
-/// Running   → PublishingTerminal
-/// Cancelling → Succeeded / Cancelled / Failed / TimedOut / OutcomeUnknown
-/// PublishingTerminal → Succeeded / Failed / Cancelled / TimedOut / OutcomeUnknown
+/// Running   → Succeeded / Failed / Denied / Cancelled / TimedOut / OutcomeUnknown
+/// Starting / Running / Cancelling → PublishingTerminal
+/// Cancelling → Succeeded / Failed / Denied / Cancelled / TimedOut / OutcomeUnknown
+/// PublishingTerminal → Succeeded / Failed / Denied / Cancelled / TimedOut / OutcomeUnknown
 /// ```
 ///
 /// The terminal vocabulary claims only facts the executor proved: `Failed`
-/// is a *known* failure, `TimedOut` is a proven deadline settlement, and
+/// is a *known* failure, `Denied` is policy/approval refusal (not `Failed`),
+/// `TimedOut` is a proven deadline settlement, and
 /// `OutcomeUnknown` means the executor could not prove the external outcome
 /// at all. A terminal lifecycle never claims a stronger external outcome
 /// than the canonical [`ToolExecutionStatus`] of the stored result proves —
@@ -2108,12 +2109,14 @@ fn terminal_inbound_message(
 ///
 /// The lifecycle never claims a stronger external outcome than the canonical
 /// [`ToolExecutionStatus`] proves: a proven success settles as `Succeeded`,
-/// a known failure as `Failed`, a proven deadline settlement as `TimedOut`,
+/// a known failure as `Failed`, policy/approval refusal as `Denied`,
+/// a proven deadline settlement as `TimedOut`,
 /// and an unproven external outcome as `OutcomeUnknown`. `Cancelling` is
 /// non-terminal: cancellation intent committed there, but the executor owns
 /// the physical terminal outcome. Only an executor-proven `Cancelled` is
 /// canonicalized to `Cancelled` with the retained registry reason and the
-/// `DuringExecution` phase; a cancellation request alone can never
+/// phase derived from the registry's logical start frontier (`BeforeStart`
+/// or `DuringExecution`); a cancellation request alone can never
 /// manufacture a cancellation settlement over an executor-proven success,
 /// failure, timeout, or honest unknown — a cancellation request is not a
 /// confirmed cancellation.
@@ -2135,8 +2138,8 @@ fn terminal_candidate(
         BackgroundLifecycle::Starting | BackgroundLifecycle::Running => match result.status {
             ToolExecutionStatus::Success => (BackgroundLifecycle::Succeeded, result.clone()),
             ToolExecutionStatus::Cancelled { reason, .. } => {
-                // `mark_running` crossed the detached runner's start
-                // frontier before the executor was called. Do not trust a
+                // `executor_started` records whether `mark_running` crossed
+                // the detached runner's logical start frontier. Do not trust a
                 // provisional executor-provided phase; the registry owns
                 // the canonical phase.
                 let mut canonical = result.clone();

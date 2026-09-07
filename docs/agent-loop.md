@@ -1582,9 +1582,11 @@ the background registry owns the equivalent classification for detached work.
 
 Physical completion and cancellation remain one race and one terminal slot
 assignment. A completion that wins remains the real result. If cancellation
-wins, the started call is `DuringExecution`; awaiting the physical future
-afterward cannot replace that result. Calls past the frontier are filled as
-`BeforeStart`, and canonical ToolMessages are still committed once, in model
+intent wins, physical settlement evidence still selects the result: known
+outcomes survive, confirmed cancellation of a started call is
+`DuringExecution`, and unprovable external outcome is `OutcomeUnknown`.
+Calls that never crossed the start frontier are filled as `BeforeStart`,
+and canonical ToolMessages are committed atomically once, in model
 call order. The model-facing rendering states the reason independently,
 explicitly says that rustX did not start a `BeforeStart` call, and warns that
 partial side effects may exist for `DuringExecution`.
@@ -1664,7 +1666,7 @@ canonical status under the Issue
 - **`Unconfirmed` settlement evidence** → `OutcomeUnknown`: the call crossed
   the external-effect frontier and terminality cannot be proven — a deadline
   can never manufacture `TimedOut` from it;
-- any executor-proven normal outcome (`Success`/`Failed`) that won the
+- any executor-proven normal outcome (`Success`/`Failed`/`Denied`) that won the
   physical race survives untouched;
 - **settlement control-plane guard expiry** → `OutcomeUnknown`:
   `TOOL_SETTLEMENT_CONTROL_GUARD` exists ONLY as protection against a broken

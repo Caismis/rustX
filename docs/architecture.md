@@ -2154,14 +2154,15 @@ plane. A child's final report continues to arrive exactly once through the
 canonical parent inbound publication.
 
 As a foreground `ToolCall`, `execution(steer)` participates honestly in
-the generic Issue #204 cancellation/settlement lifecycle: the steer branch
-splits its completion and settlement planes explicitly (instead of
-wrapping the whole operation with `settled_by_operation`) so that once the
-tool's cancellation fires, the settlement plane classifies the steer
-against its **effect frontier** — before admission (confirmed no-effect
-cancellation), after admission with the child undecided (honest
-`Unconfirmed`, with the already-routed envelope possibly still accepted),
-or after the child's committed decision (confirmed steer result).
+the generic Issue #204 cancellation/settlement lifecycle through the shared
+`ToolExecutionHandle::settled_by_operation` ownership mechanism. There is no
+private steer operation slot or second lifecycle owner. The steer domain's
+`SteerToolEnd` classifies its **effect frontier**: before admission, typed
+`Cancelled` yields confirmed no-effect settlement; after admission with the
+child undecided, typed `OutcomeUnknown` maps through the shared handle to
+`Unconfirmed`; a known child decision yields a confirmed typed steer result.
+The child registry owns guidance acceptance; the generic Tool lifecycle owns
+canonical ToolResult selection and commit.
 Cancelling the steer ToolCall is deliberately not subagent cancellation:
 it never invokes `SubagentRegistry::cancel`, and the child subagent keeps
 running under its own lifecycle.
