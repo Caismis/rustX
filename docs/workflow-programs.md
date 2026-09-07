@@ -190,8 +190,36 @@ keys after all branches settle.
 
 Native capacity is checked by `SubagentRegistry` at ownership commit.
 `commit_waiting` retains the actual staged child and watches native registry
-state changes; it never spins, sleeps or fabricates an admission. Cancellation
-wakes the same wait and conclusively rolls back the staged child. The wait is
+state changes; it never spins, sleeps or fabricates an admission. Watch is
+only notification, not ordering authority. At the first unavailable-capacity
+decision, the registry inserts the staged child's already allocated native
+Subagent ordinal into its waiter map, under the same `RegistryState` mutex
+as eligibility and ownership commit. This is the wait-registration frontier.
+The smallest **registered** ordinal is the only eligible waiter. Pairwise
+relative order remains fixed across wakeups/retries; retries do not create a
+new position. A later registration participates by its ordinal but cannot
+undo a prior ownership commit. Unregistered preparations and external
+identity-allocation timing are not a reserved pending set.
+
+Every ownership attempt rechecks eligibility under the registry mutex.
+Ordinary `commit` stays non-waiting: full capacity or an existing waiter
+returns `CapacityExceeded`; it cannot steal an eligible waiter's free slot.
+Only actual native ownership consumes active capacity. Successful admission,
+failure and cancellation remove exactly that waiter's coordination entry;
+removal notifies successors even when no child remains active. A subscription
+is established before checking state, and its observed version is updated
+before (never after) the mutex-protected decision. Capacity release between
+registration/check and `changed().await` therefore remains an unseen wakeup.
+Neither task wake order nor mutex reacquisition decides eligibility.
+
+Cancellation wakes the same wait and conclusively rolls back the staged
+child. Runtime drain cancels registered waiters too. A native task retains
+the counted lifecycle admission across commit/rollback; the count is obtained
+synchronously before task handoff. Dropping a waiting caller cancels this
+operation without dropping the staged child. If ownership already committed,
+abandonment requests native cancellation and uses the existing settlement
+owner. No waiter guard creates an ownership record or a capacity permit.
+The wait is
 bounded by the foreground execution's existing finite deadline/cancellation
 authority. Zero configured capacity rejects rather than waiting forever.
 No block owns a capacity permit. A parent block waiting for descendants

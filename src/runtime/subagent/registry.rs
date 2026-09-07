@@ -41,7 +41,7 @@
 //! never become another record, and the runtime's durability-failed state
 //! bars new submissions through the ordinary path.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use chrono::{DateTime, Utc};
@@ -421,8 +421,15 @@ impl SubagentRecord {
 }
 
 struct RegistryState {
+    /// Registered staged children, ordered by their already allocated native
+    /// identity ordinal. Notifications never confer eligibility.
+    capacity_waiters: BTreeMap<u64, CancellationSignal>,
     #[cfg(test)]
     capacity_wait_entered: Option<tokio::sync::oneshot::Sender<()>>,
+    #[cfg(test)]
+    capacity_wait_pause: Option<tokio::sync::oneshot::Receiver<()>>,
+    #[cfg(test)]
+    capacity_wait_finished: Option<tokio::sync::oneshot::Sender<()>>,
     next_ordinal: u64,
     next_response_id: u64,
     /// The transport correlation allocator of parent-authored guidance
@@ -895,6 +902,51 @@ pub struct PreparedSubagent {
     staged: StagedChild,
 }
 
+/// Removes precisely one native waiting position on every exit. This is only
+/// coordination state: no record, durable ownership or active capacity.
+struct CapacityWaitTicket<'a> {
+    registry: &'a SubagentRegistry,
+    ordinal: u64,
+}
+
+impl Drop for CapacityWaitTicket<'_> {
+    fn drop(&mut self) {
+        let mut state = self
+            .registry
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if state.capacity_waiters.remove(&self.ordinal).is_some() {
+            self.registry
+                .state_version
+                .send_modify(|version| *version += 1);
+        }
+    }
+}
+
+/// A dropped waiting caller requests cancellation, not abandonment of staged
+/// physical ownership. The native task retains the counted admission until
+/// commit/rollback completes; accepted work still uses native settlement.
+struct CapacityWaitCaller {
+    signal: CancellationSignal,
+    registry: SubagentRegistry,
+    subagent_id: SubagentId,
+    armed: bool,
+}
+
+impl Drop for CapacityWaitCaller {
+    fn drop(&mut self) {
+        if self.armed {
+            self.signal.cancel();
+            // Serializes with the real commit, covering abandonment after
+            // commit but before the caller consumes the acceptance value.
+            let _ = self
+                .registry
+                .cancel(&self.subagent_id, CancellationReason::ParentCancelled);
+        }
+    }
+}
+
 /// The outcome of a successful ownership commit.
 ///
 /// This is a **runtime acceptance value**: it carries the runtime facts a
@@ -1311,8 +1363,13 @@ impl SubagentRegistry {
         Self {
             config,
             state: Arc::new(Mutex::new(RegistryState {
+                capacity_waiters: BTreeMap::new(),
                 #[cfg(test)]
                 capacity_wait_entered: None,
+                #[cfg(test)]
+                capacity_wait_pause: None,
+                #[cfg(test)]
+                capacity_wait_finished: None,
                 next_ordinal: 1,
                 next_response_id: 1,
                 next_guidance_id: 1,
@@ -1958,8 +2015,8 @@ impl SubagentRegistry {
     /// # Errors
     ///
     /// Returns [`SubagentStartError::ConversationInactive`] when the
-    /// conversation is shutting down, [`SubagentStartError::Capacity`] when
-    /// the active bound is full at the linearization point, or
+    /// conversation is shutting down, [`SubagentStartError::CapacityExceeded`] when
+    /// the active bound is full or ordered waiters precede this admission, or
     /// [`SubagentStartError::Durability`] when the ownership commit fails.
     ///
     /// # Panics
@@ -1973,11 +2030,19 @@ impl SubagentRegistry {
         prepared: PreparedSubagent,
         attempt_cancellation: &CancellationSignal,
     ) -> Result<SubagentStartOutcome, SubagentStartError> {
-        self.commit_with_capacity_policy(prepared, attempt_cancellation, false)
-            .await
+        self.commit_with_capacity_policy(
+            prepared,
+            attempt_cancellation,
+            false,
+            self.config.mailbox.begin_running_admission(),
+        )
+        .await
     }
 
-    /// Commits an actual prepared child, waiting on native capacity changes.
+    /// Commits an actual prepared child in registered native ordinal order.
+    /// The first blocked decision inserts its position under `RegistryState`;
+    /// only the smallest registered ordinal may attempt ownership commit.
+    /// Watch notifications only trigger eligibility rechecks, never reordering.
     /// The staged child holds no active capacity. Cancellation conclusively
     /// rolls it back; the caller must await this operation to settlement.
     /// Waiting is bounded by the invoking foreground execution's cancellation
@@ -1987,8 +2052,68 @@ impl SubagentRegistry {
         prepared: PreparedSubagent,
         cancellation: &CancellationSignal,
     ) -> Result<SubagentStartOutcome, SubagentStartError> {
-        self.commit_with_capacity_policy(prepared, cancellation, true)
+        let mut caller = CapacityWaitCaller {
+            signal: cancellation.child(),
+            registry: self.clone_for_task(),
+            subagent_id: prepared.subagent_id.clone(),
+            armed: true,
+        };
+        let signal = caller.signal.clone();
+        let registry = self.clone_for_task();
+        // Count synchronously before task handoff: drain must not observe a
+        // gap while this privately staged child still requires rollback.
+        let admission = self.config.mailbox.begin_running_admission();
+        let operation_registry = registry.clone_for_task();
+        let mut operation = Box::pin(async move {
+            operation_registry
+                .commit_with_capacity_policy(prepared, &signal, true, admission)
+                .await
+        });
+        // Preserve the existing synchronous initial ownership/registration
+        // frontier. Task handoff must not delay that decision behind later
+        // native submissions. Only an operation that actually suspends needs
+        // an independent owner for abandonment-safe rollback. Subsequent
+        // eligibility is still exclusively the registry's ordinal rule.
+        if let std::task::Poll::Ready(result) = std::future::poll_fn(|cx| {
+            std::task::Poll::Ready(std::future::Future::poll(operation.as_mut(), cx))
+        })
+        .await
+        {
+            caller.armed = false;
+            return result;
+        }
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let result = operation.await;
+            if let Err(result) = sender.send(result) {
+                match result {
+                    Ok(SubagentStartOutcome::Accepted(accepted)) => {
+                        let _ = registry
+                            .cancel(&accepted.subagent_id, CancellationReason::ParentCancelled);
+                        let _ = registry.wait_until_settled(&accepted.subagent_id).await;
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "abandoned native capacity wait failed settlement");
+                    }
+                    Ok(SubagentStartOutcome::RolledBack) => {}
+                }
+            }
+            #[cfg(test)]
+            if let Some(finished) = registry
+                .state
+                .lock()
+                .expect("registry state")
+                .capacity_wait_finished
+                .take()
+            {
+                let _ = finished.send(());
+            }
+        });
+        let result = receiver
             .await
+            .expect("native capacity commit task must settle");
+        caller.armed = false;
+        result
     }
 
     #[cfg(test)]
@@ -2007,6 +2132,10 @@ impl SubagentRegistry {
         prepared: PreparedSubagent,
         attempt_cancellation: &CancellationSignal,
         wait_for_capacity: bool,
+        admission: Result<
+            Option<crate::runtime::types::LifecycleAdmission>,
+            crate::runtime::inbound::MailboxError,
+        >,
     ) -> Result<SubagentStartOutcome, SubagentStartError> {
         // Retain the counted lifecycle admission through the entire
         // prepared-to-driver handoff, including conclusive rollback. This
@@ -2014,7 +2143,7 @@ impl SubagentRegistry {
         // durable ownership decision and publication of the driver control
         // path; the registry's own cancellation state still handles a drain
         // that wins after the record is visible.
-        let Ok(_admission) = self.config.mailbox.begin_running_admission() else {
+        let Ok(_admission) = admission else {
             return match prepared.staged.rollback().await {
                 Ok(()) => Err(SubagentStartError::ConversationInactive),
                 Err(error) => Err(SubagentStartError::Rollback {
@@ -2036,6 +2165,13 @@ impl SubagentRegistry {
             profile,
             staged,
         } = prepared;
+        let ordinal = subagent_id
+            .conversation_ordinal(&self.config.conversation_id)
+            .expect("prepared child has a native conversation ordinal");
+        let ticket = CapacityWaitTicket {
+            registry: self,
+            ordinal,
+        };
         let mut capacity_changes = self.state_version.subscribe();
         let decision = loop {
             capacity_changes.borrow_and_update();
@@ -2093,7 +2229,25 @@ impl SubagentRegistry {
                         if attempt_cancellation.is_cancelled() {
                             return Decision::RolledBack;
                         }
-                        if active >= config.max_active {
+                        // Registration frontier: insert once, under the same
+                        // mutex as eligibility and the existing ownership
+                        // commit. Relative order is native identity order,
+                        // never wake order. Ordinary commit cannot bypass an
+                        // existing waiter, but remains strictly non-waiting.
+                        if wait_for_capacity
+                            && config.max_active > 0
+                            && (active >= config.max_active || !state.capacity_waiters.is_empty())
+                        {
+                            state
+                                .capacity_waiters
+                                .entry(ordinal)
+                                .or_insert_with(|| attempt_cancellation.clone());
+                        }
+                        let eligible = state
+                            .capacity_waiters
+                            .first_key_value()
+                            .is_none_or(|(first, _)| wait_for_capacity && *first == ordinal);
+                        if active >= config.max_active || !eligible {
                             return Decision::Failed(SubagentStartError::CapacityExceeded {
                                 max: config.max_active,
                             });
@@ -2184,14 +2338,17 @@ impl SubagentRegistry {
                 )
             {
                 #[cfg(test)]
-                if let Some(sender) = self
-                    .state
-                    .lock()
-                    .expect("registry state")
-                    .capacity_wait_entered
-                    .take()
                 {
-                    let _ = sender.send(());
+                    let pause = {
+                        let mut state = self.state.lock().expect("registry state");
+                        if let Some(sender) = state.capacity_wait_entered.take() {
+                            let _ = sender.send(());
+                        }
+                        state.capacity_wait_pause.take()
+                    };
+                    if let Some(pause) = pause {
+                        let _ = pause.await;
+                    }
                 }
                 tokio::select! {
                     biased;
@@ -2204,6 +2361,10 @@ impl SubagentRegistry {
                 break decision;
             }
         };
+        // Success has published its record before freeing the coordination
+        // position. Failure/cancellation frees it before physical rollback.
+        // Removal notifies the successor even if no child is active.
+        drop(ticket);
         match decision {
             Decision::RolledBack => match staged.rollback().await {
                 Ok(()) => Ok(SubagentStartOutcome::RolledBack),
@@ -3241,6 +3402,9 @@ impl SubagentRegistry {
     pub fn cancel_all(&self, reason: CancellationReason) {
         let ids: Vec<SubagentId> = {
             let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            for cancellation in state.capacity_waiters.values() {
+                cancellation.cancel();
+            }
             state
                 .records
                 .iter()
@@ -4925,6 +5089,7 @@ impl SteerAcknowledgementHook {
 
 #[cfg(test)]
 mod tests {
+    mod capacity_wait;
     use std::sync::Arc;
 
     use super::super::SubagentTerminalState;
