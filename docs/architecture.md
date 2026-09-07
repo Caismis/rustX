@@ -3536,22 +3536,69 @@ that request is the work it is doing, so awaiting the cancellation send would
 leave the branch pending on the very request it is trying to cancel.
 
 rustX therefore supplies the HTTP client the transport posts through
-(`src/tools/mcp/streamable_http.rs`) and owns those objects per JSON-RPC
-request id. Settlement terminates this call's HTTP request and awaits an
-explicit release proof: the wrapper drops the POST future or the response
-body **first** and releases the latch **afterwards**, so the latch is real
-ownership evidence rather than a restatement of "we stopped waiting". A
-request cancelled before its POST started is recorded so the POST is
-pre-terminated instead of reaching the network, and that record is never
-evicted — it is the only thing stopping a not-yet-started POST from producing
-a remote side effect after its call has settled, so it is dropped only when
-the request registers and takes the pre-cancelled token, or when the
-generation closes. That proof depends on no
-remote response, no protocol acknowledgement, and no timer — timing a future
-out, or dropping one and calling the drop a proof, is never settlement
-evidence here. Over stdio an outbound write owns no resource that outlives
-it, so there is no local half and the cancellation send is awaited exactly as
-before.
+(`src/tools/mcp/streamable_http.rs`) and models each tool invocation's local
+half as an **explicit request lifecycle**, keyed by the exact JSON-RPC request
+id rmcp put on the wire — never a parallel correlation id, and never inferred
+from a record being absent:
+
+```text
+                 admission (the instant after the effect frontier)
+                        |         or the outbound dispatch seam,
+                        |         whichever interleaving arrives first
+                        v
+              +---------------------+
+              |  NotYetRegistered   |  no local activity has begun
+              +---------------------+
+                        |  Transport::send takes dispatch ownership;
+                        |  the POST then takes the baton
+                        v
+              +---------------------+
+              |        Live         |  exactly one local owner
+              +---------------------+
+                        |  that owner dropped (POST future, then SSE body)
+                        v
+              +---------------------+
+              |      Released       |  no local activity remains
+              +---------------------+
+                        |  the invocation's admission guard drops
+                        v
+                   (forgotten)
+```
+
+Ownership is a **baton, never two parallel owners**: the outbound dispatch
+future owns the window in which the POST has not started but is still going
+to, and hands that ownership to the POST the moment it registers — holding
+both would make local settlement wait for rmcp to resolve an outbound send,
+which is the dependency this contract exists to remove.
+
+Cancellation reads that state instead of guessing it, and does something
+different in each:
+
+- **`NotYetRegistered`** — the request's token is cancelled and the outbound
+  dispatch seam refuses to hand it to the transport, so it never reaches the
+  network and no local activity of it is ever created. Nothing is pending, so
+  nothing is awaited, and **no record is created**;
+- **`Live`** — that exact HTTP request is terminated and settlement awaits an
+  explicit release proof: the wrapper drops the POST future or the response
+  body **first** and releases the latch **afterwards**, so the latch is real
+  ownership evidence rather than a restatement of "we stopped waiting";
+- **`Released`** — the local half already finished. This is the race the
+  earlier shape could not see: a cancellation landing after the POST released
+  but before rmcp delivered the correlated response used to look identical to
+  "the POST has not started", so it created a pre-termination record for a
+  request that could never register again, and that record then survived until
+  the connection generation closed. Now nothing is terminated and nothing is
+  recorded; the executor only arbitrates the response that is already on its
+  way.
+
+That proof depends on no remote response, no protocol acknowledgement, and no
+timer — timing a future out, or dropping one and calling the drop a proof, is
+never settlement evidence here. Every entry has a **request-local forget
+point** (its invocation's admission guard), so normal completion cleans up its
+own state with the connection still open; the memory bound is the in-flight
+tool-call count, never the count of requests the generation has ever raced.
+Over stdio an outbound write owns no resource that outlives it, so there is no
+local half at all and the cancellation send is awaited exactly as before.
 
 The response channel is retained across the whole path, so a **correlated
 remote response always wins**: rmcp resolves the request's local responder in
@@ -3591,20 +3638,52 @@ watchdog is consulted.
 Two windows inside the adapter could lose it. rmcp mints a request's progress
 token *inside* `send_cancellable_request`, so the dispatching call can only
 subscribe after the request is enqueued and a server answering immediately
-races that subscription; and because a correlated response outranks progress in the
-executor's biased arbitration, a ready response would otherwise end the call
-with notifications still queued. So the adapter owns a small bounded router:
-a not-yet-subscribed token's notifications are held as one coalesced entry in
-a FIFO pre-subscription window — the entry a just-dispatched call is about to
-claim is the last one an overflow can reach — and handed over on
-subscription, and the executor drains its subscription before classifying a
-response or settling a cancellation. The live subscription set is bounded by
-the in-flight call set rather than by a router constant: one subscription per
-admitted call, removed by its owner's drop, so concurrency above any fixed
-cache size cannot starve a call of its own progress. A full delivery queue
-cannot erase an occurrence either, because it is full precisely when that
-many undelivered proofs are already in the subscriber's hands. The router
-only reorders and coalesces notifications the peer genuinely sent.
+races that subscription; and because a correlated response outranks progress
+in the executor's biased arbitration, a ready response would otherwise end the
+call with notifications still queued.
+
+The subscription window is closed by **ownership, not by capacity**. Bounding
+a speculative pre-subscription cache cannot be correct: nothing in the
+architecture bounds how many admitted requests are inside that window at once,
+so any capacity there makes a legitimate live request's only liveness
+occurrence an eviction candidate — including at the hands of another
+legitimate request. rustX therefore hands rmcp its own transport wrapper
+(`src/tools/mcp/dispatch.rs`) and registers a tool invocation's
+`(RequestId, ProgressToken)` pair **synchronously inside `Transport::send`**,
+before the message reaches the wire. That registration *happens-before* the
+server can receive the request, which happens-before the server can emit
+progress for its token, so there is no unowned request-token window at all:
+
+```text
+send_cancellable_request -> Ok
+  Transport::send prologue  ->  the token becomes known and live
+    bytes on the wire
+      the server receives the request
+        the server emits progress for that token
+          the router delivers it            <-- always after registration
+executor -> subscribe(...)                  <-- may be anywhere after Ok
+```
+
+Progress therefore has exactly **two classes**, and only one is evictable:
+
+| | known live request token | unknown / unsolicited token |
+|---|---|---|
+| origin | registered by the dispatch seam | any other token a peer emits |
+| storage | O(1) per token | none at all |
+| eviction | **never** by capacity | counted, then dropped |
+| removal | the request's own terminal forget point | n/a |
+
+They do not share a container, so peer-controlled traffic has no capacity to
+consume and nothing of a live request's to displace. A known token's state is
+one coalesced entry — the latest payload plus an occurrence count — handed
+over on subscription; the executor drains its subscription before classifying
+a response or settling a cancellation; and the live subscription set is
+bounded by the in-flight call set rather than by any router constant, removed
+by its owner's drop. A full delivery queue cannot erase an occurrence either,
+because it is full precisely when that many undelivered proofs are already in
+the subscriber's hands. **Payloads may be coalesced; the occurrence may not be
+lost.** The router only reorders and coalesces notifications the peer
+genuinely sent, and fabricates nothing.
 
 **`McpConnection` (`src/tools/mcp/connection.rs`) is the stable connection
 owner** of one configured server, and it is what a published capability

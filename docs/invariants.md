@@ -3770,22 +3770,55 @@ remote control plane            local ownership plane
   `ToolCall`, the MCP settlement plane reaches a terminal decision without
   depending on that send completing — the generic Issue #204
   settlement-control guard is never the bound for an MCP transport fact.
-- **The bound is rustX's own local request ownership.** Over Streamable HTTP
-  a dispatched `tools/call` is a live HTTP request: its POST future while the
-  response headers are outstanding, and then its SSE response body. rustX
-  supplies the HTTP client the transport posts through, so it owns those
-  objects; settlement terminates the request and awaits an explicit release
-  proof that the POST future or response body was **dropped before the proof
-  fired**. That proof depends on no remote response, no protocol
-  acknowledgement, and no timer. A request cancelled before its POST started
-  is recorded so the POST is pre-terminated instead of reaching the network,
-  and **that record is never evicted**: it is the only thing stopping a
-  not-yet-started POST from producing a remote side effect after its call has
-  already settled, so it is dropped only when the request registers and takes
-  the pre-cancelled token, or when the connection generation closes and no
-  POST of it can start at all. Over stdio there is no such local half — an
-  outbound write owns no resource that outlives it — so the termination is
-  already settled.
+- **The bound is rustX's own local request ownership, and it is an explicit
+  lifecycle.** Over Streamable HTTP a dispatched `tools/call` is a live HTTP
+  request: its POST future while the response headers are outstanding, and
+  then its SSE response body. rustX supplies the HTTP client the transport
+  posts through, so it owns those objects, and it keeps **one lifecycle entry
+  per admitted tool invocation**, keyed by the exact JSON-RPC `RequestId` rmcp
+  put on the wire. One request id is one entry for one connection generation;
+  a duplicate dispatch or a duplicate registration fails closed rather than
+  overwriting a live ownership state.
+
+  ```text
+  admission (or the outbound dispatch seam, whichever arrives first)
+      -> NotYetRegistered   no local activity has begun
+      -> Live               exactly one local owner: the outbound dispatch
+                            future, then (baton passed) the POST future and
+                            the SSE response body
+      -> Released           every local owner has been dropped
+      -> forgotten          the invocation's admission guard dropped
+  ```
+
+  Ownership is a **baton, never two parallel owners**: registration hands it
+  from the outbound dispatch future to the POST, because settlement must never
+  come to depend on rmcp resolving an outbound send.
+- **Absence never means "not yet registered".** Cancellation reads the entry's
+  explicit state, and each state has different settlement evidence:
+  - `NotYetRegistered` — the token is cancelled and the outbound dispatch seam
+    **refuses** to hand the request to the transport, so it never reaches the
+    network and no local activity of it is ever created. Nothing is pending,
+    nothing is awaited, and **no record is created**;
+  - `Live` — that exact HTTP request is terminated and settlement awaits an
+    explicit release proof that the POST future or the response body was
+    **dropped before the proof fired**;
+  - `Released` — the local half already finished. This is the race an
+    absence-based reading could not see: a cancellation landing after the POST
+    released but before rmcp delivered the correlated response looked
+    identical to "the POST has not started", so it created a pre-termination
+    record for a request that could never register again, and that record then
+    survived until the connection generation closed. Nothing is terminated,
+    and nothing is recorded.
+
+  That proof depends on no remote response, no protocol acknowledgement, and
+  no timer. Over stdio there is no such local half — an outbound write owns no
+  resource that outlives it — so the termination is already settled.
+- **Every request lifecycle has a request-local forget point.** The
+  invocation's admission guard drops on every path out of the executor, so a
+  normally completed request cleans up its own state with the connection still
+  open. The memory bound of this layer is `O(in-flight tool calls)` and never
+  `O(requests this generation has ever raced)`; connection close only clears
+  what is still genuinely in flight.
 - **`notifications/cancelled` alone never owns HTTP cancellation.** Local
   HTTP request termination is a separate owned control primitive inside the
   MCP adapter, not a hoped-for side effect of the protocol notification.
@@ -3824,13 +3857,13 @@ remote control plane            local ownership plane
   declares `ToolProgressCapability::Meaningful` because it forwards genuine
   remote notifications; it fabricates no heartbeats, and a server that sends
   none stays bounded by the hard deadline alone.
-- **The bounded liveness guarantee.** Progress is idle-liveness evidence, so
-  the exact guarantee matters:
+- **The liveness guarantee.** Progress is idle-liveness evidence, so the exact
+  guarantee matters:
 
-  > For every admitted in-flight MCP request, once the adapter has observed
-  > genuine remote progress for that request, no bound in the progress router
-  > erases the fact that progress occurred before the dispatching call can
-  > consume it.
+  > Every admitted MCP request that rustX can identify as belonging to a live
+  > local `ToolCall` retains at least one liveness occurrence once genuine
+  > remote progress for that request has been observed, until that `ToolCall`
+  > consumes or terminates that liveness state.
 
   Payload detail is explicitly **not** guaranteed. Progress delivery is not
   lossless and is not claimed to be: payloads may be coalesced, and a
@@ -3852,24 +3885,44 @@ remote control plane            local ownership plane
   client cannot know a request's progress token before the request exists —
   rmcp mints it inside `send_cancellable_request` — so a server that answers
   with a progress notification immediately races the dispatching call's
-  subscription. The adapter's own progress router holds such a notification
-  in a bounded pre-subscription window, one coalesced entry per token, and
-  hands it to the subscription the moment it is created; the window evicts
-  FIFO, so the entry a just-dispatched call is about to claim is the last one
-  an overflow can reach. And because a correlated response outranks progress
-  in the executor's biased arbitration, the executor drains the subscription
-  before classifying the response or settling a cancellation, so
+  subscription. And because a correlated response outranks progress in the
+  executor's biased arbitration, a ready response would otherwise end the call
+  with notifications still queued. The executor therefore drains its
+  subscription before classifying a response or settling a cancellation, so
   notifications the peer already delivered on the same ordered transport are
-  reported before the terminal result — durable fact order stays
-  terminal-last.
-- **The live subscription set is bounded by in-flight calls, not by a router
-  constant.** One subscription exists per admitted in-flight MCP request and
-  is removed by its owner's drop, so concurrency above any fixed cache size
-  cannot starve a call of its own progress. A subscriber's queue dropping on
-  full cannot erase an occurrence either: the queue is full precisely because
-  that many undelivered proofs of remote liveness are already in the
-  subscriber's hands. The router reorders and coalesces delivery of
-  notifications the peer genuinely sent; it never invents one.
+  reported before the terminal result — durable fact order stays terminal-last.
+- **The subscription window is closed by ownership, not by capacity.**
+  Bounding a speculative pre-subscription cache can never be correct: nothing
+  bounds how many admitted requests are inside that window simultaneously, so
+  any capacity there makes a legitimate live request's only liveness
+  occurrence an eviction candidate — including at the hands of another
+  legitimate request. rustX instead hands rmcp its own transport wrapper and
+  registers a tool invocation's `(RequestId, ProgressToken)` pair
+  **synchronously inside `Transport::send`**, before the message reaches the
+  wire. That registration *happens-before* the server can receive the request,
+  which happens-before the server can emit progress for its token, so **there
+  is no unowned request-token window**.
+- **Known tokens and unknown tokens do not share a container.** A token
+  registered by the dispatch seam is a *known live request token*: O(1) state,
+  **never evicted by capacity**, removed at the request's own terminal forget
+  point (the dispatching call's subscription guard, or the correlated response
+  the inbound seam observes for a request whose call is gone). Any other token
+  is *unsolicited peer progress*: it is counted and dropped, and occupies no
+  storage at all. Peer-controlled traffic therefore has no capacity to consume
+  and nothing of a live request's to displace.
+- **Payloads may be coalesced; the occurrence may not be lost.** A known
+  token with no subscriber yet keeps one entry — the latest payload plus an
+  occurrence count — so repeated notifications collapse to O(1) without losing
+  the fact that progress happened. A subscriber's queue is bounded and drops
+  on full, which cannot erase an occurrence either: the queue is full
+  precisely because that many undelivered proofs of remote liveness are
+  already in the subscriber's hands. Progress delivery is explicitly **not**
+  lossless and is not claimed to be.
+- **The live set is bounded by in-flight requests, not by a router constant.**
+  One entry per dispatched request of the connection generation that has not
+  reached its terminal forget point, so concurrency above any fixed cache size
+  cannot starve a call of its own progress. The router reorders and coalesces
+  delivery of notifications the peer genuinely sent; it never invents one.
 
 ### Connection generations
 
