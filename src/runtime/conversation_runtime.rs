@@ -17570,9 +17570,34 @@ mod tests {
     /// runtime drain pending until the native request future settles. The
     /// release handle is then exercised again after quiescence to prove that
     /// a stale callback cannot create a late semantic effect.
+    ///
+    /// # Why the live turn is held at an exact barrier
+    ///
+    /// `begin_drain` requests cancellation of the current attempt inside the
+    /// coordinator critical section, and the Agent Loop's provider
+    /// arbitration is `stream.next()` first, *attempt cancellation second*.
+    /// A provider stream that is merely pending therefore lets the attempt
+    /// settle as cancelled at any moment after that request — including
+    /// before this test task is polled again. Reading `Draining` or an empty
+    /// shutdown channel right after `drain_linearization` was consequently
+    /// an assertion about an instant nothing ordered, and it observed
+    /// `Quiescent` whenever the attempt happened to settle first.
+    ///
+    /// [`ModelArbitrationPause`] holds the attempt **inside** its stream loop
+    /// — after the two provider items are fully processed and before the next
+    /// provider/cancellation arbitration is constructed — so the attempt
+    /// provably *cannot* settle while the barrier holds. Every fact this test
+    /// reads while it holds is therefore stable rather than raced:
+    /// `has_current_attempt()`, the lifecycle state, and the shutdown channel
+    /// all describe a runtime that is structurally unable to move. The
+    /// `drain_supervision` signal is the stronger claim on top of that: drain
+    /// registered its settlement waiter while the slot was still occupied, so
+    /// supervision is committed to this exact owner.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)]
     async fn runtime_shutdown_waits_for_started_model_settlement_and_blocks_late_effects() {
+        use crate::agent::execution::test_sync::ModelArbitrationPause;
+
         let dir = tempfile::tempdir().expect("temp dir");
         let (release_tx, release_rx) = crate::scripted_suites::support::fake::model_release();
         let script = vec![
@@ -17597,12 +17622,21 @@ mod tests {
             }),
         ];
         let drain_linearization = Arc::new(tokio::sync::Notify::new());
+        let drain_supervision = Arc::new(tokio::sync::Notify::new());
+        // Armed after the two scripted provider items — `Started` and the
+        // text delta — so the attempt parks with a durably started request it
+        // still owns, and before the arbitration that would let the drain's
+        // cancellation settle it.
+        let (model_pause, mut model_pause_reached, model_pause_release) =
+            ModelArbitrationPause::install(2);
         let (runtime, model) = headless_runtime(
             &dir,
             vec![script],
             None,
             Some(CoordinatorProbe {
                 drain_linearization: Some(drain_linearization.clone()),
+                drain_supervision: Some(drain_supervision.clone()),
+                model_arbitration_pause: Some(model_pause),
                 ..CoordinatorProbe::default()
             }),
         )
@@ -17616,11 +17650,14 @@ mod tests {
             .submit_inbound(text_content("park the provider"))
             .expect("accepted");
 
-        let mut parked = model.parked();
-        parked
-            .wait_for(|is_parked| *is_parked)
+        // The provider stream is open and owned by the attempt, and the
+        // attempt is held at the exact arbitration barrier: it cannot settle
+        // until this test releases it, whatever cancellation is requested
+        // meanwhile.
+        model_pause_reached
+            .wait_for(|is_reached| *is_reached)
             .await
-            .expect("provider gate stays open");
+            .expect("model arbitration pause channel stays open");
         let store = runtime.tool_runtime().durable_store();
         assert_eq!(
             model.requests().len(),
@@ -17643,7 +17680,19 @@ mod tests {
             let result = shutdown_runtime.shutdown().await;
             let _ = done_tx.send(result);
         });
-        drain_linearization.notified().await;
+        within_liveness_guard("the drain linearization", drain_linearization.notified()).await;
+        // Drain then parks on this exact owner: the waiter is registered and
+        // the current-attempt slot is still occupied. A drain that had
+        // short-circuited could never reach this signal.
+        within_liveness_guard(
+            "drain to park on the started provider turn",
+            drain_supervision.notified(),
+        )
+        .await;
+        assert!(
+            runtime.has_current_attempt(),
+            "the started provider turn is still runtime-owned while drain supervises it"
+        );
         assert_eq!(
             runtime.lifecycle_state(),
             ConversationLifecycleState::Draining,
@@ -17658,8 +17707,12 @@ mod tests {
         );
 
         // The provider emulator deliberately ignores cancellation until this
-        // explicit release. This is the physical settlement proof.
+        // explicit release. This is the physical settlement proof: releasing
+        // it first, and the arbitration barrier only afterwards, means the
+        // attempt's next arbitration observes the provider's own terminal
+        // event rather than a stream that is merely pending.
         release_tx.send_replace(true);
+        let _ = model_pause_release.send(());
         done_rx
             .await
             .expect("shutdown result channel")
