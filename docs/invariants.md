@@ -3892,7 +3892,7 @@ remote control plane            local ownership plane
   > Every admitted MCP request that rustX can identify as belonging to a live
   > local `ToolCall` retains at least one liveness occurrence once genuine
   > remote progress for that request has been observed, until that `ToolCall`
-  > consumes or terminates that liveness state.
+  > consumes or relinquishes that liveness state.
 
   Payload detail is explicitly **not** guaranteed. Progress delivery is not
   lossless and is not claimed to be: payloads may be coalesced, and a
@@ -3920,6 +3920,45 @@ remote control plane            local ownership plane
   subscription before classifying a response or settling a cancellation, so
   notifications the peer already delivered on the same ordered transport are
   reported before the terminal result — durable fact order stays terminal-last.
+- **Remote terminality and caller ownership are separate dimensions.** A
+  correlated answer — a `CallToolResult` or a JSON-RPC error for the request
+  id — ends the request's *remote* execution. It is not evidence about the
+  dispatching call, which may still be between its effect frontier and its
+  subscription, because rmcp mints the progress token inside the request.
+
+  > A correlated response ends remote execution but does not end the
+  > dispatching caller's progress-consumer ownership.
+
+  Each dispatched request therefore carries both facts, and no transition of
+  one implies a transition of the other:
+
+  | caller \ remote | open | terminal (answered, or refused before dispatch) |
+  |---|---|---|
+  | awaiting subscription | retain the coalesced evidence | **retain** it |
+  | subscribed | the subscriber owns delivery | the subscriber owns delivery |
+  | relinquished | keep the payload-free record | forget the request |
+
+  > Progress state is forgotten only once both remote response ownership and
+  > local consumer ownership are terminal.
+
+  A subscription is therefore never refused because the request is already
+  answered: the call is alive until it has processed that response and
+  settled, and the buffered occurrence is claimed atomically when it
+  subscribes and reported before its terminal result.
+- **One RAII owner represents the caller dimension.** The dispatching call
+  takes a progress lease in the same await-free step that admits its request
+  locally, and dropping that lease is the only relinquish. Cancellation, a
+  deadline, transport loss, protocol corruption, a refused dispatch, a send
+  failure and ordinary completion therefore all release progress ownership
+  through one path, so a call that exits before ever subscribing leaks
+  nothing and no exit branch carries progress cleanup of its own.
+- **Every progress request reaches a request-local forget point.** An
+  answered request is forgotten when its call relinquishes; a request rustX
+  refused to dispatch can never be answered, so the refusal itself is its
+  remote terminality and the seam that admitted its token releases it. The
+  only residue is a request rustX abandoned while the remote side stayed
+  genuinely open — a cancelled call whose server never answered — which
+  retains a payload-free record until the connection generation ends.
 - **The subscription window is closed by ownership, not by capacity.**
   Bounding a speculative pre-subscription cache can never be correct: nothing
   bounds how many admitted requests are inside that window simultaneously, so
@@ -3934,8 +3973,9 @@ remote control plane            local ownership plane
 - **Known tokens and unknown tokens do not share a container.** A token
   registered by the dispatch seam is a *known live request token*: O(1) state,
   **never evicted by capacity**, removed at the request's own terminal forget
-  point (the dispatching call's subscription guard, or the correlated response
-  the inbound seam observes for a request whose call is gone). Any other token
+  point (both dimensions terminal). A token stops being deliverable the moment
+  its call relinquishes, so progress that arrives afterwards is unsolicited
+  rather than stored. Any other token
   is *unsolicited peer progress*: it is counted and dropped, and occupies no
   storage at all. Peer-controlled traffic therefore has no capacity to consume
   and nothing of a live request's to displace.

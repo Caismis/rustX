@@ -3683,12 +3683,14 @@ not a liveness hazard — it can only lose a notification when the correlated
 response has already arrived, so the call settles at once and no idle
 watchdog is consulted.
 
-Two windows inside the adapter could lose it. rmcp mints a request's progress
-token *inside* `send_cancellable_request`, so the dispatching call can only
-subscribe after the request is enqueued and a server answering immediately
-races that subscription; and because a correlated response outranks progress
-in the executor's biased arbitration, a ready response would otherwise end the
-call with notifications still queued.
+Three windows inside the adapter could lose it. rmcp mints a request's
+progress token *inside* `send_cancellable_request`, so the dispatching call
+can only subscribe after the request is enqueued and a server answering
+immediately races that subscription; because a correlated response outranks
+progress in the executor's biased arbitration, a ready response would
+otherwise end the call with notifications still queued; and a response
+arriving inside that same pre-subscription window is not evidence that the
+call is over.
 
 The subscription window is closed by **ownership, not by capacity**. Bounding
 a speculative pre-subscription cache cannot be correct: nothing in the
@@ -3732,6 +3734,25 @@ because it is full precisely when that many undelivered proofs are already in
 the subscriber's hands. **Payloads may be coalesced; the occurrence may not be
 lost.** The router only reorders and coalesces notifications the peer
 genuinely sent, and fabricates nothing.
+
+The third window is closed by keeping two facts apart. **A correlated
+response ends remote execution but does not end the dispatching caller's
+progress-consumer ownership** — the peer can answer while the call is still
+between its effect frontier and its subscription, and reading that answer as
+proof that no caller remains deletes exactly the evidence the guarantee is
+about. Each dispatched request therefore carries two independent dimensions:
+whether a correlated answer can still arrive (it cannot, once the peer
+answered or rustX refused to dispatch the request), and whether the
+dispatching call still owns progress (awaiting subscription, subscribed, or
+relinquished). **Progress state is forgotten only once both remote response
+ownership and local consumer ownership are terminal.** A subscription is
+never refused because its request is already answered; it claims the
+buffered occurrence atomically and the executor reports it before the
+terminal result. The caller dimension is one RAII lease taken in the same
+await-free step that admits the request locally, so cancellation, a deadline,
+transport loss, protocol corruption, a refused dispatch and ordinary
+completion all relinquish through one path rather than through per-branch
+cleanup.
 
 **`McpConnection` (`src/tools/mcp/connection.rs`) is the stable connection
 owner** of one configured server, and it is what a published capability
