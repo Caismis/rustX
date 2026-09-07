@@ -287,11 +287,6 @@ impl<'a> ToolExecutionContext<'a> {
 ///
 /// [`ToolExecutionStatus::Failed`]: crate::tools::types::ToolExecutionStatus::Failed
 pub trait ToolExecutor: Send + Sync {
-    /// Trusted registration declaration, captured once by the registry.
-    /// Executors never run a deadline engine themselves.
-    fn foreground_policy(&self) -> crate::tools::deadline::ForegroundPolicy {
-        crate::tools::deadline::ForegroundPolicy::Leaf
-    }
     /// Constructs the handle of one caller-neutral native invocation.
     ///
     /// This method must not dispatch physical work. Dispatch and its cleanup
@@ -714,6 +709,7 @@ impl Clone for ToolRegistry {
                     entry.executor.clone(),
                     entry.normalizer,
                     entry.mandatory,
+                    entry.foreground,
                 )
                 .expect("a validated registry clones without registration errors");
         }
@@ -732,7 +728,7 @@ pub(crate) type BusinessArgumentNormalizer =
 /// derives the immutable active registry.
 #[derive(Clone)]
 pub(crate) struct ToolRegistration {
-    pub(crate) foreground: crate::tools::deadline::ForegroundPolicy,
+    foreground: crate::tools::deadline::ForegroundPolicy,
     pub(crate) definition: ToolDefinition,
     pub(crate) executor: Arc<dyn ToolExecutor>,
     pub(crate) normalizer: BusinessArgumentNormalizer,
@@ -752,6 +748,9 @@ impl std::fmt::Debug for ToolRegistration {
 }
 
 impl ToolRegistration {
+    pub(crate) fn foreground(&self) -> crate::tools::deadline::ForegroundPolicy {
+        self.foreground
+    }
     /// Prepares a fixed foreground invocation against an exact frozen
     /// definition. Runtime metadata is never accepted as business input.
     pub(crate) fn prepare_fixed(
@@ -761,7 +760,9 @@ impl ToolRegistration {
         arguments: &serde_json::Value,
     ) -> Result<PreflightOutcome, String> {
         let entry = self;
-        if entry.definition != *expected {
+        if entry.definition != *expected
+            || entry.foreground != crate::tools::deadline::ForegroundPolicy::Leaf
+        {
             return Err("frozen capability identity changed".into());
         }
         if matches!(
@@ -792,7 +793,7 @@ impl ToolRegistration {
     /// arguments use the canonical schema unchanged.
     pub(crate) fn plain(definition: ToolDefinition, executor: Arc<dyn ToolExecutor>) -> Self {
         Self {
-            foreground: executor.foreground_policy(),
+            foreground: crate::tools::deadline::ForegroundPolicy::Leaf,
             definition,
             executor,
             normalizer: identity_arguments,
@@ -865,7 +866,13 @@ impl ToolRegistry {
         executor: Arc<dyn ToolExecutor>,
         normalizer: BusinessArgumentNormalizer,
     ) -> Result<(), ToolRegistryError> {
-        self.register_with_activation_metadata(definition, executor, normalizer, false)
+        self.register_with_activation_metadata(
+            definition,
+            executor,
+            normalizer,
+            false,
+            crate::tools::deadline::ForegroundPolicy::Leaf,
+        )
     }
 
     /// Registers one validated Tool with internal activation metadata.
@@ -879,6 +886,7 @@ impl ToolRegistry {
         executor: Arc<dyn ToolExecutor>,
         normalizer: BusinessArgumentNormalizer,
         mandatory: bool,
+        foreground: crate::tools::deadline::ForegroundPolicy,
     ) -> Result<(), ToolRegistryError> {
         if definition.id.as_str().is_empty() {
             return Err(ToolRegistryError::InvalidIdentity(format!(
@@ -941,7 +949,6 @@ impl ToolRegistry {
                  sequential execution with approval disabled"
             )));
         }
-        let foreground = executor.foreground_policy();
         if let crate::tools::deadline::ForegroundPolicy::Composite { total } = foreground
             && (!total.is_positive()
                 || total.hard_deadline > std::time::Duration::from_hours(24)
@@ -992,18 +999,13 @@ impl ToolRegistry {
     ) -> Result<Self, ToolRegistryError> {
         let mut registry = Self::new();
         for registration in registrations {
-            let foreground = registration.foreground;
             registry.register_with_activation_metadata(
                 registration.definition,
                 registration.executor,
                 registration.normalizer,
                 registration.mandatory,
+                registration.foreground,
             )?;
-            if registry.entries.last().expect("just registered").foreground != foreground {
-                return Err(ToolRegistryError::InvalidPolicy(
-                    "frozen foreground policy changed".into(),
-                ));
-            }
         }
         Ok(registry)
     }

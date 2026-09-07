@@ -1,6 +1,31 @@
 //! Cross-owner WF-02 composition. Every wait below names an observed frontier.
 use super::*;
 
+#[test]
+fn typed_failure_aggregation_uses_definition_keys_with_unknown_dominance() {
+    let failure = |status| WorkflowRunError::ToolFailed {
+        node: "leaf".into(),
+        status,
+    };
+    let denied = ToolExecutionStatus::Denied {
+        reason: "alpha".into(),
+    };
+    let unknown = ToolExecutionStatus::OutcomeUnknown {
+        detail: "remote effect".into(),
+    };
+    let mut failures = BTreeMap::from([
+        ("zeta".into(), failure(ToolExecutionStatus::TimedOut)),
+        ("alpha".into(), failure(denied.clone())),
+    ]);
+    let joined = |failures| WorkflowRunError::ParallelFailed {
+        node: "join".into(),
+        failures,
+    };
+    assert_eq!(joined(failures.clone()).execution_status(), denied);
+    failures.insert("zeta".into(), failure(unknown.clone()));
+    assert_eq!(joined(failures).execution_status(), unknown);
+}
+
 #[tokio::test]
 async fn simultaneous_leaf_completion_outer_deadline_and_cancellation_have_one_terminal() {
     for cancel in [false, true] {
@@ -65,12 +90,28 @@ async fn simultaneous_leaf_completion_outer_deadline_and_cancellation_have_one_t
                 .count(),
             1
         );
-        assert!(matches!(
-            facts.last(),
-            Some(NativeInvocationFact::Completed {
-                status: ToolExecutionStatus::Cancelled { .. }
+        let expected_cause = if cancel {
+            crate::tools::deadline::ToolCancellationCause::Attempt(
+                CancellationReason::UserRequested,
+            )
+        } else {
+            crate::tools::deadline::ToolCancellationCause::Deadline(
+                crate::tools::deadline::ToolDeadlineKind::Hard,
+            )
+        };
+        let causes = facts
+            .iter()
+            .filter_map(|fact| match fact {
+                NativeInvocationFact::Lifecycle {
+                    fact: crate::tools::invocation::InvocationFact::CancellationRequested { cause },
+                } => Some(*cause),
+                _ => None,
             })
-        ));
+            .collect::<Vec<_>>();
+        assert_eq!(causes, vec![expected_cause]);
+        assert!(
+            matches!(facts.last(), Some(NativeInvocationFact::Completed { status }) if *status == result.status)
+        );
     }
 }
 
@@ -143,14 +184,6 @@ impl ToolExecutor for BrokenComposite {
     fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
         crate::tools::deadline::ToolProgressCapability::None
     }
-    fn foreground_policy(&self) -> crate::tools::deadline::ForegroundPolicy {
-        crate::tools::deadline::ForegroundPolicy::Composite {
-            total: crate::tools::deadline::ToolExecutionDeadlinePolicy::new(
-                std::time::Duration::from_millis(100),
-                None,
-            ),
-        }
-    }
     fn start<'a>(
         &'a self,
         invocation: ToolInvocation,
@@ -177,7 +210,15 @@ async fn a_broken_composite_without_owned_children_still_has_a_finite_control_gu
     let mut cancelled = probe.cancelled.subscribe();
     let (_, cancellation) = workflow_cancellation();
     let task = tokio::spawn(drive_executor(
-        Arc::new(BrokenComposite(probe)),
+        (
+            Arc::new(BrokenComposite(probe)),
+            crate::tools::deadline::ForegroundPolicy::Composite {
+                total: crate::tools::deadline::ToolExecutionDeadlinePolicy::new(
+                    std::time::Duration::from_millis(100),
+                    None,
+                ),
+            },
+        ),
         context,
         cancellation,
         None,
@@ -246,7 +287,7 @@ async fn every_native_non_success_survives_the_actual_outer_adapter_once() {
 
 #[tokio::test]
 async fn fixed_admission_rejects_orchestration_background_and_composite_leaves() {
-    use crate::runtime::subagent::catalog::SubagentToolSelector;
+    use crate::capabilities::selection::ToolSelector;
     for name in [
         "subagent",
         "execution",
@@ -266,16 +307,26 @@ async fn fixed_admission_rejects_orchestration_background_and_composite_leaves()
         }
         let mut registration = ToolRegistration::plain(leaf, probe.clone());
         if name == "composite" {
-            registration.foreground = crate::tools::deadline::ForegroundPolicy::Composite {
-                total: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
-            };
+            let mut registry = crate::tools::executor::ToolRegistry::new();
+            registry
+                .register_with_activation_metadata(
+                    registration.definition,
+                    registration.executor,
+                    registration.normalizer,
+                    false,
+                    crate::tools::deadline::ForegroundPolicy::Composite {
+                        total: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
+                    },
+                )
+                .unwrap();
+            registration = registry.registrations().remove(0);
         }
         let context = context_with_registration(
             &plane,
             registration,
             crate::agent::AttemptLifecycle::default(),
         );
-        let selector = SubagentToolSelector::Builtin { name: name.into() };
+        let selector = ToolSelector::Builtin { name: name.into() };
         let mut definition = program_definition();
         definition.tools = BTreeSet::from([selector.clone()]);
         if let WorkflowNodeDefinition::Tool {

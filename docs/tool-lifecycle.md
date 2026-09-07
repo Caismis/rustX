@@ -13,7 +13,24 @@ physical settlement-plane consumption. Callers publish their own execution facts
 only the Agent Loop owns canonical slots and atomic ordered ToolResult batches.
 Workflow Tool nodes neither synthesize model calls nor append internal history.
 
-Trusted registrations freeze `ForegroundPolicy`: ordinary Leaf uses the current
+Native Prepared, Started, Progress, settlement and Completed Journal appends are
+best-effort observations, not permission gates. When policy selects Ask, the
+InteractionCoordinator commits the exact preparation subject through durable
+interaction authority before exposing a prompt. This transaction pins the concrete
+invocation, tool identity and normalized-argument digest; it refuses replacement
+subjects for the same invocation. Agent approval still verifies its canonical
+proposal. A failed approval audit commit fails closed before publication/start;
+an ordinary native observation failure cannot veto or relabel execution.
+
+Each native lifecycle owns an absorbing cancellation-cause view. Its winner is
+selected in cancellation, hard, idle, completion priority order. The winning
+cause is installed before the child signal is cancelled. Descendants read that
+typed cause, falling through to their ancestor until their own lifecycle wins:
+an ancestor hard deadline stays `Deadline(Hard)`, never `Attempt(UserRequested)`.
+Only a locally expired deadline emits a local Deadline fact. Physical adapters'
+attempt `reason()` is not native provenance. Settled results remain immutable.
+
+Trusted registrations, not `ToolExecutor`, freeze `ForegroundPolicy`: ordinary Leaf uses the current
 ordinary finite execution policy; Composite supplies a validated finite hard-only
 total policy. Workflow defaults to ten minutes (at most 24 hours), ordinary Tools
 still default to two minutes. Both start at their native execution-start frontier.

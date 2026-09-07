@@ -104,17 +104,40 @@ impl CancellationCause for DetachedCause {
 /// It pairs the runtime cancellation signal with a **live** read of the
 /// owning authority's absorbing cause, so an executor that starts before
 /// cancellation happens still reports the cause that actually won the race.
-/// There is exactly one cause store per owned execution — this view reads
-/// it, it never copies it.
+/// Each native lifecycle additionally owns its own absorbing arbitration cause;
+/// descendant views read that authority without modifying the attempt/background
+/// reason. Signal propagation and semantic provenance remain distinct.
 #[derive(Clone)]
 pub struct ExecutionCancellation {
     signal: CancellationSignal,
     cause: Arc<dyn CancellationCause>,
+    native_cause: Option<Arc<NativeCancellationAuthority>>,
     /// A process-local failure marker for semantic control paths that can no
     /// longer safely release the owning execution. It is deliberately
     /// separate from cancellation: a broken interaction route must not be
     /// rewritten as a human cancellation outcome.
     interaction_failure: InteractionFailureSignal,
+}
+
+/// The lifecycle that wins a native race publishes its cause before signalling
+/// descendants. Unrequested scopes read through to their ancestor authority.
+struct NativeCancellationAuthority {
+    winner: std::sync::OnceLock<crate::tools::deadline::ToolCancellationCause>,
+    parent: ExecutionCancellation,
+}
+
+pub(crate) struct ExecutionCancellationTrigger {
+    signal: CancellationSignal,
+    authority: Arc<NativeCancellationAuthority>,
+}
+
+impl ExecutionCancellationTrigger {
+    pub(crate) fn cancel(&self, cause: crate::tools::deadline::ToolCancellationCause) {
+        // Semantic linearization point. The absorbing cause is visible before
+        // any child can observe the locally requested cancellation signal.
+        let _ = self.authority.winner.set(cause);
+        self.signal.cancel();
+    }
 }
 
 impl std::fmt::Debug for ExecutionCancellation {
@@ -135,6 +158,7 @@ impl ExecutionCancellation {
         Self {
             signal,
             cause,
+            native_cause: None,
             interaction_failure: InteractionFailureSignal::default(),
         }
     }
@@ -157,6 +181,7 @@ impl ExecutionCancellation {
         Self {
             signal,
             cause: Arc::new(DetachedCause(reason)),
+            native_cause: None,
             interaction_failure: InteractionFailureSignal::default(),
         }
     }
@@ -182,6 +207,37 @@ impl ExecutionCancellation {
         self.cause.cause()
     }
 
+    /// Native cancellation provenance, including ancestor deadline intent.
+    /// `reason()` remains the attempt/background reason for physical adapters;
+    /// native owners must use this view when classifying execution outcomes.
+    #[must_use]
+    pub(crate) fn native_cause(&self) -> crate::tools::deadline::ToolCancellationCause {
+        self.native_cause.as_ref().map_or_else(
+            || crate::tools::deadline::ToolCancellationCause::Attempt(self.reason()),
+            |authority| {
+                authority
+                    .winner
+                    .get()
+                    .copied()
+                    .unwrap_or_else(|| authority.parent.native_cause())
+            },
+        )
+    }
+
+    pub(crate) fn native_status(
+        &self,
+        phase: crate::tools::types::ToolCancellationPhase,
+    ) -> crate::tools::types::ToolExecutionStatus {
+        match self.native_cause() {
+            crate::tools::deadline::ToolCancellationCause::Attempt(reason) => {
+                crate::tools::types::ToolExecutionStatus::Cancelled { reason, phase }
+            }
+            crate::tools::deadline::ToolCancellationCause::Deadline(_) => {
+                crate::tools::types::ToolExecutionStatus::TimedOut
+            }
+        }
+    }
+
     /// Derives a cancellation signal for subordinate work.
     ///
     /// Cancellation propagates from the owning operation into this child, but
@@ -197,30 +253,25 @@ impl ExecutionCancellation {
     /// Derives one per-execution child view together with its owner-side
     /// trigger (Issue #204).
     ///
-    /// The returned view observes exactly what this view observes — the same
-    /// live cause authority and interaction-failure marker — behind a child
-    /// signal, so owner cancellation still propagates into the execution. The
-    /// returned trigger lets the owning lifecycle cancel *this one*
-    /// execution without touching the owner's signal or its cause, which is
-    /// how a generic execution-deadline winner requests physical
-    /// cancellation of exactly the admitted call it owns. The trigger is
-    /// never exposed to executors.
-    ///
-    /// While a deadline-triggered cancellation is in flight, the view's
-    /// `reason()` still reads the owner's authority (which has not been
-    /// cancelled); the lifecycle that fired the trigger owns the canonical
-    /// deadline classification (`TimedOut`/`OutcomeUnknown`) at settlement
-    /// and never lets the executor's provisional cancellation reason leak
-    /// into canonical history through this path.
+    /// The child reads a lifecycle-owned absorbing native cause, falling through
+    /// to its ancestor until this lifecycle wins. Publishing the cause precedes
+    /// signalling, so nested deadlines never masquerade as attempt reasons.
+    /// The trigger cannot change the attempt authority. Physical adapters may
+    /// still read `reason()`; native terminal arbitration uses `native_cause()`.
     #[must_use]
-    pub(crate) fn child_execution(&self) -> (CancellationSignal, ExecutionCancellation) {
+    pub(crate) fn child_execution(&self) -> (ExecutionCancellationTrigger, ExecutionCancellation) {
         let signal = self.signal.child();
+        let authority = Arc::new(NativeCancellationAuthority {
+            winner: std::sync::OnceLock::new(),
+            parent: self.clone(),
+        });
         let view = Self {
             signal: signal.clone(),
             cause: Arc::clone(&self.cause),
+            native_cause: Some(authority.clone()),
             interaction_failure: self.interaction_failure.clone(),
         };
-        (signal, view)
+        (ExecutionCancellationTrigger { signal, authority }, view)
     }
 
     /// Marks the owning attempt as unable to continue because its semantic

@@ -1,5 +1,26 @@
 # Architecture
 
+## Native invocation ownership
+
+| Concern | Owner |
+| --- | --- |
+| Canonical Agent ToolCall/ToolResult framing | Agent Loop |
+| Fixed Workflow graph and local values | WorkflowRuntime |
+| Source-qualified Tool selection | capabilities::selection |
+| Trusted Leaf/Composite policy | Tool registration/admission |
+| Foreground arbitration and typed cancellation provenance | shared ForegroundInvocation lifecycle |
+| Physical execution, cancellation and settlement evidence | ToolExecutor |
+| Human Tool approval rendezvous | InteractionCoordinator |
+| Durable exact preparation/approval subject | durable interaction authority |
+| Ordinary native execution facts | best-effort Event Journal observation |
+| Canonical conversation truth | canonical history/store |
+
+An Ask decision commits its immutable interaction subject before prompt publication;
+ordinary Prepared/Started/progress facts have no permission authority. Native
+cancellation winners publish an absorbing typed cause before signalling descendants.
+Composite deadlines never borrow the attempt's default cancellation reason.
+See [Tool lifecycle](tool-lifecycle.md) for frontiers and settlement semantics.
+
 ## 1. Architectural objective
 
 rustX is an execution kernel, not an agent application framework and not a control plane. Its responsibility is to execute an immutable runtime manifest, produce durable execution facts, and expose stable runtime-owned contracts to higher-level systems.
@@ -30,7 +51,9 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 25. Version 25 adds caller-neutral
+The SQLite schema is development schema version 26. Version 26 adds typed native
+deadline interruption to interaction outcomes/audit settlements; Runtime Client 19
+and child IPC 17 mirror it. Version 25 added caller-neutral
 approval correlation and native Workflow invocation facts with typed Workflow
 failure status. Runtime Client 18 mirrors approval identity; child IPC 16 mirrors
 the new invocation-bearing interaction data. No migration or compatibility
@@ -4245,7 +4268,8 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
-The current Runtime Client protocol is version 18. Version 18 distinguishes
+The current Runtime Client protocol is version 19. Version 19 adds typed deadline
+interruption of approval waits. Version 18 distinguishes
 Agent and Workflow approval invocation identity. Version 17 preserves
 `denied` in background lifecycle projections. Version 16 introduced the
 Tool outcome certainty vocabulary. It carries Issue #202's

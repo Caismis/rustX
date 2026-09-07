@@ -250,7 +250,7 @@ pub struct WorkflowDefinition {
     pub description: String,
     /// Explicit capability admission, independent of main model exposure.
     #[serde(default)]
-    pub tools: BTreeSet<super::subagent::catalog::SubagentToolSelector>,
+    pub tools: BTreeSet<crate::capabilities::selection::ToolSelector>,
     /// Trusted finite total foreground lifetime, including descendant waits.
     #[serde(default = "default_workflow_timeout_ms")]
     pub timeout_ms: u64,
@@ -282,7 +282,7 @@ pub struct WorkflowBlock {
 pub enum WorkflowNodeDefinition {
     /// One statically selected, explicitly admitted foreground capability.
     Tool {
-        selector: super::subagent::catalog::SubagentToolSelector,
+        selector: crate::capabilities::selection::ToolSelector,
         arguments: WorkflowValue,
         result: WorkflowToolResult,
     },
@@ -432,7 +432,7 @@ pub struct WorkflowProgram {
     block: WorkflowBlockProgram,
     total_nodes: usize,
     retained_bound: usize,
-    tools: BTreeSet<super::subagent::catalog::SubagentToolSelector>,
+    tools: BTreeSet<crate::capabilities::selection::ToolSelector>,
     timeout_ms: u64,
 }
 
@@ -514,7 +514,7 @@ impl WorkflowProgram {
 #[derive(Debug, Clone)]
 pub enum WorkflowNodeProgram {
     Tool {
-        selector: super::subagent::catalog::SubagentToolSelector,
+        selector: crate::capabilities::selection::ToolSelector,
         arguments: WorkflowValue,
         result: WorkflowToolResult,
     },
@@ -763,7 +763,7 @@ fn compile_program(
 fn compile_block(
     definition: WorkflowBlock,
     workflow_profiles: &BTreeSet<SubagentName>,
-    admitted_tools: &BTreeSet<super::subagent::catalog::SubagentToolSelector>,
+    admitted_tools: &BTreeSet<crate::capabilities::selection::ToolSelector>,
     path: Vec<String>,
     total_nodes: &mut usize,
 ) -> Result<WorkflowBlockProgram, WorkflowCompileError> {
@@ -1741,10 +1741,8 @@ pub struct WorkflowRun {
     run_id: WorkflowRunId,
     budgets: std::sync::Mutex<execution::RunBudgets>,
     terminal: Option<WorkflowTerminalState>,
-    tools: BTreeMap<
-        super::subagent::catalog::SubagentToolSelector,
-        crate::tools::types::ToolDefinition,
-    >,
+    tools:
+        BTreeMap<crate::capabilities::selection::ToolSelector, crate::tools::types::ToolDefinition>,
 }
 
 impl fmt::Debug for WorkflowRun {
@@ -1916,7 +1914,7 @@ impl WorkflowRuntime {
         // separates this cancellation observation from the unique run commit.
         let execution = match execution {
             Ok(_) if cancellation.is_cancelled() => {
-                Err(WorkflowRunError::Cancelled(cancellation.reason()))
+                Err(WorkflowRunError::from_cancellation(&cancellation))
             }
             result => result,
         };
@@ -2049,7 +2047,7 @@ impl WorkflowRuntime {
             .await
             .map_err(|error| match error {
                 crate::runtime::subagent::SubagentStartError::Cancelled => {
-                    WorkflowRunError::Cancelled(cancellation.reason())
+                    WorkflowRunError::from_cancellation(cancellation)
                 }
                 error => WorkflowRunError::ChildStart {
                     node: node_id.to_string(),
@@ -2062,7 +2060,7 @@ impl WorkflowRuntime {
             .await
             .map_err(|error| match error {
                 crate::runtime::subagent::SubagentStartError::Cancelled => {
-                    WorkflowRunError::Cancelled(cancellation.reason())
+                    WorkflowRunError::from_cancellation(cancellation)
                 }
                 error => WorkflowRunError::ChildStart {
                     node: node_id.to_string(),
@@ -2070,7 +2068,7 @@ impl WorkflowRuntime {
                 },
             })?;
         let crate::runtime::subagent::SubagentStartOutcome::Accepted(accepted) = accepted else {
-            return Err(WorkflowRunError::Cancelled(cancellation.reason()));
+            return Err(WorkflowRunError::from_cancellation(cancellation));
         };
         self.emit_observability(
             run,
@@ -2096,7 +2094,14 @@ impl WorkflowRuntime {
         let snapshot = tokio::select! {
             biased;
             () = cancellation.cancelled() => {
-                let _ = self.subagents.cancel(&subagent_id, cancellation.reason());
+                // The child owns a separate attempt. Parent deadline intent is
+                // ParentCancelled there, never a fabricated user request; this
+                // Workflow retains the exact deadline in its typed run outcome.
+                let reason = match cancellation.native_cause() {
+                    crate::tools::deadline::ToolCancellationCause::Attempt(reason) => reason,
+                    crate::tools::deadline::ToolCancellationCause::Deadline(_) => crate::runtime::types::CancellationReason::ParentCancelled,
+                };
+                let _ = self.subagents.cancel(&subagent_id, reason);
                 let snapshot = (&mut wait).await;
                 // The native child settlement is the cross-process
                 // observation of the workflow_output latch. If that
@@ -2110,10 +2115,10 @@ impl WorkflowRuntime {
                             &subagent_id,
                             node_id,
                             output_schema,
-                            cancellation.reason(),
+                            cancellation,
                         );
                 }
-                return Err(WorkflowRunError::Cancelled(cancellation.reason()));
+                return Err(WorkflowRunError::from_cancellation(cancellation));
             }
             snapshot = &mut wait => snapshot,
         };
@@ -2121,13 +2126,7 @@ impl WorkflowRuntime {
             node: node_id.to_string(),
             detail: "the native SubagentRegistry lost the child record".to_owned(),
         })?;
-        self.settled_agent_value(
-            snapshot,
-            &subagent_id,
-            node_id,
-            output_schema,
-            cancellation.reason(),
-        )
+        self.settled_agent_value(snapshot, &subagent_id, node_id, output_schema, cancellation)
     }
 
     fn settled_agent_value(
@@ -2136,7 +2135,7 @@ impl WorkflowRuntime {
         subagent_id: &crate::runtime::identity::SubagentId,
         node_id: &WorkflowNodeInstance,
         output_schema: &Value,
-        cancellation_reason: crate::runtime::types::CancellationReason,
+        cancellation: &crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<Value, WorkflowRunError> {
         match snapshot.state {
             crate::runtime::subagent::SubagentState::Succeeded => {
@@ -2179,7 +2178,7 @@ impl WorkflowRuntime {
                 Ok(value)
             }
             crate::runtime::subagent::SubagentState::Cancelled => {
-                Err(WorkflowRunError::Cancelled(cancellation_reason))
+                Err(WorkflowRunError::from_cancellation(cancellation))
             }
             state => Err(WorkflowRunError::ChildFailed {
                 node: node_id.to_string(),
@@ -2233,17 +2232,30 @@ pub enum WorkflowRunError {
     },
     /// Cancellation won terminal settlement.
     Cancelled(crate::runtime::types::CancellationReason),
+    /// An ancestor native deadline interrupted this scope.
+    Deadline(crate::tools::deadline::ToolDeadlineKind),
     /// A terminal transition was attempted twice.
     TerminalAlreadySettled,
 }
 
 impl WorkflowRunError {
+    fn from_cancellation(
+        cancellation: &crate::runtime::cancellation::ExecutionCancellation,
+    ) -> Self {
+        match cancellation.native_cause() {
+            crate::tools::deadline::ToolCancellationCause::Attempt(reason) => {
+                Self::Cancelled(reason)
+            }
+            crate::tools::deadline::ToolCancellationCause::Deadline(kind) => Self::Deadline(kind),
+        }
+    }
     /// Preserve native execution certainty at every composite boundary.
     #[must_use]
     pub fn execution_status(&self) -> crate::tools::types::ToolExecutionStatus {
         use crate::tools::types::{ToolCancellationPhase, ToolExecutionStatus as Status};
         match self {
             Self::ToolFailed { status, .. } => status.clone(),
+            Self::Deadline(_) => Status::TimedOut,
             Self::Cancelled(reason) => Status::Cancelled {
                 reason: *reason,
                 phase: ToolCancellationPhase::DuringExecution,
@@ -2322,6 +2334,10 @@ impl fmt::Display for WorkflowRunError {
                 Ok(())
             }
             Self::Cancelled(reason) => write!(formatter, "workflow cancelled: {reason:?}"),
+            Self::Deadline(kind) => write!(
+                formatter,
+                "workflow interrupted by ancestor {kind:?} deadline"
+            ),
             Self::TerminalAlreadySettled => {
                 formatter.write_str("workflow terminal state was already settled")
             }

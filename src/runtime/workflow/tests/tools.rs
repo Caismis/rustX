@@ -391,6 +391,70 @@ async fn cancellation_during_execution_drains_native_settlement_before_node_term
 }
 
 struct Ask;
+
+#[tokio::test]
+async fn native_observation_store_failure_has_no_permission_or_outcome_authority() {
+    let plane = workflow_test_plane(1);
+    let runtime = workflow_runtime(&plane);
+    let probe = Probe::new(ToolExecutionStatus::Success);
+    let context = context(
+        &plane,
+        probe.clone(),
+        crate::agent::AttemptLifecycle::default(),
+    );
+    // Fail every observation, including Prepared, Started, Progress and Completed.
+    // The store's real append boundary consumes these injected failures.
+    plane.store.arm_fail_event_times(100);
+    let (_, cancellation) = workflow_cancellation();
+    let (result, _) = run_outer(runtime, program(), context, cancellation).await;
+    assert_eq!(result.status, ToolExecutionStatus::Success);
+    assert_eq!(probe.starts.load(Ordering::SeqCst), 1);
+    assert!(
+        plane
+            .store
+            .read_events(None, 128)
+            .unwrap()
+            .events
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn durable_approval_preparation_failure_never_publishes_or_starts() {
+    use crate::runtime::interaction::{InteractionCoordinator, RecordingInteractionAudit};
+    let plane = workflow_test_plane(1);
+    let runtime = workflow_runtime(&plane);
+    let probe = Probe::new(ToolExecutionStatus::Success);
+    let lifecycle = crate::runtime::types::ConversationLifecycle::new();
+    assert!(lifecycle.activate());
+    let audit = RecordingInteractionAudit::new(plane.conversation_id.clone());
+    audit.fail_next_requested();
+    let coordinator = Arc::new(InteractionCoordinator::new(
+        plane.conversation_id.clone(),
+        lifecycle,
+        audit.clone(),
+    ));
+    coordinator.set_provider_available(true);
+    let lifecycle = crate::agent::AttemptLifecycle::default()
+        .with_pre_tool_policy(Arc::new(Ask))
+        .with_native_interaction(coordinator.clone());
+    let context = context(&plane, probe.clone(), lifecycle);
+    let (_, cancellation) = workflow_cancellation();
+    let error = runtime
+        .run_foreground(
+            program(),
+            ToolCallId::new("outer"),
+            context,
+            json!({"passed":false}),
+            cancellation,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, WorkflowRunError::InvocationAuthority(_)));
+    assert_eq!(probe.starts.load(Ordering::SeqCst), 0);
+    assert_eq!(coordinator.pending_count(), 0);
+    assert!(audit.events().is_empty());
+}
 async fn run_outer(
     runtime: WorkflowRuntime,
     program: Arc<WorkflowProgram>,
@@ -405,7 +469,10 @@ async fn run_outer(
 }
 
 async fn drive_executor(
-    executor: Arc<dyn ToolExecutor>,
+    registration: (
+        Arc<dyn ToolExecutor>,
+        crate::tools::deadline::ForegroundPolicy,
+    ),
     context: crate::runtime::subagent::AttemptSubagentContext,
     cancellation: ExecutionCancellation,
     completion_won: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -413,6 +480,7 @@ async fn drive_executor(
     ToolExecutionResult,
     Vec<crate::tools::invocation::InvocationFact>,
 ) {
+    let (executor, policy) = registration;
     let services = context.native.as_ref().unwrap().clone();
     let progress = NativeProgressForTest;
     let native_context = ToolExecutionContext::new(
@@ -429,7 +497,7 @@ async fn drive_executor(
     crate::tools::invocation::ForegroundInvocation {
         clock: &*services.clock,
         policy: services.leaf_policy,
-        registration: executor.foreground_policy(),
+        registration: policy,
         deadline_armed: None,
         cancellation_won: None,
         completion_won: completion_won.as_deref(),
@@ -528,10 +596,30 @@ async fn outer_total_deadline_survives_new_leaf_at_capacity_one_and_drains_settl
         ToolExecutionStatus::Success,
         "settled child is immutable"
     );
-    assert!(matches!(
-        completed[1],
-        ToolExecutionStatus::Cancelled { .. }
-    ));
+    assert_eq!(*completed[1], ToolExecutionStatus::TimedOut);
+    let causes =
+        events
+            .iter()
+            .filter_map(|event| match &event.event {
+                RuntimeEvent::NativeToolInvocation {
+                    fact:
+                        NativeInvocationFact::Lifecycle {
+                            fact:
+                                crate::tools::invocation::InvocationFact::CancellationRequested {
+                                    cause,
+                                },
+                        },
+                    ..
+                } => Some(*cause),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+    assert_eq!(
+        causes,
+        vec![crate::tools::deadline::ToolCancellationCause::Deadline(
+            crate::tools::deadline::ToolDeadlineKind::Hard
+        )]
+    );
 }
 
 #[tokio::test]
@@ -729,9 +817,8 @@ async fn normalization_and_schema_rejection_start_zero_executors() {
 }
 
 #[test]
-fn authority_rejects_changed_identity_unadmitted_selection_and_distinguishes_unavailable_source() {
-    use crate::runtime::subagent::catalog::SubagentToolSelector;
-    use crate::runtime::subagent::resolver::{SubagentResolutionError, resolve_selector};
+fn authority_rejects_changed_identity_and_unadmitted_selection() {
+    use crate::capabilities::selection::ToolSelector;
     let probe = Probe::new(ToolExecutionStatus::Success);
     let registration = ToolRegistration::plain(definition(), probe);
     let mut changed = definition();
@@ -747,27 +834,6 @@ fn authority_rejects_changed_identity_unadmitted_selection_and_distinguishes_una
             )
             .is_err()
     );
-    let available = crate::capabilities::AvailableToolCatalog::new(vec![registration]);
-    let server = crate::runtime::identity::McpServerId::new("offline");
-    let selector = SubagentToolSelector::Mcp {
-        server_id: server.clone(),
-        name: "check".into(),
-    };
-    let mut availability = crate::capabilities::CapabilityAvailability::new();
-    availability.insert(
-        crate::capabilities::CapabilitySourceId::Mcp(server),
-        crate::capabilities::CapabilitySourceState::Unavailable {
-            reason: "offline".into(),
-        },
-    );
-    assert!(matches!(
-        resolve_selector(&selector, &available, &availability),
-        Err(SubagentResolutionError::SourceUnavailable { .. })
-    ));
-    assert!(matches!(
-        resolve_selector(&selector, &available, &BTreeMap::default()),
-        Err(SubagentResolutionError::UnknownCapability { .. })
-    ));
     let program = program();
     let mut definition = WorkflowDefinition {
         description: "unadmitted".into(),
@@ -781,7 +847,7 @@ fn authority_rejects_changed_identity_unadmitted_selection_and_distinguishes_una
                 (
                     "tool".into(),
                     WorkflowNodeDefinition::Tool {
-                        selector: SubagentToolSelector::Builtin {
+                        selector: ToolSelector::Builtin {
                             name: "check".into(),
                         },
                         arguments: WorkflowValue::Literal { value: json!({}) },

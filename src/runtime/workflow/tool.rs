@@ -5,7 +5,8 @@ use super::{
     WorkflowRunError, WorkflowRuntime, bound_workflow_diagnostic, execution, expressions,
     workflow_event_id,
 };
-use crate::runtime::subagent::{AttemptSubagentContext, catalog::SubagentToolSelector};
+use crate::capabilities::selection::ToolSelector;
+use crate::runtime::subagent::AttemptSubagentContext;
 use crate::tools::executor::{PreflightOutcome, ToolExecutionContext};
 use crate::tools::invocation::{ForegroundInvocation, NativeInvocationFact, terminal};
 use crate::tools::types::{
@@ -15,28 +16,49 @@ use crate::tools::types::{
 pub(super) fn freeze(
     program: &WorkflowProgram,
     context: &AttemptSubagentContext,
-) -> Result<BTreeMap<SubagentToolSelector, ToolDefinition>, WorkflowRunError> {
+) -> Result<BTreeMap<ToolSelector, ToolDefinition>, WorkflowRunError> {
     let resources = context.resources();
     let catalog = resources.capability().available_tools();
-    program.tools.iter().map(|selector| {
-        let selected = crate::runtime::subagent::resolver::resolve_selector(
-            selector, catalog, resources.capability_availability(),
-        ).map_err(|error| match error {
-            crate::runtime::subagent::resolver::SubagentResolutionError::SourceUnavailable { .. } => WorkflowRunError::SourceUnavailable(error.to_string()),
-            _ => WorkflowRunError::InvalidSelector(error.to_string()),
-        })?;
-        let definition = selected.definition();
-        if definition.execution_policy == crate::tools::types::ToolExecutionPolicy::BackgroundOnly
-            || catalog.registration(definition).map_err(WorkflowRunError::IdentityChanged)?.foreground != crate::tools::deadline::ForegroundPolicy::Leaf
-            || !eligible(definition) {
-            return Err(WorkflowRunError::IneligibleCapability(selector.to_string()));
-        }
-        Ok((selector.clone(), definition.clone()))
-    }).collect()
+    program
+        .tools
+        .iter()
+        .map(|selector| {
+            let selected = crate::capabilities::selection::resolve_selector(
+                selector,
+                catalog,
+                resources.capability_availability(),
+            )
+            .map_err(|error| match error {
+                crate::capabilities::selection::ToolSelectionError::SourceUnavailable {
+                    ..
+                } => WorkflowRunError::SourceUnavailable(error.to_string()),
+                crate::capabilities::selection::ToolSelectionError::UnknownCapability {
+                    ..
+                } => WorkflowRunError::InvalidSelector(error.to_string()),
+            })?;
+            let definition = selected;
+            if definition.execution_policy
+                == crate::tools::types::ToolExecutionPolicy::BackgroundOnly
+                || catalog
+                    .registration(definition)
+                    .map_err(WorkflowRunError::IdentityChanged)?
+                    .foreground()
+                    != crate::tools::deadline::ForegroundPolicy::Leaf
+                || !eligible(definition)
+            {
+                return Err(WorkflowRunError::IneligibleCapability(selector.to_string()));
+            }
+            Ok((selector.clone(), definition.clone()))
+        })
+        .collect()
 }
 
 fn eligible(definition: &ToolDefinition) -> bool {
     definition.execution_policy != crate::tools::types::ToolExecutionPolicy::BackgroundOnly
+        && !definition
+            .id
+            .as_str()
+            .starts_with(super::WORKFLOW_TOOL_ID_PREFIX)
         && !(definition.origin == crate::tools::types::ToolOrigin::Builtin
             && matches!(
                 definition.name.as_str(),
@@ -54,14 +76,28 @@ impl WorkflowCatalog {
     ) -> Result<(), String> {
         for program in self.definitions().values() {
             for selector in &program.tools {
-                match crate::runtime::subagent::resolver::resolve_selector(selector, available, availability) {
+                match crate::capabilities::selection::resolve_selector(
+                    selector,
+                    available,
+                    availability,
+                ) {
                     Ok(selected) => {
-                        let definition = selected.definition();
-                        if !eligible(definition) || available.registration(definition)?.foreground != crate::tools::deadline::ForegroundPolicy::Leaf {
-                            return Err(format!("Workflow {} selects ineligible leaf {selector}", program.id()));
+                        let definition = selected;
+                        if !eligible(definition)
+                            || available.registration(definition)?.foreground()
+                                != crate::tools::deadline::ForegroundPolicy::Leaf
+                        {
+                            return Err(format!(
+                                "Workflow {} selects ineligible leaf {selector}",
+                                program.id()
+                            ));
                         }
-                    },
-                    Err(crate::runtime::subagent::resolver::SubagentResolutionError::SourceUnavailable { .. }) => {},
+                    }
+                    Err(
+                        crate::capabilities::selection::ToolSelectionError::SourceUnavailable {
+                            ..
+                        },
+                    ) => {}
                     Err(error) => return Err(error.to_string()),
                 }
             }
@@ -77,7 +113,7 @@ impl WorkflowRuntime {
         run: &WorkflowRun,
         context: &AttemptSubagentContext,
         node: &WorkflowNodeInstance,
-        selector: &SubagentToolSelector,
+        selector: &ToolSelector,
         arguments: Value,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<ToolExecutionResult, WorkflowRunError> {
@@ -115,7 +151,7 @@ impl WorkflowRuntime {
             arguments_digest: crate::events::interaction::interaction_arguments_digest(
                 &prepared.invocation.arguments,
             ),
-        })?;
+        });
         let view = crate::agent::PreToolView {
             conversation_id: &run.run_id.conversation_id,
             attempt_id: context.attempt_id(),
@@ -160,13 +196,13 @@ impl WorkflowRuntime {
                 permit = acquire => Some(permit),
             };
             if permit.is_none() || cancellation.is_cancelled() {
-                terminal(ToolExecutionStatus::Cancelled {
-                    reason: cancellation.reason(),
-                    phase: crate::tools::types::ToolCancellationPhase::BeforeStart,
-                })
+                terminal(
+                    cancellation
+                        .native_status(crate::tools::types::ToolCancellationPhase::BeforeStart),
+                )
             } else {
                 // Execution-start frontier, before construction or first poll.
-                emit(NativeInvocationFact::Started)?;
+                emit(NativeInvocationFact::Started);
                 let progress = NativeProgress(std::sync::Mutex::new(Vec::new()));
                 let native_context = ToolExecutionContext::new(
                     &run.run_id.conversation_id,
@@ -181,7 +217,7 @@ impl WorkflowRuntime {
                 let driver = ForegroundInvocation {
                     clock: &*services.clock,
                     policy: services.leaf_policy,
-                    registration: registration.foreground,
+                    registration: registration.foreground(),
                     #[cfg(test)]
                     deadline_armed: None,
                     #[cfg(test)]
@@ -199,15 +235,15 @@ impl WorkflowRuntime {
                     )
                     .await;
                 for progress in progress.0.into_inner().expect("progress buffer") {
-                    let _ = emit(NativeInvocationFact::Progress { progress });
+                    emit(NativeInvocationFact::Progress { progress });
                 }
                 for fact in facts {
-                    let _ = emit(NativeInvocationFact::Lifecycle { fact });
+                    emit(NativeInvocationFact::Lifecycle { fact });
                 }
                 result
             }
         };
-        let _ = emit(NativeInvocationFact::Completed {
+        emit(NativeInvocationFact::Completed {
             status: bounded_status(&result.status),
         });
         Ok(result)
@@ -219,34 +255,26 @@ impl WorkflowRuntime {
         id: &ToolInvocationId,
         tool_id: &crate::runtime::identity::ToolId,
         fact: NativeInvocationFact,
-    ) -> Result<(), WorkflowRunError> {
-        let prepared = matches!(fact, NativeInvocationFact::Prepared { .. });
+    ) {
         let event = RuntimeEvent::NativeToolInvocation {
             invocation_id: id.clone(),
             tool_id: tool_id.clone(),
             fact,
         };
-        let event_id = if prepared {
-            crate::tools::invocation::preparation_event_id(id)
-        } else {
-            workflow_event_id(&event)
-        };
+        let event_id = workflow_event_id(&event);
         #[cfg(test)]
         self.observations
             .send_modify(|events| events.push(event.clone()));
-        self.event_store
-            .append_event(RuntimeEventEnvelope {
-                schema_version: EVENT_SCHEMA_VERSION,
-                event_id,
-                sequence: 0,
-                conversation_id: run.run_id.conversation_id.clone(),
-                attempt_id: Some(run.run_id.attempt_id.clone()),
-                turn_id: None,
-                timestamp: Utc::now(),
-                event,
-            })
-            .map_err(|error| WorkflowRunError::InvocationAuthority(error.to_string()))?;
-        Ok(())
+        let _ = self.event_store.append_event(RuntimeEventEnvelope {
+            schema_version: EVENT_SCHEMA_VERSION,
+            event_id,
+            sequence: 0,
+            conversation_id: run.run_id.conversation_id.clone(),
+            attempt_id: Some(run.run_id.attempt_id.clone()),
+            turn_id: None,
+            timestamp: Utc::now(),
+            event,
+        });
     }
 }
 

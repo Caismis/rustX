@@ -36,8 +36,18 @@ pub(super) fn registrations(
                     program: Arc::clone(program),
                 }),
             )
+            .with_foreground_policy(foreground_policy(program))
         })
         .collect()
+}
+
+fn foreground_policy(program: &WorkflowProgram) -> crate::tools::deadline::ForegroundPolicy {
+    crate::tools::deadline::ForegroundPolicy::Composite {
+        total: crate::tools::deadline::ToolExecutionDeadlinePolicy::new(
+            std::time::Duration::from_millis(program.timeout_ms()),
+            None,
+        ),
+    }
 }
 
 fn definition(program: &WorkflowProgram) -> ToolDefinition {
@@ -63,19 +73,15 @@ struct WorkflowToolExecutor {
 pub(crate) fn test_executor(
     runtime: WorkflowRuntime,
     program: Arc<WorkflowProgram>,
-) -> Arc<dyn ToolExecutor> {
-    Arc::new(WorkflowToolExecutor { runtime, program })
+) -> (
+    Arc<dyn ToolExecutor>,
+    crate::tools::deadline::ForegroundPolicy,
+) {
+    let policy = foreground_policy(&program);
+    (Arc::new(WorkflowToolExecutor { runtime, program }), policy)
 }
 
 impl ToolExecutor for WorkflowToolExecutor {
-    fn foreground_policy(&self) -> crate::tools::deadline::ForegroundPolicy {
-        crate::tools::deadline::ForegroundPolicy::Composite {
-            total: crate::tools::deadline::ToolExecutionDeadlinePolicy::new(
-                std::time::Duration::from_millis(self.program.timeout_ms()),
-                None,
-            ),
-        }
-    }
     fn start<'a>(
         &'a self,
         invocation: ToolInvocation,

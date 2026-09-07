@@ -998,9 +998,7 @@ fn workflow_approval_pins_prepared_native_identity_without_a_canonical_leaf_call
         WorkflowBlockInstance, WorkflowDefinitionPath, WorkflowId, WorkflowNodeInstance,
         WorkflowRunId,
     };
-    use rustx::tools::invocation::NativeInvocationFact;
     use rustx::tools::types::ToolInvocationId;
-    use sha2::{Digest, Sha256};
     let store = policy_boundary_store();
     let invocation_id = ToolInvocationId::Workflow {
         node: Box::new(WorkflowNodeInstance {
@@ -1027,45 +1025,57 @@ fn workflow_approval_pins_prepared_native_identity_without_a_canonical_leaf_call
         arguments_digest: interaction_arguments_digest(&serde_json::json!({"prepared":true})),
         reason: "exact invocation".into(),
     };
-    assert!(
-        store
-            .append_interaction_audit(requested(&interaction_id(), subject.clone()))
-            .is_err(),
-        "no prepared fact means no audit authority"
-    );
+    // Requested itself commits the exact preparation subject, with no native
+    // Prepared event and no canonical leaf ToolCall prerequisite.
     store
-        .append_event(envelope(
-            &format!(
-                "native-invocation-prepared:{:x}",
-                Sha256::digest(serde_json::to_vec(&invocation_id).unwrap())
-            ),
-            RuntimeEvent::NativeToolInvocation {
-                invocation_id,
-                tool_id: ToolId::new("inactive-check"),
-                fact: NativeInvocationFact::Prepared {
-                    tool_name: "check".into(),
-                    arguments_digest: interaction_arguments_digest(
-                        &serde_json::json!({"prepared":true}),
-                    ),
-                },
-            },
-        ))
+        .append_interaction_audit(requested(&interaction_id(), subject.clone()))
         .unwrap();
-    let mut changed = subject.clone();
-    if let InteractionSubject::Approval {
-        arguments_digest, ..
-    } = &mut changed
-    {
-        *arguments_digest = interaction_arguments_digest(&serde_json::json!({"prepared":false}));
+    for mutation in 0..3 {
+        let mut changed = subject.clone();
+        if let InteractionSubject::Approval {
+            arguments_digest,
+            tool_id,
+            ..
+        } = &mut changed
+        {
+            if mutation == 1 {
+                *arguments_digest =
+                    interaction_arguments_digest(&serde_json::json!({"prepared":false}));
+            }
+            if mutation == 2 {
+                *tool_id = ToolId::new("different-tool");
+            }
+        }
+        assert!(
+            store
+                .append_interaction_audit(requested(
+                    &InteractionId::for_attempt(&attempt(), 10 + mutation),
+                    changed,
+                ))
+                .is_err(),
+            "one invocation cannot acquire a replacement approval subject"
+        );
     }
+    let mut next_visit = subject;
+    if let InteractionSubject::Approval {
+        invocation_id: ToolInvocationId::Workflow { node },
+        ..
+    } = &mut next_visit
+    {
+        node.visit += 1;
+    }
+    // A new visit needs a new interaction identity; the prior response cannot
+    // route to it. Reusing the old interaction identity is rejected.
     assert!(
         store
-            .append_interaction_audit(requested(&interaction_id(), changed))
-            .is_err(),
-        "human audit cannot rewrite prepared arguments"
+            .append_interaction_audit(requested(&interaction_id(), next_visit.clone()))
+            .is_err()
     );
     store
-        .append_interaction_audit(requested(&interaction_id(), subject))
+        .append_interaction_audit(requested(
+            &InteractionId::for_attempt(&attempt(), 20),
+            next_visit,
+        ))
         .unwrap();
 }
 

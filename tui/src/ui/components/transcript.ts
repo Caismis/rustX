@@ -397,6 +397,8 @@ function settlementLabel(
   settlement: TranscriptInteractionSettled["settlement"],
 ): string {
   switch (settlement.type) {
+    case "deadline_expired":
+      return "deadline expired";
     case "approved":
       return "approved";
     case "denied":

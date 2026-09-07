@@ -216,7 +216,7 @@ impl WorkflowRuntime {
             {
                 let mut budgets = run.budgets.lock().expect("run budgets");
                 if cancellation.is_cancelled() {
-                    return Err(WorkflowRunError::Cancelled(cancellation.reason()));
+                    return Err(WorkflowRunError::from_cancellation(cancellation));
                 }
                 let agent = usize::from(matches!(node, WorkflowNodeProgram::Agent(_)));
                 if budgets.nodes >= run.program.total_nodes
@@ -385,7 +385,7 @@ impl WorkflowRuntime {
                             });
                         }
                         if cancellation.is_cancelled() {
-                            return Err(WorkflowRunError::Cancelled(cancellation.reason()));
+                            return Err(WorkflowRunError::from_cancellation(cancellation));
                         }
                         let value = Value::Object(results);
                         validate_commit(output_schema, &value)?;

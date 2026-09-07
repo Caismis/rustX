@@ -188,6 +188,71 @@ enum ProbeCancelSettlement {
     Completed,
 }
 
+#[tokio::test]
+async fn native_agent_cancellation_preserves_attempt_provenance() {
+    let model = fake_model(tool_turn_then_stop(&[call(
+        "call-user",
+        "tool-user",
+        "user",
+    )]));
+    let mut tools = ToolRegistry::new();
+    let probe = register_probe(
+        &mut tools,
+        "user",
+        "tool-user",
+        ToolConcurrencyPolicy::Sequential,
+        success_result("not reached"),
+        &[],
+        ProbeCancelSettlement::Cancelled,
+        true,
+    );
+    let mut started = probe.started;
+    let mut observed = probe.cancel_observed;
+    let settle = probe.settle_gate.unwrap();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let owner = cancellation.clone();
+    let controller = tokio::spawn(async move {
+        // Start notification proves physical ownership; cancellation observation
+        // proves delivery before the settlement gate is released.
+        await_started(&mut started, "user tool").await;
+        assert!(owner.request_cancel(CancellationReason::UserRequested));
+        observed.wait_for(|seen| *seen).await.unwrap();
+        settle.send_replace(true);
+    });
+    let audit = run(
+        &model,
+        tools,
+        deadline_policy(20_000, None),
+        Arc::new(ManualMonotonicClock::new()),
+        &cancellation,
+    )
+    .await;
+    controller.await.unwrap();
+    let messages = tool_messages(&audit);
+    assert_eq!(messages.len(), 1);
+    assert!(matches!(
+        messages[0].result.status,
+        ToolExecutionStatus::Cancelled {
+            reason: CancellationReason::UserRequested,
+            ..
+        }
+    ));
+    let causes = audit
+        .event_history
+        .iter()
+        .filter_map(|event| match event {
+            RuntimeEvent::ToolExecutionCancellationRequested { cause, .. } => Some(*cause),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        causes,
+        vec![ToolCancellationCause::Attempt(
+            CancellationReason::UserRequested
+        )]
+    );
+}
+
 /// A deterministic scripted executor for the deadline lifecycle: it parks
 /// on one release gate per phase, reports the phase's progress message
 /// after the gate releases, and settles with `result` when the final gate

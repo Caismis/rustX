@@ -145,6 +145,7 @@ pub(crate) fn execution_fixture(subagents: Option<SubagentRegistry>) -> Executio
             registration.executor,
             registration.normalizer,
             false,
+            registration.foreground,
         )
         .expect("execution registers");
     ExecutionFixture {

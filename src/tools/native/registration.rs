@@ -52,6 +52,8 @@ use crate::tools::types::{ToolDefinition, ToolInvocationPolicy, ToolOrigin, Tool
 /// [`ToolRegistry`]: crate::tools::executor::ToolRegistry
 /// [`ToolExecutionResult`]: crate::tools::types::ToolExecutionResult
 pub(crate) struct NativeToolRegistration {
+    /// Trusted invocation policy, independent of the physical implementation.
+    pub(crate) foreground: crate::tools::deadline::ForegroundPolicy,
     /// The canonical tool-owned definition (identity, description, input
     /// schema, policies).
     pub(crate) definition: ToolDefinition,
@@ -72,9 +74,18 @@ impl NativeToolRegistration {
         Self {
             definition,
             executor,
+            foreground: crate::tools::deadline::ForegroundPolicy::Leaf,
             normalizer: identity_arguments,
             mandatory: false,
         }
+    }
+
+    pub(super) fn with_foreground_policy(
+        mut self,
+        policy: crate::tools::deadline::ForegroundPolicy,
+    ) -> Self {
+        self.foreground = policy;
+        self
     }
 
     /// Marks this native registration as mandatory for normal agent

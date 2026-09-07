@@ -54,8 +54,8 @@ impl PartialEq for AvailableToolCatalog {
             && self
                 .registrations
                 .iter()
-                .map(|entry| entry.foreground)
-                .eq(other.registrations.iter().map(|entry| entry.foreground))
+                .map(ToolRegistration::foreground)
+                .eq(other.registrations.iter().map(ToolRegistration::foreground))
     }
 }
 

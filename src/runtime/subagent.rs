@@ -167,7 +167,7 @@ pub use catalog::{
     SUBAGENT_DEFINITION_DIGEST_VERSION, SubagentAdmissionError, SubagentCatalog,
     SubagentDefinition, SubagentDefinitionDigest, SubagentDefinitionError,
     SubagentExecutionDeadline, SubagentExecutionDeadlineError, SubagentName, SubagentNameError,
-    SubagentProjectInstructionPolicy, SubagentToolSelector,
+    SubagentProjectInstructionPolicy,
 };
 pub use process::SubagentSpawnPlan;
 pub(crate) use registry::InteractionPublicationAuthority;

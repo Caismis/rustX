@@ -47,7 +47,7 @@
  * version 11's subagent activity projection; and version 9's closed
  * `interrupted` lifecycle vocabulary. Older schemas are not decoded.
  */
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 18;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 19;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -475,6 +475,7 @@ export type RoutedInteraction = {
 };
 
 export type InteractionOutcome =
+  | { type: "deadline_expired"; kind: "hard" | "idle" }
   | { type: "responded"; response: InteractionResponse }
   | { type: "cancelled"; reason: CancellationReason };
 
@@ -495,6 +496,7 @@ export type InteractionSubject =
 
 /** The terminal value retained by the durable interaction audit. */
 export type InteractionSettlement =
+  | { type: "deadline_expired"; kind: "hard" | "idle" }
   | { type: "approved" }
   | { type: "denied"; reason: string }
   | { type: "questionnaire_submitted"; submission: QuestionnaireSubmission }

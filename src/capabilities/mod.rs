@@ -50,6 +50,7 @@ mod availability;
 mod coordinator;
 mod error;
 pub mod selected;
+pub mod selection;
 mod snapshot;
 mod tools;
 

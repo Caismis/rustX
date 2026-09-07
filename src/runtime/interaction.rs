@@ -268,6 +268,10 @@ pub enum InteractionResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InteractionOutcome {
+    /// A native ancestor deadline won the rendezvous.
+    DeadlineExpired {
+        kind: crate::tools::deadline::ToolDeadlineKind,
+    },
     /// A client supplied the terminal typed response, including an explicit
     /// questionnaire decline.
     Responded {
@@ -279,6 +283,19 @@ pub enum InteractionOutcome {
         /// The first-winner cancellation cause from the owning attempt.
         reason: CancellationReason,
     },
+}
+
+impl InteractionOutcome {
+    fn interrupted(cancellation: &ExecutionCancellation) -> Self {
+        match cancellation.native_cause() {
+            crate::tools::deadline::ToolCancellationCause::Attempt(reason) => {
+                Self::Cancelled { reason }
+            }
+            crate::tools::deadline::ToolCancellationCause::Deadline(kind) => {
+                Self::DeadlineExpired { kind }
+            }
+        }
+    }
 }
 
 /// An interaction-operation failure that is not itself a human decision.
@@ -385,8 +402,9 @@ pub(crate) struct ApprovalFacts {
     /// renders: they are the exact invocation that will run.
     pub(crate) arguments: serde_json::Value,
     /// Auditable caller-owned arguments: the Agent's canonical proposal or
-    /// the Workflow node's prepared native invocation. The audit verifies
-    /// the digest against that caller's already-committed preparation facts.
+    /// the Workflow node's prepared native invocation. Durable interaction
+    /// authority verifies the Agent proposal; for Workflow its Requested
+    /// transaction is itself the exact preparation-subject commit boundary.
     pub(crate) audit_arguments: serde_json::Value,
     /// The bounded policy explanation.
     pub(crate) reason: String,
@@ -397,7 +415,7 @@ impl ApprovalFacts {
     /// bounded durable audit subject.
     ///
     /// The two are produced together, from one immutable set of facts, so the
-    /// prompt a client is shown and the audit fact the Journal commits can
+    /// prompt a client is shown and the subject interaction authority commits can
     /// never describe different calls.
     fn into_published(
         self,
@@ -524,6 +542,9 @@ fn audit_settlement(outcome: &InteractionOutcome) -> InteractionSettlement {
         },
         InteractionOutcome::Cancelled { reason } => {
             InteractionSettlement::Cancelled { reason: *reason }
+        }
+        InteractionOutcome::DeadlineExpired { kind } => {
+            InteractionSettlement::DeadlineExpired { kind: *kind }
         }
     }
 }
@@ -1548,7 +1569,9 @@ impl InteractionCoordinator {
                 // stale and the receiver still returns the response.
                 #[cfg(test)]
                 self.park_before_waiter_cancellation();
-                let _ = self.cancel_async(&id, cancellation.reason()).await;
+                if let Ok(delivery) = self.begin_settle(&id, InteractionOutcome::interrupted(&cancellation), false) {
+                    let _ = self.deliver_async(delivery).await;
+                }
                 match receiver.await {
                     Ok(Ok(payload)) => Ok(payload),
                     Ok(Err(failure)) => Err(failure),
@@ -1845,9 +1868,7 @@ impl InteractionCoordinator {
             // the same cancellation terminal outcome; it cannot publish an
             // response result and leave the interaction out of sync with its
             // owning attempt.
-            outcome = InteractionOutcome::Cancelled {
-                reason: pending.cancellation.reason(),
-            };
+            outcome = InteractionOutcome::interrupted(&pending.cancellation);
         }
         if validate_response && let InteractionOutcome::Responded { response } = &mut outcome {
             *response = validate_response_for(&pending.subject, response)?;
@@ -2523,6 +2544,49 @@ mod tests {
         );
         assert_eq!(coordinator.pending_snapshot().len(), 3);
         assert_eq!(observer.pending.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn ancestor_deadline_during_approval_keeps_typed_audit_provenance() {
+        use crate::tools::deadline::{ToolCancellationCause, ToolDeadlineKind};
+        let (coordinator, audit) = audited_coordinator();
+        coordinator.set_provider_available(true);
+        let owner = AgentCancellation::new(CancellationReason::UserRequested);
+        let (trigger, cancellation) = owner.execution_cancellation().child_execution();
+        let ticket = coordinator
+            .publish_approval_with_cancellation(
+                AttemptId::new("conversation-attempt-1"),
+                facts("c1"),
+                &cancellation,
+            )
+            .unwrap();
+        let id = ticket.id.clone();
+        // Publication has committed the immutable subject. Publish the deadline
+        // cause and signal before a late Allow attempts the pending-map frontier.
+        trigger.cancel(ToolCancellationCause::Deadline(ToolDeadlineKind::Hard));
+        let _ = coordinator.respond(
+            &id,
+            InteractionResponse::Approval {
+                decision: ApprovalDecision::Allow,
+            },
+        );
+        assert_eq!(
+            coordinator.wait(ticket, cancellation).await,
+            InteractionOutcome::DeadlineExpired {
+                kind: ToolDeadlineKind::Hard
+            }
+        );
+        assert!(matches!(
+            audit.events().last(),
+            Some(RuntimeEvent::InteractionSettled {
+                settlement: InteractionSettlement::DeadlineExpired {
+                    kind: ToolDeadlineKind::Hard
+                },
+                ..
+            })
+        ));
+        assert!(!owner.is_cancelled());
+        assert_eq!(coordinator.pending_count(), 0);
     }
 
     #[test]

@@ -5,7 +5,6 @@
 //! advance a Workflow graph.
 
 use crate::runtime::MonotonicClock;
-use crate::runtime::types::CancellationReason;
 use crate::tools::deadline::{
     TOOL_SETTLEMENT_CONTROL_GUARD, ToolCancellationCause, ToolDeadlineKind,
     ToolExecutionDeadlinePolicy, ToolProgressCapability, ToolSettlementCertainty, deadline_after,
@@ -72,12 +71,7 @@ pub(crate) async fn authorize(
 ) -> Result<Option<ToolExecutionResult>, crate::runtime::interaction::InteractionFailure> {
     use crate::agent::lifecycle::PreToolDecision;
     use crate::runtime::interaction::{ApprovalDecision, InteractionOutcome, InteractionResponse};
-    let cancelled = || {
-        terminal(ToolExecutionStatus::Cancelled {
-            reason: cancellation.reason(),
-            phase: ToolCancellationPhase::BeforeStart,
-        })
-    };
+    let cancelled = || terminal(cancellation.native_status(ToolCancellationPhase::BeforeStart));
     if cancellation.is_cancelled() {
         return Ok(Some(cancelled()));
     }
@@ -108,6 +102,9 @@ pub(crate) async fn authorize(
                 return Ok(Some(cancelled()));
             }
             match response {
+                Ok(InteractionOutcome::DeadlineExpired { .. }) => {
+                    return Ok(Some(terminal(ToolExecutionStatus::TimedOut)));
+                }
                 Ok(InteractionOutcome::Responded {
                     response:
                         InteractionResponse::Approval {
@@ -181,15 +178,6 @@ pub enum NativeInvocationFact {
     },
 }
 
-/// Stable audit correlation, independent of model call identifiers.
-pub(crate) fn preparation_event_id(
-    id: &crate::tools::types::ToolInvocationId,
-) -> crate::runtime::identity::EventId {
-    use sha2::Digest;
-    let digest = sha2::Sha256::digest(serde_json::to_vec(id).expect("invocation identity"));
-    crate::runtime::identity::EventId::new(format!("native-invocation-prepared:{digest:x}"))
-}
-
 /// Frozen policy and clock authority for one foreground invocation.
 pub(crate) struct ForegroundInvocation<'a> {
     pub clock: &'a dyn MonotonicClock,
@@ -204,7 +192,7 @@ pub(crate) struct ForegroundInvocation<'a> {
 }
 
 enum Winner {
-    Cancellation(CancellationReason),
+    Cancellation(ToolCancellationCause),
     Deadline(ToolDeadlineKind),
     Physical(ToolExecutionResult),
 }
@@ -288,7 +276,7 @@ impl ForegroundInvocation<'_> {
         let winner = tokio::select! {
             biased;
             () = ancestor.cancelled() => {
-                let reason = ancestor.reason();
+                let reason = ancestor.native_cause();
                 #[cfg(test)]
                 if let Some(hook) = self.cancellation_won { hook(); }
                 Winner::Cancellation(reason)
@@ -309,13 +297,13 @@ impl ForegroundInvocation<'_> {
                 }
                 return (result, facts);
             }
-            Winner::Cancellation(reason) => ToolCancellationCause::Attempt(reason),
+            Winner::Cancellation(cause) => cause,
             Winner::Deadline(kind) => {
                 facts.push(InvocationFact::Deadline { kind });
                 ToolCancellationCause::Deadline(kind)
             }
         };
-        trigger.cancel();
+        trigger.cancel(cause);
         facts.push(InvocationFact::CancellationRequested { cause });
         let guard = deadline_after(self.clock.now_millis(), TOOL_SETTLEMENT_CONTROL_GUARD);
         let guard_wait = async {

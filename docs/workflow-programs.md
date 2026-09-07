@@ -91,6 +91,21 @@ settlement/completion facts belong to the Event Journal, never parent history.
 The ordinary approval rendezvous gates the exact normalized, validated invocation;
 Allow/Deny has no argument-replacement channel. Rejection or denial starts no executor.
 
+All native invocation Journal facts are best-effort observations. Approval alone
+requires a durable exact-preparation boundary: InteractionRequested commits its
+immutable subject through durable interaction authority before a human can see
+the prompt. It does not depend on a Prepared execution event. A concrete node
+visit cannot acquire a replacement approval subject; another visit needs its own
+interaction. Publication failure is interaction authority loss, not human Denied.
+
+The capability plane owns `ToolSelector` and source-qualified resolution; neither
+Workflow nor generic Tool selection depends on the Subagent feature's resolver.
+Registration/admission owns Leaf/Composite policy; executors cannot declare a
+Workflow timeout. Ancestor deadlines propagate through the native lifecycle's
+absorbing cause view before cancellation is signalled. The descendant records
+`Deadline(Hard)` and, with confirmed cancellation, TimedOut. It never derives a
+user-cancellation fact from the attempt's default reason.
+
 The caller-independent foreground owner in `tools::invocation` drives one
 physical handle, genuine progress, cancellation, hard/idle deadlines and typed
 settlement. The Agent Loop still owns canonical calls, sibling ordering and atomic
@@ -421,8 +436,8 @@ outer siblings remain sequential, and no replay/resume is introduced.
 The Event Journal adds bounded block/node start and terminal facts and typed
 instance associations. It remains best-effort observation for ordinary
 Workflow lifecycle; the native child output/terminal pair retains its atomic
-durable contract. WF-02 uses SQLite development schema 25, child IPC 16 and
-Runtime Client/TUI 18 for caller-neutral approval identity and typed execution
+durable contract. WF-02 uses SQLite development schema 26, child IPC 17 and
+Runtime Client/TUI 19 for caller-neutral approval identity and typed execution
 facts. The event envelope stays version 1 because framing is unchanged. The
 client projector explicitly ignores journal-only execution facts pending WF-06;
 approval remains on the existing human interaction surface.

@@ -199,6 +199,10 @@ pub enum InteractionSubject {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InteractionSettlement {
+    /// A native execution deadline interrupted the approval rendezvous.
+    DeadlineExpired {
+        kind: crate::tools::deadline::ToolDeadlineKind,
+    },
     /// A client allowed the exact approval subject.
     Approved,
     /// A client denied the exact approval subject.
@@ -522,7 +526,10 @@ pub fn validate_interaction_settlement(
     settlement: &InteractionSettlement,
 ) -> Result<(), String> {
     match (subject, settlement) {
-        (_, InteractionSettlement::Cancelled { .. })
+        (
+            _,
+            InteractionSettlement::Cancelled { .. } | InteractionSettlement::DeadlineExpired { .. },
+        )
         | (InteractionSubject::Approval { .. }, InteractionSettlement::Approved) => Ok(()),
         (InteractionSubject::Approval { .. }, InteractionSettlement::Denied { reason }) => {
             if reason.chars().count() > MAX_APPROVAL_DENIAL_REASON_CHARS {

@@ -2,6 +2,22 @@
 
 These invariants are architectural constraints. Implementations may change; these rules should change only through an explicit architecture decision.
 
+## Native invocation ownership
+
+Source-qualified Tool selection belongs to the generic capability plane, and
+trusted Leaf/Composite deadlines belong to immutable registration/admission metadata.
+Physical executors own neither selection nor composite orchestration policy.
+Cancellation propagation preserves the initiating native authority's typed cause;
+the cause publication precedes its child signal, and later requests cannot relabel
+it. An attempt's default reason is not evidence of user cancellation.
+
+Ordinary native execution facts are observational: Journal failure cannot veto
+execution or alter settled truth. Ask alone requires the durable interaction
+transaction to pin the exact prepared subject before human publication/start.
+The same concrete invocation cannot replace its approval subject. No such audit
+creates an internal canonical ToolCall. OutcomeUnknown dominates deterministic
+definition-key failure aggregation and cannot be rewritten by observer failure.
+
 ## Language
 
 All repository content is written in English.
@@ -41,7 +57,7 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 25 is the only accepted schema; version 24 and every older
+schema version 26 is the only accepted schema; version 25 and every older
 development schema fail explicitly at open and are not migrated. Version 10
 froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation

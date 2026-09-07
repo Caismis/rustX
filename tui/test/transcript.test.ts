@@ -505,4 +505,24 @@ describe("durable transcript audits", () => {
     assert.match(rendered, /single_option/);
     assert.doesNotMatch(rendered, /respond|pending prompt|approve action/i);
   });
+
+  it("renders deadline interruption without inventing user cancellation", () => {
+    const state = stateOf({
+      transcript: { entries: [{
+        cursor: transcriptCursor(4),
+        item: {
+          type: "interaction_settled",
+          event_id: "deadline-audit",
+          timestamp: "2026-08-24T12:00:01Z",
+          attempt_id: "attempt-1",
+          turn_id: "turn-1",
+          interaction_id: "interaction-1",
+          settlement: { type: "deadline_expired", kind: "hard" },
+        },
+      }] },
+    });
+    const rendered = transcriptString(state);
+    assert.match(rendered, /deadline expired/);
+    assert.doesNotMatch(rendered, /cancelled|user requested/i);
+  });
 });

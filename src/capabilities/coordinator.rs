@@ -3481,6 +3481,10 @@ mod mcp_race_tests {
         let v1_snapshot = coordinator.commit(candidate_v1).expect("commit v1");
         assert_eq!(v1_snapshot.revision().get(), 1);
 
+        let frozen_registration = v1_snapshot.available_tools().registrations().iter()
+            .find(|entry| matches!(&entry.definition.origin, crate::tools::types::ToolOrigin::Mcp { server_id: id } if id == &server_id))
+            .expect("available MCP registration").clone();
+
         // The old execution is admitted before the source/runtime change:
         // it holds a direct generation lease on the old physical runtime.
         let old_leases = v1_snapshot
@@ -3497,6 +3501,18 @@ mod mcp_race_tests {
         let candidate_v2 = coordinator.prepare_candidate().await.expect("prepare v2");
         let v2_snapshot = coordinator.commit(candidate_v2).expect("commit v2");
         assert_eq!(v2_snapshot.revision().get(), 2);
+        let old = v1_snapshot
+            .available_tools()
+            .registration(&frozen_registration.definition)
+            .unwrap();
+        let new = v2_snapshot
+            .available_tools()
+            .registration(&frozen_registration.definition)
+            .unwrap();
+        // Pointer comparison here proves retention, not semantic catalog equality:
+        // old immutable availability cannot expose the new materialization.
+        assert!(Arc::ptr_eq(&old.executor, &frozen_registration.executor));
+        assert!(!Arc::ptr_eq(&old.executor, &new.executor));
         let v2_runtime = coordinator
             .current_mcp_runtime(&server_id)
             .expect("v2 runtime");
