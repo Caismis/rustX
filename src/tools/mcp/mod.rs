@@ -1362,6 +1362,115 @@ pub(crate) mod test_sync {
         }
     }
 
+    /// Parks one outbound tool invocation between its progress admission and
+    /// its dispatch ownership (Issue #205).
+    ///
+    /// That window is exactly "the request has been admitted and nothing
+    /// local has begun", so a cancellation that lands while a call is parked
+    /// here is provably pre-dispatch — and the request provably never
+    /// reaches the network afterwards, because the dispatch it then attempts
+    /// is refused.
+    pub(crate) struct OutboundDispatchPause {
+        tool: String,
+        state: Mutex<PauseState>,
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+
+    static OUTBOUND_PAUSE: std::sync::RwLock<Option<Arc<OutboundDispatchPause>>> =
+        std::sync::RwLock::new(None);
+
+    /// Uninstalls the installed pause when the test that installed it ends.
+    pub(crate) struct OutboundDispatchPauseGuard;
+
+    impl Drop for OutboundDispatchPauseGuard {
+        fn drop(&mut self) {
+            *OUTBOUND_PAUSE
+                .write()
+                .expect("outbound dispatch pause lock") = None;
+        }
+    }
+
+    impl OutboundDispatchPause {
+        /// Installs a pause that parks every outbound dispatch of `tool`.
+        pub(crate) fn install(tool: &str) -> (Arc<Self>, OutboundDispatchPauseGuard) {
+            let pause = Arc::new(Self {
+                tool: tool.to_owned(),
+                state: Mutex::new(PauseState::default()),
+                entered: tokio::sync::Notify::new(),
+                release: tokio::sync::Notify::new(),
+            });
+            *OUTBOUND_PAUSE
+                .write()
+                .expect("outbound dispatch pause lock") = Some(Arc::clone(&pause));
+            (pause, OutboundDispatchPauseGuard)
+        }
+
+        /// Resolves once an outbound dispatch of the paused tool is parked.
+        pub(crate) async fn wait_entered(&self) {
+            loop {
+                let entered = self.entered.notified();
+                tokio::pin!(entered);
+                entered.as_mut().enable();
+                if self
+                    .state
+                    .lock()
+                    .expect("outbound dispatch pause lock")
+                    .entered
+                {
+                    return;
+                }
+                entered.await;
+            }
+        }
+
+        /// Releases every parked dispatch.
+        pub(crate) fn release(&self) {
+            self.state
+                .lock()
+                .expect("outbound dispatch pause lock")
+                .released = true;
+            self.release.notify_waiters();
+        }
+    }
+
+    /// Parks one outbound tool invocation, when a pause is installed for its
+    /// tool.
+    pub(crate) async fn park_before_outbound_dispatch(tool: &str) {
+        let Some(pause) = OUTBOUND_PAUSE
+            .read()
+            .expect("outbound dispatch pause lock")
+            .clone()
+        else {
+            return;
+        };
+        if pause.tool != tool {
+            return;
+        }
+        {
+            let mut state = pause.state.lock().expect("outbound dispatch pause lock");
+            if state.released {
+                return;
+            }
+            state.entered = true;
+        }
+        pause.entered.notify_waiters();
+        loop {
+            let released = pause.release.notified();
+            tokio::pin!(released);
+            released.as_mut().enable();
+            if pause
+                .state
+                .lock()
+                .expect("outbound dispatch pause lock")
+                .released
+            {
+                return;
+            }
+            released.await;
+        }
+    }
+
     /// Records what the outbound dispatch seam registered for one request.
     pub(crate) fn note_progress_admission(
         id: &rmcp::model::RequestId,
@@ -1580,9 +1689,10 @@ impl McpServerRuntime {
                 // before the request can reach the server.
                 let transport = dispatch::ObservingTransport::new(
                     transport,
-                    Arc::new(dispatch::McpDispatchSeam::new(Arc::clone(
-                        &handler.progress,
-                    ))),
+                    Arc::new(dispatch::McpDispatchSeam::new(
+                        Arc::clone(&handler.progress),
+                        None,
+                    )),
                 );
                 // A handshake failure explicitly awaits the same physical
                 // settlement proof as normal runtime drain. Dropping the
@@ -1652,18 +1762,22 @@ impl McpServerRuntime {
                 // returned here is that authority; it belongs to exactly
                 // this connection generation.
                 let (client, ownership) = streamable_http::McpHttpClient::new()?;
-                request_ownership = Some(ownership);
+                request_ownership = Some(Arc::clone(&ownership));
                 let transport = rmcp::transport::StreamableHttpClientTransport::with_client(
                     client,
                     transport_config,
                 );
-                // The outbound ownership seam: a request's progress token
-                // becomes known before the request can reach the server.
+                // The outbound ownership seam. Over Streamable HTTP it
+                // carries both halves: a request's progress token becomes
+                // known before the request can reach the server, and its
+                // lifecycle entry takes dispatch ownership before the
+                // message is handed to rmcp's transport worker.
                 let transport = dispatch::ObservingTransport::new(
                     transport,
-                    Arc::new(dispatch::McpDispatchSeam::new(Arc::clone(
-                        &handler.progress,
-                    ))),
+                    Arc::new(dispatch::McpDispatchSeam::new(
+                        Arc::clone(&handler.progress),
+                        Some(Arc::clone(&ownership)),
+                    )),
                 );
                 let service = tokio::select! {
                     biased;
@@ -2198,6 +2312,15 @@ impl McpServerRuntime {
             }
         };
         // ---------- the external-effect frontier is crossed ----------
+        //
+        // The request id exists for the first time here, and there is no
+        // await between the frontier and this admission, so an admitted
+        // request always has a lifecycle entry before anything can read one.
+        // The admission is this invocation's hold on that entry: dropping it
+        // — on every path out of this function — is the request-local forget
+        // point, which is why normal completion cleans up its own state
+        // instead of leaving one record per historical request behind.
+        let admission = self.admit_local_request(&handle.id);
         // Test-only: holds this call inside the pre-subscription window so a
         // regression can prove that genuine remote progress arrived before
         // the subscription registration completed. No production path
@@ -2230,7 +2353,13 @@ impl McpServerRuntime {
                     }
                     drop(progress);
                     return self
-                        .settle_post_frontier_cancellation(handle, context, started, generation)
+                        .settle_post_frontier_cancellation(
+                            handle,
+                            admission.as_ref(),
+                            context,
+                            started,
+                            generation,
+                        )
                         .await;
                 }
                 progress_item = progress.recv() => {
@@ -2305,11 +2434,26 @@ impl McpServerRuntime {
     ///
     /// So the send is *raced*, never awaited as a prerequisite, and the
     /// bound is rustX's own local request ownership: terminating this
-    /// request's HTTP request and awaiting the release proof of its POST
-    /// future and response body depends on no remote response, no protocol
-    /// acknowledgement, and no timer. Over stdio there is no such local
-    /// half, so the termination is already settled and the race collapses
-    /// to the cancellation send and the response channel.
+    /// request's local half and awaiting its release proof depends on no
+    /// remote response, no protocol acknowledgement, and no timer.
+    ///
+    /// What "terminating the local half" means is read from the request's
+    /// **explicit lifecycle state**, never inferred from an absent record:
+    ///
+    /// ```text
+    /// NotYetRegistered  nothing local began, and the outbound dispatch seam
+    ///                   now refuses this request, so nothing local ever will
+    ///                   -> settled, and no record is created
+    /// Live              the outbound dispatch future, the POST future, or
+    ///                   the response body owns it
+    ///                   -> terminate it and await the release proof
+    /// Released          the local half already finished on its own
+    ///                   -> nothing to terminate, and no record is created
+    /// ```
+    ///
+    /// Over stdio there is no local half at all, so the termination is
+    /// already settled and the race collapses to the cancellation send and
+    /// the response channel.
     ///
     /// # Arbitration
     ///
@@ -2333,13 +2477,14 @@ impl McpServerRuntime {
     async fn settle_post_frontier_cancellation(
         &self,
         mut handle: rmcp::service::RequestHandle<RoleClient>,
+        admission: Option<&streamable_http::McpRequestAdmission>,
         context: &ToolExecutionContext<'_>,
         started: Instant,
         generation: u64,
     ) -> ToolExecutionResult {
         // Armed first and synchronously: from here on this request cannot
         // reach the network even if its POST had not started yet.
-        let termination = self.terminate_local_request(&handle.id);
+        let termination = Self::terminate_local_request(admission);
         let outcome = self
             .arbitrate_post_frontier_cancellation(&mut handle, &termination)
             .await;
@@ -2398,19 +2543,33 @@ impl McpServerRuntime {
         }
     }
 
+    /// Admits one dispatched request into this generation's request
+    /// lifecycle registry.
+    ///
+    /// Stdio owns no per-request local half, so there is no lifecycle to
+    /// open there and the settlement plane has nothing to await. Over
+    /// Streamable HTTP the entry created here is what a later cancellation
+    /// reads its state from, and the returned admission is what forgets it.
+    fn admit_local_request(
+        &self,
+        id: &rmcp::model::RequestId,
+    ) -> Option<streamable_http::McpRequestAdmission> {
+        self.request_ownership
+            .as_ref()
+            .map(|ownership| ownership.admit(id))
+    }
+
     /// Terminates rustX's own local ownership of one dispatched request.
     ///
     /// Stdio has no per-request local ownership to terminate, so it settles
-    /// immediately; Streamable HTTP terminates the request's in-flight HTTP
-    /// request and returns the proof that its POST future and response body
-    /// have been dropped.
+    /// immediately; Streamable HTTP reads the request's explicit lifecycle
+    /// state and terminates whatever local owner it actually has.
     fn terminate_local_request(
-        &self,
-        id: &rmcp::model::RequestId,
+        admission: Option<&streamable_http::McpRequestAdmission>,
     ) -> streamable_http::LocalRequestTermination {
-        self.request_ownership.as_ref().map_or(
-            streamable_http::LocalRequestTermination::Settled,
-            |ownership| ownership.terminate(id),
+        admission.map_or(
+            streamable_http::LocalRequestTermination::NoLocalOwnership,
+            streamable_http::McpRequestAdmission::terminate,
         )
     }
 
@@ -2453,13 +2612,13 @@ impl McpServerRuntime {
                 // rather than allowed to hold settlement.
                 //
                 // The guard is what keeps this honest. This arm exists only
-                // when rustX actually had a live local request to terminate
-                // — the Streamable HTTP case the bound is for. A transport
-                // that owns no per-request local state has no local
-                // settlement *event* here, only the trivially-already-settled
-                // fact, and racing that would abandon every cancellation send
-                // before it could leave.
-                () = termination.settled(), if termination.terminated_local_request() => {
+                // when the termination is genuinely *waiting* for a local
+                // owner to be dropped — the Streamable HTTP `Live` case the
+                // bound is for. Every other termination is already settled
+                // when it is created, and racing an already-resolved fact
+                // would abandon every cancellation send before it could
+                // leave.
+                () = termination.settled(), if termination.awaits_release() => {
                     break RemoteCancellation::Abandoned;
                 }
             }
@@ -3446,16 +3605,29 @@ impl ToolExecutor for McpToolExecutor {
     /// terminal end.
     ///
     /// [`ToolExecutionHandle::settled_by_operation`] is therefore still the
-    /// honest abstraction after the Streamable HTTP ownership model: it is
+    /// honest abstraction after the Streamable HTTP request lifecycle: it is
     /// correct exactly when "the operation future returned" implies "all
     /// rustX-owned local execution for this invocation is over", and it does
     /// here. This executor spawns no task and owns no process outside that
-    /// future, and the one local resource a dispatched call *does* own
-    /// outside of Rust's stack — the in-flight Streamable HTTP request — is
-    /// terminated and **proven released inside the same future**, before it
-    /// returns anything. Nothing is left for a separate settlement plane to
-    /// reclaim, so splitting completion from settlement would add a second
-    /// ownership plane with nothing in it.
+    /// future. The one local resource a dispatched call *does* own outside
+    /// of Rust's stack — the in-flight Streamable HTTP request — is
+    /// terminated inside the same future, and the settlement is only
+    /// reported once that request's lifecycle state says no local owner
+    /// remains:
+    ///
+    /// - `Live` — the release proof is **awaited** before anything is
+    ///   reported, and it fires only after the POST future or the response
+    ///   body was actually dropped;
+    /// - `NotYetRegistered` — nothing local began, and the outbound dispatch
+    ///   seam refuses the request from that point, so nothing local ever
+    ///   will;
+    /// - `Released` — every local owner had already been dropped.
+    ///
+    /// The invocation's admission guard is a stack local of that same
+    /// future, so the request's lifecycle entry is also forgotten when it
+    /// returns. Nothing is left for a separate settlement plane to reclaim,
+    /// so splitting completion from settlement would add a second ownership
+    /// plane with nothing in it.
     ///
     /// The executor never chooses a canonical terminal status: it reports
     /// physical outcomes and settlement evidence, and the Agent Loop's

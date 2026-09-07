@@ -2,16 +2,22 @@
 //!
 //! # Why a transport seam, and why exactly here
 //!
-//! Progress liveness needs a fact rmcp's public request API cannot give a
-//! caller. rmcp mints a request's `ProgressToken` *inside*
-//! `Peer::send_cancellable_request`, so the dispatching call learns it only
-//! after the request was enqueued. Anything that arrives for that token
-//! before the call subscribes has no owner, and a router that bounds unowned
-//! tokens by capacity can evict a legitimate live request's only liveness
-//! evidence — nothing bounds how many admitted requests are inside that
-//! window at once.
+//! Two contracts need a fact rmcp's public request API cannot give a caller,
+//! and both need it at the same instant:
 //!
-//! It is answered by owning the request at the outbound transport. rmcp's
+//! - **progress liveness.** rmcp mints a request's `ProgressToken` *inside*
+//!   `Peer::send_cancellable_request`, so the dispatching call learns it only
+//!   after the request was enqueued. Anything that arrives for that token
+//!   before the call subscribes has no owner, and a router that bounds
+//!   unowned tokens by capacity can evict a legitimate live request's only
+//!   liveness evidence — nothing bounds how many admitted requests are inside
+//!   that window at once;
+//! - **local request ownership.** Over Streamable HTTP a settlement has to
+//!   terminate *this request's* local half and prove it released. Inferring
+//!   "the POST has not started yet" from a request id being absent from a
+//!   live map cannot distinguish that from "the POST already finished".
+//!
+//! Both are answered by owning the request at the outbound transport. rmcp's
 //! [`Transport::send`] is called with the fully-formed
 //! [`ClientJsonRpcMessage`] — request id and `_meta.progressToken` already
 //! set — and its **synchronous prologue runs before the message is handed to
@@ -20,6 +26,7 @@
 //!
 //! ```text
 //! Transport::send prologue        registers (RequestId, ProgressToken)
+//!     |                           and takes dispatch ownership
 //!     v
 //! bytes on the wire
 //!     v
@@ -40,6 +47,9 @@
 //! It is an ownership seam, not a policy layer and not a second protocol
 //! implementation. It reads two fields, records them, and delegates. It
 //! decodes nothing, correlates nothing, retries nothing, and spawns nothing.
+//! The one decision it makes is refusing to hand an already-terminated tool
+//! invocation to the transport, which is what lets a cancellation that won
+//! before dispatch report an honest settlement instead of a hope.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -52,34 +62,62 @@ use rmcp::service::RoleClient;
 use rmcp::transport::Transport;
 
 use super::McpProgressRouter;
+use super::streamable_http::{DispatchOwnership, McpHttpRequestOwnership, OutboundDispatch};
 
-/// The transport error this seam reports.
+/// The transport error of a request rustX refused to dispatch.
 ///
-/// A transparent wrapper: the seam adds no failure of its own, it only has to
-/// name a type of its own to sit between rmcp's service and its transport.
+/// It is deliberately reported as an ordinary transport-send failure: rmcp
+/// resolves the request's local responder from it, so the dispatching call
+/// observes its own termination through the same path any other send failure
+/// takes. The MCP executor knows it terminated the request and therefore does
+/// not read this as evidence about the connection generation's health.
 #[derive(Debug)]
-pub(crate) struct McpTransportError<E>(E);
+pub(crate) enum McpTransportError<E> {
+    /// The underlying transport's own failure.
+    Transport(E),
+    /// The request's tool call was already settled, so the request was never
+    /// handed to the transport and never reached the network.
+    LocallyTerminated,
+}
 
 impl<E: std::fmt::Display> std::fmt::Display for McpTransportError<E> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(formatter)
+        match self {
+            Self::Transport(error) => error.fmt(formatter),
+            Self::LocallyTerminated => formatter.write_str(
+                "the MCP request was terminated by rustX before dispatch because its tool \
+                 call was cancelled, so it never reached the transport",
+            ),
+        }
     }
 }
 
 impl<E: std::error::Error + 'static> std::error::Error for McpTransportError<E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.0)
+        match self {
+            Self::Transport(error) => Some(error),
+            Self::LocallyTerminated => None,
+        }
     }
 }
 
 /// The per-connection-generation state the seam owns on behalf of requests.
 pub(crate) struct McpDispatchSeam {
     progress: Arc<McpProgressRouter>,
+    /// Present only for Streamable HTTP: stdio owns no per-request local
+    /// state, so there is no lifecycle for this seam to open there.
+    ownership: Option<Arc<McpHttpRequestOwnership>>,
 }
 
 impl McpDispatchSeam {
-    pub(crate) const fn new(progress: Arc<McpProgressRouter>) -> Self {
-        Self { progress }
+    pub(crate) const fn new(
+        progress: Arc<McpProgressRouter>,
+        ownership: Option<Arc<McpHttpRequestOwnership>>,
+    ) -> Self {
+        Self {
+            progress,
+            ownership,
+        }
     }
 }
 
@@ -93,6 +131,8 @@ impl McpDispatchSeam {
 struct ToolInvocation {
     id: RequestId,
     token: Option<ProgressToken>,
+    #[cfg_attr(not(test), allow(dead_code))]
+    tool: String,
 }
 
 fn tool_invocation(message: &ClientJsonRpcMessage) -> Option<ToolInvocation> {
@@ -102,10 +142,10 @@ fn tool_invocation(message: &ClientJsonRpcMessage) -> Option<ToolInvocation> {
     let ClientRequest::CallToolRequest(call) = &request.request else {
         return None;
     };
-    let _ = call;
     Some(ToolInvocation {
         id: request.id.clone(),
         token: request.request.get_meta().get_progress_token(),
+        tool: call.params.name.to_string(),
     })
 }
 
@@ -132,6 +172,22 @@ impl McpDispatchSeam {
             self.progress.admit(&invocation.id, token);
         }
         Some(invocation)
+    }
+
+    /// Takes dispatch ownership of one tool invocation, immediately before
+    /// its message is handed to the transport.
+    ///
+    /// Deliberately as late as possible: every cancellation that lands
+    /// before this point gets the clean
+    /// [`crate::tools::mcp::streamable_http::LocalRequestTermination::PreDispatchTerminated`]
+    /// outcome — nothing local began, and the refusal here guarantees
+    /// nothing local ever will — rather than a settlement that has to wait
+    /// for a local owner it did not need to create.
+    fn begin_dispatch(&self, id: &RequestId) -> OutboundDispatch {
+        self.ownership.as_ref().map_or_else(
+            || OutboundDispatch::Owned(DispatchOwnership::none()),
+            |ownership| ownership.begin_dispatch(id),
+        )
     }
 
     /// The inbound terminal-correlation point.
@@ -173,9 +229,38 @@ where
         // Synchronous, and before `item` reaches the transport: this is the
         // progress-token linearization point the whole module exists for.
         let invocation = self.seam.admit_progress(&item);
+        // The inner send future is constructed here because it needs the
+        // transport, but it is not polled until the dispatch is owned below,
+        // so nothing has been handed to the wire yet.
         let inner = self.inner.send(item);
-        let _ = &invocation;
-        async move { inner.await.map_err(McpTransportError) }
+        let seam = Arc::clone(&self.seam);
+        async move {
+            let Some(invocation) = invocation else {
+                // Not a tool invocation: no settlement can ever terminate it,
+                // so it owns nothing and passes straight through.
+                return inner.await.map_err(McpTransportError::Transport);
+            };
+            // Test-only: holds one tool invocation between its admission and
+            // its dispatch ownership, which is the window in which a
+            // cancellation is provably pre-dispatch. No production path
+            // installs a pause.
+            #[cfg(test)]
+            crate::tools::mcp::test_sync::park_before_outbound_dispatch(&invocation.tool).await;
+            let guard = match seam.begin_dispatch(&invocation.id) {
+                OutboundDispatch::Owned(guard) => guard,
+                OutboundDispatch::Refused => {
+                    // The tool call was already settled. Dropping the inner
+                    // send future without polling it is what keeps the
+                    // request off the network entirely.
+                    drop(inner);
+                    return Err(McpTransportError::LocallyTerminated);
+                }
+            };
+            // Dispatch ownership lives exactly as long as this send does,
+            // unless the POST takes the baton first.
+            let _guard = guard;
+            inner.await.map_err(McpTransportError::Transport)
+        }
     }
 
     async fn receive(&mut self) -> Option<ServerJsonRpcMessage> {
@@ -187,6 +272,9 @@ where
     }
 
     async fn close(&mut self) -> Result<(), Self::Error> {
-        self.inner.close().await.map_err(McpTransportError)
+        self.inner
+            .close()
+            .await
+            .map_err(McpTransportError::Transport)
     }
 }
