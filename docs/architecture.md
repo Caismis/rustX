@@ -30,8 +30,9 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 23. Version 23 preserves
-`Denied` in background terminal facts (Issue #206). An incompatible database
+The SQLite schema is development schema version 24. Version 24 adds scoped
+Workflow lifecycle facts and concrete instance correlations (Issue #217).
+Version 23 preserved `Denied` in background terminal facts (Issue #206). An incompatible database
 fails explicitly; there is no migration chain, legacy reader, compatibility
 fallback, dual write, or old storage mode. Version 10 froze the structured
 Questionnaire interaction audit vocabulary introduced by Issue #126. Version
@@ -7399,27 +7400,30 @@ graph edges express sequential flow; there is no Sequence/Pipeline primitive.
 An Agent invokes one already admitted named profile with a fixed static task
 and a frozen output schema. It cannot override model, tools, capabilities,
 instructions, workspace policy, approval authority, execution mode, or retry
-policy. Inputs and Returns use explicit typed references such as
-`{ref: review.blockers}`. There is no interpolation or expression language.
+policy. The root and every fixed Parallel branch contain the same compiled
+lexical block. Inputs and Returns use tagged reference, literal, object and
+array values, including `{type: reference, path: [review, blockers]}`.
+There is no interpolation or expression-string language.
 Only committed schema-bound values cross node boundaries; transcripts,
 reasoning, diagnostics, usage, timing, provider identity, and parent history
 remain outside workflow-local values.
 
-Branch consumes one committed boolean reference and deterministically selects
-exactly one true/false successor. Semantic reasoning belongs in an Agent's
-structured output, not in text parsing. Parallel is a finite definition-keyed
-set of one-Agent runs. Branch identity and result/failure ordering are key
-ordered, admission uses native Subagent capacity, and the join is all-settle:
-all admitted children reach native settlement/quiescence before success or
-failure is decided. Execution failures remain failures and are never normal
-Workflow values. Return resolves explicit bindings, validates the frozen
-Workflow output schema, and commits one immutable terminal result.
+Branch consumes a typed boolean/equality/composition predicate and selects
+exactly one true/false successor. Parallel is a finite definition-keyed set
+of private multi-step blocks using the root's executor. Ordinary failure is
+all-settle; native capacity saturation waits cancellably at the registry
+commit boundary. Return validates and completes only its owning block.
+The parent consumes declared exports, never sibling private values.
+
+The authoring grammar, conservative type proof, static-versus-instance
+identity, cancellation frontiers, aggregate budgets and retirement points are
+specified in [Fixed scoped Workflow programs](workflow-programs.md).
 
 Workflow v1 uses a deliberately closed recursive JSON Schema vocabulary. A
 schema must declare one of `array`, `boolean`, `integer`, `null`, `number`,
 `object`, or `string`, and may use only `type`, `properties`, `required`,
 `additionalProperties` (boolean), `items` (one nested schema), `enum`, and
-`const`. These rules apply identically to Workflow input/output schemas,
+`const`, excluding numeric const/enum refinements. These rules apply identically to Workflow input/output schemas,
 Agent output contracts, and Parallel branch outputs. Unsupported
 value-constraining keywords—including length/range/item constraints and
 `oneOf`/`anyOf`/`allOf`—are rejected recursively. Compatibility is proven

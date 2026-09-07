@@ -164,9 +164,9 @@ pub enum SubagentTerminalMode {
         /// The immutable Workflow identity owning this `AgentRun`.
         workflow_id: WorkflowId,
         /// The immutable Workflow invocation identity.
-        run_id: ToolCallId,
+        run_id: crate::runtime::workflow::WorkflowRunId,
         /// The stable Workflow node identity owning this `AgentRun`.
-        node_id: String,
+        node_id: Box<crate::runtime::workflow::WorkflowNodeInstance>,
     },
 }
 
@@ -421,6 +421,8 @@ impl SubagentRecord {
 }
 
 struct RegistryState {
+    #[cfg(test)]
+    capacity_wait_entered: Option<tokio::sync::oneshot::Sender<()>>,
     next_ordinal: u64,
     next_response_id: u64,
     /// The transport correlation allocator of parent-authored guidance
@@ -788,7 +790,7 @@ pub enum SubagentSteerError {
         /// The Workflow that owns this child's semantic input.
         workflow_id: WorkflowId,
         /// The Workflow node that owns this `AgentRun`.
-        node_id: String,
+        node_id: Box<crate::runtime::workflow::WorkflowNodeInstance>,
     },
     /// Terminal authority already won: the child is settling or settled, so
     /// no semantic input can still reach an Agent Loop boundary.
@@ -1309,6 +1311,8 @@ impl SubagentRegistry {
         Self {
             config,
             state: Arc::new(Mutex::new(RegistryState {
+                #[cfg(test)]
+                capacity_wait_entered: None,
                 next_ordinal: 1,
                 next_response_id: 1,
                 next_guidance_id: 1,
@@ -1969,6 +1973,41 @@ impl SubagentRegistry {
         prepared: PreparedSubagent,
         attempt_cancellation: &CancellationSignal,
     ) -> Result<SubagentStartOutcome, SubagentStartError> {
+        self.commit_with_capacity_policy(prepared, attempt_cancellation, false)
+            .await
+    }
+
+    /// Commits an actual prepared child, waiting on native capacity changes.
+    /// The staged child holds no active capacity. Cancellation conclusively
+    /// rolls it back; the caller must await this operation to settlement.
+    /// Waiting is bounded by the invoking foreground execution's cancellation
+    /// authority (including its finite execution deadline).
+    pub(crate) async fn commit_waiting(
+        &self,
+        prepared: PreparedSubagent,
+        cancellation: &CancellationSignal,
+    ) -> Result<SubagentStartOutcome, SubagentStartError> {
+        self.commit_with_capacity_policy(prepared, cancellation, true)
+            .await
+    }
+
+    #[cfg(test)]
+    pub(crate) fn watch_next_capacity_wait(&self) -> tokio::sync::oneshot::Receiver<()> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.state
+            .lock()
+            .expect("registry state")
+            .capacity_wait_entered = Some(sender);
+        receiver
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn commit_with_capacity_policy(
+        &self,
+        prepared: PreparedSubagent,
+        attempt_cancellation: &CancellationSignal,
+        wait_for_capacity: bool,
+    ) -> Result<SubagentStartOutcome, SubagentStartError> {
         // Retain the counted lifecycle admission through the entire
         // prepared-to-driver handoff, including conclusive rollback. This
         // prevents runtime drain from declaring quiescence between the
@@ -1997,138 +2036,172 @@ impl SubagentRegistry {
             profile,
             staged,
         } = prepared;
-        let decision = {
-            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-            let mailbox = self.config.mailbox.clone();
-            let clock = self.config.clock.clone();
-            let monotonic_clock = self.config.monotonic_clock.clone();
-            let config = &self.config;
-            // The lease carried by the staged child is the sole workspace
-            // authority. The prepared wrapper does not keep a second mutable
-            // copy that could drift from the physical owner before commit.
-            let workspace = staged.workspace_snapshot().clone();
-            // Runtime durability frontier (Issue #60): a new
-            // conversation-owned durable ownership commit must linearize
-            // against the owning runtime's `DurabilityFailed` commit on one
-            // synchronization boundary. The permission guard is held across
-            // the durable ownership write and the record publication below,
-            // so a failure that wins the gate first rejects this start (and
-            // the staged child rolls back conclusively), and an ownership
-            // that wins first is already durably owned before the failure
-            // can be published. A standalone registry has no runtime gate
-            // and commits through the unbound-mailbox path. The gate handle
-            // is copied out of the registry state first: the guard borrows
-            // the gate, never the registry state, so the ownership commit
-            // below may still mutate the state while the guard is held.
-            let durability_gate = state.durability_gate.clone();
-            let ownership_permission = durability_gate
-                .as_ref()
-                .map(|gate| gate.enter_ownership_commit());
-            if let Some(Err(refused)) = &ownership_permission {
-                Decision::Failed(SubagentStartError::DurabilityFailed {
-                    detail: refused.diagnostic.clone(),
-                })
-            } else {
-                // `ownership_permission` stays alive to the end of this
-                // block: the gate guard spans the whole ownership commit.
-                let decision = match mailbox.with_running_commit(|| {
-                    if mailbox.is_bound_inactive() {
-                        return Decision::Failed(SubagentStartError::ConversationInactive);
-                    }
-                    #[cfg(test)]
-                    if let Some(hook) = &state.commit_hook {
-                        hook.wait();
-                    }
-                    let active = state
-                        .records
-                        .iter()
-                        // PublishingTerminal remains an owned, unresolved
-                        // settlement and therefore still consumes capacity. A
-                        // durability-failed runtime separately rejects new
-                        // mutations, but capacity must not silently reopen.
-                        .filter(|record| record.lifecycle.is_active())
-                        .count();
-                    if active >= config.max_active {
-                        return Decision::Failed(SubagentStartError::CapacityExceeded {
-                            max: config.max_active,
+        let mut capacity_changes = self.state_version.subscribe();
+        let decision = loop {
+            capacity_changes.borrow_and_update();
+            let decision = {
+                let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+                let mailbox = self.config.mailbox.clone();
+                let clock = self.config.clock.clone();
+                let monotonic_clock = self.config.monotonic_clock.clone();
+                let config = &self.config;
+                // The lease carried by the staged child is the sole workspace
+                // authority. The prepared wrapper does not keep a second mutable
+                // copy that could drift from the physical owner before commit.
+                let workspace = staged.workspace_snapshot().clone();
+                // Runtime durability frontier (Issue #60): a new
+                // conversation-owned durable ownership commit must linearize
+                // against the owning runtime's `DurabilityFailed` commit on one
+                // synchronization boundary. The permission guard is held across
+                // the durable ownership write and the record publication below,
+                // so a failure that wins the gate first rejects this start (and
+                // the staged child rolls back conclusively), and an ownership
+                // that wins first is already durably owned before the failure
+                // can be published. A standalone registry has no runtime gate
+                // and commits through the unbound-mailbox path. The gate handle
+                // is copied out of the registry state first: the guard borrows
+                // the gate, never the registry state, so the ownership commit
+                // below may still mutate the state while the guard is held.
+                let durability_gate = state.durability_gate.clone();
+                let ownership_permission = durability_gate
+                    .as_ref()
+                    .map(|gate| gate.enter_ownership_commit());
+                if let Some(Err(refused)) = &ownership_permission {
+                    Decision::Failed(SubagentStartError::DurabilityFailed {
+                        detail: refused.diagnostic.clone(),
+                    })
+                } else {
+                    // `ownership_permission` stays alive to the end of this
+                    // block: the gate guard spans the whole ownership commit.
+                    let decision = match mailbox.with_running_commit(|| {
+                        if mailbox.is_bound_inactive() {
+                            return Decision::Failed(SubagentStartError::ConversationInactive);
+                        }
+                        #[cfg(test)]
+                        if let Some(hook) = &state.commit_hook {
+                            hook.wait();
+                        }
+                        let active = state
+                            .records
+                            .iter()
+                            // PublishingTerminal remains an owned, unresolved
+                            // settlement and therefore still consumes capacity. A
+                            // durability-failed runtime separately rejects new
+                            // mutations, but capacity must not silently reopen.
+                            .filter(|record| record.lifecycle.is_active())
+                            .count();
+                        if attempt_cancellation.is_cancelled() {
+                            return Decision::RolledBack;
+                        }
+                        if active >= config.max_active {
+                            return Decision::Failed(SubagentStartError::CapacityExceeded {
+                                max: config.max_active,
+                            });
+                        }
+                        if attempt_cancellation.is_cancelled() {
+                            return Decision::RolledBack;
+                        }
+                        let started_at = clock.now();
+                        if let Err(error) = mailbox.commit_subagent_ownership(ownership_event(
+                            &config.conversation_id,
+                            &subagent_id,
+                            &child_agent_id,
+                            &child_conversation_id,
+                            &tool_call_id,
+                            &agent,
+                            &definition_digest,
+                            match &terminal {
+                                SubagentTerminalMode::Normal => SubagentOwnershipKind::Normal,
+                                SubagentTerminalMode::WorkflowOutput { .. } => {
+                                    SubagentOwnershipKind::Workflow
+                                }
+                            },
+                            &workspace,
+                            started_at,
+                        )) {
+                            return Decision::Failed(SubagentStartError::Durability {
+                                detail: error.to_string(),
+                            });
+                        }
+                        // The deadline starts only after the durable ownership
+                        // event succeeds. Sampling the monotonic clock here
+                        // keeps the whole owned lifecycle covered without
+                        // allowing an uncommitted staged child to be cancelled.
+                        let deadline_at_millis = execution_deadline.map(|deadline| {
+                            monotonic_clock
+                                .now_millis()
+                                .saturating_add(deadline.as_millis())
                         });
-                    }
-                    if attempt_cancellation.is_cancelled() {
-                        return Decision::RolledBack;
-                    }
-                    let started_at = clock.now();
-                    if let Err(error) = mailbox.commit_subagent_ownership(ownership_event(
-                        &config.conversation_id,
-                        &subagent_id,
-                        &child_agent_id,
-                        &child_conversation_id,
-                        &tool_call_id,
-                        &agent,
-                        &definition_digest,
-                        match &terminal {
-                            SubagentTerminalMode::Normal => SubagentOwnershipKind::Normal,
-                            SubagentTerminalMode::WorkflowOutput { .. } => {
-                                SubagentOwnershipKind::Workflow
-                            }
-                        },
-                        &workspace,
-                        started_at,
-                    )) {
-                        return Decision::Failed(SubagentStartError::Durability {
-                            detail: error.to_string(),
-                        });
-                    }
-                    // The deadline starts only after the durable ownership
-                    // event succeeds. Sampling the monotonic clock here
-                    // keeps the whole owned lifecycle covered without
-                    // allowing an uncommitted staged child to be cancelled.
-                    let deadline_at_millis = execution_deadline.map(|deadline| {
-                        monotonic_clock
-                            .now_millis()
-                            .saturating_add(deadline.as_millis())
-                    });
-                    Decision::Accepted {
-                        started_at,
-                        deadline_at_millis,
-                    }
-                }) {
-                    Ok(decision) => decision,
-                    Err(_) => Decision::Failed(SubagentStartError::ConversationInactive),
-                };
-                if let Decision::Accepted { started_at, .. } = &decision {
-                    let record = SubagentRecord {
-                        subagent_id: subagent_id.clone(),
-                        child_agent_id: child_agent_id.clone(),
-                        child_conversation_id: child_conversation_id.clone(),
-                        tool_call_id,
-                        agent: agent.clone(),
-                        definition_digest: definition_digest.clone(),
-                        terminal: terminal.clone(),
-                        workspace: workspace.clone(),
-                        handoff: None,
-                        workspace_resource_state: SubagentWorkspaceResourceState::None,
-                        workspace_disposal: None,
-                        workspace_unresolved: None,
-                        lifecycle: SubagentLifecycle::Running,
-                        cancel_reason: None,
-                        steer_tickets: Vec::new(),
-                        deadline_task: None,
-                        control: None,
-                        detail: None,
-                        observation: SubagentObservation::default(),
-                        profile: Some(profile),
-                        terminal_workflow_value: None,
-                        pending_terminal: None,
-                        publication_abandoned: false,
-                        notification: NotificationState::None,
-                        started_at: *started_at,
+                        Decision::Accepted {
+                            started_at,
+                            deadline_at_millis,
+                        }
+                    }) {
+                        Ok(decision) => decision,
+                        Err(_) => Decision::Failed(SubagentStartError::ConversationInactive),
                     };
-                    let index = state.records.len();
-                    state.index.insert(subagent_id.clone(), index);
-                    state.records.push(record);
-                    publish_snapshot(&mut state, &self.state_version, index);
+                    if let Decision::Accepted { started_at, .. } = &decision {
+                        let record = SubagentRecord {
+                            subagent_id: subagent_id.clone(),
+                            child_agent_id: child_agent_id.clone(),
+                            child_conversation_id: child_conversation_id.clone(),
+                            tool_call_id: tool_call_id.clone(),
+                            agent: agent.clone(),
+                            definition_digest: definition_digest.clone(),
+                            terminal: terminal.clone(),
+                            workspace: workspace.clone(),
+                            handoff: None,
+                            workspace_resource_state: SubagentWorkspaceResourceState::None,
+                            workspace_disposal: None,
+                            workspace_unresolved: None,
+                            lifecycle: SubagentLifecycle::Running,
+                            cancel_reason: None,
+                            steer_tickets: Vec::new(),
+                            deadline_task: None,
+                            control: None,
+                            detail: None,
+                            observation: SubagentObservation::default(),
+                            profile: Some(profile.clone()),
+                            terminal_workflow_value: None,
+                            pending_terminal: None,
+                            publication_abandoned: false,
+                            notification: NotificationState::None,
+                            started_at: *started_at,
+                        };
+                        let index = state.records.len();
+                        state.index.insert(subagent_id.clone(), index);
+                        state.records.push(record);
+                        publish_snapshot(&mut state, &self.state_version, index);
+                    }
+                    decision
                 }
-                decision
+            };
+            if wait_for_capacity
+                && self.config.max_active > 0
+                && matches!(
+                    decision,
+                    Decision::Failed(SubagentStartError::CapacityExceeded { .. })
+                )
+            {
+                #[cfg(test)]
+                if let Some(sender) = self
+                    .state
+                    .lock()
+                    .expect("registry state")
+                    .capacity_wait_entered
+                    .take()
+                {
+                    let _ = sender.send(());
+                }
+                tokio::select! {
+                    biased;
+                    () = attempt_cancellation.cancelled() => break Decision::RolledBack,
+                    changed = capacity_changes.changed() => {
+                        if changed.is_err() { break Decision::Failed(SubagentStartError::ConversationInactive); }
+                    }
+                }
+            } else {
+                break decision;
             }
         };
         match decision {
@@ -2493,6 +2566,7 @@ impl SubagentRegistry {
     /// #178). `None` for any non-Workflow child, any non-successful
     /// settlement, and any record that has not settled.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn workflow_agent_output(
         &self,
         subagent_id: &SubagentId,
@@ -2504,6 +2578,27 @@ impl SubagentRegistry {
             return None;
         }
         record.terminal_workflow_value.clone()
+    }
+
+    /// Transfers the settled Workflow value to its live owner exactly once.
+    /// The journal retains bounded evidence; the registry no longer retains
+    /// private block data after this handoff.
+    pub(crate) fn take_workflow_agent_output(
+        &self,
+        subagent_id: &SubagentId,
+        instance: &crate::runtime::workflow::WorkflowNodeInstance,
+    ) -> Option<serde_json::Value> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let &index = state.index.get(subagent_id)?;
+        let record = &mut state.records[index];
+        if record.lifecycle != SubagentLifecycle::Succeeded {
+            return None;
+        }
+        if !matches!(&record.terminal, SubagentTerminalMode::WorkflowOutput { node_id, .. } if node_id.as_ref() == instance)
+        {
+            return None;
+        }
+        record.terminal_workflow_value.take()
     }
 
     /// The consistency snapshots of every known subagent, in ordinal order.
@@ -5150,8 +5245,13 @@ mod tests {
                 }),
                 workflow_id: crate::runtime::workflow::WorkflowId::parse("test_workflow")
                     .expect("workflow id"),
-                run_id: ToolCallId::new("workflow-run"),
-                node_id: "agent".to_owned(),
+                run_id: crate::runtime::workflow::test_instance("test_workflow", "agent")
+                    .block
+                    .run,
+                node_id: Box::new(crate::runtime::workflow::test_instance(
+                    "test_workflow",
+                    "agent",
+                )),
             },
             ..spec(task)
         }
@@ -5690,6 +5790,28 @@ mod tests {
         assert_eq!(
             plane.registry.workflow_agent_output(&accepted.subagent_id),
             Some(serde_json::json!({"summary": "answer"})),
+        );
+        let instance = crate::runtime::workflow::test_instance("test_workflow", "agent");
+        let mut other_instance = instance.clone();
+        other_instance.block.invocations[0] = 1;
+        assert_eq!(
+            plane
+                .registry
+                .take_workflow_agent_output(&accepted.subagent_id, &other_instance),
+            None
+        );
+        assert_eq!(
+            plane
+                .registry
+                .take_workflow_agent_output(&accepted.subagent_id, &instance),
+            Some(serde_json::json!({"summary":"answer"}))
+        );
+        assert_eq!(
+            plane
+                .registry
+                .take_workflow_agent_output(&accepted.subagent_id, &instance),
+            None,
+            "terminal output transfers only once to its exact execution instance"
         );
     }
 
@@ -8471,7 +8593,7 @@ mod tests {
             panic!("the refusal names Workflow ownership, not a lifecycle: {refused:?}");
         };
         assert_eq!(workflow_id.as_str(), "test_workflow");
-        assert_eq!(node_id, "agent");
+        assert_eq!(node_id.node, "agent");
         assert!(
             refused
                 .to_string()

@@ -672,19 +672,39 @@ pub enum RuntimeEvent {
     /// never reconstructed from this event. The successful child value and
     /// native terminal pair use a separate durable transition.
     WorkflowStarted {
+        /// Outer model correlation; never internal execution authority.
+        tool_call_id: ToolCallId,
         /// The configured Workflow identity.
         workflow_id: WorkflowId,
         /// The bounded identity of this foreground invocation.
-        run_id: ToolCallId,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+    },
+    /// A lexical block entered the shared block executor.
+    WorkflowBlockStarted {
+        instance: crate::runtime::workflow::WorkflowBlockInstance,
+    },
+    /// Private locals retired after all accepted native children settled.
+    WorkflowBlockSettled {
+        instance: crate::runtime::workflow::WorkflowBlockInstance,
+        outcome: crate::runtime::workflow::WorkflowExecutionOutcome,
+    },
+    /// A node crossed the cancellation/count admission frontier.
+    WorkflowNodeStarted {
+        instance: crate::runtime::workflow::WorkflowNodeInstance,
+    },
+    /// A node completed, failed or drained cancellation exactly once.
+    WorkflowNodeSettled {
+        instance: crate::runtime::workflow::WorkflowNodeInstance,
+        outcome: crate::runtime::workflow::WorkflowExecutionOutcome,
     },
     /// One named Subagent child was admitted to a Workflow Agent node.
     WorkflowAgentAdmitted {
         /// The configured Workflow identity.
         workflow_id: WorkflowId,
         /// The bounded identity of this foreground invocation.
-        run_id: ToolCallId,
+        run_id: crate::runtime::workflow::WorkflowRunId,
         /// The stable Workflow node identity.
-        node_id: String,
+        node_id: crate::runtime::workflow::WorkflowNodeInstance,
         /// The native child identity.
         subagent_id: SubagentId,
         /// The frozen named profile selected by the program.
@@ -695,9 +715,9 @@ pub enum RuntimeEvent {
         /// The configured Workflow identity.
         workflow_id: WorkflowId,
         /// The bounded identity of this foreground invocation.
-        run_id: ToolCallId,
+        run_id: crate::runtime::workflow::WorkflowRunId,
         /// The stable Workflow node identity.
-        node_id: String,
+        node_id: crate::runtime::workflow::WorkflowNodeInstance,
         /// The native child identity.
         subagent_id: SubagentId,
         /// The validated structured value committed by the child terminal
@@ -710,22 +730,22 @@ pub enum RuntimeEvent {
         /// The configured Workflow identity.
         workflow_id: WorkflowId,
         /// The bounded identity of this foreground invocation.
-        run_id: ToolCallId,
+        run_id: crate::runtime::workflow::WorkflowRunId,
         /// The stable Branch node identity.
-        node_id: String,
+        node_id: crate::runtime::workflow::WorkflowNodeInstance,
         /// The deterministic selected port.
         port: WorkflowPort,
         /// The selected successor node identity.
         successor: String,
     },
-    /// All keyed children of a Parallel node were admitted.
+    /// A Parallel node admitted its fixed keyed block set, before child work.
     WorkflowParallelAdmitted {
         /// The configured Workflow identity.
         workflow_id: WorkflowId,
         /// The bounded identity of this foreground invocation.
-        run_id: ToolCallId,
+        run_id: crate::runtime::workflow::WorkflowRunId,
         /// The stable Parallel node identity.
-        node_id: String,
+        node_id: crate::runtime::workflow::WorkflowNodeInstance,
         /// Branch keys in definition order.
         branches: Vec<String>,
     },
@@ -734,9 +754,9 @@ pub enum RuntimeEvent {
         /// The configured Workflow identity.
         workflow_id: WorkflowId,
         /// The bounded identity of this foreground invocation.
-        run_id: ToolCallId,
+        run_id: crate::runtime::workflow::WorkflowRunId,
         /// The stable Parallel node identity.
-        node_id: String,
+        node_id: crate::runtime::workflow::WorkflowNodeInstance,
         /// Successful branch keys in definition order.
         succeeded: Vec<String>,
         /// Failed branch keys in definition order.
@@ -747,14 +767,14 @@ pub enum RuntimeEvent {
         /// The configured Workflow identity.
         workflow_id: WorkflowId,
         /// The bounded identity of this foreground invocation.
-        run_id: ToolCallId,
+        run_id: crate::runtime::workflow::WorkflowRunId,
     },
     /// A `WorkflowRun` failed without producing a result.
     WorkflowFailed {
         /// The configured Workflow identity.
         workflow_id: WorkflowId,
         /// The bounded identity of this foreground invocation.
-        run_id: ToolCallId,
+        run_id: crate::runtime::workflow::WorkflowRunId,
         /// A bounded runtime diagnostic; it never contains child transcript.
         diagnostic: String,
     },
@@ -763,7 +783,7 @@ pub enum RuntimeEvent {
         /// The configured Workflow identity.
         workflow_id: WorkflowId,
         /// The bounded identity of this foreground invocation.
-        run_id: ToolCallId,
+        run_id: crate::runtime::workflow::WorkflowRunId,
         /// The native cancellation cause.
         reason: CancellationReason,
     },

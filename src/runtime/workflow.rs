@@ -1,4 +1,4 @@
-//! Native, provider-independent Workflow programs (Issue #83).
+//! Native, provider-independent scoped Workflow programs (Issues #83/#217).
 //!
 //! YAML is only the serialization format at this boundary. The loader turns a
 //! configured workflow file into [`WorkflowDefinition`], the compiler checks
@@ -19,10 +19,100 @@ use sha2::{Digest, Sha256};
 
 use crate::durable::ConversationStore;
 use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
-use crate::runtime::identity::{EventId, SubagentId, ToolCallId};
+#[cfg(test)]
+use crate::runtime::identity::SubagentId;
+use crate::runtime::identity::{EventId, ToolCallId};
 pub use crate::tools::executor::WORKFLOW_OUTPUT_TOOL_NAME;
 
 use super::subagent::SubagentName;
+
+mod execution;
+mod expressions;
+use expressions::{
+    evaluate_predicate, evaluate_value, valid_local_key, validate_predicate, value_schema,
+};
+
+/// Runtime-owned identity, independent of model `ToolCall` text.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct WorkflowRunId {
+    /// Owning conversation.
+    pub conversation_id: crate::runtime::identity::ConversationId,
+    /// Native admitted attempt, unique across process recovery.
+    pub attempt_id: crate::runtime::identity::AttemptId,
+    /// WorkflowRuntime-owned invocation ordinal, allocated at run admission.
+    pub invocation: u64,
+}
+
+/// Static source location; never a concrete execution authority.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct WorkflowDefinitionPath {
+    pub workflow_id: WorkflowId,
+    /// Alternating Parallel node and branch keys; empty for root.
+    pub blocks: Vec<String>,
+}
+
+/// A concrete block instance. Future iterations vary invocation components.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct WorkflowBlockInstance {
+    pub run: WorkflowRunId,
+    pub definition: WorkflowDefinitionPath,
+    pub invocations: Vec<u32>,
+}
+
+/// One concrete node visit in an owning block instance.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct WorkflowNodeInstance {
+    pub block: WorkflowBlockInstance,
+    pub node: String,
+    pub visit: u32,
+}
+
+/// Bounded block/node observation; live state stays in the executor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowExecutionOutcome {
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl fmt::Display for WorkflowNodeInstance {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{}:{}:{}:{}",
+            format_args!(
+                "{}:{}",
+                self.block.run.attempt_id, self.block.run.invocation
+            ),
+            self.block.definition.blocks.join("."),
+            self.node,
+            self.visit
+        )
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_instance(workflow: &str, node: &str) -> WorkflowNodeInstance {
+    WorkflowNodeInstance {
+        block: WorkflowBlockInstance {
+            run: WorkflowRunId {
+                conversation_id: crate::runtime::identity::ConversationId::new(
+                    "test-workflow-conversation",
+                ),
+                attempt_id: crate::runtime::identity::AttemptId::new("test-workflow-execution"),
+                invocation: 1,
+            },
+            definition: WorkflowDefinitionPath {
+                workflow_id: WorkflowId::parse(workflow).expect("test workflow"),
+                blocks: Vec::new(),
+            },
+            invocations: vec![0],
+        },
+        node: node.into(),
+        visit: 0,
+    }
+}
 
 /// The maximum serialized workflow size accepted by the native loader.
 pub const MAX_WORKFLOW_BYTES: usize = 512 * 1024;
@@ -34,6 +124,18 @@ pub const MAX_WORKFLOW_DEFINITIONS: usize = 64;
 pub const MAX_PARALLEL_BRANCHES: usize = 32;
 /// The maximum number of path components in one explicit reference.
 pub const MAX_REFERENCE_COMPONENTS: usize = 32;
+/// Aggregate nested block depth, with root at zero.
+pub const MAX_BLOCK_DEPTH: usize = 8;
+/// Maximum expression/schema/value nesting.
+pub const MAX_VALUE_DEPTH: usize = 32;
+/// Maximum serialized construction or value at a commit boundary.
+pub const MAX_VALUE_BYTES: usize = 64 * 1024;
+/// Aggregate retained inputs, locals and exported branch results in one run.
+pub const MAX_LOCAL_BYTES: usize = 4 * 1024 * 1024;
+/// Bound on each native run identity component; static keys have separate bounds.
+pub const MAX_RUN_ID_COMPONENT_BYTES: usize = 256;
+/// Retained text per native failure or branch diagnostic, excluding its key.
+pub const MAX_WORKFLOW_DIAGNOSTIC_BYTES: usize = 1024;
 /// The reserved Tool-id namespace of model-facing Workflow Tools.
 ///
 /// Workflow Tools are concrete parent-plane capabilities, but they are not
@@ -140,6 +242,14 @@ impl std::error::Error for WorkflowIdError {}
 pub struct WorkflowDefinition {
     /// The model-facing description of the workflow Tool.
     pub description: String,
+    /// The root lexical execution scope.
+    pub block: WorkflowBlock,
+}
+
+/// A fixed lexical graph. Root and Parallel branches have identical semantics.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowBlock {
     /// The workflow input JSON Schema.
     pub input: Value,
     /// The workflow output JSON Schema.
@@ -166,35 +276,67 @@ pub enum WorkflowNodeDefinition {
         task: String,
         /// Explicit input bindings from workflow-local values.
         #[serde(default)]
-        input: BTreeMap<String, WorkflowBinding>,
+        input: BTreeMap<String, WorkflowValue>,
         /// The frozen `AgentRun` output contract.
         output: Value,
     },
     /// Deterministic selection from one committed boolean value.
     Branch {
         /// The sole boolean condition binding.
-        condition: WorkflowBinding,
+        condition: WorkflowPredicate,
     },
-    /// A finite keyed set of one-Agent branches.
+    /// A finite keyed set of private lexical blocks.
     Parallel {
         /// Branches are keyed by definition identity, not completion order.
         #[serde(deserialize_with = "deserialize_unique_map")]
-        branches: BTreeMap<String, WorkflowParallelBranchDefinition>,
+        branches: BTreeMap<String, WorkflowBranch>,
     },
-    /// Resolves explicit bindings and settles the workflow.
+    /// Constructs a value and completes exactly this owning block.
     Return {
-        /// The fields of the workflow result.
-        output: BTreeMap<String, WorkflowBinding>,
+        /// The owning block's declared result.
+        output: WorkflowValue,
     },
 }
 
-/// One explicit structured workflow value reference.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct WorkflowBinding {
-    /// A path such as `args.task` or `review.blockers`.
-    #[serde(rename = "ref")]
-    pub reference: String,
+/// Closed, explicitly tagged value syntax; no evaluation of expression strings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkflowValue {
+    /// First component is `args` or a local producer; remaining components are fields.
+    Reference { path: Vec<String> },
+    /// Literal JSON, including objects and arrays, never interpreted as syntax.
+    Literal { value: Value },
+    /// Construct an object atomically.
+    Object {
+        #[serde(deserialize_with = "deserialize_unique_map")]
+        fields: BTreeMap<String, WorkflowValue>,
+    },
+    /// Construct an array atomically.
+    Array { items: Vec<WorkflowValue> },
+}
+
+/// Typed predicates. Equality requires matching scalar types; no coercion.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkflowPredicate {
+    /// A boolean value.
+    Boolean { value: WorkflowValue },
+    /// Equal scalar operands of the same static type.
+    Equal {
+        left: WorkflowValue,
+        right: WorkflowValue,
+    },
+    /// Unequal scalar operands of the same static type.
+    NotEqual {
+        left: WorkflowValue,
+        right: WorkflowValue,
+    },
+    /// Boolean negation.
+    Not { predicate: Box<WorkflowPredicate> },
+    /// Conjunction of a nonempty fixed list.
+    And { predicates: Vec<WorkflowPredicate> },
+    /// Disjunction of a nonempty fixed list.
+    Or { predicates: Vec<WorkflowPredicate> },
 }
 
 /// One explicit edge in the workflow graph.
@@ -254,19 +396,14 @@ impl<'de> Deserialize<'de> for WorkflowPort {
     }
 }
 
-/// One Agent branch inside a Parallel node.
+/// One explicit input projection and fixed private Parallel block.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct WorkflowParallelBranchDefinition {
-    /// The native named profile.
-    pub profile: SubagentName,
-    /// The fixed task instruction.
-    pub task: String,
-    /// Explicit inputs.
-    #[serde(default)]
-    pub input: BTreeMap<String, WorkflowBinding>,
-    /// The frozen branch output contract.
-    pub output: Value,
+pub struct WorkflowBranch {
+    /// Evaluated in the parent scope and checked against the child input schema.
+    pub input: WorkflowValue,
+    /// The child's private graph and contracts.
+    pub block: WorkflowBlock,
 }
 
 /// A compiled, immutable executable workflow.
@@ -274,6 +411,15 @@ pub struct WorkflowParallelBranchDefinition {
 pub struct WorkflowProgram {
     id: WorkflowId,
     description: String,
+    block: WorkflowBlockProgram,
+    total_nodes: usize,
+    retained_bound: usize,
+}
+
+/// Immutable compiled graph shared by root and every nested branch.
+#[derive(Debug, Clone)]
+pub struct WorkflowBlockProgram {
+    path: Vec<String>,
     input_schema: Value,
     output_schema: Value,
     entry: String,
@@ -311,31 +457,31 @@ impl WorkflowProgram {
     /// The immutable input schema.
     #[must_use]
     pub fn input_schema(&self) -> &Value {
-        &self.input_schema
+        &self.block.input_schema
     }
 
     /// The immutable output schema.
     #[must_use]
     pub fn output_schema(&self) -> &Value {
-        &self.output_schema
+        &self.block.output_schema
     }
 
     /// The explicit entry node.
     #[must_use]
     pub fn entry(&self) -> &str {
-        &self.entry
+        &self.block.entry
     }
 
     /// The compiled nodes in deterministic id order.
     #[must_use]
     pub fn nodes(&self) -> &BTreeMap<String, WorkflowNodeProgram> {
-        &self.nodes
+        &self.block.nodes
     }
 
     /// The compiled outgoing edges of a node.
     #[must_use]
     pub fn outgoing(&self, node: &str) -> &[WorkflowEdgeProgram] {
-        self.outgoing.get(node).map_or(&[], Vec::as_slice)
+        self.block.outgoing.get(node).map_or(&[], Vec::as_slice)
     }
 }
 
@@ -345,16 +491,14 @@ pub enum WorkflowNodeProgram {
     /// One admitted `AgentRun` template.
     Agent(WorkflowAgentProgram),
     /// One boolean Branch.
-    Branch { condition: WorkflowBinding },
-    /// One keyed finite fan-out of `AgentRun` templates.
+    Branch { condition: WorkflowPredicate },
+    /// One keyed finite fan-out of compiled private blocks.
     Parallel {
-        branches: BTreeMap<String, WorkflowAgentProgram>,
+        branches: BTreeMap<String, WorkflowBranchProgram>,
         output_schema: Value,
     },
     /// The terminal Return operation.
-    Return {
-        output: BTreeMap<String, WorkflowBinding>,
-    },
+    Return { output: WorkflowValue },
 }
 
 /// A compiled `AgentRun` template.
@@ -365,9 +509,16 @@ pub struct WorkflowAgentProgram {
     /// The fixed task string.
     pub task: String,
     /// Explicit input bindings.
-    pub input: BTreeMap<String, WorkflowBinding>,
+    pub input: BTreeMap<String, WorkflowValue>,
     /// Frozen output contract.
     pub output_schema: Value,
+}
+
+/// Compiled explicit child input projection and private block.
+#[derive(Debug, Clone)]
+pub struct WorkflowBranchProgram {
+    input: WorkflowValue,
+    block: WorkflowBlockProgram,
 }
 
 /// A compiled edge.
@@ -543,11 +694,51 @@ fn compile_program(
             "workflow {id} description is too large"
         )));
     }
+    if serde_json::to_vec(&definition).map_or(true, |bytes| bytes.len() > MAX_WORKFLOW_BYTES) {
+        return Err(WorkflowCompileError::InvalidField(
+            "aggregate program size exceeded".into(),
+        ));
+    }
+    let mut total_nodes = 0;
+    let block = compile_block(
+        definition.block,
+        workflow_profiles,
+        Vec::new(),
+        &mut total_nodes,
+    )?;
+    let retained_bound = execution::static_retained_bound(&block);
+    if retained_bound > MAX_LOCAL_BYTES {
+        return Err(WorkflowCompileError::InvalidField(
+            "aggregate retained-data reservation exceeds the run budget".into(),
+        ));
+    }
+    Ok(WorkflowProgram {
+        id,
+        description: definition.description,
+        block,
+        total_nodes,
+        retained_bound,
+    })
+}
+
+#[allow(clippy::too_many_lines)]
+fn compile_block(
+    definition: WorkflowBlock,
+    workflow_profiles: &BTreeSet<SubagentName>,
+    path: Vec<String>,
+    total_nodes: &mut usize,
+) -> Result<WorkflowBlockProgram, WorkflowCompileError> {
+    *total_nodes += definition.nodes.len();
+    if path.len() / 2 > MAX_BLOCK_DEPTH || *total_nodes > MAX_WORKFLOW_NODES {
+        return Err(WorkflowCompileError::InvalidField(
+            "aggregate block depth/node bound exceeded".into(),
+        ));
+    }
     validate_root_schema(&definition.input, "input")?;
     validate_root_schema(&definition.output, "output")?;
     if definition.nodes.is_empty() || definition.nodes.len() > MAX_WORKFLOW_NODES {
         return Err(WorkflowCompileError::InvalidField(format!(
-            "workflow {id} must contain between one and {MAX_WORKFLOW_NODES} nodes"
+            "block must contain between one and {MAX_WORKFLOW_NODES} nodes"
         )));
     }
     if definition.entry.trim().is_empty() {
@@ -556,7 +747,7 @@ fn compile_program(
         ));
     }
     for node_id in definition.nodes.keys() {
-        if node_id.trim().is_empty() || node_id.len() > 64 || node_id.contains('.') {
+        if node_id == "args" || !valid_local_key(node_id) {
             return Err(WorkflowCompileError::InvalidField(format!(
                 "workflow node id {node_id:?} must be non-empty, at most 64 bytes, and contain no dots"
             )));
@@ -699,13 +890,7 @@ fn compile_program(
                 WorkflowNodeProgram::Agent(agent)
             }
             WorkflowNodeDefinition::Branch { condition } => {
-                let schema = resolve_reference(condition, &available_before, &node_id)?;
-                if schema_type(schema) != Some("boolean") {
-                    return Err(WorkflowCompileError::IncompatibleReference(format!(
-                        "Branch {:?} condition {} must resolve to boolean",
-                        node_id, condition.reference
-                    )));
-                }
+                validate_predicate(condition, &available_before, &node_id, 0)?;
                 if outgoing[&node_id].len() != 2
                     || !outgoing[&node_id]
                         .iter()
@@ -732,28 +917,31 @@ fn compile_program(
                 let mut compiled_branches = BTreeMap::new();
                 let mut output_properties = serde_json::Map::new();
                 for (key, branch) in branches {
-                    if key.trim().is_empty() || key.len() > 64 || key.contains('.') {
+                    if !valid_local_key(key) {
                         return Err(WorkflowCompileError::InvalidField(format!(
                             "Parallel {node_id:?} branch key {key:?} must be non-empty, at most 64 bytes, and contain no dots"
                         )));
                     }
-                    validate_agent(
-                        &branch.profile,
-                        &branch.task,
-                        &branch.input,
-                        &branch.output,
+                    let actual = value_schema(&branch.input, &available_before, &node_id, 0)?;
+                    if !schemas_compatible(&actual, &branch.block.input) {
+                        return Err(WorkflowCompileError::IncompatibleReference(format!(
+                            "branch {key} input contract mismatch"
+                        )));
+                    }
+                    let mut child_path = path.clone();
+                    child_path.extend([node_id.clone(), key.clone()]);
+                    let block = compile_block(
+                        branch.block.clone(),
                         workflow_profiles,
-                        &available_before,
-                        &format!("{node_id}.{key}"),
+                        child_path,
+                        total_nodes,
                     )?;
-                    output_properties.insert(key.clone(), branch.output.clone());
+                    output_properties.insert(key.clone(), block.output_schema.clone());
                     compiled_branches.insert(
                         key.clone(),
-                        WorkflowAgentProgram {
-                            profile: branch.profile.clone(),
-                            task: branch.task.clone(),
+                        WorkflowBranchProgram {
                             input: branch.input.clone(),
-                            output_schema: branch.output.clone(),
+                            block,
                         },
                     );
                 }
@@ -778,7 +966,12 @@ fn compile_program(
                         "Return node {node_id:?} cannot have outgoing edges"
                     )));
                 }
-                validate_return(output, &available_before, &definition.output, &node_id)?;
+                let actual = value_schema(output, &available_before, &node_id, 0)?;
+                if !schemas_compatible(&actual, &definition.output) {
+                    return Err(WorkflowCompileError::IncompatibleReference(format!(
+                        "Return {node_id} output contract mismatch"
+                    )));
+                }
                 available_after.insert(node_id.clone(), available_before.clone());
                 WorkflowNodeProgram::Return {
                     output: output.clone(),
@@ -811,14 +1004,10 @@ fn compile_program(
             "every workflow must contain a reachable Return node".to_owned(),
         ));
     }
-    for node in nodes.keys() {
-        if !reaches_return(node, &outgoing, &nodes, &mut BTreeSet::new()) {
-            return Err(WorkflowCompileError::Unterminated(node.clone()));
-        }
-    }
-    Ok(WorkflowProgram {
-        id,
-        description: definition.description,
+    // A finite DAG whose only zero-outdegree nodes are Returns necessarily
+    // terminates on every path. Do not enumerate exponentially many paths.
+    Ok(WorkflowBlockProgram {
+        path,
         input_schema: definition.input,
         output_schema: definition.output,
         entry: definition.entry,
@@ -901,6 +1090,20 @@ const WORKFLOW_SCHEMA_TYPES: &[&str] = &[
 
 #[allow(clippy::too_many_lines)] // one recursive closed-vocabulary schema validator
 fn validate_workflow_schema(schema: &Value, path: &str) -> Result<(), WorkflowCompileError> {
+    validate_workflow_schema_at(schema, path, 0)
+}
+
+#[allow(clippy::too_many_lines)]
+fn validate_workflow_schema_at(
+    schema: &Value,
+    path: &str,
+    depth: usize,
+) -> Result<(), WorkflowCompileError> {
+    if depth > MAX_VALUE_DEPTH {
+        return Err(WorkflowCompileError::InvalidSchema(
+            "schema depth exceeded".into(),
+        ));
+    }
     let Some(object) = schema.as_object() else {
         return Err(WorkflowCompileError::InvalidSchema(format!(
             "workflow schema {path:?} must be an object"
@@ -923,6 +1126,16 @@ fn validate_workflow_schema(schema: &Value, path: &str) -> Result<(), WorkflowCo
     if !WORKFLOW_SCHEMA_TYPES.contains(&kind) {
         return Err(WorkflowCompileError::InvalidSchema(format!(
             "workflow schema {path:?} has unsupported type {kind:?}"
+        )));
+    }
+    // The current validator's numeric const path compares through f64.
+    // Do not use that approximation as a static finite-value proof. Ordinary
+    // integer/number schemas and numeric data remain supported.
+    if matches!(kind, "integer" | "number")
+        && (object.contains_key("const") || object.contains_key("enum"))
+    {
+        return Err(WorkflowCompileError::InvalidSchema(format!(
+            "workflow schema {path:?}: numeric const/enum are outside the conservative static subset"
         )));
     }
 
@@ -951,6 +1164,17 @@ fn validate_workflow_schema(schema: &Value, path: &str) -> Result<(), WorkflowCo
             "workflow schema {path:?} const must be included in enum"
         )));
     }
+    for value in object.get("const").into_iter().chain(
+        object
+            .get("enum")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten(),
+    ) {
+        expressions::bounded_value_bytes(value).map_err(|error| {
+            WorkflowCompileError::InvalidSchema(format!("schema {path:?} finite value: {error}"))
+        })?;
+    }
 
     match kind {
         "object" => {
@@ -961,7 +1185,11 @@ fn validate_workflow_schema(schema: &Value, path: &str) -> Result<(), WorkflowCo
                     )));
                 };
                 for (name, property) in properties {
-                    validate_workflow_schema(property, &format!("{path}.properties.{name}"))?;
+                    validate_workflow_schema_at(
+                        property,
+                        &format!("{path}.properties.{name}"),
+                        depth + 1,
+                    )?;
                 }
             }
             if let Some(required) = object.get("required") {
@@ -1016,7 +1244,7 @@ fn validate_workflow_schema(schema: &Value, path: &str) -> Result<(), WorkflowCo
                         "workflow schema {path:?} items must be one schema object"
                     )));
                 }
-                validate_workflow_schema(items, &format!("{path}.items"))?;
+                validate_workflow_schema_at(items, &format!("{path}.items"), depth + 1)?;
             }
             for keyword in ["properties", "required", "additionalProperties"] {
                 if object.contains_key(keyword) {
@@ -1042,7 +1270,7 @@ fn validate_workflow_schema(schema: &Value, path: &str) -> Result<(), WorkflowCo
 fn validate_agent(
     profile: &SubagentName,
     task: &str,
-    input: &BTreeMap<String, WorkflowBinding>,
+    input: &BTreeMap<String, WorkflowValue>,
     output: &Value,
     workflow_profiles: &BTreeSet<SubagentName>,
     available: &SchemaMap,
@@ -1073,52 +1301,7 @@ fn validate_agent(
                 "Agent {node:?} input binding name {name:?} must be at most 64 bytes and contain no dots"
             )));
         }
-        resolve_reference(binding, available, node)?;
-    }
-    Ok(())
-}
-
-fn validate_return(
-    bindings: &BTreeMap<String, WorkflowBinding>,
-    available: &SchemaMap,
-    output_schema: &Value,
-    node: &str,
-) -> Result<(), WorkflowCompileError> {
-    let properties = output_schema
-        .get("properties")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    let required = output_schema
-        .get("required")
-        .and_then(Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<BTreeSet<_>>()
-        })
-        .unwrap_or_default();
-    for key in &required {
-        if !bindings.contains_key(*key) {
-            return Err(WorkflowCompileError::InvalidReference(format!(
-                "Return {node:?} does not bind required output field {key:?}"
-            )));
-        }
-    }
-    for (key, binding) in bindings {
-        let Some(expected) = properties.get(key) else {
-            return Err(WorkflowCompileError::InvalidReference(format!(
-                "Return {node:?} binds unknown workflow output field {key:?}"
-            )));
-        };
-        let actual = resolve_reference(binding, available, node)?;
-        if !schemas_compatible(actual, expected) {
-            return Err(WorkflowCompileError::IncompatibleReference(format!(
-                "Return {node:?} binding {} is incompatible with output field {key:?}",
-                binding.reference
-            )));
-        }
+        value_schema(binding, available, node, 0)?;
     }
     Ok(())
 }
@@ -1164,46 +1347,12 @@ fn reachable_nodes(
     seen
 }
 
-fn reaches_return(
-    node: &str,
-    outgoing: &BTreeMap<String, Vec<WorkflowEdgeProgram>>,
-    programs: &BTreeMap<String, WorkflowNodeProgram>,
-    visiting: &mut BTreeSet<String>,
-) -> bool {
-    if matches!(programs[node], WorkflowNodeProgram::Return { .. }) {
-        return true;
-    }
-    if !visiting.insert(node.to_owned()) {
-        return false;
-    }
-    let result = outgoing[node]
-        .iter()
-        .all(|edge| reaches_return(&edge.to, outgoing, programs, visiting));
-    visiting.remove(node);
-    result
-}
-
 #[derive(Debug, Clone, Default)]
 struct SchemaMap(BTreeMap<String, Value>);
 
 impl SchemaMap {
     fn from_schema(schema: &Value) -> Self {
-        let mut map = BTreeMap::new();
-        let required = schema
-            .get("required")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .collect::<BTreeSet<_>>();
-        if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
-            for (name, property) in properties {
-                if required.contains(name.as_str()) {
-                    map.insert(name.clone(), property.clone());
-                }
-            }
-        }
-        Self(map)
+        Self(BTreeMap::from([("args".into(), schema.clone())]))
     }
 
     fn with_prefix(&self, prefix: &str, schema: &Value) -> Self {
@@ -1229,96 +1378,6 @@ fn intersect_schema_maps(maps: &[&SchemaMap]) -> SchemaMap {
         });
     }
     result
-}
-
-fn resolve_reference<'a>(
-    binding: &WorkflowBinding,
-    available: &'a SchemaMap,
-    node: &str,
-) -> Result<&'a Value, WorkflowCompileError> {
-    let parts = binding.reference.split('.').collect::<Vec<_>>();
-    if parts.is_empty()
-        || parts.len() > MAX_REFERENCE_COMPONENTS
-        || parts.iter().any(|part| part.is_empty())
-    {
-        return Err(WorkflowCompileError::InvalidReference(format!(
-            "node {node:?} has malformed workflow reference {:?}",
-            binding.reference
-        )));
-    }
-    if parts[0] == "args" {
-        if parts.len() < 2 {
-            return Err(WorkflowCompileError::InvalidReference(format!(
-                "workflow reference {:?} must name an input/output field",
-                binding.reference
-            )));
-        }
-        let Some(mut schema) = available.0.get(parts[1]) else {
-            return Err(WorkflowCompileError::InvalidReference(format!(
-                "node {node:?} references unavailable value {:?}",
-                binding.reference
-            )));
-        };
-        for part in &parts[2..] {
-            let required = schema_required(schema).contains(part);
-            if !required {
-                return Err(WorkflowCompileError::InvalidReference(format!(
-                    "node {node:?} reference {:?} crosses an optional field {:?}",
-                    binding.reference, part
-                )));
-            }
-            let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
-                return Err(WorkflowCompileError::InvalidReference(format!(
-                    "node {node:?} reference {:?} crosses a non-object value",
-                    binding.reference
-                )));
-            };
-            schema = properties.get(*part).ok_or_else(|| {
-                WorkflowCompileError::InvalidReference(format!(
-                    "node {node:?} references unknown field {:?}",
-                    binding.reference
-                ))
-            })?;
-        }
-        return Ok(schema);
-    }
-    if parts.len() < 2 {
-        return Err(WorkflowCompileError::InvalidReference(format!(
-            "workflow reference {:?} must include a field path",
-            binding.reference
-        )));
-    }
-    let Some(mut schema) = available.0.get(parts[0]) else {
-        return Err(WorkflowCompileError::InvalidReference(format!(
-            "node {node:?} references unavailable producer {:?}",
-            parts[0]
-        )));
-    };
-    for part in &parts[1..] {
-        let required = schema
-            .get("required")
-            .and_then(Value::as_array)
-            .is_some_and(|required| required.iter().any(|value| value.as_str() == Some(part)));
-        if !required {
-            return Err(WorkflowCompileError::InvalidReference(format!(
-                "node {node:?} reference {:?} crosses an optional field {:?}",
-                binding.reference, part
-            )));
-        }
-        let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
-            return Err(WorkflowCompileError::InvalidReference(format!(
-                "node {node:?} reference {:?} crosses a non-object value",
-                binding.reference
-            )));
-        };
-        schema = properties.get(*part).ok_or_else(|| {
-            WorkflowCompileError::InvalidReference(format!(
-                "node {node:?} references unknown field {:?}",
-                binding.reference
-            ))
-        })?;
-    }
-    Ok(schema)
 }
 
 fn schema_type(schema: &Value) -> Option<&str> {
@@ -1611,9 +1670,8 @@ pub enum WorkflowTerminalState {
 /// scheduler.
 pub struct WorkflowRun {
     program: Arc<WorkflowProgram>,
-    run_id: ToolCallId,
-    values: BTreeMap<String, Value>,
-    active_children: BTreeSet<SubagentId>,
+    run_id: WorkflowRunId,
+    budgets: std::sync::Mutex<execution::RunBudgets>,
     terminal: Option<WorkflowTerminalState>,
 }
 
@@ -1623,20 +1681,19 @@ impl fmt::Debug for WorkflowRun {
             .debug_struct("WorkflowRun")
             .field("program", &self.program.id())
             .field("run_id", &self.run_id)
-            .field("values", &self.values.keys().collect::<Vec<_>>())
-            .field("active_children", &self.active_children)
+            .field("budgets", &self.budgets)
             .field("terminal", &self.terminal)
             .finish()
     }
 }
 
 impl WorkflowRun {
-    fn new(program: Arc<WorkflowProgram>, run_id: ToolCallId) -> Self {
+    fn new(program: Arc<WorkflowProgram>, run_id: WorkflowRunId) -> Self {
+        let budgets = execution::RunBudgets::reserved(program.retained_bound);
         Self {
             program,
             run_id,
-            values: BTreeMap::new(),
-            active_children: BTreeSet::new(),
+            budgets: std::sync::Mutex::new(budgets),
             terminal: None,
         }
     }
@@ -1645,12 +1702,6 @@ impl WorkflowRun {
     #[must_use]
     pub fn program(&self) -> &Arc<WorkflowProgram> {
         &self.program
-    }
-
-    /// The explicitly committed workflow-local values.
-    #[must_use]
-    pub fn values(&self) -> &BTreeMap<String, Value> {
-        &self.values
     }
 
     /// The terminal settlement, once committed.
@@ -1676,6 +1727,11 @@ pub struct WorkflowRuntime {
     /// best-effort observability here; the journal never becomes the
     /// `WorkflowRun` state authority.
     event_store: Arc<dyn ConversationStore>,
+    next_run: Arc<std::sync::atomic::AtomicU64>,
+    #[cfg(test)]
+    node_frontier: Arc<std::sync::Mutex<Option<execution::NodeFrontierHook>>>,
+    #[cfg(test)]
+    observations: tokio::sync::watch::Sender<Vec<RuntimeEvent>>,
 }
 
 impl fmt::Debug for WorkflowRuntime {
@@ -1710,6 +1766,11 @@ impl WorkflowRuntime {
         Self {
             subagents,
             event_store,
+            next_run: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+            #[cfg(test)]
+            node_frontier: Arc::new(std::sync::Mutex::new(None)),
+            #[cfg(test)]
+            observations: tokio::sync::watch::Sender::new(Vec::new()),
         }
     }
 
@@ -1732,49 +1793,56 @@ impl WorkflowRuntime {
         input: Value,
         cancellation: crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<Value, WorkflowRunError> {
-        let mut run = WorkflowRun::new(program.clone(), run_id);
+        if context.attempt_id().as_str().len() > MAX_RUN_ID_COMPONENT_BYTES
+            || context.attempt_id().as_str().is_empty()
+            || self.event_store.conversation_id().as_str().len() > MAX_RUN_ID_COMPONENT_BYTES
+        {
+            return Err(WorkflowRunError::InvalidInput(
+                "native run identity exceeds its bound".into(),
+            ));
+        }
+        let tool_call_id = run_id;
+        let invocation = self
+            .next_run
+            .fetch_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |ordinal| ordinal.checked_add(1),
+            )
+            .map_err(|_| {
+                WorkflowRunError::InvalidProgram("Workflow invocation identity exhausted".into())
+            })?;
+        let mut run = WorkflowRun::new(
+            program.clone(),
+            WorkflowRunId {
+                conversation_id: self.event_store.conversation_id().clone(),
+                attempt_id: context.attempt_id().clone(),
+                invocation,
+            },
+        );
         self.emit_observability(
             &run,
             RuntimeEvent::WorkflowStarted {
+                tool_call_id,
                 workflow_id: program.id().clone(),
                 run_id: run.run_id.clone(),
             },
         );
-        let input_validator = jsonschema::Validator::new(program.input_schema())
-            .map_err(|error| WorkflowRunError::InvalidInput(error.to_string()))?;
-        if !input_validator.is_valid(&input) {
-            return self.finish_failed(
-                &mut run,
-                WorkflowRunError::InvalidInput(
-                    "workflow input does not satisfy the frozen input schema".to_owned(),
-                ),
-            );
-        }
         let execution = self
-            .execute_program(&mut run, &context, input, &cancellation)
-            .await;
+            .execute_block(&run, &program.block, &context, input, &cancellation)
+            .await
+            .map(|output| output.value.clone());
+        // Run terminal frontier. The shared block executor has already
+        // validated its result and settled all owned native work. No await
+        // separates this cancellation observation from the unique run commit.
+        let execution = match execution {
+            Ok(_) if cancellation.is_cancelled() => {
+                Err(WorkflowRunError::Cancelled(cancellation.reason()))
+            }
+            result => result,
+        };
         match execution {
             Ok(value) => {
-                let output_validator = jsonschema::Validator::new(program.output_schema())
-                    .map_err(|error| WorkflowRunError::InvalidOutput(error.to_string()))?;
-                if !output_validator.is_valid(&value) {
-                    return self.finish_failed(
-                        &mut run,
-                        WorkflowRunError::InvalidOutput(
-                            "workflow Return value does not satisfy the frozen output schema"
-                                .to_owned(),
-                        ),
-                    );
-                }
-                // This synchronous check is the Workflow terminal
-                // cancellation linearization point. Once it passes, the
-                // value validation and `WorkflowRun::settle` below contain no
-                // await, so a later cancellation cannot rewrite completion;
-                // a cancellation observed here drains owned children before
-                // publishing the Cancelled terminal.
-                if cancellation.is_cancelled() {
-                    return self.finish_cancelled(&mut run, &cancellation).await;
-                }
                 run.settle(WorkflowTerminalState::Completed(value.clone()))?;
                 self.emit_observability(
                     &run,
@@ -1786,7 +1854,6 @@ impl WorkflowRuntime {
                 Ok(value)
             }
             Err(error) => {
-                self.cancel_and_drain(&mut run, &cancellation).await;
                 let terminal = match &error {
                     WorkflowRunError::Cancelled(reason) => {
                         WorkflowTerminalState::Cancelled(*reason)
@@ -1817,43 +1884,6 @@ impl WorkflowRuntime {
         }
     }
 
-    fn finish_failed(
-        &self,
-        run: &mut WorkflowRun,
-        error: WorkflowRunError,
-    ) -> Result<Value, WorkflowRunError> {
-        run.settle(WorkflowTerminalState::Failed(error.to_string()))?;
-        self.emit_observability(
-            run,
-            RuntimeEvent::WorkflowFailed {
-                workflow_id: run.program.id().clone(),
-                run_id: run.run_id.clone(),
-                diagnostic: bound_workflow_text(error.to_string()),
-            },
-        );
-        Err(error)
-    }
-
-    async fn finish_cancelled(
-        &self,
-        run: &mut WorkflowRun,
-        cancellation: &crate::runtime::cancellation::ExecutionCancellation,
-    ) -> Result<Value, WorkflowRunError> {
-        let reason = cancellation.reason();
-        self.cancel_and_drain(run, cancellation).await;
-        let error = WorkflowRunError::Cancelled(reason);
-        run.settle(WorkflowTerminalState::Cancelled(reason))?;
-        self.emit_observability(
-            run,
-            RuntimeEvent::WorkflowCancelled {
-                workflow_id: run.program.id().clone(),
-                run_id: run.run_id.clone(),
-                reason,
-            },
-        );
-        Err(error)
-    }
-
     /// Appends one bounded best-effort observability fact to the conversation's
     /// existing Event Journal. A failure is intentionally ignored: ordinary
     /// Workflow lifecycle/join events never decide control flow or terminal
@@ -1861,6 +1891,9 @@ impl WorkflowRuntime {
     /// registry. The successful child value and native terminal lifecycle fact
     /// use the separate durable compound transition in `SubagentRegistry`.
     fn emit_observability(&self, _run: &WorkflowRun, event: RuntimeEvent) {
+        #[cfg(test)]
+        self.observations
+            .send_modify(|events| events.push(event.clone()));
         let event_id = workflow_event_id(&event);
         let envelope = RuntimeEventEnvelope {
             schema_version: EVENT_SCHEMA_VERSION,
@@ -1875,144 +1908,41 @@ impl WorkflowRuntime {
         let _ = self.event_store.append_event(envelope);
     }
 
-    async fn execute_program(
-        &self,
-        run: &mut WorkflowRun,
-        context: &crate::runtime::subagent::AttemptSubagentContext,
-        input: Value,
-        cancellation: &crate::runtime::cancellation::ExecutionCancellation,
-    ) -> Result<Value, WorkflowRunError> {
-        let mut node_id = run.program.entry().to_owned();
-        loop {
-            if cancellation.is_cancelled() {
-                return Err(WorkflowRunError::Cancelled(cancellation.reason()));
-            }
-            let node = run
-                .program
-                .nodes()
-                .get(&node_id)
-                .cloned()
-                .ok_or_else(|| WorkflowRunError::InvalidProgram(node_id.clone()))?;
-            match node {
-                WorkflowNodeProgram::Agent(agent) => {
-                    let value = self
-                        .execute_agent(run, context, &input, &node_id, &agent, cancellation)
-                        .await?;
-                    run.values.insert(node_id.clone(), value);
-                    node_id = single_successor(&run.program, &node_id)?;
-                }
-                WorkflowNodeProgram::Branch { condition } => {
-                    let value = resolve_runtime_reference(&condition, &input, &run.values)?;
-                    let Some(condition) = value.as_bool() else {
-                        return Err(WorkflowRunError::InvalidValue(format!(
-                            "Branch {node_id:?} condition did not produce a boolean"
-                        )));
-                    };
-                    let port = if condition {
-                        WorkflowPort::True
-                    } else {
-                        WorkflowPort::False
-                    };
-                    let successor = run
-                        .program
-                        .outgoing(&node_id)
-                        .iter()
-                        .find(|edge| edge.port == port)
-                        .map(|edge| edge.to.clone())
-                        .ok_or_else(|| WorkflowRunError::InvalidProgram(node_id.clone()))?;
-                    self.emit_observability(
-                        run,
-                        RuntimeEvent::WorkflowBranchSelected {
-                            workflow_id: run.program.id().clone(),
-                            run_id: run.run_id.clone(),
-                            node_id: node_id.clone(),
-                            port,
-                            successor: successor.clone(),
-                        },
-                    );
-                    node_id = successor;
-                }
-                WorkflowNodeProgram::Parallel { branches, .. } => {
-                    let value = self
-                        .execute_parallel(run, context, &input, &node_id, &branches, cancellation)
-                        .await?;
-                    run.values.insert(node_id.clone(), value);
-                    node_id = single_successor(&run.program, &node_id)?;
-                }
-                WorkflowNodeProgram::Return { output } => {
-                    let mut result = serde_json::Map::new();
-                    for (key, binding) in output {
-                        result.insert(
-                            key,
-                            resolve_runtime_reference(&binding, &input, &run.values)?.clone(),
-                        );
-                    }
-                    return Ok(Value::Object(result));
-                }
-            }
-        }
-    }
-
-    async fn execute_agent(
-        &self,
-        run: &mut WorkflowRun,
-        context: &crate::runtime::subagent::AttemptSubagentContext,
-        input: &Value,
-        node_id: &str,
-        agent: &WorkflowAgentProgram,
-        cancellation: &crate::runtime::cancellation::ExecutionCancellation,
-    ) -> Result<Value, WorkflowRunError> {
-        let subagent_id = self
-            .admit_agent(run, context, input, node_id, node_id, agent, cancellation)
-            .await?;
-        self.settle_agent(
-            run,
-            subagent_id,
-            node_id,
-            &agent.output_schema,
-            cancellation,
-        )
-        .await
-    }
-
     #[allow(clippy::too_many_arguments)] // the explicit child admission boundary
     async fn admit_agent(
         &self,
-        run: &mut WorkflowRun,
+        run: &WorkflowRun,
         context: &crate::runtime::subagent::AttemptSubagentContext,
         input: &Value,
-        node_id: &str,
-        event_node_id: &str,
+        values: &BTreeMap<String, Value>,
+        node_id: &WorkflowNodeInstance,
         agent: &WorkflowAgentProgram,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<crate::runtime::identity::SubagentId, WorkflowRunError> {
         let resolved = context.resolve_workflow(&agent.profile).map_err(|error| {
             WorkflowRunError::ChildStart {
-                node: node_id.to_owned(),
-                detail: error.to_string(),
+                node: node_id.to_string(),
+                detail: bound_workflow_diagnostic(error.to_string()),
             }
         })?;
         if !resolved.model.primary.capabilities.tool_calls {
             return Err(WorkflowRunError::ChildStart {
-                node: node_id.to_owned(),
+                node: node_id.to_string(),
                 detail: "Workflow Agent profile resolves to a model without tool-call capability"
                     .to_owned(),
             });
         }
         let mut bound = serde_json::Map::new();
         for (key, binding) in &agent.input {
-            bound.insert(
-                key.clone(),
-                resolve_runtime_reference(binding, input, &run.values)?.clone(),
-            );
+            bound.insert(key.clone(), evaluate_value(binding, input, values)?);
         }
         let context_package = serde_json::json!({
-            "workflow_node": node_id,
+            "workflow_node": node_id.node,
             "input": Value::Object(bound),
         });
         let context_package = serde_json::to_string(&context_package).map_err(|error| {
             WorkflowRunError::ChildStart {
-                node: node_id.to_owned(),
+                node: node_id.to_string(),
                 detail: format!("cannot encode typed Agent input: {error}"),
             }
         })?;
@@ -2022,16 +1952,14 @@ impl WorkflowRuntime {
             task: agent.task.clone(),
             context: Some(context_package),
             tool_call_id: crate::runtime::identity::ToolCallId::new(format!(
-                "workflow:{}:{}:{}",
-                run.program.id(),
-                run.run_id,
-                node_id
+                "workflow-child:{:x}",
+                Sha256::digest(serde_json::to_vec(node_id).expect("instance serialization"))
             )),
             terminal: crate::runtime::subagent::SubagentTerminalMode::WorkflowOutput {
                 output_schema: agent.output_schema.clone(),
                 workflow_id: run.program.id().clone(),
                 run_id: run.run_id.clone(),
-                node_id: event_node_id.to_owned(),
+                node_id: Box::new(node_id.clone()),
             },
         };
         let child_cancellation = cancellation.child_signal();
@@ -2044,33 +1972,32 @@ impl WorkflowRuntime {
                     WorkflowRunError::Cancelled(cancellation.reason())
                 }
                 error => WorkflowRunError::ChildStart {
-                    node: node_id.to_owned(),
-                    detail: error.to_string(),
+                    node: node_id.to_string(),
+                    detail: bound_workflow_diagnostic(error.to_string()),
                 },
             })?;
         let accepted = self
             .subagents
-            .commit(prepared, &child_cancellation)
+            .commit_waiting(prepared, &child_cancellation)
             .await
             .map_err(|error| match error {
                 crate::runtime::subagent::SubagentStartError::Cancelled => {
                     WorkflowRunError::Cancelled(cancellation.reason())
                 }
                 error => WorkflowRunError::ChildStart {
-                    node: node_id.to_owned(),
-                    detail: error.to_string(),
+                    node: node_id.to_string(),
+                    detail: bound_workflow_diagnostic(error.to_string()),
                 },
             })?;
         let crate::runtime::subagent::SubagentStartOutcome::Accepted(accepted) = accepted else {
             return Err(WorkflowRunError::Cancelled(cancellation.reason()));
         };
-        run.active_children.insert(accepted.subagent_id.clone());
         self.emit_observability(
             run,
             RuntimeEvent::WorkflowAgentAdmitted {
                 workflow_id: run.program.id().clone(),
                 run_id: run.run_id.clone(),
-                node_id: event_node_id.to_owned(),
+                node_id: node_id.clone(),
                 subagent_id: accepted.subagent_id.clone(),
                 profile: agent.profile.clone(),
             },
@@ -2080,9 +2007,8 @@ impl WorkflowRuntime {
 
     async fn settle_agent(
         &self,
-        run: &mut WorkflowRun,
         subagent_id: crate::runtime::identity::SubagentId,
-        node_id: &str,
+        node_id: &WorkflowNodeInstance,
         output_schema: &Value,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<Value, WorkflowRunError> {
@@ -2092,7 +2018,6 @@ impl WorkflowRuntime {
             () = cancellation.cancelled() => {
                 let _ = self.subagents.cancel(&subagent_id, cancellation.reason());
                 let snapshot = (&mut wait).await;
-                run.active_children.remove(&subagent_id);
                 // The native child settlement is the cross-process
                 // observation of the workflow_output latch. If that
                 // success committed before cancellation, it remains the
@@ -2112,9 +2037,8 @@ impl WorkflowRuntime {
             }
             snapshot = &mut wait => snapshot,
         };
-        run.active_children.remove(&subagent_id);
         let snapshot = snapshot.ok_or_else(|| WorkflowRunError::ChildFailed {
-            node: node_id.to_owned(),
+            node: node_id.to_string(),
             detail: "the native SubagentRegistry lost the child record".to_owned(),
         })?;
         self.settled_agent_value(
@@ -2130,7 +2054,7 @@ impl WorkflowRuntime {
         &self,
         snapshot: crate::runtime::subagent::SubagentSnapshot,
         subagent_id: &crate::runtime::identity::SubagentId,
-        node_id: &str,
+        node_id: &WorkflowNodeInstance,
         output_schema: &Value,
         cancellation_reason: crate::runtime::types::CancellationReason,
     ) -> Result<Value, WorkflowRunError> {
@@ -2141,9 +2065,9 @@ impl WorkflowRuntime {
                 // observation snapshot deliberately never carries it.
                 let content = self
                     .subagents
-                    .workflow_agent_output(subagent_id)
+                    .take_workflow_agent_output(subagent_id, node_id)
                     .ok_or_else(|| WorkflowRunError::ChildFailed {
-                        node: node_id.to_owned(),
+                        node: node_id.to_string(),
                         detail: "workflow Agent completed without committed output".to_owned(),
                     })?;
                 let value = content;
@@ -2156,13 +2080,13 @@ impl WorkflowRuntime {
                 // different trust boundaries; both stay.
                 let validator = jsonschema::Validator::new(output_schema).map_err(|error| {
                     WorkflowRunError::ChildFailed {
-                        node: node_id.to_owned(),
+                        node: node_id.to_string(),
                         detail: format!("workflow Agent output schema became invalid: {error}"),
                     }
                 })?;
                 if !validator.is_valid(&value) {
                     return Err(WorkflowRunError::ChildFailed {
-                        node: node_id.to_owned(),
+                        node: node_id.to_string(),
                         detail: "workflow Agent output violated its frozen output schema"
                             .to_owned(),
                     });
@@ -2178,122 +2102,13 @@ impl WorkflowRuntime {
                 Err(WorkflowRunError::Cancelled(cancellation_reason))
             }
             state => Err(WorkflowRunError::ChildFailed {
-                node: node_id.to_owned(),
-                detail: snapshot
-                    .detail
-                    .unwrap_or_else(|| format!("native child settled as {state:?}")),
+                node: node_id.to_string(),
+                detail: bound_workflow_diagnostic(
+                    snapshot
+                        .detail
+                        .unwrap_or_else(|| format!("native child settled as {state:?}")),
+                ),
             }),
-        }
-    }
-
-    async fn execute_parallel(
-        &self,
-        run: &mut WorkflowRun,
-        context: &crate::runtime::subagent::AttemptSubagentContext,
-        input: &Value,
-        node_id: &str,
-        branches: &BTreeMap<String, WorkflowAgentProgram>,
-        cancellation: &crate::runtime::cancellation::ExecutionCancellation,
-    ) -> Result<Value, WorkflowRunError> {
-        let mut admitted = BTreeMap::new();
-        let mut failures = BTreeMap::new();
-        for (key, branch) in branches {
-            if cancellation.is_cancelled() {
-                return Err(WorkflowRunError::Cancelled(cancellation.reason()));
-            }
-            match self
-                .admit_agent(
-                    run,
-                    context,
-                    input,
-                    &format!("{node_id}.{key}"),
-                    node_id,
-                    branch,
-                    cancellation,
-                )
-                .await
-            {
-                Ok(id) => {
-                    admitted.insert(key.clone(), (id, branch));
-                }
-                Err(WorkflowRunError::Cancelled(reason)) => {
-                    return Err(WorkflowRunError::Cancelled(reason));
-                }
-                Err(error) => {
-                    failures.insert(key.clone(), error.to_string());
-                }
-            }
-        }
-        if !admitted.is_empty() {
-            self.emit_observability(
-                run,
-                RuntimeEvent::WorkflowParallelAdmitted {
-                    workflow_id: run.program.id().clone(),
-                    run_id: run.run_id.clone(),
-                    node_id: node_id.to_owned(),
-                    branches: admitted.keys().cloned().collect(),
-                },
-            );
-        }
-        let mut results = serde_json::Map::new();
-        for (key, (subagent_id, branch)) in admitted {
-            match self
-                .settle_agent(
-                    run,
-                    subagent_id,
-                    &format!("{node_id}.{key}"),
-                    &branch.output_schema,
-                    cancellation,
-                )
-                .await
-            {
-                Ok(value) => {
-                    results.insert(key, value);
-                }
-                Err(WorkflowRunError::Cancelled(reason)) => {
-                    return Err(WorkflowRunError::Cancelled(reason));
-                }
-                Err(error) => {
-                    failures.insert(key, error.to_string());
-                }
-            }
-        }
-        self.emit_observability(
-            run,
-            RuntimeEvent::WorkflowParallelSettled {
-                workflow_id: run.program.id().clone(),
-                run_id: run.run_id.clone(),
-                node_id: node_id.to_owned(),
-                succeeded: results.keys().cloned().collect(),
-                failed: failures.keys().cloned().collect(),
-            },
-        );
-        if !failures.is_empty() {
-            let detail = failures
-                .into_iter()
-                .map(|(key, error)| format!("{key}: {error}"))
-                .collect::<Vec<_>>()
-                .join("; ");
-            return Err(WorkflowRunError::ParallelFailed {
-                node: node_id.to_owned(),
-                detail,
-            });
-        }
-        Ok(Value::Object(results))
-    }
-
-    async fn cancel_and_drain(
-        &self,
-        run: &mut WorkflowRun,
-        cancellation: &crate::runtime::cancellation::ExecutionCancellation,
-    ) {
-        let ids = run.active_children.iter().cloned().collect::<Vec<_>>();
-        for id in &ids {
-            let _ = self.subagents.cancel(id, cancellation.reason());
-        }
-        for id in ids {
-            let _ = self.subagents.wait_until_settled(&id).await;
-            run.active_children.remove(&id);
         }
     }
 }
@@ -2363,8 +2178,15 @@ fn bound_workflow_text(value: String) -> String {
     crate::runtime::subagent::bound_utf8(value, crate::runtime::subagent::MAX_RESULT_CONTENT_BYTES)
 }
 
-fn single_successor(program: &WorkflowProgram, node: &str) -> Result<String, WorkflowRunError> {
-    let edges = program.outgoing(node);
+fn bound_workflow_diagnostic(value: String) -> String {
+    crate::runtime::subagent::bound_utf8(value, MAX_WORKFLOW_DIAGNOSTIC_BYTES)
+}
+
+fn single_successor(
+    program: &WorkflowBlockProgram,
+    node: &str,
+) -> Result<String, WorkflowRunError> {
+    let edges = program.outgoing.get(node).map_or(&[][..], Vec::as_slice);
     if edges.len() != 1 || edges[0].port != WorkflowPort::Next {
         return Err(WorkflowRunError::InvalidProgram(format!(
             "node {node:?} does not have one Next successor"
@@ -2373,47 +2195,9 @@ fn single_successor(program: &WorkflowProgram, node: &str) -> Result<String, Wor
     Ok(edges[0].to.clone())
 }
 
-fn resolve_runtime_reference<'a>(
-    binding: &WorkflowBinding,
-    input: &'a Value,
-    values: &'a BTreeMap<String, Value>,
-) -> Result<&'a Value, WorkflowRunError> {
-    let parts = binding.reference.split('.').collect::<Vec<_>>();
-    if parts.len() < 2
-        || parts.len() > MAX_REFERENCE_COMPONENTS
-        || parts.iter().any(|part| part.is_empty())
-    {
-        return Err(WorkflowRunError::InvalidValue(format!(
-            "malformed workflow reference {:?}",
-            binding.reference
-        )));
-    }
-    let mut value = if parts[0] == "args" {
-        input
-    } else {
-        values.get(parts[0]).ok_or_else(|| {
-            WorkflowRunError::InvalidValue(format!(
-                "workflow producer {:?} is not committed",
-                parts[0]
-            ))
-        })?
-    };
-    // Both input (`args.task`) and committed-node (`review.passed`)
-    // references consume the root component while selecting their source.
-    // Only the remaining path components are fields of that source value.
-    for part in &parts[1..] {
-        value = value.get(*part).ok_or_else(|| {
-            WorkflowRunError::InvalidValue(format!(
-                "workflow reference {:?} has no field {:?}",
-                binding.reference, part
-            ))
-        })?;
-    }
-    Ok(value)
-}
-
 #[cfg(test)]
 mod tests {
+    mod scoped;
     use super::*;
     use serde_json::json;
     use std::sync::{Arc, Barrier};
@@ -2470,22 +2254,54 @@ mod tests {
         SubagentName::parse(name).expect("profile")
     }
 
+    fn reference(path: &str) -> WorkflowValue {
+        WorkflowValue::Reference {
+            path: path.split('.').map(str::to_owned).collect(),
+        }
+    }
+
+    fn agent_branch(task: String, output: Value) -> WorkflowBranch {
+        WorkflowBranch {
+            input: WorkflowValue::Literal { value: json!({}) },
+            block: WorkflowBlock {
+                input: schema(json!({}), &[]),
+                output: output.clone(),
+                entry: "work".into(),
+                nodes: BTreeMap::from([
+                    (
+                        "work".into(),
+                        WorkflowNodeDefinition::Agent {
+                            profile: profile("reviewer"),
+                            task,
+                            input: BTreeMap::new(),
+                            output,
+                        },
+                    ),
+                    (
+                        "done".into(),
+                        WorkflowNodeDefinition::Return {
+                            output: reference("work"),
+                        },
+                    ),
+                ]),
+                edges: vec![edge("work", "done")],
+            },
+        }
+    }
+
     fn agent(output: Value) -> WorkflowNodeDefinition {
         WorkflowNodeDefinition::Agent {
             profile: profile("reviewer"),
             task: "Review the input.".to_owned(),
-            input: BTreeMap::from([(
-                "task".to_owned(),
-                WorkflowBinding {
-                    reference: "args.task".to_owned(),
-                },
-            )]),
+            input: BTreeMap::from([("task".to_owned(), reference("args.task"))]),
             output,
         }
     }
 
-    fn return_node(output: BTreeMap<String, WorkflowBinding>) -> WorkflowNodeDefinition {
-        WorkflowNodeDefinition::Return { output }
+    fn return_node(output: BTreeMap<String, WorkflowValue>) -> WorkflowNodeDefinition {
+        WorkflowNodeDefinition::Return {
+            output: WorkflowValue::Object { fields: output },
+        }
     }
 
     fn edge(from: &str, to: &str) -> WorkflowEdgeDefinition {
@@ -2512,11 +2328,13 @@ mod tests {
     ) -> WorkflowDefinition {
         WorkflowDefinition {
             description: "Test workflow".to_owned(),
-            input: schema(json!({"task": {"type": "string"}}), &["task"]),
-            output,
-            entry: entry.to_owned(),
-            nodes,
-            edges,
+            block: WorkflowBlock {
+                input: schema(json!({"task": {"type": "string"}}), &["task"]),
+                output,
+                entry: entry.to_owned(),
+                nodes,
+                edges,
+            },
         }
     }
 
@@ -2680,6 +2498,7 @@ mod tests {
             .with_workflow_catalog(workflow_catalog),
         );
         crate::runtime::subagent::AttemptSubagentContext::new(
+            crate::runtime::identity::AttemptId::new("workflow-test-attempt"),
             resources,
             SessionModelConfig::of(model),
             models,
@@ -2787,19 +2606,12 @@ mod tests {
         for key in keys {
             branches.insert(
                 (*key).to_owned(),
-                WorkflowParallelBranchDefinition {
-                    profile: profile("reviewer"),
-                    task: format!("Run the {key} workflow branch."),
-                    input: BTreeMap::new(),
-                    output: branch_output.clone(),
-                },
+                agent_branch(
+                    format!("Run the {key} workflow branch."),
+                    branch_output.clone(),
+                ),
             );
-            returned.insert(
-                (*key).to_owned(),
-                WorkflowBinding {
-                    reference: format!("fanout.{key}"),
-                },
-            );
+            returned.insert((*key).to_owned(), reference(&(format!("fanout.{key}"))));
             output_properties.insert((*key).to_owned(), branch_output.clone());
         }
         let definition = base_definition(
@@ -2822,38 +2634,36 @@ mod tests {
         let branch_output = schema(json!({"summary": {"type": "string"}}), &["summary"]);
         let definition = WorkflowDefinition {
             description: description.to_owned(),
-            input: schema(json!({}), &[]),
-            output: schema(
-                json!({result_field: branch_output.clone()}),
-                &[result_field],
-            ),
-            entry: "fanout".to_owned(),
-            nodes: BTreeMap::from([
-                (
-                    "fanout".to_owned(),
-                    WorkflowNodeDefinition::Parallel {
-                        branches: BTreeMap::from([(
-                            "alpha".to_owned(),
-                            WorkflowParallelBranchDefinition {
-                                profile: profile("reviewer"),
-                                task: format!("Run the {description} branch."),
-                                input: BTreeMap::new(),
-                                output: branch_output,
-                            },
-                        )]),
-                    },
+            block: WorkflowBlock {
+                input: schema(json!({}), &[]),
+                output: schema(
+                    json!({result_field: branch_output.clone()}),
+                    &[result_field],
                 ),
-                (
-                    "done".to_owned(),
-                    return_node(BTreeMap::from([(
-                        result_field.to_owned(),
-                        WorkflowBinding {
-                            reference: "fanout.alpha".to_owned(),
+                entry: "fanout".to_owned(),
+                nodes: BTreeMap::from([
+                    (
+                        "fanout".to_owned(),
+                        WorkflowNodeDefinition::Parallel {
+                            branches: BTreeMap::from([(
+                                "alpha".to_owned(),
+                                agent_branch(
+                                    format!("Run the {description} branch."),
+                                    branch_output,
+                                ),
+                            )]),
                         },
-                    )])),
-                ),
-            ]),
-            edges: vec![edge("fanout", "done")],
+                    ),
+                    (
+                        "done".to_owned(),
+                        return_node(BTreeMap::from([(
+                            result_field.to_owned(),
+                            reference("fanout.alpha"),
+                        )])),
+                    ),
+                ]),
+                edges: vec![edge("fanout", "done")],
+            },
         };
         Arc::new(
             WorkflowProgram::compile(
@@ -2873,19 +2683,19 @@ mod tests {
                 WorkflowId::parse("event_journal_workflow").expect("event workflow id"),
                 WorkflowDefinition {
                     description: "Event journal test workflow".to_owned(),
-                    input: output.clone(),
-                    output: output.clone(),
-                    entry: "done".to_owned(),
-                    nodes: BTreeMap::from([(
-                        "done".to_owned(),
-                        return_node(BTreeMap::from([(
-                            "value".to_owned(),
-                            WorkflowBinding {
-                                reference: "args.value".to_owned(),
-                            },
-                        )])),
-                    )]),
-                    edges: Vec::new(),
+                    block: WorkflowBlock {
+                        input: output.clone(),
+                        output: output.clone(),
+                        entry: "done".to_owned(),
+                        nodes: BTreeMap::from([(
+                            "done".to_owned(),
+                            return_node(BTreeMap::from([(
+                                "value".to_owned(),
+                                reference("args.value"),
+                            )])),
+                        )]),
+                        edges: Vec::new(),
+                    },
                 },
                 &BTreeSet::new(),
             )
@@ -3040,10 +2850,10 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn parallel_runtime_capacity_failure_rolls_back_partial_admission() {
+    async fn parallel_runtime_capacity_one_waits_and_releases_for_every_branch() {
         let plane = workflow_test_plane(1);
         let mut alpha = stage_workflow_child(&plane);
-        let zulu = stage_workflow_child(&plane);
+        let mut zulu = stage_workflow_child(&plane);
         let runtime = workflow_runtime(&plane);
         let context = workflow_test_context(&plane);
         let program = parallel_test_program(&["alpha", "zulu"]);
@@ -3067,15 +2877,19 @@ mod tests {
                 Some(r#"{"summary":"alpha"}"#),
             )
             .await;
-        let error = task
-            .await
-            .expect("workflow task")
-            .expect_err("capacity failure");
-        let WorkflowRunError::ParallelFailed { detail, .. } = error else {
-            panic!("expected keyed parallel capacity failure");
-        };
-        assert!(detail.contains("per-conversation subagent bound (1) is reached"));
-        assert_eq!(plane.registry.all_snapshots().len(), 1);
+        zulu.expect_delegate().await;
+        zulu.send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some(r#"{"summary":"zulu"}"#),
+        )
+        .await;
+        assert_eq!(
+            task.await
+                .expect("workflow task")
+                .expect("capacity waiter progresses"),
+            json!({"alpha":{"summary":"alpha"},"zulu":{"summary":"zulu"}})
+        );
+        assert_eq!(plane.registry.all_snapshots().len(), 2);
         assert!(plane.registry.unsettled_snapshot().is_empty());
         assert!(!alpha.root.exists());
         assert!(!zulu.root.exists());
@@ -3311,28 +3125,30 @@ mod tests {
         );
         let definition = WorkflowDefinition {
             description: "Review".to_owned(),
-            input: schema(json!({"task": {"type": "string"}}), &["task"]),
-            output: schema(json!({"summary": {"type": "string"}}), &["summary"]),
-            entry: "review".to_owned(),
-            nodes: BTreeMap::from([
-                ("review".to_owned(), agent(output)),
-                (
-                    "done".to_owned(),
-                    WorkflowNodeDefinition::Return {
-                        output: BTreeMap::from([(
-                            "summary".to_owned(),
-                            WorkflowBinding {
-                                reference: "review.summary".to_owned(),
+            block: WorkflowBlock {
+                input: schema(json!({"task": {"type": "string"}}), &["task"]),
+                output: schema(json!({"summary": {"type": "string"}}), &["summary"]),
+                entry: "review".to_owned(),
+                nodes: BTreeMap::from([
+                    ("review".to_owned(), agent(output)),
+                    (
+                        "done".to_owned(),
+                        WorkflowNodeDefinition::Return {
+                            output: WorkflowValue::Object {
+                                fields: BTreeMap::from([(
+                                    "summary".to_owned(),
+                                    reference("review.summary"),
+                                )]),
                             },
-                        )]),
-                    },
-                ),
-            ]),
-            edges: vec![WorkflowEdgeDefinition {
-                from: "review".to_owned(),
-                to: "done".to_owned(),
-                port: None,
-            }],
+                        },
+                    ),
+                ]),
+                edges: vec![WorkflowEdgeDefinition {
+                    from: "review".to_owned(),
+                    to: "done".to_owned(),
+                    port: None,
+                }],
+            },
         };
         let program = WorkflowProgram::compile(
             WorkflowId::parse("review_pr").expect("id"),
@@ -3356,18 +3172,20 @@ mod tests {
     fn rejects_branch_without_boolean_condition_or_complete_ports() {
         let definition = WorkflowDefinition {
             description: "Branch".to_owned(),
-            input: schema(json!({"flag": {"type": "string"}}), &["flag"]),
-            output: schema(json!({"value": {"type": "string"}}), &["value"]),
-            entry: "decision".to_owned(),
-            nodes: BTreeMap::from([(
-                "decision".to_owned(),
-                WorkflowNodeDefinition::Branch {
-                    condition: WorkflowBinding {
-                        reference: "args.flag".to_owned(),
+            block: WorkflowBlock {
+                input: schema(json!({"flag": {"type": "string"}}), &["flag"]),
+                output: schema(json!({"value": {"type": "string"}}), &["value"]),
+                entry: "decision".to_owned(),
+                nodes: BTreeMap::from([(
+                    "decision".to_owned(),
+                    WorkflowNodeDefinition::Branch {
+                        condition: WorkflowPredicate::Boolean {
+                            value: reference("args.flag"),
+                        },
                     },
-                },
-            )]),
-            edges: Vec::new(),
+                )]),
+                edges: Vec::new(),
+            },
         };
         let error = WorkflowProgram::compile(
             WorkflowId::parse("branch").expect("id"),
@@ -3383,24 +3201,25 @@ mod tests {
 
     #[test]
     fn yaml_is_serialization_and_does_not_supply_identity() {
-        let yaml = "description: Review\ninput: {type: object, properties: {task: {type: string}}, required: [task]}\noutput: {type: object, properties: {summary: {type: string}}, required: [summary]}\nentry: done\nnodes:\n  done:\n    type: return\n    output:\n      summary:\n        ref: args.task\nedges: []\n";
+        let yaml = "description: Review\nblock:\n  input: {type: object, properties: {task: {type: string}}, required: [task]}\n  output: {type: object, properties: {summary: {type: string}}, required: [summary]}\n  entry: done\n  nodes:\n    done:\n      type: return\n      output:\n        type: object\n        fields:\n          summary: {type: reference, path: [args, task]}\n  edges: []\n";
         let definition: WorkflowDefinition = serde_yaml::from_str(yaml).expect("yaml");
         assert!(WorkflowId::parse("review_pr").is_ok());
         assert!(!yaml.contains("name:"));
-        assert_eq!(definition.entry, "done");
+        assert_eq!(definition.block.entry, "done");
     }
 
     #[test]
     fn duplicate_yaml_node_ids_are_rejected_before_compilation() {
         let yaml = r"
 description: Duplicate
-input: {type: object}
-output: {type: object}
-entry: done
-nodes:
-  done: {type: return, output: {}}
-  done: {type: return, output: {}}
-edges: []
+block:
+  input: {type: object}
+  output: {type: object}
+  entry: done
+  nodes:
+    done: {type: return, output: {type: literal, value: {}}}
+    done: {type: return, output: {type: literal, value: {}}}
+  edges: []
 ";
         assert!(serde_yaml::from_str::<WorkflowDefinition>(yaml).is_err());
     }
@@ -3467,17 +3286,19 @@ edges: []
     #[test]
     fn rejects_branch_without_complete_ports() {
         let branch = WorkflowNodeDefinition::Branch {
-            condition: WorkflowBinding {
-                reference: "args.flag".to_owned(),
+            condition: WorkflowPredicate::Boolean {
+                value: reference("args.flag"),
             },
         };
         let missing_ports = WorkflowDefinition {
             description: "Branch".to_owned(),
-            input: schema(json!({"flag": {"type": "boolean"}}), &["flag"]),
-            output: schema(json!({}), &[]),
-            entry: "decision".to_owned(),
-            nodes: BTreeMap::from([("decision".to_owned(), branch)]),
-            edges: Vec::new(),
+            block: WorkflowBlock {
+                input: schema(json!({"flag": {"type": "boolean"}}), &["flag"]),
+                output: schema(json!({}), &[]),
+                entry: "decision".to_owned(),
+                nodes: BTreeMap::from([("decision".to_owned(), branch)]),
+                edges: Vec::new(),
+            },
         };
         assert!(matches!(
             compile_test(missing_ports),
@@ -3496,12 +3317,7 @@ edges: []
                     WorkflowNodeDefinition::Agent {
                         profile: profile("reviewer"),
                         task: "Review the input.".to_owned(),
-                        input: BTreeMap::from([(
-                            "later".to_owned(),
-                            WorkflowBinding {
-                                reference: "later.summary".to_owned(),
-                            },
-                        )]),
+                        input: BTreeMap::from([("later".to_owned(), reference("later.summary"))]),
                         output: output.clone(),
                     },
                 ),
@@ -3524,9 +3340,7 @@ edges: []
                     "done".to_owned(),
                     return_node(BTreeMap::from([(
                         "summary".to_owned(),
-                        WorkflowBinding {
-                            reference: "review.summary".to_owned(),
-                        },
+                        reference("review.summary"),
                     )])),
                 ),
             ]),
@@ -3543,8 +3357,8 @@ edges: []
     fn rejects_path_dependent_values_and_return_schema_mismatches() {
         let review_output = schema(json!({"passed": {"type": "boolean"}}), &["passed"]);
         let branch = WorkflowNodeDefinition::Branch {
-            condition: WorkflowBinding {
-                reference: "review.passed".to_owned(),
+            condition: WorkflowPredicate::Boolean {
+                value: reference("review.passed"),
             },
         };
         let path_dependent = base_definition(
@@ -3565,12 +3379,7 @@ edges: []
                     WorkflowNodeDefinition::Agent {
                         profile: profile("reviewer"),
                         task: "Join the committed facts.".to_owned(),
-                        input: BTreeMap::from([(
-                            "summary".to_owned(),
-                            WorkflowBinding {
-                                reference: "yes.summary".to_owned(),
-                            },
-                        )]),
+                        input: BTreeMap::from([("summary".to_owned(), reference("yes.summary"))]),
                         output: schema(json!({"ok": {"type": "boolean"}}), &["ok"]),
                     },
                 ),
@@ -3602,9 +3411,7 @@ edges: []
                     "done".to_owned(),
                     return_node(BTreeMap::from([(
                         "summary".to_owned(),
-                        WorkflowBinding {
-                            reference: "review.passed".to_owned(),
-                        },
+                        reference("review.passed"),
                     )])),
                 ),
             ]),
@@ -3638,9 +3445,7 @@ edges: []
                     "done".to_owned(),
                     return_node(BTreeMap::from([(
                         "result".to_owned(),
-                        WorkflowBinding {
-                            reference: "review.result".to_owned(),
-                        },
+                        reference("review.result"),
                     )])),
                 ),
             ]),
@@ -3664,36 +3469,36 @@ edges: []
 
         let optional_input = WorkflowDefinition {
             description: "Optional nested input".to_owned(),
-            input: schema(
-                json!({
-                    "task": {
-                        "type": "object",
-                        "properties": {"detail": {"type": "string"}},
-                        "required": []
-                    }
-                }),
-                &["task"],
-            ),
-            output: schema(json!({}), &[]),
-            entry: "review".to_owned(),
-            nodes: BTreeMap::from([
-                (
-                    "review".to_owned(),
-                    WorkflowNodeDefinition::Agent {
-                        profile: profile("reviewer"),
-                        task: "Review the input.".to_owned(),
-                        input: BTreeMap::from([(
-                            "detail".to_owned(),
-                            WorkflowBinding {
-                                reference: "args.task.detail".to_owned(),
-                            },
-                        )]),
-                        output: schema(json!({}), &[]),
-                    },
+            block: WorkflowBlock {
+                input: schema(
+                    json!({
+                        "task": {
+                            "type": "object",
+                            "properties": {"detail": {"type": "string"}},
+                            "required": []
+                        }
+                    }),
+                    &["task"],
                 ),
-                ("done".to_owned(), return_node(BTreeMap::new())),
-            ]),
-            edges: vec![edge("review", "done")],
+                output: schema(json!({}), &[]),
+                entry: "review".to_owned(),
+                nodes: BTreeMap::from([
+                    (
+                        "review".to_owned(),
+                        WorkflowNodeDefinition::Agent {
+                            profile: profile("reviewer"),
+                            task: "Review the input.".to_owned(),
+                            input: BTreeMap::from([(
+                                "detail".to_owned(),
+                                reference("args.task.detail"),
+                            )]),
+                            output: schema(json!({}), &[]),
+                        },
+                    ),
+                    ("done".to_owned(), return_node(BTreeMap::new())),
+                ]),
+                edges: vec![edge("review", "done")],
+            },
         };
         assert!(matches!(
             compile_test(optional_input),
@@ -3713,9 +3518,7 @@ edges: []
                     "done".to_owned(),
                     return_node(BTreeMap::from([(
                         "result".to_owned(),
-                        WorkflowBinding {
-                            reference: "review.result".to_owned(),
-                        },
+                        reference("review.result"),
                     )])),
                 ),
             ]),
@@ -3775,7 +3578,7 @@ edges: []
             root(json!({"type": "string"})),
             root(json!({"type": "string"})),
         );
-        input_constraint.input = root(json!({"type": "string", "pattern": "x"}));
+        input_constraint.block.input = root(json!({"type": "string", "pattern": "x"}));
         assert!(matches!(
             compile_test(input_constraint),
             Err(WorkflowCompileError::InvalidSchema(detail)) if detail.contains("pattern")
@@ -3799,12 +3602,7 @@ edges: []
                     WorkflowNodeDefinition::Parallel {
                         branches: BTreeMap::from([(
                             "alpha".to_owned(),
-                            WorkflowParallelBranchDefinition {
-                                profile: profile("reviewer"),
-                                task: "Review alpha.".to_owned(),
-                                input: BTreeMap::new(),
-                                output: branch_output,
-                            },
+                            agent_branch("Review alpha.".to_owned(), branch_output),
                         )]),
                     },
                 ),
@@ -3935,21 +3733,11 @@ edges: []
                         branches: BTreeMap::from([
                             (
                                 "zulu".to_owned(),
-                                WorkflowParallelBranchDefinition {
-                                    profile: profile("reviewer"),
-                                    task: "Review zulu.".to_owned(),
-                                    input: BTreeMap::new(),
-                                    output: branch_output.clone(),
-                                },
+                                agent_branch("Review zulu.".to_owned(), branch_output.clone()),
                             ),
                             (
                                 "alpha".to_owned(),
-                                WorkflowParallelBranchDefinition {
-                                    profile: profile("reviewer"),
-                                    task: "Review alpha.".to_owned(),
-                                    input: BTreeMap::new(),
-                                    output: branch_output,
-                                },
+                                agent_branch("Review alpha.".to_owned(), branch_output),
                             ),
                         ]),
                     },
@@ -3958,9 +3746,7 @@ edges: []
                     "done".to_owned(),
                     return_node(BTreeMap::from([(
                         "all".to_owned(),
-                        WorkflowBinding {
-                            reference: "fanout.alpha".to_owned(),
-                        },
+                        reference("fanout.alpha"),
                     )])),
                 ),
             ]),
@@ -4028,12 +3814,10 @@ edges: []
     #[test]
     fn runtime_reference_resolves_args_without_treating_args_as_a_field() {
         let input = json!({"task": "read this"});
-        let binding = WorkflowBinding {
-            reference: "args.task".to_owned(),
-        };
+        let binding = reference("args.task");
         assert_eq!(
-            resolve_runtime_reference(&binding, &input, &BTreeMap::new()).expect("reference"),
-            &json!("read this")
+            evaluate_value(&binding, &input, &BTreeMap::new()).expect("reference"),
+            json!("read this")
         );
     }
 
@@ -4112,8 +3896,9 @@ edges: []
     #[test]
     fn workflow_event_ids_are_stable_and_distinct_per_fact() {
         let workflow_id = WorkflowId::parse("review").expect("workflow id");
-        let run_id = ToolCallId::new("run-1");
+        let run_id = test_instance("review", "done").block.run;
         let started = RuntimeEvent::WorkflowStarted {
+            tool_call_id: ToolCallId::new("run-1"),
             workflow_id: workflow_id.clone(),
             run_id: run_id.clone(),
         };

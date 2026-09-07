@@ -1400,9 +1400,12 @@ capabilities, approval/interaction, workspaces, retries, and physical
 settlement.
 
 The v1 language is deliberately limited to Agent, Branch, Parallel, and
-Return. Agent tasks are static, Branch consumes a committed boolean, Parallel
-uses definition keys and native capacity, and Return validates one explicit
-result. Workflow Agent success is exclusively the reserved
+Return. WF-01 (#217) replaces the original branch templates with scoped
+fixed blocks sharing the root executor. Values are tagged typed constructions;
+Branch consumes boolean/equality/composition predicates; Parallel uses
+definition keys and cancellable native capacity waiting. Return completes
+only its owning block. See [the current contracts](workflow-programs.md).
+Workflow Agent success is exclusively the reserved
 `workflow_output` protocol: schema validation, exactly-once commit,
 same-turn exclusivity, bounded correction feedback, and cancellation/output
 linearization are all deterministic. A Workflow is exposed as one concrete

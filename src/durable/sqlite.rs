@@ -194,8 +194,9 @@ use super::inbox::{
 /// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13/v14/v15/v16/v17/v18/v19/v20/v21 database
 /// must fail at store open; there is no migration or compatibility path.
 /// Version 23 preserves Denied in detached terminal facts (Issue #206).
+/// Version 24 adds Workflow block/node instance lifecycle facts (Issue #217).
 /// Older stores are rejected; there is no compatibility decoding.
-pub const SQLITE_SCHEMA_VERSION: i64 = 23;
+pub const SQLITE_SCHEMA_VERSION: i64 = 24;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -7470,7 +7471,18 @@ fn validate_event_reference(
                     envelope.event_id
                 )));
             }
-            if node_id.is_empty() || node_id.len() > 64 || node_id.contains('.') {
+            if node_id.node.is_empty()
+                || node_id.node.len() > 64
+                || node_id.block.definition.blocks.len()
+                    > 2 * crate::runtime::workflow::MAX_BLOCK_DEPTH
+                || node_id
+                    .block
+                    .definition
+                    .blocks
+                    .iter()
+                    .any(|key| key.is_empty() || key.len() > 64)
+                || node_id.block.invocations.len() != node_id.block.definition.blocks.len() / 2 + 1
+            {
                 return Err(ConversationStoreError::InvalidReference(
                     "Workflow output event has an invalid node identity".to_owned(),
                 ));
@@ -10558,7 +10570,8 @@ mod tests {
 
         let workflow_id =
             crate::runtime::workflow::WorkflowId::parse("review_pr").expect("workflow id");
-        let run_id = ToolCallId::new("workflow-run");
+        let node_instance = crate::runtime::workflow::test_instance("review_pr", "review");
+        let run_id = node_instance.block.run.clone();
         let terminal = crate::runtime::subagent::terminal_settlement(
             &conversation_id,
             &subagent_id,
@@ -10572,7 +10585,7 @@ mod tests {
             &subagent_id,
             &workflow_id,
             &run_id,
-            "review",
+            &node_instance,
             serde_json::json!({"passed": true}),
             timestamp,
         );
