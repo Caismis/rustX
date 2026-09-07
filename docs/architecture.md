@@ -3542,61 +3542,109 @@ id rmcp put on the wire — never a parallel correlation id, and never inferred
 from a record being absent:
 
 ```text
-                 admission (the instant after the effect frontier)
-                        |         or the outbound dispatch seam,
-                        |         whichever interleaving arrives first
-                        v
-              +---------------------+
-              |  NotYetRegistered   |  no local activity has begun
-              +---------------------+
-                        |  Transport::send takes dispatch ownership;
-                        |  the POST then takes the baton
-                        v
-              +---------------------+
-              |        Live         |  exactly one local owner
-              +---------------------+
-                        |  that owner dropped (POST future, then SSE body)
-                        v
-              +---------------------+
-              |      Released       |  no local activity remains
-              +---------------------+
-                        |  the invocation's admission guard drops
+   admit(id)                          begin_dispatch(id)
+   the executor, one statement        the outbound seam, inside
+   after its effect frontier          Transport::send's synchronous prologue
+            \                        /
+             v                      v     whichever arrives first creates it
+         +--------------------------------+
+         |        AwaitingDispatch        |  on rmcp's peer outbound queue:
+         +--------------------------------+  no local activity has begun and
+             |                        |      the outbound participant has not
+             |                        |      reached the seam
+   the prologue takes ownership   the generation's outbound seam ends,
+             |                    so that participant can never arrive
+             v                        |
+         +-----------------+          |
+         |  DispatchOwned  |          |   the send future owns it and has not
+         +-----------------+          |   handed it to the inner transport
+             |          |             |
+   the POST  |          | it refuses, resolves, or is dropped
+   registers |          |             |
+             v          |             |
+         +-------------+|             |
+         |  HttpOwned  ||             |   the POST future, then the SSE
+         +-------------+|             |   response body it produced
+             |          |             |
+   every HTTP owner dropped           |
+             |          |             |
+             v          v             v
+         +--------------------------------+
+         |            Released            |  terminal: no local participant
+         +--------------------------------+  can dispatch it or hold HTTP
+                        |                    activity for it again
+         the invocation's admission guard drops
                         v
                    (forgotten)
 ```
 
-Ownership is a **baton, never two parallel owners**: the outbound dispatch
-future owns the window in which the POST has not started but is still going
-to, and hands that ownership to the POST the moment it registers — holding
-both would make local settlement wait for rmcp to resolve an outbound send,
-which is the dependency this contract exists to remove.
+Ownership is a **baton, never two parallel owners**: the outbound participant
+owns the window in which the POST has not started but is still going to, and
+hands that ownership to the POST the moment it registers — holding both would
+make local settlement wait for rmcp to resolve an outbound send, which is the
+dependency this contract exists to remove.
 
-Cancellation reads that state instead of guessing it, and does something
+**`AwaitingDispatch` is an ownership state, not a gap.**
+`Peer::send_cancellable_request` returning `Ok` only enqueues the request;
+rmcp's service loop dequeues it later and *calls* `Transport::send`, and only
+then spawns the future that call returned. Treating that interval as "nothing
+local began" is what let a cancelled invocation settle, drop its admission,
+and have its entry forgotten — after which the still-live send future
+recreated a fresh, uncancelled entry and dispatched a `tools/call` whose
+canonical terminal result already existed. Dispatch ownership is therefore
+taken in `Transport::send`'s **synchronous prologue**, before the returned
+future exists, and one further check immediately before that future could
+poll the inner send drops it unpolled if a termination landed in between.
+
+The contract this establishes is stated as one ordering rule:
+
+> Terminal Tool settlement happens-after every local participant capable of
+> later dispatching that request id has become terminal.
+
+and one lifecycle rule:
+
+> Request lifecycle authority is created once per request id per connection
+> generation and may only move toward terminality. It is never resurrected.
+
+Cancellation reads that phase instead of guessing it, and does something
 different in each:
 
-- **`NotYetRegistered`** — the request's token is cancelled and the outbound
-  dispatch seam refuses to hand it to the transport, so it never reaches the
-  network and no local activity of it is ever created. Nothing is pending, so
-  nothing is awaited, and **no record is created**;
-- **`Live`** — that exact HTTP request is terminated and settlement awaits an
-  explicit release proof: the wrapper drops the POST future or the response
-  body **first** and releases the latch **afterwards**, so the latch is real
-  ownership evidence rather than a restatement of "we stopped waiting";
-- **`Released`** — the local half already finished. This is the race the
-  earlier shape could not see: a cancellation landing after the POST released
-  but before rmcp delivered the correlated response used to look identical to
-  "the POST has not started", so it created a pre-termination record for a
-  request that could never register again, and that record then survived until
-  the connection generation closed. Now nothing is terminated and nothing is
-  recorded; the executor only arbitrates the response that is already on its
-  way.
+- **`AwaitingDispatch`** — the request's token is cancelled, and settlement
+  awaits the outbound participant's own decision. That participant reaches the
+  seam, observes the terminal lifecycle state, refuses the request, and
+  publishes the release proof; if the generation's outbound seam ends first,
+  `Transport::close` (or the transport's own drop) publishes that the
+  participant can never arrive and releases the proof instead. Either way the
+  request never reaches the network;
+- **`DispatchOwned` / `HttpOwned`** — that exact local activity is terminated
+  and settlement awaits an explicit release proof: the wrapper drops the send
+  future's inner send, the POST future, or the response body **first** and
+  releases the latch **afterwards**, so the latch is real ownership evidence
+  rather than a restatement of "we stopped waiting";
+- **`Released`** — every local participant already finished. This is the race
+  the earlier shape could not see: a cancellation landing after the POST
+  released but before rmcp delivered the correlated response used to look
+  identical to "the POST has not started", so it created a pre-termination
+  record for a request that could never register again, and that record then
+  survived until the connection generation closed. Now nothing is terminated
+  and nothing is recorded; the executor only arbitrates the response that is
+  already on its way.
+
+A tracked POST registration **requires the dispatch baton**. `Released ->
+HttpOwned` is therefore impossible, and so are `HttpOwned -> HttpOwned` and
+`AwaitingDispatch -> HttpOwned`: each is refused with a pre-cancelled,
+untracked guard that can neither reach the network nor release ownership that
+is not its own.
 
 That proof depends on no remote response, no protocol acknowledgement, and no
 timer — timing a future out, or dropping one and calling the drop a proof, is
 never settlement evidence here. Every entry has a **request-local forget
-point** (its invocation's admission guard), so normal completion cleans up its
-own state with the connection still open; the memory bound is the in-flight
-tool-call count, never the count of requests the generation has ever raced.
+point** — its invocation's admission guard *together with* its outbound
+participant's decision — so normal completion cleans up its own state with the
+connection still open; the memory bound is the in-flight tool-call count,
+never the count of requests the generation has ever raced. An entry is removed
+only once every participant is terminal, which is precisely what stops a late
+participant from finding its entry missing and minting a fresh one.
 Over stdio an outbound write owns no resource that outlives it, so there is no
 local half at all and the cancellation send is awaited exactly as before.
 

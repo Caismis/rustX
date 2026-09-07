@@ -3781,28 +3781,57 @@ remote control plane            local ownership plane
   overwriting a live ownership state.
 
   ```text
-  admission (or the outbound dispatch seam, whichever arrives first)
-      -> NotYetRegistered   no local activity has begun
-      -> Live               exactly one local owner: the outbound dispatch
-                            future, then (baton passed) the POST future and
-                            the SSE response body
-      -> Released           every local owner has been dropped
-      -> forgotten          the invocation's admission guard dropped
+  admit(id)  or  begin_dispatch(id), whichever interleaving arrives first
+      -> AwaitingDispatch   on rmcp's peer outbound queue: no local activity
+                            has begun and the outbound participant has not
+                            reached the seam
+      -> DispatchOwned      the send future owns it and has not handed it to
+                            the inner transport
+      -> HttpOwned          (baton passed) the POST future, then the SSE
+                            response body it produced
+      -> Released           terminal: every local participant is gone and
+                            none can dispatch it or hold HTTP activity again
+      -> forgotten          the admission guard dropped *and* the outbound
+                            participant decided
   ```
 
   Ownership is a **baton, never two parallel owners**: registration hands it
-  from the outbound dispatch future to the POST, because settlement must never
+  from the outbound participant to the POST, because settlement must never
   come to depend on rmcp resolving an outbound send.
+- **Terminal Tool settlement happens-after every local participant capable of
+  later dispatching that request id has become terminal.** This is the whole
+  point of the first phase above. `Peer::send_cancellable_request` returning
+  `Ok` only enqueues the request; rmcp's service loop dequeues it later and
+  *calls* `Transport::send`, and only then spawns the future that call
+  returned. `Transport::send`'s **synchronous prologue** is therefore the
+  dispatch linearization point — the decision is frozen before the returned
+  future exists — and one further check immediately before that future could
+  poll the inner send drops it **unpolled** when a termination landed in
+  between. Cancelling a token that a future dispatch *would* observe is
+  intent, never evidence.
+- **Request lifecycle authority is created once per request id per connection
+  generation and may only move toward terminality. It is never resurrected.**
+  An entry is removed only once every participant is terminal, so a late
+  outbound participant can never find its entry missing and mint a fresh,
+  uncancelled one in its place. After the generation's outbound seam ends the
+  seam creates nothing at all and refuses unconditionally.
+- **A tracked POST registration requires the dispatch baton.** `Released ->
+  HttpOwned` is impossible, and so are `HttpOwned -> HttpOwned` and
+  `AwaitingDispatch -> HttpOwned`: each is refused with a pre-cancelled,
+  untracked guard that can neither reach the network nor release ownership
+  that is not its own. A released request's release proof stays terminal.
 - **Absence never means "not yet registered".** Cancellation reads the entry's
-  explicit state, and each state has different settlement evidence:
-  - `NotYetRegistered` — the token is cancelled and the outbound dispatch seam
-    **refuses** to hand the request to the transport, so it never reaches the
-    network and no local activity of it is ever created. Nothing is pending,
-    nothing is awaited, and **no record is created**;
-  - `Live` — that exact HTTP request is terminated and settlement awaits an
-    explicit release proof that the POST future or the response body was
-    **dropped before the proof fired**;
-  - `Released` — the local half already finished. This is the race an
+  explicit phase, and each has different settlement evidence:
+  - `AwaitingDispatch` — the token is cancelled and settlement **awaits the
+    outbound participant's own decision**: it reaches the seam, observes the
+    terminal lifecycle state and refuses, or the generation's outbound seam
+    ends first and publishes that it can never arrive. Either way the request
+    never reaches the network, and the settlement that follows is a proof
+    rather than an expectation;
+  - `DispatchOwned` / `HttpOwned` — that exact local activity is terminated
+    and settlement awaits an explicit release proof that the inner send, the
+    POST future, or the response body was **dropped before the proof fired**;
+  - `Released` — every local participant already finished. This is the race an
     absence-based reading could not see: a cancellation landing after the POST
     released but before rmcp delivered the correlated response looked
     identical to "the POST has not started", so it created a pre-termination
@@ -3814,9 +3843,9 @@ remote control plane            local ownership plane
   no timer. Over stdio there is no such local half — an outbound write owns no
   resource that outlives it — so the termination is already settled.
 - **Every request lifecycle has a request-local forget point.** The
-  invocation's admission guard drops on every path out of the executor, so a
-  normally completed request cleans up its own state with the connection still
-  open. The memory bound of this layer is `O(in-flight tool calls)` and never
+  invocation's admission guard drops on every path out of the executor and its
+  outbound participant decides exactly once, so a normally completed request
+  cleans up its own state with the connection still open. The memory bound of this layer is `O(in-flight tool calls)` and never
   `O(requests this generation has ever raced)`; connection close only clears
   what is still genuinely in flight.
 - **`notifications/cancelled` alone never owns HTTP cancellation.** Local
