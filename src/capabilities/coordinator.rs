@@ -347,6 +347,21 @@ pub struct PreparedCapabilityCandidate {
     /// the candidate until `commit` transfers them into the coordinator's
     /// published generation state.
     mcp_runtimes: Vec<McpRuntimeGeneration>,
+    /// The MCP servers whose **last-known-good capability generation** this
+    /// candidate carries forward unchanged because the refresh that would
+    /// have replaced it did not produce a complete validated generation
+    /// (Issue #205).
+    ///
+    /// Capability knowledge and transport availability are different facts.
+    /// A refresh that cannot reach a server proves the transport is
+    /// currently unavailable; it proves nothing about the catalog the server
+    /// published when it was last validated. The candidate therefore reuses
+    /// exactly the registrations the authoritative snapshot already carries
+    /// for these servers — never a partial or re-derived subset — and commit
+    /// retains their published physical generation instead of retiring it.
+    /// A carried-forward server contributes no epoch to `mcp_epochs`: its
+    /// knowledge is deliberately not being revalidated by this candidate.
+    mcp_carried_forward: std::collections::BTreeSet<McpServerId>,
     /// The effective MCP server set of this candidate: the configured
     /// bindings plus the synthesized managed-Python-package bindings (Issue
     /// #174). The committed snapshot freezes this set for the subagent
@@ -411,7 +426,9 @@ impl PreparedCapabilityCandidate {
         probe: &Arc<crate::tools::mcp::test_sync::CloseProbe>,
     ) {
         for generation in &self.mcp_runtimes {
-            generation.runtime().install_close_probe(probe.clone());
+            if let Some(runtime) = generation.connection().published_runtime() {
+                runtime.install_close_probe(probe.clone());
+            }
         }
     }
 }
@@ -821,6 +838,7 @@ impl CapabilityCoordinator {
         let mut mcp_tools = Vec::new();
         let mut mcp_epochs = BTreeMap::new();
         let mut mcp_runtimes = Vec::new();
+        let mut mcp_carried_forward = std::collections::BTreeSet::new();
         // `BTreeMap` iteration is the deterministic identity order.
         for (server_id, binding) in &effective_mcp_servers {
             match self.prepare_mcp_server(server_id, binding, None).await {
@@ -839,6 +857,16 @@ impl CapabilityCoordinator {
                     );
                 }
                 Err(reason) => {
+                    // Publish-on-success (Issue #205): a refresh that did not
+                    // produce a complete validated generation never replaces
+                    // the authoritative one. When this server already has a
+                    // published last-known-good generation **for exactly this
+                    // binding**, the candidate reuses it verbatim; otherwise
+                    // the source contributes nothing at all.
+                    if let Some(carried) = self.published_mcp_registrations(server_id, binding) {
+                        mcp_carried_forward.insert(server_id.clone());
+                        discovered_tools.extend(carried);
+                    }
                     availability.insert(
                         CapabilitySourceId::Mcp(server_id.clone()),
                         CapabilitySourceState::unavailable(reason),
@@ -875,6 +903,7 @@ impl CapabilityCoordinator {
             mcp_epochs,
             availability,
             mcp_runtimes,
+            mcp_carried_forward,
             effective_mcp_servers,
             resource_inputs: inputs,
             force_publish,
@@ -1006,7 +1035,15 @@ impl CapabilityCoordinator {
         // The epoch snapshot is taken under the shared invalidation
         // guard; the pagination itself never holds it.
         let epoch_before = self.inner.mcp_invalidation.epoch(server_id);
-        let tools = match generation.binding().runtime().list_tools().await {
+        // Discovery resolves its transport through the same health-
+        // arbitrating connection path a dispatch uses, so a candidate is
+        // never built from a generation the connection already knows is
+        // unusable.
+        let listing = match generation.connection().acquire().await {
+            Ok(transport) => transport.runtime().list_tools().await,
+            Err(error) => Err(error),
+        };
+        let tools = match listing {
             Ok(tools) => tools,
             Err(error) => {
                 let close_error = generation.retire_and_close().await;
@@ -1096,6 +1133,9 @@ impl CapabilityCoordinator {
             mcp_epochs: BTreeMap::new(),
             availability: CapabilityAvailability::new(),
             mcp_runtimes: Vec::new(),
+            // A base-only candidate has no MCP source at all, so there is
+            // nothing to carry forward.
+            mcp_carried_forward: std::collections::BTreeSet::new(),
             // The base-only candidate connects nothing; its effective server
             // set is the configured one, exactly as before.
             effective_mcp_servers: inputs.mcp_servers.clone(),
@@ -1252,12 +1292,92 @@ impl CapabilityCoordinator {
             mcp_epochs,
             availability: CapabilityAvailability::new(),
             mcp_runtimes,
+            // A child composition has no prior authoritative generation to
+            // carry forward: its frozen selected set is required, so a
+            // failure is a preparation error rather than a degraded catalog.
+            mcp_carried_forward: std::collections::BTreeSet::new(),
             // The frozen selected set IS the effective set: the child's
             // composition never learns about any other server.
             effective_mcp_servers: inputs.mcp_servers.clone(),
             resource_inputs: inputs,
             force_publish: false,
         })
+    }
+
+    /// The authoritative snapshot's registrations for one MCP server, when
+    /// that server currently has a published last-known-good capability
+    /// generation **that was validated under exactly the binding this
+    /// candidate is preparing** (Issue #205).
+    ///
+    /// # Carry-forward requires binding identity
+    ///
+    /// A server identity is *not* sufficient identity for this fallback. The
+    /// registrations reused here carry their executors, and those executors
+    /// dispatch through the connection the published generation established
+    /// — a connection negotiated from the *published* binding. Reusing them
+    /// under a different binding would publish a snapshot whose authoritative
+    /// metadata says `S -> B2` while every executor of `S` still talks to
+    /// `B1`: a split-brain authority in which endpoint, executable,
+    /// environment, headers, credentials, cwd, and every policy field of the
+    /// published binding disagree with the transport that actually runs the
+    /// call.
+    ///
+    /// ```text
+    /// published S/B1/G1, candidate S/B1, refresh fails => G1 carried forward
+    /// published S/B1/G1, candidate S/B2, refresh fails => nothing carried
+    /// ```
+    ///
+    /// The comparison is the domain equality of
+    /// [`crate::tools::mcp::McpServerBinding`] against
+    /// the authoritative frozen binding set of the published snapshot, so it
+    /// covers every execution-relevant field the type represents — never a
+    /// digest, a tool definition, or a `tools/list` result standing in for
+    /// one.
+    ///
+    /// When the binding is unchanged the registrations are reused
+    /// **verbatim**, executors included: those executors are bound to the
+    /// server's stable connection owner, so the carried-forward generation
+    /// keeps working the moment a replacement transport can be established,
+    /// without any capability republication. Nothing here re-derives,
+    /// filters, or partially reconstructs a catalog: a carried-forward
+    /// generation is exactly the one that was validated when it was
+    /// published.
+    fn published_mcp_registrations(
+        &self,
+        server_id: &McpServerId,
+        binding: &crate::tools::mcp::McpServerBinding,
+    ) -> Option<Vec<ToolRegistration>> {
+        let snapshot = self
+            .inner
+            .state
+            .lock()
+            .expect("capability state lock poisoned")
+            .snapshot
+            .clone();
+        // The publication linearization point: the snapshot carries the
+        // frozen binding set its generation was validated under, so the
+        // binding compared here is the one the published executors actually
+        // negotiated — never the currently configured desired state.
+        if snapshot.mcp_servers().get(server_id) != Some(binding) {
+            return None;
+        }
+        let carried: Vec<ToolRegistration> = snapshot
+            .tool_registry()
+            .registrations()
+            .into_iter()
+            .filter(|registration| {
+                matches!(
+                    &registration.definition.origin,
+                    crate::tools::types::ToolOrigin::Mcp { server_id: owner }
+                        if owner == server_id
+                )
+            })
+            .collect();
+        if carried.is_empty() {
+            None
+        } else {
+            Some(carried)
+        }
     }
 
     /// Connects one conversation-owned MCP server through an owner whose
@@ -1356,9 +1476,21 @@ impl CapabilityCoordinator {
                 // the candidate generation before answering the caller. If
                 // the caller has already been cancelled, the send-failure
                 // branch below retires that generation and awaits its close.
-                Ok(runtime) => Ok(McpRuntimeGeneration::from_connected(
-                    server_id_owned,
-                    runtime,
+                // The connection — not the transport — is what the
+                // published capability generation owns (Issue #205). It
+                // retains exactly the inputs a bounded replacement needs and
+                // its own ownership cancellation root, so a later dispatch
+                // can re-establish a transport without any capability
+                // knowledge changing and without any detached task.
+                Ok(runtime) => Ok(McpRuntimeGeneration::from_connection(
+                    server_id_owned.clone(),
+                    crate::tools::mcp::McpConnection::reconnectable(
+                        runtime,
+                        binding_owned.clone(),
+                        inner.workspace.clone(),
+                        inner.mcp_invalidation.clone(),
+                        cancellation.clone(),
+                    ),
                     owner_admission,
                     handle,
                     &inner.mcp_retirements,
@@ -1699,12 +1831,25 @@ impl CapabilityCoordinator {
                 mcp_lease_authority,
                 Arc::new(candidate.effective_mcp_servers.clone()),
             ));
+            // The published physical generation of a carried-forward server
+            // is *retained*, not retired: its catalog is still the
+            // authoritative last-known-good knowledge and its stable
+            // connection owner is what a later dispatch reconnects through.
+            // Every other previously published generation is replaced by
+            // this commit and retires.
             let previous_mcp_runtimes = std::mem::replace(
                 &mut state.mcp_runtimes,
                 std::mem::take(&mut candidate.mcp_runtimes),
             );
             for generation in previous_mcp_runtimes {
-                generation.retire();
+                if candidate
+                    .mcp_carried_forward
+                    .contains(generation.server_id())
+                {
+                    state.mcp_runtimes.push(generation);
+                } else {
+                    generation.retire();
+                }
             }
             state.revision = revision;
             state.snapshot = snapshot.clone();
@@ -1943,7 +2088,7 @@ impl CapabilityCoordinator {
             .mcp_runtimes
             .iter()
             .find(|generation| generation.server_id() == server_id)
-            .map(McpRuntimeGeneration::runtime)
+            .and_then(|generation| generation.connection().published_runtime())
     }
 
     /// Returns the number of retired generations still tracked by the
@@ -2727,9 +2872,15 @@ mod mcp_race_tests {
             )
             .await
             .expect("fixture connection");
-            generations.push(McpRuntimeGeneration::from_connected(
+            generations.push(McpRuntimeGeneration::from_connection(
                 server_id.clone(),
-                runtime,
+                crate::tools::mcp::McpConnection::reconnectable(
+                    runtime,
+                    binding.clone(),
+                    workspace.clone(),
+                    invalidation.clone(),
+                    crate::runtime::cancellation::CancellationSignal::new(),
+                ),
                 Some(admission),
                 tokio::runtime::Handle::current(),
                 &coordinator.inner.mcp_retirements,
@@ -3011,7 +3162,9 @@ mod mcp_race_tests {
             .mcp_runtimes
             .first()
             .expect("candidate runtime")
-            .runtime();
+            .connection()
+            .published_runtime()
+            .expect("a freshly published generation has a transport");
         let initial_epoch = runtime.change_epoch();
         assert_eq!(initial_epoch, 0);
 
@@ -3211,7 +3364,9 @@ mod mcp_race_tests {
             .mcp_runtimes
             .first()
             .expect("v1 candidate runtime")
-            .runtime();
+            .connection()
+            .published_runtime()
+            .expect("a freshly published generation has a transport");
         let v1_snapshot = coordinator.commit(candidate_v1).expect("commit v1");
         assert_eq!(v1_snapshot.revision().get(), 1);
 
@@ -3317,7 +3472,9 @@ mod mcp_race_tests {
             .mcp_runtimes
             .first()
             .expect("v1 candidate runtime")
-            .runtime();
+            .connection()
+            .published_runtime()
+            .expect("a freshly published generation has a transport");
         let v1_snapshot = coordinator.commit(candidate_v1).expect("commit v1");
         assert_eq!(v1_snapshot.revision().get(), 1);
 

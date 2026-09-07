@@ -1168,6 +1168,29 @@ mod tests {
             admission_gate,
             parent_guidance_seal_gate,
             None,
+            None,
+            conversation_id,
+            model,
+        )
+        .await
+    }
+
+    /// The child-runtime fixture with the Agent Loop's provider-arbitration
+    /// barrier armed, so a test can hold an actually-started attempt live and
+    /// **unable to settle** while it exercises the coordinator.
+    async fn child_test_runtime_with_model_pause(
+        dir: &tempfile::TempDir,
+        model_arbitration_pause: crate::agent::execution::test_sync::ModelArbitrationPause,
+        conversation_id: ConversationId,
+        model: Arc<FakeModel>,
+    ) -> ConversationRuntime {
+        child_test_runtime_full(
+            dir,
+            None,
+            None,
+            None,
+            None,
+            Some(model_arbitration_pause),
             conversation_id,
             model,
         )
@@ -1185,6 +1208,7 @@ mod tests {
         admission_gate: Option<Arc<Gate>>,
         parent_guidance_seal_gate: Option<Arc<Gate>>,
         workflow_output: Option<Arc<crate::runtime::workflow::WorkflowOutputLatch>>,
+        model_arbitration_pause: Option<crate::agent::execution::test_sync::ModelArbitrationPause>,
         conversation_id: ConversationId,
         model: Arc<FakeModel>,
     ) -> ConversationRuntime {
@@ -1250,6 +1274,7 @@ mod tests {
                 start_boundary_pause: start_pause,
                 admission_gate,
                 parent_guidance_seal_gate,
+                model_arbitration_pause,
                 ..CoordinatorProbe::default()
             },
         )
@@ -2154,14 +2179,38 @@ mod tests {
     /// A committed one-shot cancellation intent refuses guidance under the
     /// very lock that committed it: a cancelled child is never steered, and
     /// nothing moves it back toward running.
+    ///
+    /// # Why the attempt is held at an exact barrier
+    ///
+    /// Guidance is refused when the coordinator can still *read* a committed
+    /// cancellation: a one-shot intent, or a current attempt whose signal is
+    /// cancelled. `cancel_current_or_next_attempt` on a live attempt takes
+    /// the second form — and the Agent Loop's provider arbitration settles a
+    /// cancelled attempt as soon as its stream is merely pending, which
+    /// clears the current-attempt slot and with it the fact this test reads.
+    /// Waiting on `model.parked()` proved the attempt *started*, never that
+    /// it was still there one statement later, so the refusal was a race the
+    /// test usually won.
+    ///
+    /// [`ModelArbitrationPause`] holds the attempt inside its stream loop,
+    /// after the provider's first item and before the next
+    /// provider/cancellation arbitration, so it provably cannot settle while
+    /// this test exercises the coordinator. Both admission decisions below
+    /// are then about a runtime that is structurally unable to move.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn guidance_after_the_committed_cancellation_intent_is_refused() {
+        use crate::agent::execution::test_sync::ModelArbitrationPause;
+
         let dir = tempfile::tempdir().expect("temp root");
-        let model = Arc::new(FakeModel::new(vec![vec![FakeStep::ParkUntilCancelled]]));
-        let runtime = child_test_runtime(
+        let model = Arc::new(FakeModel::new(vec![vec![
+            FakeStep::Emit(crate::model::event::ModelEvent::Started),
+            FakeStep::ParkUntilCancelled,
+        ]]));
+        let (model_pause, mut model_pause_reached, model_pause_release) =
+            ModelArbitrationPause::install(1);
+        let runtime = child_test_runtime_with_model_pause(
             &dir,
-            None,
-            None,
+            model_pause,
             ConversationId::new("conv-child-guidance-cancelled"),
             model.clone(),
         )
@@ -2181,11 +2230,13 @@ mod tests {
                 })],
             )
             .expect("Delegate enters ordinary child inbound");
-        let mut parked = model.parked();
-        parked
-            .wait_for(|is_parked| *is_parked)
+        // The attempt owns a started provider turn and is held at the exact
+        // arbitration barrier, so it cannot settle and clear the
+        // current-attempt slot under either admission decision below.
+        model_pause_reached
+            .wait_for(|is_reached| *is_reached)
             .await
-            .expect("provider parked watch");
+            .expect("model arbitration pause channel stays open");
 
         // Guidance is legal while the attempt is live and uncancelled.
         runtime
@@ -2216,6 +2267,8 @@ mod tests {
             matches!(refused, InboundAdmissionError::GuidanceCancelled),
             "the refusal names the committed cancellation intent: {refused:?}"
         );
+        // Only now may the held attempt observe its cancellation and settle.
+        let _ = model_pause_release.send(());
         runtime.shutdown().await.expect("child runtime drains");
     }
 
@@ -2305,6 +2358,7 @@ mod tests {
             None,
             None,
             Some(Arc::clone(&latch)),
+            None,
             ConversationId::new("conv-child-workflow-isolated"),
             model.clone(),
         )

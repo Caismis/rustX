@@ -26,11 +26,19 @@
 //! never delivers, correlates, or handles a message. On a
 //! confirmed structurally invalid message it records a bounded
 //! [`ProtocolViolationRecorder`] fact and then ends the byte stream (EOF)
-//! immediately after the offending line — rmcp still sends its own
-//! peer-facing `Invalid Request` reply for that line, and its service loop
-//! then terminates, so every pending and future operation on the
-//! connection resolves through the recorder as an explicit rustX protocol
-//! failure instead of a silently healthy exchange.
+//! immediately after the offending line, so rmcp's service loop terminates
+//! and every pending and future operation on the connection resolves
+//! through the recorder as an explicit rustX protocol failure instead of a
+//! silently healthy exchange.
+//!
+//! rmcp's own peer-facing `Invalid Request` reply for that line is written
+//! inline as it decodes it, one layer above this tee. Whether the violating
+//! peer ever *reads* it is not a rustX guarantee and is not depended on
+//! anywhere: this seam records the violation from the same line before rmcp
+//! decodes it, so rustX is already fencing the boundary — the generation is
+//! poisoned and its owned stdio unit is asked to retire — while that reply
+//! is still on its way. The courtesy is rmcp's; the contract is the
+//! recorder.
 
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
