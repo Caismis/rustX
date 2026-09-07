@@ -536,7 +536,7 @@ async fn repeated_cancel_is_idempotent() {
 #[tokio::test]
 async fn starting_can_be_cancelled() {
     let fixture = background_fixture("conv-bg");
-    let (executor, mut started, _release) = ControlledExecutor::parking(success());
+    let (executor, started, _release) = ControlledExecutor::parking(success());
     let registry = fixture.registry.clone();
     let prepared = registry
         .prepare_dispatch(
@@ -554,8 +554,24 @@ async fn starting_can_be_cancelled() {
     // Cancel immediately after commit, before the runner begins.
     let snapshot = registry.cancel(&execution_id).expect("cancel");
     assert_eq!(snapshot.state, BackgroundLifecycle::Cancelling);
-    await_background_started(&mut started, "runner still starts").await;
-    wait_for_state(&registry, &execution_id, BackgroundLifecycle::Cancelled).await;
+    let terminal = tokio::time::timeout(
+        Duration::from_secs(5),
+        registry.wait_until_terminal(&execution_id),
+    )
+    .await
+    .expect("unstarted cancellation settles")
+    .expect("terminal");
+    assert!(
+        !*started.borrow(),
+        "cancellation never polls the physical operation"
+    );
+    assert_eq!(
+        terminal.result.expect("result").status,
+        ToolExecutionStatus::Cancelled {
+            reason: CancellationReason::UserRequested,
+            phase: rustx::tools::types::ToolCancellationPhase::BeforeStart,
+        }
+    );
 }
 
 /// Exactly one terminal transition and exactly one terminal mailbox
@@ -1658,5 +1674,178 @@ fn background_status_accounting() {
     assert_eq!(
         estimator.estimate_conversation_input(&[]),
         estimator.estimate_conversation_input(&without_status.messages),
+    );
+}
+
+struct SettlementOnlyExecutor {
+    started: tokio::sync::watch::Sender<bool>,
+    result: ToolExecutionResult,
+}
+
+impl ToolExecutor for SettlementOnlyExecutor {
+    fn start<'a>(
+        &'a self,
+        _invocation: ToolInvocation,
+        context: ToolExecutionContext<'a>,
+    ) -> ToolExecutionHandle<'a> {
+        let result = self.result.clone();
+        ToolExecutionHandle::new(
+            Box::pin(async move {
+                self.started.send_replace(true);
+                std::future::pending().await
+            }),
+            Box::pin(async move {
+                context.cancellation.cancelled().await;
+                match result.status {
+                    ToolExecutionStatus::OutcomeUnknown { detail } => {
+                        rustx::tools::executor::ToolSettlement::Unconfirmed { detail }
+                    }
+                    _ => rustx::tools::executor::ToolSettlement::Confirmed(result),
+                }
+            }),
+        )
+    }
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
+    }
+}
+
+/// Detached cancellation must drive independent settlement, preserving every
+/// terminal meaning and publishing once even under repeated terminal signals.
+#[tokio::test]
+async fn issue206_background_consumes_typed_settlement_without_completion() {
+    for with_sink in [false, true] {
+        for (status, expected) in [
+            (ToolExecutionStatus::Success, BackgroundLifecycle::Succeeded),
+            (
+                ToolExecutionStatus::Failed {
+                    error: "timeout cancelled aborted".into(),
+                },
+                BackgroundLifecycle::Failed,
+            ),
+            (
+                ToolExecutionStatus::Denied {
+                    reason: "policy".into(),
+                },
+                BackgroundLifecycle::Denied,
+            ),
+            (cancelled().status, BackgroundLifecycle::Cancelled),
+            (ToolExecutionStatus::TimedOut, BackgroundLifecycle::TimedOut),
+            (
+                ToolExecutionStatus::OutcomeUnknown {
+                    detail: "dispatched external effect".into(),
+                },
+                BackgroundLifecycle::OutcomeUnknown,
+            ),
+        ] {
+            let fixture = background_fixture_with_sink("conv-206-settlement", with_sink);
+            let (started, mut started_rx) = tokio::sync::watch::channel(false);
+            let mut result = success();
+            result.status = status;
+            let executor: Arc<dyn ToolExecutor> = Arc::new(SettlementOnlyExecutor {
+                started,
+                result: result.clone(),
+            });
+            let prepared = fixture
+                .registry
+                .prepare_dispatch(
+                    &background_invocation("probe"),
+                    &executor,
+                    rustx::tools::environment::ToolEnvironment::new(),
+                )
+                .expect("prepare");
+            let BackgroundDispatchOutcome::Accepted { execution_id, .. } = fixture
+                .registry
+                .commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new())
+                .expect("commit")
+            else {
+                panic!("accepted");
+            };
+            await_background_started(&mut started_rx, "split completion started").await;
+            let _ = fixture.registry.cancel(&execution_id);
+            let _ = fixture.registry.cancel(&execution_id);
+            let terminal = tokio::time::timeout(
+                Duration::from_secs(5),
+                fixture.registry.wait_until_terminal(&execution_id),
+            )
+            .await
+            .expect("settlement does not await completion")
+            .expect("terminal snapshot");
+            assert_eq!(terminal.state, expected);
+            assert_eq!(
+                terminal.result.as_ref().expect("typed result").status,
+                result.status
+            );
+            fixture.registry.finish(&execution_id, &success());
+            let _ = fixture.registry.cancel(&execution_id);
+            assert_eq!(fixture.registry.snapshot(&execution_id), Some(terminal));
+            let batch = fixture
+                .mailbox
+                .select_pending_batch()
+                .expect("mailbox")
+                .expect("terminal inbound");
+            assert_eq!(batch.items().len(), 1, "one absorbing terminal publication");
+            let json = serde_json::to_string(batch.items()[0].message()).expect("terminal JSON");
+            assert!(json.contains(expected.name()));
+        }
+    }
+}
+
+struct PanickingBackgroundExecutor;
+impl ToolExecutor for PanickingBackgroundExecutor {
+    fn start<'a>(
+        &'a self,
+        _invocation: ToolInvocation,
+        context: ToolExecutionContext<'a>,
+    ) -> ToolExecutionHandle<'a> {
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async { panic!("scripted detached panic") }),
+            context.cancellation,
+        )
+    }
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
+    }
+}
+
+#[tokio::test]
+async fn issue206_background_panic_keeps_registry_settlement_authority() {
+    let fixture = background_fixture("conv-206-panic");
+    let executor: Arc<dyn ToolExecutor> = Arc::new(PanickingBackgroundExecutor);
+    let prepared = fixture
+        .registry
+        .prepare_dispatch(
+            &background_invocation("panic"),
+            &executor,
+            rustx::tools::environment::ToolEnvironment::new(),
+        )
+        .expect("prepare");
+    let BackgroundDispatchOutcome::Accepted { execution_id, .. } = fixture
+        .registry
+        .commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new())
+        .expect("commit")
+    else {
+        panic!("accepted");
+    };
+    let terminal = tokio::time::timeout(
+        Duration::from_secs(5),
+        fixture.registry.wait_until_terminal(&execution_id),
+    )
+    .await
+    .expect("panic must not orphan the record")
+    .expect("terminal");
+    assert_eq!(terminal.state, BackgroundLifecycle::OutcomeUnknown);
+    assert!(fixture.registry.active_snapshot().is_empty());
+    fixture.registry.finish(&execution_id, &success());
+    assert_eq!(fixture.registry.snapshot(&execution_id), Some(terminal));
+    assert_eq!(
+        fixture
+            .mailbox
+            .select_pending_batch()
+            .expect("mailbox")
+            .expect("terminal inbound")
+            .items()
+            .len(),
+        1
     );
 }

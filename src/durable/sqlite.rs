@@ -193,7 +193,9 @@ use super::inbox::{
 ///
 /// A v3/v4/v5/v6/v7/v8/v9/v10/v11/v12/v13/v14/v15/v16/v17/v18/v19/v20/v21 database
 /// must fail at store open; there is no migration or compatibility path.
-pub const SQLITE_SCHEMA_VERSION: i64 = 22;
+/// Version 23 preserves Denied in detached terminal facts (Issue #206).
+/// Older stores are rejected; there is no compatibility decoding.
+pub const SQLITE_SCHEMA_VERSION: i64 = 23;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;

@@ -3000,7 +3000,7 @@ async fn a_tool_cancellation_before_the_steer_effect_frontier_is_confirmed_no_ef
             result.status,
             rustx::tools::types::ToolExecutionStatus::Cancelled {
                 reason: rustx::runtime::types::CancellationReason::UserRequested,
-                phase: rustx::tools::types::ToolCancellationPhase::DuringExecution,
+                phase: rustx::tools::types::ToolCancellationPhase::BeforeStart,
             }
         ),
         "the confirmed result is the tool cancellation: {:?}",

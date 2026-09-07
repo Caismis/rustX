@@ -985,8 +985,8 @@ The stages are distinct and named:
 | 1 | physical tool execution completion | executor |
 | 2 | normalized `ToolExecutionResult` finalization | Agent Loop (`run_single_call`) |
 | 3 | every sibling `CallSlot` settled, including cancellation fill | Agent Loop (`execute_tools`) |
-| 4 | canonical `ToolMessage` commit, in original model call order | Agent Loop (`commit_canonical`) |
-| 5 | **batch structural settlement** — the last `commit_canonical` of the batch | Agent Loop |
+| 4 | prepare every canonical `ToolMessage`, in model call order | Agent Loop |
+| 5 | **batch structural settlement** — atomic `commit_tool_result_batch` | Agent Loop |
 | 6 | `ToolResultObserver` pass → validate at the transaction boundary → stamp producer identity → stage | Agent Loop |
 | 7 | deferred proposals become **eligible** — the next `prepare_model_turn` drains the buffer into `ContextAssembly::assemble` | Agent Loop |
 | 8 | next model-turn start (policy + staging + cancellation-vs-start arbitration + fused `commit_model_turn_start`) | Agent Loop |
@@ -1509,6 +1509,9 @@ settles cancelled exactly once.
 
 ### 7.1 Tool-call batch scheduling and structural settlement
 
+The final cross-executor contract and conformance audit are in
+[Tool lifecycle](tool-lifecycle.md).
+
 Every valid committed Assistant tool-call message is preflighted before commit
 (see section 3). Once committed, its entire tool-result batch is settled
 structurally exactly once:
@@ -1540,8 +1543,8 @@ structurally exactly once:
   model call order.
 - After the structurally complete batch commits, the attempt settles
   cancelled exactly once with one terminal event last.
-- The batch's **structural settlement point** is the last canonical
-  `ToolMessage` commit of the batch. The Issue #56 `ToolResultObserver` pass
+- The batch's **structural settlement point** is the atomic
+  `commit_tool_result_batch`: all sibling results commit together. The Issue #56 `ToolResultObserver` pass
   runs strictly after that point (see section 4.3), so an observer failure
   can never split the batch or prevent a committed Assistant tool-call
   message from receiving its complete canonical result batch.
@@ -1579,9 +1582,11 @@ the background registry owns the equivalent classification for detached work.
 
 Physical completion and cancellation remain one race and one terminal slot
 assignment. A completion that wins remains the real result. If cancellation
-wins, the started call is `DuringExecution`; awaiting the physical future
-afterward cannot replace that result. Calls past the frontier are filled as
-`BeforeStart`, and canonical ToolMessages are still committed once, in model
+intent wins, physical settlement evidence still selects the result: known
+outcomes survive, confirmed cancellation of a started call is
+`DuringExecution`, and unprovable external outcome is `OutcomeUnknown`.
+Calls that never crossed the start frontier are filled as `BeforeStart`,
+and canonical ToolMessages are committed atomically once, in model
 call order. The model-facing rendering states the reason independently,
 explicitly says that rustX did not start a `BeforeStart` call, and warns that
 partial side effects may exist for `DuringExecution`.
@@ -1661,7 +1666,7 @@ canonical status under the Issue
 - **`Unconfirmed` settlement evidence** → `OutcomeUnknown`: the call crossed
   the external-effect frontier and terminality cannot be proven — a deadline
   can never manufacture `TimedOut` from it;
-- any executor-proven normal outcome (`Success`/`Failed`) that won the
+- any executor-proven normal outcome (`Success`/`Failed`/`Denied`) that won the
   physical race survives untouched;
 - **settlement control-plane guard expiry** → `OutcomeUnknown`:
   `TOOL_SETTLEMENT_CONTROL_GUARD` exists ONLY as protection against a broken
@@ -1678,7 +1683,8 @@ settlement evidence returned by the executor's authority, while
 lifecycle itself when that authority violated its contract. Both select
 `OutcomeUnknown`, but the journal records them differently (below).
 
-`OutcomeUnknown` therefore comes only from explicit `Unconfirmed` evidence
+`OutcomeUnknown` comes from executor outcome evidence (including contained
+operation failure with unprovable effects), explicit `Unconfirmed` evidence,
 or from the guard — never from "the execution future did not return", and
 never from dropping a future. Dropping the completion plane after the
 settlement transition abandons nothing: with

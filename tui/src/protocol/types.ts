@@ -24,6 +24,7 @@
  */
 
 /**
+ * Version 17 adds `denied` to background terminal states (Issue #206).
  * Version 16 carries Issue #202's explicit tool outcome certainty: tool
  * status `interrupted` becomes `outcome_unknown` with a bounded `detail`;
  * `timed_out` means proven terminal settlement; and the background
@@ -46,7 +47,7 @@
  * version 11's subagent activity projection; and version 9's closed
  * `interrupted` lifecycle vocabulary. Older schemas are not decoded.
  */
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 16;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 17;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -319,6 +320,7 @@ export type BackgroundLifecycle =
   | "publishing_terminal"
   | "succeeded"
   | "failed"
+  | "denied"
   | "cancelled"
   | "timed_out"
   | "outcome_unknown";
@@ -343,6 +345,7 @@ export const BACKGROUND_TERMINAL_STATES: ReadonlySet<BackgroundLifecycle> =
   new Set<BackgroundLifecycle>([
     "succeeded",
     "failed",
+    "denied",
     "cancelled",
     "timed_out",
     "outcome_unknown",

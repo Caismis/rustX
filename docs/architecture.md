@@ -30,7 +30,8 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 22. An incompatible database
+The SQLite schema is development schema version 23. Version 23 preserves
+`Denied` in background terminal facts (Issue #206). An incompatible database
 fails explicitly; there is no migration chain, legacy reader, compatibility
 fallback, dual write, or old storage mode. Version 10 froze the structured
 Questionnaire interaction audit vocabulary introduced by Issue #126. Version
@@ -2153,14 +2154,15 @@ plane. A child's final report continues to arrive exactly once through the
 canonical parent inbound publication.
 
 As a foreground `ToolCall`, `execution(steer)` participates honestly in
-the generic Issue #204 cancellation/settlement lifecycle: the steer branch
-splits its completion and settlement planes explicitly (instead of
-wrapping the whole operation with `settled_by_operation`) so that once the
-tool's cancellation fires, the settlement plane classifies the steer
-against its **effect frontier** — before admission (confirmed no-effect
-cancellation), after admission with the child undecided (honest
-`Unconfirmed`, with the already-routed envelope possibly still accepted),
-or after the child's committed decision (confirmed steer result).
+the generic Issue #204 cancellation/settlement lifecycle through the shared
+`ToolExecutionHandle::settled_by_operation` ownership mechanism. There is no
+private steer operation slot or second lifecycle owner. The steer domain's
+`SteerToolEnd` classifies its **effect frontier**: before admission, typed
+`Cancelled` yields confirmed no-effect settlement; after admission with the
+child undecided, typed `OutcomeUnknown` maps through the shared handle to
+`Unconfirmed`; a known child decision yields a confirmed typed steer result.
+The child registry owns guidance acceptance; the generic Tool lifecycle owns
+canonical ToolResult selection and commit.
 Cancelling the steer ToolCall is deliberately not subagent cancellation:
 it never invokes `SubagentRegistry::cancel`, and the child subagent keeps
 running under its own lifecycle.
@@ -4234,14 +4236,16 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
-The current Runtime Client protocol is version 16. It carries Issue #202's
+The current Runtime Client protocol is version 17. Version 17 preserves
+`denied` in background lifecycle projections. Version 16 introduced the
+Tool outcome certainty vocabulary. It carries Issue #202's
 explicit tool outcome certainty: the canonical `ToolExecutionStatus`
 replaces `interrupted` with `outcome_unknown` (a bounded producer-owned
 `detail` accompanies it and is never parsed for semantics), the background
 terminal state `interrupted` becomes `outcome_unknown`, `timed_out` now
 claims proven terminal settlement rather than mere deadline expiry, the
 background lifecycle's terminal vocabulary is the honest `succeeded`,
-`failed`, `cancelled`, `timed_out`, and `outcome_unknown` — an unknown
+`failed`, `denied`, `cancelled`, `timed_out`, and `outcome_unknown` — an unknown
 outcome is never collapsed into `failed` — and
 every terminal non-success status carries bounded model-facing feedback
 through the canonical projection. Version 15 added the explicit

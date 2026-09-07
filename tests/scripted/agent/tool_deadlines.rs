@@ -2205,3 +2205,223 @@ async fn issue204_idle_liveness_is_gated_by_progress_capability() {
         vec!["started", "completed"]
     );
 }
+
+/// Issue #206: the construction and operation panic cuts cannot unwind an
+/// accepted batch. The operation's private owner is reclaimed before commit.
+struct ConformancePanicTool {
+    construction: bool,
+    reclaimed: Arc<AtomicBool>,
+}
+
+impl ToolExecutor for ConformancePanicTool {
+    fn start<'a>(
+        &'a self,
+        _invocation: ToolInvocation,
+        context: ToolExecutionContext<'a>,
+    ) -> ToolExecutionHandle<'a> {
+        assert!(!self.construction, "scripted construction panic");
+        let reclaimed = self.reclaimed.clone();
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                struct Owner(Arc<AtomicBool>);
+                impl Drop for Owner {
+                    fn drop(&mut self) {
+                        self.0.store(true, Ordering::SeqCst);
+                    }
+                }
+                let _owner = Owner(reclaimed);
+                panic!("scripted operation panic");
+            }),
+            context.cancellation,
+        )
+    }
+
+    fn progress_capability(&self) -> rustx::tools::ToolProgressCapability {
+        rustx::tools::ToolProgressCapability::None
+    }
+}
+
+#[tokio::test]
+async fn issue206_executor_panic_cannot_orphan_parallel_siblings() {
+    for construction in [true, false] {
+        let model = fake_model(tool_turn_then_stop(&[
+            call("call-panic", "tool-panic", "panic_probe"),
+            call("call-failure", "tool-failure", "failure_probe"),
+            call("call-success", "tool-success", "success_probe"),
+        ]));
+        let mut tools = ToolRegistry::new();
+        let reclaimed = Arc::new(AtomicBool::new(false));
+        tools
+            .register(
+                common::tool_policies(
+                    "panic_probe",
+                    "tool-panic",
+                    ToolExecutionPolicy::ForegroundOnly,
+                    ToolConcurrencyPolicy::Parallel,
+                ),
+                Arc::new(ConformancePanicTool {
+                    construction,
+                    reclaimed: reclaimed.clone(),
+                }),
+            )
+            .expect("register panic probe");
+        let mut failure = success_result("business failure");
+        failure.status = ToolExecutionStatus::Failed {
+            error: "cancelled interrupted aborted timeout timed out are diagnostic text".to_owned(),
+        };
+        for (name, id, result) in [
+            ("failure_probe", "tool-failure", failure.clone()),
+            (
+                "success_probe",
+                "tool-success",
+                success_result("sibling completed"),
+            ),
+        ] {
+            FakeTool::new(
+                common::tool_policies(
+                    name,
+                    id,
+                    ToolExecutionPolicy::ForegroundOnly,
+                    ToolConcurrencyPolicy::Parallel,
+                ),
+                result,
+            )
+            .register(&mut tools);
+        }
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let audit = run(
+            &model,
+            tools,
+            deadline_policy(10_000, None),
+            Arc::new(ManualMonotonicClock::new()),
+            &cancellation,
+        )
+        .await;
+        let messages = tool_messages(&audit);
+        assert_eq!(messages.len(), 3);
+        if construction {
+            assert!(matches!(
+                messages[0].result.status,
+                ToolExecutionStatus::Failed { .. }
+            ));
+        } else {
+            assert!(matches!(
+                messages[0].result.status,
+                ToolExecutionStatus::OutcomeUnknown { .. }
+            ));
+            assert!(
+                reclaimed.load(Ordering::SeqCst),
+                "private operation ownership reclaimed before commit"
+            );
+        }
+        assert_eq!(messages[1].result, failure);
+        assert!(matches!(
+            messages[2].result.status,
+            ToolExecutionStatus::Success
+        ));
+        for id in ["call-panic", "call-failure", "call-success"] {
+            assert_eq!(fact_sequence(&audit, id), vec!["started", "completed"]);
+        }
+        assert!(matches!(
+            audit.result.outcome,
+            AttemptOutcome::Completed { .. }
+        ));
+        assert_eq!(
+            model.requests().len(),
+            2,
+            "typed results reach model continuation"
+        );
+    }
+}
+
+struct CancellationPanicTool {
+    started: watch::Sender<bool>,
+    reclaimed: Arc<AtomicBool>,
+}
+
+impl ToolExecutor for CancellationPanicTool {
+    fn start<'a>(
+        &'a self,
+        _invocation: ToolInvocation,
+        context: ToolExecutionContext<'a>,
+    ) -> ToolExecutionHandle<'a> {
+        let cancellation = context.cancellation.clone();
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                struct Owner(Arc<AtomicBool>);
+                impl Drop for Owner {
+                    fn drop(&mut self) {
+                        self.0.store(true, Ordering::SeqCst);
+                    }
+                }
+                let _owner = Owner(self.reclaimed.clone());
+                self.started.send_replace(true);
+                context.cancellation.cancelled().await;
+                panic!("scripted panic while settling");
+            }),
+            cancellation,
+        )
+    }
+    fn progress_capability(&self) -> rustx::tools::ToolProgressCapability {
+        rustx::tools::ToolProgressCapability::None
+    }
+}
+
+#[tokio::test]
+async fn issue206_settlement_panic_never_manufactures_confirmed_timeout() {
+    let model = fake_model(tool_turn_then_stop(&[call(
+        "call-panic",
+        "tool-panic",
+        "panic_probe",
+    )]));
+    let mut tools = ToolRegistry::new();
+    let (started, mut started_rx) = watch::channel(false);
+    let reclaimed = Arc::new(AtomicBool::new(false));
+    tools
+        .register(
+            common::tool_policies(
+                "panic_probe",
+                "tool-panic",
+                ToolExecutionPolicy::ForegroundOnly,
+                ToolConcurrencyPolicy::Parallel,
+            ),
+            Arc::new(CancellationPanicTool {
+                started,
+                reclaimed: reclaimed.clone(),
+            }),
+        )
+        .expect("register");
+    let clock = Arc::new(ManualMonotonicClock::new());
+    let controller_clock = clock.clone();
+    let controller = tokio::spawn(async move {
+        await_started(&mut started_rx, "operation admitted").await;
+        controller_clock.advance(10_000);
+    });
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let audit = run(
+        &model,
+        tools,
+        deadline_policy(10_000, None),
+        clock,
+        &cancellation,
+    )
+    .await;
+    controller.await.expect("controller");
+    assert!(reclaimed.load(Ordering::SeqCst));
+    let messages = tool_messages(&audit);
+    assert_eq!(messages.len(), 1);
+    assert!(matches!(
+        messages[0].result.status,
+        ToolExecutionStatus::OutcomeUnknown { .. }
+    ));
+    assert_eq!(
+        fact_sequence(&audit, "call-panic"),
+        vec![
+            "started",
+            "deadline:hard",
+            "cancellation-requested:deadline:hard",
+            "settlement:unconfirmed",
+            "completed",
+        ]
+    );
+}

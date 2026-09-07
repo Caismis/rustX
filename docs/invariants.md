@@ -41,7 +41,7 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 22 is the only accepted schema; version 21 and every older
+schema version 23 is the only accepted schema; version 22 and every older
 development schema fail explicitly at open and are not migrated. Version 10
 froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation
@@ -3549,8 +3549,9 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   `TimedOut`. The two paths are type-distinct and never collapsed: the
   executor's `ToolSettlement` is evidence its authority returned, while the
   lifecycle's `SettlementAuthorityOutcome::ControlPlaneFailed` is generated
-  when that authority never did. `OutcomeUnknown` comes only from explicit
-  `Unconfirmed` evidence or the guard, never from "the execution future did
+  when that authority never did. `OutcomeUnknown` comes from executor outcome
+  evidence (including contained operation panic with unprovable effects),
+  explicit `Unconfirmed` evidence, or the guard, never from "the execution future did
   not return" or from dropping a future. A conforming executor keeps every
   rustX-owned local ownership inside its handle futures — it never spawns an
   unmanaged local task or process behind them — so when the guard fires and
@@ -3624,15 +3625,17 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   monotonic (`exec_1`, `exec_2`, ...) with checked exhaustion; they are
   allocated under the same synchronization boundary that owns background
   records.
-- The public lifecycle is `Starting -> Running -> Cancelling -> terminal`,
-  with the five terminal states (`Succeeded`, `Failed`, `Cancelled`,
-  `TimedOut`, `OutcomeUnknown`) absorbing; exactly one terminal transition
+- Starting, Running, and Cancelling can settle directly or retain a candidate
+  in PublishingTerminal until durable publication succeeds. The six terminal
+  states (`Succeeded`, `Failed`, `Denied`, `Cancelled`, `TimedOut`,
+  `OutcomeUnknown`) are absorbing; exactly one terminal transition
   settles an execution. `Cancelling` is non-terminal: it means cancellation
   intent committed and the cancellation was requested — terminal certainty
   is still pending, and it is not a confirmed cancellation. When the
   executor returns, its proven settlement decides the terminal state: an
   executor-proven cancellation settles as `Cancelled` with the
-  registry-retained reason and the `DuringExecution` phase, while every
+  registry-retained reason and the phase derived from its logical start
+  frontier (`BeforeStart` or `DuringExecution`), while every
   other executor-proven outcome (`Success`, `Failed`, `Denied`, `TimedOut`,
   `OutcomeUnknown`) settles under its own truthful lifecycle state.
 - The dispatch ownership commit is the background linearization point: the
@@ -5118,8 +5121,8 @@ Core invariant:
 ### ToolResultObserver
 
 - The observation pass runs **after** the owning tool batch reaches
-  structural settlement — the last canonical `ToolMessage` commit of the
-  batch — and before `tools_finished()` and the safe-boundary mailbox drain.
+  structural settlement — the atomic `commit_tool_result_batch` of every
+  sibling — and before `tools_finished()` and the safe-boundary mailbox drain.
   Observer failure therefore cannot split a batch or prevent a committed
   Assistant tool-call message from receiving its complete canonical result
   batch.

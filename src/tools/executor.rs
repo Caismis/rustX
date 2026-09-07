@@ -27,6 +27,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 
 use crate::runtime::cancellation::ExecutionCancellation;
@@ -242,9 +243,10 @@ impl<'a> ToolExecutionContext<'a> {
 /// One executable tool.
 ///
 /// Executors execute an already-resolved, already-validated
-/// [`ToolInvocation`] and report the actual execution outcome: a failure is
-/// a normalized [`ToolExecutionStatus::Failed`] result, never a fabricated
-/// success. Executors report physical outcomes; the owning runtime scheduler
+/// [`ToolInvocation`] and report the actual execution outcome: a known failure
+/// is a normalized [`ToolExecutionStatus::Failed`] result; an unprovable effect
+/// is [`ToolExecutionStatus::OutcomeUnknown`], never fabricated failure or success.
+/// Executors report physical outcomes; the owning runtime scheduler
 /// or registry owns canonical cancellation settlement and may normalize the
 /// cancellation reason and phase from its authoritative winner and start
 /// frontier. The canonical [`ToolExecutionResult`] is the final
@@ -263,7 +265,11 @@ impl<'a> ToolExecutionContext<'a> {
 ///
 /// [`ToolExecutionStatus::Failed`]: crate::tools::types::ToolExecutionStatus::Failed
 pub trait ToolExecutor: Send + Sync {
-    /// Starts one canonical invocation.
+    /// Constructs the handle of one canonical invocation.
+    ///
+    /// This method must not dispatch physical work. Dispatch and its cleanup
+    /// live inside the returned handle, so cancellation before the first
+    /// operation poll can prove that the invocation never had an effect.
     ///
     /// The returned [`ToolExecutionHandle`] splits the execution into its
     /// physical completion plane and its independent cancellation/settlement
@@ -362,6 +368,49 @@ pub struct ToolExecutionHandle<'a> {
     pub settlement: BoxFuture<'a, ToolSettlement>,
 }
 
+/// Invokes the executor construction boundary without letting an invocation
+/// panic unwind the owning batch or detached runner. Construction must not
+/// dispatch work: physical ownership belongs in the returned handle.
+pub(crate) fn start_tool_execution<'a>(
+    executor: &'a dyn ToolExecutor,
+    invocation: ToolInvocation,
+    context: ToolExecutionContext<'a>,
+) -> ToolExecutionHandle<'a> {
+    let cancellation = context.cancellation.clone();
+    if cancellation.is_cancelled() {
+        return ToolExecutionHandle::settled_by_operation(
+            Box::pin(async { unreachable!("cancelled admission never polls the operation") }),
+            cancellation,
+        );
+    }
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        executor.start(invocation, context)
+    }))
+    .unwrap_or_else(|_| {
+        ToolExecutionHandle::settled_by_operation(
+            Box::pin(async {
+                execution_boundary_result(ToolExecutionStatus::Failed {
+                    error: "the tool executor panicked while constructing its execution handle"
+                        .to_owned(),
+                })
+            }),
+            cancellation,
+        )
+    })
+}
+
+fn execution_boundary_result(status: ToolExecutionStatus) -> ToolExecutionResult {
+    ToolExecutionResult {
+        status,
+        content: Vec::new(),
+        duration_ms: 0,
+        exit_code: None,
+        artifacts: Vec::new(),
+        truncation: None,
+        managed_output: None,
+    }
+}
+
 impl<'a> ToolExecutionHandle<'a> {
     /// A handle whose settlement authority is genuinely independent of the
     /// physical operation future.
@@ -409,18 +458,49 @@ impl<'a> ToolExecutionHandle<'a> {
         operation: BoxFuture<'a, ToolExecutionResult>,
         cancellation: ExecutionCancellation,
     ) -> Self {
+        let operation_cancellation = cancellation.clone();
+        let operation: BoxFuture<'a, ToolExecutionResult> = Box::pin(async move {
+            // This checkpoint precedes the first physical poll, including
+            // when cancellation hands an unpolled operation to settlement.
+            if operation_cancellation.is_cancelled() {
+                return execution_boundary_result(ToolExecutionStatus::Cancelled {
+                    reason: operation_cancellation.reason(),
+                    phase: crate::tools::types::ToolCancellationPhase::BeforeStart,
+                });
+            }
+            // Catch inside the shared slot's lock so invocation unwinding
+            // cannot poison that ownership lock or unwind sibling calls.
+            // The consumed future is dropped before publishing its result.
+            // Panic is not evidence that an already-started effect failed.
+            std::panic::AssertUnwindSafe(operation)
+                .catch_unwind()
+                .await
+                .unwrap_or_else(|_| {
+                    execution_boundary_result(ToolExecutionStatus::OutcomeUnknown {
+                        detail: "the tool operation panicked after execution began; its effects \
+                                 cannot be confirmed"
+                            .to_owned(),
+                    })
+                })
+        });
         let slot = std::sync::Arc::new(std::sync::Mutex::new(Some(operation)));
         let completion_slot = std::sync::Arc::clone(&slot);
         let completion: BoxFuture<'a, ToolExecutionResult> =
             Box::pin(futures_util::future::poll_fn(move |cx| {
                 let mut guard = completion_slot.lock().expect("operation slot lock");
-                match guard.as_mut() {
+                let polled = match guard.as_mut() {
                     Some(operation) => operation.as_mut().poll(cx),
                     // The settlement plane owns the operation now; the
                     // owning lifecycle never polls this plane again after
                     // cancellation won arbitration.
                     None => std::task::Poll::Pending,
+                };
+                if polled.is_ready() {
+                    // Terminal is absorbing: consume the operation rather
+                    // than retaining a completed future that can be repolled.
+                    guard.take();
                 }
+                polled
             }));
         let settlement: BoxFuture<'a, ToolSettlement> = Box::pin(async move {
             cancellation.cancelled().await;
@@ -1829,5 +1909,62 @@ mod tests {
             vec![json!({"path": "a.txt"})],
             "the executor receives only the stripped business arguments"
         );
+    }
+}
+
+#[cfg(test)]
+mod settlement_conformance_tests {
+    use super::*;
+    use crate::runtime::cancellation::CancellationSignal;
+    use crate::runtime::types::CancellationReason;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn issue206_cancel_before_first_poll_never_crosses_effect_frontier() {
+        let signal = CancellationSignal::new();
+        let cancellation =
+            ExecutionCancellation::detached(signal.clone(), CancellationReason::UserRequested);
+        let effects = Arc::new(AtomicUsize::new(0));
+        let operation_effects = effects.clone();
+        let handle = ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                operation_effects.fetch_add(1, Ordering::SeqCst);
+                execution_boundary_result(ToolExecutionStatus::Success)
+            }),
+            cancellation,
+        );
+        signal.cancel();
+        signal.cancel();
+        let ToolSettlement::Confirmed(result) = handle.settlement.await else {
+            panic!("unstarted operation has confirmed no-effect settlement");
+        };
+        assert!(matches!(
+            result.status,
+            ToolExecutionStatus::Cancelled { .. }
+        ));
+        assert_eq!(effects.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn issue206_completion_consumes_operation_once() {
+        let cancellation = ExecutionCancellation::detached(
+            CancellationSignal::new(),
+            CancellationReason::UserRequested,
+        );
+        let effects = Arc::new(AtomicUsize::new(0));
+        let operation_effects = effects.clone();
+        let mut handle = ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                operation_effects.fetch_add(1, Ordering::SeqCst);
+                execution_boundary_result(ToolExecutionStatus::Success)
+            }),
+            cancellation,
+        );
+        assert!(matches!(
+            (&mut handle.completion).await.status,
+            ToolExecutionStatus::Success
+        ));
+        assert!(futures_util::poll!(&mut handle.completion).is_pending());
+        assert_eq!(effects.load(Ordering::SeqCst), 1);
     }
 }

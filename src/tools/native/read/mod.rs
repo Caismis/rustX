@@ -1116,7 +1116,7 @@ mod tests {
             result.status,
             ToolExecutionStatus::Cancelled {
                 reason: crate::runtime::types::CancellationReason::UserRequested,
-                phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
+                phase: crate::tools::types::ToolCancellationPhase::BeforeStart,
             }
         );
         assert_eq!(hook.starts(), 0, "a cancelled read must never decode");

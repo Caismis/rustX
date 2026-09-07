@@ -94,9 +94,9 @@
 //! `execution(steer)` is itself a foreground `ToolCall`, so it must
 //! cooperate with the generic Tool cancellation/settlement lifecycle
 //! (Issue #204) instead of relying on the settlement control-plane guard.
-//! The `steer` branch is therefore the one action whose executor splits its
-//! planes explicitly rather than wrapping the whole operation with
-//! [`ToolExecutionHandle::settled_by_operation`]: its operation races the
+//! The `steer` branch uses the shared cooperative ownership mechanism in
+//! [`ToolExecutionHandle::settled_by_operation`], not a private operation slot
+//! or a second lifecycle owner. `run_steer_tool_operation` races the
 //! child's durable decision against the tool's [`ExecutionCancellation`]
 //! and classifies the outcome against the steer **effect frontier** — the
 //! registry admission critical section that hands the guidance envelope to
@@ -106,14 +106,21 @@
 //!   anywhere, so the settlement is a confirmed no-effect cancellation;
 //! - **cancellation observed after the frontier, child decision unknown** —
 //!   the child may still durably accept the already-routed envelope, so
-//!   local ownership settles finitely and the settlement reports
-//!   [`ToolSettlement::Unconfirmed`] (honest outcome-unknown), never a
+//!   `SteerToolEnd::CancelledAwaitingChildDecision` becomes typed
+//!   `OutcomeUnknown`, which the shared handle maps to
+//!   [`crate::tools::executor::ToolSettlement::Unconfirmed`] (honest outcome-unknown), never a
 //!   fabricated cancellation and never a wait for the settlement control-
 //!   plane guard;
 //! - **the child's durable decision reached the operation** — the steer's
 //!   registry result (accepted or refused) is the physical completion and
 //!   is reported as confirmed settlement evidence: a committed child
 //!   decision is evidence, while the tool cancellation is a request.
+//!
+//! `SteerToolEnd` owns this domain effect-frontier classification: `Result`
+//! carries the known typed result and `CancelledBeforeSteerEffect` becomes
+//! typed `Cancelled`; both yield confirmed settlement through the shared
+//! handle. The child registry owns guidance acceptance, while the generic
+//! Tool lifecycle alone selects and commits the canonical `ToolResult`.
 //!
 //! Tool-call cancellation is deliberately **not** subagent cancellation:
 //! cancelling the `execution(steer)` `ToolCall` never calls
@@ -124,7 +131,7 @@
 //!
 //! [`ToolExecutionHandle::settled_by_operation`]: crate::tools::executor::ToolExecutionHandle::settled_by_operation
 //! [`ExecutionCancellation`]: crate::runtime::cancellation::ExecutionCancellation
-//! [`ToolSettlement::Unconfirmed`]: crate::tools::executor::ToolSettlement::Unconfirmed
+//! [`crate::tools::executor::ToolSettlement::Unconfirmed`]: crate::tools::executor::ToolSettlement::Unconfirmed
 //!
 //! # Discovery: ordering, bound, and scope (Issue #180)
 //!
@@ -165,16 +172,13 @@ use crate::tools::background::{
 };
 use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::execution::{ExecutionHandle, ExecutionKind, MAX_LISTED_EXECUTIONS};
-use crate::tools::executor::{
-    ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolSettlement,
-};
+use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
 use crate::tools::types::{
     ToolCancellationPhase, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
     ToolResultContent,
 };
-use futures_util::future::BoxFuture;
 
 use input::{ExecutionFilter, ExecutionInput};
 
@@ -277,9 +281,9 @@ impl ToolExecutor for ExecutionExecutor {
         // The one action whose operation can outlive its caller's patience
         // *and* cross a semantic effect frontier — steering a running child
         // whose durable answer may arrive long after the tool call is
-        // cancelled — gets its own Issue #204 handle whose settlement plane
-        // cooperates with cancellation and classifies the steer effect
-        // honestly (see [`steer_tool_handle`]). The other actions are
+        // cancelled — needs a cancellation-aware operation inside the shared
+        // cooperative handle (see [`steer_tool_handle`]). SteerToolEnd
+        // classifies its domain effect frontier. The other actions are
         // synchronous registry reads/writes over an immediately-resolving
         // operation, for which the standard cooperative pattern is exactly
         // right.
@@ -314,10 +318,9 @@ fn run_execution(
         Ok(ExecutionInput::Status { target }) => run_status(background, subagents, &target),
         Ok(ExecutionInput::Cancel { target }) => run_cancel(background, subagents, &target),
         // `steer` is dispatched in `ExecutionExecutor::start` and never
-        // reaches this router: reaching it would wrap the steer operation in
-        // the generic `settled_by_operation` pattern, which cannot settle
-        // finitely once the tool cancellation transfers the operation to the
-        // settlement plane while the child withholds its answer.
+        // reaches this synchronous router: its asynchronous operation must
+        // observe tool cancellation while awaiting the child's decision.
+        // Both routes use the shared `settled_by_operation` ownership.
         Ok(ExecutionInput::Steer { .. }) => {
             unreachable!("execution(steer) is dispatched before run_execution")
         }
@@ -373,9 +376,9 @@ enum SteerToolEnd {
 /// conversation to steer) and the subagent registry is not asked either, so
 /// there is no fallback in either direction and no id is ever interpreted
 /// across domains. Message validation is equally static and precedes every
-/// authority, so a deterministically invalid invocation is an ordinary
-/// failed tool result whether or not a cancellation is in flight — exactly
-/// as under the previous uniform `settled_by_operation` wrap.
+/// authority. Once the shared handle admits the operation's first poll,
+/// static rejection is an ordinary failed tool result. Cancellation already
+/// observed by that handle prevents the operation from being polled at all.
 ///
 /// The intrinsic owns none of the steer semantics: it composes the
 /// registry's own steering phases ([`SubagentRegistry::admit_guidance`],
@@ -408,8 +411,8 @@ async fn run_steer_tool_operation(
     cancellation: ExecutionCancellation,
 ) -> SteerToolEnd {
     // Static dispatch refusal: a `kind = tool` target has no conversation to
-    // steer. Deterministic, synchronous, and independent of cancellation —
-    // an invalid invocation is refused, never silently dropped.
+    // steer. Once this operation is polled, static validation precedes its
+    // domain cancellation checkpoint; the shared handle gates the first poll.
     match target.kind {
         ExecutionKind::Tool => {
             return SteerToolEnd::Result(failed(
@@ -484,18 +487,16 @@ async fn run_steer_tool_operation(
 /// plane drives it while no cancellation/deadline intent has won, and once
 /// intent wins the owning lifecycle awaits ONLY the settlement plane, which
 /// takes exclusive ownership of the same operation and drives it to its
-/// classified end. This is the same ownership shape as
-/// [`ToolExecutionHandle::settled_by_operation`], but the steer operation
-/// observes the cancellation itself and ends in a typed
-/// [`SteerToolEnd`], so the settlement plane can classify the steer effect
-/// against its frontier instead of blindly waiting for the child:
+/// classified end. [`ToolExecutionHandle::settled_by_operation`] owns that
+/// transfer. The steer operation observes cancellation and maps its typed
+/// [`SteerToolEnd`] to physical evidence at the domain-owned effect frontier:
 ///
 /// - a natural steer result (child decision) is confirmed settlement
 ///   evidence of that result;
 /// - a cancellation observed before the steer effect frontier is a
 ///   confirmed no-effect cancellation;
 /// - a cancellation observed after the frontier with the child undecided is
-///   [`ToolSettlement::Unconfirmed`] — the envelope may still be durably
+///   [`crate::tools::executor::ToolSettlement::Unconfirmed`] — the envelope may still be durably
 ///   accepted by the child — returned promptly, with no dependence on the
 ///   settlement control-plane guard and no synthesized subagent
 ///   cancellation.
@@ -505,67 +506,21 @@ fn steer_tool_handle<'a>(
     message: String,
     cancellation: ExecutionCancellation,
 ) -> ToolExecutionHandle<'a> {
-    let operation = Box::pin(run_steer_tool_operation(
-        subagents,
-        target,
-        message,
-        cancellation.clone(),
-    ));
-    let slot: std::sync::Arc<std::sync::Mutex<Option<BoxFuture<'a, SteerToolEnd>>>> =
-        std::sync::Arc::new(std::sync::Mutex::new(Some(operation)));
-    let completion_slot = std::sync::Arc::clone(&slot);
-    let completion: BoxFuture<'a, ToolExecutionResult> =
-        Box::pin(futures_util::future::poll_fn(move |cx| {
-            let mut guard = completion_slot.lock().expect("steer operation slot lock");
-            match guard.as_mut() {
-                Some(operation) => match operation.as_mut().poll(cx) {
-                    std::task::Poll::Ready(end) => std::task::Poll::Ready(steer_end_result(end)),
-                    std::task::Poll::Pending => std::task::Poll::Pending,
-                },
-                // The settlement plane owns the operation now; the owning
-                // lifecycle never polls this plane again after cancellation
-                // won arbitration.
-                None => std::task::Poll::Pending,
-            }
-        }));
-    let settlement: BoxFuture<'a, ToolSettlement> = Box::pin(async move {
-        cancellation.cancelled().await;
-        let operation = slot
-            .lock()
-            .expect("steer operation slot lock")
-            .take()
-            .expect("the settlement plane is awaited only while the operation is still owned");
-        match operation.await {
-            // The child's durable decision reached the operation: the steer
-            // result is the confirmed settlement evidence (Issue #204 keeps
-            // a known completion that won the physical race).
-            SteerToolEnd::Result(result) => ToolSettlement::Confirmed(result),
-            // Cancellation before the steer effect frontier: the no-effect
-            // cancellation is confirmed.
-            SteerToolEnd::CancelledBeforeSteerEffect { .. } => {
-                ToolSettlement::Confirmed(steer_cancelled_result(cancellation.reason()))
-            }
-            // Cancellation after the frontier, child decision unknown: the
-            // steer operation was abandoned (its ticket guard cleaned the
-            // registry ticket), every rustX-owned local execution ownership
-            // of this call is settled, and only the child-side fate of the
-            // already-routed envelope remains unprovable — the honest
-            // outcome-unknown evidence, never a fabricated cancellation.
-            SteerToolEnd::CancelledAwaitingChildDecision => ToolSettlement::Unconfirmed {
-                detail: steer_effect_uncertain_detail(),
-            },
-        }
-    });
-    ToolExecutionHandle::new(completion, settlement)
+    let operation_cancellation = cancellation.clone();
+    ToolExecutionHandle::settled_by_operation(
+        Box::pin(async move {
+            steer_end_result(
+                run_steer_tool_operation(subagents, target, message, operation_cancellation).await,
+            )
+        }),
+        cancellation,
+    )
 }
 
 /// Maps a classified steer operation end to the [`ToolExecutionResult`] the
-/// completion plane reports when it observes that end. In the owning
-/// Issue #204 lifecycle this is reached only when the operation itself saw
-/// the tool cancellation fire (after which the lifecycle's biased
-/// arbitration hands the call to the settlement plane); the mapping keeps
-/// the completion plane total and honest for any direct driver of the
-/// handle.
+/// shared cooperative operation returns on either natural completion or
+/// cancellation. The shared handle reports it through completion, or maps
+/// it to confirmed/unconfirmed evidence when settlement owns the operation.
 fn steer_end_result(end: SteerToolEnd) -> ToolExecutionResult {
     match end {
         SteerToolEnd::Result(result) => result,

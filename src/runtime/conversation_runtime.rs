@@ -16255,7 +16255,7 @@ mod tests {
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
         };
-        let (tool_a, mut started_a, release_a) = GatedBackgroundExecutor::new();
+        let (tool_a, started_a, _release_a) = GatedBackgroundExecutor::new();
         let (tool_b, started_b, _release_b) = GatedBackgroundExecutor::new();
         let mut registry = ToolRegistry::new();
         registry
@@ -16334,16 +16334,15 @@ mod tests {
         tool_start_release
             .send(())
             .expect("release the first start frontier");
-        started_a
-            .wait_for(|started| *started)
-            .await
-            .expect("first foreground sibling starts");
-        release_a.send_replace(true);
         done_rx
             .await
             .expect("shutdown result channel")
             .expect("parallel foreground work settles");
 
+        assert!(
+            !*started_a.borrow(),
+            "drain prevents the first physical poll"
+        );
         assert!(!*started_b.borrow(), "the second sibling never executes");
         let events = runtime
             .tool_runtime()

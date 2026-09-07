@@ -173,20 +173,72 @@ pub(super) async fn consume_background(
 pub(super) async fn await_drain(
     stdout_task: &mut Option<StreamHandle>,
     stderr_task: &mut Option<StreamHandle>,
-    combined_task: &mut StreamHandle,
+    combined_task: &mut Option<StreamHandle>,
 ) -> Result<(), String> {
-    await_handle(stdout_task).await?;
-    await_handle(stderr_task).await?;
-    combined_task
-        .await
-        .map_err(|join| format!("the combined output reader task failed: {join}"))?
+    // A failed reader does not release ownership of its siblings. Join all
+    // three before returning any error or publishing terminal output.
+    let stdout = await_handle(stdout_task).await;
+    let stderr = await_handle(stderr_task).await;
+    let combined = await_handle(combined_task).await;
+    stdout.and(stderr).and(combined)
 }
 
 async fn await_handle(handle: &mut Option<StreamHandle>) -> Result<(), String> {
-    match handle {
+    let result = match handle {
         Some(handle) => handle
             .await
-            .map_err(|join| format!("the output reader task failed: {join}"))?,
-        None => Ok(()),
+            .map_err(|join| format!("the output reader task failed: {join}"))
+            .and_then(std::convert::identity),
+        None => return Ok(()),
+    };
+    // A timeout may resume draining. Never poll a joined task twice.
+    handle.take();
+    result
+}
+
+#[cfg(test)]
+mod settlement_tests {
+    use super::await_drain;
+
+    /// A reader panic or abort is a joined failure; siblings must still
+    /// finish before the caller can publish terminal output.
+    #[tokio::test]
+    async fn issue206_reader_task_failure_drains_every_sibling() {
+        for abort in [false, true] {
+            let failed = tokio::spawn(async move {
+                if abort {
+                    std::future::pending::<()>().await;
+                }
+                panic!("scripted capture panic");
+                #[allow(unreachable_code)]
+                Ok(())
+            });
+            if abort {
+                failed.abort();
+            }
+            let mut stdout = Some(failed);
+            let (release, wait) = tokio::sync::oneshot::channel();
+            let mut stderr = Some(tokio::spawn(async move {
+                wait.await.expect("release reader");
+                Ok(())
+            }));
+            let (release_combined, wait_combined) = tokio::sync::oneshot::channel();
+            let mut combined = Some(tokio::spawn(async move {
+                wait_combined.await.expect("release combined capture");
+                Ok(())
+            }));
+            {
+                let drain = await_drain(&mut stdout, &mut stderr, &mut combined);
+                tokio::pin!(drain);
+                assert!(futures_util::poll!(&mut drain).is_pending());
+                release.send(()).expect("reader still owned");
+                assert!(futures_util::poll!(&mut drain).is_pending());
+                release_combined
+                    .send(())
+                    .expect("combined capture still owned");
+                assert!(drain.await.is_err());
+            }
+            assert!(stdout.is_none() && stderr.is_none() && combined.is_none());
+        }
     }
 }
