@@ -1863,11 +1863,10 @@ impl InteractionCoordinator {
         };
         let cancellation_won = validate_response && pending.cancellation.is_cancelled();
         if cancellation_won {
-            // The owning AgentCancellation owns cause arbitration. A response that
-            // arrives after that authority has already won can only trigger
-            // the same cancellation terminal outcome; it cannot publish an
-            // response result and leave the interaction out of sync with its
-            // owning attempt.
+            // The execution authority owns cancellation provenance, including
+            // native ancestor deadlines. A response after that authority wins
+            // can only settle the same interruption, not publish Allow or
+            // replace a deadline with the attempt's default reason.
             outcome = InteractionOutcome::interrupted(&pending.cancellation);
         }
         if validate_response && let InteractionOutcome::Responded { response } = &mut outcome {

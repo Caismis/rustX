@@ -73,11 +73,10 @@ impl CancellationSignal {
 ///
 /// The cause is **read from the owner that owns the signal**, at the moment
 /// the executor observes cancellation — never copied into a start-time
-/// snapshot. A foreground execution's authority is its attempt's
-/// `AgentCancellation`; a background execution's authority is the
-/// conversation background registry record. Both are absorbing: the first
-/// cancellation request that wins owns the cause and no later request can
-/// relabel it.
+/// snapshot. This is the attempt/background reason authority: foreground
+/// invocations additionally carry their native lifecycle's deadline-or-attempt
+/// arbitration through `ExecutionCancellation::native_cause`. Neither authority
+/// can relabel its first winner or mutate its ancestor's reason.
 pub trait CancellationCause: Send + Sync {
     /// The current winning semantic cause, or the owner's default cause when
     /// no cancellation has been requested yet.

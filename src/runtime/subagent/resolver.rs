@@ -533,12 +533,10 @@ impl SubagentResolver {
     }
 }
 
-/// The one per-selector capability-selection core.
-///
-/// Both callers below go through exactly this function, so there is a single
-/// source-qualified matching rule and a single place where the two typed
-/// outcomes — *the source is unavailable* and *the selection is invalid* —
-/// are distinguished.
+/// Subagent-specific admission and physical identity freezing after generic
+/// capability selection. Source matching and availability classification belong
+/// exclusively to `capabilities::selection`; both Subagent call sites consume
+/// that owner here before freezing the child launch identity.
 fn resolve_selector(
     selector: &ToolSelector,
     available: &AvailableToolCatalog,
