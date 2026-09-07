@@ -3138,7 +3138,7 @@ fn commit_subagent_ownership(store: &SqliteConversationStore, subagent: &Subagen
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
                 ownership: rustx::events::types::SubagentOwnershipKind::Normal,
-                workspace: rustx::runtime::subagent::WorkspaceSnapshot::shared(
+                workspace: rustx::runtime::workspace::WorkspaceSnapshot::shared(
                     std::path::PathBuf::from("<shared-workspace>"),
                 ),
             },
@@ -3160,7 +3160,7 @@ fn commit_workflow_ownership(store: &SqliteConversationStore, subagent: &Subagen
                 agent: "reviewer".to_owned(),
                 definition_digest: "sha256:workflow-definition".to_owned(),
                 ownership: rustx::events::types::SubagentOwnershipKind::Workflow,
-                workspace: rustx::runtime::subagent::WorkspaceSnapshot::shared(
+                workspace: rustx::runtime::workspace::WorkspaceSnapshot::shared(
                     std::path::PathBuf::from("<shared-workspace>"),
                 ),
             },

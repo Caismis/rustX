@@ -2449,7 +2449,7 @@ after ChildGuidanceOutcome::Accepted:
   there is no model-facing per-call override, provider, strategy, or generic
   workspace backend.
 - **One manager owns physical workspaces.** `SubagentResolver` resolves the
-  policy only. `SubagentWorkspaceManager` owns repository resolution, exact
+  policy only. `WorkspaceManager` owns repository resolution, exact
   `HEAD` capture, parent-status inspection, worktree/ref creation, final Git
   inspection, safe removal, and handoff facts. `SubagentRegistry` owns live
   lifecycle/capacity/cancellation/durability and never executes Git. Git is

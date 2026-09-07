@@ -101,11 +101,10 @@ use crate::runtime::identity::{
     AgentId, AttemptId, ConversationId, EventId, InteractionId, MessageId, RequestId, SubagentId,
     ToolCallId, ToolExecutionId, ToolId, TurnId,
 };
-use crate::runtime::subagent::{
-    SubagentName, WorkspaceHandoff, WorkspaceSnapshot, WorkspaceUnresolvedReason,
-};
+use crate::runtime::subagent::SubagentName;
 use crate::runtime::types::{CancellationReason, RuntimeError, TokenMeasurement};
 use crate::runtime::workflow::{WorkflowId, WorkflowPort};
+use crate::runtime::workspace::{WorkspaceHandoff, WorkspaceSnapshot, WorkspaceUnresolvedReason};
 use crate::tools::types::{ToolExecutionResult, ToolProgress};
 
 /// The terminal domain that owns a committed subagent child.

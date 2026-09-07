@@ -2400,11 +2400,12 @@ mod tests {
     #[cfg(unix)]
     use crate::runtime::subagent::{
         SubagentDefinition, SubagentProjectInstructionPolicy, SubagentRegistry,
-        SubagentRegistryConfig, SubagentSpawnPlan, SubagentWorkspaceManager,
-        SubagentWorkspacePolicy,
+        SubagentRegistryConfig, SubagentSpawnPlan,
     };
     #[cfg(unix)]
     use crate::runtime::types::{ApprovalMode, CancellationReason, SystemClock};
+    #[cfg(unix)]
+    use crate::runtime::workspace::{WorkspaceManager, WorkspacePolicy};
     #[cfg(unix)]
     use crate::skills::SkillSnapshot;
     #[cfg(unix)]
@@ -2589,7 +2590,7 @@ mod tests {
                     summary_output_cap: None,
                 },
             },
-            workspace: SubagentWorkspaceManager::new(&workspace, &runtime_root),
+            workspace: WorkspaceManager::new(&workspace, &runtime_root),
             max_active,
         });
         WorkflowTestPlane {
@@ -2643,7 +2644,7 @@ mod tests {
                 inherit: false,
                 files: Vec::new(),
             },
-            SubagentWorkspacePolicy::SharedWorkspace,
+            WorkspacePolicy::SharedWorkspace,
         )
         .expect("workflow test subagent definition");
         let catalog = crate::runtime::subagent::SubagentCatalog::new([definition])

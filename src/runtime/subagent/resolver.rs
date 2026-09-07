@@ -83,8 +83,8 @@ use super::catalog::{
     SubagentCatalog, SubagentDefinition, SubagentDefinitionDigest, SubagentExecutionDeadline,
     SubagentName,
 };
-use super::workspace::SubagentWorkspacePolicy;
 use crate::capabilities::selection::ToolSelector;
+use crate::runtime::workspace::WorkspacePolicy;
 
 /// One frozen capability identity of a resolved child.
 ///
@@ -254,7 +254,7 @@ pub struct ResolvedSubagentSpec {
     pub execution_deadline: Option<SubagentExecutionDeadline>,
     /// The definition-level project workspace policy resolved before any
     /// child process or lease is staged.
-    pub workspace_policy: SubagentWorkspacePolicy,
+    pub workspace_policy: WorkspacePolicy,
     /// The exact child instruction document, composed as the child's
     /// request-time `AgentProfile` System section.
     pub instructions: String,
@@ -824,10 +824,10 @@ mod tests {
         AvailableToolCatalog, CapabilityAvailability, CapabilitySourceId, CapabilitySourceState,
     };
     use crate::runtime::identity::{McpServerId, ToolId};
-    use crate::runtime::subagent::SubagentWorkspacePolicy;
     use crate::runtime::subagent::catalog::{
         SubagentCatalog, SubagentDefinition, SubagentName, SubagentProjectInstructionPolicy,
     };
+    use crate::runtime::workspace::WorkspacePolicy;
     use crate::tools::types::{
         ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin,
         ToolReplayPolicy,
@@ -909,7 +909,7 @@ mod tests {
                 inherit: true,
                 files: Vec::new(),
             },
-            SubagentWorkspacePolicy::SharedWorkspace,
+            WorkspacePolicy::SharedWorkspace,
         )
         .expect("definition")
     }
@@ -1164,7 +1164,7 @@ mod tests {
                     inherit: true,
                     files: Vec::new(),
                 },
-                SubagentWorkspacePolicy::SharedWorkspace,
+                WorkspacePolicy::SharedWorkspace,
             )
             .expect("definition"),
             SubagentDefinition::new(
@@ -1180,7 +1180,7 @@ mod tests {
                     inherit: true,
                     files: Vec::new(),
                 },
-                SubagentWorkspacePolicy::SharedWorkspace,
+                WorkspacePolicy::SharedWorkspace,
             )
             .expect("definition"),
         ])

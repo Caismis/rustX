@@ -6422,7 +6422,7 @@ fn find_subagent_ownership(
 ) -> Result<
     (
         AgentId,
-        crate::runtime::subagent::WorkspaceSnapshot,
+        crate::runtime::workspace::WorkspaceSnapshot,
         crate::events::types::SubagentOwnershipKind,
         String,
     ),
@@ -6673,7 +6673,7 @@ fn find_subagent_terminal_resource(
 
 fn validate_subagent_terminal_resource(
     subagent_id: &crate::runtime::identity::SubagentId,
-    workspace: &crate::runtime::subagent::WorkspaceSnapshot,
+    workspace: &crate::runtime::workspace::WorkspaceSnapshot,
     resource: &crate::events::types::SubagentWorkspaceTerminalResource,
 ) -> Result<(), ConversationStoreError> {
     match resource {
@@ -6697,8 +6697,7 @@ fn validate_subagent_terminal_resource(
                 )));
             }
             if detail.is_empty()
-                || detail.len()
-                    > crate::runtime::subagent::workspace::MAX_WORKSPACE_SETTLEMENT_DETAIL_BYTES
+                || detail.len() > crate::runtime::workspace::MAX_WORKSPACE_SETTLEMENT_DETAIL_BYTES
             {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "subagent {subagent_id} unresolved workspace detail is outside its bounded shape"
@@ -6712,8 +6711,8 @@ fn validate_subagent_terminal_resource(
 
 fn validate_unresolved_disposal_handoff(
     subagent_id: &crate::runtime::identity::SubagentId,
-    workspace: &crate::runtime::subagent::WorkspaceSnapshot,
-    handoff: &crate::runtime::subagent::WorkspaceHandoff,
+    workspace: &crate::runtime::workspace::WorkspaceSnapshot,
+    handoff: &crate::runtime::workspace::WorkspaceHandoff,
     phase: &str,
 ) -> Result<(), ConversationStoreError> {
     let Some(worktree) = workspace.git_worktree() else {
@@ -7394,7 +7393,7 @@ fn validate_event_reference(
                     handoff: terminal_handoff,
                 } if terminal_handoff == *workspace_handoff => {}
                 crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved {
-                    reason: crate::runtime::subagent::WorkspaceUnresolvedReason::PhysicalSettlement,
+                    reason: crate::runtime::workspace::WorkspaceUnresolvedReason::PhysicalSettlement,
                     ..
                 } => {
                     // This handoff was derived only after the later exact
@@ -7412,7 +7411,7 @@ fn validate_event_reference(
                     )?;
                 }
                 crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved {
-                    reason: crate::runtime::subagent::WorkspaceUnresolvedReason::NestedContainment,
+                    reason: crate::runtime::workspace::WorkspaceUnresolvedReason::NestedContainment,
                     ..
                 } => {
                     return Err(ConversationStoreError::InvalidReference(format!(
@@ -7463,7 +7462,7 @@ fn validate_event_reference(
                     handoff: terminal_handoff,
                 } if terminal_handoff == *workspace_handoff => {}
                 crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved {
-                    reason: crate::runtime::subagent::WorkspaceUnresolvedReason::PhysicalSettlement,
+                    reason: crate::runtime::workspace::WorkspaceUnresolvedReason::PhysicalSettlement,
                     ..
                 } => {
                     validate_unresolved_disposal_handoff(
@@ -9927,7 +9926,7 @@ mod tests {
             store,
             subagent_id,
             child_agent_id,
-            crate::runtime::subagent::WorkspaceSnapshot::shared(std::path::PathBuf::from(
+            crate::runtime::workspace::WorkspaceSnapshot::shared(std::path::PathBuf::from(
                 "<shared-workspace>",
             )),
         );
@@ -9939,7 +9938,7 @@ mod tests {
         store: &SqliteConversationStore,
         subagent_id: &crate::runtime::identity::SubagentId,
         child_agent_id: &AgentId,
-        workspace: crate::runtime::subagent::WorkspaceSnapshot,
+        workspace: crate::runtime::workspace::WorkspaceSnapshot,
     ) {
         store
             .append_event(envelope(
@@ -10225,7 +10224,7 @@ mod tests {
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
                 ownership: crate::events::types::SubagentOwnershipKind::Normal,
-                workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
+                workspace: crate::runtime::workspace::WorkspaceSnapshot::shared(
                     std::path::PathBuf::from("<shared-workspace>"),
                 ),
             },
@@ -10392,7 +10391,7 @@ mod tests {
         let (subagent_id, child) = owned(8);
         let unresolved =
             crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved {
-                reason: crate::runtime::subagent::WorkspaceUnresolvedReason::PhysicalSettlement,
+                reason: crate::runtime::workspace::WorkspaceUnresolvedReason::PhysicalSettlement,
                 detail: "the final workspace inspection was unavailable".to_owned(),
             };
         let (notice, report, event) =
@@ -10488,10 +10487,10 @@ mod tests {
         let isolated_id =
             crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 2);
         let isolated_child = crate::runtime::identity::AgentId::new(format!("agent-{isolated_id}"));
-        let workspace = crate::runtime::subagent::WorkspaceSnapshot {
+        let workspace = crate::runtime::workspace::WorkspaceSnapshot {
             logical_workspace: std::path::PathBuf::from("/tmp/rustx-worktree-9/backend"),
-            isolation: crate::runtime::subagent::WorkspaceIsolation::GitWorktree(
-                crate::runtime::subagent::GitWorktreeSnapshot {
+            isolation: crate::runtime::workspace::WorkspaceIsolation::GitWorktree(
+                crate::runtime::workspace::GitWorktreeSnapshot {
                     source_repository_root: std::path::PathBuf::from("/tmp/rustx-repository"),
                     repository_relative_workspace: std::path::PathBuf::from("backend"),
                     physical_worktree_root: std::path::PathBuf::from("/tmp/rustx-worktree-9"),
@@ -10501,7 +10500,7 @@ mod tests {
                 },
             ),
         };
-        let handoff = crate::runtime::subagent::WorkspaceHandoff {
+        let handoff = crate::runtime::workspace::WorkspaceHandoff {
             logical_workspace: workspace.logical_workspace.clone(),
             physical_worktree_root: std::path::PathBuf::from("/tmp/rustx-worktree-9"),
             branch: "rustx/subagent/xyz".to_owned(),
@@ -10614,7 +10613,7 @@ mod tests {
                     agent: "reviewer".to_owned(),
                     definition_digest: "sha256:definition".to_owned(),
                     ownership: crate::events::types::SubagentOwnershipKind::Workflow,
-                    workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
+                    workspace: crate::runtime::workspace::WorkspaceSnapshot::shared(
                         std::path::PathBuf::from("<shared-workspace>"),
                     ),
                 },
@@ -10676,10 +10675,10 @@ mod tests {
         let subagent_id =
             crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
         let physical = std::path::PathBuf::from("/tmp/rustx-worktree-1");
-        let workspace = crate::runtime::subagent::WorkspaceSnapshot {
+        let workspace = crate::runtime::workspace::WorkspaceSnapshot {
             logical_workspace: physical.clone(),
-            isolation: crate::runtime::subagent::WorkspaceIsolation::GitWorktree(
-                crate::runtime::subagent::GitWorktreeSnapshot {
+            isolation: crate::runtime::workspace::WorkspaceIsolation::GitWorktree(
+                crate::runtime::workspace::GitWorktreeSnapshot {
                     source_repository_root: std::path::PathBuf::from("/tmp/repository"),
                     repository_relative_workspace: std::path::PathBuf::from("backend"),
                     physical_worktree_root: physical,
@@ -10719,10 +10718,10 @@ mod tests {
         let subagent_id =
             crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
         let child_agent_id = AgentId::new(format!("agent-{subagent_id}"));
-        let workspace = crate::runtime::subagent::WorkspaceSnapshot {
+        let workspace = crate::runtime::workspace::WorkspaceSnapshot {
             logical_workspace: std::path::PathBuf::from("/tmp/rustx-worktree-1/backend"),
-            isolation: crate::runtime::subagent::WorkspaceIsolation::GitWorktree(
-                crate::runtime::subagent::GitWorktreeSnapshot {
+            isolation: crate::runtime::workspace::WorkspaceIsolation::GitWorktree(
+                crate::runtime::workspace::GitWorktreeSnapshot {
                     source_repository_root: std::path::PathBuf::from("/tmp/rustx-repository"),
                     repository_relative_workspace: std::path::PathBuf::from("backend"),
                     physical_worktree_root: std::path::PathBuf::from("/tmp/rustx-worktree-1"),
@@ -10732,7 +10731,7 @@ mod tests {
                 },
             ),
         };
-        let handoff = crate::runtime::subagent::WorkspaceHandoff {
+        let handoff = crate::runtime::workspace::WorkspaceHandoff {
             logical_workspace: workspace.logical_workspace.clone(),
             physical_worktree_root: std::path::PathBuf::from("/tmp/rustx-worktree-1"),
             branch: "rustx/subagent/abc".to_owned(),
@@ -10952,10 +10951,10 @@ mod tests {
         let subagent_id =
             crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
         let child_agent_id = AgentId::new(format!("agent-{subagent_id}"));
-        let workspace = crate::runtime::subagent::WorkspaceSnapshot {
+        let workspace = crate::runtime::workspace::WorkspaceSnapshot {
             logical_workspace: std::path::PathBuf::from("/tmp/rustx-unresolved/backend"),
-            isolation: crate::runtime::subagent::WorkspaceIsolation::GitWorktree(
-                crate::runtime::subagent::GitWorktreeSnapshot {
+            isolation: crate::runtime::workspace::WorkspaceIsolation::GitWorktree(
+                crate::runtime::workspace::GitWorktreeSnapshot {
                     source_repository_root: std::path::PathBuf::from("/tmp/rustx-repository"),
                     repository_relative_workspace: std::path::PathBuf::from("backend"),
                     physical_worktree_root: std::path::PathBuf::from("/tmp/rustx-unresolved"),
@@ -10974,7 +10973,7 @@ mod tests {
 
         let unresolved_resource =
             crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved {
-                reason: crate::runtime::subagent::WorkspaceUnresolvedReason::PhysicalSettlement,
+                reason: crate::runtime::workspace::WorkspaceUnresolvedReason::PhysicalSettlement,
                 detail: "the final workspace inspection was unavailable".to_owned(),
             };
         let (draft, terminal) = non_success_publication(
@@ -11006,7 +11005,7 @@ mod tests {
         };
         *workspace_resource =
             crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved {
-                reason: crate::runtime::subagent::WorkspaceUnresolvedReason::NestedContainment,
+                reason: crate::runtime::workspace::WorkspaceUnresolvedReason::NestedContainment,
                 detail: "different unresolved authority".to_owned(),
             };
         let (conflicting_draft, _) = non_success_publication(
@@ -11022,7 +11021,7 @@ mod tests {
             Err(ConversationStoreError::InvalidReference(_))
         ));
 
-        let handoff = crate::runtime::subagent::WorkspaceHandoff {
+        let handoff = crate::runtime::workspace::WorkspaceHandoff {
             logical_workspace: workspace.logical_workspace.clone(),
             physical_worktree_root: std::path::PathBuf::from("/tmp/rustx-unresolved"),
             branch: "rustx/subagent/abc".to_owned(),
@@ -11285,7 +11284,7 @@ mod tests {
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
                 ownership: crate::events::types::SubagentOwnershipKind::Normal,
-                workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
+                workspace: crate::runtime::workspace::WorkspaceSnapshot::shared(
                     std::path::PathBuf::from("<shared-workspace>"),
                 ),
             },
@@ -11315,7 +11314,7 @@ mod tests {
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
                 ownership: crate::events::types::SubagentOwnershipKind::Normal,
-                workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
+                workspace: crate::runtime::workspace::WorkspaceSnapshot::shared(
                     std::path::PathBuf::from("<shared-workspace>"),
                 ),
             },
@@ -11352,7 +11351,7 @@ mod tests {
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
                 ownership: crate::events::types::SubagentOwnershipKind::Normal,
-                workspace: crate::runtime::subagent::WorkspaceSnapshot::shared(
+                workspace: crate::runtime::workspace::WorkspaceSnapshot::shared(
                     std::path::PathBuf::from("<shared-workspace>"),
                 ),
             },

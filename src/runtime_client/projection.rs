@@ -1901,10 +1901,10 @@ pub(crate) fn subagent_view(
         workspace: super::snapshot::RuntimeClientSubagentWorkspace {
             logical_workspace: snapshot.workspace.logical_workspace.clone(),
             isolation: match &snapshot.workspace.isolation {
-                crate::runtime::subagent::WorkspaceIsolation::Shared => {
+                crate::runtime::workspace::WorkspaceIsolation::Shared => {
                     super::snapshot::RuntimeClientWorkspaceIsolation::Shared
                 }
-                crate::runtime::subagent::WorkspaceIsolation::GitWorktree(worktree) => {
+                crate::runtime::workspace::WorkspaceIsolation::GitWorktree(worktree) => {
                     super::snapshot::RuntimeClientWorkspaceIsolation::GitWorktree {
                         source_repository_root: worktree.source_repository_root.clone(),
                         repository_relative_workspace: worktree
@@ -5255,8 +5255,8 @@ mod tests {
         use crate::runtime::subagent::{
             SubagentActivity, SubagentActivityCounters, SubagentExecutionProfile,
             SubagentObservation, SubagentSnapshot, SubagentState, SubagentWorkspaceResourceState,
-            WorkspaceSnapshot,
         };
+        use crate::runtime::workspace::WorkspaceSnapshot;
 
         fn snapshot(observation: SubagentObservation) -> SubagentSnapshot {
             SubagentSnapshot {

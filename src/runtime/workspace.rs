@@ -1,4 +1,4 @@
-//! Deterministic workspace ownership for named subagents (Issue #146).
+//! Native ownership of managed source workspaces.
 //!
 //! This module is the only owner of Git/worktree operations.  The registry
 //! supplies it with a resolved policy and an already allocated subagent
@@ -93,7 +93,7 @@ struct ValidatedOverlayFile {
 /// extension point.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum SubagentWorkspacePolicy {
+pub enum WorkspacePolicy {
     /// The current shared-workspace behavior.
     #[default]
     SharedWorkspace,
@@ -109,7 +109,7 @@ pub enum SubagentWorkspacePolicy {
     },
 }
 
-impl SubagentWorkspacePolicy {
+impl WorkspacePolicy {
     /// Whether the policy acquires a separate Git worktree.
     #[must_use]
     pub const fn is_isolated(self) -> bool {
@@ -865,7 +865,7 @@ impl std::error::Error for WorkspaceAcquireError {}
 
 /// The one manager of physical named-subagent workspaces.
 #[derive(Debug, Clone)]
-pub struct SubagentWorkspaceManager {
+pub struct WorkspaceManager {
     parent_logical_workspace: PathBuf,
     runtime_root: PathBuf,
     /// Serializes runtime-owned retained disposal with other disposal calls
@@ -888,7 +888,7 @@ pub struct SubagentWorkspaceManager {
     disposal_hook: Option<std::sync::Arc<WorkspaceDisposalHook>>,
 }
 
-impl SubagentWorkspaceManager {
+impl WorkspaceManager {
     /// Creates a manager over the already-canonical parent workspace and the
     /// disjoint runtime-private artifact root.
     #[must_use]
@@ -1667,14 +1667,14 @@ impl SubagentWorkspaceManager {
     #[allow(clippy::too_many_lines)] // one ordered Git acquisition pipeline
     pub async fn acquire(
         &self,
-        policy: SubagentWorkspacePolicy,
+        policy: WorkspacePolicy,
         subagent_id: &SubagentId,
         cancellation: &CancellationSignal,
     ) -> Result<WorkspaceLease, WorkspaceAcquireError> {
         if cancellation.is_cancelled() {
             return Err(WorkspaceAcquireError::Cancelled);
         }
-        if matches!(policy, SubagentWorkspacePolicy::SharedWorkspace) {
+        if matches!(policy, WorkspacePolicy::SharedWorkspace) {
             return Ok(WorkspaceLease {
                 manager: self.clone(),
                 snapshot: WorkspaceSnapshot::shared(self.parent_logical_workspace.clone()),
@@ -1682,7 +1682,7 @@ impl SubagentWorkspaceManager {
                 created: false,
             });
         }
-        let SubagentWorkspacePolicy::GitWorktree {
+        let WorkspacePolicy::GitWorktree {
             require_clean_parent,
         } = policy
         else {
@@ -2426,7 +2426,7 @@ impl SubagentWorkspaceManager {
 /// recovery, never a force-removal of unknown user work.
 #[derive(Debug)]
 pub struct WorkspaceLease {
-    manager: SubagentWorkspaceManager,
+    manager: WorkspaceManager,
     snapshot: WorkspaceSnapshot,
     /// Proof that this lease's successful atomic `worktree add -b` created the
     /// deterministic runtime branch. An ambiguous/cancelled Git command does
@@ -2622,7 +2622,7 @@ impl WorkspaceLease {
     }
 }
 
-impl SubagentWorkspaceManager {
+impl WorkspaceManager {
     async fn runtime_branch_head(&self, branch: &str) -> Result<String, String> {
         let reference = format!("refs/heads/{branch}");
         self.git_text(
@@ -3868,10 +3868,10 @@ impl WorkspaceDisposalHook {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_OVERLAY_BYTES, MAX_OVERLAY_FILES, SubagentWorkspaceManager, SubagentWorkspacePolicy,
-        WorkspaceAcquireHook, WorkspaceCleanup, WorkspaceDisposalHook, WorkspaceIsolation,
-        WorkspaceOverlayFreezeHook, WorkspaceOverlayMaterializationHook,
-        WorkspaceOverlaySourceHook, WorkspaceOverlayValidationHook, WorkspaceSnapshot,
+        MAX_OVERLAY_BYTES, MAX_OVERLAY_FILES, WorkspaceAcquireHook, WorkspaceCleanup,
+        WorkspaceDisposalHook, WorkspaceIsolation, WorkspaceManager, WorkspaceOverlayFreezeHook,
+        WorkspaceOverlayMaterializationHook, WorkspaceOverlaySourceHook,
+        WorkspaceOverlayValidationHook, WorkspacePolicy, WorkspaceSnapshot,
         deterministic_worktree_name, parse_overlay_manifest,
     };
     use crate::runtime::cancellation::CancellationSignal;
@@ -3985,8 +3985,8 @@ mod tests {
     /// acquisition/settlement semantics construct this policy so they keep
     /// exercising the current default rather than freezing the obsolete
     /// permissive default.
-    fn default_isolated() -> SubagentWorkspacePolicy {
-        SubagentWorkspacePolicy::GitWorktree {
+    fn default_isolated() -> WorkspacePolicy {
+        WorkspacePolicy::GitWorktree {
             require_clean_parent: true,
         }
     }
@@ -4030,10 +4030,10 @@ mod tests {
         let workspace = directory.path().join("shared-workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         std::fs::write(workspace.join("dirty.txt"), "shared bytes\n").expect("file");
-        let manager = SubagentWorkspaceManager::new(&workspace, directory.path().join("artifacts"));
+        let manager = WorkspaceManager::new(&workspace, directory.path().join("artifacts"));
         let lease = manager
             .acquire(
-                SubagentWorkspacePolicy::SharedWorkspace,
+                WorkspacePolicy::SharedWorkspace,
                 &SubagentId::new("conversation-shared-subagent-1"),
                 &CancellationSignal::new(),
             )
@@ -4060,13 +4060,13 @@ mod tests {
         let base = head(dir.path());
         std::fs::write(dir.path().join("tracked.txt"), "parent dirty\n").expect("dirty file");
         std::fs::write(dir.path().join("untracked.txt"), "parent only\n").expect("untracked");
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 // The explicit opt-out: the child runs from the captured
                 // committed HEAD while intentionally ignoring parent-local
                 // dirty bytes (Issue #188).
-                SubagentWorkspacePolicy::GitWorktree {
+                WorkspacePolicy::GitWorktree {
                     require_clean_parent: false,
                 },
                 &SubagentId::new("conversation-a-subagent-1"),
@@ -4102,7 +4102,7 @@ mod tests {
     async fn clean_parent_worktree_is_created_at_the_exact_head_and_removed_cleanly() {
         let dir = repository();
         let base = head(dir.path());
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 default_isolated(),
@@ -4134,7 +4134,7 @@ mod tests {
         let parent_before =
             std::fs::read_to_string(repository.path().join("tracked.txt")).expect("parent source");
         let runtime = tempfile::tempdir().expect("runtime root");
-        let manager = SubagentWorkspaceManager::new(repository.path(), runtime.path());
+        let manager = WorkspaceManager::new(repository.path(), runtime.path());
         let subagent_id = SubagentId::new("conversation-dispose-subagent-1");
         let lease = manager
             .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
@@ -4187,7 +4187,7 @@ mod tests {
         let parent_before =
             std::fs::read_to_string(repository.path().join("tracked.txt")).expect("parent");
         let runtime = tempfile::tempdir().expect("runtime root");
-        let mut manager = SubagentWorkspaceManager::new(repository.path(), runtime.path());
+        let mut manager = WorkspaceManager::new(repository.path(), runtime.path());
         let hook = std::sync::Arc::new(WorkspaceDisposalHook::new());
         manager.install_disposal_hook(hook.clone());
         let subagent_id = SubagentId::new("conversation-disposal-partial-subagent-1");
@@ -4246,7 +4246,7 @@ mod tests {
     async fn moved_branch_after_worktree_removal_is_preserved_by_compare_delete() {
         let repository = repository();
         let runtime = tempfile::tempdir().expect("runtime root");
-        let mut manager = SubagentWorkspaceManager::new(repository.path(), runtime.path());
+        let mut manager = WorkspaceManager::new(repository.path(), runtime.path());
         let hook = std::sync::Arc::new(WorkspaceDisposalHook::new());
         manager.install_disposal_hook(hook.clone());
         let subagent_id = SubagentId::new("conversation-disposal-moved-branch-subagent-1");
@@ -4325,7 +4325,7 @@ mod tests {
     async fn externally_missing_worktree_without_intent_fails_closed() {
         let repository = repository();
         let runtime = tempfile::tempdir().expect("runtime root");
-        let manager = SubagentWorkspaceManager::new(repository.path(), runtime.path());
+        let manager = WorkspaceManager::new(repository.path(), runtime.path());
         let subagent_id = SubagentId::new("conversation-disposal-external-missing-subagent-1");
         let lease = manager
             .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
@@ -4381,7 +4381,7 @@ mod tests {
             ],
         );
         let runtime = tempfile::tempdir().expect("runtime root");
-        let manager = SubagentWorkspaceManager::new(repository.path(), runtime.path());
+        let manager = WorkspaceManager::new(repository.path(), runtime.path());
         let subagent_id = SubagentId::new("conversation-isolation-dispose-subagent-1");
         let lease = manager
             .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
@@ -4430,7 +4430,7 @@ mod tests {
     async fn disposal_fails_closed_for_tampered_path_branch_repository_and_registration() {
         let source_repository = repository();
         let runtime = tempfile::tempdir().expect("runtime root");
-        let manager = SubagentWorkspaceManager::new(source_repository.path(), runtime.path());
+        let manager = WorkspaceManager::new(source_repository.path(), runtime.path());
 
         let tampered_path_id = SubagentId::new("conversation-tampered-path-subagent-1");
         let tampered_path_lease = manager
@@ -4636,7 +4636,7 @@ mod tests {
     async fn disposal_rechecks_registration_after_a_deterministic_concurrent_change() {
         let repository = repository();
         let runtime = tempfile::tempdir().expect("runtime root");
-        let mut manager = SubagentWorkspaceManager::new(repository.path(), runtime.path());
+        let mut manager = WorkspaceManager::new(repository.path(), runtime.path());
         let hook = std::sync::Arc::new(WorkspaceDisposalHook::new());
         manager.install_disposal_hook(hook.clone());
         hook.arm_before_recheck();
@@ -4733,7 +4733,7 @@ mod tests {
         let expected = b"TOKEN=local-only\n\0binary-tail";
         write_overlay_file(&workspace, "local/runtime.env", expected);
         let runtime = tempfile::tempdir().expect("runtime root");
-        let lease = SubagentWorkspaceManager::new(&workspace, runtime.path())
+        let lease = WorkspaceManager::new(&workspace, runtime.path())
             .acquire(
                 default_isolated(),
                 &SubagentId::new("conversation-basic-overlay-subagent-1"),
@@ -4763,7 +4763,7 @@ mod tests {
         );
         write_overlay_file(&workspace, ".env", b"FROZEN=before\n");
         let runtime = tempfile::tempdir().expect("runtime root");
-        let mut manager = SubagentWorkspaceManager::new(&workspace, runtime.path());
+        let mut manager = WorkspaceManager::new(&workspace, runtime.path());
         let hook = std::sync::Arc::new(WorkspaceOverlayFreezeHook::new());
         manager.install_overlay_freeze_hook(hook.clone());
         let cancellation = CancellationSignal::new();
@@ -4807,7 +4807,7 @@ mod tests {
         .expect("manifest");
         commit(repository.path(), "select tracked file");
         let runtime = tempfile::tempdir().expect("runtime root");
-        let error = SubagentWorkspaceManager::new(repository.path(), runtime.path())
+        let error = WorkspaceManager::new(repository.path(), runtime.path())
             .acquire(
                 default_isolated(),
                 &SubagentId::new("conversation-tracked-overlay-subagent-1"),
@@ -4835,9 +4835,9 @@ mod tests {
         std::fs::write(repository.path().join("local.env"), "LOCAL=value\n")
             .expect("non-ignored local file");
         let runtime = tempfile::tempdir().expect("runtime root");
-        let error = SubagentWorkspaceManager::new(repository.path(), runtime.path())
+        let error = WorkspaceManager::new(repository.path(), runtime.path())
             .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
+                WorkspacePolicy::GitWorktree {
                     require_clean_parent: false,
                 },
                 &SubagentId::new("conversation-non-ignored-overlay-subagent-1"),
@@ -4877,9 +4877,9 @@ mod tests {
                 symlink(outside.path(), workspace.join("linked")).expect("ancestor symlink");
             }
             let runtime = tempfile::tempdir().expect("runtime root");
-            let error = SubagentWorkspaceManager::new(&workspace, runtime.path())
+            let error = WorkspaceManager::new(&workspace, runtime.path())
                 .acquire(
-                    SubagentWorkspacePolicy::GitWorktree {
+                    WorkspacePolicy::GitWorktree {
                         require_clean_parent: false,
                     },
                     &SubagentId::new(format!(
@@ -4913,7 +4913,7 @@ mod tests {
         std::fs::write(outside.path().join("runtime.env"), b"OUTSIDE\n").expect("outside overlay");
 
         let runtime = tempfile::tempdir().expect("runtime root");
-        let mut manager = SubagentWorkspaceManager::new(&workspace, runtime.path());
+        let mut manager = WorkspaceManager::new(&workspace, runtime.path());
         let hook = std::sync::Arc::new(WorkspaceOverlaySourceHook::new());
         manager.install_overlay_source_hook(hook.clone());
         let subagent = SubagentId::new("conversation-overlay-ancestor-race-subagent-1");
@@ -4982,7 +4982,7 @@ mod tests {
         std::fs::write(outside.path().join("runtime.env"), b"OUTSIDE\n").expect("outside overlay");
 
         let runtime = tempfile::tempdir().expect("runtime root");
-        let mut manager = SubagentWorkspaceManager::new(&workspace, runtime.path());
+        let mut manager = WorkspaceManager::new(&workspace, runtime.path());
         let hook = std::sync::Arc::new(WorkspaceOverlayValidationHook::new());
         manager.install_overlay_validation_hook(hook.clone());
         let subagent = SubagentId::new("conversation-overlay-retained-file-subagent-1");
@@ -5051,7 +5051,7 @@ mod tests {
             &["missing.env".to_owned()],
         );
         let runtime = tempfile::tempdir().expect("runtime root");
-        let error = SubagentWorkspaceManager::new(&workspace, runtime.path())
+        let error = WorkspaceManager::new(&workspace, runtime.path())
             .acquire(
                 default_isolated(),
                 &SubagentId::new("conversation-missing-overlay-subagent-1"),
@@ -5086,7 +5086,7 @@ mod tests {
             &vec![b'b'; MAX_OVERLAY_BYTES - (MAX_OVERLAY_BYTES / 2)],
         );
         let accepted_runtime = tempfile::tempdir().expect("runtime root");
-        let accepted = SubagentWorkspaceManager::new(&accepted_workspace, accepted_runtime.path())
+        let accepted = WorkspaceManager::new(&accepted_workspace, accepted_runtime.path())
             .acquire(
                 default_isolated(),
                 &SubagentId::new("conversation-byte-boundary-overlay-subagent-1"),
@@ -5125,7 +5125,7 @@ mod tests {
             &vec![0; MAX_OVERLAY_BYTES - (MAX_OVERLAY_BYTES / 2) + 1],
         );
         let rejected_runtime = tempfile::tempdir().expect("runtime root");
-        let error = SubagentWorkspaceManager::new(&rejected_workspace, rejected_runtime.path())
+        let error = WorkspaceManager::new(&rejected_workspace, rejected_runtime.path())
             .acquire(
                 default_isolated(),
                 &SubagentId::new("conversation-over-byte-limit-overlay-subagent-1"),
@@ -5146,7 +5146,7 @@ mod tests {
         let repository = repository();
         let runtime = tempfile::tempdir().expect("runtime root");
         let subagent_id = SubagentId::new("conversation-root-scope-subagent-1");
-        let lease = SubagentWorkspaceManager::new(repository.path(), runtime.path())
+        let lease = WorkspaceManager::new(repository.path(), runtime.path())
             .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
             .await
             .expect("worktree");
@@ -5174,11 +5174,10 @@ mod tests {
         let repository = repository_with_workspace(std::path::Path::new("backend"));
         let runtime = tempfile::tempdir().expect("runtime root");
         let subagent_id = SubagentId::new("conversation-subdir-scope-subagent-1");
-        let lease =
-            SubagentWorkspaceManager::new(repository.path().join("backend"), runtime.path())
-                .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
-                .await
-                .expect("worktree");
+        let lease = WorkspaceManager::new(repository.path().join("backend"), runtime.path())
+            .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
+            .await
+            .expect("worktree");
         let physical = runtime
             .path()
             .join("worktrees")
@@ -5208,7 +5207,7 @@ mod tests {
         let repository = repository_with_workspace(relative);
         let runtime = tempfile::tempdir().expect("runtime root");
         let subagent_id = SubagentId::new("conversation-nested-scope-subagent-1");
-        let lease = SubagentWorkspaceManager::new(repository.path().join(relative), runtime.path())
+        let lease = WorkspaceManager::new(repository.path().join(relative), runtime.path())
             .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
             .await
             .expect("worktree");
@@ -5253,9 +5252,9 @@ mod tests {
             deterministic_worktree_name(&subagent_id)
         );
 
-        let error = SubagentWorkspaceManager::new(&parent_logical_workspace, runtime.path())
+        let error = WorkspaceManager::new(&parent_logical_workspace, runtime.path())
             .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
+                WorkspacePolicy::GitWorktree {
                     require_clean_parent: false,
                 },
                 &subagent_id,
@@ -5288,7 +5287,7 @@ mod tests {
         let repository = repository_with_workspace(relative);
         let runtime = tempfile::tempdir().expect("runtime root");
         let subagent_id = SubagentId::new("conversation-scoped-handoff-subagent-1");
-        let lease = SubagentWorkspaceManager::new(repository.path().join(relative), runtime.path())
+        let lease = WorkspaceManager::new(repository.path().join(relative), runtime.path())
             .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
             .await
             .expect("worktree");
@@ -5382,7 +5381,7 @@ mod tests {
         permissions.set_mode(0o755);
         std::fs::set_permissions(&hook, permissions).expect("executable hook");
 
-        let manager = SubagentWorkspaceManager::new(dir.path(), &runtime_root);
+        let manager = WorkspaceManager::new(dir.path(), &runtime_root);
         let lease = manager
             .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
             .await
@@ -5404,7 +5403,7 @@ mod tests {
     async fn ignored_only_child_artifact_is_cleaned_without_a_handoff() {
         let dir = repository();
         ignore_target(dir.path());
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 default_isolated(),
@@ -5441,7 +5440,7 @@ mod tests {
         );
         write_overlay_file(&workspace, ".env", b"VALUE=frozen\n");
         let runtime = tempfile::tempdir().expect("runtime root");
-        let lease = SubagentWorkspaceManager::new(&workspace, runtime.path())
+        let lease = WorkspaceManager::new(&workspace, runtime.path())
             .acquire(
                 default_isolated(),
                 &SubagentId::new("conversation-overlay-only-settlement-subagent-1"),
@@ -5469,7 +5468,7 @@ mod tests {
         );
         write_overlay_file(&workspace, ".env", b"VALUE=local\n");
         let runtime = tempfile::tempdir().expect("runtime root");
-        let lease = SubagentWorkspaceManager::new(&workspace, runtime.path())
+        let lease = WorkspaceManager::new(&workspace, runtime.path())
             .acquire(
                 default_isolated(),
                 &SubagentId::new("conversation-overlay-source-change-subagent-1"),
@@ -5506,7 +5505,7 @@ mod tests {
     #[tokio::test]
     async fn parent_movement_after_acquisition_cannot_change_the_child_base() {
         let dir = repository();
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 default_isolated(),
@@ -5545,7 +5544,7 @@ mod tests {
         let dir = repository();
         let parent_before =
             std::fs::read_to_string(dir.path().join("tracked.txt")).expect("parent");
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 default_isolated(),
@@ -5582,7 +5581,7 @@ mod tests {
     #[tokio::test]
     async fn committed_child_work_is_preserved_even_when_the_worktree_is_clean() {
         let dir = repository();
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 default_isolated(),
@@ -5615,7 +5614,7 @@ mod tests {
     async fn committed_child_work_with_ignored_cache_is_dirty_false_but_changed() {
         let dir = repository();
         ignore_target(dir.path());
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 default_isolated(),
@@ -5655,7 +5654,7 @@ mod tests {
     async fn untracked_source_and_ignored_cache_preserve_a_dirty_handoff() {
         let dir = repository();
         ignore_target(dir.path());
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 default_isolated(),
@@ -5688,7 +5687,7 @@ mod tests {
     async fn recovered_inspection_uses_the_same_ordinary_dirty_definition() {
         let dir = repository();
         ignore_target(dir.path());
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 default_isolated(),
@@ -5706,7 +5705,7 @@ mod tests {
         .expect("cache");
         drop(lease);
 
-        let settlement = SubagentWorkspaceManager::inspect_recovered(&snapshot);
+        let settlement = WorkspaceManager::inspect_recovered(&snapshot);
         let handoff = settlement.handoff().expect("recovered handoff");
 
         assert_eq!(settlement.cleanup(), WorkspaceCleanup::Preserved);
@@ -5717,7 +5716,7 @@ mod tests {
     #[tokio::test]
     async fn committed_and_dirty_child_work_reports_both_terminal_facts() {
         let dir = repository();
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 default_isolated(),
@@ -5753,7 +5752,7 @@ mod tests {
     #[tokio::test]
     async fn staged_dirty_state_fails_closed_and_never_force_removes_work() {
         let dir = repository();
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 default_isolated(),
@@ -5783,7 +5782,7 @@ mod tests {
         );
         write_overlay_file(&workspace, "local/runtime.env", b"STAGED=overlay\n");
         let runtime_root = dir.path().join("artifacts");
-        let mut manager = SubagentWorkspaceManager::new(&workspace, &runtime_root);
+        let mut manager = WorkspaceManager::new(&workspace, &runtime_root);
         let hook = std::sync::Arc::new(WorkspaceAcquireHook::new());
         manager.install_acquisition_hook(hook.clone());
         let cancellation = CancellationSignal::new();
@@ -5834,7 +5833,7 @@ mod tests {
         write_overlay_file(&workspace, "second.env", b"SECOND=overlay\n");
 
         let runtime_root = dir.path().join("artifacts");
-        let mut manager = SubagentWorkspaceManager::new(&workspace, &runtime_root);
+        let mut manager = WorkspaceManager::new(&workspace, &runtime_root);
         let hook = std::sync::Arc::new(WorkspaceOverlayMaterializationHook::new());
         manager.install_overlay_materialization_hook(hook.clone());
         let cancellation = CancellationSignal::new();
@@ -5897,7 +5896,7 @@ mod tests {
     async fn concurrent_children_have_distinct_deterministic_paths_and_refs() {
         let dir = repository();
         let runtime = tempfile::tempdir().expect("runtime root");
-        let manager = SubagentWorkspaceManager::new(dir.path(), runtime.path());
+        let manager = WorkspaceManager::new(dir.path(), runtime.path());
         let first_id = SubagentId::new("conversation-concurrent-subagent-1");
         let second_id = SubagentId::new("conversation-concurrent-subagent-2");
         let cancellation = CancellationSignal::new();
@@ -5930,7 +5929,7 @@ mod tests {
     async fn same_identity_collision_cannot_settle_another_lease() {
         let dir = repository();
         let runtime = tempfile::tempdir().expect("runtime root");
-        let manager = SubagentWorkspaceManager::new(dir.path(), runtime.path());
+        let manager = WorkspaceManager::new(dir.path(), runtime.path());
         let subagent = SubagentId::new("conversation-same-identity-subagent-1");
         let first = manager
             .acquire(default_isolated(), &subagent, &CancellationSignal::new())
@@ -5960,7 +5959,7 @@ mod tests {
     async fn concurrent_same_identity_acquisition_has_one_atomic_owner() {
         let dir = repository();
         let runtime = tempfile::tempdir().expect("runtime root");
-        let manager = SubagentWorkspaceManager::new(dir.path(), runtime.path());
+        let manager = WorkspaceManager::new(dir.path(), runtime.path());
         let subagent = SubagentId::new("conversation-concurrent-same-identity-subagent-1");
         let cancellation = CancellationSignal::new();
         let (left, right) = tokio::join!(
@@ -5995,7 +5994,7 @@ mod tests {
         let dir = repository();
         let base = head(dir.path());
         std::fs::write(dir.path().join("tracked.txt"), "dirty\n").expect("dirty file");
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let error = manager
             .acquire(
                 default_isolated(),
@@ -6024,7 +6023,7 @@ mod tests {
         let base = head(dir.path());
         std::fs::write(dir.path().join("tracked.txt"), "staged dirty\n").expect("dirty file");
         git(dir.path(), &["add", "tracked.txt"]);
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let error = manager
             .acquire(
                 default_isolated(),
@@ -6052,7 +6051,7 @@ mod tests {
         let dir = repository();
         let base = head(dir.path());
         std::fs::write(dir.path().join("parent-only.txt"), "untracked\n").expect("untracked file");
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let error = manager
             .acquire(
                 default_isolated(),
@@ -6084,7 +6083,7 @@ mod tests {
         let dir = repository();
         let base = head(dir.path());
         std::fs::write(dir.path().join("tracked.txt"), "dirty\n").expect("dirty file");
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let error = manager
             .acquire(
                 default_isolated(),
@@ -6131,7 +6130,7 @@ mod tests {
         let base = head(dir.path());
         std::fs::create_dir_all(dir.path().join("target/debug")).expect("target");
         std::fs::write(dir.path().join("target/debug/generated"), "cache\n").expect("cache");
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 default_isolated(),
@@ -6170,12 +6169,12 @@ mod tests {
         git(dir.path(), &["add", "staged.txt"]);
         std::fs::write(dir.path().join("parent-only.txt"), "untracked\n").expect("untracked");
         let runtime = tempfile::tempdir().expect("runtime root");
-        let manager = SubagentWorkspaceManager::new(dir.path(), runtime.path());
+        let manager = WorkspaceManager::new(dir.path(), runtime.path());
         let lease = manager
             .acquire(
                 // Explicit opt-out: run from committed HEAD while ignoring
                 // parent-local dirty bytes (Issue #188).
-                SubagentWorkspacePolicy::GitWorktree {
+                WorkspacePolicy::GitWorktree {
                     require_clean_parent: false,
                 },
                 &SubagentId::new("conversation-permissive-snapshot-subagent-1"),

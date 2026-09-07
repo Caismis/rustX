@@ -11,10 +11,9 @@ use std::sync::Arc;
 
 use rustx::runtime::CancellationSignal;
 use rustx::runtime::identity::{AgentId, ConversationId, ToolCallId};
-use rustx::runtime::subagent::{
-    SubagentRegistry, SubagentRegistryConfig, SubagentSpawnPlan, SubagentWorkspaceManager,
-};
+use rustx::runtime::subagent::{SubagentRegistry, SubagentRegistryConfig, SubagentSpawnPlan};
 use rustx::runtime::types::{CancellationReason, SystemClock};
+use rustx::runtime::workspace::WorkspaceManager;
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{
     ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolResultContent,
@@ -73,7 +72,7 @@ pub(crate) fn subagent_plane_for(conversation: &str) -> SubagentPlane {
                 summary_output_cap: None,
             },
         },
-        workspace: SubagentWorkspaceManager::new(&workspace, &runtime_root),
+        workspace: WorkspaceManager::new(&workspace, &runtime_root),
         max_active: 4,
     });
     SubagentPlane {

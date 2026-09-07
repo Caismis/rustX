@@ -6103,7 +6103,7 @@ recovery input.
 Named definitions carry one bounded project-workspace policy:
 `SharedWorkspace` (the default) or `GitWorktree { require_clean_parent }`.
 `SubagentResolver` resolves that policy, while
-`SubagentWorkspaceManager` is the only component that resolves the source
+`WorkspaceManager` is the only component that resolves the source
 repository, invokes Git, acquires worktrees, inspects final state, removes a
 clean runtime-owned worktree, or creates handoff facts. The registry remains
 the owner of live subagent identity, capacity, cancellation, durable
@@ -6281,7 +6281,7 @@ Disposed
 ```
 
 `SubagentWorkspaceDisposalStarted` is the durable authorization point. It is
-committed only after `SubagentWorkspaceManager` has proved the source
+committed only after `WorkspaceManager` has proved the source
 repository identity, deterministic allocation path, exact Git worktree
 registration, branch attachment, worktree `HEAD`, branch ref `HEAD`, and
 terminal handoff equality. The event repeats the exact `SubagentId` and

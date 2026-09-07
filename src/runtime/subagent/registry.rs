@@ -63,14 +63,13 @@ use super::catalog::{SubagentDefinitionDigest, SubagentExecutionDeadline, Subage
 use super::ipc::DelegationFrame;
 use super::process::{PhysicalOutcome, PhysicalSettlement, StagedChild, SubagentSpawnPlan};
 use super::resolver::ResolvedSubagentSpec;
-use super::workspace::{
-    SubagentWorkspaceManager, WorkspaceDisposalPhase, WorkspaceDisposalSettlement,
-    WorkspaceHandoff, WorkspaceLease, WorkspaceSettlementDisposition, WorkspaceSnapshot,
-    WorkspaceUnresolvedReason,
-};
 use super::{
     MAX_CONTEXT_PACKAGE_BYTES, MAX_RESULT_CONTENT_BYTES, MAX_TASK_BYTES, SubagentTerminalState,
     bound_utf8, ownership_event, terminal_publication, terminal_settlement, workflow_output_event,
+};
+use crate::runtime::workspace::{
+    WorkspaceDisposalPhase, WorkspaceDisposalSettlement, WorkspaceHandoff, WorkspaceLease,
+    WorkspaceManager, WorkspaceSettlementDisposition, WorkspaceSnapshot, WorkspaceUnresolvedReason,
 };
 
 /// The highest lifecycle state of one subagent child.
@@ -629,13 +628,13 @@ impl core::fmt::Display for SubagentWorkspaceDisposalError {
 impl std::error::Error for SubagentWorkspaceDisposalError {}
 
 fn map_workspace_disposal_error(
-    error: super::workspace::WorkspaceDisposalError,
+    error: crate::runtime::workspace::WorkspaceDisposalError,
 ) -> SubagentWorkspaceDisposalError {
     match error {
-        super::workspace::WorkspaceDisposalError::OwnershipMismatch { detail } => {
+        crate::runtime::workspace::WorkspaceDisposalError::OwnershipMismatch { detail } => {
             SubagentWorkspaceDisposalError::OwnershipMismatch { detail }
         }
-        super::workspace::WorkspaceDisposalError::Git { operation, detail } => {
+        crate::runtime::workspace::WorkspaceDisposalError::Git { operation, detail } => {
             SubagentWorkspaceDisposalError::Backend {
                 detail: format!("{operation}: {detail}"),
             }
@@ -1244,7 +1243,7 @@ pub struct SubagentRegistryConfig {
     pub spawn: SubagentSpawnPlan,
     /// The sole owner of physical named-subagent workspace acquisition and
     /// settlement. The registry supplies policy/identity but never runs Git.
-    pub workspace: SubagentWorkspaceManager,
+    pub workspace: WorkspaceManager,
     /// The per-conversation concurrency bound.
     pub max_active: usize,
 }
@@ -1882,10 +1881,10 @@ impl SubagentRegistry {
                 )
                 .await
                 .map_err(|error| match error {
-                    super::workspace::WorkspaceAcquireError::Cancelled => {
+                    crate::runtime::workspace::WorkspaceAcquireError::Cancelled => {
                         SubagentStartError::Cancelled
                     }
-                    super::workspace::WorkspaceAcquireError::Settlement { detail } => {
+                    crate::runtime::workspace::WorkspaceAcquireError::Settlement { detail } => {
                         SubagentStartError::Rollback { detail }
                     }
                     // Issue #188: the dirty-parent rejection keeps its typed
@@ -1893,9 +1892,9 @@ impl SubagentRegistry {
                     // string here would destroy the only fact the
                     // model-facing tool boundary needs to render actionable
                     // remediation without parsing prose.
-                    super::workspace::WorkspaceAcquireError::DirtyParent { base_commit } => {
-                        SubagentStartError::WorkspaceDirtyParent { base_commit }
-                    }
+                    crate::runtime::workspace::WorkspaceAcquireError::DirtyParent {
+                        base_commit,
+                    } => SubagentStartError::WorkspaceDirtyParent { base_commit },
                     error => SubagentStartError::Workspace {
                         detail: error.to_string(),
                     },
@@ -5109,8 +5108,8 @@ mod tests {
         conversation_id: ConversationId,
         runtime_root: std::path::PathBuf,
         monotonic_clock: Arc<crate::runtime::ManualMonotonicClock>,
-        workspace_settlement_hook: Arc<super::super::workspace::WorkspaceSettlementHook>,
-        workspace_disposal_hook: Arc<super::super::workspace::WorkspaceDisposalHook>,
+        workspace_settlement_hook: Arc<crate::runtime::workspace::WorkspaceSettlementHook>,
+        workspace_disposal_hook: Arc<crate::runtime::workspace::WorkspaceDisposalHook>,
     }
 
     fn plane(max_active: usize) -> TestPlane {
@@ -5126,11 +5125,11 @@ mod tests {
         );
         let mailbox = ConversationInboundMailbox::over_store(store.clone());
         let workspace_settlement_hook =
-            Arc::new(super::super::workspace::WorkspaceSettlementHook::new());
+            Arc::new(crate::runtime::workspace::WorkspaceSettlementHook::new());
         let workspace_disposal_hook =
-            Arc::new(super::super::workspace::WorkspaceDisposalHook::new());
+            Arc::new(crate::runtime::workspace::WorkspaceDisposalHook::new());
         let monotonic_clock = Arc::new(crate::runtime::ManualMonotonicClock::new());
-        let mut workspace_manager = SubagentWorkspaceManager::new(&workspace, &runtime_root);
+        let mut workspace_manager = WorkspaceManager::new(&workspace, &runtime_root);
         workspace_manager.install_settlement_hook(workspace_settlement_hook.clone());
         workspace_manager.install_disposal_hook(workspace_disposal_hook.clone());
         let registry = SubagentRegistry::new(SubagentRegistryConfig {
@@ -5376,7 +5375,7 @@ mod tests {
             ))
             .expect("digest"),
             execution_deadline: None,
-            workspace_policy: crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
+            workspace_policy: crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
             instructions: "instructions".to_owned(),
             model: crate::model::frozen::test_frozen_model_spec(
                 serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
@@ -5524,10 +5523,9 @@ mod tests {
         let plane = plane(4);
         make_dirty_git_workspace(&plane);
         let mut start = spec("strict workspace");
-        start.resolved.workspace_policy =
-            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
-                require_clean_parent: true,
-            };
+        start.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+            require_clean_parent: true,
+        };
 
         let error = plane
             .registry
@@ -5676,10 +5674,9 @@ mod tests {
         make_clean_git_workspace(plane);
         let child = stage_stubborn(plane);
         let mut spec = start_spec(task);
-        spec.resolved.workspace_policy =
-            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
-                require_clean_parent: true,
-            };
+        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+            require_clean_parent: true,
+        };
         let accepted = start(plane, &spec).await;
         let workspace = plane
             .registry
@@ -5716,10 +5713,9 @@ mod tests {
         make_clean_git_workspace(plane);
         let child = stage_exit0(plane);
         let mut spec = start_spec(task);
-        spec.resolved.workspace_policy =
-            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
-                require_clean_parent: true,
-            };
+        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+            require_clean_parent: true,
+        };
         plane
             .workspace_settlement_hook
             .fail_next("injected final workspace inspection failure");
@@ -5785,7 +5781,7 @@ mod tests {
         assert_eq!(plan.settled_subagent_unresolved().len(), 1);
         assert_eq!(
             plan.settled_subagent_unresolved()[0].reason,
-            crate::runtime::subagent::WorkspaceUnresolvedReason::NestedContainment
+            crate::runtime::workspace::WorkspaceUnresolvedReason::NestedContainment
         );
         let recovered_snapshot = recovered
             .snapshot(subagent_id)
@@ -5988,10 +5984,9 @@ mod tests {
         make_clean_git_workspace(&plane);
         let child = stage_stubborn(&plane);
         let mut spec = start_spec("write a source change");
-        spec.resolved.workspace_policy =
-            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
-                require_clean_parent: true,
-            };
+        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+            require_clean_parent: true,
+        };
         let accepted = start(&plane, &spec).await;
         let workspace = plane
             .registry
@@ -6516,10 +6511,9 @@ mod tests {
             .fail_next("injected final workspace inspection failure");
         let child = stage_stubborn(&plane);
         let mut spec = start_spec("write a source change");
-        spec.resolved.workspace_policy =
-            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
-                require_clean_parent: true,
-            };
+        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+            require_clean_parent: true,
+        };
         let accepted = start(&plane, &spec).await;
 
         child
@@ -6581,7 +6575,7 @@ mod tests {
                 state: SubagentTerminalState::Failed,
                 workspace_resource:
                     crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved {
-                        reason: crate::runtime::subagent::WorkspaceUnresolvedReason::PhysicalSettlement,
+                        reason: crate::runtime::workspace::WorkspaceUnresolvedReason::PhysicalSettlement,
                         ..
                     },
                 ..
@@ -6636,7 +6630,7 @@ mod tests {
                 )],
             },
             runtime_root_cleanup_error: None,
-            workspace: super::super::workspace::WorkspaceSettlement::shared(
+            workspace: crate::runtime::workspace::WorkspaceSettlement::shared(
                 WorkspaceSnapshot::shared(std::path::PathBuf::from("<shared-workspace>")),
             ),
         };
@@ -6672,10 +6666,9 @@ mod tests {
         make_clean_git_workspace(&plane);
         let child = stage_with_unresolved_anchor(&plane);
         let mut spec = deadline_spec("nested containment", 100);
-        spec.resolved.workspace_policy =
-            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
-                require_clean_parent: true,
-            };
+        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+            require_clean_parent: true,
+        };
         let accepted = start(&plane, &spec).await;
         let running = plane
             .registry
@@ -6723,7 +6716,7 @@ mod tests {
                 subagent_id,
                 workspace_resource:
                     crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved {
-                        reason: crate::runtime::subagent::WorkspaceUnresolvedReason::NestedContainment,
+                        reason: crate::runtime::workspace::WorkspaceUnresolvedReason::NestedContainment,
                         ..
                     },
                 ..
@@ -7094,10 +7087,9 @@ mod tests {
         make_clean_git_workspace(&plane);
         let child = stage_stubborn(&plane);
         let mut spec = start_spec("write a source change");
-        spec.resolved.workspace_policy =
-            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
-                require_clean_parent: true,
-            };
+        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+            require_clean_parent: true,
+        };
         let accepted = start(&plane, &spec).await;
         let workspace = plane
             .registry
@@ -8489,10 +8481,9 @@ mod tests {
             .fail_next("injected terminal workspace settlement failure");
         let child = stage_stubborn(&plane);
         let mut spec = start_spec("inspect");
-        spec.resolved.workspace_policy =
-            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
-                require_clean_parent: true,
-            };
+        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+            require_clean_parent: true,
+        };
         let accepted = start(&plane, &spec).await;
         plane.store.arm_fail_accept_times(3);
         child

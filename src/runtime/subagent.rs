@@ -80,7 +80,6 @@ pub mod activity;
 pub mod catalog;
 mod registry;
 pub mod resolver;
-pub mod workspace;
 
 pub(crate) mod anchors;
 
@@ -158,6 +157,9 @@ pub(crate) fn is_safe_child_conversation_component(conversation_id: &Conversatio
         && !value.contains('\\')
 }
 
+use crate::runtime::workspace::{
+    WorkspaceHandoff, WorkspaceSettlement, WorkspaceSettlementDisposition, WorkspaceSnapshot,
+};
 pub use activity::{
     SubagentActivity, SubagentActivityCounters, SubagentExecutionProfile, SubagentObservation,
     SubagentWaitReason,
@@ -183,12 +185,6 @@ pub use registry::{
 pub use resolver::{
     ResolvedSubagentSkill, ResolvedSubagentSpec, ResolvedSubagentTool, SubagentDomain,
     SubagentResolutionError, SubagentResolver,
-};
-pub use workspace::{
-    GitWorktreeSnapshot, SubagentWorkspaceManager, SubagentWorkspacePolicy, WorkspaceCleanup,
-    WorkspaceDisposalError, WorkspaceDisposalSettlement, WorkspaceHandoff, WorkspaceIsolation,
-    WorkspaceLease, WorkspaceSettlement, WorkspaceSettlementDisposition, WorkspaceSnapshot,
-    WorkspaceUnresolvedReason,
 };
 
 use std::sync::Arc;
@@ -702,7 +698,7 @@ pub(crate) fn terminal_workspace_resource(
                 reason: *reason,
                 detail: bound_utf8(
                     detail.clone(),
-                    workspace::MAX_WORKSPACE_SETTLEMENT_DETAIL_BYTES,
+                    crate::runtime::workspace::MAX_WORKSPACE_SETTLEMENT_DETAIL_BYTES,
                 ),
             }
         }
@@ -903,7 +899,7 @@ mod tests {
         let child_agent_id = AgentId::new("agent-child");
         let conversation_id = ConversationId::new("conv-1");
         let timestamp = chrono::Utc::now();
-        let handoff = crate::runtime::subagent::WorkspaceHandoff {
+        let handoff = crate::runtime::workspace::WorkspaceHandoff {
             logical_workspace: std::path::PathBuf::from("/physical/worktree"),
             physical_worktree_root: std::path::PathBuf::from("/physical/worktree"),
             branch: "rustx/subagent/secret-branch".to_owned(),

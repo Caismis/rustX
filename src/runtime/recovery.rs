@@ -128,10 +128,11 @@ use crate::runtime::identity::{
     AttemptId, ConversationId, EventId, MessageId, PublicationStreamId, RequestId, SubagentId,
     ToolCallId, ToolExecutionId, ToolId,
 };
-use crate::runtime::subagent::{
+
+use crate::runtime::types::{CancellationReason, RuntimeClock, RuntimeError};
+use crate::runtime::workspace::{
     WorkspaceHandoff, WorkspaceSettlement, WorkspaceSnapshot, WorkspaceUnresolvedReason,
 };
-use crate::runtime::types::{CancellationReason, RuntimeClock, RuntimeError};
 use crate::tools::types::{ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus};
 
 /// The Event Journal page size of the recovery fold.
@@ -2221,7 +2222,7 @@ impl RecoveryPlan {
             // Recovery has no direct-child or nested-anchor proof, so it
             // never removes a recorded worktree. It does inspect it to make
             // retained work available to the recovered read model.
-            let workspace = crate::runtime::subagent::SubagentWorkspaceManager::inspect_recovered(
+            let workspace = crate::runtime::workspace::WorkspaceManager::inspect_recovered(
                 &class.evidence.workspace,
             );
             let workspace_resource =
@@ -2651,8 +2652,8 @@ mod tests {
         let child_agent_id = crate::runtime::identity::AgentId::new("agent-child");
         let workspace = WorkspaceSnapshot {
             logical_workspace: std::path::PathBuf::from("/tmp/rustx-worktree-1/backend"),
-            isolation: crate::runtime::subagent::WorkspaceIsolation::GitWorktree(
-                crate::runtime::subagent::GitWorktreeSnapshot {
+            isolation: crate::runtime::workspace::WorkspaceIsolation::GitWorktree(
+                crate::runtime::workspace::GitWorktreeSnapshot {
                     source_repository_root: std::path::PathBuf::from("/tmp/repository"),
                     repository_relative_workspace: std::path::PathBuf::from("backend"),
                     physical_worktree_root: std::path::PathBuf::from("/tmp/rustx-worktree-1"),
@@ -2812,8 +2813,8 @@ mod tests {
         let child_agent_id = crate::runtime::identity::AgentId::new("agent-child");
         let workspace = WorkspaceSnapshot {
             logical_workspace: std::path::PathBuf::from("/tmp/rustx-worktree-unresolved/backend"),
-            isolation: crate::runtime::subagent::WorkspaceIsolation::GitWorktree(
-                crate::runtime::subagent::GitWorktreeSnapshot {
+            isolation: crate::runtime::workspace::WorkspaceIsolation::GitWorktree(
+                crate::runtime::workspace::GitWorktreeSnapshot {
                     source_repository_root: std::path::PathBuf::from("/tmp/repository"),
                     repository_relative_workspace: std::path::PathBuf::from("backend"),
                     physical_worktree_root: std::path::PathBuf::from(

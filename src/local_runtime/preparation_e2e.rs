@@ -166,10 +166,7 @@ impl Lab {
                     summary_output_cap: None,
                 },
             },
-            workspace: crate::runtime::subagent::SubagentWorkspaceManager::new(
-                &workspace,
-                &runtime_root,
-            ),
+            workspace: crate::runtime::workspace::WorkspaceManager::new(&workspace, &runtime_root),
             max_active: 4,
         });
         // The one ordinal this conversation will allocate: `prepare` burns
@@ -204,8 +201,7 @@ impl Lab {
                 ))
                 .expect("digest"),
                 execution_deadline: None,
-                workspace_policy:
-                    crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
+                workspace_policy: crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
                 instructions: "frozen child instructions".to_owned(),
                 model: crate::model::frozen::test_frozen_model_spec(
                     serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),

@@ -1549,9 +1549,11 @@ mod tests {
     /// minimal semantic fact — never a physical path, branch, or commit.
     #[test]
     fn the_subagent_projection_annotates_retained_isolated_changes_semantically() {
-        use crate::runtime::subagent::{GitWorktreeSnapshot, WorkspaceHandoff, WorkspaceIsolation};
+        use crate::runtime::workspace::{
+            GitWorktreeSnapshot, WorkspaceHandoff, WorkspaceIsolation,
+        };
         let mut snapshot = subagent_snapshot();
-        snapshot.workspace = crate::runtime::subagent::WorkspaceSnapshot {
+        snapshot.workspace = crate::runtime::workspace::WorkspaceSnapshot {
             logical_workspace: std::path::PathBuf::from("/physical/worktree/project"),
             isolation: WorkspaceIsolation::GitWorktree(GitWorktreeSnapshot {
                 source_repository_root: std::path::PathBuf::from("/repo"),
@@ -1918,8 +1920,8 @@ mod tests {
         use crate::runtime::identity::{AgentId, ConversationId, SubagentId, ToolCallId};
         use crate::runtime::subagent::{
             SubagentObservation, SubagentSnapshot, SubagentState, SubagentWorkspaceResourceState,
-            WorkspaceSnapshot,
         };
+        use crate::runtime::workspace::WorkspaceSnapshot;
         SubagentSnapshot {
             subagent_id: SubagentId::new("conversation-1-subagent-2"),
             child_agent_id: AgentId::new("agent-child"),

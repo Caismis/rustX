@@ -195,6 +195,13 @@ this child?".
 
 ### Retained subagent workspaces
 
+`runtime::workspace` owns the native `WorkspaceManager`, `WorkspacePolicy`,
+and physical `WorkspaceLease`. The Subagent registry and process driver consume
+that owner; workspace types are not re-exported through `runtime::subagent`.
+The lease currently follows the staged-child to process-driver settlement
+path described below. Workflow run retention and node borrowing are still
+pending WF-03 work.
+
 An isolated subagent starts from the captured committed source `HEAD`. If the
 child leaves no source change, rustX removes its runtime-created worktree and
 branch during normal terminal settlement. If it changes the worktree — either

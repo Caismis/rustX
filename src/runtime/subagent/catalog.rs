@@ -318,7 +318,7 @@ pub struct SubagentDefinition {
     tools: Vec<ToolSelector>,
     skills: Vec<String>,
     project_instructions: SubagentProjectInstructionPolicy,
-    workspace_policy: super::workspace::SubagentWorkspacePolicy,
+    workspace_policy: crate::runtime::workspace::WorkspacePolicy,
     digest: SubagentDefinitionDigest,
 }
 
@@ -346,7 +346,7 @@ impl SubagentDefinition {
         tools: Vec<ToolSelector>,
         skills: Vec<String>,
         project_instructions: SubagentProjectInstructionPolicy,
-        workspace_policy: super::workspace::SubagentWorkspacePolicy,
+        workspace_policy: crate::runtime::workspace::WorkspacePolicy,
     ) -> Result<Self, SubagentDefinitionError> {
         if description.trim().is_empty() {
             return Err(SubagentDefinitionError::EmptyDescription { agent: name });
@@ -492,7 +492,7 @@ impl SubagentDefinition {
 
     /// The resolved project-workspace policy of this definition.
     #[must_use]
-    pub const fn workspace_policy(&self) -> super::workspace::SubagentWorkspacePolicy {
+    pub const fn workspace_policy(&self) -> crate::runtime::workspace::WorkspacePolicy {
         self.workspace_policy
     }
 
@@ -767,7 +767,7 @@ fn compute_digest(
     tools: &[ToolSelector],
     skills: &[String],
     project_instructions: &SubagentProjectInstructionPolicy,
-    workspace_policy: super::workspace::SubagentWorkspacePolicy,
+    workspace_policy: crate::runtime::workspace::WorkspacePolicy,
 ) -> SubagentDefinitionDigest {
     let mut hasher = Sha256::new();
     hasher.update(SUBAGENT_DEFINITION_DIGEST_VERSION.as_bytes());
@@ -825,8 +825,8 @@ fn compute_digest(
         field(&mut hasher, "project_instruction_content", &file.content);
     }
     let workspace = match workspace_policy {
-        super::workspace::SubagentWorkspacePolicy::SharedWorkspace => "shared".to_owned(),
-        super::workspace::SubagentWorkspacePolicy::GitWorktree {
+        crate::runtime::workspace::WorkspacePolicy::SharedWorkspace => "shared".to_owned(),
+        crate::runtime::workspace::WorkspacePolicy::GitWorktree {
             require_clean_parent,
         } => format!("git_worktree:require_clean_parent={require_clean_parent}"),
     };
@@ -856,7 +856,7 @@ mod tests {
     use crate::capabilities::selection::ToolSelector;
     use crate::runtime::identity::McpServerId;
     use crate::runtime::resources::ProjectContextFile;
-    use crate::runtime::subagent::SubagentWorkspacePolicy;
+    use crate::runtime::workspace::WorkspacePolicy;
 
     fn policy() -> SubagentProjectInstructionPolicy {
         SubagentProjectInstructionPolicy {
@@ -880,7 +880,7 @@ mod tests {
             tools,
             skills,
             policy(),
-            SubagentWorkspacePolicy::SharedWorkspace,
+            WorkspacePolicy::SharedWorkspace,
         )
     }
 
@@ -1028,7 +1028,7 @@ mod tests {
                 inherit: false,
                 files: Vec::new(),
             },
-            SubagentWorkspacePolicy::SharedWorkspace,
+            WorkspacePolicy::SharedWorkspace,
         )
         .expect("definition");
         let with_file = SubagentDefinition::new(
@@ -1047,7 +1047,7 @@ mod tests {
                     content: "explicit".to_owned(),
                 }],
             },
-            SubagentWorkspacePolicy::SharedWorkspace,
+            WorkspacePolicy::SharedWorkspace,
         )
         .expect("definition");
         let changed_content = SubagentDefinition::new(
@@ -1066,7 +1066,7 @@ mod tests {
                     content: "explicit, revised".to_owned(),
                 }],
             },
-            SubagentWorkspacePolicy::SharedWorkspace,
+            WorkspacePolicy::SharedWorkspace,
         )
         .expect("definition");
         let changed_instructions = SubagentDefinition::new(
@@ -1079,7 +1079,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             policy(),
-            SubagentWorkspacePolicy::SharedWorkspace,
+            WorkspacePolicy::SharedWorkspace,
         )
         .expect("definition");
         let isolated = SubagentDefinition::new(
@@ -1093,7 +1093,7 @@ mod tests {
             Vec::new(),
             policy(),
             // The default isolated definition (Issue #188) is strict.
-            SubagentWorkspacePolicy::GitWorktree {
+            WorkspacePolicy::GitWorktree {
                 require_clean_parent: true,
             },
         )
@@ -1123,7 +1123,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             policy(),
-            SubagentWorkspacePolicy::SharedWorkspace,
+            WorkspacePolicy::SharedWorkspace,
         )
         .expect("definition");
         let there = SubagentDefinition::new(
@@ -1136,7 +1136,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             policy(),
-            SubagentWorkspacePolicy::SharedWorkspace,
+            WorkspacePolicy::SharedWorkspace,
         )
         .expect("definition");
         assert_eq!(
@@ -1177,7 +1177,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             policy(),
-            SubagentWorkspacePolicy::SharedWorkspace,
+            WorkspacePolicy::SharedWorkspace,
         )
         .expect("definition");
         assert_eq!(with_deadline.execution_deadline(), Some(deadline));

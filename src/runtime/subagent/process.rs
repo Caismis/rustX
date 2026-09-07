@@ -51,7 +51,7 @@ use super::ipc::{
 };
 use super::registry::{SubagentInteractionSink, SubagentTerminalMode};
 use super::resolver::ResolvedSubagentSpec;
-use super::workspace::{WorkspaceLease, WorkspaceSnapshot};
+use crate::runtime::workspace::{WorkspaceLease, WorkspaceSnapshot};
 
 /// The liveness guard of the startup handshake. The child composes only
 /// local state before `Ready` (catalog file, durable store, capability
@@ -789,7 +789,7 @@ pub(crate) struct PhysicalSettlement {
     /// leaves its root in place instead.
     pub runtime_root_cleanup_error: Option<String>,
     /// The final workspace inspection and cleanup/handoff facts.
-    pub workspace: super::workspace::WorkspaceSettlement,
+    pub workspace: crate::runtime::workspace::WorkspaceSettlement,
 }
 
 impl PhysicalSettlement {
@@ -802,9 +802,9 @@ impl PhysicalSettlement {
                 unproven: Vec::new(),
             },
             runtime_root_cleanup_error: None,
-            workspace: super::workspace::WorkspaceSettlement::shared(WorkspaceSnapshot::shared(
-                PathBuf::from("<shared-workspace>"),
-            )),
+            workspace: crate::runtime::workspace::WorkspaceSettlement::shared(
+                WorkspaceSnapshot::shared(PathBuf::from("<shared-workspace>")),
+            ),
         }
     }
 }
@@ -972,9 +972,9 @@ impl StagedChild {
                 )
             }
         } else {
-            super::workspace::WorkspaceSettlement::shared(WorkspaceSnapshot::shared(PathBuf::from(
-                "<test-shared-workspace>",
-            )))
+            crate::runtime::workspace::WorkspaceSettlement::shared(WorkspaceSnapshot::shared(
+                PathBuf::from("<test-shared-workspace>"),
+            ))
         };
         // The child-private runtime root is independent of the project
         // workspace. Once the direct child and every nested anchor are
@@ -1829,7 +1829,7 @@ async fn settle_nested(
         Some(lease) => lease.preserve_after_unresolved_nested(
             "a nested supervised process anchor remains physically unresolved",
         ),
-        None => super::workspace::WorkspaceSettlement::shared(WorkspaceSnapshot::shared(
+        None => crate::runtime::workspace::WorkspaceSettlement::shared(WorkspaceSnapshot::shared(
             PathBuf::from("<shared-workspace>"),
         )),
     };
@@ -1943,9 +1943,10 @@ mod tests {
         ChildFrame, ParentFrame, ProcessUnitAnchorFrame, ReadyFrame, read_parent_frame,
         write_child_frame,
     };
-    use crate::runtime::subagent::{
-        SubagentWorkspaceManager, SubagentWorkspacePolicy, WorkspaceCleanup,
-        WorkspaceSettlementDisposition, WorkspaceUnresolvedReason,
+
+    use crate::runtime::workspace::{
+        WorkspaceCleanup, WorkspaceManager, WorkspacePolicy, WorkspaceSettlementDisposition,
+        WorkspaceUnresolvedReason,
     };
 
     const DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
@@ -2227,10 +2228,10 @@ mod tests {
     async fn staged_workspace_handoff_does_not_leak_the_private_runtime_root() {
         let repository = git_repository();
         let artifacts = tempfile::tempdir().expect("artifact root");
-        let manager = SubagentWorkspaceManager::new(repository.path(), artifacts.path());
+        let manager = WorkspaceManager::new(repository.path(), artifacts.path());
         let lease = manager
             .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
+                WorkspacePolicy::GitWorktree {
                     require_clean_parent: true,
                 },
                 &SubagentId::new("conversation-staged-worktree-subagent-1"),
@@ -2386,10 +2387,10 @@ mod tests {
     async fn an_unresolved_nested_anchor_preserves_the_worktree() {
         let repository = git_repository();
         let runtime_root = repository.path().join("runtime");
-        let manager = SubagentWorkspaceManager::new(repository.path(), &runtime_root);
+        let manager = WorkspaceManager::new(repository.path(), &runtime_root);
         let lease = manager
             .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
+                WorkspacePolicy::GitWorktree {
                     require_clean_parent: true,
                 },
                 &SubagentId::new("conv-workspace-unresolved-anchor"),
@@ -2480,8 +2481,7 @@ mod tests {
                 definition_digest: serde_json::from_value(serde_json::json!("sha256:frozen"))
                     .expect("digest"),
                 execution_deadline: None,
-                workspace_policy:
-                    crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
+                workspace_policy: crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
                 instructions: String::new(),
                 model: crate::model::frozen::test_frozen_model_spec(
                     serde_json::from_value(serde_json::json!("local/model-a")).expect("model"),
@@ -2501,7 +2501,7 @@ mod tests {
                 keep_recent_tokens: 0,
                 summary_output_cap: None,
             },
-            workspace_snapshot: crate::runtime::subagent::WorkspaceSnapshot::shared(
+            workspace_snapshot: crate::runtime::workspace::WorkspaceSnapshot::shared(
                 dir.path().join("workspace"),
             ),
             runtime_root: dir.path().join("runtime"),
@@ -2517,12 +2517,12 @@ mod tests {
                     &plan,
                     &spec,
                     runtime_root,
-                    crate::runtime::subagent::SubagentWorkspaceManager::new(
+                    crate::runtime::workspace::WorkspaceManager::new(
                         &spec.workspace_snapshot.logical_workspace,
                         dir.path().join("workspace-artifacts"),
                     )
                     .acquire(
-                        crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
+                        crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
                         &spec.subagent_id,
                         &crate::runtime::cancellation::CancellationSignal::new(),
                     )
