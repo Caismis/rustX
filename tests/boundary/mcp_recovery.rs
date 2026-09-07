@@ -157,10 +157,22 @@ enum OrderedObservation {
 #[derive(Default)]
 struct OrderedObservations {
     facts: std::sync::Mutex<Vec<OrderedObservation>>,
+    /// Installed only for the progress boundedness regression. Sampled on
+    /// the terminal publication path, before the next model turn can dispatch.
+    progress_runtime: Option<Arc<rustx::tools::mcp::McpServerRuntime>>,
+    settled_progress_cardinalities: std::sync::Mutex<Vec<usize>>,
 }
 
 impl OrderedObservations {
     fn record(&self, fact: OrderedObservation) {
+        if fact == OrderedObservation::Completed
+            && let Some(runtime) = &self.progress_runtime
+        {
+            self.settled_progress_cardinalities
+                .lock()
+                .expect("settled cardinalities lock")
+                .push(runtime.tracked_progress_requests());
+        }
         self.facts
             .lock()
             .expect("ordered observation lock")
@@ -2015,6 +2027,109 @@ async fn a_silent_streamable_http_call_settles_inside_the_mcp_settlement_plane()
         1,
         "cancellation never causes a second dispatch"
     );
+    drop(capability);
+    server.shutdown().await;
+}
+
+/// Repeated ambiguous settlements release local progress on the same HTTP
+/// generation. Server acceptance and the armed manual deadline order every
+/// cancellation; runtime identity proves reconnect/teardown never cleans up.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repeated_ambiguous_http_calls_release_progress_on_one_live_generation() {
+    const CALLS: u32 = 64;
+    let fixture = common::native_fixture();
+    let server =
+        streamable_http::HttpFixture::start(streamable_http::HttpFixtureControl::new()).await;
+    let server_id = McpServerId::new("http-progress-boundedness");
+    let capability = http_capability(&fixture.runtime, &server_id, server.binding()).await;
+    let runtime = capability
+        .coordinator
+        .current_mcp_runtime(&server_id)
+        .expect("published runtime");
+    let baseline = runtime.tracked_progress_requests();
+    assert_eq!(baseline, 0);
+    let ordered = Arc::new(OrderedObservations {
+        progress_runtime: Some(Arc::clone(&runtime)),
+        ..Default::default()
+    });
+    let withhold = server.control.withhold();
+    let echo = server.control.echo();
+    let mut turns = vec![vec![withhold.as_str()]; CALLS as usize];
+    turns.push(vec![echo.as_str()]);
+    let accepted = server.control.clone();
+    let audit = run_mcp_turns(
+        &fixture,
+        capability.coordinator.acquire_attempt_lease(),
+        "http-repeated-ambiguous",
+        &turns,
+        ToolExecutionDeadlinePolicy {
+            hard_deadline: Duration::from_mins(1),
+            idle_liveness: None,
+        },
+        Some(Arc::clone(&ordered)),
+        move |controls| async move {
+            for count in 1..=CALLS {
+                accepted.wait_accepted(count).await;
+                // Acceptance is after deadline arming for this call. Each
+                // preceding call settled before the next model turn began.
+                let deadline = controls.armed.borrow().expect("armed before dispatch");
+                assert_eq!(deadline, u64::from(count) * 60_000);
+                controls.clock.advance(60_000);
+                accepted.wait_terminated(count).await;
+            }
+        },
+    )
+    .await;
+    let results = tool_results(&audit);
+    assert_eq!(results.len(), CALLS as usize + 1);
+    assert!(
+        results[..CALLS as usize]
+            .iter()
+            .all(|result| matches!(result.status, ToolExecutionStatus::OutcomeUnknown { .. }))
+    );
+    assert!(matches!(
+        results[CALLS as usize].status,
+        ToolExecutionStatus::Success
+    ));
+    let facts = execution_facts(&audit);
+    assert_eq!(
+        facts
+            .iter()
+            .filter(|fact| matches!(fact, RuntimeEvent::ToolExecutionDeadlineFired { .. }))
+            .count(),
+        CALLS as usize
+    );
+    assert!(!facts.iter().any(|fact| matches!(
+        fact,
+        RuntimeEvent::ToolExecutionSettlementControlFailed { .. }
+    )));
+    assert_eq!(
+        *ordered
+            .settled_progress_cardinalities
+            .lock()
+            .expect("settled cardinalities"),
+        vec![baseline; CALLS as usize + 1],
+        "each terminal publication sees the bounded baseline before the next dispatch"
+    );
+    assert_eq!(
+        ordered.facts(),
+        vec![OrderedObservation::Completed; CALLS as usize + 1],
+        "no progress and exactly one settlement per call"
+    );
+    assert_eq!(runtime.outstanding_http_requests(), 0);
+    assert_eq!(runtime.tracked_progress_requests(), baseline);
+    assert!(
+        Arc::ptr_eq(
+            &runtime,
+            &capability
+                .coordinator
+                .current_mcp_runtime(&server_id)
+                .expect("same healthy runtime")
+        ),
+        "no reconnect or teardown supplied cleanup"
+    );
+    assert_eq!(server.control.accepted_calls(), CALLS + 1, "no replay");
+    assert_eq!(server.control.terminated_calls(), CALLS);
     drop(capability);
     server.shutdown().await;
 }

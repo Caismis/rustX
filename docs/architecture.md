@@ -3740,12 +3740,22 @@ response ends remote execution but does not end the dispatching caller's
 progress-consumer ownership** — the peer can answer while the call is still
 between its effect frontier and its subscription, and reading that answer as
 proof that no caller remains deletes exactly the evidence the guarantee is
-about. Each dispatched request therefore carries two independent dimensions:
+about. Each dispatched request therefore carries three independent facts:
 whether a correlated answer can still arrive (it cannot, once the peer
 answered or rustX refused to dispatch the request), and whether the
 dispatching call still owns progress (awaiting subscription, subscribed, or
-relinquished). **Progress state is forgotten only once both remote response
-ownership and local consumer ownership are terminal.** A subscription is
+relinquished), plus whether outbound admission has been consumed. **A live
+caller owns progress until it consumes or relinquishes it. After caller
+relinquishment, request state is retained only while needed to prevent a
+not-yet-consumed outbound admission from recreating ownership.** This
+payload-free tombstone has no delivery index; late admission consumes and
+forgets it without recreating an owner. Remote terminality also removes the
+tombstone. Once admission has happened, relinquishment forgets immediately,
+even if the remote server never answers. Remote execution uncertainty does
+not by itself retain progress-router state: the canonical `OutcomeUnknown`
+Tool result owns that uncertainty. Router cardinality is O(live callers +
+unresolved outbound admissions), never historical ambiguous calls.
+A subscription is
 never refused because its request is already answered; it claims the
 buffered occurrence atomically and the executor reports it before the
 terminal result. The caller dimension is one RAII lease taken in the same

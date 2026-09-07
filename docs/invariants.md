@@ -3929,17 +3929,17 @@ remote control plane            local ownership plane
   > A correlated response ends remote execution but does not end the
   > dispatching caller's progress-consumer ownership.
 
-  Each dispatched request therefore carries both facts, and no transition of
-  one implies a transition of the other:
+  Admission consumption is tracked independently of both facts:
 
-  | caller \ remote | open | terminal (answered, or refused before dispatch) |
-  |---|---|---|
-  | awaiting subscription | retain the coalesced evidence | **retain** it |
-  | subscribed | the subscriber owns delivery | the subscriber owns delivery |
-  | relinquished | keep the payload-free record | forget the request |
+  | caller | admission | remote | action |
+  |---|---|---|---|
+  | live (awaiting subscription or subscribed) | pending or consumed | open or terminal | retain evidence/delivery |
+  | relinquished | pending | open | payload-free tombstone, no delivery index |
+  | relinquished | pending | terminal | forget |
+  | relinquished | consumed | open or terminal | forget |
 
-  > Progress state is forgotten only once both remote response ownership and
-  > local consumer ownership are terminal.
+  > A relinquished progress record survives only while it is still needed to
+  > prevent a not-yet-consumed outbound admission from resurrecting caller ownership.
 
   A subscription is therefore never refused because the request is already
   answered: the call is alive until it has processed that response and
@@ -3952,13 +3952,15 @@ remote control plane            local ownership plane
   failure and ordinary completion therefore all release progress ownership
   through one path, so a call that exits before ever subscribing leaks
   nothing and no exit branch carries progress cleanup of its own.
-- **Every progress request reaches a request-local forget point.** An
-  answered request is forgotten when its call relinquishes; a request rustX
-  refused to dispatch can never be answered, so the refusal itself is its
-  remote terminality and the seam that admitted its token releases it. The
-  only residue is a request rustX abandoned while the remote side stayed
-  genuinely open — a cancelled call whose server never answered — which
-  retains a payload-free record until the connection generation ends.
+- **Tombstones protect only the pre-admission race.** Caller relinquishment
+  before `Transport::send` consumes admission leaves a payload-free tombstone
+  with no delivery index. Late admission consumes and forgets it without
+  recreating caller ownership. Remote terminality also makes it unnecessary.
+  After admission is consumed, caller relinquishment forgets immediately,
+  including when the remote server never answers. Refused dispatch consumes
+  admission in the synchronous prologue and marks the remote side terminal.
+  Remote execution uncertainty does not retain progress-router state; it is
+  represented by the canonical `OutcomeUnknown` Tool result.
 - **The subscription window is closed by ownership, not by capacity.**
   Bounding a speculative pre-subscription cache can never be correct: nothing
   bounds how many admitted requests are inside that window simultaneously, so
@@ -3973,7 +3975,7 @@ remote control plane            local ownership plane
 - **Known tokens and unknown tokens do not share a container.** A token
   registered by the dispatch seam is a *known live request token*: O(1) state,
   **never evicted by capacity**, removed at the request's own terminal forget
-  point (both dimensions terminal). A token stops being deliverable the moment
+  point defined above. A token stops being deliverable the moment
   its call relinquishes, so progress that arrives afterwards is unsolicited
   rather than stored. Any other token
   is *unsolicited peer progress*: it is counted and dropped, and occupies no
@@ -3988,9 +3990,11 @@ remote control plane            local ownership plane
   already in the subscriber's hands. Progress delivery is explicitly **not**
   lossless and is not claimed to be.
 - **The live set is bounded by in-flight requests, not by a router constant.**
-  One entry per dispatched request of the connection generation that has not
-  reached its terminal forget point, so concurrency above any fixed cache size
-  cannot starve a call of its own progress. The router reorders and coalesces
+  O(live callers + unresolved outbound admissions): one entry per live caller
+  and one payload-free tombstone per relinquished request still awaiting its
+  outbound admission. Repeated admitted calls whose remote outcomes remain
+  unknown retain no history. Concurrency above any fixed cache size cannot
+  starve a call of its own progress. The router reorders and coalesces
   delivery of notifications the peer genuinely sent; it never invents one.
 
 ### Connection generations

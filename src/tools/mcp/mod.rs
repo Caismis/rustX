@@ -2547,6 +2547,12 @@ impl McpServerRuntime {
             .map_or(0, |ownership| ownership.outstanding_requests())
     }
 
+    /// Current progress cardinality, including pre-admission tombstones.
+    #[cfg(test)]
+    pub(crate) fn tracked_progress_requests(&self) -> usize {
+        self.handler.progress.tracked_requests()
+    }
+
     /// Installs the test-only close synchronization/fault seam.
     #[cfg(test)]
     #[allow(dead_code)]
@@ -2781,9 +2787,9 @@ impl McpServerRuntime {
                     drain_remote_progress(context, &mut progress);
                     drop(progress);
                     // This call stops consuming progress here, so it
-                    // relinquishes here: the settlement below is about the
-                    // remote dimension, and the two are forgotten together
-                    // once both are terminal.
+                    // relinquishes here. Consumed admission makes progress
+                    // forgettable even if settlement reports OutcomeUnknown;
+                    // remote uncertainty does not own local progress.
                     drop(progress_lease);
                     return self
                         .settle_post_frontier_cancellation(
@@ -3439,25 +3445,29 @@ const PROGRESS_SUBSCRIPTION_CAPACITY: usize = 16;
 /// biased response arm reported a terminal result with the liveness
 /// occurrence silently gone.
 ///
-/// So the two dimensions are tracked separately and the forget point is
-/// their conjunction:
+/// Admission consumption is a third, independent fact: `admit` consumes
+/// the once-per-request outbound seam even when the caller is already gone.
+/// The forget rule is:
 ///
 /// ```text
-/// caller \ remote        Open                       Terminal
-/// AwaitingSubscription   retain the evidence        retain the evidence
-/// Subscribed             the subscriber owns it     the subscriber owns it
-/// Relinquished           keep the record            forget the request
+/// caller                 admission   remote       action
+/// AwaitingSubscription   either      either       retain evidence
+/// Subscribed             either      either       retain delivery
+/// Relinquished           pending     Open         payload-free tombstone
+/// Relinquished           pending     Terminal     forget
+/// Relinquished           consumed    either       forget
 /// ```
 ///
-/// > **Progress state is forgotten only once both remote response ownership
-/// > and local consumer ownership are terminal.**
+/// > **A relinquished progress record survives only while needed to prevent
+/// > a not-yet-consumed outbound admission from resurrecting caller ownership.**
 ///
-/// A relinquished request keeps no payload and no delivery index — nothing
-/// is deliverable to a caller that no longer exists — but its record
-/// survives until the remote dimension is terminal too. That record is
-/// load-bearing: `Transport::send` can run *after* the executor returned, so
-/// an admission arriving then would otherwise re-create an owned entry for a
-/// request that has no owner left to forget it.
+/// `Transport::send` can run after the executor returned. Relinquishment
+/// before that seam leaves a payload-free tombstone with no delivery index.
+/// Late admission consumes that tombstone without creating caller ownership.
+/// Once admission has happened, relinquishment forgets immediately, even if
+/// the server never answers. Remote execution uncertainty belongs to the
+/// canonical `OutcomeUnknown` Tool result, not to progress-router ownership.
+/// Remote terminality also makes a pre-admission tombstone unnecessary.
 ///
 /// # Who owns each transition
 ///
@@ -3502,15 +3512,12 @@ const PROGRESS_SUBSCRIPTION_CAPACITY: usize = 16;
 ///
 /// # Boundedness
 ///
-/// Live state is one small entry per rustX request of this connection
-/// generation that has been dispatched and has not yet reached the terminal
-/// forget point above — never a router constant, and never one entry per
-/// request ever answered. A request that is answered while its call is gone,
-/// and a request whose call relinquished after it was answered, are both
-/// removed outright. The residue is a request rustX abandoned while the
-/// remote side stayed genuinely open — a cancelled call whose server never
-/// answered — which keeps a payload-free record until this generation ends.
-/// The whole router belongs to one connection generation and dies with it.
+/// State is O(live callers + unresolved outbound admissions), with one
+/// coalesced payload or bounded delivery queue per live caller and one
+/// payload-free tombstone per relinquished request still awaiting admission.
+/// Unknown progress creates no per-token state. Repeated admitted calls whose
+/// servers never answer leave no history after caller relinquishment. The
+/// whole router belongs to one connection generation and dies with it.
 #[cfg_attr(not(test), derive(Default))]
 struct McpProgressRouter {
     state: Mutex<ProgressRouterState>,
@@ -3561,12 +3568,15 @@ struct UnsolicitedProgress {
     last: Option<rmcp::model::ProgressToken>,
 }
 
-/// The progress state of one dispatched request, on both dimensions.
+/// Caller, remote, and outbound-admission state of one request.
 struct RequestProgress {
     /// The token rmcp minted for this request.
     token: rmcp::model::ProgressToken,
     caller: CallerOwnership,
     remote: RemoteOwnership,
+    /// Whether the once-per-request outbound admission has reached the router.
+    /// A relinquished request only needs a tombstone while this is false.
+    admission_consumed: bool,
 }
 
 /// Where the dispatching call's progress-consumer ownership stands.
@@ -3579,8 +3589,8 @@ enum CallerOwnership {
     /// The dispatching call owns delivery directly.
     Subscribed(ProgressSubscriber),
     /// The dispatching call is gone. Nothing is deliverable any more, and
-    /// the record exists only so the remote dimension has something to
-    /// finish, and so a late admission cannot resurrect an owner.
+    /// the record exists only while a pending outbound admission could
+    /// otherwise resurrect an owner.
     Relinquished,
 }
 
@@ -3612,10 +3622,11 @@ impl McpProgressRouter {
     /// live**, before the request can reach the server.
     ///
     /// Called from [`dispatch::McpDispatchSeam`] inside `Transport::send`.
-    /// From this point the token can never be treated as unsolicited and can
-    /// never be evicted by peer-controlled traffic.
+    /// While the caller remains live, the token is known and can never be
+    /// evicted by peer-controlled traffic.
     ///
-    /// An admission never overwrites an existing entry. The dispatching
+    /// Admission consumes the outbound seam without replacing live evidence.
+    /// A pending relinquished tombstone is consumed and forgotten. The
     /// call's own lease may already have subscribed, and — because this runs
     /// in rmcp's service loop rather than in the caller's task — it may
     /// already have relinquished; in the second case re-creating an owned
@@ -3625,13 +3636,21 @@ impl McpProgressRouter {
             .state
             .lock()
             .expect("MCP progress router lock poisoned");
-        if !state.requests.contains_key(id) {
+        if let Some(entry) = state.requests.get_mut(id) {
+            entry.admission_consumed = true;
+            if matches!(entry.caller, CallerOwnership::Relinquished) {
+                state.requests.remove(id);
+                #[cfg(test)]
+                test_sync::note_progress_forgotten(self.scope, id);
+            }
+        } else {
             state.requests.insert(
                 id.clone(),
                 RequestProgress {
                     token: token.clone(),
                     caller: CallerOwnership::AwaitingSubscription(PendingProgress::default()),
                     remote: RemoteOwnership::Open,
+                    admission_consumed: true,
                 },
             );
             state.owners.insert(token.clone(), id.clone());
@@ -3684,7 +3703,7 @@ impl McpProgressRouter {
     /// Takes the dispatching call's progress-consumer ownership of one
     /// request.
     ///
-    /// The lease is the caller half of the two dimensions above, and it is
+    /// The lease owns the caller dimension above, and it is
     /// deliberately taken *before* the call can park, fail or be cancelled:
     /// dropping it is the single relinquish point every exit path shares.
     fn lease(
@@ -3746,6 +3765,7 @@ impl McpProgressRouter {
                             token: token.clone(),
                             caller: CallerOwnership::Subscribed(sender),
                             remote: RemoteOwnership::Open,
+                            admission_consumed: false,
                         },
                     );
                     state.owners.insert(token.clone(), id.clone());
@@ -3767,8 +3787,8 @@ impl McpProgressRouter {
     /// one request. Called exactly once, by [`McpProgressLease`]'s `Drop`.
     ///
     /// Nothing is deliverable to a caller that no longer exists, so the
-    /// payload and the delivery index go immediately. The record itself
-    /// survives until the remote dimension is terminal too.
+    /// payload and the delivery index go immediately. Only a pending
+    /// admission with an open remote side still needs a tombstone.
     fn relinquish(&self, id: &rmcp::model::RequestId, token: &rmcp::model::ProgressToken) {
         let mut state = self
             .state
@@ -3777,7 +3797,7 @@ impl McpProgressRouter {
         state.owners.remove(token);
         let forget = if let Some(entry) = state.requests.get_mut(id) {
             entry.caller = CallerOwnership::Relinquished;
-            entry.remote == RemoteOwnership::Terminal
+            entry.admission_consumed || entry.remote == RemoteOwnership::Terminal
         } else {
             // The relinquish beat the outbound seam's admission, which can
             // still run: the record is what stops that admission from
@@ -3788,6 +3808,7 @@ impl McpProgressRouter {
                     token: token.clone(),
                     caller: CallerOwnership::Relinquished,
                     remote: RemoteOwnership::Open,
+                    admission_consumed: false,
                 },
             );
             false
@@ -3833,7 +3854,7 @@ impl McpProgressRouter {
         self.scope
     }
 
-    /// How many requests this router currently tracks on either dimension.
+    /// How many live requests and pre-admission tombstones this router tracks.
     #[cfg(test)]
     fn tracked_requests(&self) -> usize {
         self.state
@@ -4141,9 +4162,25 @@ mod progress_router_tests {
         assert_eq!(
             router.tracked_requests(),
             0,
-            "both dimensions are terminal, so the request is forgotten"
+            "the caller relinquished after admission, so the request is forgotten"
         );
         assert_eq!(router.deliverable_tokens(), 0);
+    }
+
+    /// Admission is consumed even if the remote server never answers.
+    #[test]
+    fn an_admitted_relinquished_request_is_forgotten_while_remote_is_open() {
+        let router = Arc::new(McpProgressRouter::default());
+        router.admit(&id(10), &token(10));
+        let lease = router.lease(id(10), token(10));
+        router.deliver(notification(10, 1.0));
+        drop(lease);
+        assert_eq!(router.tracked_requests(), 0);
+        assert_eq!(router.deliverable_tokens(), 0);
+        assert_eq!(router.pending_occurrences(&id(10)), None);
+        router.deliver(notification(10, 2.0));
+        assert_eq!(router.unsolicited_dropped(), 1);
+        assert_eq!(router.tracked_requests(), 0);
     }
 
     /// A call that never subscribes still relinquishes: the lease is the
@@ -4171,7 +4208,7 @@ mod progress_router_tests {
         assert_eq!(
             router.tracked_requests(),
             0,
-            "both dimensions terminal is the forget point"
+            "caller relinquishment after admission is the forget point"
         );
     }
 
@@ -4186,8 +4223,8 @@ mod progress_router_tests {
         drop(lease);
         assert_eq!(
             router.tracked_requests(),
-            1,
-            "the remote side is still open"
+            0,
+            "admission was consumed, so remote uncertainty retains nothing"
         );
         router.mark_remote_terminal(&id(8));
         assert_eq!(router.tracked_requests(), 0);
@@ -4201,7 +4238,19 @@ mod progress_router_tests {
         let router = Arc::new(McpProgressRouter::default());
         let lease = router.lease(id(9), token(9));
         drop(lease);
+        assert_eq!(
+            router.tracked_requests(),
+            1,
+            "pending admission needs a tombstone"
+        );
+        assert_eq!(router.deliverable_tokens(), 0);
         router.admit(&id(9), &token(9));
+        assert_eq!(
+            router.tracked_requests(),
+            0,
+            "late admission consumes the tombstone"
+        );
+        assert_eq!(router.deliverable_tokens(), 0);
         router.deliver(notification(9, 1.0));
         assert_eq!(
             router.pending_occurrences(&id(9)),
@@ -4215,7 +4264,7 @@ mod progress_router_tests {
 
     /// Every ordering of the four events, and none of them leaks or loses.
     ///
-    /// The two dimensions are ordered by nothing, so the contract is stated
+    /// The ownership transitions are ordered by nothing, so the contract is stated
     /// as a table rather than as one happy path: what each ordering must
     /// preserve is the occurrence, and what each must reach is zero.
     #[test]
@@ -4281,8 +4330,50 @@ mod progress_router_tests {
         router.deliver(notification(6, 1.0));
         assert_eq!(subscription.drain().len(), 1);
         drop(lease);
+        assert_eq!(router.tracked_requests(), 0);
+        assert_eq!(router.deliverable_tokens(), 0);
         router.mark_remote_terminal(&id(6));
         assert_eq!(router.tracked_requests(), 0);
+    }
+
+    /// Pending admission is the only reason a relinquished record survives;
+    /// terminal remote ownership consumes that reason too, idempotently.
+    #[test]
+    fn pending_admission_tombstones_end_at_admission_or_remote_terminality() {
+        for subscribe in [false, true] {
+            for terminal_first in [false, true] {
+                let router = Arc::new(McpProgressRouter::default());
+                let lease = router.lease(id(11), token(11));
+                let _subscription = subscribe.then(|| lease.subscribe());
+                drop(lease);
+                assert_eq!(router.tracked_requests(), 1);
+                assert_eq!(router.deliverable_tokens(), 0);
+                assert_eq!(router.pending_occurrences(&id(11)), None);
+                if terminal_first {
+                    router.mark_remote_terminal(&id(11));
+                } else {
+                    router.admit(&id(11), &token(11));
+                }
+                assert_eq!(router.tracked_requests(), 0);
+                router.mark_remote_terminal(&id(11));
+                router.mark_remote_terminal(&id(11));
+                assert_eq!(router.tracked_requests(), 0);
+                assert_eq!(router.deliverable_tokens(), 0);
+            }
+        }
+
+        // A live subscriber retains evidence even if remote terminality
+        // precedes admission; only its lease may relinquish that evidence.
+        let router = Arc::new(McpProgressRouter::default());
+        let lease = router.lease(id(12), token(12));
+        let mut subscription = lease.subscribe();
+        router.mark_remote_terminal(&id(12));
+        router.deliver(notification(12, 1.0));
+        assert_eq!(router.tracked_requests(), 1);
+        assert_eq!(subscription.drain().len(), 1);
+        drop(lease);
+        assert_eq!(router.tracked_requests(), 0);
+        assert_eq!(router.deliverable_tokens(), 0);
     }
 
     /// A long run of complete request lifecycles leaves the router at its

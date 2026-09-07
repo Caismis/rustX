@@ -97,9 +97,10 @@
 //! a fast server can answer inside it. Reading a correlated response as
 //! proof that no caller remains deleted the very evidence
 //! [`crate::tools::mcp::McpProgressRouter`] exists to keep. So this seam
-//! only ever completes the *remote* dimension of a request's progress
-//! ownership; the caller's own `McpProgressLease` completes the other, and
-//! the router forgets the request when both are terminal.
+//! completes the *remote* dimension on an answer or refusal. Admission in
+//! the outbound prologue independently consumes the admission dimension.
+//! The caller's `McpProgressLease` relinquishes local ownership; only an
+//! unconsumed admission with an open remote side then needs a tombstone.
 //!
 //! # What this seam is not
 //!
@@ -274,9 +275,9 @@ impl McpDispatchSeam {
     ///
     /// A request rustX refused to dispatch never reaches the network, so no
     /// correlated response can ever arrive for it. That is the same remote
-    /// terminality an answer carries, and recording it is what gives a
-    /// refused request the request-local forget point an inbound answer
-    /// would otherwise have provided.
+    /// terminality an answer carries. The synchronous prologue already
+    /// consumed progress admission, so caller relinquishment forgets the
+    /// request independently of whether this refusal has been observed.
     fn no_dispatch(&self, id: &RequestId) {
         self.progress.mark_remote_terminal(id);
     }
@@ -549,6 +550,32 @@ mod tests {
         }
     }
 
+    /// Refusal consumes both outbound admission and remote ownership while
+    /// leaving a live caller in charge of its own evidence.
+    #[test]
+    fn repeated_refused_dispatches_leave_no_progress_history() {
+        let progress = Arc::new(McpProgressRouter::default());
+        let seam = seam(&progress);
+        for value in 0..128_u32 {
+            let lease = progress.lease(id(i64::from(value)), token(value));
+            seam.admit_progress(&tool_call(id(i64::from(value)), &token(value)))
+                .expect("tool invocation");
+            seam.no_dispatch(&id(i64::from(value)));
+            {
+                let state = progress.state.lock().expect("progress state");
+                let entry = state
+                    .requests
+                    .get(&id(i64::from(value)))
+                    .expect("live caller");
+                assert!(entry.admission_consumed);
+                assert!(entry.remote == crate::tools::mcp::RemoteOwnership::Terminal);
+            }
+            drop(lease);
+            assert_eq!(progress.tracked_requests(), 0);
+            assert_eq!(progress.deliverable_tokens(), 0);
+        }
+    }
+
     /// A request the seam refused to dispatch can never be answered, so the
     /// refusal itself is its remote terminality and it still reaches a
     /// request-local forget point.
@@ -561,8 +588,8 @@ mod tests {
         drop(progress.lease(id(4), token(4)));
         assert_eq!(
             progress.tracked_requests(),
-            1,
-            "the remote side is still open until the seam refuses"
+            0,
+            "the seam consumed admission before the caller relinquished"
         );
         seam.no_dispatch(&id(4));
         assert_eq!(progress.tracked_requests(), 0);
