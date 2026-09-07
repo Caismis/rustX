@@ -851,6 +851,8 @@ pub enum BackgroundTerminalState {
     Succeeded,
     /// The executor failed.
     Failed,
+    /// Invocation was denied by policy or approval authority.
+    Denied,
     /// Cancellation intent won settlement.
     Cancelled,
     /// The execution's deadline expired and the executor proved the

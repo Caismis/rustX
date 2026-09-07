@@ -120,8 +120,8 @@
 //! stronger external outcome than the executor proved. When the executor
 //! returns under `Cancelling`, its proven settlement decides the terminal
 //! state — an executor-proven [`ToolExecutionStatus::Cancelled`] settles as
-//! `Cancelled` with the retained registry reason and the `DuringExecution`
-//! phase, while an executor that raced past the request and proved success
+//! `Cancelled` with the retained registry reason and the phase selected from
+//! the registry's start frontier, while an executor that raced past the request and proved success
 //! settles as `Succeeded`, a known failure as `Failed`, a proven deadline
 //! settlement as `TimedOut`, and an executor
 //! [`ToolExecutionStatus::OutcomeUnknown`] (for example an unconfirmed
@@ -281,9 +281,11 @@ pub enum BackgroundLifecycle {
     /// terminal outcome. `Failed` never means "anything that is not success
     /// or cancelled" — an unproven outcome is [`Self::OutcomeUnknown`].
     Failed,
+    /// Invocation was refused by policy or approval authority.
+    Denied,
     /// The executor proved physical cancellation settlement; the canonical
     /// terminal result carries the registry-retained cancellation reason and
-    /// the `DuringExecution` phase.
+    /// the phase derived from its logical start frontier.
     Cancelled,
     /// The execution's deadline expired and the executor proved the
     /// terminal settlement (see [`ToolExecutionStatus::TimedOut`]).
@@ -354,6 +356,7 @@ impl BackgroundLifecycle {
             self,
             Self::Succeeded
                 | Self::Failed
+                | Self::Denied
                 | Self::Cancelled
                 | Self::TimedOut
                 | Self::OutcomeUnknown
@@ -376,6 +379,7 @@ impl BackgroundLifecycle {
             Self::PublishingTerminal => "publishing_terminal",
             Self::Succeeded => "succeeded",
             Self::Failed => "failed",
+            Self::Denied => "denied",
             Self::Cancelled => "cancelled",
             Self::TimedOut => "timed_out",
             Self::OutcomeUnknown => "outcome_unknown",
@@ -610,6 +614,8 @@ enum NotificationState {
 
 /// One published background record.
 struct BackgroundRecord {
+    /// Absorbing logical start frontier, owned by `mark_running`.
+    executor_started: bool,
     execution_id: ToolExecutionId,
     tool_call_id: ToolCallId,
     tool_id: ToolId,
@@ -995,6 +1001,7 @@ impl ConversationBackgroundRegistry {
         );
         let prepared = PreparedRecord {
             record: BackgroundRecord {
+                executor_started: false,
                 execution_id: execution_id.clone(),
                 tool_call_id: invocation.call_id.clone(),
                 tool_id: invocation.tool_id.clone(),
@@ -1294,6 +1301,7 @@ impl ConversationBackgroundRegistry {
                 | BackgroundLifecycle::PublishingTerminal
                 | BackgroundLifecycle::Succeeded
                 | BackgroundLifecycle::Failed
+                | BackgroundLifecycle::Denied
                 | BackgroundLifecycle::Cancelled
                 | BackgroundLifecycle::TimedOut
                 | BackgroundLifecycle::OutcomeUnknown => {}
@@ -1406,7 +1414,7 @@ impl ConversationBackgroundRegistry {
     /// This is durable publication attempt #1 of the production settlement
     /// continuation; [`ConversationBackgroundRegistry::settle_terminal`]
     /// drives the bounded retry and the explicit failure report.
-    pub fn finish(&self, execution_id: &ToolExecutionId, result: &ToolExecutionResult) {
+    pub(crate) fn finish(&self, execution_id: &ToolExecutionId, result: &ToolExecutionResult) {
         // A committed runner may finish after the runtime has entered
         // `Draining`; this narrow guard keeps its durable terminal inbound,
         // observer callback, and terminal registry transition inside the
@@ -1432,9 +1440,12 @@ impl ConversationBackgroundRegistry {
             if record.lifecycle.is_terminal() {
                 return;
             }
-            let Some(candidate) =
-                terminal_candidate(record.lifecycle, record.cancel_reason, result)
-            else {
+            let Some(candidate) = terminal_candidate(
+                record.lifecycle,
+                record.cancel_reason,
+                record.executor_started,
+                result,
+            ) else {
                 return;
             };
             candidate
@@ -1792,7 +1803,7 @@ impl ConversationBackgroundRegistry {
     /// The runner-owned start boundary: the published `Starting` record
     /// transitions to `Running` immediately before the executor begins.
     /// A record already claimed by cancellation intent stays `Cancelling`.
-    pub fn mark_running(&self, execution_id: &ToolExecutionId) {
+    fn mark_running(&self, execution_id: &ToolExecutionId) {
         let mut state = self.state();
         let Some(index) = state.index.get(execution_id).copied() else {
             return;
@@ -1800,6 +1811,7 @@ impl ConversationBackgroundRegistry {
         {
             let record = &mut state.records[index];
             if record.lifecycle == BackgroundLifecycle::Starting {
+                record.executor_started = true;
                 record.lifecycle = BackgroundLifecycle::Running;
             } else {
                 return;
@@ -1925,11 +1937,37 @@ impl ConversationBackgroundRegistry {
                 // is structural rather than a policy decision.
                 subagent: None,
             };
-            // The background plane awaits the executor's own terminal
-            // return: no deadline, no settlement-plane use. The settlement
-            // future is dropped unpolled, which is safe by construction —
-            // the completion plane drove the operation.
-            let result = executor.start(invocation, context).completion.await;
+            // The registry remains the detached lifecycle owner. Cancellation
+            // transfers physical ownership to the same settlement plane used
+            // by foreground execution; foreground deadline policy is absent.
+            let result = {
+                let crate::tools::executor::ToolExecutionHandle {
+                    completion,
+                    settlement,
+                } = crate::tools::executor::start_tool_execution(&*executor, invocation, context);
+                tokio::pin!(completion);
+                tokio::pin!(settlement);
+                tokio::select! {
+                biased;
+                () = cancellation.cancelled() => {
+                    match settlement.as_mut().await {
+                        crate::tools::executor::ToolSettlement::Confirmed(result) => result,
+                        crate::tools::executor::ToolSettlement::Unconfirmed { detail } => {
+                            ToolExecutionResult {
+                                status: ToolExecutionStatus::OutcomeUnknown { detail },
+                                content: Vec::new(),
+                                duration_ms: 0,
+                                exit_code: None,
+                                artifacts: Vec::new(),
+                                truncation: None,
+                                managed_output: None,
+                            }
+                        }
+                    }
+                },
+                result = completion.as_mut() => result,
+                }
+            };
             registry.settle_terminal(&execution_id, &result);
         })
     }
@@ -2085,8 +2123,14 @@ fn terminal_inbound_message(
 fn terminal_candidate(
     lifecycle: BackgroundLifecycle,
     cancel_reason: Option<CancellationReason>,
+    executor_started: bool,
     result: &ToolExecutionResult,
 ) -> Option<(BackgroundLifecycle, ToolExecutionResult)> {
+    let phase = if executor_started {
+        ToolCancellationPhase::DuringExecution
+    } else {
+        ToolCancellationPhase::BeforeStart
+    };
     Some(match lifecycle {
         BackgroundLifecycle::Starting | BackgroundLifecycle::Running => match result.status {
             ToolExecutionStatus::Success => (BackgroundLifecycle::Succeeded, result.clone()),
@@ -2096,15 +2140,11 @@ fn terminal_candidate(
                 // provisional executor-provided phase; the registry owns
                 // the canonical phase.
                 let mut canonical = result.clone();
-                canonical.status = ToolExecutionStatus::Cancelled {
-                    reason,
-                    phase: ToolCancellationPhase::DuringExecution,
-                };
+                canonical.status = ToolExecutionStatus::Cancelled { reason, phase };
                 (BackgroundLifecycle::Cancelled, canonical)
             }
-            ToolExecutionStatus::Denied { .. } | ToolExecutionStatus::Failed { .. } => {
-                (BackgroundLifecycle::Failed, result.clone())
-            }
+            ToolExecutionStatus::Denied { .. } => (BackgroundLifecycle::Denied, result.clone()),
+            ToolExecutionStatus::Failed { .. } => (BackgroundLifecycle::Failed, result.clone()),
             ToolExecutionStatus::TimedOut => (BackgroundLifecycle::TimedOut, result.clone()),
             ToolExecutionStatus::OutcomeUnknown { .. } => {
                 (BackgroundLifecycle::OutcomeUnknown, result.clone())
@@ -2118,9 +2158,8 @@ fn terminal_candidate(
                 // terminal outcome the executor already proved.
                 (BackgroundLifecycle::Succeeded, result.clone())
             }
-            ToolExecutionStatus::Denied { .. } | ToolExecutionStatus::Failed { .. } => {
-                (BackgroundLifecycle::Failed, result.clone())
-            }
+            ToolExecutionStatus::Denied { .. } => (BackgroundLifecycle::Denied, result.clone()),
+            ToolExecutionStatus::Failed { .. } => (BackgroundLifecycle::Failed, result.clone()),
             ToolExecutionStatus::TimedOut => {
                 // The executor proved the deadline settlement; the
                 // cancellation request did not manufacture it.
@@ -2143,16 +2182,14 @@ fn terminal_candidate(
                 let reason = cancel_reason
                     .expect("Cancelling background execution must retain its cancellation reason");
                 let mut canonical = result.clone();
-                canonical.status = ToolExecutionStatus::Cancelled {
-                    reason,
-                    phase: ToolCancellationPhase::DuringExecution,
-                };
+                canonical.status = ToolExecutionStatus::Cancelled { reason, phase };
                 (BackgroundLifecycle::Cancelled, canonical)
             }
         },
         BackgroundLifecycle::PublishingTerminal
         | BackgroundLifecycle::Succeeded
         | BackgroundLifecycle::Failed
+        | BackgroundLifecycle::Denied
         | BackgroundLifecycle::Cancelled
         | BackgroundLifecycle::TimedOut
         | BackgroundLifecycle::OutcomeUnknown => return None,
@@ -2188,6 +2225,7 @@ fn background_terminal_event(
         match state {
             BackgroundLifecycle::Succeeded => BackgroundTerminalState::Succeeded,
             BackgroundLifecycle::Failed => BackgroundTerminalState::Failed,
+            BackgroundLifecycle::Denied => BackgroundTerminalState::Denied,
             BackgroundLifecycle::Cancelled => BackgroundTerminalState::Cancelled,
             BackgroundLifecycle::TimedOut => BackgroundTerminalState::TimedOut,
             BackgroundLifecycle::OutcomeUnknown => BackgroundTerminalState::OutcomeUnknown,
@@ -2438,6 +2476,7 @@ mod tests {
         let mut state = registry.state();
         let index = state.records.len();
         state.records.push(BackgroundRecord {
+            executor_started: lifecycle != BackgroundLifecycle::Starting,
             execution_id: execution_id.clone(),
             tool_call_id: ToolCallId::new(format!("call-{id}")),
             tool_id: ToolId::new("tool-bash"),

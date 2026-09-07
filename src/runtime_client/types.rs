@@ -281,7 +281,10 @@ pub enum RuntimeClientSessionRequest {
 /// terminal vocabulary gains `timed_out` and `outcome_unknown`, so an
 /// execution whose external outcome is unknown is never observed as
 /// `failed`. There is no compatibility decoding of version 15.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 16;
+///
+/// Version 17 preserves `Denied` in background lifecycle projections, using
+/// the same terminal vocabulary as foreground `ToolResults` (Issue #206).
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 17;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1241,7 +1244,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 16);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 17);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
