@@ -847,11 +847,25 @@ mod tests {
             head_commit: tree.base_commit.clone(),
             dirty: false,
         };
+        let store = crate::durable::SqliteConversationStore::in_memory(
+            fixture.node.block.run.conversation_id.clone(),
+        )
+        .unwrap();
+        assert!(
+            fixture
+                .manager
+                .dispose_workflow_workspace(&store, &fixture.node.block.run)
+                .await
+                .is_err()
+        );
         assert!(
             fixture
                 .manager
                 .dispose_retained_workspace(
-                    &WorkspaceOwner::Workflow(fixture.node.block.run.clone()),
+                    &crate::runtime::identity::SubagentId::for_conversation(
+                        &fixture.node.block.run.conversation_id,
+                        1
+                    ),
                     &snapshot,
                     &handoff
                 )

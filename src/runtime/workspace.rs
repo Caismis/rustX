@@ -990,7 +990,7 @@ impl WorkspaceManager {
     /// recorded handoff cannot be proven against the current Git repository.
     pub async fn prove_retained_workspace(
         &self,
-        owner_id: impl Into<WorkspaceOwner>,
+        owner_id: &SubagentId,
         snapshot: &WorkspaceSnapshot,
         handoff: &WorkspaceHandoff,
     ) -> Result<(), WorkspaceDisposalError> {
@@ -1019,7 +1019,7 @@ impl WorkspaceManager {
     /// Git worktree recorded in `snapshot`.
     pub async fn reprove_unresolved_workspace(
         &self,
-        owner_id: impl Into<WorkspaceOwner>,
+        owner_id: &SubagentId,
         snapshot: &WorkspaceSnapshot,
     ) -> Result<WorkspaceHandoff, WorkspaceDisposalError> {
         let owner = owner_id.into();
@@ -1032,7 +1032,10 @@ impl WorkspaceManager {
     /// Disposes one retained runtime-created worktree and its exact runtime
     /// branch after re-proving the complete ownership relationship.
     ///
-    /// The caller supplies the authoritative native owner identity and the two
+    /// This one-shot entry point accepts only Subagent identity. Workflow
+    /// disposal must use `dispose_workflow_workspace` and its journal/content
+    /// authority; it cannot bypass those checks through this entry point.
+    /// The caller supplies the authoritative Subagent identity and the two
     /// runtime-owned facts captured at terminal settlement. The identity
     /// checks bind the requested resource to this manager's deterministic
     /// allocation namespace; the current repository root, worktree
@@ -1060,7 +1063,7 @@ impl WorkspaceManager {
     /// physical worktree as retained.
     pub async fn dispose_retained_workspace(
         &self,
-        owner_id: impl Into<WorkspaceOwner>,
+        owner_id: &SubagentId,
         snapshot: &WorkspaceSnapshot,
         handoff: &WorkspaceHandoff,
     ) -> Result<WorkspaceDisposalSettlement, WorkspaceDisposalError> {
@@ -1082,7 +1085,7 @@ impl WorkspaceManager {
     /// complete ownership proof.
     pub(crate) async fn dispose_authorized_workspace(
         &self,
-        owner_id: impl Into<WorkspaceOwner>,
+        owner_id: &SubagentId,
         snapshot: &WorkspaceSnapshot,
         handoff: &WorkspaceHandoff,
         phase: WorkspaceDisposalPhase,

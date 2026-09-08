@@ -587,7 +587,9 @@ resource journal facts are separate from best-effort execution observation.
 `WorkspaceManager::inspect_workflow_workspace` reads historical settlement
 and separate disposal status; `dispose_workflow_workspace` accepts only the
 run identity and conversation store. Its durable intent and physical phases
-use the existing native disposal primitive. Repeated disposal is idempotent
+use the existing native disposal primitive. One-shot proof/disposal entry points
+accept only `SubagentId`, so they cannot bypass Workflow journal/content authority.
+Repeated disposal is idempotent
 and retained source bytes are revalidated before deletion, including retries
 that have not yet removed the worktree. A changed handoff fails closed
 and cannot rewrite the Workflow terminal outcome. Recovery exposes retained
