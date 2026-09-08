@@ -8459,3 +8459,10 @@ prepared invocation; FullAccess changes only that permission gate.
 Runtime Client 21, child IPC 19 and SQLite development schema 29 carry the coherent
 new vocabulary. Event envelope framing remains version 1. No pending recovery or
 compatibility protocol is introduced.
+
+WF-04 Review decisions/feedback are immutable business data, separate from
+run-local accepted-candidate authority. Reject A remains readable after writer B;
+explicit A-derived inputs remain stale. Plan and context facts preserve candidate
+applicability in the Review specification/digest/audit, and all dependencies share
+the native freeze. Native ask_user is workspace-independent under WorkspaceUse:
+it never holds a CandidateScope borrow while waiting.

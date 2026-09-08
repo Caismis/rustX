@@ -42,8 +42,8 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
 pub struct GrepTool;
 
 impl ToolExecutor for GrepTool {
-    fn honors_workspace(&self) -> bool {
-        true
+    fn workspace_use(&self) -> crate::tools::executor::WorkspaceUse {
+        crate::tools::executor::WorkspaceUse::ConsumesProvided
     }
     fn start<'a>(
         &'a self,

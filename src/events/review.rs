@@ -13,6 +13,7 @@ pub const MAX_REVIEW_FEEDBACK_CHARS: usize = 2_000;
 pub enum ReviewSubject {
     Plan {
         content: Value,
+        candidate: Option<CandidateReference>,
     },
     /// The native owner keeps this checkout exclusively borrowed while pending.
     /// This is an inspection reference, not an inlined or truncated diff.
@@ -24,10 +25,17 @@ pub enum ReviewSubject {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ReviewFact {
+    pub value: Value,
+    pub candidate: Option<CandidateReference>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReviewSpecification {
     pub instance: Box<WorkflowNodeInstance>,
     pub subject: ReviewSubject,
-    pub context: Vec<Value>,
+    pub context: Vec<ReviewFact>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,7 +74,7 @@ impl ReviewSpecification {
             return Err("Review instance exceeds 8192 bytes".into());
         }
         match &self.subject {
-            ReviewSubject::Plan { content } => {
+            ReviewSubject::Plan { content, .. } => {
                 if !content.is_object()
                     || serde_json::to_vec(content)
                         .map_err(|e| e.to_string())?
@@ -93,6 +101,7 @@ impl ReviewSpecification {
                 }
             }
         }
+        self.candidate()?;
         if self.context.len() > 8
             || serde_json::to_vec(&self.context)
                 .map_err(|e| e.to_string())?
@@ -103,6 +112,34 @@ impl ReviewSpecification {
         }
         Ok(())
     }
+    /// Collect the single exact candidate dependency of the complete subject.
+    /// # Errors
+    /// Conflicting versions and foreign/malformed identities fail before publication.
+    pub fn candidate(&self) -> Result<Option<&CandidateReference>, String> {
+        let mut candidate = match &self.subject {
+            ReviewSubject::Candidate { reference, .. } => Some(reference),
+            ReviewSubject::Plan { candidate, .. } => candidate.as_ref(),
+        };
+        for reference in self
+            .context
+            .iter()
+            .filter_map(|fact| fact.candidate.as_ref())
+        {
+            if candidate.is_some_and(|current| current != reference) {
+                return Err("Review facts name incompatible candidates".into());
+            }
+            candidate = Some(reference);
+        }
+        if let Some(reference) = candidate
+            && (reference.run != self.instance.block.run
+                || reference.content.len() != 64
+                || !reference.content.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            return Err("invalid Review fact candidate identity".into());
+        }
+        Ok(candidate)
+    }
+
     /// # Errors
     /// Refuses a different instance/digest or oversized feedback.
     pub fn validate_response(&self, response: &ReviewResponse) -> Result<(), String> {
@@ -125,6 +162,7 @@ mod tests {
         ReviewSpecification {
             instance: Box::new(crate::runtime::workflow::test_instance("review", "human")),
             subject: ReviewSubject::Plan {
+                candidate: None,
                 content: serde_json::json!({"steps":["inspect"]}),
             },
             context: vec![],
@@ -149,18 +187,55 @@ mod tests {
         assert!(spec.validate_response(&response).is_err());
         let mut oversized = spec.clone();
         oversized.subject = ReviewSubject::Plan {
+            candidate: None,
             content: serde_json::json!({"plan":"x".repeat(MAX_REVIEW_PLAN_BYTES)}),
         };
         assert!(oversized.validate().is_err());
         oversized = spec.clone();
-        oversized.context = vec![Value::Null; 9];
+        oversized.context = vec![
+            ReviewFact {
+                value: Value::Null,
+                candidate: None
+            };
+            9
+        ];
         assert!(oversized.validate().is_err());
-        oversized.context = vec![Value::String("x".repeat(MAX_REVIEW_CONTEXT_BYTES))];
+        oversized.context = vec![ReviewFact {
+            value: Value::String("x".repeat(MAX_REVIEW_CONTEXT_BYTES)),
+            candidate: None,
+        }];
         assert!(oversized.validate().is_err());
         let mut changed = spec.clone();
         changed.subject = ReviewSubject::Plan {
+            candidate: None,
             content: serde_json::json!({"steps":["replace"]}),
         };
         assert_ne!(spec.digest(), changed.digest());
+    }
+    #[test]
+    fn same_check_json_different_candidate_changes_digest_and_mismatch_fails() {
+        let mut a = specification();
+        let reference = CandidateReference {
+            run: a.instance.block.run.clone(),
+            version: 1,
+            content: "a".repeat(64),
+        };
+        a.context.push(ReviewFact {
+            value: serde_json::json!({"passed":true}),
+            candidate: Some(reference.clone()),
+        });
+        a.validate().unwrap();
+        let mut b = a.clone();
+        b.context[0].candidate.as_mut().unwrap().content = "b".repeat(64);
+        b.validate().unwrap();
+        assert_eq!(a.context[0].value, b.context[0].value);
+        assert_ne!(a.digest(), b.digest());
+        a.context.push(b.context[0].clone());
+        assert!(a.validate().is_err());
+        b.subject = ReviewSubject::Candidate {
+            reference,
+            inspection_path: "/trusted/native/candidate".into(),
+        };
+        assert!(b.validate().is_err());
     }
 }

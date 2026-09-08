@@ -1996,6 +1996,7 @@ impl WorkflowRuntime {
                             &program.block,
                             &context,
                             input.into(),
+                            execution::Acceptance::default(),
                             &cancellation,
                         )
                         .await

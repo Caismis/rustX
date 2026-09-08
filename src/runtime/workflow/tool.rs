@@ -104,6 +104,23 @@ impl WorkflowCatalog {
 }
 
 impl WorkflowRuntime {
+    pub(super) fn tool_workspace_use(
+        run: &WorkflowRun,
+        context: &AttemptSubagentContext,
+        selector: &ToolSelector,
+    ) -> Result<crate::tools::executor::WorkspaceUse, WorkflowRunError> {
+        let definition = run.tools.get(selector).ok_or_else(|| {
+            WorkflowRunError::CapabilityNotAdmitted("capability was not admitted".into())
+        })?;
+        let registration = context
+            .resources()
+            .capability()
+            .available_tools()
+            .registration(definition)
+            .map_err(WorkflowRunError::IdentityChanged)?;
+        Ok(registration.executor.workspace_use())
+    }
+
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // One node admission followed by native invocation and fact projection.
     pub(super) async fn invoke_tool(
         &self,
@@ -121,8 +138,18 @@ impl WorkflowRuntime {
         ),
         WorkflowRunError,
     > {
+        let policy = Self::tool_workspace_use(run, context, selector)?;
         let signal = cancellation.child_signal();
-        let access = if admitted_access.is_some() {
+        let access = if policy == crate::tools::executor::WorkspaceUse::Independent {
+            debug_assert!(admitted_access.is_none());
+            None
+        } else if run.candidate.is_some()
+            && policy == crate::tools::executor::WorkspaceUse::Incompatible
+        {
+            return Err(WorkflowRunError::IneligibleCapability(
+                "executor cannot consume a candidate workspace".into(),
+            ));
+        } else if admitted_access.is_some() {
             admitted_access
         } else {
             match &run.candidate {

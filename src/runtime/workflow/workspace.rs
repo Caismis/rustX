@@ -32,7 +32,9 @@ impl WorkflowRuntime {
                 .available_tools()
                 .registration(definition)
                 .map_err(WorkflowRunError::IdentityChanged)?;
-            if !registration.executor.honors_workspace() {
+            if registration.executor.workspace_use()
+                == crate::tools::executor::WorkspaceUse::Incompatible
+            {
                 return Err(WorkflowRunError::IneligibleCapability(format!(
                     "{} cannot consume a candidate workspace",
                     definition.name

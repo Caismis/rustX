@@ -47,8 +47,8 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
 pub struct WriteTool;
 
 impl ToolExecutor for WriteTool {
-    fn honors_workspace(&self) -> bool {
-        true
+    fn workspace_use(&self) -> crate::tools::executor::WorkspaceUse {
+        crate::tools::executor::WorkspaceUse::ConsumesProvided
     }
     fn start<'a>(
         &'a self,

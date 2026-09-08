@@ -643,13 +643,22 @@ impl WorkspaceAccess {
 /// Shared access to one native exclusive borrow, never a second workspace owner.
 /// Validation and a synchronous consumer commit happen without releasing it.
 #[derive(Debug)]
-pub(crate) struct CandidateFreeze(Mutex<Option<WorkspaceAccess>>);
+pub(crate) struct CandidateFreeze {
+    access: Mutex<Option<WorkspaceAccess>>,
+    reference: CandidateReference,
+}
 impl CandidateFreeze {
     pub(crate) fn new(access: WorkspaceAccess) -> Arc<Self> {
-        Arc::new(Self(Mutex::new(Some(access))))
+        Arc::new(Self {
+            reference: access.input().clone(),
+            access: Mutex::new(Some(access)),
+        })
+    }
+    pub(crate) fn reference(&self) -> &CandidateReference {
+        &self.reference
     }
     pub(crate) async fn with_current<T>(&self, commit: impl FnOnce(Result<(), String>) -> T) -> T {
-        let mut access = self.0.lock().await;
+        let mut access = self.access.lock().await;
         let valid = match access.as_mut() {
             Some(access) => access.validate_frozen().await,
             None => Err("candidate freeze already released".into()),
@@ -658,7 +667,7 @@ impl CandidateFreeze {
     }
     pub(crate) async fn finish(&self) -> Result<CandidateReference, String> {
         let access = self
-            .0
+            .access
             .lock()
             .await
             .take()

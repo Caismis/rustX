@@ -129,20 +129,46 @@ impl Drop for LocalReservation<'_> {
     }
 }
 
+/// Run-local acceptance is authority for candidate consumers, never JSON provenance.
+#[derive(Clone, Default)]
+pub(super) struct Acceptance {
+    candidate: Option<crate::runtime::workspace::CandidateReference>,
+}
+impl Acceptance {
+    fn merge(&mut self, other: &Self) -> Result<(), WorkflowRunError> {
+        if let Some(candidate) = &other.candidate {
+            if self
+                .candidate
+                .as_ref()
+                .is_some_and(|current| current != candidate)
+            {
+                return Err(WorkflowRunError::InvalidValue(
+                    "conflicting candidate acceptances".into(),
+                ));
+            }
+            self.candidate = Some(candidate.clone());
+        }
+        Ok(())
+    }
+}
+
 pub(super) struct BlockOutput<'a> {
     pub(super) value: CommittedValue,
+    acceptance: Acceptance,
     _reservation: LocalReservation<'a>,
 }
 
 impl WorkflowRuntime {
     /// Every lexical scope, including root, enters and exits here. Boxed only
     /// because fixed nested Parallel recursively invokes the same executor.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn execute_block<'a>(
         &'a self,
         run: &'a WorkflowRun,
         block: &'a WorkflowBlockProgram,
         context: &'a crate::runtime::subagent::AttemptSubagentContext,
         input: CommittedValue,
+        acceptance: Acceptance,
         cancellation: &'a crate::runtime::cancellation::ExecutionCancellation,
     ) -> std::pin::Pin<
         Box<
@@ -165,7 +191,15 @@ impl WorkflowRuntime {
                 },
             );
             let result = self
-                .execute_block_body(run, block, &instance, context, input, cancellation)
+                .execute_block_body(
+                    run,
+                    block,
+                    &instance,
+                    context,
+                    input,
+                    acceptance,
+                    cancellation,
+                )
                 .await;
             self.emit_observability(
                 run,
@@ -186,16 +220,14 @@ impl WorkflowRuntime {
         instance: &WorkflowBlockInstance,
         context: &'a crate::runtime::subagent::AttemptSubagentContext,
         input: CommittedValue,
+        acceptance: Acceptance,
         cancellation: &'a crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<BlockOutput<'a>, WorkflowRunError> {
         input.assert_current(run).await?;
         validate_commit(&block.input_schema, &input.value)?;
         let mut reservation = LocalReservation::new(run);
         reservation.retain(&input.value)?;
-        let mut control = CommittedValue {
-            value: Value::Null,
-            candidate: input.candidate.clone(),
-        };
+        let mut control = acceptance;
         let mut values = BTreeMap::new();
         let mut node_id = block.entry.clone();
         loop {
@@ -220,10 +252,48 @@ impl WorkflowRuntime {
                     let _ = hook.release.await;
                 }
             }
-            // A candidate-dependent control edge acquires the native borrow
-            // before admission and transfers that SAME borrow into effects.
-            // A queued writer may win first; then this node never starts.
-            let mut admitted_access = if let Some(reference) = &control.candidate {
+            // Only candidate consumers acquire acceptance authority. Business-only
+            // tools and pure reads of Review decisions do not touch CandidateScope.
+            let consumes = match node {
+                WorkflowNodeProgram::Agent(_) => run.candidate.is_some(),
+                WorkflowNodeProgram::Tool { selector, .. } => {
+                    Self::tool_workspace_use(run, context, selector)?
+                        == crate::tools::executor::WorkspaceUse::ConsumesProvided
+                }
+                _ => false,
+            };
+            let mut dependency = CommittedValue::from(Value::Null);
+            match node {
+                WorkflowNodeProgram::Tool { arguments, .. } => {
+                    dependency.depend_on(&evaluate_value(arguments, &input, &values)?)?;
+                }
+                WorkflowNodeProgram::Agent(agent) => {
+                    for binding in agent.input.values() {
+                        dependency.depend_on(&evaluate_value(binding, &input, &values)?)?;
+                    }
+                }
+                WorkflowNodeProgram::Branch { condition } => {
+                    dependency.depend_on(&evaluate_predicate(condition, &input, &values)?)?;
+                }
+                WorkflowNodeProgram::Return { output } => {
+                    dependency.depend_on(&evaluate_value(output, &input, &values)?)?;
+                }
+                _ => {}
+            }
+            // Explicit data dependencies remain checked even for independent tools,
+            // but never grant them an exclusive workspace borrow during execution.
+            dependency.assert_current(run).await?;
+            if consumes {
+                dependency.depend_on(&CommittedValue {
+                    value: Value::Null,
+                    candidate: control.candidate.clone(),
+                })?;
+            }
+            let mut admitted_access = if let Some(reference) = dependency
+                .candidate
+                .as_ref()
+                .filter(|_| consumes || !matches!(node, WorkflowNodeProgram::Tool { .. }))
+            {
                 Some(
                     run.candidate
                         .as_ref()
@@ -303,17 +373,19 @@ impl WorkflowRuntime {
                                 .await
                                 .map_err(WorkflowRunError::InvalidValue)?;
                         }
-                        let mut bound = evaluate_value(subject.value(), &input, &values)?;
+                        let bound = evaluate_value(subject.value(), &input, &values)?;
                         bound.assert_current(run).await?;
                         let mut facts = Vec::new();
                         for check in checks {
                             let value = evaluate_value(check, &input, &values)?;
                             value.assert_current(run).await?;
-                            bound.depend_on(&value)?;
-                            facts.push(value.value);
+                            facts.push(crate::events::review::ReviewFact {
+                                value: value.value,
+                                candidate: value.candidate,
+                            });
                         }
                         let checks = facts;
-                        let value = self
+                        let (value, accepted_candidate) = self
                             .review(
                                 run,
                                 context,
@@ -325,8 +397,12 @@ impl WorkflowRuntime {
                             )
                             .await?;
                         reservation.retain(&value.value)?;
-                        if value.value["accepted"] == true {
-                            control.depend_on(&value)?;
+                        if let Some(candidate) = accepted_candidate {
+                            // A new explicit acceptance replaces the old subject.
+                            // Business-only decisions cannot erase an existing dependency.
+                            control = Acceptance {
+                                candidate: Some(candidate),
+                            };
                         }
                         values.insert(node_id.clone(), value);
                         Ok(None)
@@ -337,8 +413,7 @@ impl WorkflowRuntime {
                         arguments,
                         result,
                     } => {
-                        let mut arguments = evaluate_value(arguments, &input, &values)?;
-                        arguments.depend_on(&control)?;
+                        let arguments = evaluate_value(arguments, &input, &values)?;
                         if admitted_access.is_none() {
                             arguments.assert_current(run).await?;
                         }
@@ -382,8 +457,7 @@ impl WorkflowRuntime {
                         Ok(None)
                     }
                     WorkflowNodeProgram::Branch { condition } => {
-                        let mut condition = evaluate_predicate(condition, &input, &values)?;
-                        condition.depend_on(&control)?;
+                        let condition = evaluate_predicate(condition, &input, &values)?;
                         if admitted_access.is_none() {
                             condition.assert_current(run).await?;
                         }
@@ -438,12 +512,7 @@ impl WorkflowRuntime {
                             let values = &values;
                             let control = &control;
                             async move {
-                                let bound = evaluate_value(&branch.input, input, values).and_then(
-                                    |mut input| {
-                                        input.depend_on(control)?;
-                                        Ok(input)
-                                    },
-                                );
+                                let bound = evaluate_value(&branch.input, input, values);
                                 let result = match bound {
                                     Ok(input) => {
                                         self.execute_block(
@@ -451,6 +520,7 @@ impl WorkflowRuntime {
                                             &branch.block,
                                             context,
                                             input,
+                                            control.clone(),
                                             cancellation,
                                         )
                                         .await
@@ -493,13 +563,16 @@ impl WorkflowRuntime {
                         if cancellation.is_cancelled() {
                             return Err(WorkflowRunError::from_cancellation(cancellation));
                         }
+                        let mut joined_acceptance = Acceptance::default();
                         // Native branch failures retain their status before
                         // validating applicability of an otherwise successful join.
                         for (_, result) in &settled {
                             let output = result.as_ref().expect("successful branches");
                             output.value.assert_current(run).await?;
                             applicability.depend_on(&output.value)?;
+                            joined_acceptance.merge(&output.acceptance)?;
                         }
+                        control = joined_acceptance;
                         let value = Value::Object(results);
                         validate_commit(output_schema, &value)?;
                         // Transfer exported output accounting before releasing
@@ -511,8 +584,7 @@ impl WorkflowRuntime {
                         Ok(None)
                     }
                     WorkflowNodeProgram::Return { output } => {
-                        let mut value = evaluate_value(output, &input, &values)?;
-                        value.depend_on(&control)?;
+                        let value = evaluate_value(output, &input, &values)?;
                         if admitted_access.is_none() {
                             value.assert_current(run).await?;
                         }
@@ -529,6 +601,7 @@ impl WorkflowRuntime {
                         exported.retain(&value.value)?;
                         Ok(BlockOutput {
                             value,
+                            acceptance: control.clone(),
                             _reservation: exported,
                         })
                     })

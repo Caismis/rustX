@@ -7386,3 +7386,10 @@ the borrow to the effect. A writer that wins first invalidates old acceptance;
 cancellation observed before admission starts no next work. Historical acceptance
 and requested facts cannot reconstruct runtime authority after process death.
 See [the owner/frontier table](workflow-programs.md#ownership-and-linearization).
+
+WF-04 Review decisions/feedback are immutable business data, separate from
+run-local accepted-candidate authority. Reject A remains readable after writer B;
+explicit A-derived inputs remain stale. Plan and context facts preserve candidate
+applicability in the Review specification/digest/audit, and all dependencies share
+the native freeze. Native ask_user is workspace-independent under WorkspaceUse:
+it never holds a CandidateScope borrow while waiting.

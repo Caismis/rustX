@@ -4,7 +4,7 @@ use super::{
     Deserialize, Serialize, Value, WorkflowNodeInstance, WorkflowRun, WorkflowRunError,
     WorkflowRuntime, WorkflowValue, expressions,
 };
-use crate::events::review::{ReviewDecision, ReviewSpecification, ReviewSubject};
+use crate::events::review::{ReviewDecision, ReviewFact, ReviewSpecification, ReviewSubject};
 use crate::runtime::interaction::{InteractionOutcome, InteractionResponse};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -24,7 +24,7 @@ pub(super) fn result_schema() -> Value {
     serde_json::json!({"type":"object","properties":{"accepted":{"type":"boolean"},"feedback":{"type":"string"}},"required":["accepted","feedback"],"additionalProperties":false})
 }
 impl WorkflowRuntime {
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // One freeze/request/settlement ownership scope.
     pub(super) async fn review(
         &self,
         run: &WorkflowRun,
@@ -32,9 +32,15 @@ impl WorkflowRuntime {
         node: &WorkflowNodeInstance,
         subject: &WorkflowReviewSubject,
         bound: expressions::CommittedValue,
-        checks: Vec<Value>,
+        checks: Vec<ReviewFact>,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
-    ) -> Result<expressions::CommittedValue, WorkflowRunError> {
+    ) -> Result<
+        (
+            expressions::CommittedValue,
+            Option<crate::runtime::workspace::CandidateReference>,
+        ),
+        WorkflowRunError,
+    > {
         let services = context.native.as_ref().ok_or_else(|| {
             WorkflowRunError::InvocationAuthority("missing native interaction services".into())
         })?;
@@ -46,44 +52,51 @@ impl WorkflowRuntime {
                     "human interaction provider unavailable".into(),
                 )
             })?;
-        let (subject, freeze) = match subject {
-            WorkflowReviewSubject::Plan { .. } => (
-                ReviewSubject::Plan {
-                    content: bound.value,
-                },
-                None,
-            ),
-            WorkflowReviewSubject::Candidate { .. } => {
-                let reference = bound.candidate.as_ref().ok_or_else(|| {
+        let subject = match subject {
+            WorkflowReviewSubject::Plan { .. } => ReviewSubject::Plan {
+                content: bound.value,
+                candidate: bound.candidate,
+            },
+            WorkflowReviewSubject::Candidate { .. } => ReviewSubject::Candidate {
+                reference: bound.candidate.ok_or_else(|| {
                     WorkflowRunError::InvalidValue(
                         "Review needs a runtime-owned candidate value".into(),
                     )
-                })?;
-                let scope = run.candidate.as_ref().ok_or_else(|| {
-                    WorkflowRunError::InvalidValue("missing candidate scope".into())
-                })?;
-                let access = scope
-                    .borrow(node.clone(), Some(reference), &cancellation.child_signal())
-                    .await
-                    .map_err(WorkflowRunError::InvocationAuthority)?;
-                let subject = ReviewSubject::Candidate {
-                    reference: access.input().clone(),
-                    inspection_path: access
-                        .snapshot()
-                        .logical_workspace
-                        .to_string_lossy()
-                        .into_owned(),
-                };
-                (
-                    subject,
-                    Some(crate::runtime::workspace::CandidateFreeze::new(access)),
-                )
-            }
+                })?,
+                inspection_path: String::new(),
+            },
         };
-        let specification = ReviewSpecification {
+        let mut specification = ReviewSpecification {
             instance: Box::new(node.clone()),
             subject,
             context: checks,
+        };
+        let candidate = specification
+            .candidate()
+            .map_err(WorkflowRunError::InvalidValue)?
+            .cloned();
+        let freeze = if let Some(reference) = &candidate {
+            let scope = run
+                .candidate
+                .as_ref()
+                .ok_or_else(|| WorkflowRunError::InvalidValue("missing candidate scope".into()))?;
+            let access = scope
+                .borrow(node.clone(), Some(reference), &cancellation.child_signal())
+                .await
+                .map_err(WorkflowRunError::InvocationAuthority)?;
+            if let ReviewSubject::Candidate {
+                inspection_path, ..
+            } = &mut specification.subject
+            {
+                *inspection_path = access
+                    .snapshot()
+                    .logical_workspace
+                    .to_string_lossy()
+                    .into_owned();
+            }
+            Some(crate::runtime::workspace::CandidateFreeze::new(access))
+        } else {
+            None
         };
         let outcome = coordinator
             .request_review(
@@ -115,10 +128,12 @@ impl WorkflowRuntime {
                     ReviewDecision::Accepted => (true, String::new()),
                     ReviewDecision::Rejected { feedback } => (false, feedback),
                 };
-                Ok(expressions::CommittedValue {
-                    value: serde_json::json!({"accepted":accepted,"feedback":feedback}),
-                    candidate: bound.candidate,
-                })
+                Ok((
+                    expressions::CommittedValue::from(
+                        serde_json::json!({"accepted":accepted,"feedback":feedback}),
+                    ),
+                    if accepted { candidate } else { None },
+                ))
             }
             InteractionOutcome::Cancelled { .. } | InteractionOutcome::DeadlineExpired { .. } => {
                 Err(WorkflowRunError::from_cancellation(cancellation))

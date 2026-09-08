@@ -467,12 +467,21 @@ cleanliness policies fail before acquisition or child/Tool side effects.
 Candidate Agents cannot select MCP (including managed Python) or nested
 `subagent`/`execution` orchestration: their existing bindings cannot safely
 promise candidate cwd or descendant access. These combinations are rejected,
-not stripped from a profile. Tool executors must explicitly implement the
-native `honors_workspace` contract; the default is false. Native filesystem
-Tools and Bash support it; current MCP executors do not. No frozen policy is
-reinterpreted against a different checkout.
+not stripped from a profile. Tool executors declare the shared `WorkspaceUse` contract:
 
-Agents are exclusive source-writing borrowers. Every Tool in a candidate run
+- `ConsumesProvided`: uses the supplied workspace as cwd/file authority. Native
+  filesystem Tools and Bash acquire the exact candidate validation borrow.
+- `Independent`: consumes no workspace authority. Native `ask_user` runs unchanged
+  without acquiring, holding or validating CandidateScope access, and its result
+  gains no candidate applicability merely because the run owns a workspace.
+- `Incompatible` (the default): external/fixed-cwd executors cannot safely honor
+  the binding and fail admission before execution. Current MCP executors use this.
+
+No frozen policy is reinterpreted against a different checkout. A pending
+Questionnaire cannot block a writer solely because the run owns a candidate;
+source mutation cannot turn its independent response into candidate failure.
+
+Agents are exclusive source-writing borrowers. Every workspace-consuming Tool
 is an exclusive **validation** borrower, regardless of its name. This is not
 a read-only sandbox: a test may write, but then cannot certify its input.
 All candidate consumers serialize, including consumers in Parallel branches
@@ -762,8 +771,14 @@ The reference includes the owning run, monotonically changing version and native
 content digest. The WF-03 source contract (dirty tracked bytes, admitted untracked
 source, deletions, index/modes/symlinks, exclusions and unsupported-content rules)
 continues unchanged. Equal HEAD with different source bytes is a different subject.
-Context/check values retain their original candidate applicability and cannot be
-attached to another candidate version.
+Context/check entries are bounded typed facts `{value, candidate}`. The optional
+candidate is the runtime-owned exact reference, not a claim from authored JSON.
+Plan subjects also preserve their own optional candidate applicability. These
+identities are included in the Review specification, digest, durable requested
+fact and UI disclosure. Identical check JSON tied to A and B has different Review
+identity. All subject/context dependencies must agree on one exact candidate;
+conflicts fail before publication. Plan Reviews with candidate-bound facts acquire
+and retain the same native freeze used by candidate subjects.
 
 ### Ownership and linearization
 
@@ -774,18 +789,26 @@ attached to another candidate version.
 | Requested commit | InteractionCoordinator commits InteractionRequested before installing/publishing the actionable prompt through the existing route. |
 | Response validation | Coordinator checks the live identity, kind, concrete instance and whole-subject digest. CandidateFreeze validates while retaining that native borrow. |
 | Settled commit | Under coordinator terminal ownership, durable InteractionSettled precedes waiter release. Observable cancellation/deadline overrides a response. Source invalidation is a separate runtime outcome, never rejection. |
-| Review local commit | Workflow validates native freeze settlement and commits the typed business value with candidate applicability. This is not a standing grant. |
-| Downstream admission | Candidate-dependent control acquires the exact expected native borrow **before** WorkflowNodeStarted. Tool/Agent receives that same borrow through execution and physical settlement. |
+| Review local commit | Workflow validates native freeze settlement and commits immutable decision/feedback JSON without candidate provenance. Accepted candidate identity is retained separately in run-local Acceptance state. |
+| Downstream admission | A candidate-consuming Tool/Agent combines explicit data applicability with Acceptance and acquires the exact expected native borrow **before** WorkflowNodeStarted. Tool/Agent receives that same borrow through execution and physical settlement. |
 
 The borrow may be released between settled Review and later admission. A queued
 writer can win that interval and publish B. In that case the next admission of A
 fails before its node starts. There is no unlocked currentness-check followed by
 later execution: acquisition, exact-reference validation and the effect's access
-are one ownership transfer. Pure Branch/Return consumes its dependent value while
-holding the borrow. Parallel passes the dependency explicitly to child blocks and
-does not hold a parent borrow while they wait. A mutating Agent consumes A at its
-start; its resulting B needs a new explicit Review to gain acceptance. Older
-Review values remain historical for A and cannot be combined with B.
+are one ownership transfer. Pure Branch/Return reads of Review decision/feedback
+need no candidate authority. Ordinary candidate-derived data and explicit old
+candidate references still require currentness; pure consumers hold their native
+borrow through consumption. Parallel passes acceptance separately from input data
+and does not hold a parent borrow while branches wait. A mutating Agent consumes A
+at its start; its resulting B needs a new explicit Review to gain acceptance.
+
+Both accepted and rejected Review JSON are immutable business records. Rejection
+establishes no standing candidate authorization: after Reject A, a writer can
+produce B and Branch/Return can still read the decision and feedback. An explicit
+A-bound producer remains stale and cannot start a repair Agent against B. Accepted
+A likewise cannot admit a candidate-dependent operation against B. Acceptance is
+not encoded in `CommittedValue.candidate`; that field remains data provenance.
 
 Native writer exclusion is not a sandbox against arbitrary external host processes.
 WF-03's kernel observation and content checks detect interference at the native

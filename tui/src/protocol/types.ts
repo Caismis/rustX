@@ -412,14 +412,16 @@ export type QuestionnaireResponse =
 
 export type WorkflowNodeInstance = Extract<ToolInvocationId, { caller: "workflow" }>['node'];
 export type ReviewDecision = { type: "accepted" } | { type: "rejected"; feedback: string };
+export type ReviewCandidate = { run: WorkflowNodeInstance['block']['run']; version: number; content: string };
+export type ReviewFact = { value: unknown; candidate: ReviewCandidate | null };
 export type ReviewSpecification = {
   instance: WorkflowNodeInstance;
-  subject: { type: "plan"; content: Record<string, unknown> } | {
+  subject: { type: "plan"; content: Record<string, unknown>; candidate: ReviewCandidate | null } | {
     type: "candidate";
-    reference: { run: WorkflowNodeInstance['block']['run']; version: number; content: string };
+    reference: ReviewCandidate;
     inspection_path: string;
   };
-  context: unknown[];
+  context: ReviewFact[];
 };
 export type ReviewResponse = { instance: WorkflowNodeInstance; subject_digest: string; decision: ReviewDecision };
 export type InteractionResponse =

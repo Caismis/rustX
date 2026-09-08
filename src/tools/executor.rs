@@ -24,6 +24,17 @@
 //! metadata subsystem: only the concrete contracts the current tool plane
 //! needs.
 
+/// Executor authority under a caller-provided workspace binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceUse {
+    /// Uses the supplied cwd/file authority.
+    ConsumesProvided,
+    /// Consumes no workspace authority.
+    Independent,
+    /// Cannot honor caller workspace binding.
+    Incompatible,
+}
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -290,10 +301,10 @@ impl<'a> ToolExecutionContext<'a> {
 ///
 /// [`ToolExecutionStatus::Failed`]: crate::tools::types::ToolExecutionStatus::Failed
 pub trait ToolExecutor: Send + Sync {
-    /// Whether every invocation uses the supplied workspace as its execution
-    /// cwd/file authority. External servers and fixed-cwd executors fail closed.
-    fn honors_workspace(&self) -> bool {
-        false
+    /// How this executor relates to a caller-provided workspace.
+    /// External servers and fixed-cwd executors default to failing closed.
+    fn workspace_use(&self) -> WorkspaceUse {
+        WorkspaceUse::Incompatible
     }
     /// Constructs the handle of one caller-neutral native invocation.
     ///

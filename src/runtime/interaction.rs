@@ -1579,6 +1579,12 @@ impl InteractionCoordinator {
         if review.instance.block.run.conversation_id != self.conversation_id {
             return Err(InteractionFailure::Invalid);
         }
+        let expected = review
+            .candidate()
+            .map_err(|_| InteractionFailure::Invalid)?;
+        if expected != candidate.as_ref().map(|freeze| freeze.reference()) {
+            return Err(InteractionFailure::Invalid);
+        }
         let id = self.allocate_id(&attempt_id)?;
         let subject = InteractionSubject::Review {
             review: review.clone(),
@@ -2667,6 +2673,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn candidate_bound_review_cannot_publish_without_matching_native_freeze() {
+        let (owner, audit) = audited_coordinator();
+        owner.set_provider_available(true);
+        let mut instance = crate::runtime::workflow::test_instance("review", "human");
+        instance.block.run.conversation_id = ConversationId::new("conversation");
+        let candidate = crate::runtime::workspace::CandidateReference {
+            run: instance.block.run.clone(),
+            version: 1,
+            content: "a".repeat(64),
+        };
+        let review = crate::events::review::ReviewSpecification {
+            instance: Box::new(instance),
+            subject: crate::events::review::ReviewSubject::Plan {
+                content: serde_json::json!({"plan":"P"}),
+                candidate: None,
+            },
+            context: vec![crate::events::review::ReviewFact {
+                value: serde_json::json!({"passed":true}),
+                candidate: Some(candidate),
+            }],
+        };
+        let cancellation =
+            crate::agent::cancellation::AgentCancellation::new(CancellationReason::UserRequested);
+        assert!(matches!(
+            owner
+                .request_review(review, 1, cancellation.execution_cancellation(), None)
+                .await,
+            Err(InteractionFailure::Invalid)
+        ));
+        assert_eq!(owner.pending_count(), 0);
+        assert!(audit.events().is_empty());
+    }
+
+    #[tokio::test]
     async fn review_requested_and_accepted_history_never_recreate_a_waiter() {
         for accepted in [false, true] {
             let (first, audit) = audited_coordinator();
@@ -2676,6 +2716,7 @@ mod tests {
             let review = crate::events::review::ReviewSpecification {
                 instance: Box::new(instance),
                 subject: crate::events::review::ReviewSubject::Plan {
+                    candidate: None,
                     content: serde_json::json!({"plan":"A"}),
                 },
                 context: vec![],

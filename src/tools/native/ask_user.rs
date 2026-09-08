@@ -143,8 +143,8 @@ fn definition() -> ToolDefinition {
 struct AskUserExecutor;
 
 impl ToolExecutor for AskUserExecutor {
-    fn honors_workspace(&self) -> bool {
-        true
+    fn workspace_use(&self) -> crate::tools::executor::WorkspaceUse {
+        crate::tools::executor::WorkspaceUse::Independent
     }
     fn start<'a>(
         &'a self,
