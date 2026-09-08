@@ -14,6 +14,26 @@ pub(super) struct NodeFrontierHook {
     pub release: tokio::sync::oneshot::Receiver<()>,
 }
 
+#[cfg(test)]
+pub(super) struct PreStartHook {
+    pub node: String,
+    pub acquired: tokio::sync::oneshot::Sender<(
+        crate::runtime::workspace::CandidateScope,
+        crate::runtime::workspace::CandidateReference,
+        WorkflowNodeInstance,
+        [usize; 2],
+    )>,
+    pub proceed: tokio::sync::oneshot::Receiver<PreStartAction>,
+    pub released: tokio::sync::oneshot::Sender<[usize; 2]>,
+    pub finish: tokio::sync::oneshot::Receiver<()>,
+}
+#[cfg(test)]
+pub(super) enum PreStartAction {
+    Continue,
+    ExhaustNodes,
+    ExhaustAgents,
+}
+
 #[derive(Debug, Default)]
 pub(super) struct RunBudgets {
     nodes: usize,
@@ -315,37 +335,79 @@ impl WorkflowRuntime {
             } else {
                 None
             };
-            if cancellation.is_cancelled() {
-                if let Some(access) = admitted_access.take() {
-                    let _ = access.finish(true).await;
-                }
-                return Err(WorkflowRunError::from_cancellation(cancellation));
-            }
-            // Node admission frontier: cancellation observation and aggregate
-            // count reservation are synchronous, before any child preparation.
-            {
-                let mut budgets = run.budgets.lock().expect("run budgets");
-                if cancellation.is_cancelled() {
-                    return Err(WorkflowRunError::from_cancellation(cancellation));
-                }
-                let agent = usize::from(matches!(node, WorkflowNodeProgram::Agent(_)));
-                if budgets.nodes >= run.program.total_nodes
-                    || budgets.agents + agent > MAX_WORKFLOW_NODES
+            #[cfg(test)]
+            let pre_start_hook = {
+                let mut hook = self.pre_start.lock().expect("pre-start hook");
+                if admitted_access.is_some()
+                    && hook.as_ref().is_some_and(|hook| hook.node == node_id)
                 {
-                    return Err(WorkflowRunError::InvalidProgram(
-                        "aggregate execution count exceeded".into(),
-                    ));
+                    hook.take()
+                } else {
+                    None
                 }
-                budgets.nodes += 1;
-                budgets.agents += agent;
-            }
-            self.emit_observability(
-                run,
-                RuntimeEvent::WorkflowNodeStarted {
-                    instance: node_instance.clone(),
-                },
-            );
+            };
+            #[cfg(test)]
+            let pre_start_cleanup = if let Some(PreStartHook {
+                acquired,
+                proceed,
+                released,
+                finish,
+                ..
+            }) = pre_start_hook
+            {
+                let counts = {
+                    let budgets = run.budgets.lock().unwrap();
+                    [budgets.nodes, budgets.agents]
+                };
+                let _ = acquired.send((
+                    run.candidate.as_ref().unwrap().clone(),
+                    admitted_access.as_ref().unwrap().input().clone(),
+                    node_instance.clone(),
+                    counts,
+                ));
+                match proceed.await.expect("pre-start action") {
+                    PreStartAction::Continue => {}
+                    PreStartAction::ExhaustNodes => {
+                        run.budgets.lock().unwrap().nodes = run.program.total_nodes;
+                    }
+                    PreStartAction::ExhaustAgents => {
+                        run.budgets.lock().unwrap().agents = MAX_WORKFLOW_NODES;
+                    }
+                }
+                Some((released, finish))
+            } else {
+                None
+            };
+            let mut started = false;
+            // Every fallible step after borrow stays inside this result scope.
+            // The one finalizer below returns any access not transferred to a
+            // native owner, including zero-start cancellation/budget rejection.
             let result: Result<Option<BlockOutput<'_>>, WorkflowRunError> = async {
+                // Node admission frontier: cancellation observation and aggregate
+                // count reservation are synchronous, before any child preparation.
+                {
+                    let mut budgets = run.budgets.lock().expect("run budgets");
+                    if cancellation.is_cancelled() {
+                        return Err(WorkflowRunError::from_cancellation(cancellation));
+                    }
+                    let agent = usize::from(matches!(node, WorkflowNodeProgram::Agent(_)));
+                    if budgets.nodes >= run.program.total_nodes
+                        || budgets.agents + agent > MAX_WORKFLOW_NODES
+                    {
+                        return Err(WorkflowRunError::InvalidProgram(
+                            "aggregate execution count exceeded".into(),
+                        ));
+                    }
+                    budgets.nodes += 1;
+                    budgets.agents += agent;
+                }
+                self.emit_observability(
+                    run,
+                    RuntimeEvent::WorkflowNodeStarted {
+                        instance: node_instance.clone(),
+                    },
+                );
+                started = true;
                 // This lease owns the complete admission/settlement future,
                 // including approval or staged Agent cleanup. It retires only
                 // after the native owner returned; it is not outcome authority.
@@ -425,7 +487,7 @@ impl WorkflowRuntime {
                                 selector,
                                 arguments,
                                 cancellation,
-                                admitted_access.take(),
+                                &mut admitted_access,
                             )
                             .await?;
                         let value = result.project(&native, &node_instance)?;
@@ -445,7 +507,7 @@ impl WorkflowRuntime {
                                 &node_instance,
                                 agent,
                                 cancellation,
-                                admitted_access.take(),
+                                &mut admitted_access,
                             )
                             .await?;
                         let value = self
@@ -615,13 +677,24 @@ impl WorkflowRuntime {
             } else {
                 result
             };
-            self.emit_observability(
-                run,
-                RuntimeEvent::WorkflowNodeSettled {
-                    instance: node_instance,
-                    outcome: outcome(&result),
-                },
-            );
+            #[cfg(test)]
+            if let Some((released, finish)) = pre_start_cleanup {
+                let counts = {
+                    let budgets = run.budgets.lock().unwrap();
+                    [budgets.nodes, budgets.agents]
+                };
+                let _ = released.send(counts);
+                let _ = finish.await;
+            }
+            if started {
+                self.emit_observability(
+                    run,
+                    RuntimeEvent::WorkflowNodeSettled {
+                        instance: node_instance,
+                        outcome: outcome(&result),
+                    },
+                );
+            }
             if let Some(output) = result? {
                 // Input and locals retire at owning block completion. Only the
                 // declared export survives, with its own bounded reservation.

@@ -387,6 +387,24 @@ root block terminal, WorkflowRun terminal. Terminal outcomes are unique.
 | Retained Workflow inputs, locals and exports | 4 MiB | Compiler proves whole-program reservation; run charges actual bytes before local commit |
 | Native/branch failure diagnostic text | 1 KiB per diagnostic | Clamp before retention/aggregation; preserve every outer branch key |
 
+Downstream admission evaluates dependencies, borrows the exact candidate when
+required, then observes cancellation and checks/commits node and Agent counts in
+one synchronous run-budget critical section immediately before
+`WorkflowNodeStarted`. Stale-candidate failure, pre-start cancellation and budget
+rejection commit no count. Once committed, counts are not refunded for subsequent
+preparation/execution failure.
+
+Workflow owns pre-start candidate access in one async result/cleanup scope. Every
+error after borrow returns through its finalizer unless ownership has transferred
+to the native consumer. The finalizer uses unchanged-validator `finish(true)`:
+it clears native admitted ownership and preserves the version when no source
+changed; real interference retains the existing conservative validation behavior.
+Tool setup borrows that owned slot through physical settlement; Agent setup leaves
+it there until native child preparation takes it. Pure consumers retain it through
+consumption. Zero-start cancellation emits no node start/settled facts and cannot
+alone manufacture abandoned-user/NestedContainment resource state. Review retains
+its separate existing CandidateFreeze acquisition path, without a duplicate borrow.
+
 Count reservations are conservative and never refunded or reset on child
 entry, failed preparation or scope completion. Private block inputs and
 locals have one accounting reservation. A Return obtains an export

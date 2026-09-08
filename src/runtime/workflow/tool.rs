@@ -130,7 +130,7 @@ impl WorkflowRuntime {
         selector: &ToolSelector,
         arguments: expressions::CommittedValue,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
-        admitted_access: Option<crate::runtime::workspace::WorkspaceAccess>,
+        admitted_access: &mut Option<crate::runtime::workspace::WorkspaceAccess>,
     ) -> Result<
         (
             ToolExecutionResult,
@@ -140,34 +140,32 @@ impl WorkflowRuntime {
     > {
         let policy = Self::tool_workspace_use(run, context, selector)?;
         let signal = cancellation.child_signal();
-        let access = if policy == crate::tools::executor::WorkspaceUse::Independent {
+        if policy == crate::tools::executor::WorkspaceUse::Independent {
             debug_assert!(admitted_access.is_none());
-            None
         } else if run.candidate.is_some()
             && policy == crate::tools::executor::WorkspaceUse::Incompatible
         {
             return Err(WorkflowRunError::IneligibleCapability(
                 "executor cannot consume a candidate workspace".into(),
             ));
-        } else if admitted_access.is_some() {
-            admitted_access
-        } else {
-            match &run.candidate {
-                Some(candidate) => Some(
-                    candidate
-                        .borrow(node.clone(), arguments.candidate.as_ref(), &signal)
-                        .await
-                        .map_err(|error| {
-                            if cancellation.is_cancelled() {
-                                WorkflowRunError::from_cancellation(cancellation)
-                            } else {
-                                WorkflowRunError::InvocationAuthority(error)
-                            }
-                        })?,
-                ),
-                None => None,
-            }
-        };
+        } else if admitted_access.is_none()
+            && let Some(candidate) = &run.candidate
+        {
+            *admitted_access = Some(
+                candidate
+                    .borrow(node.clone(), arguments.candidate.as_ref(), &signal)
+                    .await
+                    .map_err(|error| {
+                        if cancellation.is_cancelled() {
+                            WorkflowRunError::from_cancellation(cancellation)
+                        } else {
+                            WorkflowRunError::InvocationAuthority(error)
+                        }
+                    })?,
+            );
+        }
+        // Setup errors leave the exact access in the caller's cleanup scope.
+        let access = admitted_access;
         let workspace = access
             .as_ref()
             .map(|access| {
@@ -187,7 +185,7 @@ impl WorkflowRuntime {
             )
             .await;
         let mut applicability = None;
-        if let Some(access) = access {
+        if let Some(access) = access.take() {
             let input = access.input().clone();
             let status = match &result {
                 Ok(result) => result.status.clone(),

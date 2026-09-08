@@ -1864,6 +1864,8 @@ pub struct WorkflowRuntime {
     #[cfg(test)]
     node_frontier: Arc<std::sync::Mutex<Option<execution::NodeFrontierHook>>>,
     #[cfg(test)]
+    pre_start: Arc<std::sync::Mutex<Option<execution::PreStartHook>>>,
+    #[cfg(test)]
     observations: tokio::sync::watch::Sender<Vec<RuntimeEvent>>,
 }
 
@@ -1911,6 +1913,8 @@ impl WorkflowRuntime {
             next_run: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             #[cfg(test)]
             node_frontier: Arc::new(std::sync::Mutex::new(None)),
+            #[cfg(test)]
+            pre_start: Arc::new(std::sync::Mutex::new(None)),
             #[cfg(test)]
             observations: tokio::sync::watch::Sender::new(Vec::new()),
         }
@@ -2126,7 +2130,7 @@ impl WorkflowRuntime {
         node_id: &WorkflowNodeInstance,
         agent: &WorkflowAgentProgram,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
-        admitted_access: Option<crate::runtime::workspace::WorkspaceAccess>,
+        admitted_access: &mut Option<crate::runtime::workspace::WorkspaceAccess>,
     ) -> Result<crate::runtime::identity::SubagentId, WorkflowRunError> {
         let resolved = context.resolve_workflow(&agent.profile).map_err(|error| {
             WorkflowRunError::ChildStart {
@@ -2148,7 +2152,7 @@ impl WorkflowRuntime {
             applicability.depend_on(&value)?;
             bound.insert(key.clone(), value.value);
         }
-        if let Some(access) = &admitted_access {
+        if let Some(access) = admitted_access.as_ref() {
             if applicability
                 .candidate
                 .as_ref()
@@ -2188,32 +2192,31 @@ impl WorkflowRuntime {
             },
         };
         let child_cancellation = cancellation.child_signal();
-        let access = if admitted_access.is_some() {
-            admitted_access
-        } else {
-            match &run.candidate {
-                Some(candidate) => Some(
-                    candidate
-                        .borrow(
-                            node_id.clone(),
-                            applicability.candidate.as_ref(),
-                            &child_cancellation,
-                        )
-                        .await
-                        .map_err(|error| {
-                            if cancellation.is_cancelled() {
-                                WorkflowRunError::from_cancellation(cancellation)
-                            } else {
-                                WorkflowRunError::InvocationAuthority(error)
-                            }
-                        })?,
-                ),
-                None => None,
-            }
-        };
+        if admitted_access.is_none()
+            && let Some(candidate) = &run.candidate
+        {
+            *admitted_access = Some(
+                candidate
+                    .borrow(
+                        node_id.clone(),
+                        applicability.candidate.as_ref(),
+                        &child_cancellation,
+                    )
+                    .await
+                    .map_err(|error| {
+                        if cancellation.is_cancelled() {
+                            WorkflowRunError::from_cancellation(cancellation)
+                        } else {
+                            WorkflowRunError::InvocationAuthority(error)
+                        }
+                    })?,
+            );
+        }
+        // Preparation takes ownership only here. Every earlier error leaves
+        // the access in execute_block_body's explicit async cleanup scope.
         let prepared = self
             .subagents
-            .prepare_in_workspace(&spec, &child_cancellation, access)
+            .prepare_in_workspace(&spec, &child_cancellation, admitted_access.take())
             .await
             .map_err(|error| match error {
                 crate::runtime::subagent::SubagentStartError::Cancelled => {

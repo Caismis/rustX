@@ -1944,3 +1944,170 @@ async fn review_mismatched_candidate_context_fails_before_any_prompt() {
     assert!(audit.events().is_empty());
     assert_eq!(owner.pending_count(), 0);
 }
+
+#[tokio::test]
+async fn cancellation_after_candidate_borrow_before_start_returns_exact_access() {
+    for consumer in ["tool", "agent", "return"] {
+        pre_start_candidate_case(consumer, 0).await;
+    }
+}
+
+#[tokio::test]
+async fn budget_rejection_after_candidate_borrow_returns_access_without_count_commit() {
+    pre_start_candidate_case("tool", 1).await;
+    pre_start_candidate_case("agent", 2).await;
+}
+
+#[allow(clippy::too_many_lines)]
+async fn pre_start_candidate_case(consumer: &str, failure: usize) {
+    use crate::runtime::workflow::execution::{PreStartAction, PreStartHook};
+    let plane = workflow_test_plane(1);
+    initialize(&plane);
+    let probe = Arc::new(CandidateProbe {
+        status: ToolExecutionStatus::Success,
+        mutate: false,
+        observed: std::sync::Mutex::default(),
+    });
+    let context = setup_context(&plane, probe.clone());
+    let mut definition = program_definition();
+    definition.workspace = Some(WorkflowWorkspace {
+        require_clean_parent: true,
+    });
+    let mut next = match consumer {
+        "tool" => definition.block.nodes["check"].clone(),
+        "agent" => serde_json::from_value(repair_agent()).unwrap(),
+        "return" => WorkflowNodeDefinition::Return {
+            output: WorkflowValue::Reference {
+                path: vec!["check".into()],
+            },
+        },
+        _ => unreachable!(),
+    };
+    let dependency = WorkflowValue::Reference {
+        path: vec!["check".into()],
+    };
+    match &mut next {
+        WorkflowNodeDefinition::Tool { arguments, .. } => {
+            *arguments = WorkflowValue::Object {
+                fields: BTreeMap::from([
+                    (
+                        "passed".into(),
+                        WorkflowValue::Reference {
+                            path: vec!["check".into(), "passed".into()],
+                        },
+                    ),
+                    (
+                        "label".into(),
+                        WorkflowValue::Literal {
+                            value: json!("next"),
+                        },
+                    ),
+                ]),
+            };
+        }
+        WorkflowNodeDefinition::Agent { input, .. } => {
+            input.insert("candidate".into(), dependency);
+        }
+        _ => {}
+    }
+    definition.block.nodes.retain(|key, _| key == "check");
+    definition.block.nodes.insert("next".into(), next);
+    definition.block.edges = vec![edge("check", "next")];
+    if consumer != "return" {
+        definition.block.nodes.insert(
+            "done".into(),
+            WorkflowNodeDefinition::Return {
+                output: WorkflowValue::Literal {
+                    value: json!({"passed":true}),
+                },
+            },
+        );
+        definition.block.edges.push(edge("next", "done"));
+    }
+    let program = Arc::new(compile_test(definition).unwrap());
+    let total_nodes = program.total_nodes;
+    let runtime = workflow_runtime(&plane);
+    let (acquired, acquire) = tokio::sync::oneshot::channel();
+    let (proceed, proceed_rx) = tokio::sync::oneshot::channel();
+    let (released, release_rx) = tokio::sync::oneshot::channel();
+    let (finish, finish_rx) = tokio::sync::oneshot::channel();
+    *runtime.pre_start.lock().unwrap() = Some(PreStartHook {
+        node: "next".into(),
+        acquired,
+        proceed: proceed_rx,
+        released,
+        finish: finish_rx,
+    });
+    let (trigger, cancellation) = workflow_cancellation();
+    let task = tokio::spawn(async move {
+        runtime
+            .run_foreground(
+                program,
+                ToolCallId::new("pre-start"),
+                context,
+                json!({"passed":true}),
+                cancellation,
+            )
+            .await
+    });
+    let (scope, reference, node, before) = acquire.await.unwrap();
+    assert_eq!(before, [1, 0]);
+    // This is the actual native borrow queue, not an observation-only flag.
+    let (_, fresh) = workflow_cancellation();
+    let signal = fresh.child_signal();
+    let mut borrower = Box::pin(scope.borrow(node, Some(&reference), &signal));
+    assert!(futures_util::poll!(&mut borrower).is_pending());
+    let action = match failure {
+        0 => {
+            trigger.cancel();
+            PreStartAction::Continue
+        }
+        1 => PreStartAction::ExhaustNodes,
+        2 => PreStartAction::ExhaustAgents,
+        _ => unreachable!(),
+    };
+    proceed.send(action).unwrap_or_else(|_| panic!("proceed"));
+    let after = release_rx.await.unwrap();
+    assert_eq!(
+        after,
+        match failure {
+            0 => before,
+            1 => [total_nodes, 0],
+            2 => [1, MAX_WORKFLOW_NODES],
+            _ => unreachable!(),
+        }
+    );
+    // Cleanup cleared native admitted state: the queued borrower acquires A
+    // unchanged before the Workflow is allowed to settle its outer resource.
+    let access = borrower.await.unwrap();
+    assert_eq!(access.input(), &reference);
+    assert_eq!(access.finish(true).await.unwrap(), reference);
+    finish.send(()).unwrap();
+    let error = task.await.unwrap().unwrap_err();
+    let WorkflowRunError::WorkspaceSettlement {
+        error,
+        workspace,
+        candidate,
+        ..
+    } = error
+    else {
+        panic!("workspace settlement")
+    };
+    if failure == 0 {
+        assert!(
+            matches!(*error, WorkflowRunError::Cancelled { .. }),
+            "{error:?}"
+        );
+    } else {
+        assert!(matches!(*error, WorkflowRunError::InvalidProgram(_)));
+    }
+    assert_eq!(candidate.as_ref(), Some(&reference));
+    assert!(workspace.unresolved_reason().is_none(), "{workspace:?}");
+    assert!(!format!("{workspace:?}").contains("abandoned"));
+    assert_eq!(probe.observed.lock().unwrap().len(), 1); // initial check only
+    assert!(plane.registry.all_snapshots().is_empty()); // zero Agent delegation
+    let events = plane.store.read_events(None, 256).unwrap().events;
+    assert!(!events.iter().any(|event| matches!(&event.event,RuntimeEvent::WorkflowNodeStarted {instance} | RuntimeEvent::WorkflowNodeSettled {instance,..} if instance.node == "next")));
+    assert!(!events.iter().any(|event| matches!(&event.event,RuntimeEvent::WorkflowCandidateInvocation {node,..} if node.node == "next")));
+    assert!(!events.iter().any(|event| matches!(&event.event, RuntimeEvent::NativeToolInvocation { invocation_id: crate::tools::types::ToolInvocationId::Workflow { node }, fact: crate::tools::invocation::NativeInvocationFact::Started, .. } if node.node == "next")));
+}
