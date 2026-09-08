@@ -6,6 +6,8 @@ mod candidate;
 mod composition;
 #[path = "human.rs"]
 mod human;
+#[path = "loops.rs"]
+mod loops;
 use super::*;
 use crate::tools::executor::{
     ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistration,

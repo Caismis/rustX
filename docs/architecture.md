@@ -51,7 +51,10 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 29. Version 29 adds native Review
+The SQLite schema is development schema version 30. Version 30 adds concrete Loop
+iteration admission/settlement and satisfied/exhausted exit facts. Existing
+Runtime Client 21 and child IPC 19 identity vectors represent nested iterations.
+Version 29 adds native Review
 audit facts and required Questionnaire invocation correlation. Version 28 adds a distinct
 Workflow resource recovery guard for uncertain final candidate settlement;
 child IPC 18 and Runtime Client 20 are unchanged. Version 27 adds native
@@ -8456,8 +8459,9 @@ Tool/Agent work. Native Tool(ask_user) uses the existing requester, now bound to
 the invocation driver's cancellation scope. Approval remains permission for a
 prepared invocation; FullAccess changes only that permission gate.
 
-Runtime Client 21, child IPC 19 and SQLite development schema 29 carry the coherent
-new vocabulary. Event envelope framing remains version 1. No pending recovery or
+Runtime Client 21 and child IPC 19 carry the coherent human-step vocabulary.
+SQLite development schema 30 retains its schema-29 audit payloads and adds Loop
+facts. Event envelope framing remains version 1. No pending recovery or
 compatibility protocol is introduced.
 
 WF-04 Review decisions/feedback are immutable business data, separate from

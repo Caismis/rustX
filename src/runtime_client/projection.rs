@@ -1194,6 +1194,9 @@ impl RuntimeClientProjection {
             | RuntimeEvent::WorkflowStarted { .. }
             | RuntimeEvent::WorkflowBlockStarted { .. }
             | RuntimeEvent::WorkflowBlockSettled { .. }
+            | RuntimeEvent::WorkflowLoopIterationAdmitted { .. }
+            | RuntimeEvent::WorkflowLoopIterationSettled { .. }
+            | RuntimeEvent::WorkflowLoopExited { .. }
             | RuntimeEvent::NativeToolInvocation { .. }
             | RuntimeEvent::WorkflowNodeStarted { .. }
             | RuntimeEvent::WorkflowNodeSettled { .. }
@@ -2181,6 +2184,41 @@ mod tests {
 
     fn apply_event(projection: &mut RuntimeClientProjection, event: RuntimeEvent) {
         projection.apply(event_observation(event));
+    }
+
+    #[test]
+    fn loop_facts_remain_journal_observations_without_client_execution_or_history() {
+        use crate::runtime::workflow::{WorkflowExecutionOutcome, WorkflowLoopExit, test_instance};
+        let mut projection = projection();
+        let (before, before_cursor) = projection.snapshot().unwrap();
+        let node = test_instance("feedback", "loop");
+        let body = node.block.clone();
+        for event in [
+            RuntimeEvent::WorkflowLoopIterationAdmitted {
+                node: node.clone(),
+                body: body.clone(),
+                iteration: 1,
+            },
+            RuntimeEvent::WorkflowLoopIterationSettled {
+                node: node.clone(),
+                body,
+                iteration: 1,
+                outcome: WorkflowExecutionOutcome::Completed,
+            },
+            RuntimeEvent::WorkflowLoopExited {
+                node,
+                iterations: 1,
+                status: WorkflowLoopExit::Exhausted,
+            },
+        ] {
+            projection.apply(event_observation(event));
+        }
+        let (after, after_cursor) = projection.snapshot().unwrap();
+        assert_eq!(before_cursor, after_cursor);
+        assert_eq!(
+            serde_json::to_value(before).unwrap(),
+            serde_json::to_value(after).unwrap()
+        );
     }
 
     /// Opens the representative publication stream on a projection.

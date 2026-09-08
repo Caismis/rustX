@@ -57,7 +57,7 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 29 is the only accepted schema; version 28 and every older
+schema version 30 is the only accepted schema; version 29 and every older
 development schema fail explicitly at open and are not migrated. Version 10
 froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation
@@ -2736,7 +2736,9 @@ the launch-boundary policy inheritance.
   Workflow Tool registration occur off-side. One publication boundary makes
   the generation visible; an invalid reload preserves the previous valid
   generation. A run retains the immutable program snapshot it admitted.
-- **The compiler establishes a finite DAG contract.** There is exactly one
+- **The compiler establishes fixed finite block control.** Ordinary edges within
+  every block are acyclic; only structured bounded Loop repeats a fixed body.
+  There is exactly one
   explicit entry, no dangling references, duplicate ids, cycles, unreachable
   nodes, unterminated paths, incomplete Branch ports, invalid schemas,
   use-before-definition values, path-dependent unavailable values, or
@@ -2744,8 +2746,8 @@ the launch-boundary policy inheritance.
   vocabulary of `type`, `properties`, `required`, boolean
   `additionalProperties`, one-schema `items`, `enum`, and `const`; unsupported
   constraints and unprovable compatibility are rejected for every input,
-  output, Agent, and Parallel schema. The only v1 nodes are Agent, Branch,
-  Parallel, and Return.
+  output, Agent, Tool, Parallel, and Loop schema. The node vocabulary is Agent,
+  Tool, Branch, Parallel, Review, Loop, and Return.
 - **Workflow-local data is explicit and typed.** Only committed
   JSON-compatible values and explicit artifact/reference identities cross
   nodes. An Agent's transcript, reasoning, diagnostics, provider/model

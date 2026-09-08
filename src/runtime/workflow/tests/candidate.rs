@@ -26,7 +26,119 @@ fn initialize(plane: &WorkflowTestPlane) {
     git(&root, &["add", "."]);
     git(&root, &["commit", "-m", "baseline"]);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)] // One physical process gate reused for both repair iterations.
+async fn loop_checker_supervised_process_gate_blocks_next_writer_and_exhaustion_retains_candidate()
+{
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let plane = workflow_test_plane(1);
+    initialize(&plane);
+    let parent = plane.dir.path().join("workspace");
+    std::fs::write(parent.join(".gitignore"), "target/\n").unwrap();
+    git(&parent, &["add", ".gitignore"]);
+    git(&parent, &["commit", "-m", "ignore checker build output"]);
+    let gate = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut first = stage_workflow_child(&plane);
+    let mut second = stage_workflow_child(&plane);
+    let context = context_with_workspace_policy(
+        &plane,
+        crate::tools::native::test_bash_registration(),
+        crate::agent::AttemptLifecycle::default(),
+        WorkspacePolicy::GitWorktree {
+            require_clean_parent: true,
+        },
+    );
+    // The shell can emit a checker report and exit while its supervised child
+    // still owns candidate work. Only the native Bash supervisor can settle it.
+    let command = format!(
+        "printf 'provisional checker report\\n'; (exec 3<>/dev/tcp/127.0.0.1/{}; printf 'entered\\n' >&3; IFS= read -r gate <&3; printf 'settled\\n' >> target/check-log) >/dev/null 2>&1 &",
+        gate.local_addr().unwrap().port()
+    );
+    let state = schema(json!({"passed":{"type":"boolean"}}), &["passed"]);
+    let definition = serde_json::from_value(json!({"description":"native gated feedback","workspace":{"require_clean_parent":true},"tools":[{"origin":"builtin","name":"bash"}],"block":{
+        "input":state,"output":state,"entry":"repair","nodes":{
+            "repair":repair_agent(),
+            "check":{"type":"tool","selector":{"origin":"builtin","name":"bash"},"arguments":{"type":"literal","value":{"command":command}},"result":{"type":"json","part":0,"schema":{"type":"object"}}},
+            "done":{"type":"return","output":{"type":"literal","value":{"passed":false}}}
+        },"edges":[{"from":"repair","to":"check"},{"from":"check","to":"done"}]}})).unwrap();
+    let program = Arc::new(compile_test(super::loops::wrap_definition(definition, 2)).unwrap());
+    let runtime = workflow_runtime(&plane);
+    let observations = runtime.observations.subscribe();
+    let (_, cancellation) = workflow_cancellation();
+    let mut task = tokio::spawn(async move {
+        runtime
+            .run_foreground(
+                program,
+                ToolCallId::new("process-loop"),
+                context,
+                json!({"passed":false}),
+                cancellation,
+            )
+            .await
+    });
+    let mut candidate_path = None;
+    for (index, child) in [(1, &mut first), (2, &mut second)] {
+        tokio::select! {
+            () = child.expect_delegate() => {},
+            result = &mut task => panic!("run stopped before writer: {result:?}"),
+        }
+        let snapshot = plane.registry.all_snapshots().pop().unwrap();
+        let path = snapshot.workspace.logical_workspace;
+        if let Some(previous) = &candidate_path {
+            assert_eq!(previous, &path);
+        }
+        candidate_path = Some(path.clone());
+        std::fs::create_dir_all(path.join("target")).unwrap();
+        if index == 1 {
+            std::fs::write(path.join("target/check-log"), "").unwrap();
+        }
+        std::fs::write(path.join("candidate"), format!("repair-{index}")).unwrap();
+        child
+            .send_result(
+                crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+                Some("{}"),
+            )
+            .await;
+        let (mut connection, _) = tokio::select! {
+            connection = gate.accept() => connection.unwrap(),
+            result = &mut task => panic!("run stopped before checker gate: {result:?}"),
+        };
+        let mut announcement = [0; 8];
+        connection.read_exact(&mut announcement).await.unwrap();
+        assert_eq!(&announcement, b"entered\n");
+        assert_eq!(plane.registry.all_snapshots().len(), index);
+        assert_eq!(
+            observations
+                .borrow()
+                .iter()
+                .filter(|e| matches!(e, RuntimeEvent::WorkflowLoopIterationSettled { .. }))
+                .count(),
+            index - 1
+        );
+        assert!(!task.is_finished());
+        connection.write_all(b"release\n").await.unwrap();
+    }
+    let output = task.await.unwrap().unwrap();
+    assert_eq!(output["output"]["status"], "exhausted");
+    assert_eq!(output["output"]["iterations"], 2);
+    let path = candidate_path.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(path.join("candidate")).unwrap(),
+        "repair-2"
+    );
+    assert_eq!(
+        std::fs::read_to_string(path.join("target/check-log")).unwrap(),
+        "settled\nsettled\n"
+    );
+    assert!(!parent.join("candidate").exists());
+    assert!(plane.registry.unsettled_snapshot().is_empty());
+    assert!(output.to_string().contains("handoff"));
+}
 fn candidate_program(agent: bool) -> Arc<WorkflowProgram> {
+    Arc::new(compile_test(candidate_definition(agent)).unwrap())
+}
+fn candidate_definition(agent: bool) -> WorkflowDefinition {
     let mut definition = program_definition();
     definition.workspace = Some(WorkflowWorkspace {
         require_clean_parent: true,
@@ -45,7 +157,231 @@ fn candidate_program(agent: bool) -> Arc<WorkflowProgram> {
         definition.block.entry = "implement".into();
         definition.block.edges.push(edge("implement", "check"));
     }
-    Arc::new(compile_test(definition).unwrap())
+    definition
+}
+
+#[tokio::test]
+async fn loop_failed_and_cancelled_owned_work_preserves_dirty_handoff_without_retry() {
+    for mode in ["cancel", "agent_failure", "tool_failure"] {
+        let plane = workflow_test_plane(1);
+        initialize(&plane);
+        let mut child = stage_workflow_child(&plane);
+        let probe = Arc::new(CandidateProbe {
+            status: if mode == "tool_failure" {
+                ToolExecutionStatus::Failed {
+                    error: "checker unavailable".into(),
+                }
+            } else {
+                ToolExecutionStatus::Success
+            },
+            mutate: false,
+            observed: std::sync::Mutex::new(Vec::new()),
+        });
+        let context = setup_context(&plane, probe);
+        let runtime = workflow_runtime(&plane);
+        let observations = runtime.observations.subscribe();
+        let program = Arc::new(
+            compile_test(super::loops::wrap_definition(candidate_definition(true), 3)).unwrap(),
+        );
+        let (trigger, cancellation) = workflow_cancellation();
+        let task = tokio::spawn(async move {
+            runtime
+                .run_foreground(
+                    program,
+                    ToolCallId::new("failed-loop"),
+                    context,
+                    json!({"passed":false}),
+                    cancellation,
+                )
+                .await
+        });
+        child.expect_delegate().await;
+        let path = plane.registry.all_snapshots()[0]
+            .workspace
+            .logical_workspace
+            .clone();
+        std::fs::write(path.join("candidate"), "useful dirty work").unwrap();
+        if mode == "cancel" {
+            trigger.cancel();
+            child.cancel_after_delegate().await;
+        } else {
+            child
+                .send_result(
+                    if mode == "agent_failure" {
+                        crate::runtime::subagent::ipc::ChildResultStatus::Failed
+                    } else {
+                        crate::runtime::subagent::ipc::ChildResultStatus::Succeeded
+                    },
+                    Some("{}"),
+                )
+                .await;
+        }
+        let error = task.await.unwrap().unwrap_err();
+        let WorkflowRunError::WorkspaceSettlement { workspace, .. } = &error else {
+            panic!("retained handoff: {error:?}")
+        };
+        assert!(workspace.handoff().is_some());
+        assert!(workspace.unresolved_reason().is_none());
+        if mode == "cancel" {
+            assert!(error.is_cancelled());
+        }
+        assert_eq!(
+            std::fs::read_to_string(path.join("candidate")).unwrap(),
+            "useful dirty work"
+        );
+        assert_eq!(plane.registry.all_snapshots().len(), 1);
+        assert!(plane.registry.unsettled_snapshot().is_empty());
+        assert_eq!(
+            observations
+                .borrow()
+                .iter()
+                .filter(|e| matches!(e, RuntimeEvent::WorkflowLoopIterationAdmitted { .. }))
+                .count(),
+            1
+        );
+        assert!(
+            !observations
+                .borrow()
+                .iter()
+                .any(|e| matches!(e, RuntimeEvent::WorkflowLoopExited { .. }))
+        );
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Exact two-iteration native candidate and Review ownership sequence.
+async fn loop_candidate_mutation_clears_old_acceptance_and_stale_review_cannot_certify_new_version()
+{
+    use crate::runtime::interaction::InteractionKind;
+    let plane = workflow_test_plane(1);
+    initialize(&plane);
+    let mut first = stage_workflow_child(&plane);
+    let mut second = stage_workflow_child(&plane);
+    let probe = Arc::new(CandidateProbe {
+        status: ToolExecutionStatus::Success,
+        mutate: false,
+        observed: std::sync::Mutex::new(Vec::new()),
+    });
+    let (owner, _, mut published) = super::human::owner(&plane);
+    let mut context = setup_context(&plane, probe.clone());
+    Arc::make_mut(context.native.as_mut().unwrap()).lifecycle =
+        crate::agent::AttemptLifecycle::default().with_native_interaction(owner.clone());
+    let mut definition = program_definition();
+    definition.workspace = Some(WorkflowWorkspace {
+        require_clean_parent: true,
+    });
+    definition.block = serde_json::from_value(json!({
+        "input":{"type":"object"},"output":crate::runtime::workflow::review::result_schema(),"entry":"repair",
+        "nodes":{"repair":repair_agent(),"review":{"type":"review","subject":{"type":"candidate","value":{"type":"reference","path":["repair"]}},"context":[]},"done":{"type":"return","output":{"type":"reference","path":["review"]}}},
+        "edges":[{"from":"repair","to":"review"},{"from":"review","to":"done"}]})).unwrap();
+    let mut definition = super::loops::wrap_definition(definition, 2);
+    let WorkflowNodeDefinition::Loop { until, carry, .. } =
+        definition.block.nodes.get_mut("feedback").unwrap()
+    else {
+        unreachable!()
+    };
+    **until = WorkflowPredicate::Boolean {
+        value: WorkflowValue::Literal {
+            value: json!(false),
+        },
+    };
+    *carry = WorkflowValue::Literal { value: json!({}) };
+    let output_schema = definition.block.output.clone();
+    definition.block.nodes.insert(
+        "check".into(),
+        program_definition().block.nodes["check"].clone(),
+    );
+    // A literal avoids introducing a candidate dependency through old check data.
+    let WorkflowNodeDefinition::Tool { arguments, .. } =
+        definition.block.nodes.get_mut("check").unwrap()
+    else {
+        unreachable!()
+    };
+    *arguments = WorkflowValue::Literal {
+        value: json!({"passed":true,"label":"current"}),
+    };
+    definition.block.edges = vec![
+        branch_edge("feedback", "check", WorkflowPort::Satisfied),
+        branch_edge("feedback", "check", WorkflowPort::Exhausted),
+        edge("check", "done"),
+    ];
+    definition.block.output = output_schema;
+    let runtime = workflow_runtime(&plane);
+    let (_, cancellation) = workflow_cancellation();
+    let task = tokio::spawn(async move {
+        runtime
+            .run_foreground(
+                Arc::new(compile_test(definition).unwrap()),
+                ToolCallId::new("candidate-review-loop"),
+                context,
+                json!({}),
+                cancellation,
+            )
+            .await
+    });
+    first.expect_delegate().await;
+    let path = plane.registry.all_snapshots()[0]
+        .workspace
+        .logical_workspace
+        .clone();
+    std::fs::write(path.join("candidate"), "A").unwrap();
+    first
+        .send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some("{}"),
+        )
+        .await;
+    let a = published.recv().await.unwrap();
+    owner
+        .respond_async(&a.id, super::human::answer(&a, true))
+        .await
+        .unwrap();
+    second.expect_delegate().await;
+    std::fs::write(path.join("candidate"), "B").unwrap();
+    second
+        .send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some("{}"),
+        )
+        .await;
+    let b = published.recv().await.unwrap();
+    let (InteractionKind::Review { review: ar, .. }, InteractionKind::Review { review: br, .. }) =
+        (&a.kind, &b.kind)
+    else {
+        panic!("reviews")
+    };
+    assert_ne!(ar.candidate().unwrap(), br.candidate().unwrap());
+    assert_ne!(ar.instance, br.instance);
+    assert!(
+        owner
+            .respond_async(&b.id, super::human::answer(&a, true))
+            .await
+            .is_err()
+    );
+    assert!(
+        owner
+            .respond_async(&a.id, super::human::answer(&a, true))
+            .await
+            .is_err()
+    );
+    owner
+        .respond_async(&b.id, super::human::answer(&b, false))
+        .await
+        .unwrap();
+    let output = task.await.unwrap().unwrap();
+    assert_eq!(output["output"]["status"], "exhausted");
+    assert_eq!(output["output"]["result"]["accepted"], false);
+    assert_eq!(
+        probe.observed.lock().unwrap().len(),
+        1,
+        "current B can be checked after old A acceptance was cleared"
+    );
+    assert_eq!(
+        std::fs::read_to_string(path.join("candidate")).unwrap(),
+        "B"
+    );
+    assert_eq!(owner.pending_count(), 0);
+    assert!(plane.registry.unsettled_snapshot().is_empty());
 }
 
 struct CandidateProbe {
@@ -1948,18 +2284,23 @@ async fn review_mismatched_candidate_context_fails_before_any_prompt() {
 #[tokio::test]
 async fn cancellation_after_candidate_borrow_before_start_returns_exact_access() {
     for consumer in ["tool", "agent", "return"] {
-        pre_start_candidate_case(consumer, 0).await;
+        pre_start_candidate_case(consumer, 0, false).await;
     }
 }
 
 #[tokio::test]
 async fn budget_rejection_after_candidate_borrow_returns_access_without_count_commit() {
-    pre_start_candidate_case("tool", 1).await;
-    pre_start_candidate_case("agent", 2).await;
+    pre_start_candidate_case("tool", 1, false).await;
+    pre_start_candidate_case("agent", 2, false).await;
+}
+
+#[tokio::test]
+async fn loop_agent_budget_failure_releases_candidate_without_normal_exit() {
+    pre_start_candidate_case("agent", 2, true).await;
 }
 
 #[allow(clippy::too_many_lines)]
-async fn pre_start_candidate_case(consumer: &str, failure: usize) {
+async fn pre_start_candidate_case(consumer: &str, failure: usize, looped: bool) {
     use crate::runtime::workflow::execution::{PreStartAction, PreStartHook};
     let plane = workflow_test_plane(1);
     initialize(&plane);
@@ -2024,8 +2365,11 @@ async fn pre_start_candidate_case(consumer: &str, failure: usize) {
         );
         definition.block.edges.push(edge("next", "done"));
     }
+    if looped {
+        definition = super::loops::wrap_definition(definition, 3);
+    }
     let program = Arc::new(compile_test(definition).unwrap());
-    let total_nodes = program.total_nodes;
+    let execution_bound = program.execution_bound;
     let runtime = workflow_runtime(&plane);
     let (acquired, acquire) = tokio::sync::oneshot::channel();
     let (proceed, proceed_rx) = tokio::sync::oneshot::channel();
@@ -2051,7 +2395,7 @@ async fn pre_start_candidate_case(consumer: &str, failure: usize) {
             .await
     });
     let (scope, reference, node, before) = acquire.await.unwrap();
-    assert_eq!(before, [1, 0]);
+    assert_eq!(before, [if looped { 3 } else { 1 }, 0]);
     // This is the actual native borrow queue, not an observation-only flag.
     let (_, fresh) = workflow_cancellation();
     let signal = fresh.child_signal();
@@ -2062,7 +2406,7 @@ async fn pre_start_candidate_case(consumer: &str, failure: usize) {
             trigger.cancel();
             PreStartAction::Continue
         }
-        1 => PreStartAction::ExhaustNodes,
+        1 => PreStartAction::ExhaustSteps,
         2 => PreStartAction::ExhaustAgents,
         _ => unreachable!(),
     };
@@ -2072,8 +2416,8 @@ async fn pre_start_candidate_case(consumer: &str, failure: usize) {
         after,
         match failure {
             0 => before,
-            1 => [total_nodes, 0],
-            2 => [1, MAX_WORKFLOW_NODES],
+            1 => [execution_bound, 0],
+            2 => [before[0], MAX_WORKFLOW_AGENTS],
             _ => unreachable!(),
         }
     );
@@ -2099,7 +2443,14 @@ async fn pre_start_candidate_case(consumer: &str, failure: usize) {
             "{error:?}"
         );
     } else {
-        assert!(matches!(*error, WorkflowRunError::InvalidProgram(_)));
+        assert_eq!(
+            *error,
+            WorkflowRunError::LimitExceeded(if failure == 1 {
+                WorkflowLimit::Steps
+            } else {
+                WorkflowLimit::Agents
+            })
+        );
     }
     assert_eq!(candidate.as_ref(), Some(&reference));
     assert!(workspace.unresolved_reason().is_none(), "{workspace:?}");
@@ -2107,6 +2458,24 @@ async fn pre_start_candidate_case(consumer: &str, failure: usize) {
     assert_eq!(probe.observed.lock().unwrap().len(), 1); // initial check only
     assert!(plane.registry.all_snapshots().is_empty()); // zero Agent delegation
     let events = plane.store.read_events(None, 256).unwrap().events;
+    if looped {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    &event.event,
+                    RuntimeEvent::WorkflowLoopIterationAdmitted { .. }
+                ))
+                .count(),
+            1
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(&event.event, RuntimeEvent::WorkflowLoopExited { .. }))
+        );
+        assert!(!events.iter().any(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == "done")));
+    }
     assert!(!events.iter().any(|event| matches!(&event.event,RuntimeEvent::WorkflowNodeStarted {instance} | RuntimeEvent::WorkflowNodeSettled {instance,..} if instance.node == "next")));
     assert!(!events.iter().any(|event| matches!(&event.event,RuntimeEvent::WorkflowCandidateInvocation {node,..} if node.node == "next")));
     assert!(!events.iter().any(|event| matches!(&event.event, RuntimeEvent::NativeToolInvocation { invocation_id: crate::tools::types::ToolInvocationId::Workflow { node }, fact: crate::tools::invocation::NativeInvocationFact::Started, .. } if node.node == "next")));

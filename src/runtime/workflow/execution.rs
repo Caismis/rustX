@@ -1,10 +1,10 @@
-//! The single root/branch block executor. Native children always settle inline.
+//! The single root/Parallel/Loop block executor. Native children settle inline.
 use super::expressions::CommittedValue;
 use super::{
-    BTreeMap, MAX_VALUE_BYTES, MAX_WORKFLOW_NODES, RuntimeEvent, Value, WorkflowBlockInstance,
-    WorkflowBlockProgram, WorkflowDefinitionPath, WorkflowExecutionOutcome, WorkflowNodeInstance,
-    WorkflowNodeProgram, WorkflowPort, WorkflowRun, WorkflowRunError, WorkflowRuntime,
-    evaluate_predicate, evaluate_value, single_successor,
+    BTreeMap, MAX_VALUE_BYTES, MAX_WORKFLOW_AGENTS, MAX_WORKFLOW_STEPS, RuntimeEvent, Value,
+    WorkflowBlockInstance, WorkflowBlockProgram, WorkflowDefinitionPath, WorkflowExecutionOutcome,
+    WorkflowNodeInstance, WorkflowNodeProgram, WorkflowPort, WorkflowRun, WorkflowRunError,
+    WorkflowRuntime, evaluate_predicate, evaluate_value, single_successor,
 };
 
 #[cfg(test)]
@@ -12,6 +12,57 @@ pub(super) struct NodeFrontierHook {
     pub node: String,
     pub entered: tokio::sync::oneshot::Sender<()>,
     pub release: tokio::sync::oneshot::Receiver<()>,
+}
+
+#[cfg(test)]
+pub(super) struct IterationFrontierHook {
+    pub iteration: u32,
+    pub entered: tokio::sync::oneshot::Sender<()>,
+    pub release: tokio::sync::oneshot::Receiver<()>,
+}
+
+pub(super) fn loop_result_schema(body: &Value) -> Value {
+    serde_json::json!({"type":"object", "properties": {
+        "status":{"type":"string","enum":["satisfied","exhausted"]},
+        "iterations":{"type":"integer"}, "result":body
+    }, "required":["status","iterations","result"], "additionalProperties":false})
+}
+
+/// Deliberate worst-case expansion, including iteration admission steps. Each
+/// recursion is checked before multiplication, so overflow is not a bound.
+pub(super) fn static_execution_bound(
+    block: &WorkflowBlockProgram,
+) -> Result<(usize, usize), super::WorkflowCompileError> {
+    let mut steps = block.nodes.len();
+    let mut agents = 0;
+    for node in block.nodes.values() {
+        match node {
+            WorkflowNodeProgram::Agent(_) => agents += 1,
+            WorkflowNodeProgram::Parallel { branches, .. } => {
+                for branch in branches.values() {
+                    let (child_steps, child_agents) = static_execution_bound(&branch.block)?;
+                    steps += child_steps;
+                    agents += child_agents;
+                }
+            }
+            WorkflowNodeProgram::Loop {
+                body,
+                max_iterations,
+                ..
+            } => {
+                let (child_steps, child_agents) = static_execution_bound(body)?;
+                steps += (child_steps + 1) * *max_iterations as usize;
+                agents += child_agents * *max_iterations as usize;
+            }
+            _ => {}
+        }
+        if steps > MAX_WORKFLOW_STEPS || agents > MAX_WORKFLOW_AGENTS {
+            return Err(super::WorkflowCompileError::InvalidField(
+                "aggregate expanded execution bound exceeded".into(),
+            ));
+        }
+    }
+    Ok((steps, agents))
 }
 
 #[cfg(test)]
@@ -30,13 +81,13 @@ pub(super) struct PreStartHook {
 #[cfg(test)]
 pub(super) enum PreStartAction {
     Continue,
-    ExhaustNodes,
+    ExhaustSteps,
     ExhaustAgents,
 }
 
 #[derive(Debug, Default)]
 pub(super) struct RunBudgets {
-    nodes: usize,
+    steps: usize,
     agents: usize,
     retained_bytes: usize,
     reserved_bytes: usize,
@@ -48,6 +99,34 @@ impl RunBudgets {
             reserved_bytes: bytes,
             ..Self::default()
         }
+    }
+
+    /// Called only under the run mutex. A successful final cancellation read
+    /// commits the reservation; its counter installation cannot fail or await.
+    fn admit(
+        &mut self,
+        bound: usize,
+        agent: bool,
+        cancellation: &crate::runtime::cancellation::ExecutionCancellation,
+    ) -> Result<(), WorkflowRunError> {
+        if cancellation.is_cancelled() {
+            return Err(WorkflowRunError::from_cancellation(cancellation));
+        }
+        if self.steps >= bound || self.steps >= MAX_WORKFLOW_STEPS {
+            return Err(WorkflowRunError::LimitExceeded(super::WorkflowLimit::Steps));
+        }
+        let agent = usize::from(agent);
+        if self.agents + agent > MAX_WORKFLOW_AGENTS {
+            return Err(WorkflowRunError::LimitExceeded(
+                super::WorkflowLimit::Agents,
+            ));
+        }
+        if cancellation.is_cancelled() {
+            return Err(WorkflowRunError::from_cancellation(cancellation));
+        }
+        self.steps += 1;
+        self.agents += agent;
+        Ok(())
     }
 }
 
@@ -61,6 +140,16 @@ pub(super) fn static_retained_bound(block: &WorkflowBlockProgram) -> usize {
             WorkflowNodeProgram::Agent(agent) => schema_value_bound(&agent.output_schema),
             WorkflowNodeProgram::Tool { result, .. } => schema_value_bound(&result.schema()),
             WorkflowNodeProgram::Branch { .. } => 0,
+            WorkflowNodeProgram::Loop {
+                body,
+                output_schema,
+                ..
+            } => {
+                // One live body, one explicit carry plus transfer overlap; no history.
+                static_retained_bound(body)
+                    + 2 * schema_value_bound(&body.input_schema)
+                    + schema_value_bound(output_schema)
+            }
             WorkflowNodeProgram::Review { .. } => {
                 schema_value_bound(&super::review::result_schema())
             }
@@ -133,8 +222,8 @@ impl<'a> LocalReservation<'a> {
         let bytes = super::expressions::bounded_value_bytes(value)?;
         let mut budgets = self.run.budgets.lock().expect("run budgets");
         if bytes > MAX_VALUE_BYTES || budgets.retained_bytes + bytes > budgets.reserved_bytes {
-            return Err(WorkflowRunError::InvalidValue(
-                "aggregate retained value budget exceeded".into(),
+            return Err(WorkflowRunError::LimitExceeded(
+                super::WorkflowLimit::RetainedData,
             ));
         }
         budgets.retained_bytes += bytes;
@@ -226,7 +315,7 @@ pub(super) struct BlockOutput<'a> {
 
 impl WorkflowRuntime {
     /// Every lexical scope, including root, enters and exits here. Boxed only
-    /// because fixed nested Parallel recursively invokes the same executor.
+    /// because fixed nested blocks recursively invoke the same executor.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn execute_block<'a>(
         &'a self,
@@ -235,6 +324,7 @@ impl WorkflowRuntime {
         context: &'a crate::runtime::subagent::AttemptSubagentContext,
         input: CommittedValue,
         acceptance: Acceptance,
+        invocations: Vec<u32>,
         cancellation: &'a crate::runtime::cancellation::ExecutionCancellation,
     ) -> std::pin::Pin<
         Box<
@@ -248,7 +338,7 @@ impl WorkflowRuntime {
                     workflow_id: run.program.id.clone(),
                     blocks: block.path.clone(),
                 },
-                invocations: vec![0; block.path.len() / 2 + 1],
+                invocations,
             };
             self.emit_observability(
                 run,
@@ -404,7 +494,7 @@ impl WorkflowRuntime {
             {
                 let counts = {
                     let budgets = run.budgets.lock().unwrap();
-                    [budgets.nodes, budgets.agents]
+                    [budgets.steps, budgets.agents]
                 };
                 let _ = acquired.send((
                     run.candidate.as_ref().unwrap().clone(),
@@ -414,11 +504,11 @@ impl WorkflowRuntime {
                 ));
                 match proceed.await.expect("pre-start action") {
                     PreStartAction::Continue => {}
-                    PreStartAction::ExhaustNodes => {
-                        run.budgets.lock().unwrap().nodes = run.program.total_nodes;
+                    PreStartAction::ExhaustSteps => {
+                        run.budgets.lock().unwrap().steps = run.program.execution_bound;
                     }
                     PreStartAction::ExhaustAgents => {
-                        run.budgets.lock().unwrap().agents = MAX_WORKFLOW_NODES;
+                        run.budgets.lock().unwrap().agents = MAX_WORKFLOW_AGENTS;
                     }
                 }
                 Some((released, finish))
@@ -434,19 +524,7 @@ impl WorkflowRuntime {
                 // count reservation are synchronous, before any child preparation.
                 {
                     let mut budgets = run.budgets.lock().expect("run budgets");
-                    if cancellation.is_cancelled() {
-                        return Err(WorkflowRunError::from_cancellation(cancellation));
-                    }
-                    let agent = usize::from(matches!(node, WorkflowNodeProgram::Agent(_)));
-                    if budgets.nodes >= run.program.total_nodes
-                        || budgets.agents + agent > MAX_WORKFLOW_NODES
-                    {
-                        return Err(WorkflowRunError::InvalidProgram(
-                            "aggregate execution count exceeded".into(),
-                        ));
-                    }
-                    budgets.nodes += 1;
-                    budgets.agents += agent;
+                    budgets.admit(run.program.execution_bound, matches!(node, WorkflowNodeProgram::Agent(_)), cancellation)?;
                 }
                 self.emit_observability(
                     run,
@@ -472,6 +550,89 @@ impl WorkflowRuntime {
                     None
                 };
                 match node {
+                    WorkflowNodeProgram::Loop { input: initial, body, until, carry, max_iterations, output_schema } => {
+                        let mut carried = evaluate_value(initial, &input, &values)?;
+                        let mut carried_reservation = LocalReservation::new(run);
+                        carried_reservation.retain(&carried.value)?;
+                        for iteration in 1..=*max_iterations {
+                            carried.assert_current(run).await?;
+                            validate_commit(&body.input_schema, &carried.value)?;
+                            #[cfg(test)]
+                            {
+                                let hook = {
+                                    let mut slot = self.iteration_frontier.lock().expect("iteration frontier");
+                                    if slot.as_ref().is_some_and(|hook| hook.iteration == iteration) { slot.take() } else { None }
+                                };
+                                if let Some(hook) = hook {
+                                    let _ = hook.entered.send(());
+                                    let _ = hook.release.await;
+                                }
+                            }
+                            // Reservation, cancellation observation, admission and
+                            // consumption are one synchronous decision. No failed
+                            // reservation or detached continuation can dispatch.
+                            {
+                                let mut budgets = run.budgets.lock().expect("run budgets");
+                                budgets.admit(run.program.execution_bound, false, cancellation)?;
+                            }
+                            let mut invocations = instance.invocations.clone();
+                            invocations.push(iteration);
+                            let body_instance = WorkflowBlockInstance {
+                                run: run.run_id.clone(),
+                                definition: WorkflowDefinitionPath { workflow_id: run.program.id.clone(), blocks: body.path.clone() },
+                                invocations: invocations.clone(),
+                            };
+                            self.emit_observability(run, RuntimeEvent::WorkflowLoopIterationAdmitted {
+                                node: node_instance.clone(), body: body_instance.clone(), iteration,
+                            });
+                            let settled = self.execute_block(run, body, context, carried, control.clone(), invocations, cancellation).await;
+                            self.emit_observability(run, RuntimeEvent::WorkflowLoopIterationSettled {
+                                node: node_instance.clone(), body: body_instance, iteration, outcome: outcome(&settled),
+                            });
+                            // The same block engine has validated/exported the body
+                            // output and finalized every native owner before returning.
+                            drop(carried_reservation);
+                            let settled = settled?;
+                            control.apply(&settled.acceptance_transition);
+                            transition.then(&settled.acceptance_transition);
+                            settled.value.assert_current(run).await?;
+                            let BlockOutput { value, _reservation: _result_reservation, .. } = settled;
+                            let scope = BTreeMap::from([("result".into(), value)]);
+                            let satisfied = evaluate_predicate(until, &Value::Null.into(), &scope)?;
+                            satisfied.assert_current(run).await?;
+                            if satisfied.value == Value::Bool(true) || iteration == *max_iterations {
+                                let status = if satisfied.value == Value::Bool(true) { super::WorkflowLoopExit::Satisfied } else { super::WorkflowLoopExit::Exhausted };
+                                let value = serde_json::json!({"status":status,"iterations":iteration,"result":scope["result"].value});
+                                validate_commit(output_schema, &value)?;
+                                reservation.retain(&value)?;
+                                // Exit commits only the structural result, never a bare body value.
+                                if cancellation.is_cancelled() { return Err(WorkflowRunError::from_cancellation(cancellation)); }
+                                values.insert(node_id.clone(), CommittedValue { value, candidate: scope["result"].candidate.clone() });
+                                self.emit_observability(run, RuntimeEvent::WorkflowLoopExited { node: node_instance.clone(), iterations: iteration, status });
+                                let port = match status {
+                                    super::WorkflowLoopExit::Satisfied => WorkflowPort::Satisfied,
+                                    super::WorkflowLoopExit::Exhausted => WorkflowPort::Exhausted,
+                                };
+                                let successor = block.outgoing[&node_id].iter()
+                                    .find(|edge| edge.port == port)
+                                    .ok_or_else(|| WorkflowRunError::InvalidProgram(node_id.clone()))?
+                                    .to.clone();
+                                node_id = successor;
+                                return Ok(None);
+                            }
+                            let next = evaluate_value(carry, &Value::Null.into(), &scope)?;
+                            next.assert_current(run).await?;
+                            validate_commit(&body.input_schema, &next.value)?;
+                            let mut next_reservation = LocalReservation::new(run);
+                            next_reservation.retain(&next.value)?;
+                            if cancellation.is_cancelled() { return Err(WorkflowRunError::from_cancellation(cancellation)); }
+                            // Atomic carry commit after full validation and byte reservation.
+                            carried = next;
+                            carried_reservation = next_reservation;
+                            // Private body locals are already retired; only this carry survives.
+                        }
+                        unreachable!("compiled positive finite Loop")
+                    }
                     WorkflowNodeProgram::Review {
                         subject,
                         context: checks,
@@ -641,6 +802,7 @@ impl WorkflowRuntime {
                                             context,
                                             input,
                                             control.clone(),
+                                            { let mut path = instance.invocations.clone(); path.push(0); path },
                                             cancellation,
                                         )
                                         .await
@@ -740,7 +902,7 @@ impl WorkflowRuntime {
             if let Some((released, finish)) = pre_start_cleanup {
                 let counts = {
                     let budgets = run.budgets.lock().unwrap();
-                    [budgets.nodes, budgets.agents]
+                    [budgets.steps, budgets.agents]
                 };
                 let _ = released.send(counts);
                 let _ = finish.await;
@@ -759,7 +921,10 @@ impl WorkflowRuntime {
                 // declared export survives, with its own bounded reservation.
                 return Ok(output);
             }
-            if !matches!(node, WorkflowNodeProgram::Branch { .. }) {
+            if !matches!(
+                node,
+                WorkflowNodeProgram::Branch { .. } | WorkflowNodeProgram::Loop { .. }
+            ) {
                 node_id = single_successor(block, &node_id)?;
             }
         }
@@ -806,6 +971,40 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
+    fn shared_admission_counts_agents_separately_and_rejection_commits_nothing() {
+        let signal = crate::runtime::cancellation::CancellationSignal::new();
+        let cancellation = crate::runtime::cancellation::ExecutionCancellation::detached(
+            signal.clone(),
+            crate::runtime::types::CancellationReason::UserRequested,
+        );
+        let mut budgets = RunBudgets::default();
+        for _ in 0..MAX_WORKFLOW_AGENTS {
+            budgets
+                .admit(MAX_WORKFLOW_STEPS, true, &cancellation)
+                .unwrap();
+        }
+        budgets
+            .admit(MAX_WORKFLOW_STEPS, false, &cancellation)
+            .unwrap(); // an iteration is not an Agent
+        let before = (budgets.steps, budgets.agents);
+        assert_eq!(
+            budgets.admit(MAX_WORKFLOW_STEPS, true, &cancellation),
+            Err(WorkflowRunError::LimitExceeded(
+                super::super::WorkflowLimit::Agents
+            ))
+        );
+        assert_eq!((budgets.steps, budgets.agents), before);
+        signal.cancel();
+        assert!(
+            budgets
+                .admit(MAX_WORKFLOW_STEPS, false, &cancellation)
+                .unwrap_err()
+                .is_cancelled()
+        );
+        assert_eq!((budgets.steps, budgets.agents), before);
+    }
+
+    #[test]
     fn retained_budget_is_shared_and_released_only_with_private_state() {
         assert_eq!(
             schema_value_bound(&serde_json::json!({"type":"object","const":{"value":1}})),
@@ -839,8 +1038,11 @@ mod tests {
         }
         assert_eq!(run.budgets.lock().unwrap().retained_bytes, MAX_LOCAL_BYTES);
         let mut nested = LocalReservation::new(&run);
-        assert!(
-            nested.retain(&value).is_err(),
+        assert_eq!(
+            nested.retain(&value),
+            Err(WorkflowRunError::LimitExceeded(
+                super::super::WorkflowLimit::RetainedData
+            )),
             "child scope cannot reset aggregate counter"
         );
         assert_eq!(nested.bytes, 0, "rejected reservation commits nothing");

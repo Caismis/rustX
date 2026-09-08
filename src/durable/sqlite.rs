@@ -202,7 +202,8 @@ use super::inbox::{
 /// `PhysicalSettlement` recovery guards. Older stores lack this source-content
 /// disposal authority and are rejected without migration.
 /// Version 29 adds Review audit and required Questionnaire invocation identity.
-pub const SQLITE_SCHEMA_VERSION: i64 = 29;
+/// Version 30 adds bounded Loop iteration settlement and explicit exit facts.
+pub const SQLITE_SCHEMA_VERSION: i64 = 30;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -12063,6 +12064,94 @@ mod tests {
             SqliteConversationStore::open(conversation_id, &path),
             Err(ConversationStoreError::SchemaVersionMismatch {
                 stored: 1,
+                expected: SQLITE_SCHEMA_VERSION
+            })
+        ));
+    }
+
+    #[test]
+    fn loop_lifecycle_facts_round_trip_without_executable_state() {
+        use crate::runtime::workflow::{WorkflowExecutionOutcome, WorkflowLoopExit, test_instance};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("loop-facts.sqlite");
+        let conversation = ConversationId::new("loop-facts");
+        let mut node = test_instance("feedback", "loop");
+        node.block.run.conversation_id = conversation.clone();
+        node.block.invocations = vec![0, 2];
+        let mut body = node.block.clone();
+        body.definition
+            .blocks
+            .extend(["loop".into(), "body".into()]);
+        body.invocations.push(3);
+        let facts = vec![
+            RuntimeEvent::WorkflowLoopIterationAdmitted {
+                node: node.clone(),
+                body: body.clone(),
+                iteration: 3,
+            },
+            RuntimeEvent::WorkflowLoopIterationSettled {
+                node: node.clone(),
+                body,
+                iteration: 3,
+                outcome: WorkflowExecutionOutcome::Completed,
+            },
+            RuntimeEvent::WorkflowLoopExited {
+                node: node.clone(),
+                iterations: 3,
+                status: WorkflowLoopExit::Satisfied,
+            },
+            RuntimeEvent::WorkflowLoopExited {
+                node,
+                iterations: 3,
+                status: WorkflowLoopExit::Exhausted,
+            },
+        ];
+        {
+            let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+            for (index, fact) in facts.iter().enumerate() {
+                store
+                    .append_event(envelope(
+                        &conversation,
+                        &format!("loop-fact-{index}"),
+                        None,
+                        fact.clone(),
+                    ))
+                    .unwrap();
+            }
+        }
+        let store = SqliteConversationStore::open(conversation, &path).unwrap();
+        let read = store
+            .read_events(None, 16)
+            .unwrap()
+            .events
+            .into_iter()
+            .map(|e| e.event)
+            .collect::<Vec<_>>();
+        assert_eq!(read, facts);
+        assert!(store.load_canonical().unwrap().is_empty());
+    }
+
+    #[test]
+    fn schema_29_without_loop_lifecycle_facts_is_rejected() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pre-loop.sqlite");
+        let conversation = ConversationId::new("loop-schema");
+        {
+            let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+            store
+                .conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE rustx_store SET schema_version = 29 WHERE id = 1",
+                    [],
+                )
+                .unwrap();
+        }
+        assert!(matches!(
+            SqliteConversationStore::open(conversation, &path),
+            Err(ConversationStoreError::SchemaVersionMismatch {
+                stored: 29,
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));

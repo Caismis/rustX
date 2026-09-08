@@ -176,6 +176,7 @@ fn validate_profiles(
                     validate_profiles(&branch.block, context, policy)?;
                 }
             }
+            WorkflowNodeProgram::Loop { body, .. } => validate_profiles(body, context, policy)?,
             _ => {}
         }
     }

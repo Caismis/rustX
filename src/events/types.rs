@@ -712,6 +712,25 @@ pub enum RuntimeEvent {
     WorkflowBlockStarted {
         instance: crate::runtime::workflow::WorkflowBlockInstance,
     },
+    /// One iteration consumed its allowance at the cancellation/budget frontier.
+    WorkflowLoopIterationAdmitted {
+        node: crate::runtime::workflow::WorkflowNodeInstance,
+        body: crate::runtime::workflow::WorkflowBlockInstance,
+        iteration: u32,
+    },
+    /// The fixed body and all its native owners reached terminal settlement.
+    WorkflowLoopIterationSettled {
+        node: crate::runtime::workflow::WorkflowNodeInstance,
+        body: crate::runtime::workflow::WorkflowBlockInstance,
+        iteration: u32,
+        outcome: crate::runtime::workflow::WorkflowExecutionOutcome,
+    },
+    /// A validated structural Loop result committed. This is not business success.
+    WorkflowLoopExited {
+        node: crate::runtime::workflow::WorkflowNodeInstance,
+        iterations: u32,
+        status: crate::runtime::workflow::WorkflowLoopExit,
+    },
     /// Private locals retired after all accepted native children settled.
     WorkflowBlockSettled {
         instance: crate::runtime::workflow::WorkflowBlockInstance,

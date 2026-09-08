@@ -42,6 +42,9 @@ pub(super) fn owner(
     (owner, audit, rx)
 }
 fn human_program(question: bool) -> Arc<WorkflowProgram> {
+    Arc::new(compile_test(human_definition(question)).unwrap())
+}
+fn human_definition(question: bool) -> WorkflowDefinition {
     let result = if question {
         schema(
             json!({"cancelled":{"type":"boolean"},"answers":{"type":"array","items":{"type":"object"}}}),
@@ -55,11 +58,10 @@ fn human_program(question: bool) -> Arc<WorkflowProgram> {
     } else {
         json!({"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[]})
     };
-    let definition = serde_json::from_value(json!({"description":"Human business decision","timeout_ms":100,"tools":if question {json!([{"origin":"builtin","name":"ask_user"}])} else {json!([])},"block":{
+    serde_json::from_value(json!({"description":"Human business decision","timeout_ms":100,"tools":if question {json!([{"origin":"builtin","name":"ask_user"}])} else {json!([])},"block":{
         "input":schema(json!({"passed":{"type":"boolean"}}), &["passed"]),"output":result,"entry":"human",
         "nodes":{"human":node,"branch":{"type":"branch","condition":{"type":"boolean","value":{"type":"reference","path":["human",if question {"cancelled"} else {"accepted"}]}}},"yes":{"type":"return","output":{"type":"reference","path":["human"]}},"no":{"type":"return","output":{"type":"reference","path":["human"]}}},
-        "edges":[{"from":"human","to":"branch"},{"from":"branch","to":"yes","port":"true"},{"from":"branch","to":"no","port":"false"}]}})).unwrap();
-    Arc::new(compile_test(definition).unwrap())
+        "edges":[{"from":"human","to":"branch"},{"from":"branch","to":"yes","port":"true"},{"from":"branch","to":"no","port":"false"}]}})).unwrap()
 }
 fn human_context(
     plane: &WorkflowTestPlane,
@@ -74,6 +76,144 @@ fn human_context(
             ))
             .with_native_interaction(owner),
     )
+}
+
+fn feedback_definition(question: bool) -> WorkflowDefinition {
+    let mut definition = super::loops::wrap_definition(human_definition(question), 3);
+    let WorkflowNodeDefinition::Loop { until, carry, .. } =
+        definition.block.nodes.get_mut("feedback").unwrap()
+    else {
+        unreachable!()
+    };
+    let boolean = WorkflowPredicate::Boolean {
+        value: reference(if question {
+            "result.cancelled"
+        } else {
+            "result.accepted"
+        }),
+    };
+    **until = if question {
+        WorkflowPredicate::Not {
+            predicate: Box::new(boolean),
+        }
+    } else {
+        boolean
+    };
+    *carry = WorkflowValue::Literal {
+        value: json!({"passed":false}),
+    };
+    definition
+}
+
+#[tokio::test]
+async fn loop_review_and_questionnaire_reject_old_responses_and_allocate_fresh_instances() {
+    for question in [false, true] {
+        let plane = workflow_test_plane(1);
+        let (owner, audit, mut published) = owner(&plane);
+        let context = human_context(&plane, owner.clone());
+        let runtime = workflow_runtime(&plane);
+        let (_, cancellation) = workflow_cancellation();
+        let definition = feedback_definition(question);
+        let task = tokio::spawn(async move {
+            runtime
+                .run_foreground(
+                    Arc::new(compile_test(definition).unwrap()),
+                    ToolCallId::new("loop-human"),
+                    context,
+                    json!({"passed":false}),
+                    cancellation,
+                )
+                .await
+        });
+        let first = published.recv().await.unwrap();
+        owner
+            .respond_async(&first.id, answer(&first, false))
+            .await
+            .unwrap();
+        let second = published.recv().await.unwrap();
+        assert_ne!(first.id, second.id);
+        assert!(
+            owner
+                .respond_async(&first.id, answer(&first, true))
+                .await
+                .is_err()
+        );
+        if let (
+            InteractionKind::Review { review: a, .. },
+            InteractionKind::Review { review: b, .. },
+        ) = (&first.kind, &second.kind)
+        {
+            assert_eq!(a.instance.block.definition, b.instance.block.definition);
+            assert_eq!(a.instance.block.invocations, [0, 1]);
+            assert_eq!(b.instance.block.invocations, [0, 2]);
+            assert!(
+                owner
+                    .respond_async(&second.id, answer(&first, true))
+                    .await
+                    .is_err()
+            );
+        }
+        if let (
+            InteractionKind::Questionnaire {
+                invocation_id: a, ..
+            },
+            InteractionKind::Questionnaire {
+                invocation_id: b, ..
+            },
+        ) = (&first.kind, &second.kind)
+        {
+            assert_ne!(a, b);
+        }
+        assert!(!task.is_finished());
+        owner
+            .respond_async(&second.id, answer(&second, true))
+            .await
+            .unwrap();
+        let output = task.await.unwrap().unwrap();
+        assert_eq!(output["status"], "satisfied");
+        assert_eq!(output["iterations"], 2);
+        assert_eq!(audit.events().len(), 4);
+        assert!(owner.pending_snapshot().is_empty());
+        assert!(plane.registry.all_snapshots().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn unavailable_loop_human_step_fails_without_exhaustion_or_reprompt() {
+    let plane = workflow_test_plane(1);
+    let (owner, _, mut published) = owner(&plane);
+    owner.set_provider_available(false);
+    let context = human_context(&plane, owner);
+    let runtime = workflow_runtime(&plane);
+    let observations = runtime.observations.subscribe();
+    let (_, cancellation) = workflow_cancellation();
+    assert!(
+        runtime
+            .run_foreground(
+                Arc::new(compile_test(feedback_definition(false)).unwrap()),
+                ToolCallId::new("unavailable-loop"),
+                context,
+                json!({"passed":false}),
+                cancellation
+            )
+            .await
+            .is_err()
+    );
+    assert!(published.try_recv().is_err());
+    assert_eq!(
+        observations
+            .borrow()
+            .iter()
+            .filter(|e| matches!(e, RuntimeEvent::WorkflowLoopIterationAdmitted { .. }))
+            .count(),
+        1
+    );
+    assert!(
+        !observations
+            .borrow()
+            .iter()
+            .any(|e| matches!(e, RuntimeEvent::WorkflowLoopExited { .. }))
+    );
 }
 pub(super) fn answer(request: &InteractionRequest, affirmative: bool) -> InteractionResponse {
     match &request.kind {
