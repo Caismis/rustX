@@ -1,18 +1,10 @@
-//! Issue #83: the native YAML Workflow path through the existing runtime.
+//! Registered foreground Workflow boundary and shipped-program conformance.
 //!
-//! This suite crosses the real provider boundary once for the parent Agent
-//! and once for the Workflow-owned child. The provider script is strict about
-//! the request sequence:
-//!
-//! ```text
-//! parent -> concrete review_pr ToolCall
-//! child  -> reserved workflow_output ToolCall
-//! parent -> one bounded Workflow ToolResult continuation
-//! ```
-//!
-//! The Workflow itself is loaded only because `workflows.definitions` names
-//! its exact YAML file. Its `reviewer` profile is Workflow-admitted but not
-//! main-admitted, proving the two domains remain independent.
+//! Foundational local fixtures prove explicit registration and the canonical
+//! outer Tool boundary. The #223 reference scenarios compose fixed Parallel,
+//! real candidate writes and frozen verification, bounded repair, and root HITL
+//! through strict provider-emulator sequences and native execution.
+//! Private child transcripts remain outside the single parent `ToolResult`.
 
 use std::sync::Arc;
 
@@ -918,19 +910,26 @@ impl Driver {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn shipped_repair_uses_real_writes_checks_and_root_human_decisions() {
-    reference_repair(false).await;
+    reference_repair(false, false).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn shipped_repair_exhaustion_retains_dirty_work_without_another_body() {
-    reference_repair(true).await;
+    reference_repair(true, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn shipped_repair_candidate_checker_tampering_cannot_redefine_frozen_verification() {
+    reference_repair(false, true).await;
 }
 
 #[allow(clippy::too_many_lines)]
-async fn reference_repair(exhausted: bool) {
+async fn reference_repair(exhausted: bool, tampered: bool) {
     use rustx::events::review::{ReviewDecision, ReviewResponse};
     use rustx::runtime::{InteractionKind, InteractionResponse, QuestionnaireResponse};
-    let scenario = if exhausted {
+    let scenario = if tampered {
+        "workflow_reference_tampering"
+    } else if exhausted {
         "workflow_reference_exhaustion"
     } else {
         "workflow_reference_repair"
@@ -948,6 +947,25 @@ async fn reference_repair(exhausted: bool) {
                 .await_gate(&format!("reference-writer-{iteration}"))
                 .await;
             assert_eq!(emulator.requests().await.len(), 2 * iteration + 2);
+            if tampered && iteration == 2 {
+                // The second writer's provider gate is after the first native
+                // check's settlement and failed-finding commit, before repair.
+                let (snapshot, _) = driver.runtime.host().snapshot().unwrap();
+                let run = &snapshot.workflows.runs[0];
+                let checks = run
+                    .instances
+                    .iter()
+                    .filter(|row| row.node.as_deref() == Some("check") && row.invocation.is_some())
+                    .collect::<Vec<_>>();
+                assert_eq!(checks.len(), 1);
+                assert!(matches!(checks[0].state, WorkflowState::Settled { .. }));
+                assert!(
+                    !run.instances
+                        .iter()
+                        .any(|row| row.node.as_deref() == Some("review_candidate")
+                            && row.review_accepted == Some(true))
+                );
+            }
             emulator
                 .release_gate(&format!("reference-writer-{iteration}"))
                 .await;
@@ -957,6 +975,8 @@ async fn reference_repair(exhausted: bool) {
         let mut reviews = 0;
         let mut approvals = 0;
         let mut questions = 0;
+        let mut check_commands = Vec::new();
+        let mut writes = 0;
         loop {
             let EventDelivery::Event(event) =
                 tokio::time::timeout(std::time::Duration::from_mins(1), driver.events.next())
@@ -990,8 +1010,19 @@ async fn reference_repair(exhausted: bool) {
                                 },
                             }
                         }
-                        InteractionKind::Approval { .. } => {
+                        InteractionKind::Approval {
+                            tool_name,
+                            arguments,
+                            ..
+                        } => {
                             approvals += 1;
+                            if tool_name == "bash" {
+                                check_commands
+                                    .push(arguments["command"].as_str().unwrap().to_owned());
+                            } else {
+                                assert_eq!(tool_name, "write");
+                                writes += 1;
+                            }
                             serde_json::from_value::<InteractionResponse>(
                                 serde_json::json!({"type":"approval","decision":{"type":"allow"}}),
                             )
@@ -1027,9 +1058,22 @@ async fn reference_repair(exhausted: bool) {
             (
                 2,
                 if exhausted { 1 } else { 2 },
-                u64::try_from(2 * iterations).unwrap()
+                u64::try_from(2 * iterations + usize::from(tampered)).unwrap()
             )
         );
+        assert_eq!(writes, iterations + usize::from(tampered));
+        assert_eq!(check_commands.len(), iterations);
+        let definition: serde_json::Value = serde_yaml::from_str(include_str!(
+            "../../examples/local-runtime/workspace/.agents/workflows/implement_and_review.yaml"
+        ))
+        .unwrap();
+        let frozen = definition["block"]["nodes"]["repair"]["body"]["nodes"]["check"]["arguments"]
+            ["value"]["command"]
+            .as_str()
+            .unwrap();
+        assert!(frozen.starts_with("python3 -I -B - <<'PY'"));
+        assert!(!frozen.contains("checks/verify_greeting.py"));
+        assert!(check_commands.iter().all(|command| command == frozen));
     };
     tokio::join!(release_writers, interact);
     assert_eq!(emulator.requests().await.len(), 4 + 2 * iterations);
@@ -1100,6 +1144,22 @@ async fn reference_repair(exhausted: bool) {
     }
     let handoff = run.handoff.as_ref().unwrap();
     assert_eq!(handoff.state, "retained");
+    if tampered {
+        assert_eq!(
+            std::fs::read_to_string(
+                std::path::Path::new(&handoff.path).join("checks/verify_greeting.py")
+            )
+            .unwrap(),
+            "print(\"passed\", end=\"\")\n"
+        );
+        assert!(
+            !driver
+                .root
+                .path()
+                .join("workspace/checks/verify_greeting.py")
+                .exists()
+        );
+    }
     let changed =
         std::fs::read_to_string(std::path::Path::new(&handoff.path).join("greeting.py")).unwrap();
     assert_eq!(

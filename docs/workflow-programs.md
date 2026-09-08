@@ -37,7 +37,28 @@ block:
     check:
       type: tool
       selector: {origin: builtin, name: bash}
-      arguments: {type: literal, value: {command: 'python3 -B checks/verify_greeting.py'}}
+      arguments:
+        type: literal
+        value:
+          command: |
+            python3 -I -B - <<'PY'
+            """Fixed checker. Exit zero means checks ran, not that business checks passed."""
+            import contextlib
+            import runpy
+            import sys
+            from pathlib import Path
+
+            source = Path("greeting.py")
+            if source.stat().st_size > 4096:
+                raise ValueError("greeting.py exceeds the 4096-byte source limit")
+            # Candidate stdout cannot forge the checker's exact output contract.
+            with contextlib.redirect_stdout(sys.stderr):
+                greeting = runpy.run_path(str(source))["greeting"]
+                actual = [greeting("Ada"), greeting("")]
+            if any(not isinstance(value, str) or len(value) > 256 for value in actual):
+                raise ValueError("greeting must return bounded strings")
+            sys.stdout.write("passed" if actual == ["Hello, Ada!", "Hello, friend!"] else "failed")
+            PY
       result: {type: json, part: 0, schema: *report}
     done:
       type: return
@@ -145,8 +166,13 @@ that gate, nor an Agent registry capacity slot, while awaiting descendants.
 Thus capacity one is usable without weakening ordinary outer sibling ordering.
 
 The copyable `implement_and_review` example uses ordinary native Bash and a
-project-owned standard-library checker. Its exact stdout enum is validated from
-the native JSON result before typed Branch/Return constructs business findings.
+standard-library checker frozen in trusted literal Tool arguments before candidate writer admission.
+The candidate supplies the source under test, not the verifier implementation.
+Candidate edits to Workflow YAML cannot change the already admitted program generation.
+The checker's exact stdout enum is validated from the native JSON result before
+typed Branch/Return constructs business findings. Tool Approval permits an invocation,
+not the trustworthiness of candidate contents. This is not filesystem sandboxing
+against arbitrary external host processes.
 No command-name special case or Workflow-owned process supervisor is involved.
 
 ```yaml
@@ -893,8 +919,12 @@ cancellation/deadline scope. Both leaf and finite outer deadlines remain active.
 [The executable implementation/review example](../examples/local-runtime/workspace/.agents/workflows/implement_and_review.yaml)
 shows static capability selection, literal arguments, typed results, Branch and
 Review. Register it explicitly through the usual Workflow resource configuration.
-Its input object is the complete plan being reviewed; answering the question does
-not rewrite that plan. The answer is explicit immutable review context.
+Its root receives business input such as `{"requirement":"Fix greeting.py"}`. An
+empty requirement takes the fixed question path. A planning Agent consumes that
+committed business context and produces a structured plan; Review accepts or rejects
+that plan. Acceptance admits the bounded implementation/check Loop, followed by
+candidate-bound Review on success or an explicit retained handoff on exhaustion.
+The plan is data and cannot change the fixed graph or capability selectors.
 
 There are three distinct contracts:
 

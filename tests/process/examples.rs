@@ -23,7 +23,6 @@ fn examples_root() -> PathBuf {
 
 const REQUIRED_EXAMPLE_FILES: &[&str] = &[
     "AGENTS.md",
-    "checks/verify_greeting.py",
     ".agents/subagents/planner/instructions.md",
     ".agents/subagents/implementer/instructions.md",
     ".agents/skills/review-guidance/SKILL.md",

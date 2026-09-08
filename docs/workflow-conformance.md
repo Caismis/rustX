@@ -7,7 +7,7 @@ Branch, Parallel, Review, Loop and Return without new grammar or execution APIs.
 
 ## Composed scenarios and authoritative owner tests
 
-The three shipped-program scenarios live in
+The four shipped-program scenarios live in
 [`tests/conformance/workflow.rs`](../tests/conformance/workflow.rs). They copy the
 actual workspace and registration, substitute only local provider configuration,
 and use real native child processes, file writes, Bash supervision and root HITL.
@@ -16,7 +16,7 @@ The emulator emits model responses; it never executes tools or supplies check re
 | Contract | Product composition and owning regression |
 | --- | --- |
 | Outer Tool boundary | `shipped_repair_uses_real_writes_checks_and_root_human_decisions`: 8 requests = parent admission + plan + child question + 2 writer requests + 2 child output requests + parent continuation; one canonical ToolResult. At plan/candidate Review, exactly 2/7 requests exist. |
-| Real verification | Same scenario: first native write produces an incorrect greeting despite model prose claiming success; real Bash/Python check fails, second write fixes it, second check passes. Exactly 2 writer Agents and 2 checker executions. |
+| Real verification | Same scenario: first native write produces an incorrect greeting despite model prose claiming success; real Bash/Python check fails, second write fixes it, second check passes. Exactly 2 writer Agents and 2 checker executions. `shipped_repair_candidate_checker_tampering_cannot_redefine_frozen_verification` additionally approves a candidate-side fake checker printing `passed`: wrong source still commits failed feedback, then corrected source passes. The same frozen command is approved in both iterations: 8 requests, 3 AgentRuns, 2 bodies, 3 writes, 2 native checks, 5 approvals, 2 questions and 2 Reviews. |
 | Structured dataflow | Shipped Parallel children reject parent-only history in provider expectations; downstream quality pass receives only declared assessment. Repair excludes private model claims and child questions from parent continuation. Native lexical-scope tests reject sibling/optional-path reads. |
 | Fixed Parallel | `shipped_parallel_reverses_completion_without_git_or_parent_orchestration`: first response remains gated until the second child's native settled publication. Exactly 3 AgentRuns, 5 provider requests, one result, no candidate or Git initialization. `reversing_completions_preserves_keyed_outputs_failures_and_join_commit_order` and `nested_capacity_one_blocks_never_reserve_descendant_capacity` own keyed all-settle and capacity-one detail. |
 | Candidate handoff | Shipped repair checks and Review operate in the same retained candidate; exact final dirty bytes are inspected and parent bytes are unchanged. Native `agent_dirty_bytes_reach_exact_tool_context_after_child_settlement_with_frozen_resources` owns cross-node context transfer. |
@@ -50,10 +50,21 @@ settlement. InteractionCoordinator owns rendezvous. Native workspace infrastruct
 owns the lease, candidate content/version and disposal. Event Journal records facts;
 Runtime Client/TUI read the authoritative Workflow owner. There is no second engine.
 
+* Verification trust is fixed before candidate writer admission: the Workflow
+  program is compiled/frozen, including its Tool selector and literal verification
+  command. The verification program is frozen as trusted Workflow Tool arguments.
+  The candidate supplies the source under test, not the verifier implementation.
+  Candidate edits to Workflow YAML cannot mutate the admitted program generation.
+  A fake `checks/verify_greeting.py` is merely candidate data, even when its write
+  was explicitly approved. Tool Approval authorizes an exact invocation, not
+  verifier semantics. This does not sandbox arbitrary external host processes.
 * Candidate publication follows native writer settlement and content inspection,
   including uncommitted source bytes. Workflow commits only the resulting native
   candidate reference with validated structured output.
-* Checking holds exclusive candidate access through physical Tool settlement.
+* Checking executes the frozen verifier against the exact candidate through native
+  Bash and holds exclusive candidate access through physical Tool settlement.
+  Native Tool status stays distinct from the machine-derived `passed`/`failed`
+  finding; only successful execution enters typed business Branch/Return.
   `WorkspaceAccess::finish(true)` validates unchanged content before applicability
   can commit. A validator that mutates source cannot certify its input.
 * Review freezes its exact plan/candidate subject before durable publication. The

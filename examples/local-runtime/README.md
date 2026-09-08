@@ -21,7 +21,6 @@ examples/local-runtime/
 ├── workspace/
 │   ├── AGENTS.md
 │   ├── greeting.py
-│   ├── checks/verify_greeting.py
 │   └── .agents/
 │       ├── skills/
 │       │   └── review-guidance/SKILL.md
@@ -562,14 +561,20 @@ plan. The accepted path executes at most three implement/check bodies. Each impl
 exports its implemented plan anew; only those declared committed outputs and the actual
 check report are carried forward. Private transcripts are never carried.
 
-`Tool(bash)` executes `python3 -B checks/verify_greeting.py` in the candidate. The native
+`Tool(bash)` executes a literal `python3 -I -B -` here-document in the candidate. The native
 Bash JSON result supplies `stdout`, `stderr`, `combined`, and `exit_code`. A closed
 `stdout` enum admits exactly `passed` or `failed`, then typed equality/Return produces
 the boolean report. This is a fixed machine protocol, not log-keyword searching.
 A zero exit with `failed` is a successfully executed check with business findings.
 Missing files, exceptions, invalid return values, denial, cancellation, timeout and
 unknown settlement never become `passed: false` and never enter another iteration.
-`-B` prevents bytecode writes; the checker must not change candidate source.
+`-I` excludes candidate import paths and Python environment overrides; `-B` prevents bytecode writes.
+The verification program is frozen as trusted Workflow Tool arguments. The candidate
+supplies the source under test, not the verifier implementation. Editing Workflow YAML
+inside the candidate cannot mutate the already admitted program: execution uses the
+frozen program generation. A candidate-side fake checker is only candidate data.
+Tool Approval permits one exact invocation; it does not certify verifier trust. This
+is not filesystem sandboxing against arbitrary external host processes.
 
 Policy mode asks approval for each exact Bash invocation and native write. `full_access` bypasses that
 permission only, never the fixed question or either human Review. An implementer's
