@@ -558,6 +558,10 @@ The runtime prevents overlapping **runtime-owned** writers. It does not
 sandbox arbitrary host processes. Every access revalidates exact source facts;
 Linux inotify/macOS vnode observation detects observed source/control writes
 during validation, including writes followed by restoration of identical bytes.
+Darwin attribute-only notifications exclude access-time-only bookkeeping when
+all other recorded attributes are unchanged. This filters read noise; it is
+not source-equality proof. Content/index/mode fingerprints and independent
+data-write notifications remain required.
 Observation loss/overflow or invalid ownership fails closed. macOS directory
 notifications may conservatively invalidate a check for directory changes.
 Kernel notification semantics are not universal external-process isolation:

@@ -213,7 +213,7 @@ impl Kernel {
 struct Kernel {
     queue: nix::sys::event::Kqueue,
     files: Vec<std::fs::File>,
-    paths: std::collections::HashMap<usize, PathBuf>,
+    paths: std::collections::HashMap<usize, (PathBuf, std::fs::Metadata)>,
 }
 
 #[cfg(target_os = "macos")]
@@ -266,7 +266,10 @@ impl Kernel {
                     }),
                 )
                 .map_err(|e| e.to_string())?;
-            paths.insert(ident, path.clone());
+            paths.insert(
+                ident,
+                (path.clone(), file.metadata().map_err(|e| e.to_string())?),
+            );
             files.push(file);
         }
         Ok(Self {
@@ -309,15 +312,46 @@ impl Kernel {
                 {
                     return Err("candidate mutation observation lost coverage".into());
                 }
-                changed.insert(
-                    self.paths
-                        .get(&event.ident())
-                        .ok_or("unknown candidate watch")?
-                        .clone(),
+                let (path, initial) = self
+                    .paths
+                    .get(&event.ident())
+                    .ok_or("unknown candidate watch")?;
+                if event.fflags() == FilterFlag::NOTE_ATTRIB {
+                    let current = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+                    if unchanged_non_access_attributes(initial, &current) {
+                        continue;
+                    }
+                }
+                #[cfg(test)]
+                eprintln!(
+                    "candidate vnode observation: {} {:?}",
+                    path.display(),
+                    event.fflags()
                 );
+                changed.insert(path.clone());
             }
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn unchanged_non_access_attributes(before: &std::fs::Metadata, after: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    // NOTE_ATTRIB includes access-time bookkeeping from reads. This only
+    // excludes that noise; it never establishes source equality. Exact
+    // content/index/mode hashing and independent NOTE_WRITE/EXTEND events
+    // remain mandatory, including for write-and-restore detection.
+    before.dev() == after.dev()
+        && before.ino() == after.ino()
+        && before.mode() == after.mode()
+        && before.nlink() == after.nlink()
+        && before.uid() == after.uid()
+        && before.gid() == after.gid()
+        && before.len() == after.len()
+        && before.ctime() == after.ctime()
+        && before.ctime_nsec() == after.ctime_nsec()
+        && before.mtime() == after.mtime()
+        && before.mtime_nsec() == after.mtime_nsec()
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
