@@ -313,10 +313,10 @@ impl ToolExecutor for SubagentExecutor {
 #[cfg(test)]
 mod tests {
     use super::{SUBAGENT_TOOL_NAME, SubagentExecutor, SubagentInput, ToolInvocation, definition};
-    use crate::runtime::subagent::SubagentWorkspacePolicy;
     use crate::runtime::subagent::catalog::{
         SubagentCatalog, SubagentDefinition, SubagentName, SubagentProjectInstructionPolicy,
     };
+    use crate::runtime::workspace::WorkspacePolicy;
     use crate::tools::types::{ToolExecutionStatus, ToolResultContent};
 
     fn catalog() -> SubagentCatalog {
@@ -334,7 +334,7 @@ mod tests {
                     inherit: true,
                     files: Vec::new(),
                 },
-                SubagentWorkspacePolicy::SharedWorkspace,
+                WorkspacePolicy::SharedWorkspace,
             )
             .expect("definition"),
             SubagentDefinition::new(
@@ -350,7 +350,7 @@ mod tests {
                     inherit: true,
                     files: Vec::new(),
                 },
-                SubagentWorkspacePolicy::SharedWorkspace,
+                WorkspacePolicy::SharedWorkspace,
             )
             .expect("definition"),
         ])
@@ -537,9 +537,9 @@ mod tests {
         use crate::runtime::inbound::ConversationInboundMailbox;
         use crate::runtime::subagent::{
             AttemptSubagentContext, SubagentRegistry, SubagentRegistryConfig, SubagentSpawnPlan,
-            SubagentWorkspaceManager,
         };
         use crate::runtime::types::{ApprovalMode, SystemClock};
+        use crate::runtime::workspace::WorkspaceManager;
         use crate::skills::SkillSnapshot;
         use crate::tools::environment::ToolEnvironment;
         use crate::tools::mcp::McpRuntimeLeaseAuthority;
@@ -580,7 +580,7 @@ mod tests {
                     summary_output_cap: None,
                 },
             },
-            workspace: SubagentWorkspaceManager::new(&workspace_root, &runtime_root),
+            workspace: WorkspaceManager::new(&workspace_root, &runtime_root),
             max_active: 4,
         });
 
@@ -599,7 +599,7 @@ mod tests {
                 inherit: false,
                 files: Vec::new(),
             },
-            SubagentWorkspacePolicy::GitWorktree {
+            WorkspacePolicy::GitWorktree {
                 require_clean_parent: true,
             },
         )

@@ -63,14 +63,14 @@ use super::catalog::{SubagentDefinitionDigest, SubagentExecutionDeadline, Subage
 use super::ipc::DelegationFrame;
 use super::process::{PhysicalOutcome, PhysicalSettlement, StagedChild, SubagentSpawnPlan};
 use super::resolver::ResolvedSubagentSpec;
-use super::workspace::{
-    SubagentWorkspaceManager, WorkspaceDisposalPhase, WorkspaceDisposalSettlement,
-    WorkspaceHandoff, WorkspaceLease, WorkspaceSettlementDisposition, WorkspaceSnapshot,
-    WorkspaceUnresolvedReason,
-};
 use super::{
     MAX_CONTEXT_PACKAGE_BYTES, MAX_RESULT_CONTENT_BYTES, MAX_TASK_BYTES, SubagentTerminalState,
     bound_utf8, ownership_event, terminal_publication, terminal_settlement, workflow_output_event,
+};
+use crate::runtime::workspace::{
+    WorkspaceAccess, WorkspaceDisposalPhase, WorkspaceDisposalSettlement, WorkspaceHandoff,
+    WorkspaceManager, WorkspaceSettlementDisposition, WorkspaceSnapshot, WorkspaceUnresolvedReason,
+    WorkspaceUse,
 };
 
 /// The highest lifecycle state of one subagent child.
@@ -116,6 +116,14 @@ enum Decision {
     },
     RolledBack,
     Failed(SubagentStartError),
+}
+
+/// Unique live Workflow child result. Candidate applicability is native,
+/// process-local metadata and is never written into the output event or IPC.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct WorkflowAgentOutput {
+    pub value: serde_json::Value,
+    pub candidate: Option<crate::runtime::workspace::CandidateReference>,
 }
 
 /// The canonicalized terminal outcome awaiting publication.
@@ -344,7 +352,7 @@ struct SubagentRecord {
     /// The parent-validated Workflow output value of a successful
     /// Workflow-owned child: the live Workflow result channel, deliberately
     /// kept out of the observation snapshot.
-    terminal_workflow_value: Option<serde_json::Value>,
+    terminal_workflow_value: Option<WorkflowAgentOutput>,
     pending_terminal: Option<TerminalCandidate>,
     publication_abandoned: bool,
     notification: NotificationState,
@@ -629,13 +637,13 @@ impl core::fmt::Display for SubagentWorkspaceDisposalError {
 impl std::error::Error for SubagentWorkspaceDisposalError {}
 
 fn map_workspace_disposal_error(
-    error: super::workspace::WorkspaceDisposalError,
+    error: crate::runtime::workspace::WorkspaceDisposalError,
 ) -> SubagentWorkspaceDisposalError {
     match error {
-        super::workspace::WorkspaceDisposalError::OwnershipMismatch { detail } => {
+        crate::runtime::workspace::WorkspaceDisposalError::OwnershipMismatch { detail } => {
             SubagentWorkspaceDisposalError::OwnershipMismatch { detail }
         }
-        super::workspace::WorkspaceDisposalError::Git { operation, detail } => {
+        crate::runtime::workspace::WorkspaceDisposalError::Git { operation, detail } => {
             SubagentWorkspaceDisposalError::Backend {
                 detail: format!("{operation}: {detail}"),
             }
@@ -1244,7 +1252,7 @@ pub struct SubagentRegistryConfig {
     pub spawn: SubagentSpawnPlan,
     /// The sole owner of physical named-subagent workspace acquisition and
     /// settlement. The registry supplies policy/identity but never runs Git.
-    pub workspace: SubagentWorkspaceManager,
+    pub workspace: WorkspaceManager,
     /// The per-conversation concurrency bound.
     pub max_active: usize,
 }
@@ -1833,6 +1841,45 @@ impl SubagentRegistry {
         spec: &SubagentStartSpec,
         preparation_cancellation: &CancellationSignal,
     ) -> Result<PreparedSubagent, SubagentStartError> {
+        self.prepare_in_workspace(spec, preparation_cancellation, None)
+            .await
+    }
+
+    pub(crate) fn workspace_manager(&self) -> &WorkspaceManager {
+        &self.config.workspace
+    }
+
+    pub(crate) async fn prepare_in_workspace(
+        &self,
+        spec: &SubagentStartSpec,
+        preparation_cancellation: &CancellationSignal,
+        mut access: Option<WorkspaceAccess>,
+    ) -> Result<PreparedSubagent, SubagentStartError> {
+        let result = self
+            .prepare_inner(spec, preparation_cancellation, &mut access)
+            .await;
+        if let Some(access) = access {
+            let _ = access.finish(false).await;
+        }
+        result
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn prepare_inner(
+        &self,
+        spec: &SubagentStartSpec,
+        preparation_cancellation: &CancellationSignal,
+        access: &mut Option<WorkspaceAccess>,
+    ) -> Result<PreparedSubagent, SubagentStartError> {
+        if let Some(access) = access.as_ref() {
+            let matches = matches!(&spec.terminal, SubagentTerminalMode::WorkflowOutput { node_id, .. } if node_id.as_ref() == access.node());
+            if !matches || spec.resolved.workspace_policy != access.policy() {
+                return Err(SubagentStartError::Workspace {
+                    detail: "candidate access does not match the frozen child/node authority"
+                        .into(),
+                });
+            }
+        }
         if preparation_cancellation.is_cancelled() {
             return Err(SubagentStartError::Cancelled);
         }
@@ -1872,34 +1919,39 @@ impl SubagentRegistry {
             // Workspace acquisition is staged child ownership. It happens
             // after resolution/freeze and before any child preparation, but
             // the lease is not durable until the commit below succeeds.
-            let workspace_lease = self
-                .config
-                .workspace
-                .acquire(
-                    spec.resolved.workspace_policy,
-                    &subagent_id,
-                    preparation_cancellation,
+            let workspace_lease = if let Some(access) = access.take() {
+                WorkspaceUse::from(access)
+            } else {
+                WorkspaceUse::from(
+                    self.config
+                        .workspace
+                        .acquire(
+                            spec.resolved.workspace_policy,
+                            &subagent_id,
+                            preparation_cancellation,
+                        )
+                        .await
+                        .map_err(|error| match error {
+                            crate::runtime::workspace::WorkspaceAcquireError::Cancelled => {
+                                SubagentStartError::Cancelled
+                            }
+                            crate::runtime::workspace::WorkspaceAcquireError::Settlement {
+                                detail,
+                            } => SubagentStartError::Rollback { detail },
+                            // Issue #188: the dirty-parent rejection keeps its typed
+                            // identity across this boundary. Flattening it into a
+                            // string here would destroy the only fact the
+                            // model-facing tool boundary needs to render actionable
+                            // remediation without parsing prose.
+                            crate::runtime::workspace::WorkspaceAcquireError::DirtyParent {
+                                base_commit,
+                            } => SubagentStartError::WorkspaceDirtyParent { base_commit },
+                            error => SubagentStartError::Workspace {
+                                detail: error.to_string(),
+                            },
+                        })?,
                 )
-                .await
-                .map_err(|error| match error {
-                    super::workspace::WorkspaceAcquireError::Cancelled => {
-                        SubagentStartError::Cancelled
-                    }
-                    super::workspace::WorkspaceAcquireError::Settlement { detail } => {
-                        SubagentStartError::Rollback { detail }
-                    }
-                    // Issue #188: the dirty-parent rejection keeps its typed
-                    // identity across this boundary. Flattening it into a
-                    // string here would destroy the only fact the
-                    // model-facing tool boundary needs to render actionable
-                    // remediation without parsing prose.
-                    super::workspace::WorkspaceAcquireError::DirtyParent { base_commit } => {
-                        SubagentStartError::WorkspaceDirtyParent { base_commit }
-                    }
-                    error => SubagentStartError::Workspace {
-                        detail: error.to_string(),
-                    },
-                })?;
+            };
             #[cfg(test)]
             {
                 let override_child = self
@@ -1928,9 +1980,15 @@ impl SubagentRegistry {
             let runtime_root = match self.config.spawn.allocate_child_runtime_root(&subagent_id) {
                 Ok(runtime_root) => runtime_root,
                 Err(super::process::SpawnError::ConversationIdentityInUse { .. }) => {
+                    let borrowed = matches!(workspace_lease, WorkspaceUse::Borrowed(_));
                     if let Err(error) = workspace_lease.settle_staged().await {
                         return Err(SubagentStartError::Rollback {
                             detail: error.detail,
+                        });
+                    }
+                    if borrowed {
+                        return Err(SubagentStartError::Workspace {
+                            detail: "candidate child identity is already occupied".into(),
                         });
                     }
                     continue;
@@ -2738,7 +2796,10 @@ impl SubagentRegistry {
         if record.lifecycle != SubagentLifecycle::Succeeded {
             return None;
         }
-        record.terminal_workflow_value.clone()
+        record
+            .terminal_workflow_value
+            .as_ref()
+            .map(|output| output.value.clone())
     }
 
     /// Transfers the settled Workflow value to its live owner exactly once.
@@ -2748,7 +2809,7 @@ impl SubagentRegistry {
         &self,
         subagent_id: &SubagentId,
         instance: &crate::runtime::workflow::WorkflowNodeInstance,
-    ) -> Option<serde_json::Value> {
+    ) -> Option<WorkflowAgentOutput> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let &index = state.index.get(subagent_id)?;
         let record = &mut state.records[index];
@@ -3784,7 +3845,15 @@ impl SubagentRegistry {
             nested,
             runtime_root_cleanup_error,
             workspace,
+            candidate: workspace_candidate,
         } = settlement;
+        let candidate_diagnostic = (matches!(
+            workspace.disposition,
+            WorkspaceSettlementDisposition::Borrowed
+        ) && workspace_candidate.as_ref().is_none_or(|reference| {
+            Some(&reference.run) != workspace.snapshot.borrowed_from.as_ref()
+        }))
+        .then(|| "borrowed child candidate settlement produced no valid reference".to_owned());
         // An unproven nested settlement, workspace settlement, or failed
         // exact-root cleanup is a terminal classification input, not an
         // ignorable warning. A successful semantic frame cannot become a
@@ -3792,6 +3861,7 @@ impl SubagentRegistry {
         // proven settled.
         let settlement_diagnostic = [
             nested.unproven_diagnostic(),
+            candidate_diagnostic.clone(),
             workspace
                 .error()
                 .map(|detail| format!("the child workspace was not settled: {detail}")),
@@ -3805,11 +3875,14 @@ impl SubagentRegistry {
         let settlement_diagnostic =
             (!settlement_diagnostic.is_empty()).then_some(settlement_diagnostic.join("; "));
         let physical_settlement_unproven = !nested.unproven.is_empty()
+            || candidate_diagnostic.is_some()
             || workspace.error().is_some()
             || runtime_root_cleanup_error.is_some();
         let workspace_handoff = workspace.handoff().cloned();
         let (workspace_resource_state, workspace_unresolved) = match &workspace.disposition {
-            WorkspaceSettlementDisposition::Shared | WorkspaceSettlementDisposition::Removed => {
+            WorkspaceSettlementDisposition::Borrowed
+            | WorkspaceSettlementDisposition::Shared
+            | WorkspaceSettlementDisposition::Removed => {
                 (SubagentWorkspaceResourceState::None, None)
             }
             WorkspaceSettlementDisposition::Retained { .. } => {
@@ -4066,9 +4139,14 @@ impl SubagentRegistry {
                     .map(|reason| reason_text(reason).to_owned())
             });
             if candidate.state == TerminalState::Succeeded {
-                record
-                    .terminal_workflow_value
-                    .clone_from(&candidate.workflow_value);
+                record.terminal_workflow_value =
+                    candidate
+                        .workflow_value
+                        .clone()
+                        .map(|value| WorkflowAgentOutput {
+                            value,
+                            candidate: workspace_candidate,
+                        });
             }
             abort_deadline_task(deadline_task);
             candidate
@@ -4547,7 +4625,7 @@ impl SubagentRegistry {
 /// strengthened to a rollback failure and the workspace manager preserves the
 /// evidence.
 async fn settle_staged_workspace(
-    workspace: WorkspaceLease,
+    workspace: WorkspaceUse,
     original: SubagentStartError,
 ) -> SubagentStartError {
     match workspace.settle_staged().await {
@@ -5109,8 +5187,8 @@ mod tests {
         conversation_id: ConversationId,
         runtime_root: std::path::PathBuf,
         monotonic_clock: Arc<crate::runtime::ManualMonotonicClock>,
-        workspace_settlement_hook: Arc<super::super::workspace::WorkspaceSettlementHook>,
-        workspace_disposal_hook: Arc<super::super::workspace::WorkspaceDisposalHook>,
+        workspace_settlement_hook: Arc<crate::runtime::workspace::WorkspaceSettlementHook>,
+        workspace_disposal_hook: Arc<crate::runtime::workspace::WorkspaceDisposalHook>,
     }
 
     fn plane(max_active: usize) -> TestPlane {
@@ -5126,11 +5204,11 @@ mod tests {
         );
         let mailbox = ConversationInboundMailbox::over_store(store.clone());
         let workspace_settlement_hook =
-            Arc::new(super::super::workspace::WorkspaceSettlementHook::new());
+            Arc::new(crate::runtime::workspace::WorkspaceSettlementHook::new());
         let workspace_disposal_hook =
-            Arc::new(super::super::workspace::WorkspaceDisposalHook::new());
+            Arc::new(crate::runtime::workspace::WorkspaceDisposalHook::new());
         let monotonic_clock = Arc::new(crate::runtime::ManualMonotonicClock::new());
-        let mut workspace_manager = SubagentWorkspaceManager::new(&workspace, &runtime_root);
+        let mut workspace_manager = WorkspaceManager::new(&workspace, &runtime_root);
         workspace_manager.install_settlement_hook(workspace_settlement_hook.clone());
         workspace_manager.install_disposal_hook(workspace_disposal_hook.clone());
         let registry = SubagentRegistry::new(SubagentRegistryConfig {
@@ -5376,7 +5454,7 @@ mod tests {
             ))
             .expect("digest"),
             execution_deadline: None,
-            workspace_policy: crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
+            workspace_policy: crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
             instructions: "instructions".to_owned(),
             model: crate::model::frozen::test_frozen_model_spec(
                 serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
@@ -5524,10 +5602,9 @@ mod tests {
         let plane = plane(4);
         make_dirty_git_workspace(&plane);
         let mut start = spec("strict workspace");
-        start.resolved.workspace_policy =
-            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
-                require_clean_parent: true,
-            };
+        start.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+            require_clean_parent: true,
+        };
 
         let error = plane
             .registry
@@ -5676,10 +5753,9 @@ mod tests {
         make_clean_git_workspace(plane);
         let child = stage_stubborn(plane);
         let mut spec = start_spec(task);
-        spec.resolved.workspace_policy =
-            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
-                require_clean_parent: true,
-            };
+        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+            require_clean_parent: true,
+        };
         let accepted = start(plane, &spec).await;
         let workspace = plane
             .registry
@@ -5716,10 +5792,9 @@ mod tests {
         make_clean_git_workspace(plane);
         let child = stage_exit0(plane);
         let mut spec = start_spec(task);
-        spec.resolved.workspace_policy =
-            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
-                require_clean_parent: true,
-            };
+        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+            require_clean_parent: true,
+        };
         plane
             .workspace_settlement_hook
             .fail_next("injected final workspace inspection failure");
@@ -5785,7 +5860,7 @@ mod tests {
         assert_eq!(plan.settled_subagent_unresolved().len(), 1);
         assert_eq!(
             plan.settled_subagent_unresolved()[0].reason,
-            crate::runtime::subagent::WorkspaceUnresolvedReason::NestedContainment
+            crate::runtime::workspace::WorkspaceUnresolvedReason::NestedContainment
         );
         let recovered_snapshot = recovered
             .snapshot(subagent_id)
@@ -5970,7 +6045,10 @@ mod tests {
             plane
                 .registry
                 .take_workflow_agent_output(&accepted.subagent_id, &instance),
-            Some(serde_json::json!({"summary":"answer"}))
+            Some(WorkflowAgentOutput {
+                value: serde_json::json!({"summary":"answer"}),
+                candidate: None
+            })
         );
         assert_eq!(
             plane
@@ -5988,10 +6066,9 @@ mod tests {
         make_clean_git_workspace(&plane);
         let child = stage_stubborn(&plane);
         let mut spec = start_spec("write a source change");
-        spec.resolved.workspace_policy =
-            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
-                require_clean_parent: true,
-            };
+        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+            require_clean_parent: true,
+        };
         let accepted = start(&plane, &spec).await;
         let workspace = plane
             .registry
@@ -6516,10 +6593,9 @@ mod tests {
             .fail_next("injected final workspace inspection failure");
         let child = stage_stubborn(&plane);
         let mut spec = start_spec("write a source change");
-        spec.resolved.workspace_policy =
-            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
-                require_clean_parent: true,
-            };
+        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+            require_clean_parent: true,
+        };
         let accepted = start(&plane, &spec).await;
 
         child
@@ -6581,7 +6657,7 @@ mod tests {
                 state: SubagentTerminalState::Failed,
                 workspace_resource:
                     crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved {
-                        reason: crate::runtime::subagent::WorkspaceUnresolvedReason::PhysicalSettlement,
+                        reason: crate::runtime::workspace::WorkspaceUnresolvedReason::PhysicalSettlement,
                         ..
                     },
                 ..
@@ -6636,7 +6712,8 @@ mod tests {
                 )],
             },
             runtime_root_cleanup_error: None,
-            workspace: super::super::workspace::WorkspaceSettlement::shared(
+            candidate: None,
+            workspace: crate::runtime::workspace::WorkspaceSettlement::shared(
                 WorkspaceSnapshot::shared(std::path::PathBuf::from("<shared-workspace>")),
             ),
         };
@@ -6672,10 +6749,9 @@ mod tests {
         make_clean_git_workspace(&plane);
         let child = stage_with_unresolved_anchor(&plane);
         let mut spec = deadline_spec("nested containment", 100);
-        spec.resolved.workspace_policy =
-            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
-                require_clean_parent: true,
-            };
+        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+            require_clean_parent: true,
+        };
         let accepted = start(&plane, &spec).await;
         let running = plane
             .registry
@@ -6723,7 +6799,7 @@ mod tests {
                 subagent_id,
                 workspace_resource:
                     crate::events::types::SubagentWorkspaceTerminalResource::PreservedUnresolved {
-                        reason: crate::runtime::subagent::WorkspaceUnresolvedReason::NestedContainment,
+                        reason: crate::runtime::workspace::WorkspaceUnresolvedReason::NestedContainment,
                         ..
                     },
                 ..
@@ -7094,10 +7170,9 @@ mod tests {
         make_clean_git_workspace(&plane);
         let child = stage_stubborn(&plane);
         let mut spec = start_spec("write a source change");
-        spec.resolved.workspace_policy =
-            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
-                require_clean_parent: true,
-            };
+        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+            require_clean_parent: true,
+        };
         let accepted = start(&plane, &spec).await;
         let workspace = plane
             .registry
@@ -8489,10 +8564,9 @@ mod tests {
             .fail_next("injected terminal workspace settlement failure");
         let child = stage_stubborn(&plane);
         let mut spec = start_spec("inspect");
-        spec.resolved.workspace_policy =
-            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
-                require_clean_parent: true,
-            };
+        spec.resolved.workspace_policy = crate::runtime::workspace::WorkspacePolicy::GitWorktree {
+            require_clean_parent: true,
+        };
         let accepted = start(&plane, &spec).await;
         plane.store.arm_fail_accept_times(3);
         child

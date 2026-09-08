@@ -1,12 +1,11 @@
-//! Deterministic workspace ownership for named subagents (Issue #146).
+//! Native ownership of managed source workspaces.
 //!
-//! This module is the only owner of Git/worktree operations.  The registry
-//! supplies it with a resolved policy and an already allocated subagent
-//! identity; it never constructs Git commands itself. A [`WorkspaceLease`]
-//! is the physical ownership token that moves from preparation to the child
-//! process driver at the same boundary as the process handle. The lease keeps
-//! the child's logical project authority distinct from the physical worktree
-//! root that the manager owns and settles.
+//! This module is the only owner of Git/worktree operations. Callers supply
+//! frozen policy and a runtime-generated [`WorkspaceOwner`]. One physical
+//! [`WorkspaceLease`] transfers to either a one-shot child process driver or
+//! native run-retained candidate state. Candidate children receive exclusive
+//! access, never another lease. Logical project authority stays distinct from
+//! the physical worktree root that this manager owns and settles.
 //!
 //! The important snapshot rule is intentionally visible in the types and in
 //! the command order:
@@ -53,6 +52,47 @@ use tokio::process::Command;
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::SubagentId;
 
+mod candidate;
+mod retained_candidate;
+pub use candidate::{CandidateRecoveryGuard, CandidateReference};
+pub(crate) use candidate::{CandidateScope, WorkspaceAccess, WorkspaceUse};
+pub use retained_candidate::WorkflowWorkspaceInspection;
+
+/// Native allocation authority. A run identity never impersonates a child.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "identity",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum WorkspaceOwner {
+    Subagent(SubagentId),
+    Workflow(crate::runtime::workflow::WorkflowRunId),
+}
+
+pub(crate) fn workflow_resource_event_id(
+    run: &crate::runtime::workflow::WorkflowRunId,
+    phase: &str,
+) -> crate::runtime::identity::EventId {
+    crate::runtime::identity::EventId::new(format!(
+        "workflow-workspace-{phase}:{}",
+        deterministic_worktree_name(WorkspaceOwner::Workflow(run.clone()))
+    ))
+}
+
+impl From<&SubagentId> for WorkspaceOwner {
+    fn from(id: &SubagentId) -> Self {
+        Self::Subagent(id.clone())
+    }
+}
+
+impl From<&WorkspaceOwner> for WorkspaceOwner {
+    fn from(owner: &WorkspaceOwner) -> Self {
+        owner.clone()
+    }
+}
+
 /// The only manifest name recognized by isolated workspace acquisition.
 const WORKTREE_INCLUDE_MANIFEST: &str = ".worktreeinclude";
 /// A deliberately small v1 selection bound. Entries select files, never
@@ -86,14 +126,14 @@ struct ValidatedOverlayFile {
     source: std::fs::File,
 }
 
-/// The bounded workspace policy resolved from a named subagent definition.
+/// The bounded native workspace policy frozen by trusted admission.
 ///
 /// This is deliberately the complete policy vocabulary for this milestone:
 /// shared workspace or one Git worktree.  It is not a provider/strategy
 /// extension point.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum SubagentWorkspacePolicy {
+pub enum WorkspacePolicy {
     /// The current shared-workspace behavior.
     #[default]
     SharedWorkspace,
@@ -109,7 +149,7 @@ pub enum SubagentWorkspacePolicy {
     },
 }
 
-impl SubagentWorkspacePolicy {
+impl WorkspacePolicy {
     /// Whether the policy acquires a separate Git worktree.
     #[must_use]
     pub const fn is_isolated(self) -> bool {
@@ -126,6 +166,8 @@ impl SubagentWorkspacePolicy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkspaceSnapshot {
+    /// A child using run-owned source has no independent disposal authority.
+    pub borrowed_from: Option<crate::runtime::workflow::WorkflowRunId>,
     /// The authoritative logical project path given to the child.
     pub logical_workspace: PathBuf,
     /// The closed physical-isolation facts for this selection.
@@ -175,6 +217,7 @@ impl WorkspaceSnapshot {
     #[must_use]
     pub fn shared(workspace: impl Into<PathBuf>) -> Self {
         Self {
+            borrowed_from: None,
             logical_workspace: workspace.into(),
             isolation: WorkspaceIsolation::Shared,
         }
@@ -190,6 +233,7 @@ impl WorkspaceSnapshot {
         parent_had_uncommitted_changes: bool,
     ) -> Self {
         Self {
+            borrowed_from: None,
             logical_workspace,
             isolation: WorkspaceIsolation::GitWorktree(GitWorktreeSnapshot {
                 source_repository_root,
@@ -224,6 +268,9 @@ impl WorkspaceSnapshot {
     /// process also validate it so a malformed event/spec cannot silently
     /// turn an isolated child into an untracked arbitrary path.
     pub(crate) fn validate(&self) -> Result<(), String> {
+        if self.borrowed_from.is_some() && !self.is_isolated() {
+            return Err("candidate borrowing requires an isolated workspace".into());
+        }
         if self.logical_workspace.as_os_str().is_empty() {
             return Err("workspace snapshot has an empty logical project path".to_owned());
         }
@@ -275,6 +322,9 @@ impl WorkspaceSnapshot {
     }
 
     pub(crate) fn matches_handoff(&self, handoff: &WorkspaceHandoff) -> bool {
+        if self.borrowed_from.is_some() {
+            return false;
+        }
         let Some(worktree) = self.git_worktree() else {
             return false;
         };
@@ -365,8 +415,11 @@ pub enum WorkspaceUnresolvedReason {
 /// combination `Preserved + no handoff + error` from being projected as an
 /// absent resource. `Retained` and `PreservedUnresolved` are both physical
 /// preservation, but only the former carries the stronger handoff contract.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkspaceSettlementDisposition {
+    /// Physical node access returned to its run; the child owns no resource.
+    Borrowed,
     /// Shared workspace: there is no runtime-owned isolated worktree.
     Shared,
     /// The runtime-created clean worktree and its branch were removed.
@@ -402,7 +455,8 @@ pub enum WorkspaceCleanup {
 }
 
 /// The final workspace facts produced by the one lease owner.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkspaceSettlement {
     /// The immutable selection facts.
     pub snapshot: WorkspaceSnapshot,
@@ -479,7 +533,8 @@ impl WorkspaceSettlement {
     pub fn handoff(&self) -> Option<&WorkspaceHandoff> {
         match &self.disposition {
             WorkspaceSettlementDisposition::Retained { handoff, .. } => Some(handoff),
-            WorkspaceSettlementDisposition::Shared
+            WorkspaceSettlementDisposition::Borrowed
+            | WorkspaceSettlementDisposition::Shared
             | WorkspaceSettlementDisposition::Removed
             | WorkspaceSettlementDisposition::PreservedUnresolved { .. } => None,
         }
@@ -490,7 +545,9 @@ impl WorkspaceSettlement {
     #[must_use]
     pub const fn cleanup(&self) -> WorkspaceCleanup {
         match self.disposition {
-            WorkspaceSettlementDisposition::Shared => WorkspaceCleanup::Shared,
+            WorkspaceSettlementDisposition::Borrowed | WorkspaceSettlementDisposition::Shared => {
+                WorkspaceCleanup::Shared
+            }
             WorkspaceSettlementDisposition::Removed => WorkspaceCleanup::Removed,
             WorkspaceSettlementDisposition::Retained { .. }
             | WorkspaceSettlementDisposition::PreservedUnresolved { .. } => {
@@ -511,7 +568,8 @@ impl WorkspaceSettlement {
             | WorkspaceSettlementDisposition::PreservedUnresolved { detail: error, .. } => {
                 Some(error)
             }
-            WorkspaceSettlementDisposition::Shared
+            WorkspaceSettlementDisposition::Borrowed
+            | WorkspaceSettlementDisposition::Shared
             | WorkspaceSettlementDisposition::Removed
             | WorkspaceSettlementDisposition::Retained {
                 cleanup_error: None,
@@ -525,7 +583,8 @@ impl WorkspaceSettlement {
     pub const fn unresolved_reason(&self) -> Option<WorkspaceUnresolvedReason> {
         match self.disposition {
             WorkspaceSettlementDisposition::PreservedUnresolved { reason, .. } => Some(reason),
-            WorkspaceSettlementDisposition::Shared
+            WorkspaceSettlementDisposition::Borrowed
+            | WorkspaceSettlementDisposition::Shared
             | WorkspaceSettlementDisposition::Removed
             | WorkspaceSettlementDisposition::Retained { .. } => None,
         }
@@ -618,7 +677,8 @@ impl std::error::Error for WorkspaceDisposalError {}
 /// The result is intentionally not an all-or-nothing `Result`: once Git has
 /// removed the worktree, that fact must be carried to the registry even when
 /// compare-and-delete cannot settle the branch.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkspaceDisposalSettlement {
     /// No worktree removal was completed. The durable disposal intent remains
     /// retryable and no physical retained-resource state is cleared.
@@ -863,9 +923,10 @@ impl core::fmt::Display for WorkspaceAcquireError {
 
 impl std::error::Error for WorkspaceAcquireError {}
 
-/// The one manager of physical named-subagent workspaces.
+/// The one physical workspace manager for named Subagents and Workflow runs.
 #[derive(Debug, Clone)]
-pub struct SubagentWorkspaceManager {
+pub struct WorkspaceManager {
+    active: Arc<std::sync::Mutex<BTreeSet<String>>>,
     parent_logical_workspace: PathBuf,
     runtime_root: PathBuf,
     /// Serializes runtime-owned retained disposal with other disposal calls
@@ -888,12 +949,13 @@ pub struct SubagentWorkspaceManager {
     disposal_hook: Option<std::sync::Arc<WorkspaceDisposalHook>>,
 }
 
-impl SubagentWorkspaceManager {
+impl WorkspaceManager {
     /// Creates a manager over the already-canonical parent workspace and the
     /// disjoint runtime-private artifact root.
     #[must_use]
     pub fn new(parent_workspace: impl AsRef<Path>, runtime_root: impl AsRef<Path>) -> Self {
         Self {
+            active: Arc::default(),
             parent_logical_workspace: parent_workspace.as_ref().to_path_buf(),
             runtime_root: runtime_root.as_ref().to_path_buf(),
             disposal_lock: Arc::new(tokio::sync::Mutex::new(())),
@@ -928,12 +990,15 @@ impl SubagentWorkspaceManager {
     /// recorded handoff cannot be proven against the current Git repository.
     pub async fn prove_retained_workspace(
         &self,
-        subagent_id: &SubagentId,
+        owner_id: &SubagentId,
         snapshot: &WorkspaceSnapshot,
         handoff: &WorkspaceHandoff,
     ) -> Result<(), WorkspaceDisposalError> {
+        let owner = owner_id.into();
+        self.require_released(&owner)?;
+        let owner_id = &owner;
         let _disposal = self.disposal_lock.lock().await;
-        self.verify_retained_workspace(subagent_id, snapshot, handoff)
+        self.verify_retained_workspace(owner_id, snapshot, handoff)
             .await
             .map(|_| ())
     }
@@ -954,18 +1019,23 @@ impl SubagentWorkspaceManager {
     /// Git worktree recorded in `snapshot`.
     pub async fn reprove_unresolved_workspace(
         &self,
-        subagent_id: &SubagentId,
+        owner_id: &SubagentId,
         snapshot: &WorkspaceSnapshot,
     ) -> Result<WorkspaceHandoff, WorkspaceDisposalError> {
+        let owner = owner_id.into();
+        self.require_released(&owner)?;
+        let owner_id = &owner;
         let _disposal = self.disposal_lock.lock().await;
-        self.verify_unresolved_workspace(subagent_id, snapshot)
-            .await
+        self.verify_unresolved_workspace(owner_id, snapshot).await
     }
 
     /// Disposes one retained runtime-created worktree and its exact runtime
     /// branch after re-proving the complete ownership relationship.
     ///
-    /// The caller supplies the authoritative subagent identity and the two
+    /// This one-shot entry point accepts only Subagent identity. Workflow
+    /// disposal must use `dispose_workflow_workspace` and its journal/content
+    /// authority; it cannot bypass those checks through this entry point.
+    /// The caller supplies the authoritative Subagent identity and the two
     /// runtime-owned facts captured at terminal settlement. The identity
     /// checks bind the requested resource to this manager's deterministic
     /// allocation namespace; the current repository root, worktree
@@ -993,16 +1063,18 @@ impl SubagentWorkspaceManager {
     /// physical worktree as retained.
     pub async fn dispose_retained_workspace(
         &self,
-        subagent_id: &SubagentId,
+        owner_id: &SubagentId,
         snapshot: &WorkspaceSnapshot,
         handoff: &WorkspaceHandoff,
     ) -> Result<WorkspaceDisposalSettlement, WorkspaceDisposalError> {
+        let _disposal = self.disposal_lock.lock().await;
         self.dispose_authorized_workspace_inner(
-            subagent_id,
+            &owner_id.into(),
             snapshot,
             handoff,
             WorkspaceDisposalPhase::Authorized,
             false,
+            None,
         )
         .await
     }
@@ -1014,31 +1086,40 @@ impl SubagentWorkspaceManager {
     /// complete ownership proof.
     pub(crate) async fn dispose_authorized_workspace(
         &self,
-        subagent_id: &SubagentId,
+        owner_id: &SubagentId,
         snapshot: &WorkspaceSnapshot,
         handoff: &WorkspaceHandoff,
         phase: WorkspaceDisposalPhase,
     ) -> Result<WorkspaceDisposalSettlement, WorkspaceDisposalError> {
-        self.dispose_authorized_workspace_inner(subagent_id, snapshot, handoff, phase, true)
-            .await
+        let _disposal = self.disposal_lock.lock().await;
+        self.dispose_authorized_workspace_inner(
+            &owner_id.into(),
+            snapshot,
+            handoff,
+            phase,
+            true,
+            None,
+        )
+        .await
     }
 
     #[allow(clippy::too_many_lines)] // One ordered physical settlement protocol.
     async fn dispose_authorized_workspace_inner(
         &self,
-        subagent_id: &SubagentId,
+        owner_id: &WorkspaceOwner,
         snapshot: &WorkspaceSnapshot,
         handoff: &WorkspaceHandoff,
         phase: WorkspaceDisposalPhase,
         durable_intent_committed: bool,
+        // A proven terminal candidate or a last-proven recovery baseline.
+        content_reference: Option<&CandidateReference>,
     ) -> Result<WorkspaceDisposalSettlement, WorkspaceDisposalError> {
         fn mismatch(detail: impl Into<String>) -> WorkspaceDisposalError {
             WorkspaceDisposalError::OwnershipMismatch {
                 detail: detail.into(),
             }
         }
-        let _disposal = self.disposal_lock.lock().await;
-
+        self.require_released(owner_id)?;
         snapshot.validate().map_err(mismatch)?;
         handoff.validate().map_err(&mut |detail| mismatch(detail))?;
         if !snapshot.matches_handoff(handoff) {
@@ -1049,14 +1130,11 @@ impl SubagentWorkspaceManager {
         let Some(worktree) = snapshot.git_worktree() else {
             return Err(mismatch("the requested subagent has no isolated worktree"));
         };
-        let expected_branch = format!(
-            "rustx/subagent/{}",
-            deterministic_worktree_name(subagent_id)
-        );
+        let expected_branch = format!("rustx/workspace/{}", deterministic_worktree_name(owner_id));
         let expected_root = self
             .runtime_root
             .join("worktrees")
-            .join(deterministic_worktree_name(subagent_id));
+            .join(deterministic_worktree_name(owner_id));
         if worktree.branch != expected_branch || worktree.physical_worktree_root != expected_root {
             return Err(mismatch(
                 "the recorded worktree is outside this runtime's deterministic allocation",
@@ -1099,7 +1177,28 @@ impl SubagentWorkspaceManager {
                     (true, true) => {
                         // The complete proof repeats the path, registration,
                         // worktree HEAD, branch attachment, and ref checks.
-                        self.verify_retained_workspace(subagent_id, snapshot, handoff)
+                        if matches!(owner_id, WorkspaceOwner::Workflow(_))
+                            && content_reference.is_none()
+                        {
+                            return Err(mismatch(
+                                "Workflow disposal lacks candidate content proof",
+                            ));
+                        }
+                        if let Some(reference) = content_reference {
+                            if !matches!(owner_id, WorkspaceOwner::Workflow(run) if *run == reference.run)
+                            {
+                                return Err(mismatch("candidate run identity mismatch"));
+                            }
+                            let content = candidate::inspect_source(self, owner_id, snapshot)
+                                .await
+                                .map_err(mismatch)?;
+                            if content != reference.content {
+                                return Err(mismatch(
+                                    "candidate changed from proven disposal content",
+                                ));
+                            }
+                        }
+                        self.verify_retained_workspace(owner_id, snapshot, handoff)
                             .await?;
                         let removed = self
                             .git_raw(
@@ -1293,7 +1392,7 @@ impl SubagentWorkspaceManager {
     #[allow(clippy::too_many_lines)] // The ownership proof is intentionally one ordered sequence.
     async fn verify_retained_workspace(
         &self,
-        subagent_id: &SubagentId,
+        owner_id: &WorkspaceOwner,
         snapshot: &WorkspaceSnapshot,
         handoff: &WorkspaceHandoff,
     ) -> Result<GitWorktreeSnapshot, WorkspaceDisposalError> {
@@ -1312,14 +1411,11 @@ impl SubagentWorkspaceManager {
         let Some(worktree) = snapshot.git_worktree() else {
             return Err(mismatch("the requested subagent has no isolated worktree"));
         };
-        let expected_branch = format!(
-            "rustx/subagent/{}",
-            deterministic_worktree_name(subagent_id)
-        );
+        let expected_branch = format!("rustx/workspace/{}", deterministic_worktree_name(owner_id));
         let expected_root = self
             .runtime_root
             .join("worktrees")
-            .join(deterministic_worktree_name(subagent_id));
+            .join(deterministic_worktree_name(owner_id));
         if worktree.branch != expected_branch || worktree.physical_worktree_root != expected_root {
             return Err(mismatch(
                 "the recorded worktree is outside this runtime's deterministic allocation",
@@ -1438,7 +1534,7 @@ impl SubagentWorkspaceManager {
     #[allow(clippy::too_many_lines)] // The unresolved re-proof is one ordered ownership check.
     async fn verify_unresolved_workspace(
         &self,
-        subagent_id: &SubagentId,
+        owner_id: &WorkspaceOwner,
         snapshot: &WorkspaceSnapshot,
     ) -> Result<WorkspaceHandoff, WorkspaceDisposalError> {
         fn mismatch(detail: impl Into<String>) -> WorkspaceDisposalError {
@@ -1450,14 +1546,11 @@ impl SubagentWorkspaceManager {
         let Some(worktree) = snapshot.git_worktree() else {
             return Err(mismatch("the unresolved resource has no isolated worktree"));
         };
-        let expected_branch = format!(
-            "rustx/subagent/{}",
-            deterministic_worktree_name(subagent_id)
-        );
+        let expected_branch = format!("rustx/workspace/{}", deterministic_worktree_name(owner_id));
         let expected_root = self
             .runtime_root
             .join("worktrees")
-            .join(deterministic_worktree_name(subagent_id));
+            .join(deterministic_worktree_name(owner_id));
         if worktree.branch != expected_branch || worktree.physical_worktree_root != expected_root {
             return Err(mismatch(
                 "the unresolved worktree is outside this runtime's deterministic allocation",
@@ -1667,22 +1760,27 @@ impl SubagentWorkspaceManager {
     #[allow(clippy::too_many_lines)] // one ordered Git acquisition pipeline
     pub async fn acquire(
         &self,
-        policy: SubagentWorkspacePolicy,
-        subagent_id: &SubagentId,
+        policy: WorkspacePolicy,
+        owner_id: impl Into<WorkspaceOwner>,
         cancellation: &CancellationSignal,
     ) -> Result<WorkspaceLease, WorkspaceAcquireError> {
+        let owner = owner_id.into();
+        let owner_id = &owner;
         if cancellation.is_cancelled() {
             return Err(WorkspaceAcquireError::Cancelled);
         }
-        if matches!(policy, SubagentWorkspacePolicy::SharedWorkspace) {
+        if matches!(policy, WorkspacePolicy::SharedWorkspace) {
             return Ok(WorkspaceLease {
+                active_registered: false,
+                policy,
+                owner,
                 manager: self.clone(),
                 snapshot: WorkspaceSnapshot::shared(self.parent_logical_workspace.clone()),
                 branch_created: false,
                 created: false,
             });
         }
-        let SubagentWorkspacePolicy::GitWorktree {
+        let WorkspacePolicy::GitWorktree {
             require_clean_parent,
         } = policy
         else {
@@ -1769,8 +1867,8 @@ impl SubagentWorkspaceManager {
             return Err(WorkspaceAcquireError::Cancelled);
         }
 
-        let token = deterministic_worktree_name(subagent_id);
-        let branch = format!("rustx/subagent/{token}");
+        let token = deterministic_worktree_name(owner_id);
+        let branch = format!("rustx/workspace/{token}");
         let physical_worktree_root = self.runtime_root.join("worktrees").join(token);
         if path_is_occupied(&physical_worktree_root)
             || self.branch_exists(&branch, cancellation).await?
@@ -1815,6 +1913,9 @@ impl SubagentWorkspaceManager {
             parent_dirty,
         );
         let mut lease = WorkspaceLease {
+            active_registered: false,
+            policy,
+            owner,
             manager: self.clone(),
             snapshot,
             branch_created: false,
@@ -1958,6 +2059,11 @@ impl SubagentWorkspaceManager {
                 .settle_acquisition_failure(lease, WorkspaceAcquireError::Cancelled)
                 .await);
         }
+        self.active
+            .lock()
+            .expect("workspace ownership")
+            .insert(deterministic_worktree_name(&lease.owner));
+        lease.active_registered = true;
         Ok(lease)
     }
 
@@ -2348,6 +2454,12 @@ impl SubagentWorkspaceManager {
     /// exact path is the only safe disposition.
     #[must_use]
     pub fn inspect_recovered(snapshot: &WorkspaceSnapshot) -> WorkspaceSettlement {
+        if snapshot.borrowed_from.is_some() {
+            return WorkspaceSettlement {
+                snapshot: snapshot.clone(),
+                disposition: WorkspaceSettlementDisposition::Borrowed,
+            };
+        }
         if let Err(error) = snapshot.validate() {
             return WorkspaceSettlement::unresolved(snapshot.clone(), error);
         }
@@ -2426,7 +2538,10 @@ impl SubagentWorkspaceManager {
 /// recovery, never a force-removal of unknown user work.
 #[derive(Debug)]
 pub struct WorkspaceLease {
-    manager: SubagentWorkspaceManager,
+    active_registered: bool,
+    policy: WorkspacePolicy,
+    owner: WorkspaceOwner,
+    manager: WorkspaceManager,
     snapshot: WorkspaceSnapshot,
     /// Proof that this lease's successful atomic `worktree add -b` created the
     /// deterministic runtime branch. An ambiguous/cancelled Git command does
@@ -2487,6 +2602,23 @@ impl WorkspaceLease {
         )
     }
 
+    /// Physical users have ended; retain the resource but retire process-local
+    /// ownership so the exact native inspection/disposal route can re-prove it.
+    fn preserve_after_settled_inspection(self, detail: String) -> WorkspaceSettlement {
+        if self.active_registered {
+            self.manager
+                .active
+                .lock()
+                .expect("workspace ownership")
+                .remove(&deterministic_worktree_name(&self.owner));
+        }
+        WorkspaceSettlement::unresolved_with_reason(
+            self.snapshot,
+            WorkspaceUnresolvedReason::PhysicalSettlement,
+            detail,
+        )
+    }
+
     /// Settles a lease that never crossed durable child ownership.  Any dirty
     /// or otherwise unproven state is returned as an error and retained.
     pub(crate) async fn settle_staged(
@@ -2510,13 +2642,23 @@ impl WorkspaceLease {
     }
 
     async fn settle(self) -> WorkspaceSettlement {
-        if !self.snapshot.is_isolated() {
-            return WorkspaceSettlement::shared(self.snapshot);
+        let registration = self.active_registered.then(|| {
+            (
+                self.manager.active.clone(),
+                deterministic_worktree_name(&self.owner),
+            )
+        });
+        let settlement = if !self.snapshot.is_isolated() {
+            WorkspaceSettlement::shared(self.snapshot)
+        } else if !self.created {
+            self.settle_unregistered().await
+        } else {
+            self.settle_registered().await
+        };
+        if let Some((active, key)) = registration {
+            active.lock().expect("workspace ownership").remove(&key);
         }
-        if !self.created {
-            return self.settle_unregistered().await;
-        }
-        self.settle_registered().await
+        settlement
     }
 
     async fn settle_unregistered(self) -> WorkspaceSettlement {
@@ -2612,6 +2754,13 @@ impl WorkspaceLease {
             head_commit: head.clone(),
             dirty,
         };
+        if let Err(error) = self
+            .manager
+            .verify_retained_workspace(&self.owner, &snapshot, &handoff)
+            .await
+        {
+            return WorkspaceSettlement::unresolved(snapshot, error.to_string());
+        }
         if changed {
             return WorkspaceSettlement::retained(snapshot, handoff);
         }
@@ -2622,7 +2771,21 @@ impl WorkspaceLease {
     }
 }
 
-impl SubagentWorkspaceManager {
+impl WorkspaceManager {
+    fn require_released(&self, owner: &WorkspaceOwner) -> Result<(), WorkspaceDisposalError> {
+        if self
+            .active
+            .lock()
+            .expect("workspace ownership")
+            .contains(&deterministic_worktree_name(owner))
+        {
+            return Err(WorkspaceDisposalError::OwnershipMismatch {
+                detail: "workspace lease still owns unsettled physical access".into(),
+            });
+        }
+        Ok(())
+    }
+
     async fn runtime_branch_head(&self, branch: &str) -> Result<String, String> {
         let reference = format!("refs/heads/{branch}");
         self.git_text(
@@ -2777,12 +2940,22 @@ fn is_git_object_id(value: &str) -> bool {
 /// Stable, race-independent runtime worktree identity derived from the
 /// durable subagent identity and a versioned namespace.
 #[must_use]
-pub fn deterministic_worktree_name(subagent_id: &SubagentId) -> String {
+pub fn deterministic_worktree_name(owner: impl Into<WorkspaceOwner>) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"rustx-subagent-worktree-v1\n");
-    hasher.update(subagent_id.as_str().len().to_string().as_bytes());
-    hasher.update(b"\n");
-    hasher.update(subagent_id.as_str().as_bytes());
+    hasher.update(b"rustx-workspace-v2\n");
+    let parts = match owner.into() {
+        WorkspaceOwner::Subagent(id) => vec!["subagent".to_owned(), id.as_str().to_owned()],
+        WorkspaceOwner::Workflow(run) => vec![
+            "workflow".to_owned(),
+            run.conversation_id.as_str().to_owned(),
+            run.attempt_id.as_str().to_owned(),
+            run.invocation.to_string(),
+        ],
+    };
+    for part in parts {
+        hasher.update((part.len() as u64).to_be_bytes());
+        hasher.update(part.as_bytes());
+    }
     format!("{:x}", hasher.finalize())
 }
 
@@ -3868,10 +4041,10 @@ impl WorkspaceDisposalHook {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_OVERLAY_BYTES, MAX_OVERLAY_FILES, SubagentWorkspaceManager, SubagentWorkspacePolicy,
-        WorkspaceAcquireHook, WorkspaceCleanup, WorkspaceDisposalHook, WorkspaceIsolation,
-        WorkspaceOverlayFreezeHook, WorkspaceOverlayMaterializationHook,
-        WorkspaceOverlaySourceHook, WorkspaceOverlayValidationHook, WorkspaceSnapshot,
+        MAX_OVERLAY_BYTES, MAX_OVERLAY_FILES, WorkspaceAcquireHook, WorkspaceCleanup,
+        WorkspaceDisposalHook, WorkspaceIsolation, WorkspaceManager, WorkspaceOverlayFreezeHook,
+        WorkspaceOverlayMaterializationHook, WorkspaceOverlaySourceHook,
+        WorkspaceOverlayValidationHook, WorkspacePolicy, WorkspaceSnapshot,
         deterministic_worktree_name, parse_overlay_manifest,
     };
     use crate::runtime::cancellation::CancellationSignal;
@@ -3985,8 +4158,8 @@ mod tests {
     /// acquisition/settlement semantics construct this policy so they keep
     /// exercising the current default rather than freezing the obsolete
     /// permissive default.
-    fn default_isolated() -> SubagentWorkspacePolicy {
-        SubagentWorkspacePolicy::GitWorktree {
+    fn default_isolated() -> WorkspacePolicy {
+        WorkspacePolicy::GitWorktree {
             require_clean_parent: true,
         }
     }
@@ -4030,10 +4203,10 @@ mod tests {
         let workspace = directory.path().join("shared-workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         std::fs::write(workspace.join("dirty.txt"), "shared bytes\n").expect("file");
-        let manager = SubagentWorkspaceManager::new(&workspace, directory.path().join("artifacts"));
+        let manager = WorkspaceManager::new(&workspace, directory.path().join("artifacts"));
         let lease = manager
             .acquire(
-                SubagentWorkspacePolicy::SharedWorkspace,
+                WorkspacePolicy::SharedWorkspace,
                 &SubagentId::new("conversation-shared-subagent-1"),
                 &CancellationSignal::new(),
             )
@@ -4060,13 +4233,13 @@ mod tests {
         let base = head(dir.path());
         std::fs::write(dir.path().join("tracked.txt"), "parent dirty\n").expect("dirty file");
         std::fs::write(dir.path().join("untracked.txt"), "parent only\n").expect("untracked");
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 // The explicit opt-out: the child runs from the captured
                 // committed HEAD while intentionally ignoring parent-local
                 // dirty bytes (Issue #188).
-                SubagentWorkspacePolicy::GitWorktree {
+                WorkspacePolicy::GitWorktree {
                     require_clean_parent: false,
                 },
                 &SubagentId::new("conversation-a-subagent-1"),
@@ -4102,7 +4275,7 @@ mod tests {
     async fn clean_parent_worktree_is_created_at_the_exact_head_and_removed_cleanly() {
         let dir = repository();
         let base = head(dir.path());
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 default_isolated(),
@@ -4114,7 +4287,7 @@ mod tests {
         let worktree = lease.snapshot().git_worktree().expect("Git worktree facts");
         assert_eq!(worktree.base_commit, base);
         assert_eq!(head(lease.logical_workspace()), base);
-        assert!(worktree.branch.starts_with("rustx/subagent/"));
+        assert!(worktree.branch.starts_with("rustx/workspace/"));
         let physical = worktree.physical_worktree_root.clone();
         let branch = worktree.branch.clone();
         assert!(ref_exists(dir.path(), &branch));
@@ -4134,10 +4307,10 @@ mod tests {
         let parent_before =
             std::fs::read_to_string(repository.path().join("tracked.txt")).expect("parent source");
         let runtime = tempfile::tempdir().expect("runtime root");
-        let manager = SubagentWorkspaceManager::new(repository.path(), runtime.path());
-        let subagent_id = SubagentId::new("conversation-dispose-subagent-1");
+        let manager = WorkspaceManager::new(repository.path(), runtime.path());
+        let owner_id = SubagentId::new("conversation-dispose-subagent-1");
         let lease = manager
-            .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
+            .acquire(default_isolated(), &owner_id, &CancellationSignal::new())
             .await
             .expect("retained worktree");
         let physical = lease
@@ -4164,7 +4337,7 @@ mod tests {
         assert!(ref_exists(repository.path(), &branch));
 
         manager
-            .dispose_retained_workspace(&subagent_id, &settlement.snapshot, handoff)
+            .dispose_retained_workspace(&owner_id, &settlement.snapshot, handoff)
             .await
             .expect("exact retained resource disposal");
 
@@ -4187,12 +4360,12 @@ mod tests {
         let parent_before =
             std::fs::read_to_string(repository.path().join("tracked.txt")).expect("parent");
         let runtime = tempfile::tempdir().expect("runtime root");
-        let mut manager = SubagentWorkspaceManager::new(repository.path(), runtime.path());
+        let mut manager = WorkspaceManager::new(repository.path(), runtime.path());
         let hook = std::sync::Arc::new(WorkspaceDisposalHook::new());
         manager.install_disposal_hook(hook.clone());
-        let subagent_id = SubagentId::new("conversation-disposal-partial-subagent-1");
+        let owner_id = SubagentId::new("conversation-disposal-partial-subagent-1");
         let lease = manager
-            .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
+            .acquire(default_isolated(), &owner_id, &CancellationSignal::new())
             .await
             .expect("retained worktree");
         std::fs::write(
@@ -4207,7 +4380,7 @@ mod tests {
 
         hook.fail_branch_cleanup("injected compare-delete failure");
         let result = manager
-            .dispose_retained_workspace(&subagent_id, &settlement.snapshot, handoff)
+            .dispose_retained_workspace(&owner_id, &settlement.snapshot, handoff)
             .await
             .expect("the physical layer reports partial success as a value");
         assert!(matches!(
@@ -4233,7 +4406,7 @@ mod tests {
         // A direct, non-authorized retry cannot infer success from absence.
         // Only the registry's durable intent may use the continuation phase.
         let retry = manager
-            .dispose_retained_workspace(&subagent_id, &settlement.snapshot, handoff)
+            .dispose_retained_workspace(&owner_id, &settlement.snapshot, handoff)
             .await;
         assert!(matches!(
             retry,
@@ -4246,12 +4419,12 @@ mod tests {
     async fn moved_branch_after_worktree_removal_is_preserved_by_compare_delete() {
         let repository = repository();
         let runtime = tempfile::tempdir().expect("runtime root");
-        let mut manager = SubagentWorkspaceManager::new(repository.path(), runtime.path());
+        let mut manager = WorkspaceManager::new(repository.path(), runtime.path());
         let hook = std::sync::Arc::new(WorkspaceDisposalHook::new());
         manager.install_disposal_hook(hook.clone());
-        let subagent_id = SubagentId::new("conversation-disposal-moved-branch-subagent-1");
+        let owner_id = SubagentId::new("conversation-disposal-moved-branch-subagent-1");
         let lease = manager
-            .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
+            .acquire(default_isolated(), &owner_id, &CancellationSignal::new())
             .await
             .expect("retained worktree");
         std::fs::write(
@@ -4266,7 +4439,7 @@ mod tests {
         hook.arm_after_worktree_removal();
 
         let task_manager = manager.clone();
-        let task_id = subagent_id.clone();
+        let task_id = owner_id.clone();
         let task_snapshot = settlement.snapshot.clone();
         let task_handoff = handoff.clone();
         let task = tokio::spawn(async move {
@@ -4307,7 +4480,7 @@ mod tests {
         // compare-delete still refuses to remove its unexpected value.
         let continuation = manager
             .dispose_authorized_workspace(
-                &subagent_id,
+                &owner_id,
                 &settlement.snapshot,
                 handoff,
                 super::WorkspaceDisposalPhase::WorktreeRemoved,
@@ -4325,10 +4498,10 @@ mod tests {
     async fn externally_missing_worktree_without_intent_fails_closed() {
         let repository = repository();
         let runtime = tempfile::tempdir().expect("runtime root");
-        let manager = SubagentWorkspaceManager::new(repository.path(), runtime.path());
-        let subagent_id = SubagentId::new("conversation-disposal-external-missing-subagent-1");
+        let manager = WorkspaceManager::new(repository.path(), runtime.path());
+        let owner_id = SubagentId::new("conversation-disposal-external-missing-subagent-1");
         let lease = manager
-            .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
+            .acquire(default_isolated(), &owner_id, &CancellationSignal::new())
             .await
             .expect("retained worktree");
         std::fs::write(
@@ -4353,7 +4526,7 @@ mod tests {
         assert!(ref_exists(repository.path(), &branch));
 
         let result = manager
-            .dispose_retained_workspace(&subagent_id, &settlement.snapshot, handoff)
+            .dispose_retained_workspace(&owner_id, &settlement.snapshot, handoff)
             .await;
         assert!(matches!(
             result,
@@ -4381,10 +4554,10 @@ mod tests {
             ],
         );
         let runtime = tempfile::tempdir().expect("runtime root");
-        let manager = SubagentWorkspaceManager::new(repository.path(), runtime.path());
-        let subagent_id = SubagentId::new("conversation-isolation-dispose-subagent-1");
+        let manager = WorkspaceManager::new(repository.path(), runtime.path());
+        let owner_id = SubagentId::new("conversation-isolation-dispose-subagent-1");
         let lease = manager
-            .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
+            .acquire(default_isolated(), &owner_id, &CancellationSignal::new())
             .await
             .expect("target worktree");
         let target = lease
@@ -4406,7 +4579,7 @@ mod tests {
         let handoff = settlement.handoff().expect("changed handoff");
 
         manager
-            .dispose_retained_workspace(&subagent_id, &settlement.snapshot, handoff)
+            .dispose_retained_workspace(&owner_id, &settlement.snapshot, handoff)
             .await
             .expect("target disposal");
 
@@ -4430,7 +4603,7 @@ mod tests {
     async fn disposal_fails_closed_for_tampered_path_branch_repository_and_registration() {
         let source_repository = repository();
         let runtime = tempfile::tempdir().expect("runtime root");
-        let manager = SubagentWorkspaceManager::new(source_repository.path(), runtime.path());
+        let manager = WorkspaceManager::new(source_repository.path(), runtime.path());
 
         let tampered_path_id = SubagentId::new("conversation-tampered-path-subagent-1");
         let tampered_path_lease = manager
@@ -4636,13 +4809,13 @@ mod tests {
     async fn disposal_rechecks_registration_after_a_deterministic_concurrent_change() {
         let repository = repository();
         let runtime = tempfile::tempdir().expect("runtime root");
-        let mut manager = SubagentWorkspaceManager::new(repository.path(), runtime.path());
+        let mut manager = WorkspaceManager::new(repository.path(), runtime.path());
         let hook = std::sync::Arc::new(WorkspaceDisposalHook::new());
         manager.install_disposal_hook(hook.clone());
         hook.arm_before_recheck();
-        let subagent_id = SubagentId::new("conversation-disposal-race-subagent-1");
+        let owner_id = SubagentId::new("conversation-disposal-race-subagent-1");
         let lease = manager
-            .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
+            .acquire(default_isolated(), &owner_id, &CancellationSignal::new())
             .await
             .expect("race test worktree");
         std::fs::write(
@@ -4654,7 +4827,7 @@ mod tests {
         let handoff = settlement.handoff().expect("retained handoff");
         let physical = handoff.physical_worktree_root.clone();
         let task_manager = manager.clone();
-        let task_id = subagent_id.clone();
+        let task_id = owner_id.clone();
         let task_snapshot = settlement.snapshot.clone();
         let task_handoff = handoff.clone();
         let task = tokio::spawn(async move {
@@ -4733,7 +4906,7 @@ mod tests {
         let expected = b"TOKEN=local-only\n\0binary-tail";
         write_overlay_file(&workspace, "local/runtime.env", expected);
         let runtime = tempfile::tempdir().expect("runtime root");
-        let lease = SubagentWorkspaceManager::new(&workspace, runtime.path())
+        let lease = WorkspaceManager::new(&workspace, runtime.path())
             .acquire(
                 default_isolated(),
                 &SubagentId::new("conversation-basic-overlay-subagent-1"),
@@ -4763,7 +4936,7 @@ mod tests {
         );
         write_overlay_file(&workspace, ".env", b"FROZEN=before\n");
         let runtime = tempfile::tempdir().expect("runtime root");
-        let mut manager = SubagentWorkspaceManager::new(&workspace, runtime.path());
+        let mut manager = WorkspaceManager::new(&workspace, runtime.path());
         let hook = std::sync::Arc::new(WorkspaceOverlayFreezeHook::new());
         manager.install_overlay_freeze_hook(hook.clone());
         let cancellation = CancellationSignal::new();
@@ -4807,7 +4980,7 @@ mod tests {
         .expect("manifest");
         commit(repository.path(), "select tracked file");
         let runtime = tempfile::tempdir().expect("runtime root");
-        let error = SubagentWorkspaceManager::new(repository.path(), runtime.path())
+        let error = WorkspaceManager::new(repository.path(), runtime.path())
             .acquire(
                 default_isolated(),
                 &SubagentId::new("conversation-tracked-overlay-subagent-1"),
@@ -4835,9 +5008,9 @@ mod tests {
         std::fs::write(repository.path().join("local.env"), "LOCAL=value\n")
             .expect("non-ignored local file");
         let runtime = tempfile::tempdir().expect("runtime root");
-        let error = SubagentWorkspaceManager::new(repository.path(), runtime.path())
+        let error = WorkspaceManager::new(repository.path(), runtime.path())
             .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
+                WorkspacePolicy::GitWorktree {
                     require_clean_parent: false,
                 },
                 &SubagentId::new("conversation-non-ignored-overlay-subagent-1"),
@@ -4877,9 +5050,9 @@ mod tests {
                 symlink(outside.path(), workspace.join("linked")).expect("ancestor symlink");
             }
             let runtime = tempfile::tempdir().expect("runtime root");
-            let error = SubagentWorkspaceManager::new(&workspace, runtime.path())
+            let error = WorkspaceManager::new(&workspace, runtime.path())
                 .acquire(
-                    SubagentWorkspacePolicy::GitWorktree {
+                    WorkspacePolicy::GitWorktree {
                         require_clean_parent: false,
                     },
                     &SubagentId::new(format!(
@@ -4913,7 +5086,7 @@ mod tests {
         std::fs::write(outside.path().join("runtime.env"), b"OUTSIDE\n").expect("outside overlay");
 
         let runtime = tempfile::tempdir().expect("runtime root");
-        let mut manager = SubagentWorkspaceManager::new(&workspace, runtime.path());
+        let mut manager = WorkspaceManager::new(&workspace, runtime.path());
         let hook = std::sync::Arc::new(WorkspaceOverlaySourceHook::new());
         manager.install_overlay_source_hook(hook.clone());
         let subagent = SubagentId::new("conversation-overlay-ancestor-race-subagent-1");
@@ -4951,7 +5124,7 @@ mod tests {
                 "conversation-overlay-ancestor-race-subagent-1",
             )));
         let branch = format!(
-            "rustx/subagent/{}",
+            "rustx/workspace/{}",
             deterministic_worktree_name(&SubagentId::new(
                 "conversation-overlay-ancestor-race-subagent-1",
             ))
@@ -4982,7 +5155,7 @@ mod tests {
         std::fs::write(outside.path().join("runtime.env"), b"OUTSIDE\n").expect("outside overlay");
 
         let runtime = tempfile::tempdir().expect("runtime root");
-        let mut manager = SubagentWorkspaceManager::new(&workspace, runtime.path());
+        let mut manager = WorkspaceManager::new(&workspace, runtime.path());
         let hook = std::sync::Arc::new(WorkspaceOverlayValidationHook::new());
         manager.install_overlay_validation_hook(hook.clone());
         let subagent = SubagentId::new("conversation-overlay-retained-file-subagent-1");
@@ -5051,7 +5224,7 @@ mod tests {
             &["missing.env".to_owned()],
         );
         let runtime = tempfile::tempdir().expect("runtime root");
-        let error = SubagentWorkspaceManager::new(&workspace, runtime.path())
+        let error = WorkspaceManager::new(&workspace, runtime.path())
             .acquire(
                 default_isolated(),
                 &SubagentId::new("conversation-missing-overlay-subagent-1"),
@@ -5086,7 +5259,7 @@ mod tests {
             &vec![b'b'; MAX_OVERLAY_BYTES - (MAX_OVERLAY_BYTES / 2)],
         );
         let accepted_runtime = tempfile::tempdir().expect("runtime root");
-        let accepted = SubagentWorkspaceManager::new(&accepted_workspace, accepted_runtime.path())
+        let accepted = WorkspaceManager::new(&accepted_workspace, accepted_runtime.path())
             .acquire(
                 default_isolated(),
                 &SubagentId::new("conversation-byte-boundary-overlay-subagent-1"),
@@ -5125,7 +5298,7 @@ mod tests {
             &vec![0; MAX_OVERLAY_BYTES - (MAX_OVERLAY_BYTES / 2) + 1],
         );
         let rejected_runtime = tempfile::tempdir().expect("runtime root");
-        let error = SubagentWorkspaceManager::new(&rejected_workspace, rejected_runtime.path())
+        let error = WorkspaceManager::new(&rejected_workspace, rejected_runtime.path())
             .acquire(
                 default_isolated(),
                 &SubagentId::new("conversation-over-byte-limit-overlay-subagent-1"),
@@ -5145,15 +5318,15 @@ mod tests {
     async fn repository_root_scope_maps_to_the_physical_worktree_root() {
         let repository = repository();
         let runtime = tempfile::tempdir().expect("runtime root");
-        let subagent_id = SubagentId::new("conversation-root-scope-subagent-1");
-        let lease = SubagentWorkspaceManager::new(repository.path(), runtime.path())
-            .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
+        let owner_id = SubagentId::new("conversation-root-scope-subagent-1");
+        let lease = WorkspaceManager::new(repository.path(), runtime.path())
+            .acquire(default_isolated(), &owner_id, &CancellationSignal::new())
             .await
             .expect("worktree");
         let physical = runtime
             .path()
             .join("worktrees")
-            .join(deterministic_worktree_name(&subagent_id));
+            .join(deterministic_worktree_name(&owner_id));
         let facts = lease.snapshot().git_worktree().expect("Git worktree facts");
 
         assert_eq!(
@@ -5173,16 +5346,15 @@ mod tests {
     async fn repository_subdirectory_scope_is_preserved_in_the_isolated_checkout() {
         let repository = repository_with_workspace(std::path::Path::new("backend"));
         let runtime = tempfile::tempdir().expect("runtime root");
-        let subagent_id = SubagentId::new("conversation-subdir-scope-subagent-1");
-        let lease =
-            SubagentWorkspaceManager::new(repository.path().join("backend"), runtime.path())
-                .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
-                .await
-                .expect("worktree");
+        let owner_id = SubagentId::new("conversation-subdir-scope-subagent-1");
+        let lease = WorkspaceManager::new(repository.path().join("backend"), runtime.path())
+            .acquire(default_isolated(), &owner_id, &CancellationSignal::new())
+            .await
+            .expect("worktree");
         let physical = runtime
             .path()
             .join("worktrees")
-            .join(deterministic_worktree_name(&subagent_id));
+            .join(deterministic_worktree_name(&owner_id));
         let logical = physical.join("backend");
         let facts = lease.snapshot().git_worktree().expect("Git worktree facts");
 
@@ -5207,15 +5379,15 @@ mod tests {
         let relative = std::path::Path::new("a/b/c");
         let repository = repository_with_workspace(relative);
         let runtime = tempfile::tempdir().expect("runtime root");
-        let subagent_id = SubagentId::new("conversation-nested-scope-subagent-1");
-        let lease = SubagentWorkspaceManager::new(repository.path().join(relative), runtime.path())
-            .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
+        let owner_id = SubagentId::new("conversation-nested-scope-subagent-1");
+        let lease = WorkspaceManager::new(repository.path().join(relative), runtime.path())
+            .acquire(default_isolated(), &owner_id, &CancellationSignal::new())
             .await
             .expect("worktree");
         let physical = runtime
             .path()
             .join("worktrees")
-            .join(deterministic_worktree_name(&subagent_id));
+            .join(deterministic_worktree_name(&owner_id));
         let facts = lease.snapshot().git_worktree().expect("Git worktree facts");
 
         assert_eq!(facts.repository_relative_workspace, relative);
@@ -5243,22 +5415,19 @@ mod tests {
         )
         .expect("uncommitted file");
         let runtime = tempfile::tempdir().expect("runtime root");
-        let subagent_id = SubagentId::new("conversation-absent-scope-subagent-1");
+        let owner_id = SubagentId::new("conversation-absent-scope-subagent-1");
         let physical = runtime
             .path()
             .join("worktrees")
-            .join(deterministic_worktree_name(&subagent_id));
-        let branch = format!(
-            "rustx/subagent/{}",
-            deterministic_worktree_name(&subagent_id)
-        );
+            .join(deterministic_worktree_name(&owner_id));
+        let branch = format!("rustx/workspace/{}", deterministic_worktree_name(&owner_id));
 
-        let error = SubagentWorkspaceManager::new(&parent_logical_workspace, runtime.path())
+        let error = WorkspaceManager::new(&parent_logical_workspace, runtime.path())
             .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
+                WorkspacePolicy::GitWorktree {
                     require_clean_parent: false,
                 },
-                &subagent_id,
+                &owner_id,
                 &CancellationSignal::new(),
             )
             .await
@@ -5287,9 +5456,9 @@ mod tests {
         let relative = std::path::Path::new("backend/service");
         let repository = repository_with_workspace(relative);
         let runtime = tempfile::tempdir().expect("runtime root");
-        let subagent_id = SubagentId::new("conversation-scoped-handoff-subagent-1");
-        let lease = SubagentWorkspaceManager::new(repository.path().join(relative), runtime.path())
-            .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
+        let owner_id = SubagentId::new("conversation-scoped-handoff-subagent-1");
+        let lease = WorkspaceManager::new(repository.path().join(relative), runtime.path())
+            .acquire(default_isolated(), &owner_id, &CancellationSignal::new())
             .await
             .expect("worktree");
         let physical = lease
@@ -5328,7 +5497,7 @@ mod tests {
             std::path::PathBuf::from("backend"),
             physical.clone(),
             "1111111111111111111111111111111111111111".to_owned(),
-            "rustx/subagent/token".to_owned(),
+            "rustx/workspace/token".to_owned(),
             false,
         );
         assert!(valid.validate().is_ok());
@@ -5361,10 +5530,10 @@ mod tests {
 
         let dir = repository();
         let runtime_root = dir.path().join("artifacts");
-        let subagent_id = SubagentId::new("conversation-hook-subagent-1");
+        let owner_id = SubagentId::new("conversation-hook-subagent-1");
         let workspace = runtime_root
             .join("worktrees")
-            .join(super::deterministic_worktree_name(&subagent_id));
+            .join(super::deterministic_worktree_name(&owner_id));
         let hook_marker = dir.path().join("post-checkout-hook-ran");
         let hook = dir.path().join(".git/hooks/post-checkout");
         std::fs::write(
@@ -5382,9 +5551,9 @@ mod tests {
         permissions.set_mode(0o755);
         std::fs::set_permissions(&hook, permissions).expect("executable hook");
 
-        let manager = SubagentWorkspaceManager::new(dir.path(), &runtime_root);
+        let manager = WorkspaceManager::new(dir.path(), &runtime_root);
         let lease = manager
-            .acquire(default_isolated(), &subagent_id, &CancellationSignal::new())
+            .acquire(default_isolated(), &owner_id, &CancellationSignal::new())
             .await
             .expect("worktree");
 
@@ -5404,7 +5573,7 @@ mod tests {
     async fn ignored_only_child_artifact_is_cleaned_without_a_handoff() {
         let dir = repository();
         ignore_target(dir.path());
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 default_isolated(),
@@ -5441,7 +5610,7 @@ mod tests {
         );
         write_overlay_file(&workspace, ".env", b"VALUE=frozen\n");
         let runtime = tempfile::tempdir().expect("runtime root");
-        let lease = SubagentWorkspaceManager::new(&workspace, runtime.path())
+        let lease = WorkspaceManager::new(&workspace, runtime.path())
             .acquire(
                 default_isolated(),
                 &SubagentId::new("conversation-overlay-only-settlement-subagent-1"),
@@ -5469,7 +5638,7 @@ mod tests {
         );
         write_overlay_file(&workspace, ".env", b"VALUE=local\n");
         let runtime = tempfile::tempdir().expect("runtime root");
-        let lease = SubagentWorkspaceManager::new(&workspace, runtime.path())
+        let lease = WorkspaceManager::new(&workspace, runtime.path())
             .acquire(
                 default_isolated(),
                 &SubagentId::new("conversation-overlay-source-change-subagent-1"),
@@ -5506,7 +5675,7 @@ mod tests {
     #[tokio::test]
     async fn parent_movement_after_acquisition_cannot_change_the_child_base() {
         let dir = repository();
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 default_isolated(),
@@ -5545,7 +5714,7 @@ mod tests {
         let dir = repository();
         let parent_before =
             std::fs::read_to_string(dir.path().join("tracked.txt")).expect("parent");
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 default_isolated(),
@@ -5582,7 +5751,7 @@ mod tests {
     #[tokio::test]
     async fn committed_child_work_is_preserved_even_when_the_worktree_is_clean() {
         let dir = repository();
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 default_isolated(),
@@ -5615,7 +5784,7 @@ mod tests {
     async fn committed_child_work_with_ignored_cache_is_dirty_false_but_changed() {
         let dir = repository();
         ignore_target(dir.path());
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 default_isolated(),
@@ -5655,7 +5824,7 @@ mod tests {
     async fn untracked_source_and_ignored_cache_preserve_a_dirty_handoff() {
         let dir = repository();
         ignore_target(dir.path());
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 default_isolated(),
@@ -5688,7 +5857,7 @@ mod tests {
     async fn recovered_inspection_uses_the_same_ordinary_dirty_definition() {
         let dir = repository();
         ignore_target(dir.path());
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 default_isolated(),
@@ -5706,7 +5875,7 @@ mod tests {
         .expect("cache");
         drop(lease);
 
-        let settlement = SubagentWorkspaceManager::inspect_recovered(&snapshot);
+        let settlement = WorkspaceManager::inspect_recovered(&snapshot);
         let handoff = settlement.handoff().expect("recovered handoff");
 
         assert_eq!(settlement.cleanup(), WorkspaceCleanup::Preserved);
@@ -5717,7 +5886,7 @@ mod tests {
     #[tokio::test]
     async fn committed_and_dirty_child_work_reports_both_terminal_facts() {
         let dir = repository();
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 default_isolated(),
@@ -5753,7 +5922,7 @@ mod tests {
     #[tokio::test]
     async fn staged_dirty_state_fails_closed_and_never_force_removes_work() {
         let dir = repository();
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 default_isolated(),
@@ -5783,7 +5952,7 @@ mod tests {
         );
         write_overlay_file(&workspace, "local/runtime.env", b"STAGED=overlay\n");
         let runtime_root = dir.path().join("artifacts");
-        let mut manager = SubagentWorkspaceManager::new(&workspace, &runtime_root);
+        let mut manager = WorkspaceManager::new(&workspace, &runtime_root);
         let hook = std::sync::Arc::new(WorkspaceAcquireHook::new());
         manager.install_acquisition_hook(hook.clone());
         let cancellation = CancellationSignal::new();
@@ -5800,7 +5969,7 @@ mod tests {
         let path = runtime_root
             .join("worktrees")
             .join(deterministic_worktree_name(&subagent));
-        let branch = format!("rustx/subagent/{}", deterministic_worktree_name(&subagent));
+        let branch = format!("rustx/workspace/{}", deterministic_worktree_name(&subagent));
         assert!(path.exists(), "the barrier is after Git worktree creation");
         assert!(path.join("backend").exists(), "the logical scope exists");
         assert_eq!(
@@ -5834,7 +6003,7 @@ mod tests {
         write_overlay_file(&workspace, "second.env", b"SECOND=overlay\n");
 
         let runtime_root = dir.path().join("artifacts");
-        let mut manager = SubagentWorkspaceManager::new(&workspace, &runtime_root);
+        let mut manager = WorkspaceManager::new(&workspace, &runtime_root);
         let hook = std::sync::Arc::new(WorkspaceOverlayMaterializationHook::new());
         manager.install_overlay_materialization_hook(hook.clone());
         let cancellation = CancellationSignal::new();
@@ -5853,7 +6022,7 @@ mod tests {
             .join("worktrees")
             .join(deterministic_worktree_name(&subagent));
         let logical = path.join("backend");
-        let branch = format!("rustx/subagent/{}", deterministic_worktree_name(&subagent));
+        let branch = format!("rustx/workspace/{}", deterministic_worktree_name(&subagent));
         assert!(path.exists(), "the staged physical worktree exists");
         assert!(
             logical.join("first.env").is_file(),
@@ -5897,7 +6066,7 @@ mod tests {
     async fn concurrent_children_have_distinct_deterministic_paths_and_refs() {
         let dir = repository();
         let runtime = tempfile::tempdir().expect("runtime root");
-        let manager = SubagentWorkspaceManager::new(dir.path(), runtime.path());
+        let manager = WorkspaceManager::new(dir.path(), runtime.path());
         let first_id = SubagentId::new("conversation-concurrent-subagent-1");
         let second_id = SubagentId::new("conversation-concurrent-subagent-2");
         let cancellation = CancellationSignal::new();
@@ -5930,7 +6099,7 @@ mod tests {
     async fn same_identity_collision_cannot_settle_another_lease() {
         let dir = repository();
         let runtime = tempfile::tempdir().expect("runtime root");
-        let manager = SubagentWorkspaceManager::new(dir.path(), runtime.path());
+        let manager = WorkspaceManager::new(dir.path(), runtime.path());
         let subagent = SubagentId::new("conversation-same-identity-subagent-1");
         let first = manager
             .acquire(default_isolated(), &subagent, &CancellationSignal::new())
@@ -5960,7 +6129,7 @@ mod tests {
     async fn concurrent_same_identity_acquisition_has_one_atomic_owner() {
         let dir = repository();
         let runtime = tempfile::tempdir().expect("runtime root");
-        let manager = SubagentWorkspaceManager::new(dir.path(), runtime.path());
+        let manager = WorkspaceManager::new(dir.path(), runtime.path());
         let subagent = SubagentId::new("conversation-concurrent-same-identity-subagent-1");
         let cancellation = CancellationSignal::new();
         let (left, right) = tokio::join!(
@@ -5995,7 +6164,7 @@ mod tests {
         let dir = repository();
         let base = head(dir.path());
         std::fs::write(dir.path().join("tracked.txt"), "dirty\n").expect("dirty file");
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let error = manager
             .acquire(
                 default_isolated(),
@@ -6024,7 +6193,7 @@ mod tests {
         let base = head(dir.path());
         std::fs::write(dir.path().join("tracked.txt"), "staged dirty\n").expect("dirty file");
         git(dir.path(), &["add", "tracked.txt"]);
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let error = manager
             .acquire(
                 default_isolated(),
@@ -6052,7 +6221,7 @@ mod tests {
         let dir = repository();
         let base = head(dir.path());
         std::fs::write(dir.path().join("parent-only.txt"), "untracked\n").expect("untracked file");
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let error = manager
             .acquire(
                 default_isolated(),
@@ -6084,7 +6253,7 @@ mod tests {
         let dir = repository();
         let base = head(dir.path());
         std::fs::write(dir.path().join("tracked.txt"), "dirty\n").expect("dirty file");
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let error = manager
             .acquire(
                 default_isolated(),
@@ -6131,7 +6300,7 @@ mod tests {
         let base = head(dir.path());
         std::fs::create_dir_all(dir.path().join("target/debug")).expect("target");
         std::fs::write(dir.path().join("target/debug/generated"), "cache\n").expect("cache");
-        let manager = SubagentWorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
+        let manager = WorkspaceManager::new(dir.path(), dir.path().join("artifacts"));
         let lease = manager
             .acquire(
                 default_isolated(),
@@ -6170,12 +6339,12 @@ mod tests {
         git(dir.path(), &["add", "staged.txt"]);
         std::fs::write(dir.path().join("parent-only.txt"), "untracked\n").expect("untracked");
         let runtime = tempfile::tempdir().expect("runtime root");
-        let manager = SubagentWorkspaceManager::new(dir.path(), runtime.path());
+        let manager = WorkspaceManager::new(dir.path(), runtime.path());
         let lease = manager
             .acquire(
                 // Explicit opt-out: run from committed HEAD while ignoring
                 // parent-local dirty bytes (Issue #188).
-                SubagentWorkspacePolicy::GitWorktree {
+                WorkspacePolicy::GitWorktree {
                     require_clean_parent: false,
                 },
                 &SubagentId::new("conversation-permissive-snapshot-subagent-1"),

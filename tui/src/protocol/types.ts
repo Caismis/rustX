@@ -47,7 +47,7 @@
  * version 11's subagent activity projection; and version 9's closed
  * `interrupted` lifecycle vocabulary. Older schemas are not decoded.
  */
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 19;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 20;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -812,6 +812,8 @@ export interface RuntimeClientBackgroundExecution {
 
 /** User-recoverable project workspace facts for one subagent. */
 export interface RuntimeClientSubagentWorkspace {
+  /** Run ownership; this child has no independent disposal authority. */
+  borrowed_from?: { conversation_id: string; attempt_id: string; invocation: number };
   /** The authoritative logical project workspace used by the child. */
   logical_workspace: string;
   /** The closed shared/isolated execution facts. */

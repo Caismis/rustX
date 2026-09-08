@@ -5820,7 +5820,7 @@ mod tests {
             ))
             .expect("digest"),
             execution_deadline: None,
-            workspace_policy: crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
+            workspace_policy: crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
             instructions: "instructions".to_owned(),
             model: crate::model::frozen::test_frozen_model_spec(
                 serde_json::from_value(serde_json::json!("local/model")).expect("model reference"),
@@ -6490,7 +6490,7 @@ mod tests {
                         summary_output_cap: None,
                     },
                 },
-                workspace: crate::runtime::subagent::SubagentWorkspaceManager::new(
+                workspace: crate::runtime::workspace::WorkspaceManager::new(
                     &workspace,
                     dir.path().join("subagents"),
                 ),
@@ -6603,7 +6603,7 @@ mod tests {
                         summary_output_cap: None,
                     },
                 },
-                workspace: crate::runtime::subagent::SubagentWorkspaceManager::new(
+                workspace: crate::runtime::workspace::WorkspaceManager::new(
                     &workspace,
                     dir.path().join("subagents"),
                 ),
@@ -8332,6 +8332,7 @@ mod tests {
             crate::runtime::WorkflowProgram::compile(
                 crate::runtime::WorkflowId::parse("reload_workflow").expect("workflow id"),
                 crate::runtime::WorkflowDefinition {
+                    workspace: None,
                     tools: std::collections::BTreeSet::default(),
                     timeout_ms: 600_000,
                     description: description.to_owned(),

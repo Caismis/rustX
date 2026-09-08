@@ -1186,7 +1186,12 @@ impl RuntimeClientProjection {
             // project the bounded parent Tool call/result and does not expose
             // workflow-local values or child transcripts as a second
             // conversation surface.
-            RuntimeEvent::WorkflowStarted { .. }
+            RuntimeEvent::WorkflowWorkspaceOwned { .. }
+            | RuntimeEvent::WorkflowWorkspaceDisposalStarted { .. }
+            | RuntimeEvent::WorkflowWorkspaceDisposalSettled { .. }
+            | RuntimeEvent::WorkflowWorkspaceSettled { .. }
+            | RuntimeEvent::WorkflowCandidateInvocation { .. }
+            | RuntimeEvent::WorkflowStarted { .. }
             | RuntimeEvent::WorkflowBlockStarted { .. }
             | RuntimeEvent::WorkflowBlockSettled { .. }
             | RuntimeEvent::NativeToolInvocation { .. }
@@ -1899,12 +1904,13 @@ pub(crate) fn subagent_view(
         execution_profile: snapshot.profile.clone(),
         started_at: snapshot.started_at,
         workspace: super::snapshot::RuntimeClientSubagentWorkspace {
+            borrowed_from: snapshot.workspace.borrowed_from.clone(),
             logical_workspace: snapshot.workspace.logical_workspace.clone(),
             isolation: match &snapshot.workspace.isolation {
-                crate::runtime::subagent::WorkspaceIsolation::Shared => {
+                crate::runtime::workspace::WorkspaceIsolation::Shared => {
                     super::snapshot::RuntimeClientWorkspaceIsolation::Shared
                 }
-                crate::runtime::subagent::WorkspaceIsolation::GitWorktree(worktree) => {
+                crate::runtime::workspace::WorkspaceIsolation::GitWorktree(worktree) => {
                     super::snapshot::RuntimeClientWorkspaceIsolation::GitWorktree {
                         source_repository_root: worktree.source_repository_root.clone(),
                         repository_relative_workspace: worktree
@@ -5255,8 +5261,8 @@ mod tests {
         use crate::runtime::subagent::{
             SubagentActivity, SubagentActivityCounters, SubagentExecutionProfile,
             SubagentObservation, SubagentSnapshot, SubagentState, SubagentWorkspaceResourceState,
-            WorkspaceSnapshot,
         };
+        use crate::runtime::workspace::WorkspaceSnapshot;
 
         fn snapshot(observation: SubagentObservation) -> SubagentSnapshot {
             SubagentSnapshot {

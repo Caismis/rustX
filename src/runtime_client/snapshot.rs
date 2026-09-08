@@ -732,6 +732,9 @@ pub struct RuntimeClientBackgroundExecution {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeClientSubagentWorkspace {
+    /// Present when the Workflow run, rather than this child, owns the lease.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub borrowed_from: Option<crate::runtime::workflow::WorkflowRunId>,
     /// The authoritative logical project workspace used by the child.
     pub logical_workspace: std::path::PathBuf,
     /// The closed shared/isolated execution facts.

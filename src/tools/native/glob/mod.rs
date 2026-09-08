@@ -39,6 +39,9 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
 pub struct GlobTool;
 
 impl ToolExecutor for GlobTool {
+    fn honors_workspace(&self) -> bool {
+        true
+    }
     fn start<'a>(
         &'a self,
         invocation: ToolInvocation,

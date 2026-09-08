@@ -195,6 +195,13 @@ this child?".
 
 ### Retained subagent workspaces
 
+`runtime::workspace` owns the native `WorkspaceManager`, `WorkspacePolicy`,
+and physical `WorkspaceLease`. The Subagent registry and process driver consume
+that owner; workspace types are not re-exported through `runtime::subagent`.
+The lease currently follows the staged-child to process-driver settlement
+path described below. Workflow run retention and node borrowing are still
+pending WF-03 work.
+
 An isolated subagent starts from the captured committed source `HEAD`. If the
 child leaves no source change, rustX removes its runtime-created worktree and
 branch during normal terminal settlement. If it changes the worktree — either
@@ -461,3 +468,46 @@ Destination-unique `MessageId` and `ToolCallId` values are remapped. Retained
 `ToolExecutionId`, `SubagentId`, and background identifiers remain opaque
 history and never reacquire live owners. Future destination requests use the
 destination runtime's current resources and current Session intent.
+## Candidate access is not resource rediscovery
+
+WF-03 binds the run to a native-retained isolated candidate. Agent profile workspace policy must exactly match the run policy before acquisition. Instructions, Skills, model/profile configuration, capability allowlists, Python ToolVersion identities, MCP definitions, approval and deadlines continue to come from the invoking immutable generation. Candidate cwd never triggers ancestor instruction walks or project capability discovery. Current MCP bindings and nested orchestration are rejected for candidate consumers instead of being silently reconfigured. Noncandidate Workflows acquire no Git resource. See [WF-03 ownership and freeze rules](workflow-programs.md#run-scoped-candidate-workspace-wf-03).
+
+CandidateScope also owns live currentness: internal Workflow committed values carry the exact checked candidate through constructions and Parallel exports. Stale values fail at Branch, Return and execution-input consumption; history never reacquires authority.
+
+After physical users settle, hashing/watch/Git uncertainty is
+PhysicalSettlement. Absorbing scope settlement preserves the native resource and
+releases process-local active registration, enabling the supported exact native
+re-proof/disposal path only within its durable authority: without a trusted
+terminal HEAD, checkout and branch HEAD must still equal the immutable
+acquisition base. Recovery also requires current source identity to match the
+durable `WorkflowWorkspaceSettled.recovery_guard.reference`. That guard is a
+`CandidateRecoveryGuard` copied from the native owner's last proven candidate;
+it is separate from `candidate`, which describes exact terminal state and is
+absent when final inspection is unresolved. Repairing inspection conditions
+cannot authorize deleting source that differs from the guard. An advanced-HEAD
+unresolved candidate remains retained for explicit user/manual recovery;
+readability cannot fabricate terminal commit authority. NestedContainment means
+physical descendants remain unproven: active ownership remains, and Git-only
+disposal is forbidden even after reopening. Durable disposal intent and exact
+native identity allow continuation after physical removal despite failed
+settlement append; a still-present checkout must pass candidate-content
+verification before removal. No resource recovery restores Workflow execution.
+
+Candidate Agent structured output carries process-local applicability from the
+post-node `WorkspaceAccess::finish(false)` reference, through native physical
+settlement and the registry's unique terminal result into Workflow's
+`CommittedValue`. No mutation binds A to A; a writer binds its output to
+produced B. Failed inspection or unresolved containment grants no successful
+local candidate-bound output. Machine-review A cannot authorize a later B, and
+Event Journal output/correlation remains historical rather than execution
+authority. Agent applicability remains process-local. SQLite development schema
+28 adds the separate durable resource recovery guard; Child IPC 18 and Runtime
+Client 20 are unchanged. Old stores are rejected without migration.
+
+A recovery guard grants no execution or access authority and is not
+model-visible. A failed writer inspection retains prior guard A, preserving any
+unproven B. A successful writer proof of B followed by final-run inspection
+failure retains guard B; unchanged B may recover, while later C must survive.
+The native disposer rehashes source immediately before first removal. Durable
+intent permits exact continuation after removal without hashing a checkout that
+no longer exists.

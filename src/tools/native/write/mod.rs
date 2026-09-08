@@ -47,6 +47,9 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
 pub struct WriteTool;
 
 impl ToolExecutor for WriteTool {
+    fn honors_workspace(&self) -> bool {
+        true
+    }
     fn start<'a>(
         &'a self,
         invocation: ToolInvocation,

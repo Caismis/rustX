@@ -53,7 +53,7 @@ use crate::runtime::identity::{AgentId, ConversationId, ProcessUnitId, SubagentI
 use crate::runtime::types::{ApprovalMode, CancellationReason};
 
 use super::resolver::ResolvedSubagentSpec;
-use super::workspace::WorkspaceSnapshot;
+use crate::runtime::workspace::WorkspaceSnapshot;
 
 /// The only subagent control protocol version this build speaks.
 ///
@@ -86,7 +86,7 @@ use super::workspace::WorkspaceSnapshot;
 /// this version exits before composing anything.
 /// The current version adds typed native deadline interruption to interaction
 /// outcomes and durable approval settlement, without fabricating user intent.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 17;
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 18;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -875,7 +875,7 @@ mod tests {
             definition_digest: serde_json::from_value(serde_json::json!("sha256:abc"))
                 .expect("digest"),
             execution_deadline: None,
-            workspace_policy: crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
+            workspace_policy: crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
             instructions: "instructions".to_owned(),
             model: crate::model::frozen::test_frozen_model_spec(
                 serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),

@@ -51,7 +51,7 @@ use super::ipc::{
 };
 use super::registry::{SubagentInteractionSink, SubagentTerminalMode};
 use super::resolver::ResolvedSubagentSpec;
-use super::workspace::{WorkspaceLease, WorkspaceSnapshot};
+use crate::runtime::workspace::{WorkspaceSnapshot, WorkspaceUse};
 
 /// The liveness guard of the startup handshake. The child composes only
 /// local state before `Ready` (catalog file, durable store, capability
@@ -153,7 +153,7 @@ impl SubagentSpawnPlan {
         resolved: &ResolvedSubagentSpec,
         approval_mode: crate::runtime::types::ApprovalMode,
         runtime_root: &PhysicalChildRuntimeRoot,
-        workspace: &WorkspaceLease,
+        workspace: &WorkspaceUse,
         terminal: &SubagentTerminalMode,
     ) -> SubagentChildSpec {
         SubagentChildSpec {
@@ -511,7 +511,7 @@ pub(crate) async fn spawn_staged(
     plan: &SubagentSpawnPlan,
     spec: &SubagentChildSpec,
     runtime_root: PhysicalChildRuntimeRoot,
-    workspace: WorkspaceLease,
+    workspace: WorkspaceUse,
     preparation_cancellation: &crate::runtime::cancellation::CancellationSignal,
 ) -> Result<StagedChild, SpawnError> {
     if preparation_cancellation.is_cancelled() {
@@ -629,7 +629,7 @@ pub(crate) async fn spawn_staged(
 /// acquisition and process staging.
 async fn discard_unstaged_resources(
     runtime_root: PhysicalChildRuntimeRoot,
-    workspace: WorkspaceLease,
+    workspace: WorkspaceUse,
     error: SpawnError,
 ) -> SpawnError {
     let path = runtime_root.path().display().to_string();
@@ -754,7 +754,7 @@ pub(crate) struct StagedChild {
     runtime_root: PhysicalChildRuntimeRoot,
     /// The staged project-workspace owner. It moves into the driver at the
     /// durable ownership boundary, or is settled by rollback before then.
-    workspace: Option<WorkspaceLease>,
+    workspace: Option<WorkspaceUse>,
     /// The nested supervised process units this child has anchored in this
     /// process (Issue #145).
     ///
@@ -789,7 +789,10 @@ pub(crate) struct PhysicalSettlement {
     /// leaves its root in place instead.
     pub runtime_root_cleanup_error: Option<String>,
     /// The final workspace inspection and cleanup/handoff facts.
-    pub workspace: super::workspace::WorkspaceSettlement,
+    pub workspace: crate::runtime::workspace::WorkspaceSettlement,
+    /// Exact post-node candidate from borrowed access settlement, not a later
+    /// read of the run owner. Missing on unproven or noncandidate settlement.
+    pub candidate: Option<crate::runtime::workspace::CandidateReference>,
 }
 
 impl PhysicalSettlement {
@@ -802,9 +805,10 @@ impl PhysicalSettlement {
                 unproven: Vec::new(),
             },
             runtime_root_cleanup_error: None,
-            workspace: super::workspace::WorkspaceSettlement::shared(WorkspaceSnapshot::shared(
-                PathBuf::from("<shared-workspace>"),
-            )),
+            candidate: None,
+            workspace: crate::runtime::workspace::WorkspaceSettlement::shared(
+                WorkspaceSnapshot::shared(PathBuf::from("<shared-workspace>")),
+            ),
         }
     }
 }
@@ -965,16 +969,16 @@ impl StagedChild {
         let settlement = contain_retained(self.retained.take()).await;
         let workspace_result = if let Some(workspace) = self.workspace.take() {
             if settlement.unproven.is_empty() {
-                workspace.settle_after_child().await
+                workspace.settle_after_child().await.workspace
             } else {
                 workspace.preserve_after_unresolved_nested(
                     "a nested supervised process anchor remains physically unresolved",
                 )
             }
         } else {
-            super::workspace::WorkspaceSettlement::shared(WorkspaceSnapshot::shared(PathBuf::from(
-                "<test-shared-workspace>",
-            )))
+            crate::runtime::workspace::WorkspaceSettlement::shared(WorkspaceSnapshot::shared(
+                PathBuf::from("<test-shared-workspace>"),
+            ))
         };
         // The child-private runtime root is independent of the project
         // workspace. Once the direct child and every nested anchor are
@@ -1047,7 +1051,7 @@ impl StagedChild {
     /// Attaches the prepared workspace lease to this staged process. The
     /// process cannot enter the driver until this transfer is complete.
     #[cfg(test)]
-    pub(crate) fn with_workspace(mut self, workspace: WorkspaceLease) -> Self {
+    pub(crate) fn with_workspace(mut self, workspace: WorkspaceUse) -> Self {
         debug_assert!(self.workspace.is_none());
         self.workspace = Some(workspace);
         self
@@ -1348,7 +1352,7 @@ async fn settle_after_driver_loss(
     mut control: tokio::net::UnixStream,
     mut retained: RetainedProcessUnits,
     runtime_root: PhysicalChildRuntimeRoot,
-    workspace: Option<WorkspaceLease>,
+    workspace: Option<WorkspaceUse>,
     diagnostic: String,
     cancellation_delivered: bool,
 ) -> PhysicalSettlement {
@@ -1381,7 +1385,7 @@ async fn drive_child(
     observation: tokio::net::UnixStream,
     retained: RetainedProcessUnits,
     runtime_root: PhysicalChildRuntimeRoot,
-    workspace: Option<WorkspaceLease>,
+    workspace: Option<WorkspaceUse>,
     delegate: super::ipc::DelegationFrame,
     commands: tokio::sync::mpsc::Receiver<DriverCommand>,
     cancelled_before_start: Option<CancellationReason>,
@@ -1454,7 +1458,7 @@ async fn drive_child_control(
     mut control: tokio::net::UnixStream,
     mut retained: RetainedProcessUnits,
     runtime_root: PhysicalChildRuntimeRoot,
-    workspace: Option<WorkspaceLease>,
+    workspace: Option<WorkspaceUse>,
     mut delegate: super::ipc::DelegationFrame,
     mut commands: tokio::sync::mpsc::Receiver<DriverCommand>,
     cancelled_before_start: Option<CancellationReason>,
@@ -1817,7 +1821,7 @@ async fn settle_nested(
     outcome: PhysicalOutcome,
     retained: &mut RetainedProcessUnits,
     runtime_root: PhysicalChildRuntimeRoot,
-    workspace: Option<WorkspaceLease>,
+    workspace: Option<WorkspaceUse>,
 ) -> PhysicalSettlement {
     let nested = contain_retained(retained.take()).await;
     remove_inspection_liveness_marker(&runtime_root);
@@ -1826,12 +1830,15 @@ async fn settle_nested(
     // child exits; only the complete physical settlement permits cleanup.
     let workspace = match workspace {
         Some(lease) if nested.unproven.is_empty() => lease.settle_after_child().await,
-        Some(lease) => lease.preserve_after_unresolved_nested(
-            "a nested supervised process anchor remains physically unresolved",
-        ),
-        None => super::workspace::WorkspaceSettlement::shared(WorkspaceSnapshot::shared(
+        Some(lease) => lease
+            .preserve_after_unresolved_nested(
+                "a nested supervised process anchor remains physically unresolved",
+            )
+            .into(),
+        None => crate::runtime::workspace::WorkspaceSettlement::shared(WorkspaceSnapshot::shared(
             PathBuf::from("<shared-workspace>"),
-        )),
+        ))
+        .into(),
     };
     let runtime_root_cleanup_error = if nested.unproven.is_empty() {
         let path = runtime_root.path().display().to_string();
@@ -1850,7 +1857,8 @@ async fn settle_nested(
         outcome,
         nested,
         runtime_root_cleanup_error,
-        workspace,
+        candidate: workspace.candidate,
+        workspace: workspace.workspace,
     }
 }
 
@@ -1943,9 +1951,10 @@ mod tests {
         ChildFrame, ParentFrame, ProcessUnitAnchorFrame, ReadyFrame, read_parent_frame,
         write_child_frame,
     };
-    use crate::runtime::subagent::{
-        SubagentWorkspaceManager, SubagentWorkspacePolicy, WorkspaceCleanup,
-        WorkspaceSettlementDisposition, WorkspaceUnresolvedReason,
+
+    use crate::runtime::workspace::{
+        WorkspaceCleanup, WorkspaceManager, WorkspacePolicy, WorkspaceSettlementDisposition,
+        WorkspaceUnresolvedReason, WorkspaceUse,
     };
 
     const DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
@@ -2227,10 +2236,10 @@ mod tests {
     async fn staged_workspace_handoff_does_not_leak_the_private_runtime_root() {
         let repository = git_repository();
         let artifacts = tempfile::tempdir().expect("artifact root");
-        let manager = SubagentWorkspaceManager::new(repository.path(), artifacts.path());
+        let manager = WorkspaceManager::new(repository.path(), artifacts.path());
         let lease = manager
             .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
+                WorkspacePolicy::GitWorktree {
                     require_clean_parent: true,
                 },
                 &SubagentId::new("conversation-staged-worktree-subagent-1"),
@@ -2253,10 +2262,16 @@ mod tests {
 
         let harness = stage();
         let runtime_root = harness.runtime_root.clone();
-        let error = tokio::time::timeout(DEADLINE, harness.staged.with_workspace(lease).rollback())
-            .await
-            .expect("rollback liveness")
-            .expect_err("staged project work must prevent a clean rollback");
+        let error = tokio::time::timeout(
+            DEADLINE,
+            harness
+                .staged
+                .with_workspace(WorkspaceUse::from(lease))
+                .rollback(),
+        )
+        .await
+        .expect("rollback liveness")
+        .expect_err("staged project work must prevent a clean rollback");
         assert!(matches!(error, super::RollbackError::Workspace { .. }));
         assert!(workspace.exists(), "the changed worktree is preserved");
         assert!(
@@ -2343,6 +2358,86 @@ mod tests {
         drop(nested);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn candidate_access_returns_only_after_child_and_nested_anchor_containment() {
+        let repository = git_repository();
+        let manager = WorkspaceManager::new(repository.path(), repository.path().join("runtime"));
+        let node = crate::runtime::workflow::test_instance("candidate", "implement");
+        let run = node.block.run.clone();
+        let scope = manager
+            .acquire(
+                WorkspacePolicy::GitWorktree {
+                    require_clean_parent: true,
+                },
+                &crate::runtime::workspace::WorkspaceOwner::Workflow(run.clone()),
+                &CancellationSignal::new(),
+            )
+            .await
+            .unwrap()
+            .retain_for_run(run)
+            .await
+            .unwrap();
+        let signal = CancellationSignal::new();
+        let access = scope.borrow(node.clone(), None, &signal).await.unwrap();
+        let path = access.snapshot().logical_workspace.clone();
+        std::fs::write(path.join("candidate"), b"owned process work").unwrap();
+        let harness = stage();
+        let mut staged = harness.staged.with_workspace(WorkspaceUse::from(access));
+        let mut nested = tokio::process::Command::new("sh")
+            .args(["-c", "read gate"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0)
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let _gate = nested.stdin.take().unwrap();
+        let pgid = i32::try_from(nested.id().unwrap()).unwrap();
+        staged.retain_for_test(ProcessUnitId::new("candidate-nested"), pgid);
+        let driver = staged.into_driver(
+            crate::runtime::subagent::ipc::DelegationFrame {
+                task: "candidate".into(),
+                context: None,
+                interaction_provider_available: false,
+            },
+            None,
+            None,
+            None,
+        );
+        let (_commands, start, task) = driver.split();
+        start.send(None).unwrap();
+        let mut next = Box::pin(scope.borrow(node, None, &signal));
+        assert!(futures_util::poll!(&mut next).is_pending());
+        let mut cleanup = Box::pin(scope.settle());
+        assert!(futures_util::poll!(&mut cleanup).is_pending());
+        drop(cleanup);
+        assert!(path.exists());
+        drop(harness.child); // reliable control EOF releases the physical settlement frontier
+        let settlement = tokio::time::timeout(DEADLINE, task).await.unwrap().unwrap();
+        assert!(settlement.nested.unproven.is_empty());
+        assert_eq!(
+            settlement.workspace.disposition,
+            WorkspaceSettlementDisposition::Borrowed
+        );
+        assert_eq!(
+            settlement.candidate.as_ref().unwrap().version,
+            1,
+            "the exact post-write reference is published after nested containment"
+        );
+        assert!(matches!(
+            nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), None),
+            Err(nix::errno::Errno::ESRCH)
+        ));
+        let next = next.await.unwrap();
+        assert_eq!(
+            std::fs::read(next.snapshot().logical_workspace.join("candidate")).unwrap(),
+            b"owned process work"
+        );
+        next.finish(true).await.unwrap();
+        assert!(scope.settle().await.handoff().is_some());
+    }
+
     /// Control-channel loss remains the sole liveness authority (Issue
     /// #178): with the observation channel still open and healthy, closing
     /// the control channel settles the drive as a loss — a live observation
@@ -2386,10 +2481,10 @@ mod tests {
     async fn an_unresolved_nested_anchor_preserves_the_worktree() {
         let repository = git_repository();
         let runtime_root = repository.path().join("runtime");
-        let manager = SubagentWorkspaceManager::new(repository.path(), &runtime_root);
+        let manager = WorkspaceManager::new(repository.path(), &runtime_root);
         let lease = manager
             .acquire(
-                SubagentWorkspacePolicy::GitWorktree {
+                WorkspacePolicy::GitWorktree {
                     require_clean_parent: true,
                 },
                 &SubagentId::new("conv-workspace-unresolved-anchor"),
@@ -2418,7 +2513,7 @@ mod tests {
             },
             &mut retained,
             PhysicalChildRuntimeRoot::from_existing(child_runtime.clone()),
-            Some(lease),
+            Some(WorkspaceUse::from(lease)),
         )
         .await;
         assert_eq!(settlement.nested.unproven.len(), 1);
@@ -2480,8 +2575,7 @@ mod tests {
                 definition_digest: serde_json::from_value(serde_json::json!("sha256:frozen"))
                     .expect("digest"),
                 execution_deadline: None,
-                workspace_policy:
-                    crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
+                workspace_policy: crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
                 instructions: String::new(),
                 model: crate::model::frozen::test_frozen_model_spec(
                     serde_json::from_value(serde_json::json!("local/model-a")).expect("model"),
@@ -2501,7 +2595,7 @@ mod tests {
                 keep_recent_tokens: 0,
                 summary_output_cap: None,
             },
-            workspace_snapshot: crate::runtime::subagent::WorkspaceSnapshot::shared(
+            workspace_snapshot: crate::runtime::workspace::WorkspaceSnapshot::shared(
                 dir.path().join("workspace"),
             ),
             runtime_root: dir.path().join("runtime"),
@@ -2517,17 +2611,18 @@ mod tests {
                     &plan,
                     &spec,
                     runtime_root,
-                    crate::runtime::subagent::SubagentWorkspaceManager::new(
+                    crate::runtime::workspace::WorkspaceManager::new(
                         &spec.workspace_snapshot.logical_workspace,
                         dir.path().join("workspace-artifacts"),
                     )
                     .acquire(
-                        crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
+                        crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
                         &spec.subagent_id,
                         &crate::runtime::cancellation::CancellationSignal::new(),
                     )
                     .await
-                    .expect("shared workspace lease"),
+                    .expect("shared workspace lease")
+                    .into(),
                     &crate::runtime::cancellation::CancellationSignal::new()
                 )
                 .await,

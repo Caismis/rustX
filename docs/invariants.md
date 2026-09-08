@@ -57,7 +57,7 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 26 is the only accepted schema; version 25 and every older
+schema version 28 is the only accepted schema; version 27 and every older
 development schema fail explicitly at open and are not migrated. Version 10
 froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation
@@ -2449,7 +2449,7 @@ after ChildGuidanceOutcome::Accepted:
   there is no model-facing per-call override, provider, strategy, or generic
   workspace backend.
 - **One manager owns physical workspaces.** `SubagentResolver` resolves the
-  policy only. `SubagentWorkspaceManager` owns repository resolution, exact
+  policy only. `WorkspaceManager` owns repository resolution, exact
   `HEAD` capture, parent-status inspection, worktree/ref creation, final Git
   inspection, safe removal, and handoff facts. `SubagentRegistry` owns live
   lifecycle/capacity/cancellation/durability and never executes Git. Git is
@@ -7334,3 +7334,43 @@ restarted from an earlier offset. The TUI uses the loaded length as the
 monotonic no-op offset for the exhausted side while the other side continues;
 it does not duplicate rows or turn client-side search into a native unbounded
 query.
+## WF-03 candidate invariants
+
+One native owner retains one exact candidate across fixed nodes. Access is admitted only after exact run/node identity, lease/Git proof, content verification and cancellation checks. A candidate reference or path is not access authority. One exclusive borrower survives until actual Tool/Agent/nested physical settlement; cancellation and future drop do not release it. Unknown containment prevents new access and disposal. Run settlement is absorbing and occurs before the Workflow terminal result on success and every failure path.
+
+Tool candidate consumers are exclusive validators, not presumed readers. Source mutation (including observed write-and-restore) invalidates certification and advances the version; native results remain correlated to their historical input. No check authorizes a changed version. Runtime serialization is not arbitrary-host isolation. [The canonical content and interference contract](workflow-programs.md#candidate-content-and-interference) defines coverage, exclusions and unsupported content. Candidate rebinding cannot rediscover or widen frozen authority.
+
+Workflow committed values retain internal candidate applicability through
+references, objects, arrays and Parallel inputs/exports. Branch, Return and
+derived execution inputs reject stale applicability against the live
+CandidateScope; queued Tool/Agent consumers recheck under exclusive admission.
+Successful candidate Agent outputs carry the exact post-node reference from
+native borrowed-access physical settlement: unchanged A binds A, a writer's B
+binds B. Both structured output and candidate settlement must succeed before
+local commit. Machine review of A cannot authorize B, just like a Tool check.
+Event Journal correlation is historical evidence, never interpreter authority.
+
+Bounded no-follow directory admission includes existing empty directories
+(100,000 entries, depth 64, 100,000 source/control/directory watch candidates).
+New unwatched trees or notification loss fail closed; macOS directory-entry
+events conservatively invalidate coverage. PhysicalSettlement retires ended
+process-local ownership. Durable Workflow re-proof requires checkout and branch
+HEAD to equal the acquisition base when no trusted terminal HEAD exists and
+current source content to equal the durable recovery guard;
+advanced-HEAD unresolved resources remain retained for explicit user/manual
+recovery. Readable current facts do not manufacture terminal authority;
+NestedContainment retains active ownership and rejects Git-only recovery.
+Durable disposal intent authorizes exact continuation after removal, never
+arbitrary absence or deletion of changed source before the destructive frontier.
+
+`WorkflowWorkspaceSettled.candidate` is exact proven terminal state.
+`recovery_guard: Option<CandidateRecoveryGuard>` is instead the last proven
+`CandidateReference` from `CandidateScope.state.current`, committed only for
+PhysicalSettlement. Uncertainty clears the former, never upgrades the latter.
+The guard is a destructive-recovery baseline, not a final candidate, local-value
+applicability, access authority, or model-visible data. Missing guard fails closed.
+An uncertain writer B cannot replace guard A; proven B followed by later final
+inspection failure guards B. Any current bytes differing from the guard survive.
+Native disposal compares `inspect_source` immediately before the first removal;
+exact durable intent permits continuation without rehash only after that physical
+frontier. Schema 28 durably separates these meanings without compatibility code.

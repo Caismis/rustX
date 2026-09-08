@@ -199,21 +199,69 @@ pub(super) fn validate_predicate(
     Ok(())
 }
 
+/// Interpreter-only applicability, never embedded in authored/user JSON.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct CommittedValue {
+    pub value: Value,
+    pub candidate: Option<crate::runtime::workspace::CandidateReference>,
+}
+impl From<Value> for CommittedValue {
+    fn from(value: Value) -> Self {
+        Self {
+            value,
+            candidate: None,
+        }
+    }
+}
+impl CommittedValue {
+    pub fn depend_on(&mut self, other: &Self) -> Result<(), WorkflowRunError> {
+        if let Some(reference) = &other.candidate {
+            if self
+                .candidate
+                .as_ref()
+                .is_some_and(|existing| existing != reference)
+            {
+                return Err(WorkflowRunError::InvalidValue(
+                    "incompatible candidate applicability".into(),
+                ));
+            }
+            self.candidate = Some(reference.clone());
+        }
+        Ok(())
+    }
+    pub async fn assert_current(&self, run: &super::WorkflowRun) -> Result<(), WorkflowRunError> {
+        if let Some(reference) = &self.candidate {
+            run.candidate
+                .as_ref()
+                .ok_or_else(|| WorkflowRunError::InvalidValue("missing candidate owner".into()))?
+                .assert_current(reference)
+                .await
+                .map_err(WorkflowRunError::InvalidValue)?;
+        }
+        Ok(())
+    }
+}
+
 pub(super) fn evaluate_value(
     expression: &WorkflowValue,
-    input: &Value,
-    values: &BTreeMap<String, Value>,
-) -> Result<Value, WorkflowRunError> {
+    input: &CommittedValue,
+    values: &BTreeMap<String, CommittedValue>,
+) -> Result<CommittedValue, WorkflowRunError> {
+    let mut committed = CommittedValue::from(Value::Null);
     let value = match expression {
         WorkflowValue::Reference { path } => {
             let first = path
                 .first()
                 .ok_or_else(|| WorkflowRunError::InvalidValue("empty reference".into()))?;
-            let mut value = if first == "args" {
+            let producer = if first == "args" {
                 Some(input)
             } else {
                 values.get(first)
             };
+            if let Some(producer) = producer {
+                committed.depend_on(producer)?;
+            }
+            let mut value = producer.map(|producer| &producer.value);
             for key in &path[1..] {
                 value = value.and_then(|value| value.get(key));
             }
@@ -228,14 +276,15 @@ pub(super) fn evaluate_value(
             for (key, expression) in fields {
                 let value = evaluate_value(expression, input, values)?;
                 bytes += serde_json::to_vec(key).expect("JSON key").len()
-                    + serde_json::to_vec(&value).expect("JSON value").len()
+                    + serde_json::to_vec(&value.value).expect("JSON value").len()
                     + 2;
                 if bytes.saturating_sub(usize::from(!fields.is_empty())) > MAX_VALUE_BYTES {
                     return Err(WorkflowRunError::InvalidValue(
                         "constructed object byte bound exceeded".into(),
                     ));
                 }
-                result.insert(key.clone(), value);
+                committed.depend_on(&value)?;
+                result.insert(key.clone(), value.value);
             }
             Value::Object(result)
         }
@@ -244,19 +293,21 @@ pub(super) fn evaluate_value(
             let mut bytes = 2;
             for item in items {
                 let value = evaluate_value(item, input, values)?;
-                bytes += serde_json::to_vec(&value).expect("JSON value").len() + 1;
+                bytes += serde_json::to_vec(&value.value).expect("JSON value").len() + 1;
                 if bytes - 1 > MAX_VALUE_BYTES {
                     return Err(WorkflowRunError::InvalidValue(
                         "constructed array byte bound exceeded".into(),
                     ));
                 }
-                result.push(value);
+                committed.depend_on(&value)?;
+                result.push(value.value);
             }
             Value::Array(result)
         }
     };
     bounded_value_bytes(&value)?;
-    Ok(value)
+    committed.value = value;
+    Ok(committed)
 }
 
 pub(super) fn bounded_value_bytes(value: &Value) -> Result<usize, WorkflowRunError> {
@@ -288,35 +339,98 @@ pub(super) fn bounded_value_bytes(value: &Value) -> Result<usize, WorkflowRunErr
 
 pub(super) fn evaluate_predicate(
     predicate: &WorkflowPredicate,
-    input: &Value,
-    values: &BTreeMap<String, Value>,
-) -> Result<bool, WorkflowRunError> {
-    match predicate {
-        WorkflowPredicate::Boolean { value } => evaluate_value(value, input, values)?
-            .as_bool()
-            .ok_or_else(|| WorkflowRunError::InvalidValue("nonboolean predicate".into())),
-        WorkflowPredicate::Equal { left, right } => {
-            Ok(evaluate_value(left, input, values)? == evaluate_value(right, input, values)?)
+    input: &CommittedValue,
+    values: &BTreeMap<String, CommittedValue>,
+) -> Result<CommittedValue, WorkflowRunError> {
+    let mut result = CommittedValue::from(Value::Null);
+    let boolean = match predicate {
+        WorkflowPredicate::Boolean { value } => {
+            let value = evaluate_value(value, input, values)?;
+            result.depend_on(&value)?;
+            value
+                .value
+                .as_bool()
+                .ok_or_else(|| WorkflowRunError::InvalidValue("nonboolean predicate".into()))?
         }
-        WorkflowPredicate::NotEqual { left, right } => {
-            Ok(evaluate_value(left, input, values)? != evaluate_value(right, input, values)?)
+        WorkflowPredicate::Equal { left, right } | WorkflowPredicate::NotEqual { left, right } => {
+            let left = evaluate_value(left, input, values)?;
+            let right = evaluate_value(right, input, values)?;
+            result.depend_on(&left)?;
+            result.depend_on(&right)?;
+            (left.value == right.value) == matches!(predicate, WorkflowPredicate::Equal { .. })
         }
-        WorkflowPredicate::Not { predicate } => Ok(!evaluate_predicate(predicate, input, values)?),
-        WorkflowPredicate::And { predicates } => {
+        WorkflowPredicate::Not { predicate } => {
+            let value = evaluate_predicate(predicate, input, values)?;
+            result.depend_on(&value)?;
+            !value.value.as_bool().expect("predicate boolean")
+        }
+        WorkflowPredicate::And { predicates } | WorkflowPredicate::Or { predicates } => {
+            let and = matches!(predicate, WorkflowPredicate::And { .. });
+            let mut boolean = and;
             for predicate in predicates {
-                if !evaluate_predicate(predicate, input, values)? {
-                    return Ok(false);
+                let value = evaluate_predicate(predicate, input, values)?;
+                result.depend_on(&value)?;
+                let value = value.value.as_bool().expect("predicate boolean");
+                if and {
+                    boolean &= value;
+                } else {
+                    boolean |= value;
+                }
+                if boolean != and {
+                    break;
                 }
             }
-            Ok(true)
+            boolean
         }
-        WorkflowPredicate::Or { predicates } => {
-            for predicate in predicates {
-                if evaluate_predicate(predicate, input, values)? {
-                    return Ok(true);
-                }
-            }
-            Ok(false)
-        }
+    };
+    result.value = Value::Bool(boolean);
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn constructed_values_reject_incompatible_candidate_versions() {
+        let run = super::super::test_instance("applicability", "check")
+            .block
+            .run;
+        let values = BTreeMap::from([
+            (
+                "a".into(),
+                CommittedValue {
+                    value: Value::Bool(true),
+                    candidate: Some(crate::runtime::workspace::CandidateReference {
+                        run: run.clone(),
+                        version: 0,
+                        content: "a".into(),
+                    }),
+                },
+            ),
+            (
+                "b".into(),
+                CommittedValue {
+                    value: Value::Bool(true),
+                    candidate: Some(crate::runtime::workspace::CandidateReference {
+                        run,
+                        version: 1,
+                        content: "b".into(),
+                    }),
+                },
+            ),
+        ]);
+        let expression = WorkflowValue::Array {
+            items: vec![
+                WorkflowValue::Reference {
+                    path: vec!["a".into()],
+                },
+                WorkflowValue::Reference {
+                    path: vec!["b".into()],
+                },
+            ],
+        };
+        assert!(
+            matches!(evaluate_value(&expression, &Value::Null.into(), &values), Err(WorkflowRunError::InvalidValue(detail)) if detail.contains("incompatible candidate applicability"))
+        );
     }
 }

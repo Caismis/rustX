@@ -1219,7 +1219,7 @@ fn the_committed_identity_survives_a_durable_round_trip() {
             agent: "explore".to_owned(),
             definition_digest: "sha256:d1".to_owned(),
             ownership: rustx::events::types::SubagentOwnershipKind::Normal,
-            workspace: rustx::runtime::subagent::WorkspaceSnapshot::shared(
+            workspace: rustx::runtime::workspace::WorkspaceSnapshot::shared(
                 std::path::PathBuf::from("<shared-workspace>"),
             ),
         },
@@ -1260,7 +1260,7 @@ fn the_runtime_client_projection_carries_the_named_identity() {
         tool_call_id: ToolCallId::new("call-1"),
         agent: "explore".to_owned(),
         definition_digest: "sha256:d1".to_owned(),
-        workspace: rustx::runtime::subagent::WorkspaceSnapshot::shared(std::path::PathBuf::from(
+        workspace: rustx::runtime::workspace::WorkspaceSnapshot::shared(std::path::PathBuf::from(
             "<shared-workspace>",
         )),
         handoff: None,
@@ -1286,6 +1286,7 @@ fn the_runtime_client_projection_carries_the_named_identity() {
         execution_profile: None,
         started_at: snapshot.started_at,
         workspace: rustx::runtime_client::snapshot::RuntimeClientSubagentWorkspace {
+            borrowed_from: None,
             logical_workspace: snapshot.workspace.logical_workspace.clone(),
             isolation: rustx::runtime_client::snapshot::RuntimeClientWorkspaceIsolation::Shared,
             resource_state: snapshot.workspace_resource_state,

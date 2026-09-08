@@ -51,7 +51,12 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 26. Version 26 adds typed native
+The SQLite schema is development schema version 28. Version 28 adds a distinct
+Workflow resource recovery guard for uncertain final candidate settlement;
+child IPC 18 and Runtime Client 20 are unchanged. Version 27 adds native
+Workflow candidate ownership, settlement, invocation correlation and disposal,
+with borrowed-run association in child IPC 18 and Runtime Client 20.
+Version 26 adds typed native
 deadline interruption to interaction outcomes/audit settlements; Runtime Client 19
 and child IPC 17 mirror it. Version 25 added caller-neutral
 approval correlation and native Workflow invocation facts with typed Workflow
@@ -4268,7 +4273,8 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
-The current Runtime Client protocol is version 19. Version 19 adds typed deadline
+The current Runtime Client protocol is version 20. Version 20 adds borrowed
+Workflow run identity to child workspace facts. Version 19 adds typed deadline
 interruption of approval waits. Version 18 distinguishes
 Agent and Workflow approval invocation identity. Version 17 preserves
 `denied` in background lifecycle projections. Version 16 introduced the
@@ -6103,7 +6109,7 @@ recovery input.
 Named definitions carry one bounded project-workspace policy:
 `SharedWorkspace` (the default) or `GitWorktree { require_clean_parent }`.
 `SubagentResolver` resolves that policy, while
-`SubagentWorkspaceManager` is the only component that resolves the source
+`WorkspaceManager` is the only component that resolves the source
 repository, invokes Git, acquires worktrees, inspects final state, removes a
 clean runtime-owned worktree, or creates handoff facts. The registry remains
 the owner of live subagent identity, capacity, cancellation, durable
@@ -6281,7 +6287,7 @@ Disposed
 ```
 
 `SubagentWorkspaceDisposalStarted` is the durable authorization point. It is
-committed only after `SubagentWorkspaceManager` has proved the source
+committed only after `WorkspaceManager` has proved the source
 repository identity, deterministic allocation path, exact Git worktree
 registration, branch attachment, worktree `HEAD`, branch ref `HEAD`, and
 terminal handoff equality. The event repeats the exact `SubagentId` and
@@ -8382,3 +8388,55 @@ decide what to do next.
 ## 8. Compatibility policy
 
 Before 1.0, rustX intentionally does not preserve compatibility with previous runtimes or flawed abstractions. Breaking changes are preferred when they materially improve correctness, separation of concerns, or long-term maintainability.
+## WF-03 native candidate ownership
+
+The shared native owner is `runtime::workspace`, not a Subagent-specific Git manager. A Workflow holds a logical `CandidateScope`; its native state owns exactly one retained `WorkspaceLease`. Exclusive `WorkspaceAccess` transfers to the ordinary Agent process driver or Tool invocation until physical descendants settle. Child exit returns access rather than disposing the run lease. All candidate consumers serialize before child capacity/Tool scheduling. Matching frozen isolated profile policy is required; unsupported bindings fail before Git acquisition. See [the complete candidate contract](workflow-programs.md#run-scoped-candidate-workspace-wf-03) for content identity, mutation detection, cancellation and exact commit points.
+
+SQLite development schema 28 adds a distinct recovery guard to the Workflow
+resource settlement facts introduced in schema 27. Child IPC 18 adds
+borrowed-run association; Runtime Client/TUI 20 mirrors it. Superseded schemas
+are rejected without migration. Resource persistence is not Workflow
+continuation. Providers have no workspace orchestration responsibilities.
+
+The interpreter's internal CommittedValue pairs JSON with one optional exact
+CandidateReference. Tool applicability returns directly from the native
+settlement path. Candidate Agent applicability originates at
+`WorkspaceAccess::finish(false)` after child and nested physical settlement,
+flows through `WorkspaceUseSettlement.candidate` and
+`PhysicalSettlement.candidate`, then the registry stores it alongside JSON in
+process-local `WorkflowAgentOutput` at the unique terminal outcome. Workflow
+Agent settlement commits both into `CommittedValue` only after successful
+terminal publication. It never reads a later `CandidateScope::current` to infer
+the reference: a writer's output binds its post-write B, and a machine-review
+output for A becomes stale after another writer. Inspection/containment failure
+cannot publish a successful candidate-bound local value. Value
+constructions/references/Parallel merge it and reject incompatible references.
+Consumption checks live CandidateScope state, with expected-reference checks
+inside queued Tool/Agent admission. Journal correlation remains historical
+evidence. No user JSON field, provenance graph or second physical owner is
+introduced.
+
+Mutation admission traverses existing directories without following symlinks,
+including empty directories, under entry/depth/watch bounds. Linux directory
+creation and macOS directory-entry notifications invalidate incomplete coverage.
+Typed PhysicalSettlement preserves the resource but retires ended active
+ownership. Without a trusted durable terminal HEAD, Workflow disposal re-proof
+requires checkout and branch HEAD to remain at acquisition base, plus exact
+source equality with its durable last-proven recovery guard. Advanced-HEAD
+unresolved candidates need explicit user/manual recovery; readable Git facts
+cannot supply missing terminal authority. NestedContainment preserves the
+stricter process authority. The native disposal owner checks candidate content
+only when the exact worktree remains present. Committed exact intent permits
+continuation after worktree removal and failed durable append, including
+branch-only completion or AlreadyDisposed; absence without intent fails closed.
+`WorkflowWorkspaceSettled.candidate` remains the exact proven terminal
+candidate. A separate `recovery_guard: Option<CandidateRecoveryGuard>` stores
+the last proven `reference` copied from native `CandidateScope.state.current`
+for PhysicalSettlement. It does not certify final state, supply Workflow
+applicability, or enter authored JSON. A failed writer inspection cannot advance
+the guard; successful node proof of B followed by failed final inspection guards
+B. Native disposal rehashes via `inspect_source` and compares the guard before
+removal; changed bytes or a missing guard fail closed. No second disposal state
+machine or Workflow Git owner exists. See the candidate contract for exact
+limits and crash windows. SQLite schema 28 rejects older stores without
+migration; IPC and client mirrors need no new fields.

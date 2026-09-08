@@ -133,7 +133,7 @@ use crate::runtime::resources::{
 };
 use crate::runtime::subagent::{
     ResolvedSubagentTool, SubagentCatalog, SubagentDefinition, SubagentProjectInstructionPolicy,
-    SubagentResolver, SubagentWorkspaceManager, child_conversation_inspection_liveness_path,
+    SubagentResolver, child_conversation_inspection_liveness_path,
     child_conversation_inspection_socket_path, child_conversation_store_path,
     is_safe_child_conversation_component,
 };
@@ -141,6 +141,7 @@ use crate::runtime::workflow::{
     MAX_WORKFLOW_BYTES, WorkflowCatalog, WorkflowDefinition, WorkflowOutputLatch, WorkflowProgram,
     WorkflowRuntime,
 };
+use crate::runtime::workspace::WorkspaceManager;
 use crate::runtime_client::endpoint::RuntimeClientEndpoint;
 use crate::runtime_client::host::{
     HostConstructionError, RuntimeClientHost, RuntimeClientHostConfig, RuntimeClientSessionControl,
@@ -1288,7 +1289,7 @@ impl LocalConversationCore {
                     agent_status: runtime_config.agent_status.clone(),
                     context: runtime_config.context_policy(),
                 },
-                workspace: SubagentWorkspaceManager::new(
+                workspace: WorkspaceManager::new(
                     tool_runtime.workspace().root(),
                     tool_runtime.artifacts().root(),
                 ),
@@ -2693,8 +2694,7 @@ mod subagent_child_tests {
                 definition_digest: serde_json::from_value(serde_json::json!("sha256:frozen"))
                     .expect("digest"),
                 execution_deadline: None,
-                workspace_policy:
-                    crate::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
+                workspace_policy: crate::runtime::workspace::WorkspacePolicy::SharedWorkspace,
                 instructions: "frozen child instructions".to_owned(),
                 model: crate::model::frozen::test_frozen_model_spec(
                     serde_json::from_value(serde_json::json!("local/model-a")).expect("model ref"),
@@ -2714,7 +2714,7 @@ mod subagent_child_tests {
                 keep_recent_tokens: 0,
                 summary_output_cap: None,
             },
-            workspace_snapshot: crate::runtime::subagent::WorkspaceSnapshot::shared(
+            workspace_snapshot: crate::runtime::workspace::WorkspaceSnapshot::shared(
                 root.join("workspace"),
             ),
             runtime_root: root.join("child"),
@@ -2879,13 +2879,14 @@ mod subagent_child_tests {
             Vec::new(),
         );
         child_spec.resolved.workspace_policy =
-            crate::runtime::subagent::SubagentWorkspacePolicy::GitWorktree {
+            crate::runtime::workspace::WorkspacePolicy::GitWorktree {
                 require_clean_parent: false,
             };
-        child_spec.workspace_snapshot = crate::runtime::subagent::WorkspaceSnapshot {
+        child_spec.workspace_snapshot = crate::runtime::workspace::WorkspaceSnapshot {
+            borrowed_from: None,
             logical_workspace: worktree.clone(),
-            isolation: crate::runtime::subagent::WorkspaceIsolation::GitWorktree(
-                crate::runtime::subagent::GitWorktreeSnapshot {
+            isolation: crate::runtime::workspace::WorkspaceIsolation::GitWorktree(
+                crate::runtime::workspace::GitWorktreeSnapshot {
                     source_repository_root: dir.path().to_path_buf(),
                     repository_relative_workspace: std::path::PathBuf::new(),
                     physical_worktree_root: worktree,

@@ -101,11 +101,10 @@ use crate::runtime::identity::{
     AgentId, AttemptId, ConversationId, EventId, InteractionId, MessageId, RequestId, SubagentId,
     ToolCallId, ToolExecutionId, ToolId, TurnId,
 };
-use crate::runtime::subagent::{
-    SubagentName, WorkspaceHandoff, WorkspaceSnapshot, WorkspaceUnresolvedReason,
-};
+use crate::runtime::subagent::SubagentName;
 use crate::runtime::types::{CancellationReason, RuntimeError, TokenMeasurement};
 use crate::runtime::workflow::{WorkflowId, WorkflowPort};
+use crate::runtime::workspace::{WorkspaceHandoff, WorkspaceSnapshot, WorkspaceUnresolvedReason};
 use crate::tools::types::{ToolExecutionResult, ToolProgress};
 
 /// The terminal domain that owns a committed subagent child.
@@ -673,10 +672,34 @@ pub enum RuntimeEvent {
     },
 
     /// A native `WorkflowRun` began executing one immutable `WorkflowProgram`.
-    /// This is a best-effort observability fact only; the in-memory
-    /// `WorkflowRun` remains the execution authority and unfinished runs are
-    /// never reconstructed from this event. The successful child value and
-    /// native terminal pair use a separate durable transition.
+    /// Required durable resource ownership fact, not resumable execution
+    /// authority. Unfinished runs and borrowers are never reconstructed.
+    WorkflowWorkspaceOwned {
+        run_id: crate::runtime::workflow::WorkflowRunId,
+        workspace: crate::runtime::workspace::WorkspaceSnapshot,
+    },
+    WorkflowWorkspaceSettled {
+        run_id: crate::runtime::workflow::WorkflowRunId,
+        workspace: crate::runtime::workspace::WorkspaceSettlement,
+        /// Exact proven terminal candidate; absent when final state is unknown.
+        candidate: Option<crate::runtime::workspace::CandidateReference>,
+        /// Last proven content, only for destructive `PhysicalSettlement` recovery.
+        recovery_guard: Option<Box<crate::runtime::workspace::CandidateRecoveryGuard>>,
+    },
+    WorkflowCandidateInvocation {
+        node: crate::runtime::workflow::WorkflowNodeInstance,
+        input: crate::runtime::workspace::CandidateReference,
+        result: crate::tools::types::ToolExecutionStatus,
+        candidate_unchanged: bool,
+    },
+    WorkflowWorkspaceDisposalStarted {
+        run_id: crate::runtime::workflow::WorkflowRunId,
+        handoff: crate::runtime::workspace::WorkspaceHandoff,
+    },
+    WorkflowWorkspaceDisposalSettled {
+        run_id: crate::runtime::workflow::WorkflowRunId,
+        settlement: crate::runtime::workspace::WorkspaceDisposalSettlement,
+    },
     WorkflowStarted {
         /// Outer model correlation; never internal execution authority.
         tool_call_id: ToolCallId,

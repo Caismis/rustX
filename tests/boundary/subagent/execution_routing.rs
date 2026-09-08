@@ -51,7 +51,7 @@ fn resolved(agent: &str) -> ResolvedSubagentSpec {
         ))
         .expect("digest"),
         execution_deadline: None,
-        workspace_policy: rustx::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
+        workspace_policy: rustx::runtime::workspace::WorkspacePolicy::SharedWorkspace,
         instructions: "instructions".to_owned(),
         model: crate::model::frozen::test_frozen_model_spec(
             serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),

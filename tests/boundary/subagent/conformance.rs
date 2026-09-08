@@ -323,7 +323,7 @@ fn resolved_child_spec(agent: &str) -> ResolvedSubagentSpec {
         ))
         .expect("definition digest"),
         execution_deadline: None,
-        workspace_policy: rustx::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
+        workspace_policy: rustx::runtime::workspace::WorkspacePolicy::SharedWorkspace,
         instructions: "Issue 138 conformance child".to_owned(),
         model: rustx::model::frozen::test_frozen_model_spec(
             serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
@@ -411,7 +411,7 @@ fn standalone_parent_plane(dir: &tempfile::TempDir, conversation: &str) -> Paren
         clock: Arc::new(SystemClock),
         monotonic_clock: Arc::new(rustx::runtime::ManualMonotonicClock::new()),
         spawn: test_spawn_plan(&runtime_root),
-        workspace: rustx::runtime::subagent::SubagentWorkspaceManager::new(
+        workspace: rustx::runtime::workspace::WorkspaceManager::new(
             dir.path().join("parent-workspace"),
             &runtime_root,
         ),
@@ -500,10 +500,7 @@ async fn compose_parent_runtime_plane(
         clock: Arc::new(SystemClock),
         monotonic_clock: Arc::new(rustx::runtime::ManualMonotonicClock::new()),
         spawn: test_spawn_plan(&runtime_root),
-        workspace: rustx::runtime::subagent::SubagentWorkspaceManager::new(
-            &workspace,
-            &runtime_root,
-        ),
+        workspace: rustx::runtime::workspace::WorkspaceManager::new(&workspace, &runtime_root),
         max_active: 4,
     });
     let model = fake_model(parent_scripts);
@@ -1053,17 +1050,16 @@ async fn the_child_spec_carries_the_frozen_timeout_policy() {
         .expect("physical child root");
     let workspace_path = dir.path().join("parent-workspace");
     std::fs::create_dir_all(&workspace_path).expect("parent workspace");
-    let workspace = rustx::runtime::subagent::SubagentWorkspaceManager::new(
-        &workspace_path,
-        &plan.runtime_root,
-    )
-    .acquire(
-        rustx::runtime::subagent::SubagentWorkspacePolicy::SharedWorkspace,
-        &subagent_id,
-        &CancellationSignal::new(),
-    )
-    .await
-    .expect("shared workspace lease");
+    let workspace =
+        rustx::runtime::workspace::WorkspaceManager::new(&workspace_path, &plan.runtime_root)
+            .acquire(
+                rustx::runtime::workspace::WorkspacePolicy::SharedWorkspace,
+                &subagent_id,
+                &CancellationSignal::new(),
+            )
+            .await
+            .expect("shared workspace lease");
+    let workspace = rustx::runtime::workspace::WorkspaceUse::from(workspace);
     let spec = plan.child_spec(
         &subagent_id,
         &ConversationId::new("conv-x-subagent-1"),

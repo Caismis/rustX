@@ -114,8 +114,98 @@ impl WorkflowRuntime {
         context: &AttemptSubagentContext,
         node: &WorkflowNodeInstance,
         selector: &ToolSelector,
+        arguments: expressions::CommittedValue,
+        cancellation: &crate::runtime::cancellation::ExecutionCancellation,
+    ) -> Result<
+        (
+            ToolExecutionResult,
+            Option<crate::runtime::workspace::CandidateReference>,
+        ),
+        WorkflowRunError,
+    > {
+        let signal = cancellation.child_signal();
+        let access = match &run.candidate {
+            Some(candidate) => Some(
+                candidate
+                    .borrow(node.clone(), arguments.candidate.as_ref(), &signal)
+                    .await
+                    .map_err(|error| {
+                        if cancellation.is_cancelled() {
+                            WorkflowRunError::from_cancellation(cancellation)
+                        } else {
+                            WorkflowRunError::InvocationAuthority(error)
+                        }
+                    })?,
+            ),
+            None => None,
+        };
+        let workspace = access
+            .as_ref()
+            .map(|access| {
+                crate::tools::workspace::Workspace::new(&access.snapshot().logical_workspace)
+            })
+            .transpose()
+            .map_err(|error| WorkflowRunError::InvocationAuthority(error.to_string()))?;
+        let mut result = self
+            .invoke_tool_bound(
+                run,
+                context,
+                node,
+                selector,
+                arguments.value,
+                cancellation,
+                workspace.as_ref(),
+            )
+            .await;
+        let mut applicability = None;
+        if let Some(access) = access {
+            let input = access.input().clone();
+            let status = match &result {
+                Ok(result) => result.status.clone(),
+                Err(error) => error.execution_status(),
+            };
+            let unchanged = if result.as_ref().is_ok_and(|result| {
+                matches!(result.status, ToolExecutionStatus::OutcomeUnknown { .. })
+            }) {
+                access.unresolved("Tool physical settlement is unknown".into());
+                false
+            } else {
+                match access.finish(true).await {
+                    Ok(_) => true,
+                    Err(error) => {
+                        if result
+                            .as_ref()
+                            .is_ok_and(|result| result.status == ToolExecutionStatus::Success)
+                        {
+                            result = Err(WorkflowRunError::InvalidValue(error));
+                        }
+                        false
+                    }
+                }
+            };
+            self.commit_resource(RuntimeEvent::WorkflowCandidateInvocation {
+                node: node.clone(),
+                input: input.clone(),
+                result: status,
+                candidate_unchanged: unchanged,
+            })?;
+            if unchanged {
+                applicability = Some(input);
+            }
+        }
+        result.map(|result| (result, applicability))
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    async fn invoke_tool_bound(
+        &self,
+        run: &WorkflowRun,
+        context: &AttemptSubagentContext,
+        node: &WorkflowNodeInstance,
+        selector: &ToolSelector,
         arguments: Value,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
+        workspace: Option<&crate::tools::workspace::Workspace>,
     ) -> Result<ToolExecutionResult, WorkflowRunError> {
         let services = context.native.as_ref().ok_or_else(|| {
             WorkflowRunError::InvocationAuthority(
@@ -208,7 +298,7 @@ impl WorkflowRuntime {
                     &run.run_id.conversation_id,
                     None,
                     cancellation.clone(),
-                    services.runtime.workspace(),
+                    workspace.unwrap_or_else(|| services.runtime.workspace()),
                     &progress,
                     services.runtime.artifacts(),
                     services.runtime.tool_output(),

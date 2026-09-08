@@ -25,10 +25,9 @@ use crate::model::deadline::{
 use crate::model::session::SessionModelConfig;
 use crate::runtime::ApprovalMode;
 use crate::runtime::identity::{AgentId, McpServerId};
-use crate::runtime::subagent::{
-    MAX_SUBAGENT_DEFINITIONS, SubagentExecutionDeadline, SubagentName, SubagentWorkspacePolicy,
-};
+use crate::runtime::subagent::{MAX_SUBAGENT_DEFINITIONS, SubagentExecutionDeadline, SubagentName};
 use crate::runtime::workflow::{MAX_WORKFLOW_DEFINITIONS, WorkflowId};
+use crate::runtime::workspace::WorkspacePolicy;
 use crate::tools::environment::{ToolEnvironment, ToolEnvironmentError};
 use crate::tools::mcp::{McpServerBinding, McpServerBindings, McpTransportConfig};
 use crate::tools::native::NativeToolPolicies;
@@ -316,13 +315,13 @@ impl SubagentWorktreeDocument {
     /// The resolved policy is the single normalized value the runtime
     /// consumes; no runtime call site re-interprets an omitted field.
     #[must_use]
-    pub const fn to_policy(self) -> SubagentWorkspacePolicy {
+    pub const fn to_policy(self) -> WorkspacePolicy {
         if self.enabled {
-            SubagentWorkspacePolicy::GitWorktree {
+            WorkspacePolicy::GitWorktree {
                 require_clean_parent: self.require_clean_parent,
             }
         } else {
-            SubagentWorkspacePolicy::SharedWorkspace
+            WorkspacePolicy::SharedWorkspace
         }
     }
 }
@@ -1199,7 +1198,7 @@ mod tests {
     /// while `require_clean_parent` becomes `true` by default.
     #[test]
     fn named_subagent_worktree_policy_is_bounded_and_definition_scoped() {
-        use crate::runtime::subagent::SubagentWorkspacePolicy as Policy;
+        use crate::runtime::workspace::WorkspacePolicy as Policy;
 
         /// Builds a minimal config whose single `worker` definition carries
         /// exactly the given `worktree` JSONC document (empty when omitted).
