@@ -289,6 +289,68 @@ def workflow_tool() -> Scenario:
     )
 
 
+def workflow_reference_parallel() -> Scenario:
+    import json
+    steps = [Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
+                         tools_include=("parallel_review",)),
+                  Stream(ToolCall("outer", "parallel_review", '{"proposal":"PRIVATE PROPOSAL"}'), Finish("tool_calls")))]
+    for index in range(3):
+        steps.append(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
+                                 tools_include=("workflow_output",),
+                                 body_excludes=("workflow conformance request",)),
+                          Stream(Gate(f"parallel-child-{index}"),
+                                 ToolCall(f"output-{index}", "workflow_output", json.dumps({"summary": f"Assessment {index}", "acceptable": True})), Finish("tool_calls"))))
+    steps.append(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
+                             tools_include=("parallel_review",), body_contains=("ready",)),
+                      Stream(Text("Reviews ready."), Finish("stop"))))
+    return Scenario("workflow_reference_parallel", *steps)
+
+
+def workflow_reference_repair(exhausted: bool = False, tampered: bool = False) -> Scenario:
+    """Real native writes/checks; the provider never supplies check findings."""
+    import json
+    plan = {"summary": "Fix greeting.py", "steps": ["Implement the two fixed cases"]}
+    def terminal():
+        return Stream(ToolCall("output", "workflow_output", json.dumps({"plan": plan})), Finish("tool_calls"))
+    steps = [
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
+                    tools_include=("implement_and_review",)),
+             Stream(ToolCall("outer", "implement_and_review", '{"requirement":""}'), Finish("tool_calls"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
+                    tools_include=("workflow_output",), body_contains=("Produce a concise implementation plan",)),
+             Stream(ToolCall("plan", "workflow_output", json.dumps(plan)), Finish("tool_calls"))),
+    ]
+    sources = [
+        'def greeting(name):\n    return "wrong"\n',
+        "def greeting(name):\n    return 'Hello, ' + (name or 'friend') + '!'\n",
+    ]
+    if exhausted:
+        sources = [sources[0]] * 3
+    for iteration, source in enumerate(sources, 1):
+        if iteration == 1:
+            steps.append(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
+                                     tools_include=("ask_user", "workflow_output")),
+                              Stream(ToolCall("child-question", "ask_user", json.dumps({"questions":[{"question":"PRIVATE CHILD QUESTION: confirm the implementation priority", "header":"Priority", "options":[{"label":"Minimal change","description":"Small patch"},{"label":"Clarity","description":"Explicit code"}]}]})), Finish("tool_calls"))))
+        tampering = ([ToolCall("fake-checker", "write", json.dumps({"path": "checks/verify_greeting.py", "content": 'print("passed", end="")\n'}))]
+                     if tampered and iteration == 1 else [])
+        steps.extend([
+            Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
+                        tools_include=("write", "workflow_output"),
+                        body_contains=(("Implement or repair greeting.py", "The checker ran successfully but greeting.py failed")
+                                       if tampered and iteration == 2 else ("Implement or repair greeting.py",))),
+                 Stream(Gate(f"reference-writer-{iteration}"),
+                        Text("PRIVATE CLAIM: all tests passed"),
+                        ToolCall(f"write-{iteration}", "write", json.dumps({"path": "greeting.py", "content": source})), *tampering, Finish("tool_calls"))),
+            Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
+                        tools_include=("workflow_output",)), terminal()),
+        ])
+    steps.append(Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
+                             tools_include=("implement_and_review",),
+                             body_contains=(("needs_revision" if exhausted else "accepted"),), body_excludes=("PRIVATE CLAIM", "PRIVATE CHILD QUESTION")),
+                      Stream(Text("Candidate ready for inspection."), Finish("stop"))))
+    return Scenario("workflow_reference_tampering" if tampered else "workflow_reference_exhaustion" if exhausted else "workflow_reference_repair", *steps)
+
+
 def workflow_retention() -> Scenario:
     """Nine sequential native Workflow calls exceed the eight-run detail cap."""
     return Scenario(
@@ -306,23 +368,6 @@ def workflow_retention() -> Scenario:
                    body_contains=("review_pr.yaml",), tools_include=("review_pr",),
                    body_excludes=("program_digest",)),
             Stream(Gate("workflow-complete"), Text("workflow conformance complete"), Finish("stop")),
-        ),
-    )
-
-
-def workflow_greeting() -> Scenario:
-    """The checked-in managed Python verifier returns successful false findings."""
-    return Scenario(
-        "workflow_greeting",
-        Step(
-            Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
-                   tools_include=("greeting_check",)),
-            Stream(ToolCall("call-greeting-check", "greeting_check", '{}'), Finish("tool_calls")),
-        ),
-        Step(
-            Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
-                   body_contains=("Hello, !",), tools_include=("greeting_check",)),
-            Stream(Text("project check found the empty-name failure"), Finish("stop")),
         ),
     )
 
@@ -572,8 +617,12 @@ SCENARIOS = {
     "skill_read_turn": skill_read_turn,
     "workflow_output": workflow_output,
     "workflow_tool": workflow_tool,
+    "workflow_reference_repair": workflow_reference_repair,
+    "workflow_reference_tampering": lambda: workflow_reference_repair(tampered=True),
+    "workflow_reference_exhaustion": lambda: workflow_reference_repair(True),
+    "workflow_reference_cancel": lambda: Scenario("workflow_reference_cancel", *workflow_reference_repair().steps[:5]),
+    "workflow_reference_parallel": workflow_reference_parallel,
     "workflow_retention": workflow_retention,
-    "workflow_greeting": workflow_greeting,
     "provider_http_error": provider_http_error,
     "gated_stream_cancellation": gated_stream_cancellation,
     "restart_after_request_start": restart_after_request_start,

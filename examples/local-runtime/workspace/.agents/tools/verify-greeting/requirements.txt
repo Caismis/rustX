@@ -1,1 +1,0 @@
-# FastMCP is supplied and pinned by rustX's managed Python runtime.

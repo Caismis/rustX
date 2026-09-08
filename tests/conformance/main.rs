@@ -21,6 +21,5 @@
 mod common;
 
 mod agent_loop;
-mod examples;
 mod lifecycle;
 mod workflow;

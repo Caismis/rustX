@@ -1528,3 +1528,21 @@ contracts are unchanged by this read-model addition. The foreground Tool card
 projects native waits, cancellation draining, candidate applicability, finite
 Loop exits and retained handoff. See [the projection contract](workflow-run-projection.md)
 for the revision/cursor handoff, retention limits and reconnect/death boundary.
+
+## WF-07 — executable fixed programs (#223)
+
+The reference set is consolidated into non-Git `parallel_review` and candidate-bound
+`implement_and_review`, covering Agent / Tool / Branch / Parallel / Review / Loop /
+Return. The [conformance map](workflow-conformance.md) connects real registered
+foreground invocation tests to the owning lower-layer contracts.
+
+Workflow = HOW one finite fixed program executes. Goal #84 = WHAT objective persists
+across ordinary rounds. Scheduler #85 = WHEN a target becomes eligible.
+`Workflow completed != business checks passed != Goal complete`.
+Workflow requires neither Goal nor Scheduler. A future Goal-driven normal Agent round
+may call a registered Workflow Tool. Loop exhaustion does not start another round;
+Goal-level accounting and manual continuation belong to #84. Pausing/disarming future
+rounds is separate from cancelling current admitted execution. A pending Review or
+question is not automatically Goal Blocked. Recovering Goal state never recovers an
+old Workflow continuation or old human authority. Scheduler owns temporal triggering,
+not graph execution. This slice implements neither future domain.

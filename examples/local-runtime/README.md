@@ -25,17 +25,15 @@ examples/local-runtime/
 │       ├── skills/
 │       │   └── review-guidance/SKILL.md
 │       ├── tools/
-│       │   ├── echo/
-│       │   │   ├── server.py
-│       │   │   └── requirements.txt
-│       │   └── verify-greeting/{server.py,requirements.txt}
+│       │   └── echo/{server.py,requirements.txt}
 │       ├── subagents/
 │       │   ├── navigator/{instructions.md,AGENTS.md}
-│       │   └── reviewer/{instructions.md,AGENTS.md}
+│       │   ├── reviewer/{instructions.md,AGENTS.md}
+│       │   ├── planner/instructions.md
+│       │   └── implementer/instructions.md
 │       └── workflows/
-│           ├── review_pr.yaml
 │           ├── parallel_review.yaml
-│           └── greeting_check.yaml
+│           └── implement_and_review.yaml
 └── .rustx/        # runtime-root; generated state, normally absent initially
 ```
 
@@ -274,10 +272,10 @@ model-visible catalog.
 
 Workflows are registered explicitly in `rustx.jsonc`; the runtime does not
 discover every YAML file under the workspace. A registered id such as
-`review_pr` resolves exactly to:
+`parallel_review` resolves exactly to:
 
 ```text
-workspace/.agents/workflows/review_pr.yaml
+workspace/.agents/workflows/parallel_review.yaml
 ```
 
 `workflows.definitions` is the registration set and `workflows.main` is the
@@ -290,8 +288,8 @@ file, even a malformed one, is irrelevant.
 The YAML is serialization only. It deserializes into a `WorkflowDefinition`,
 which is statically checked and compiled into an immutable `WorkflowProgram`;
 `WorkflowRuntime` executes that program over the existing named
-`SubagentRuntime`. The bounded v1 vocabulary is `Agent`, `Branch`,
-`Parallel`, and `Return`. Agent tasks are fixed strings, data movement uses
+`SubagentRuntime`. The vocabulary is `Agent`, `Tool`, `Branch`, `Parallel`, `Review`, `Loop`,
+and `Return`. Agent tasks are fixed strings, data movement uses
 tagged references (`{type: reference, path: [args, task]}`), literals and
 object/array constructions. Branch consumes a typed predicate. Root and
 Parallel branches use identical lexical `block` graphs; a branch receives
@@ -310,7 +308,7 @@ child transcripts do not enter the parent conversation history.
 Workflow subagent admission is independent from `subagents.main`: a profile
 must be listed in `subagents.workflow` to be usable by a Workflow Agent, and
 being main-visible does not grant Workflow admission. In this example
-`navigator` is main-admitted while `reviewer` is Workflow-only. A reload
+`navigator` is main-admitted while `reviewer`, `planner` and `implementer` are Workflow-only. A reload
 constructs and validates the complete candidate, then publishes it atomically;
 an active run keeps the immutable program snapshot with which it started.
 Unfinished runs are not replayed after a crash.
@@ -491,7 +489,8 @@ cargo build --bin rustx
   --models ./examples/local-runtime/models.jsonc \
   --config ./examples/local-runtime/rustx.jsonc \
   --workspace ./examples/local-runtime/workspace \
-  --runtime-root ./examples/local-runtime/.rustx
+  --runtime-root ./examples/local-runtime/.rustx \
+  --tools parallel_review,implement_and_review
 ```
 
 The endpoint in `models.jsonc` is an example URL, so replace it before making
@@ -509,25 +508,102 @@ pnpm --dir tui start \
   --models "$PWD/examples/local-runtime/models.jsonc" \
   --config "$PWD/examples/local-runtime/rustx.jsonc" \
   --workspace "$PWD/examples/local-runtime/workspace" \
-  --runtime-root "$PWD/examples/local-runtime/.rustx"
+  --runtime-root "$PWD/examples/local-runtime/.rustx" \
+  --tools parallel_review,implement_and_review
 ```
 
 The TUI passes the paths through unchanged; the Rust runtime remains the sole
 owner of model, session, tool, capability, and MCP semantics.
 
-## WF-02 project check
+## Executable fixed Workflow references
 
-`greeting_check` invokes the ordinary managed Python `verify_greeting` capability
-through a fixed Tool node, without any internal model request. The two fixed
-cases check `workspace/greeting.py`; its empty-name case intentionally fails.
-The checker returns native successful structured findings with `passed: false`.
-Missing source, import errors or an invalid return contract remain native Tool
-failures. The Workflow selects JSON part 1 explicitly; it never parses the text
-summary. Repairing the project file and making a new invocation is manual—there
-is no automatic retry, Loop, Review or workspace handoff in WF-02.
+Use `--tools parallel_review,implement_and_review` on the runtime/TUI launch
+above to select exactly the two foreground Workflow Tools. This does not grant
+leaf capabilities to the parent. Profiles and fixed Tool selectors have separate
+explicit allowlists. Managed Python/MCP tools are unnecessary for these workflows.
+The optional `echo` package illustrates the separate Python Tool Plane.
 
-Use the existing launch option `--exclude-tools verify_greeting` to keep this
-capability inactive for the parent model while `greeting_check` can still invoke
-its explicitly admitted `python:verify-greeting` source. Workflow admission does
-not activate a capability; ordinary Python discovery/model activation remains
-independent. The composed verifier test exercises this inactive-leaf setup.
+| Tool / YAML under `.agents/workflows/` | Input | Profiles / fixed Tools | Git | Nodes |
+| --- | --- | --- | --- | --- |
+| `parallel_review` | `{"proposal":"A concrete product proposal"}` | reviewer (`read` only) | No | Agent, Parallel, Branch, Return |
+| `implement_and_review` | `{"requirement":"Keep the change minimal"}`; empty string requests a question | planner (no tools), implementer (`read`, `write`, `edit`, `ask_user`); fixed `ask_user`, `bash` | Yes | All seven |
+
+Ask the parent to call the named Tool with these inputs. It makes one foreground
+call; fixed child work and human interactions require no parent continuation.
+For an interactive model, replace the placeholder endpoint, model id and credential
+reference in `models.jsonc`, and the matching model references in `rustx.jsonc`.
+Use a tool-capable Chat Completions provider. No paid service is needed for CI:
+the provider emulator scripts ordinary model requests and native tools do the work.
+Install Rust, the TUI's locked Node/pnpm dependencies, Git, `python3` and `uv` on PATH (the optional discovered echo package uses uv).
+The checker uses only Python's standard library; it needs no Python Tool server.
+
+For the implementation example, copy this directory outside any existing repository,
+then initialize **the copied workspace**, keeping runtime-root outside it:
+
+```sh
+cd /path/to/copied/local-runtime/workspace
+git init
+git add .
+git commit -m 'Initial example workspace'
+```
+
+This setup commit creates the clean baseline; the Workflow never commits or merges.
+`greeting.py` deliberately fails the empty-name case. The trusted run binding acquires
+one candidate at admission, before intake/plan Review, as required by the current
+run-resource grammar. No implementation writer starts until the plan is accepted.
+The planner uses the same isolated workspace policy with an empty tool allowlist.
+Plan rejection disposes the unchanged candidate through native settlement.
+
+The intake uses two predefined scoped branches: optional missing-information intake
+and the fixed business contract. Questionnaire decline returns `unanswered` without
+planning. The planner produces structured data, and Review accepts/rejects that exact
+plan. The accepted path executes at most three implement/check bodies. Each implementer
+exports its implemented plan anew; only those declared committed outputs and the actual
+check report are carried forward. Private transcripts are never carried.
+
+`Tool(bash)` executes a literal `python3 -I -B -` here-document in the candidate. The native
+Bash JSON result supplies `stdout`, `stderr`, `combined`, and `exit_code`. A closed
+`stdout` enum admits exactly `passed` or `failed`, then typed equality/Return produces
+the boolean report. This is a fixed machine protocol, not log-keyword searching.
+A zero exit with `failed` is a successfully executed check with business findings.
+Missing files, exceptions, invalid return values, denial, cancellation, timeout and
+unknown settlement never become `passed: false` and never enter another iteration.
+`-I` excludes candidate import paths and Python environment overrides; `-B` prevents bytecode writes.
+The verification program is frozen as trusted Workflow Tool arguments. The candidate
+supplies the source under test, not the verifier implementation. Editing Workflow YAML
+inside the candidate cannot mutate the already admitted program: execution uses the
+frozen program generation. A candidate-side fake checker is only candidate data.
+Tool Approval permits one exact invocation; it does not certify verifier trust. This
+is not filesystem sandboxing against arbitrary external host processes.
+
+Policy mode asks approval for each exact Bash invocation and native write. `full_access` bypasses that
+permission only, never the fixed question or either human Review. An implementer's
+explicitly allowed `ask_user` also routes to the root interaction surface, without a
+parent relay. Questionnaire answers/decline, Review acceptance/rejection and Tool
+Approval allow/deny are distinct responses with fresh instance identity.
+
+Success at iteration N runs exactly N writers and N checks, then asks candidate Review.
+Exhaustion returns `needs_revision` after three checks. Candidate rejection returns
+`rejected`. These are completed business results, separate from native execution status.
+The outer result includes native candidate identity and workspace handoff. Dirty bytes,
+not just HEAD, identify the candidate. Later edits invalidate old check/Review
+applicability. Inspect the retained path/diff; integrate it manually if appropriate.
+No automatic commit, merge, stash, reset, deployment or new Workflow follows.
+
+Every terminal path settles native borrowers first. Useful dirty work is retained on
+acceptance, rejection, exhaustion, cancellation and failure; unchanged clean work can
+be disposed. Unknown physical ownership is retained unresolved, not claimed safe to
+write/delete. Cancellation is not rollback. The outer 30-minute deadline includes
+human waits and all iterations; each native leaf keeps its ordinary deadline. Progress
+and iterations do not extend either policy.
+
+Parallel proposal review has no workspace binding and works in an ordinary non-Git
+directory. Its quality branch has two fixed Agent steps; security has one. Each child
+receives only its declared input. Definition keys (`quality`, `security`) determine
+aggregation order regardless of completion order. Both settle before the deterministic
+Branch and outer Return. A branch/body Return ends its own scope only.
+
+See [the conformance map](../../docs/workflow-conformance.md) for ownership, deterministic
+frontiers and tests, and [run details](../../docs/workflow-run-projection.md) for TUI
+progress, resync and historical inspection. Live reconnect observes the same owner;
+process restart never resumes old nodes or recreates actionable human decisions.

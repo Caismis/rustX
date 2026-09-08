@@ -60,6 +60,7 @@
       "concurrency": "parallel",
     },
     "write": {
+      "approval": "always",
       "execution": "foreground_only",
       "concurrency": "sequential",
     },
@@ -161,6 +162,18 @@
           "files": [".agents/subagents/navigator/AGENTS.md"],
         },
       },
+      "planner": {
+        "description": "Plan the fixed greeting implementation without tool access.",
+        "instructionsFile": ".agents/subagents/planner/instructions.md",
+        "tools": {"builtin": []},
+        "worktree": {"enabled": true, "requireCleanParent": true},
+      },
+      "implementer": {
+        "description": "Implement greeting.py in the run candidate.",
+        "instructionsFile": ".agents/subagents/implementer/instructions.md",
+        "tools": {"builtin": ["read", "write", "edit", "ask_user"]},
+        "worktree": {"enabled": true, "requireCleanParent": true},
+      },
       "reviewer": {
         "description": "Review one bounded request and return a concise result.",
         "instructionsFile": ".agents/subagents/reviewer/instructions.md",
@@ -176,9 +189,9 @@
       },
     },
     // Main exposure and Workflow admission are deliberately independent:
-    // navigator is directly callable, while reviewer is Workflow-only.
+    // navigator is directly callable; reviewer/planner/implementer are Workflow-only.
     "main": ["navigator"],
-    "workflow": ["reviewer"],
+    "workflow": ["reviewer", "planner", "implementer"],
   },
 
   // Each id explicitly registers exactly one YAML file at
@@ -188,8 +201,8 @@
   // one immutable WorkflowProgram; it is not a scripting language or an
   // expression/interpolation engine.
   "workflows": {
-    "definitions": ["review_pr", "parallel_review", "greeting_check"],
-    "main": ["review_pr", "parallel_review", "greeting_check"],
+    "definitions": ["parallel_review", "implement_and_review"],
+    "main": ["parallel_review", "implement_and_review"],
   },
 
   // Only this explicitly authorized environment reaches tools.

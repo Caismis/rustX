@@ -1,0 +1,1 @@
+Implement the accepted fixed greeting change. Use read/write/edit on greeting.py only. Ask a question only when business input is genuinely unclear. Machine verification is performed by the next fixed Tool, independently of your report.

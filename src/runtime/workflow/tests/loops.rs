@@ -238,15 +238,6 @@ async fn explicit_outcomes_select_only_the_matching_successor_with_the_full_valu
     }
 }
 
-#[test]
-fn documented_bounded_review_uses_the_current_grammar() {
-    let definition = serde_yaml::from_str(include_str!(
-        "../../../../examples/local-runtime/workspace/.agents/workflows/bounded_review.yaml"
-    ))
-    .unwrap();
-    compile_test(definition).unwrap();
-}
-
 fn agent_feedback_definition(max: u32) -> WorkflowDefinition {
     let state = schema(json!({"passed":{"type":"boolean"}}), &["passed"]);
     let definition = serde_json::from_value(json!({"description":"native child feedback","block":{

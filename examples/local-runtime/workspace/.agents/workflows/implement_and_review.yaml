@@ -1,0 +1,354 @@
+description: Implement greeting.py in one retained candidate, execute real checks up to three times, and request
+  human acceptance.
+timeout_ms: 1800000
+workspace: {require_clean_parent: true}
+tools:
+- {origin: builtin, name: ask_user}
+- {origin: builtin, name: bash}
+block:
+  input:
+    type: object
+    properties:
+      requirement: {type: string}
+    required: [requirement]
+    additionalProperties: false
+  output:
+    type: object
+    properties:
+      status:
+        type: string
+        enum: [accepted, rejected, needs_revision, unanswered]
+      feedback: {type: string}
+    required: [status, feedback]
+    additionalProperties: false
+  entry: intake
+  nodes:
+    intake:
+      type: parallel
+      branches:
+        brief:
+          input:
+            type: object
+            fields:
+              requirement: {type: reference, path: [args, requirement]}
+          block:
+            input:
+              type: object
+              properties:
+                requirement: {type: string}
+              required: [requirement]
+              additionalProperties: false
+            output:
+              type: object
+              properties:
+                requirement: {type: string}
+                answers:
+                  type: array
+                  items: {type: object}
+              required: [requirement, answers]
+              additionalProperties: false
+            entry: missing
+            nodes:
+              missing:
+                type: branch
+                condition:
+                  type: equal
+                  left: {type: reference, path: [args, requirement]}
+                  right: {type: literal, value: ''}
+              question:
+                type: tool
+                selector: {origin: builtin, name: ask_user}
+                arguments:
+                  type: literal
+                  value:
+                    questions:
+                    - question: Which constraint should the greeting implementation prioritize?
+                      header: Priority
+                      options:
+                      - {label: Minimal change, description: Keep the implementation small.}
+                      - {label: Clarity, description: Prefer explicit readable code.}
+                result:
+                  type: json
+                  part: 0
+                  schema:
+                    type: object
+                    properties:
+                      cancelled: {type: boolean}
+                      answers:
+                        type: array
+                        items: {type: object}
+                    required: [cancelled, answers]
+                    additionalProperties: false
+              declined:
+                type: branch
+                condition:
+                  type: boolean
+                  value: {type: reference, path: [question, cancelled]}
+              answered:
+                type: return
+                output:
+                  type: object
+                  fields:
+                    requirement: {type: literal, value: Implement the fixed greeting contract using the selected
+                        priority.}
+                    answers: {type: reference, path: [question, answers]}
+              unanswered:
+                type: return
+                output:
+                  type: object
+                  fields:
+                    requirement: {type: literal, value: ''}
+                    answers:
+                      type: literal
+                      value: []
+              provided:
+                type: return
+                output:
+                  type: object
+                  fields:
+                    requirement: {type: reference, path: [args, requirement]}
+                    answers:
+                      type: literal
+                      value: []
+            edges:
+            - {from: missing, to: question, port: 'true'}
+            - {from: missing, to: provided, port: 'false'}
+            - {from: question, to: declined}
+            - {from: declined, to: unanswered, port: 'true'}
+            - {from: declined, to: answered, port: 'false'}
+        contract:
+          input:
+            type: literal
+            value: {}
+          block:
+            input:
+              type: object
+              properties: {}
+              required: []
+              additionalProperties: false
+            output:
+              type: object
+              properties:
+                requirement: {type: string}
+              required: [requirement]
+              additionalProperties: false
+            entry: done
+            nodes:
+              done:
+                type: return
+                output:
+                  type: literal
+                  value: {requirement: 'greeting("Ada") == "Hello, Ada!"; greeting("") == "Hello, friend!"'}
+            edges: []
+    unanswered:
+      type: branch
+      condition:
+        type: equal
+        left: {type: reference, path: [intake, brief, requirement]}
+        right: {type: literal, value: ''}
+    plan:
+      type: agent
+      profile: planner
+      task: Produce a concise implementation plan for the fixed greeting contract and supplied priority. Do
+        not edit files or run commands. The plan is business data, never executable Workflow structure.
+      input:
+        brief: {type: reference, path: [intake, brief]}
+        contract: {type: reference, path: [intake, contract]}
+      output: &plan
+        type: object
+        properties:
+          summary: {type: string}
+          steps:
+            type: array
+            items: {type: string}
+        required: [summary, steps]
+        additionalProperties: false
+    review_plan:
+      type: review
+      subject:
+        type: plan
+        value: {type: reference, path: [plan]}
+      context: []
+    plan_accepted:
+      type: branch
+      condition:
+        type: boolean
+        value: {type: reference, path: [review_plan, accepted]}
+    repair:
+      type: loop
+      max_iterations: 3
+      input:
+        type: object
+        fields:
+          plan: {type: reference, path: [plan]}
+          feedback: {type: literal, value: Implement the accepted plan.}
+      body:
+        input:
+          type: object
+          properties:
+            plan: *plan
+            feedback: {type: string}
+          required: [plan, feedback]
+          additionalProperties: false
+        output:
+          type: object
+          properties:
+            plan: *plan
+            feedback: {type: string}
+            passed: {type: boolean}
+            report: &check_report
+              type: object
+              properties:
+                exit_code: {type: integer}
+                stdout:
+                  type: string
+                  enum: [passed, failed]
+                stderr: {type: string}
+                combined: {type: string}
+              required: [exit_code, stdout, stderr, combined]
+              additionalProperties: false
+          required: [plan, feedback, passed, report]
+          additionalProperties: false
+        entry: implement
+        nodes:
+          implement:
+            type: agent
+            profile: implementer
+            task: Implement or repair greeting.py so greeting(name) returns Hello, NAME! and uses friend for
+              an empty name. Use the supplied plan and feedback as data. Change only greeting.py. Never claim
+              verification from prose; the next fixed Tool runs the checker. Return the implemented plan as
+              the declared output for the next iteration.
+            input:
+              plan: {type: reference, path: [args, plan]}
+              feedback: {type: reference, path: [args, feedback]}
+            output:
+              type: object
+              properties:
+                plan: *plan
+              required: [plan]
+              additionalProperties: false
+          check:
+            type: tool
+            selector: {origin: builtin, name: bash}
+            arguments:
+              type: literal
+              value:
+                command: |
+                  python3 -I -B - <<'PY'
+                  """Fixed checker. Exit zero means checks ran, not that business checks passed."""
+                  import contextlib
+                  import runpy
+                  import sys
+                  from pathlib import Path
+
+                  source = Path("greeting.py")
+                  if source.stat().st_size > 4096:
+                      raise ValueError("greeting.py exceeds the 4096-byte source limit")
+                  # Candidate stdout cannot forge the checker's exact output contract.
+                  with contextlib.redirect_stdout(sys.stderr):
+                      greeting = runpy.run_path(str(source))["greeting"]
+                      actual = [greeting("Ada"), greeting("")]
+                  if any(not isinstance(value, str) or len(value) > 256 for value in actual):
+                      raise ValueError("greeting must return bounded strings")
+                  sys.stdout.write("passed" if actual == ["Hello, Ada!", "Hello, friend!"] else "failed")
+                  PY
+            result:
+              type: json
+              part: 0
+              schema: *check_report
+          passed:
+            type: branch
+            condition:
+              type: equal
+              left: {type: reference, path: [check, stdout]}
+              right: {type: literal, value: passed}
+          success:
+            type: return
+            output:
+              type: object
+              fields:
+                plan: {type: reference, path: [implement, plan]}
+                feedback: {type: literal, value: Both fixed greeting cases passed.}
+                passed: {type: literal, value: true}
+                report: {type: reference, path: [check]}
+          repair:
+            type: return
+            output:
+              type: object
+              fields:
+                plan: {type: reference, path: [implement, plan]}
+                feedback: {type: literal, value: The checker ran successfully but greeting.py failed at least
+                    one fixed case. Repair greeting.py.}
+                passed: {type: literal, value: false}
+                report: {type: reference, path: [check]}
+        edges:
+        - {from: implement, to: check}
+        - {from: check, to: passed}
+        - {from: passed, to: success, port: 'true'}
+        - {from: passed, to: repair, port: 'false'}
+      until:
+        type: boolean
+        value: {type: reference, path: [result, passed]}
+      carry:
+        type: object
+        fields:
+          plan: {type: reference, path: [result, plan]}
+          feedback: {type: reference, path: [result, feedback]}
+    review_candidate:
+      type: review
+      subject:
+        type: candidate
+        value: {type: reference, path: [repair]}
+      context:
+      - {type: reference, path: [repair]}
+    candidate_accepted:
+      type: branch
+      condition:
+        type: boolean
+        value: {type: reference, path: [review_candidate, accepted]}
+    accepted:
+      type: return
+      output:
+        type: object
+        fields:
+          status: {type: literal, value: accepted}
+          feedback: {type: reference, path: [review_candidate, feedback]}
+    rejected_candidate:
+      type: return
+      output:
+        type: object
+        fields:
+          status: {type: literal, value: rejected}
+          feedback: {type: reference, path: [review_candidate, feedback]}
+    rejected_plan:
+      type: return
+      output:
+        type: object
+        fields:
+          status: {type: literal, value: rejected}
+          feedback: {type: reference, path: [review_plan, feedback]}
+    exhausted:
+      type: return
+      output:
+        type: object
+        fields:
+          status: {type: literal, value: needs_revision}
+          feedback: {type: reference, path: [repair, result, feedback]}
+    declined:
+      type: return
+      output:
+        type: literal
+        value: {status: unanswered, feedback: Questionnaire declined; no implementation requested.}
+  edges:
+  - {from: intake, to: unanswered}
+  - {from: unanswered, to: declined, port: 'true'}
+  - {from: unanswered, to: plan, port: 'false'}
+  - {from: plan, to: review_plan}
+  - {from: review_plan, to: plan_accepted}
+  - {from: plan_accepted, to: repair, port: 'true'}
+  - {from: plan_accepted, to: rejected_plan, port: 'false'}
+  - {from: repair, to: review_candidate, port: satisfied}
+  - {from: repair, to: exhausted, port: exhausted}
+  - {from: review_candidate, to: candidate_accepted}
+  - {from: candidate_accepted, to: accepted, port: 'true'}
+  - {from: candidate_accepted, to: rejected_candidate, port: 'false'}

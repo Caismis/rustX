@@ -23,6 +23,8 @@ fn examples_root() -> PathBuf {
 
 const REQUIRED_EXAMPLE_FILES: &[&str] = &[
     "AGENTS.md",
+    ".agents/subagents/planner/instructions.md",
+    ".agents/subagents/implementer/instructions.md",
     ".agents/skills/review-guidance/SKILL.md",
     ".agents/tools/echo/server.py",
     ".agents/tools/echo/requirements.txt",
@@ -30,7 +32,7 @@ const REQUIRED_EXAMPLE_FILES: &[&str] = &[
     ".agents/subagents/navigator/AGENTS.md",
     ".agents/subagents/reviewer/instructions.md",
     ".agents/subagents/reviewer/AGENTS.md",
-    ".agents/workflows/review_pr.yaml",
+    ".agents/workflows/implement_and_review.yaml",
     ".agents/workflows/parallel_review.yaml",
 ];
 
@@ -51,7 +53,7 @@ fn assert_example_resource_snapshot(resources: &RuntimeResourceSnapshot) {
             .into_iter()
             .map(rustx::runtime::subagent::SubagentName::as_str)
             .collect::<Vec<_>>(),
-        vec!["navigator", "reviewer"]
+        vec!["implementer", "navigator", "planner", "reviewer"]
     );
     assert_eq!(
         resources
@@ -67,7 +69,7 @@ fn assert_example_resource_snapshot(resources: &RuntimeResourceSnapshot) {
             .iter()
             .map(rustx::runtime::subagent::SubagentName::as_str)
             .collect::<Vec<_>>(),
-        vec!["reviewer"]
+        vec!["implementer", "planner", "reviewer"]
     );
     assert!(
         resources
@@ -78,8 +80,8 @@ fn assert_example_resource_snapshot(resources: &RuntimeResourceSnapshot) {
 
     let review = resources
         .workflows()
-        .get(&WorkflowId::parse("review_pr").expect("workflow id"))
-        .expect("review_pr is registered");
+        .get(&WorkflowId::parse("implement_and_review").expect("workflow id"))
+        .expect("implement_and_review is registered");
     assert!(
         review
             .nodes()
@@ -117,7 +119,7 @@ fn assert_example_resource_snapshot(resources: &RuntimeResourceSnapshot) {
     );
 
     let tool_names = resources.capability().tool_registry().names();
-    assert!(tool_names.contains(&"review_pr"));
+    assert!(tool_names.contains(&"implement_and_review"));
     assert!(tool_names.contains(&"parallel_review"));
     assert!(tool_names.contains(&"subagent"));
     assert!(tool_names.contains(&"echo"));

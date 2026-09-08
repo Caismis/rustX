@@ -176,6 +176,18 @@ describe("working status", () => {
     );
   });
 
+  it("keeps human Review distinct from tool permission and mixed waits", () => {
+    const review = approvalInteraction();
+    review.request.kind = { type: "review", subject_digest: "a".repeat(64), review: {
+      instance: { block: { run: { conversation_id: "conversation-1", attempt_id: "attempt-1", invocation: 1 }, definition: { workflow_id: "example", blocks: [] }, invocations: [0] }, node: "review", visit: 0 },
+      subject: { type: "plan", candidate: null, content: { plan: "fixed" } }, context: [],
+    } };
+    assert.equal(workingStatus(stateOf({ pending_interactions: [review] })), "Waiting for human review…");
+    for (const other of [approvalInteraction(), questionnaireInteraction()]) {
+      assert.equal(workingStatus(stateOf({ pending_interactions: [review, other] })), "Waiting for 2 human responses…");
+    }
+  });
+
   it("surfaces a pending interaction even when another attempt is active", () => {
     assert.equal(
       workingStatus(

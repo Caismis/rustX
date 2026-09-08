@@ -49,21 +49,24 @@ export function workingStatus(state: PresentationState): string | undefined {
   }
   const waiting = state.pendingInteractions;
   if (waiting.length > 0) {
-    const questions = waiting.filter(
-      (interaction) => interaction.request.kind.type === "questionnaire",
-    );
-    const approvals = waiting.length - questions.length;
-    if (questions.length > 0 && approvals === 0) {
-      return questions.length === 1
-        ? "Waiting for questionnaire…"
-        : `Waiting for ${questions.length} questionnaires…`;
-    }
-    if (questions.length > 0) {
+    const kind = waiting[0]!.request.kind;
+    if (waiting.some((interaction) => interaction.request.kind.type !== kind.type)) {
       return `Waiting for ${waiting.length} human responses…`;
     }
-    return waiting.length === 1
-      ? `Waiting for approval of ${waiting[0]!.request.kind.type === "approval" ? waiting[0]!.request.kind.tool_name : "tool"}…`
-      : `Waiting for ${waiting.length} approvals…`;
+    switch (kind.type) {
+      case "questionnaire":
+        return waiting.length === 1
+          ? "Waiting for questionnaire…"
+          : `Waiting for ${waiting.length} questionnaires…`;
+      case "review":
+        return waiting.length === 1
+          ? "Waiting for human review…"
+          : `Waiting for ${waiting.length} human reviews…`;
+      case "approval":
+        return waiting.length === 1
+          ? `Waiting for approval of ${kind.tool_name}…`
+          : `Waiting for ${waiting.length} approvals…`;
+    }
   }
   const attempt = state.attempt;
   if (attempt === undefined || attempt.phase.type === "settled") {

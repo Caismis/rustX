@@ -7432,8 +7432,8 @@ Workflow ids, while `workflows.main` independently exposes a subset as
 model-facing Tools. Unknown ids are configuration errors.
 
 The configured Workflow id is the identity of the definition, catalog entry,
-and Tool. `review_pr` resolves to
-`.agents/workflows/review_pr.yaml` relative to the configured workspace. The
+and Tool. `parallel_review` resolves to
+`.agents/workflows/parallel_review.yaml` relative to the configured workspace. The
 loader never scans that directory for admission, and YAML has no duplicate
 authoritative `name` field. A Tool is an invocation surface, a Workflow is a
 compiled bounded program, and a Skill is reusable resource/instruction

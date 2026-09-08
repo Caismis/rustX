@@ -115,7 +115,7 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
     assert!(config.mcp_tool_policies.is_empty());
     assert_eq!(config.environment["RUSTX_EXAMPLE_MODE"], "local-runtime");
     assert!(config.default_tools.iter().any(|name| name == "subagent"));
-    assert_eq!(config.subagents.definitions.len(), 2);
+    assert_eq!(config.subagents.definitions.len(), 4);
     assert_eq!(
         config
             .subagents
@@ -132,7 +132,7 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
             .iter()
             .map(rustx::runtime::subagent::SubagentName::as_str)
             .collect::<Vec<_>>(),
-        vec!["reviewer"]
+        vec!["reviewer", "planner", "implementer"]
     );
     assert_eq!(
         config
@@ -141,7 +141,7 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
             .iter()
             .map(rustx::runtime::workflow::WorkflowId::as_str)
             .collect::<Vec<_>>(),
-        vec!["review_pr", "parallel_review", "greeting_check"]
+        vec!["parallel_review", "implement_and_review"]
     );
     assert_eq!(config.workflows.main, config.workflows.definitions);
 
@@ -163,16 +163,7 @@ fn committed_echo_package_is_discovered_by_production_python_discovery() {
     let workspace = Workspace::new(&workspace_path).expect("example workspace");
     let discovered = rustx::tools::python::discover_python_packages(&workspace)
         .expect("example tool packages must be discoverable");
-    assert_eq!(discovered.len(), 2);
-    let verifier = discovered
-        .iter()
-        .find(|package| package.server_id.as_str() == "python:verify-greeting")
-        .expect("project verifier package");
-    assert!(
-        verifier.outcome.is_ok(),
-        "the verifier package must be valid"
-    );
-
+    assert_eq!(discovered.len(), 1);
     let echo = &discovered[0];
     assert_eq!(echo.server_id.as_str(), "python:echo");
     let package = echo
@@ -212,4 +203,101 @@ fn committed_example_skill_is_found_by_project_agents_discovery() {
         vec!["review-guidance"]
     );
     assert!(packages[0].description().contains("bounded"));
+}
+
+#[test]
+fn every_shipped_workflow_is_registered_and_compiles() {
+    use rustx::runtime::workflow::{WorkflowDefinition, WorkflowProgram};
+    let config = CurrentRuntimeConfig::from_jsonc_slice(&read_example("rustx.jsonc")).unwrap();
+    let profiles = config.subagents.workflow.iter().cloned().collect();
+    let directory = examples_root().join("workspace/.agents/workflows");
+    assert_eq!(
+        std::fs::read_dir(&directory).unwrap().count(),
+        config.workflows.definitions.len()
+    );
+    for id in &config.workflows.definitions {
+        let path = directory.join(format!("{id}.yaml"));
+        let definition: WorkflowDefinition =
+            serde_yaml::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        WorkflowProgram::compile(id.clone(), definition, &profiles)
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    }
+    for profile in config.subagents.definitions.values() {
+        assert!(
+            examples_root()
+                .join("workspace")
+                .join(&profile.instructions_file)
+                .is_file()
+        );
+    }
+}
+
+#[test]
+fn reference_authoring_errors_fail_before_execution() {
+    use rustx::runtime::workflow::{WorkflowDefinition, WorkflowId, WorkflowProgram};
+    let config = CurrentRuntimeConfig::from_jsonc_slice(&read_example("rustx.jsonc")).unwrap();
+    let profiles = config.subagents.workflow.iter().cloned().collect();
+    let source: serde_json::Value = serde_yaml::from_slice(&read_example(
+        "workspace/.agents/workflows/implement_and_review.yaml",
+    ))
+    .unwrap();
+    let cases = [
+        (
+            "/block/nodes/plan/input/brief/path",
+            serde_json::json!(["args", "missing"]),
+        ),
+        (
+            "/block/nodes/plan/profile",
+            serde_json::json!("unavailable_profile"),
+        ),
+        (
+            "/block/nodes/repair/body/nodes/check/selector/name",
+            serde_json::json!("unadmitted_tool"),
+        ),
+        (
+            "/block/nodes/repair/body/nodes/implement/input/plan/path",
+            serde_json::json!(["plan"]),
+        ),
+        ("/block/nodes/repair/max_iterations", serde_json::json!(0)),
+        (
+            "/block/nodes/plan/input/brief/path",
+            serde_json::json!(["repair"]),
+        ),
+        (
+            "/block/nodes/repair/body/entry",
+            serde_json::json!("missing_node"),
+        ),
+    ];
+    for (pointer, value) in cases {
+        let mut invalid = source.clone();
+        *invalid.pointer_mut(pointer).unwrap() = value;
+        let definition: WorkflowDefinition = serde_json::from_value(invalid).unwrap();
+        let error = WorkflowProgram::compile(
+            WorkflowId::parse("implement_and_review").unwrap(),
+            definition,
+            &profiles,
+        )
+        .unwrap_err();
+        let diagnostic = error.to_string();
+        let expected_node = if pointer.ends_with("/entry") {
+            "missing_node"
+        } else if pointer.contains("/check/") {
+            "check"
+        } else if pointer.contains("/implement/") {
+            "implement"
+        } else if pointer.ends_with("max_iterations") {
+            "repair"
+        } else {
+            "plan"
+        };
+        assert!(
+            diagnostic.contains(expected_node),
+            "{pointer}: {diagnostic}"
+        );
+
+        assert!(
+            !diagnostic.is_empty() && diagnostic.len() < 2048,
+            "{pointer}: {diagnostic}"
+        );
+    }
 }
