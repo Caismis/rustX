@@ -53,11 +53,11 @@ pub struct WorkflowRunId {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct WorkflowDefinitionPath {
     pub workflow_id: WorkflowId,
-    /// Alternating Parallel node and branch keys; empty for root.
+    /// Pairs of owner node and child key (Parallel branch or Loop `body`); empty for root.
     pub blocks: Vec<String>,
 }
 
-/// A concrete block instance. Future iterations vary invocation components.
+/// A concrete block instance. Root/Parallel append zero; Loop appends its one-based iteration.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct WorkflowBlockInstance {
     pub run: WorkflowRunId,
@@ -85,16 +85,32 @@ pub enum WorkflowExecutionOutcome {
     OutcomeUnknown,
 }
 
+/// Normal finite Loop completion; neither case claims business verification passed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowLoopExit {
+    Satisfied,
+    Exhausted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowLimit {
+    Steps,
+    Agents,
+    RetainedData,
+}
+
 impl fmt::Display for WorkflowNodeInstance {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "{}:{}:{}:{}",
+            "{}:{}:{:?}:{}:{}",
             format_args!(
                 "{}:{}",
                 self.block.run.attempt_id, self.block.run.invocation
             ),
             self.block.definition.blocks.join("."),
+            self.block.invocations,
             self.node,
             self.visit
         )
@@ -127,6 +143,12 @@ pub(crate) fn test_instance(workflow: &str, node: &str) -> WorkflowNodeInstance 
 pub const MAX_WORKFLOW_BYTES: usize = 512 * 1024;
 /// The maximum number of nodes in one workflow program.
 pub const MAX_WORKFLOW_NODES: usize = 256;
+/// Admitted node and iteration steps across the entire run.
+pub const MAX_WORKFLOW_STEPS: usize = 4096;
+/// Native `AgentRuns` across the entire run, never replenished by a block.
+pub const MAX_WORKFLOW_AGENTS: usize = 256;
+/// Trusted ceiling for a single Loop's finite allowance.
+pub const MAX_LOOP_ITERATIONS: u32 = 256;
 /// The maximum number of registered workflow definitions in one generation.
 pub const MAX_WORKFLOW_DEFINITIONS: usize = 64;
 /// The maximum number of explicit parallel branches in one node.
@@ -273,7 +295,7 @@ pub struct WorkflowWorkspace {
     pub require_clean_parent: bool,
 }
 
-/// A fixed lexical graph. Root and Parallel branches have identical semantics.
+/// A fixed lexical graph shared by root, Parallel branches and Loop bodies.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowBlock {
@@ -295,6 +317,14 @@ pub struct WorkflowBlock {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 pub enum WorkflowNodeDefinition {
+    /// Repeat one fixed typed body until its committed result satisfies `until`.
+    Loop {
+        input: WorkflowValue,
+        body: Box<WorkflowBlock>,
+        until: Box<WorkflowPredicate>,
+        carry: WorkflowValue,
+        max_iterations: u32,
+    },
     Review {
         subject: WorkflowReviewSubject,
         context: Vec<WorkflowValue>,
@@ -451,13 +481,13 @@ pub struct WorkflowProgram {
     id: WorkflowId,
     description: String,
     block: WorkflowBlockProgram,
-    total_nodes: usize,
+    execution_bound: usize,
     retained_bound: usize,
     tools: BTreeSet<crate::capabilities::selection::ToolSelector>,
     timeout_ms: u64,
 }
 
-/// Immutable compiled graph shared by root and every nested branch.
+/// Immutable compiled graph shared by root, Parallel branches and Loop bodies.
 #[derive(Debug, Clone)]
 pub struct WorkflowBlockProgram {
     path: Vec<String>,
@@ -534,6 +564,14 @@ impl WorkflowProgram {
 /// A compiled node whose references and schemas have been admitted.
 #[derive(Debug, Clone)]
 pub enum WorkflowNodeProgram {
+    Loop {
+        input: WorkflowValue,
+        body: Box<WorkflowBlockProgram>,
+        until: Box<WorkflowPredicate>,
+        carry: WorkflowValue,
+        max_iterations: u32,
+        output_schema: Value,
+    },
     Review {
         subject: WorkflowReviewSubject,
         context: Vec<WorkflowValue>,
@@ -769,6 +807,7 @@ fn compile_program(
         &mut total_nodes,
     )?;
     let retained_bound = execution::static_retained_bound(&block);
+    let (execution_bound, _) = execution::static_execution_bound(&block)?;
     if retained_bound > MAX_LOCAL_BYTES {
         return Err(WorkflowCompileError::InvalidField(
             "aggregate retained-data reservation exceeds the run budget".into(),
@@ -779,7 +818,7 @@ fn compile_program(
         id,
         description: definition.description,
         block,
-        total_nodes,
+        execution_bound,
         retained_bound,
         tools: definition.tools,
         timeout_ms: definition.timeout_ms,
@@ -928,6 +967,57 @@ fn compile_block(
             intersect_schema_maps(&predecessors)
         };
         let compiled = match node {
+            WorkflowNodeDefinition::Loop {
+                input,
+                body,
+                until,
+                carry,
+                max_iterations,
+            } => {
+                if *max_iterations == 0 || *max_iterations > MAX_LOOP_ITERATIONS {
+                    return Err(WorkflowCompileError::InvalidField(format!(
+                        "Loop max_iterations must be 1..={MAX_LOOP_ITERATIONS}"
+                    )));
+                }
+                let initial = value_schema(input, &available_before, &node_id, 0)?;
+                if !schemas_compatible(&initial, &body.input) {
+                    return Err(WorkflowCompileError::IncompatibleReference(
+                        "Loop input contract mismatch".into(),
+                    ));
+                }
+                // A separate lexical projection scope exposes only committed body output.
+                let result_scope =
+                    SchemaMap(BTreeMap::from([("result".into(), body.output.clone())]));
+                validate_predicate(until, &result_scope, &node_id, 0)?;
+                let next = value_schema(carry, &result_scope, &node_id, 0)?;
+                if !schemas_compatible(&next, &body.input) {
+                    return Err(WorkflowCompileError::IncompatibleReference(
+                        "Loop carry contract mismatch".into(),
+                    ));
+                }
+                let mut child_path = path.clone();
+                child_path.extend([node_id.clone(), "body".into()]);
+                let body = compile_block(
+                    *body.clone(),
+                    workflow_profiles,
+                    admitted_tools,
+                    child_path,
+                    total_nodes,
+                )?;
+                let output_schema = execution::loop_result_schema(&body.output_schema);
+                available_after.insert(
+                    node_id.clone(),
+                    available_before.with_prefix(&node_id, &output_schema),
+                );
+                WorkflowNodeProgram::Loop {
+                    input: input.clone(),
+                    body: Box::new(body),
+                    until: until.clone(),
+                    carry: carry.clone(),
+                    max_iterations: *max_iterations,
+                    output_schema,
+                }
+            }
             WorkflowNodeDefinition::Review { subject, context } => {
                 if !matches!(subject.value(), WorkflowValue::Reference { .. }) {
                     return Err(WorkflowCompileError::InvalidField(
@@ -1864,6 +1954,8 @@ pub struct WorkflowRuntime {
     #[cfg(test)]
     node_frontier: Arc<std::sync::Mutex<Option<execution::NodeFrontierHook>>>,
     #[cfg(test)]
+    iteration_frontier: Arc<std::sync::Mutex<Option<execution::IterationFrontierHook>>>,
+    #[cfg(test)]
     pre_start: Arc<std::sync::Mutex<Option<execution::PreStartHook>>>,
     #[cfg(test)]
     observations: tokio::sync::watch::Sender<Vec<RuntimeEvent>>,
@@ -1913,6 +2005,8 @@ impl WorkflowRuntime {
             next_run: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             #[cfg(test)]
             node_frontier: Arc::new(std::sync::Mutex::new(None)),
+            #[cfg(test)]
+            iteration_frontier: Arc::new(std::sync::Mutex::new(None)),
             #[cfg(test)]
             pre_start: Arc::new(std::sync::Mutex::new(None)),
             #[cfg(test)]
@@ -2001,6 +2095,7 @@ impl WorkflowRuntime {
                             &context,
                             input.into(),
                             execution::Acceptance::default(),
+                            vec![0],
                             &cancellation,
                         )
                         .await
@@ -2298,9 +2393,7 @@ impl WorkflowRuntime {
                 // observation of the workflow_output latch. If that
                 // success committed before cancellation, it remains the
                 // winner even when this waiter observed cancellation first.
-                if let Some(snapshot) = snapshot
-                    && matches!(snapshot.state, crate::runtime::subagent::SubagentState::Succeeded)
-                {
+                if let Some(snapshot) = snapshot {
                     return self.settled_agent_value(
                             snapshot,
                             &subagent_id,
@@ -2313,9 +2406,11 @@ impl WorkflowRuntime {
             }
             snapshot = &mut wait => snapshot,
         };
-        let snapshot = snapshot.ok_or_else(|| WorkflowRunError::ChildFailed {
+        let snapshot = snapshot.ok_or_else(|| WorkflowRunError::ChildOutcome {
             node: node_id.to_string(),
-            detail: "the native SubagentRegistry lost the child record".to_owned(),
+            status: crate::tools::types::ToolExecutionStatus::OutcomeUnknown {
+                detail: "the native SubagentRegistry lost the child record".to_owned(),
+            },
         })?;
         self.settled_agent_value(snapshot, &subagent_id, node_id, output_schema, cancellation)
     }
@@ -2328,6 +2423,15 @@ impl WorkflowRuntime {
         output_schema: &Value,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<expressions::CommittedValue, WorkflowRunError> {
+        use crate::tools::types::{ToolCancellationPhase, ToolExecutionStatus as Status};
+        if !snapshot.settled {
+            return Err(WorkflowRunError::ChildOutcome {
+                node: node_id.to_string(),
+                status: Status::OutcomeUnknown {
+                    detail: "native child terminal publication did not settle".into(),
+                },
+            });
+        }
         match snapshot.state {
             crate::runtime::subagent::SubagentState::Succeeded => {
                 // The committed output value is the live Workflow result
@@ -2372,7 +2476,31 @@ impl WorkflowRuntime {
                 })
             }
             crate::runtime::subagent::SubagentState::Cancelled => {
-                Err(WorkflowRunError::from_cancellation(cancellation))
+                // The registry's first committed cause is immutable. Only
+                // inherited parent cancellation may project the parent's
+                // richer deadline cause; an unrelated later outer cancellation
+                // cannot replace a child's own committed cause.
+                let status = match snapshot.cancel_reason {
+                    Some(crate::runtime::types::CancellationReason::SubagentExecutionDeadlineExceeded) => Status::TimedOut,
+                    Some(crate::runtime::types::CancellationReason::ParentCancelled)
+                        if cancellation.is_cancelled() => cancellation.native_status(ToolCancellationPhase::DuringExecution),
+                    Some(reason) => Status::Cancelled { reason, phase: ToolCancellationPhase::DuringExecution },
+                    None => Status::OutcomeUnknown { detail: "native child cancellation has no committed cause".into() },
+                };
+                Err(WorkflowRunError::ChildOutcome {
+                    node: node_id.to_string(),
+                    status,
+                })
+            }
+            crate::runtime::subagent::SubagentState::Interrupted => {
+                Err(WorkflowRunError::ChildOutcome {
+                    node: node_id.to_string(),
+                    status: Status::OutcomeUnknown {
+                        detail: bound_workflow_diagnostic(snapshot.detail.unwrap_or_else(|| {
+                            "native child interrupted without a valid outcome".into()
+                        })),
+                    },
+                })
             }
             state => Err(WorkflowRunError::ChildFailed {
                 node: node_id.to_string(),
@@ -2390,6 +2518,11 @@ impl WorkflowRuntime {
 /// never converted into workflow-local values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkflowRunError {
+    LimitExceeded(WorkflowLimit),
+    ChildOutcome {
+        node: String,
+        status: crate::tools::types::ToolExecutionStatus,
+    },
     WorkspaceSettlement {
         candidate: Option<crate::runtime::workspace::CandidateReference>,
         error: Box<WorkflowRunError>,
@@ -2467,7 +2600,7 @@ impl WorkflowRunError {
                     error.execution_status()
                 }
             }
-            Self::ToolFailed { status, .. } => status.clone(),
+            Self::ToolFailed { status, .. } | Self::ChildOutcome { status, .. } => status.clone(),
             Self::Deadline(_) => Status::TimedOut,
             Self::Cancelled(reason) => Status::Cancelled {
                 reason: *reason,
@@ -2506,6 +2639,12 @@ impl fmt::Display for WorkflowRunError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::WorkspaceSettlement { error, .. } => error.fmt(formatter),
+            Self::LimitExceeded(limit) => {
+                write!(formatter, "Workflow run {limit:?} limit exceeded")
+            }
+            Self::ChildOutcome { node, status } => {
+                write!(formatter, "Workflow Agent {node:?}: {status:?}")
+            }
             Self::ToolFailed { node, status } => {
                 write!(formatter, "Workflow Tool {node:?}: {status:?}")
             }

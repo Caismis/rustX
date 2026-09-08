@@ -118,6 +118,54 @@ async fn fixed_tool_only_has_one_outer_result_and_zero_additional_provider_reque
 
 const KEY: &str = "RUSTX_ISSUE83_KEY";
 
+#[tokio::test]
+async fn bounded_loop_exhaustion_keeps_one_outer_result_and_no_internal_provider_turns() {
+    use serde_json::json;
+    let Some(emulator) = ProviderEmulator::start("workflow_tool").await else {
+        return;
+    };
+    let mut definition: serde_json::Value = serde_yaml::from_str(TOOL_WORKFLOW).unwrap();
+    let body = definition["block"].take();
+    let output = json!({"type":"object","properties":{
+        "status":{"type":"string","enum":["satisfied","exhausted"]},"iterations":{"type":"integer"},"result":body["output"]
+    },"required":["status","iterations","result"],"additionalProperties":false});
+    definition["block"] = json!({"input":body["input"],"output":output,"entry":"feedback","nodes":{
+        "feedback":{"type":"loop","input":{"type":"reference","path":["args"]},"body":body,"max_iterations":3,
+            "until":{"type":"boolean","value":{"type":"literal","value":false}},"carry":{"type":"literal","value":{"task":"inspect again"}}},
+        "done":{"type":"return","output":{"type":"reference","path":["feedback"]}}
+    },"edges":[{"from":"feedback","to":"done"}]});
+    let driver =
+        Driver::start_with_workflow(&emulator, &serde_yaml::to_string(&definition).unwrap()).await;
+    driver.submit();
+    let (events, outcome) = driver.settle().await;
+    assert!(
+        matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, RuntimeClientEvent::ToolExecutionSettled { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(emulator.requests().await.len(), 2);
+    let (snapshot, _) = driver.runtime.host().snapshot().unwrap();
+    assert_eq!(
+        snapshot
+            .messages
+            .iter()
+            .filter(|m| matches!(m, rustx::message::types::MessageBlock::Tool(_)))
+            .count(),
+        1
+    );
+    let history = serde_json::to_string(&snapshot.messages).unwrap();
+    assert!(history.contains("exhausted"));
+    assert!(history.contains("review_pr.yaml"));
+    assert!(!history.contains("tool-glob"));
+    emulator.finish().await;
+}
+
 fn models_json_for_base_url(base_url: &str) -> String {
     serde_json::json!({
         "providers": {

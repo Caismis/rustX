@@ -51,7 +51,10 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 29. Version 29 adds native Review
+The SQLite schema is development schema version 30. Version 30 adds concrete Loop
+iteration admission/settlement and satisfied/exhausted exit facts. Existing
+Runtime Client 21 and child IPC 19 identity vectors represent nested iterations.
+Version 29 adds native Review
 audit facts and required Questionnaire invocation correlation. Version 28 adds a distinct
 Workflow resource recovery guard for uncertain final candidate settlement;
 child IPC 18 and Runtime Client 20 are unchanged. Version 27 adds native

@@ -1390,7 +1390,7 @@ serialization. Configuration registers exact ids and separately admits
 truth, with independent `subagents.main` and `subagents.workflow` domains.
 
 The loader compiles each registered definition into an immutable
-`WorkflowProgram`. The compiler enforces one explicit-entry finite DAG,
+`WorkflowProgram`. The compiler enforces an explicit-entry acyclic graph within each block,
 reachability/termination, explicit typed references, path availability,
 schema compatibility, complete Branch ports, and workflow profile admission.
 `WorkflowRuntime` owns only per-run values, deterministic progression,
@@ -1399,12 +1399,15 @@ the existing SubagentRuntime continues to own child Agent loops, tools,
 capabilities, approval/interaction, workspaces, retries, and physical
 settlement.
 
-The v1 language is deliberately limited to Agent, Branch, Parallel, and
+The current language contains Agent, Tool, Branch, Parallel, Review, Loop and
 Return. WF-01 (#217) replaces the original branch templates with scoped
 fixed blocks sharing the root executor. Values are tagged typed constructions;
 Branch consumes boolean/equality/composition predicates; Parallel uses
 definition keys and cancellable native capacity waiting. Return completes
 only its owning block. See [the current contracts](workflow-programs.md).
+WF-05 (#221) adds one structured finite repeat-until Loop over that same block
+engine, explicit carried state and satisfied/exhausted results, fresh iteration
+identity, shared run-wide budgets and native settlement before another body.
 Workflow Agent success is exclusively the reserved
 `workflow_output` protocol: schema validation, exactly-once commit,
 same-turn exclusivity, bounded correction feedback, and cancellation/output

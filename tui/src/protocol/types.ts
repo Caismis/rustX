@@ -443,6 +443,7 @@ export type ToolInvocationId =
         block: {
           run: { conversation_id: ConversationId; attempt_id: AttemptId; invocation: number };
           definition: { workflow_id: string; blocks: string[] };
+          /** Root [0]; Parallel appends 0; Loop appends its one-based iteration. */
           invocations: number[];
         };
         node: string;

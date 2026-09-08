@@ -1,6 +1,6 @@
 # Fixed scoped Workflow programs
 
-WF-01 (#217), WF-02 (#218), and WF-03 (#219) extend the native Workflow foundation (#83). A registered
+WF-01 through WF-05 (#217–#221) extend the native Workflow foundation (#83). A registered
 Workflow remains one foreground Tool. Configuration explicitly registers
 `.agents/workflows/<id>.yaml` and separately exposes it through
 `workflows.main`. Profiles must belong to `subagents.workflow`. Files do not
@@ -13,7 +13,7 @@ admission set, and trusted `timeout_ms` (default 600000). Every block contains
 `input` and `output` JSON Schemas, `entry`, `nodes`, and `edges`. Parallel
 branches contain an `input` value expression and another `block` of exactly
 the same shape. There is no Block node, callable subworkflow, conversation,
-or independent job. The node vocabulary is Agent, Tool, Branch, Parallel, Review, Return.
+or independent job. The node vocabulary is Agent, Tool, Branch, Parallel, Review, Loop, Return.
 
 ## Fixed native Tool nodes (WF-02)
 
@@ -293,22 +293,27 @@ and against the consuming node's immutable contract.
 ## Identity and lifecycle ownership
 
 `WorkflowProgram` contains one immutable root `WorkflowBlockProgram`.
-Every compiled branch holds an input expression and a `WorkflowBlockProgram`.
-`WorkflowRuntime::execute_block` is the sole root/branch execution and
+Every compiled branch and Loop body holds a `WorkflowBlockProgram`.
+`WorkflowRuntime::execute_block` is the sole root/branch/body execution and
 lifecycle entry point; it owns private input/local-value lifetime and invokes
 the same node dispatch for every scope. No one-Agent Parallel executor or
 legacy grammar remains.
 
 `WorkflowDefinitionPath` contains the configured Workflow id and alternating
-Parallel-node/branch keys. A `WorkflowRunId` contains the conversation, native
+owner-node/child keys: a Parallel branch key or the fixed Loop key `body`.
+A `WorkflowRunId` contains the conversation, native
 admitted `AttemptId`, and a WorkflowRuntime-owned invocation ordinal.
 Cloned runtimes share the ordinal allocator, including across resource reload.
 Recovery creates a fresh native attempt identity rather than resuming a run.
 `WorkflowBlockInstance` combines
 that run, the static path and structural invocation components.
-`WorkflowNodeInstance` adds the local node and visit ordinal. WF-01 uses zero
-invocation/visit ordinals; later Loop iterations can supply fresh components
-without cloning static definitions. No identity uses prose, PID, provider
+`WorkflowNodeInstance` adds the local node and visit ordinal (zero within an acyclic block).
+Root starts with invocation path `[0]`; Parallel appends `0`; Loop appends its
+one-based iteration. Nested scopes inherit the complete path: `[0,2,0,3]`
+identifies inner iteration three inside a Parallel branch in outer iteration two.
+The static paths disambiguate siblings. No static definition is cloned to
+obtain a new identity. Display diagnostics include invocation components too.
+No identity uses prose, PID, provider
 text or completion order. The outer `ToolCallId` appears on WorkflowStarted
 only as model correlation. Registry terminal routing and node facts carry
 the concrete instance; child ToolCall correlation is a bounded hash of it.
@@ -375,14 +380,15 @@ root block terminal, WorkflowRun terminal. Terminal outcomes are unique.
 | --- | --- | --- |
 | YAML source and serialized program | 512 KiB each | Loader read; compiler before block traversal |
 | Static nodes, including every nested graph | 256 | One compiler counter shared by all blocks |
-| Nested Parallel depth | 8, root depth zero | Recursive compiler admission |
+| Nested block depth (Parallel and Loop combined) | 8, root depth zero | Recursive compiler admission |
+| Local Loop maximum | 1–256 iterations | Trusted compiler ceiling |
 | Branches per Parallel | 32 | Compiler; aggregate nodes still apply |
 | Reference path | 32 components, 64 bytes each | Expression static validation |
 | Native conversation/attempt identity components | 256 bytes each | Run admission; static paths have at most 16 bounded keys |
 | Expression/predicate serialized size | 64 KiB each | Compiler; aggregate program bytes still apply |
 | Expression/schema/value depth | 32 | Compiler; runtime value commit |
 | One constructed/retained value | 64 KiB | Construction before commit and local reservation |
-| Admitted nodes | Program's total static count, at most 256 | WorkflowRun counter at node frontier |
+| Admitted steps (nodes plus iteration admissions) | Program's expanded bound, at most 4096 | One WorkflowRun counter at both frontiers |
 | Admitted Agent executions | At most 256 | Same run-owned reservation, before native preparation |
 | Retained Workflow inputs, locals and exports | 4 MiB | Compiler proves whole-program reservation; run charges actual bytes before local commit |
 | Native/branch failure diagnostic text | 1 KiB per diagnostic | Clamp before retention/aggregation; preserve every outer branch key |
@@ -461,8 +467,135 @@ facts. The event envelope stays version 1 because framing is unchanged. The
 client projector explicitly ignores journal-only execution facts pending WF-06;
 approval remains on the existing human interaction surface.
 
-Review/ask_user is described in WF-04 below. Loop (#221), full projection (#222),
-and composed reference workflows (#223) remain separate slices.
+Review/ask_user is described in WF-04 below. WF-05 adds Loop lifecycle facts
+under SQLite schema 30. Runtime Client/TUI 21, child IPC 19, configuration 6
+and event envelope 1 remain unchanged: the existing invocation vector already
+represents iterations, and the new lifecycle facts remain journal-only. The
+Runtime Client explicitly ignores these facts pending full run presentation
+in #222. Composed reference-workflow conformance remains #223.
+
+## Bounded feedback (WF-05)
+
+There is one repeat-until form, with no retries, catch paths or graph back edges:
+
+```yaml
+feedback:
+  type: loop
+  input: {type: reference, path: [args]}
+  max_iterations: 3
+  body:
+    input: &state
+      type: object
+      properties: {passed: {type: boolean}}
+      required: [passed]
+      additionalProperties: false
+    output: *state
+    entry: done
+    nodes:
+      done:
+        type: return
+        output: {type: reference, path: [args]}
+    edges: []
+  until:
+    type: boolean
+    value: {type: reference, path: [result, passed]}
+  carry: {type: reference, path: [result]}
+```
+
+`input` is evaluated once in the containing block. `body` is an ordinary fixed
+block with explicit input/output contracts. Its Return ends only that iteration.
+The first body always runs. After native settlement and validated output export,
+`until` and `carry` use the existing value/predicate AST in a scope containing
+only `result`, the declared body output. They cannot read parent args, prior body
+locals, transcripts or historical outputs. `carry` is required even when input
+and output schemas match; when they differ, it explicitly projects the next
+input. Both initial input and carry must statically prove compatibility with
+the body's input, with runtime validation before admission. The copyable
+`bounded_review.yaml` example uses structured feedback to revise a fixed plan.
+
+The Loop node always commits this exact structural result:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "status": {"type": "string", "enum": ["satisfied", "exhausted"]},
+    "iterations": {"type": "integer"},
+    "result": {
+      "type": "object",
+      "properties": {"passed": {"type": "boolean"}},
+      "required": ["passed"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["status", "iterations", "result"],
+  "additionalProperties": false
+}
+```
+
+Here `result` uses the example body's schema; each Loop embeds its own body schema.
+`iterations` is exactly 1 through the trusted local maximum. `satisfied` means
+the typed predicate was true; `exhausted` means every consumed body was valid
+and the last predicate was false at the maximum. Authors handle exhaustion by
+Branch on `[feedback,status]` or return the structural result to their caller.
+Returning only business fields is an explicit author projection, never an
+implicit Loop conversion. A completed Workflow is not a claim that checks passed.
+
+Iteration reservation begins after validating the carried input. Reservation,
+admission and consumption form one synchronous run-budget critical section:
+check capacity, then the final cancellation observation commits admission;
+install the infallible step increment before unlocking. If cancellation is
+observable at that final observation, no iteration is consumed or dispatched.
+Cancellation arriving after it cancels admitted work through the existing node
+and native start guards. Ordinals advance only in this one sequential owner;
+there is no pending reservation queue, redispatch path or resumable continuation.
+
+The body's output commits at its ordinary Return validation/export reservation,
+and becomes available to Loop only after block finalization, including every
+native borrower and all Parallel siblings. A carry commits only after projection,
+current candidate checks, input validation, byte reservation and cancellation
+observation all succeed. Exit similarly validates/reserves the complete tagged
+result before its one local insertion and `WorkflowLoopExited` fact. Neither a
+failed projection nor a rejected byte reservation installs partial state.
+
+The compiler expands worst-case node and iteration counts across all fixed
+branches and nested Loops, rejecting more than 4096 steps or 256 AgentRuns.
+Each child expansion is checked before multiplying by a maximum of 256, so
+integer overflow is never used as a bound. Mutually exclusive paths may be
+conservatively overcounted. Runtime counters are shared across all scopes and
+never refunded; `WorkflowRunError::LimitExceeded` distinguishes Steps, Agents
+and RetainedData. Such failures are not normal exhaustion.
+
+Retained bytes count one live body, explicit carry and bounded transfer overlap,
+plus the final Loop result. They do not multiply private memory by iteration
+count. The existing parent locals and simultaneous Parallel branches remain
+charged. Each iteration's private locals retire on body exit; its exported
+result retires after carry or final-result transfer. No output history is retained
+by Loop. Native child records and durable journal facts retain their existing
+bounded observation ownership, with at most 256 admitted children and 4096 steps.
+
+Native Agent/Tool execution, supervised process containment, candidate borrowers
+and Review/Questionnaire settlement are unchanged owners. Loop awaits their
+existing block boundary. It does not own a process supervisor or workspace
+manager. Body acceptance transitions compose sequentially and export to the
+containing block/Parallel join. Mutation A→B clears accepted A independently of
+whether the body inherited acceptance. Candidate-dependent carried data retains
+its exact applicability; stale data cannot authorize B. Fresh invocation vectors
+make Review and Questionnaire authority distinct in every iteration.
+
+Failed, Denied, TimedOut, Cancelled, unavailable human interaction and
+OutcomeUnknown stop execution without another feedback attempt. Interrupted
+native children and abandoned native terminal publication retain OutcomeUnknown;
+a child's own committed execution deadline maps to TimedOut. The outer deadline
+never resets. All terminal paths use native candidate settlement and preserve
+useful dirty handoff; cancellation is not rollback.
+
+`WorkflowLoopIterationAdmitted`, `WorkflowLoopIterationSettled` (including typed
+failure/cancellation/unknown outcome) and `WorkflowLoopExited` (satisfied or
+exhausted) correlate concrete Loop and body instances. Existing Agent/Tool facts,
+interaction waits and native cancellation/drain facts continue to describe work
+inside an iteration. These are observations, not an executable Event Journal.
+No Goal round, Scheduler, cross-run budget renewal or durable resume is added.
 
 ## Run-scoped candidate workspace (WF-03)
 

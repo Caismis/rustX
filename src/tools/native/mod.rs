@@ -435,6 +435,15 @@ pub fn register_subagent_child_tools(
 }
 
 #[cfg(test)]
+pub(crate) fn test_bash_registration() -> crate::tools::executor::ToolRegistration {
+    let native = bash::registration(ToolInvocationPolicy::default());
+    let mut registration =
+        crate::tools::executor::ToolRegistration::plain(native.definition, native.executor);
+    registration.normalizer = native.normalizer;
+    registration
+}
+
+#[cfg(test)]
 pub(crate) fn test_ask_user_registration() -> crate::tools::executor::ToolRegistration {
     let native = ask_user::registration();
     let mut registration =
