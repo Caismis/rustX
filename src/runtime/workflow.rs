@@ -774,7 +774,7 @@ pub enum WorkflowCompileError {
     /// A reference has an incompatible statically known schema.
     IncompatibleReference(String),
     /// An Agent profile is not workflow-admitted.
-    ProfileNotAdmitted(SubagentName),
+    ProfileNotAdmitted { node: String, profile: SubagentName },
 }
 
 impl fmt::Display for WorkflowCompileError {
@@ -790,9 +790,9 @@ impl fmt::Display for WorkflowCompileError {
             | Self::IncompatibleReference(detail) => formatter.write_str(detail),
             Self::Cycle => formatter.write_str("workflow graph contains a cycle"),
             Self::Unreachable(node) => write!(formatter, "workflow node {node:?} is unreachable"),
-            Self::ProfileNotAdmitted(profile) => write!(
+            Self::ProfileNotAdmitted { node, profile } => write!(
                 formatter,
-                "workflow Agent profile {profile:?} is not admitted by subagents.workflow"
+                "workflow Agent {node:?} profile {profile:?} is not admitted by subagents.workflow"
             ),
         }
     }
@@ -1032,7 +1032,7 @@ fn compile_block(
                 }
                 if *max_iterations == 0 || *max_iterations > MAX_LOOP_ITERATIONS {
                     return Err(WorkflowCompileError::InvalidField(format!(
-                        "Loop max_iterations must be 1..={MAX_LOOP_ITERATIONS}"
+                        "Loop {node_id:?} max_iterations must be 1..={MAX_LOOP_ITERATIONS}"
                     )));
                 }
                 let initial = value_schema(input, &available_before, &node_id, 0)?;
@@ -1550,7 +1550,10 @@ fn validate_agent(
     node: &str,
 ) -> Result<(), WorkflowCompileError> {
     if !workflow_profiles.contains(profile) {
-        return Err(WorkflowCompileError::ProfileNotAdmitted(profile.clone()));
+        return Err(WorkflowCompileError::ProfileNotAdmitted {
+            node: node.to_owned(),
+            profile: profile.clone(),
+        });
     }
     if task.trim().is_empty() || task.len() > 32 * 1024 {
         return Err(WorkflowCompileError::InvalidField(format!(

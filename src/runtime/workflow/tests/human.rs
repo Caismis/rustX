@@ -507,17 +507,3 @@ async fn simultaneous_workflow_review_and_questionnaire_settle_only_their_origin
     }
     assert_eq!(audit.events().len(), 4);
 }
-
-#[test]
-fn documented_fixed_question_and_review_example_compiles_without_profiles() {
-    let definition = serde_yaml::from_str(include_str!(
-        "../../../../examples/local-runtime/workspace/.agents/workflows/human_review.yaml"
-    ))
-    .unwrap();
-    WorkflowProgram::compile(
-        WorkflowId::parse("human_review").unwrap(),
-        definition,
-        &BTreeSet::new(),
-    )
-    .unwrap();
-}

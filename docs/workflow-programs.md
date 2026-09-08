@@ -1,6 +1,6 @@
 # Fixed scoped Workflow programs
 
-WF-01 through WF-05 (#217–#221) extend the native Workflow foundation (#83). A registered
+The fixed Workflow architecture (#216–#223) extends the native Workflow foundation (#83). A registered
 Workflow remains one foreground Tool. Configuration explicitly registers
 `.agents/workflows/<id>.yaml` and separately exposes it through
 `workflows.main`. Profiles must belong to `subagents.workflow`. Files do not
@@ -18,26 +18,27 @@ or independent job. The node vocabulary is Agent, Tool, Branch, Parallel, Review
 ## Fixed native Tool nodes (WF-02)
 
 ```yaml
-description: Check the project.
-tools:
-  - {origin: mcp, server_id: 'python:verify-greeting', name: verify_greeting}
+description: Execute the fixed greeting checker.
+tools: [{origin: builtin, name: bash}]
 timeout_ms: 600000
 block:
   input: {type: object, properties: {}, additionalProperties: false}
-  output: &findings
+  output: &report
     type: object
     properties:
-      passed: {type: boolean}
-      failures: {type: array, items: {type: object}}
-    required: [passed, failures]
+      exit_code: {type: integer}
+      stdout: {type: string, enum: [passed, failed]}
+      stderr: {type: string}
+      combined: {type: string}
+    required: [exit_code, stdout, stderr, combined]
     additionalProperties: false
   entry: check
   nodes:
     check:
       type: tool
-      selector: {origin: mcp, server_id: 'python:verify-greeting', name: verify_greeting}
-      arguments: {type: literal, value: {}}
-      result: {type: json, part: 1, schema: *findings}
+      selector: {origin: builtin, name: bash}
+      arguments: {type: literal, value: {command: 'python3 -B checks/verify_greeting.py'}}
+      result: {type: json, part: 0, schema: *report}
     done:
       type: return
       output: {type: reference, path: [check]}
@@ -143,10 +144,10 @@ leaves are exclusive, parallel leaves share it. The outer composite never holds
 that gate, nor an Agent registry capacity slot, while awaiting descendants.
 Thus capacity one is usable without weakening ordinary outer sibling ordering.
 
-The copyable `greeting_check` example uses an ordinary managed Python tool over
-two fixed project checks. Findings are machine-derived, not log-keyword inference;
-load/contract failures remain native execution failures. It adds no process
-supervisor, verifier service, retry, Review, Loop or dynamic graph.
+The copyable `implement_and_review` example uses ordinary native Bash and a
+project-owned standard-library checker. Its exact stdout enum is validated from
+the native JSON result before typed Branch/Return constructs business findings.
+No command-name special case or Workflow-owned process supervisor is involved.
 
 ```yaml
 description: Return an explicitly projected greeting.
@@ -459,21 +460,12 @@ one main Tool result. Private values and child transcripts are never appended
 to the parent's canonical conversation. Workflow Tools remain foreground-only,
 outer siblings remain sequential, and no replay/resume is introduced.
 
-The Event Journal adds bounded block/node start and terminal facts and typed
-instance associations. It remains best-effort observation for ordinary
-Workflow lifecycle; the native child output/terminal pair retains its atomic
-durable contract. WF-03 uses SQLite development schema 28, child IPC 18 and
-Runtime Client/TUI 20 for candidate resource ownership and borrowed child workspace
-facts. The event envelope stays version 1 because framing is unchanged. The
-client projector explicitly ignores journal-only execution facts pending WF-06;
-approval remains on the existing human interaction surface.
-
-Review/ask_user is described in WF-04 below. WF-05 adds Loop lifecycle facts
-under SQLite schema 30. Runtime Client/TUI 21, child IPC 19, configuration 6
-and event envelope 1 remain unchanged: the existing invocation vector already
-represents iterations, and the new lifecycle facts remain journal-only. The
-Runtime Client explicitly ignores these facts pending full run presentation
-in #222. Composed reference-workflow conformance remains #223.
+The Event Journal records bounded block/node start and terminal facts with concrete
+instance associations. It remains evidence, never replay authority. Resource and human
+facts use SQLite development schema 30, child IPC 19 and Runtime Client/TUI 22;
+configuration remains 6 and the event envelope remains 1. The native Workflow read
+model supplies bounded coherent live state independently of journal delivery.
+See [run projection](workflow-run-projection.md) and [product conformance](workflow-conformance.md).
 
 ## Bounded feedback (WF-05)
 
@@ -512,7 +504,7 @@ locals, transcripts or historical outputs. `carry` is required even when input
 and output schemas match; when they differ, it explicitly projects the next
 input. Both initial input and carry must statically prove compatibility with
 the body's input, with runtime validation before admission. The copyable
-`bounded_review.yaml` example uses structured feedback to revise a fixed plan.
+`implement_and_review.yaml` example carries structured implementation feedback through real checks.
 
 The Loop node always commits this exact structural result:
 
@@ -898,7 +890,7 @@ deadlines, provider absence and control failures never create that answer.
 The native context reborrow also rebinds the requester to the driver's leaf
 cancellation/deadline scope. Both leaf and finite outer deadlines remain active.
 
-[The executable human_review example](../examples/local-runtime/workspace/.agents/workflows/human_review.yaml)
+[The executable implementation/review example](../examples/local-runtime/workspace/.agents/workflows/implement_and_review.yaml)
 shows static capability selection, literal arguments, typed results, Branch and
 Review. Register it explicitly through the usual Workflow resource configuration.
 Its input object is the complete plan being reviewed; answering the question does

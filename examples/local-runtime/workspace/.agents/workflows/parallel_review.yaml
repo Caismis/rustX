@@ -1,164 +1,125 @@
-description: Run two independent review passes and return keyed results.
+description: Two scoped proposal reviews, including a fixed second quality pass; no Git required.
+timeout_ms: 600000
 block:
   input:
     type: object
     properties:
-      task:
-        type: string
-    required:
-    - task
+      proposal: {type: string}
+    required: [proposal]
     additionalProperties: false
   output:
     type: object
     properties:
-      security:
+      status:
+        type: string
+        enum: [ready, needs_revision]
+      reviews:
         type: object
         properties:
-          summary:
-            type: string
-        required:
-        - summary
+          quality: &id001
+            type: object
+            properties:
+              summary: {type: string}
+              acceptable: {type: boolean}
+            required: [summary, acceptable]
+            additionalProperties: false
+          security: *id001
+        required: [quality, security]
         additionalProperties: false
-      quality:
-        type: object
-        properties:
-          summary:
-            type: string
-        required:
-        - summary
-        additionalProperties: false
-    required:
-    - security
-    - quality
+    required: [status, reviews]
     additionalProperties: false
-  entry: fanout
+  entry: reviews
   nodes:
-    fanout:
+    reviews:
       type: parallel
       branches:
-        security:
-          input:
-            type: object
-            fields:
-              task:
-                type: reference
-                path:
-                - args
-                - task
-          block:
-            input:
-              type: object
-              properties:
-                task:
-                  type: string
-              required:
-              - task
-              additionalProperties: false
-            output:
-              type: object
-              properties:
-                summary:
-                  type: string
-              required:
-              - summary
-              additionalProperties: false
-            entry: review
-            nodes:
-              review:
-                type: agent
-                profile: reviewer
-                task: Review the security implications of the request.
-                input:
-                  task:
-                    type: reference
-                    path:
-                    - args
-                    - task
-                output:
-                  type: object
-                  properties:
-                    summary:
-                      type: string
-                  required: [summary]
-                  additionalProperties: false
-              done:
-                type: return
-                output:
-                  type: reference
-                  path:
-                  - review
-            edges:
-            - from: review
-              to: done
         quality:
           input:
             type: object
             fields:
-              task:
-                type: reference
-                path:
-                - args
-                - task
+              proposal: {type: reference, path: [args, proposal]}
           block:
             input:
               type: object
               properties:
-                task:
-                  type: string
-              required:
-              - task
+                proposal: {type: string}
+              required: [proposal]
               additionalProperties: false
-            output:
-              type: object
-              properties:
-                summary:
-                  type: string
-              required:
-              - summary
-              additionalProperties: false
+            output: *id001
             entry: review
             nodes:
               review:
                 type: agent
                 profile: reviewer
-                task: Review the quality of the request.
+                task: Review the supplied proposal for quality. No external research is required.
                 input:
-                  task:
-                    type: reference
-                    path:
-                    - args
-                    - task
-                output:
-                  type: object
-                  properties:
-                    summary:
-                      type: string
-                  required: [summary]
-                  additionalProperties: false
+                  proposal: {type: reference, path: [args, proposal]}
+                output: *id001
+              refine:
+                type: agent
+                profile: reviewer
+                task: Independently check this quality assessment for unsupported claims. Return the corrected
+                  assessment.
+                input:
+                  assessment: {type: reference, path: [review]}
+                output: *id001
               done:
                 type: return
-                output:
-                  type: reference
-                  path:
-                  - review
+                output: {type: reference, path: [refine]}
             edges:
-            - from: review
-              to: done
-    done:
+            - {from: review, to: refine}
+            - {from: refine, to: done}
+        security:
+          input:
+            type: object
+            fields:
+              proposal: {type: reference, path: [args, proposal]}
+          block:
+            input:
+              type: object
+              properties:
+                proposal: {type: string}
+              required: [proposal]
+              additionalProperties: false
+            output: *id001
+            entry: review
+            nodes:
+              review:
+                type: agent
+                profile: reviewer
+                task: Review the supplied proposal for security. No external research is required.
+                input:
+                  proposal: {type: reference, path: [args, proposal]}
+                output: *id001
+              done:
+                type: return
+                output: {type: reference, path: [review]}
+            edges:
+            - {from: review, to: done}
+    decision:
+      type: branch
+      condition:
+        type: and
+        predicates:
+        - type: boolean
+          value: {type: reference, path: [reviews, quality, acceptable]}
+        - type: boolean
+          value: {type: reference, path: [reviews, security, acceptable]}
+    ready:
       type: return
       output:
         type: object
         fields:
-          security:
-            type: reference
-            path:
-            - fanout
-            - security
-          quality:
-            type: reference
-            path:
-            - fanout
-            - quality
+          status: {type: literal, value: ready}
+          reviews: {type: reference, path: [reviews]}
+    revise:
+      type: return
+      output:
+        type: object
+        fields:
+          status: {type: literal, value: needs_revision}
+          reviews: {type: reference, path: [reviews]}
   edges:
-  - from: fanout
-    to: done
+  - {from: reviews, to: decision}
+  - {from: decision, to: ready, port: 'true'}
+  - {from: decision, to: revise, port: 'false'}

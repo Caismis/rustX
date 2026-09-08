@@ -24,6 +24,7 @@ use rustx::message::content::TextBlock;
 use rustx::message::types::UserContentBlock;
 use rustx::model::catalog::MapCredentialEnvironment;
 use rustx::runtime::workflow::WorkflowId;
+use rustx::runtime::workflow::read_model::{WorkflowNodeKind, WorkflowState};
 use rustx::runtime_client::attachment::RuntimeAttachment;
 use rustx::runtime_client::host::{EventDelivery, EventSubscription};
 use rustx::runtime_client::types::RuntimeClientResult;
@@ -813,4 +814,362 @@ async fn fixed_question_and_review_use_root_client_while_parent_model_remains_in
         );
         emulator.finish().await;
     }
+}
+
+fn copy_reference(source: &std::path::Path, target: &std::path::Path) {
+    std::fs::create_dir_all(target).unwrap();
+    for entry in std::fs::read_dir(source).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_dir() {
+            copy_reference(&entry.path(), &target.join(entry.file_name()));
+        } else {
+            std::fs::copy(entry.path(), target.join(entry.file_name())).unwrap();
+        }
+    }
+}
+
+fn reference_git(root: &std::path::Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "fixture")
+        .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+        .env("GIT_COMMITTER_NAME", "fixture")
+        .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+impl Driver {
+    async fn reference(emulator: &ProviderEmulator, git: bool) -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let source =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/local-runtime");
+        copy_reference(&source, root.path());
+        let workspace = root.path().join("workspace");
+        if git {
+            reference_git(&workspace, &["init"]);
+            reference_git(&workspace, &["add", "."]);
+            reference_git(&workspace, &["commit", "-m", "reference baseline"]);
+        }
+        std::fs::write(
+            root.path().join("models.jsonc"),
+            models_json(emulator).replace("1024", "4096"),
+        )
+        .unwrap();
+        let config = std::fs::read_to_string(root.path().join("rustx.jsonc"))
+            .unwrap()
+            .replace("example/demo-model", "emulator/workflow-model")
+            .replace("\"reasoningProfile\": \"off\",", "");
+        std::fs::write(root.path().join("rustx.jsonc"), config).unwrap();
+        let paths = LocalRuntimePaths {
+            models: root.path().join("models.jsonc"),
+            config: root.path().join("rustx.jsonc"),
+            workspace,
+            runtime_root: root.path().join("private"),
+            skill_paths: vec![],
+            no_skills: false,
+            no_builtin_tools: false,
+            no_tools: false,
+            startup_session: rustx::local_runtime::StartupSession::Empty,
+            session_name: None,
+            tools: Some(vec![
+                "parallel_review".into(),
+                "implement_and_review".into(),
+            ]),
+            exclude_tools: vec![],
+        };
+        let dependencies = LocalRuntimeDependencies {
+            credentials: Arc::new(MapCredentialEnvironment::new([(
+                KEY.to_owned(),
+                "fixture".to_owned(),
+            )])),
+            child_program: Some(std::path::PathBuf::from(env!("CARGO_BIN_EXE_rustx"))),
+            ..LocalRuntimeDependencies::default()
+        };
+        let runtime = LocalConversationRuntime::compose(&paths, &dependencies)
+            .await
+            .unwrap();
+        let (attachment, initialized) = runtime
+            .host()
+            .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let RuntimeClientResult::Initialized { cursor, .. } = initialized else {
+            panic!("initialized")
+        };
+        let (events, _) = runtime
+            .host()
+            .subscribe_events(attachment.attachment_id(), cursor)
+            .unwrap();
+        Self {
+            root,
+            runtime,
+            attachment,
+            events,
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn shipped_repair_uses_real_writes_checks_and_root_human_decisions() {
+    reference_repair(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn shipped_repair_exhaustion_retains_dirty_work_without_another_body() {
+    reference_repair(true).await;
+}
+
+#[allow(clippy::too_many_lines)]
+async fn reference_repair(exhausted: bool) {
+    use rustx::events::review::{ReviewDecision, ReviewResponse};
+    use rustx::runtime::{InteractionKind, InteractionResponse, QuestionnaireResponse};
+    let scenario = if exhausted {
+        "workflow_reference_exhaustion"
+    } else {
+        "workflow_reference_repair"
+    };
+    let iterations = if exhausted { 3 } else { 2 };
+    let Some(emulator) = ProviderEmulator::start(scenario).await else {
+        return;
+    };
+    let driver = Driver::reference(&emulator, true).await;
+    let original = std::fs::read(driver.root.path().join("workspace/greeting.py")).unwrap();
+    driver.submit();
+    let release_writers = async {
+        for iteration in 1..=iterations {
+            emulator
+                .await_gate(&format!("reference-writer-{iteration}"))
+                .await;
+            assert_eq!(emulator.requests().await.len(), 2 * iteration + 2);
+            emulator
+                .release_gate(&format!("reference-writer-{iteration}"))
+                .await;
+        }
+    };
+    let interact = async {
+        let mut reviews = 0;
+        let mut approvals = 0;
+        let mut questions = 0;
+        loop {
+            let EventDelivery::Event(event) =
+                tokio::time::timeout(std::time::Duration::from_mins(1), driver.events.next())
+                    .await
+                    .unwrap()
+            else {
+                panic!("events")
+            };
+            match event.event {
+                RuntimeClientEvent::InteractionPending { interaction } => {
+                    let response = match interaction.request.kind {
+                        InteractionKind::Questionnaire { .. } => {
+                            questions += 1;
+                            // A typed response uses the existing questionnaire schema below.
+                            InteractionResponse::Questionnaire { response: serde_json::from_value::<QuestionnaireResponse>(serde_json::json!({"type":"submitted","value":{"answers":[{"question_index":0,"answer":{"type":"single_option","value":{"label":"Minimal change"}}}]}})).unwrap() }
+                        }
+                        InteractionKind::Review {
+                            review,
+                            subject_digest,
+                        } => {
+                            reviews += 1;
+                            assert_eq!(
+                                emulator.requests().await.len(),
+                                if reviews == 1 { 2 } else { 7 }
+                            );
+                            InteractionResponse::Review {
+                                response: ReviewResponse {
+                                    instance: review.instance,
+                                    subject_digest,
+                                    decision: ReviewDecision::Accepted,
+                                },
+                            }
+                        }
+                        InteractionKind::Approval { .. } => {
+                            approvals += 1;
+                            serde_json::from_value::<InteractionResponse>(
+                                serde_json::json!({"type":"approval","decision":{"type":"allow"}}),
+                            )
+                            .unwrap()
+                        }
+                    };
+                    let reply = driver
+                        .attachment
+                        .handle_request_async(
+                            rustx::runtime_client::RuntimeClientRequest::InteractionRespond {
+                                id: rustx::runtime_client::RequestId::new(
+                                    questions + reviews + approvals,
+                                ),
+                                interaction: interaction.interaction,
+                                response,
+                            },
+                        )
+                        .await;
+                    assert!(reply.error.is_none(), "{reply:?}");
+                }
+                RuntimeClientEvent::AttemptSettled { outcome, .. } => {
+                    assert!(
+                        matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+                        "{outcome:?}"
+                    );
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(
+            (questions, reviews, approvals),
+            (
+                2,
+                if exhausted { 1 } else { 2 },
+                u64::try_from(2 * iterations).unwrap()
+            )
+        );
+    };
+    tokio::join!(release_writers, interact);
+    assert_eq!(emulator.requests().await.len(), 4 + 2 * iterations);
+    assert_eq!(
+        std::fs::read(driver.root.path().join("workspace/greeting.py")).unwrap(),
+        original
+    );
+    let (snapshot, _) = driver.runtime.host().snapshot().unwrap();
+    let messages = serde_json::to_string(&snapshot.messages).unwrap();
+    assert!(!messages.contains("PRIVATE CLAIM"));
+    assert_eq!(
+        snapshot
+            .messages
+            .iter()
+            .filter(|m| matches!(m, rustx::message::types::MessageBlock::Tool(_)))
+            .count(),
+        1
+    );
+    assert!(messages.contains("handoff"), "{messages}");
+    let run = &snapshot.workflows.runs[0];
+    assert_eq!(run.agents_consumed, 1 + iterations);
+    assert_eq!(run.candidate_users, 0);
+    assert_eq!(
+        run.instances
+            .iter()
+            .filter(|row| row.node.as_deref() == Some("implement"))
+            .count(),
+        iterations
+    );
+    assert_eq!(
+        run.instances
+            .iter()
+            .filter(|row| row.node.as_deref() == Some("check"))
+            .count(),
+        iterations
+    );
+    assert_eq!(
+        run.instances
+            .iter()
+            .filter(|row| row.kind == WorkflowNodeKind::Tool)
+            .count(),
+        1 + iterations
+    );
+    assert!(
+        run.instances
+            .iter()
+            .filter(|row| row.child.is_some() || row.invocation.is_some())
+            .all(|row| matches!(row.state, WorkflowState::Settled { .. }))
+    );
+    let checks = run
+        .instances
+        .iter()
+        .filter(|row| row.node.as_deref() == Some("check"))
+        .collect::<Vec<_>>();
+    assert!(checks.iter().all(|row| row.candidate.is_some()));
+    if !exhausted {
+        assert_ne!(checks[0].candidate, checks[1].candidate);
+    }
+    assert_eq!(checks.last().unwrap().candidate, run.candidate);
+    if !exhausted {
+        let review = run
+            .instances
+            .iter()
+            .find(|row| row.node.as_deref() == Some("review_candidate"))
+            .unwrap();
+        assert_eq!(review.candidate, run.candidate);
+        assert_eq!(review.review_accepted, Some(true));
+    }
+    let handoff = run.handoff.as_ref().unwrap();
+    assert_eq!(handoff.state, "retained");
+    let changed =
+        std::fs::read_to_string(std::path::Path::new(&handoff.path).join("greeting.py")).unwrap();
+    assert_eq!(
+        changed,
+        if exhausted {
+            "def greeting(name):\n    return \"wrong\"\n"
+        } else {
+            "def greeting(name):\n    return 'Hello, ' + (name or 'friend') + '!'\n"
+        }
+    );
+
+    emulator.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn shipped_parallel_reverses_completion_without_git_or_parent_orchestration() {
+    let Some(emulator) = ProviderEmulator::start("workflow_reference_parallel").await else {
+        return;
+    };
+    let driver = Driver::reference(&emulator, false).await;
+    driver.submit();
+    emulator.await_gate("parallel-child-0").await;
+    emulator.await_gate("parallel-child-1").await;
+    assert_eq!(emulator.requests().await.len(), 3);
+    emulator.release_gate("parallel-child-1").await;
+    // The native owner publication, not elapsed time, proves the second child
+    // settled while the first provider response is still held.
+    loop {
+        let EventDelivery::Event(_) =
+            tokio::time::timeout(std::time::Duration::from_secs(30), driver.events.next())
+                .await
+                .unwrap()
+        else {
+            panic!("events")
+        };
+        let (snapshot, _) = driver.runtime.host().snapshot().unwrap();
+        if snapshot
+            .workflows
+            .runs
+            .iter()
+            .flat_map(|run| &run.instances)
+            .any(|row| {
+                row.kind == WorkflowNodeKind::Agent
+                    && matches!(row.state, WorkflowState::Settled { .. })
+            })
+        {
+            break;
+        }
+    }
+    emulator.release_gate("parallel-child-0").await;
+    emulator.await_gate("parallel-child-2").await;
+    emulator.release_gate("parallel-child-2").await;
+    let (_, outcome) = driver.settle().await;
+    assert!(matches!(outcome, RuntimeClientOutcome::Completed { .. }));
+    assert_eq!(emulator.requests().await.len(), 5);
+    let (snapshot, _) = driver.runtime.host().snapshot().unwrap();
+    let run = &snapshot.workflows.runs[0];
+    assert_eq!(run.agents_consumed, 3);
+    assert!(run.candidate.is_none());
+    assert!(run.handoff.is_none());
+    assert!(!driver.root.path().join("workspace/.git").exists());
+    let history = serde_json::to_string(&snapshot.messages).unwrap();
+    assert!(history.contains("quality") && history.contains("security"));
+    assert_eq!(
+        snapshot
+            .messages
+            .iter()
+            .filter(|m| matches!(m, rustx::message::types::MessageBlock::Tool(_)))
+            .count(),
+        1
+    );
+    emulator.finish().await;
 }
