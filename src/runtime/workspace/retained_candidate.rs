@@ -173,17 +173,6 @@ impl WorkspaceManager {
             return Ok(WorkspaceDisposalSettlement::AlreadyDisposed);
         }
         let snapshot = &facts.workspace.snapshot;
-        if facts.phase == WorkspaceDisposalPhase::Authorized
-            && !facts.disposed
-            && let Some(reference) = &facts.candidate
-        {
-            let content = super::candidate::inspect_source(self, &owner, snapshot)
-                .await
-                .map_err(mismatch)?;
-            if content != reference.content {
-                return Err(mismatch("retained candidate changed after run settlement"));
-            }
-        }
         let handoff = if let Some(handoff) = facts.intent {
             handoff
         } else {
@@ -209,7 +198,14 @@ impl WorkspaceManager {
             handoff
         };
         let result = self
-            .dispose_authorized_workspace_inner(&owner, snapshot, &handoff, facts.phase, true)
+            .dispose_authorized_workspace_inner(
+                &owner,
+                snapshot,
+                &handoff,
+                facts.phase,
+                true,
+                facts.candidate.as_ref(),
+            )
             .await?;
         if facts.disposed {
             return Ok(WorkspaceDisposalSettlement::AlreadyDisposed);

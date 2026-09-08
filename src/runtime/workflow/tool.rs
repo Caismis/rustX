@@ -114,14 +114,20 @@ impl WorkflowRuntime {
         context: &AttemptSubagentContext,
         node: &WorkflowNodeInstance,
         selector: &ToolSelector,
-        arguments: Value,
+        arguments: expressions::CommittedValue,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
-    ) -> Result<ToolExecutionResult, WorkflowRunError> {
+    ) -> Result<
+        (
+            ToolExecutionResult,
+            Option<crate::runtime::workspace::CandidateReference>,
+        ),
+        WorkflowRunError,
+    > {
         let signal = cancellation.child_signal();
         let access = match &run.candidate {
             Some(candidate) => Some(
                 candidate
-                    .borrow(node.clone(), None, &signal)
+                    .borrow(node.clone(), arguments.candidate.as_ref(), &signal)
                     .await
                     .map_err(|error| {
                         if cancellation.is_cancelled() {
@@ -146,11 +152,12 @@ impl WorkflowRuntime {
                 context,
                 node,
                 selector,
-                arguments,
+                arguments.value,
                 cancellation,
                 workspace.as_ref(),
             )
             .await;
+        let mut applicability = None;
         if let Some(access) = access {
             let input = access.input().clone();
             let status = match &result {
@@ -170,7 +177,7 @@ impl WorkflowRuntime {
                             .as_ref()
                             .is_ok_and(|result| result.status == ToolExecutionStatus::Success)
                         {
-                            result = Ok(terminal(ToolExecutionStatus::Failed { error }));
+                            result = Err(WorkflowRunError::InvalidValue(error));
                         }
                         false
                     }
@@ -178,12 +185,15 @@ impl WorkflowRuntime {
             };
             self.commit_resource(RuntimeEvent::WorkflowCandidateInvocation {
                 node: node.clone(),
-                input,
+                input: input.clone(),
                 result: status,
                 candidate_unchanged: unchanged,
             })?;
+            if unchanged {
+                applicability = Some(input);
+            }
         }
-        result
+        result.map(|result| (result, applicability))
     }
 
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]

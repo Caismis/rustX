@@ -568,13 +568,68 @@ Kernel notification semantics are not universal external-process isolation:
 privileged interference, remote filesystem changes, and writes outside kernel
 notification coverage are outside this guarantee. Timestamps are never proof.
 
-A validation mutation publishes a new version and fails the applicable result,
-even if final bytes were restored. The durable `WorkflowCandidateInvocation`
+A proven validation mutation publishes a new version and fails applicability,
+even if final bytes were restored. Lost directory coverage instead leaves
+currentness unresolved and cannot certify an unchanged candidate. The durable `WorkflowCandidateInvocation`
 correlates the actual native outcome with the input reference and an explicit
 `candidate_unchanged` fact; native Success alone is insufficient. Historical
 checks never authorize a later version. External net changes between borrowers
 or before final settlement invalidate admission/final reference and preserve
 the workspace conservatively. Model text is not native verification evidence.
+
+### Committed-value applicability and consumption
+
+The interpreter retains `CommittedValue { value: Value, candidate:
+Option<CandidateReference> }`. This metadata is internal, never an authored
+JSON field. A successful candidate Tool projection carries the exact input
+reference returned directly by native invocation after physical settlement and
+source/mutation verification. Literals and external run arguments are unbound.
+References retain applicability, including field selection; objects and arrays
+merge their dependencies. Parallel inputs, branch Returns and keyed exports
+retain the same metadata. Mixing different references fails explicitly; there
+is one run candidate, not a provenance graph.
+
+Branch predicates, Return, derived Tool arguments, derived Agent inputs and
+Parallel block input/export commits check applicability through the live
+`CandidateScope::assert_current`. It validates the run and exact current
+reference and fails closed for unresolved/released state. It grants no access
+and changes no candidate. Tool/Agent admission additionally checks the expected
+reference while acquiring exclusive access, after queued writers settle.
+Journal correlation records history and is never queried for this decision.
+
+The linearization sequence is:
+
+```text
+A -> exclusive Tool access admitted
+  -> native check executes: passed=true
+  -> physical Tool settlement -> source/mutation verification
+  -> committed local value carrying A
+  -> later writer admitted -> physical writer settlement -> version B committed
+  -> Branch/Return attempts to consume A -> Workflow InvalidValue (stale reference)
+```
+
+The native Success remains historical Success. Applicability rejection is a
+Workflow-domain failure; it does not rewrite the historical invocation outcome.
+Denied, Failed, Cancelled, TimedOut and OutcomeUnknown retain their native
+meaning. Unknown physical settlement never releases borrower ownership.
+
+Directory watch admission enumerates the existing candidate tree using
+no-follow, descriptor-relative traversal, including empty and ignored
+directories. The fixed limits are 100,000 enumerated entries, depth 64 beneath
+the root, and 100,000 total source/control/directory watch candidates. Allocation
+or enumeration failure rejects admission. Existing source/control files and
+necessary control ancestors are also covered. This is a bounded observation
+interval, not an unbounded recursive watcher.
+
+Linux inotify observes child names at each admitted directory. Creating or
+moving in a new directory invalidates coverage immediately when notifications
+are drained; its descendants cannot silently certify unchanged content.
+Ignored file activity may be excluded using Git source policy. macOS vnode
+observes existing files and directories but cannot name a changed child;
+directory-entry changes conservatively invalidate coverage, even in ignored
+caches. Directory watch loss, revocation and Linux queue overflow fail closed.
+Neither platform uses timestamps to certify equality or claims arbitrary-host
+sandboxing.
 
 ### Terminal handoff and resource persistence
 
@@ -595,3 +650,34 @@ that have not yet removed the worktree. A changed handoff fails closed
 and cannot rewrite the Workflow terminal outcome. Recovery exposes retained
 or unresolved resource facts, never resurrects borrowers, nodes or execution
 authority. No Workflow resume or full inspector UI is introduced here.
+
+Unresolved candidate state stores a typed reason and a bounded detail.
+`NestedContainment` means a physical user/descendant remains unproven: active
+process-local ownership stays registered and Git-only disposal is rejected,
+including after reopening. `PhysicalSettlement` means physical users have
+settled but final hashing, Git inspection or mutation coverage is uncertain.
+At absorbing run settlement the native lease preserves the workspace and
+retires its active registration before returning this fact. The existing exact
+native re-proof/disposal route may then inspect current facts and dispose it;
+no borrower or execution is recreated. Missing terminal settlement remains
+conservatively `NestedContainment`.
+
+```text
+Retained -> DisposalStarted (durable exact intent)
+         -> worktree removal -> branch/ref settlement
+         -> DisposalSettled (durable physical phase)
+```
+
+The native physical owner revalidates candidate content and exact ownership
+immediately before the first removal whenever the worktree remains present,
+including retries with committed intent. If removal succeeded but the durable
+settlement append failed, retry uses that same intent and exact absence of
+both path and Git registration to continue branch/ref settlement without
+hashing the deleted checkout. If the branch was also removed, retry commits
+AlreadyDisposed. A partial branch failure can commit WorktreeRemoved or retry
+from the still-authorized intent. Repository identity, deterministic allocation,
+registration and compare-delete ref proofs remain mandatory. Absence without
+intent, partial absence, replaced paths, unrelated refs and changed retained
+source before the destructive frontier fail closed. There is one native
+physical disposal state machine; the Workflow wrapper only carries durable
+identity, candidate applicability and phase facts.

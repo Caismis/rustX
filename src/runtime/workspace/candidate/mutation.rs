@@ -4,6 +4,62 @@ use super::{BTreeSet, PathBuf, WorkspaceLease};
 #[cfg(target_os = "macos")]
 use nix::{fcntl::OFlag, sys::stat::Mode};
 
+const MAX_WATCHES: usize = 100_000;
+const MAX_DIRECTORY_DEPTH: usize = 64;
+const MAX_DIRECTORY_ENTRIES: usize = 100_000;
+
+// Include empty and ignored directories: filtering events remains a separate
+// source-policy decision. Never traverse a symlink. Admission is bounded even
+// when an ignored cache contains an enormous tree.
+#[cfg(unix)]
+fn existing_directories(root: &std::path::Path) -> Result<BTreeSet<PathBuf>, String> {
+    use nix::fcntl::AtFlags;
+    use nix::sys::stat::{SFlag, fstatat};
+    use std::os::unix::{ffi::OsStrExt, fs::OpenOptionsExt};
+    let root_file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(root)
+        .map_err(|e| e.to_string())?;
+    let mut directories = BTreeSet::new();
+    let mut pending = vec![(PathBuf::new(), 0)];
+    let mut entries = 0;
+    while let Some((relative, depth)) = pending.pop() {
+        if depth > MAX_DIRECTORY_DEPTH || directories.len() >= MAX_WATCHES {
+            return Err("candidate directory watch bound exceeded".into());
+        }
+        let file =
+            super::open_directory_relative(&root_file, &relative).map_err(|e| e.to_string())?;
+        let mut directory =
+            nix::dir::Dir::from_fd(file.try_clone().map_err(|e| e.to_string())?.into())
+                .map_err(|e| e.to_string())?;
+        directories.insert(root.join(&relative));
+        for entry in directory.iter() {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let name = entry.file_name().to_bytes();
+            if name == b"." || name == b".." {
+                continue;
+            }
+            entries += 1;
+            if entries > MAX_DIRECTORY_ENTRIES {
+                return Err("candidate directory enumeration bound exceeded".into());
+            }
+            let name = std::ffi::OsStr::from_bytes(name);
+            let stat =
+                fstatat(&file, name, AtFlags::AT_SYMLINK_NOFOLLOW).map_err(|e| e.to_string())?;
+            if SFlag::from_bits_truncate(stat.st_mode) & SFlag::S_IFMT == SFlag::S_IFDIR {
+                pending.push((relative.join(name), depth + 1));
+            }
+        }
+    }
+    Ok(directories)
+}
+
+#[cfg(not(unix))]
+fn existing_directories(_: &std::path::Path) -> Result<BTreeSet<PathBuf>, String> {
+    Err("candidate directory observation requires Unix".into())
+}
+
 #[derive(Debug)]
 pub(super) struct MutationWatch {
     kernel: Kernel,
@@ -75,7 +131,7 @@ impl MutationWatch {
                 .map_err(|e| e.to_string())?;
             control.insert(PathBuf::from(path));
         }
-        let mut directories = BTreeSet::from([root.clone()]);
+        let mut directories = existing_directories(&root)?;
         for path in source.iter().chain(&control) {
             let mut parent = path.parent();
             while let Some(path) = parent {
@@ -88,7 +144,7 @@ impl MutationWatch {
                 parent = path.parent();
             }
         }
-        if source.len() + directories.len() > 100_000 {
+        if source.len() + directories.len() + control.len() > MAX_WATCHES {
             return Err("candidate mutation watch bound exceeded".into());
         }
         let kernel = Kernel::start(&directories, &source, &control)?;
@@ -101,7 +157,11 @@ impl MutationWatch {
     }
 
     pub(super) async fn changed(&self, lease: &WorkspaceLease) -> Result<bool, String> {
-        for path in self.kernel.drain()? {
+        let (paths, directory_mutation) = self.kernel.drain()?;
+        if directory_mutation {
+            return Ok(true);
+        }
+        for path in paths {
             if self.source.contains(&path) || self.control.contains(&path) {
                 return Ok(true);
             }
@@ -175,13 +235,14 @@ impl Kernel {
         }
         Ok(Self { watch, paths })
     }
-    fn drain(&self) -> Result<BTreeSet<PathBuf>, String> {
+    fn drain(&self) -> Result<(BTreeSet<PathBuf>, bool), String> {
         use nix::sys::inotify::AddWatchFlags as F;
         let mut changed = BTreeSet::new();
+        let mut directory_mutation = false;
         loop {
             let events = match self.watch.read_events() {
                 Ok(events) => events,
-                Err(nix::errno::Errno::EAGAIN) => return Ok(changed),
+                Err(nix::errno::Errno::EAGAIN) => return Ok((changed, directory_mutation)),
                 Err(error) => return Err(error.to_string()),
             };
             for event in events {
@@ -193,6 +254,12 @@ impl Kernel {
                         | F::IN_MOVE_SELF,
                 ) {
                     return Err("candidate mutation observation lost coverage".into());
+                }
+                if event.mask.contains(F::IN_ISDIR)
+                    && event.mask.intersects(F::IN_CREATE | F::IN_MOVED_TO)
+                {
+                    // No descendant watch was admitted for this new tree.
+                    directory_mutation = true;
                 }
                 let directory = self.paths.get(&event.wd).ok_or("unknown candidate watch")?;
                 changed.insert(
@@ -278,7 +345,7 @@ impl Kernel {
             paths,
         })
     }
-    fn drain(&self) -> Result<BTreeSet<PathBuf>, String> {
+    fn drain(&self) -> Result<(BTreeSet<PathBuf>, bool), String> {
         use nix::sys::event::{EvFlags, EventFilter, FilterFlag, KEvent};
         let _keep_descriptors = &self.files;
         let empty = KEvent::new(
@@ -291,6 +358,7 @@ impl Kernel {
         );
         let mut events = [empty; 128];
         let mut changed = BTreeSet::new();
+        let mut directory_mutation = false;
         loop {
             let count = self
                 .queue
@@ -304,7 +372,7 @@ impl Kernel {
                 )
                 .map_err(|e| e.to_string())?;
             if count == 0 {
-                return Ok(changed);
+                return Ok((changed, directory_mutation));
             }
             for event in &events[..count] {
                 if event.flags().contains(EvFlags::EV_ERROR)
@@ -316,6 +384,19 @@ impl Kernel {
                     .paths
                     .get(&event.ident())
                     .ok_or("unknown candidate watch")?;
+                if initial.is_dir()
+                    && event
+                        .fflags()
+                        .intersects(FilterFlag::NOTE_DELETE | FilterFlag::NOTE_RENAME)
+                {
+                    return Err("candidate mutation observation lost directory coverage".into());
+                }
+                if initial.is_dir() && event.fflags().contains(FilterFlag::NOTE_WRITE) {
+                    // vnode has no child name/type. A directory-entry change
+                    // could introduce an unwatched tree, even under an ignored
+                    // cache with source exceptions. Conservatively fail closed.
+                    directory_mutation = true;
+                }
                 if event.fflags() == FilterFlag::NOTE_ATTRIB {
                     let current = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
                     if unchanged_non_access_attributes(initial, &current) {
@@ -366,7 +447,43 @@ impl Kernel {
     ) -> Result<Self, String> {
         Err("candidate mutation observation is supported only on Linux/macOS".into())
     }
-    fn drain(&self) -> Result<BTreeSet<PathBuf>, String> {
+    fn drain(&self) -> Result<(BTreeSet<PathBuf>, bool), String> {
         Err("candidate mutation observation unavailable".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn directory_depth_bound_rejects_incomplete_watch_admission() {
+        let root = tempfile::tempdir().unwrap();
+        let mut path = root.path().to_path_buf();
+        for _ in 0..MAX_DIRECTORY_DEPTH {
+            path.push("d");
+        }
+        std::fs::create_dir_all(&path).unwrap();
+        assert_eq!(
+            existing_directories(root.path()).unwrap().len(),
+            MAX_DIRECTORY_DEPTH + 1
+        );
+        std::fs::create_dir(path.join("too-deep")).unwrap();
+        assert!(
+            existing_directories(root.path())
+                .unwrap_err()
+                .contains("bound exceeded")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_admission_never_traverses_symlinks() {
+        let root = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(root.path(), root.path().join("cycle")).unwrap();
+        assert_eq!(
+            existing_directories(root.path()).unwrap(),
+            BTreeSet::from([root.path().to_path_buf()])
+        );
     }
 }

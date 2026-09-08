@@ -23,12 +23,26 @@ pub struct CandidateReference {
     pub content: String,
 }
 
+#[derive(Debug, Clone)]
+struct UnresolvedCandidate {
+    reason: super::WorkspaceUnresolvedReason,
+    detail: String,
+}
+impl UnresolvedCandidate {
+    fn physical(detail: String) -> Self {
+        Self {
+            reason: super::WorkspaceUnresolvedReason::PhysicalSettlement,
+            detail,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct State {
     lease: Option<WorkspaceLease>,
     current: CandidateReference,
     admitted: bool,
-    unresolved: Option<String>,
+    unresolved: Option<UnresolvedCandidate>,
     settlement: Option<WorkspaceSettlement>,
     final_reference: Option<CandidateReference>,
 }
@@ -381,6 +395,21 @@ fn hash_path(_: &std::fs::File, _: &[u8], _: &mut Sha256, _: &mut u64) -> Result
 }
 
 impl CandidateScope {
+    /// Applicability only: this neither grants access nor changes the candidate.
+    pub(crate) async fn assert_current(
+        &self,
+        reference: &CandidateReference,
+    ) -> Result<(), String> {
+        let state = self.state.lock().await;
+        if reference.run != self.run || *reference != state.current {
+            return Err("stale candidate reference".into());
+        }
+        if state.admitted || state.unresolved.is_some() || state.lease.is_none() {
+            return Err("candidate currentness is unproven".into());
+        }
+        Ok(())
+    }
+
     /// Queue before any descendant capacity or Tool scheduling admission.
     /// A stale expected version fails rather than being rebound to new bytes.
     pub(crate) async fn borrow(
@@ -410,8 +439,9 @@ impl CandidateScope {
         let mutation = mutation::MutationWatch::start(lease).await?;
         let content = lease.source_identity().await?;
         if content != state.current.content {
-            state.unresolved =
-                Some("external source interference invalidated the candidate".into());
+            state.unresolved = Some(UnresolvedCandidate::physical(
+                "external source interference invalidated the candidate".into(),
+            ));
             return Err("external source interference invalidated the candidate".into());
         }
         if cancellation.is_cancelled() {
@@ -449,20 +479,30 @@ impl CandidateScope {
                     state.final_reference = Some(state.current.clone());
                 }
                 Ok(_) => {
-                    state.unresolved =
-                        Some("external source interference before run settlement".into());
+                    state.unresolved = Some(UnresolvedCandidate::physical(
+                        "external source interference before run settlement".into(),
+                    ));
                 }
-                Err(error) => state.unresolved = Some(error),
+                Err(error) => state.unresolved = Some(UnresolvedCandidate::physical(error)),
             }
         }
-        let settlement =
-            if state.admitted || state.unresolved.is_some() {
-                lease.preserve_after_unresolved_nested(state.unresolved.clone().unwrap_or_else(
-                    || "candidate user abandoned without physical settlement".into(),
-                ))
-            } else {
-                lease.settle().await
-            };
+        let settlement = if state.admitted {
+            lease.preserve_after_unresolved_nested(state.unresolved.as_ref().map_or_else(
+                || "candidate user abandoned without physical settlement".into(),
+                |unresolved| unresolved.detail.clone(),
+            ))
+        } else if let Some(unresolved) = &state.unresolved {
+            match unresolved.reason {
+                super::WorkspaceUnresolvedReason::NestedContainment => {
+                    lease.preserve_after_unresolved_nested(unresolved.detail.clone())
+                }
+                super::WorkspaceUnresolvedReason::PhysicalSettlement => {
+                    lease.preserve_after_settled_inspection(unresolved.detail.clone())
+                }
+            }
+        } else {
+            lease.settle().await
+        };
         if settlement.unresolved_reason().is_some() {
             state.final_reference = None;
         }
@@ -513,14 +553,14 @@ impl WorkspaceAccess {
         let mutation = match mutation {
             Ok(mutation) => mutation,
             Err(error) => {
-                self.state.unresolved = Some(error.clone());
+                self.state.unresolved = Some(UnresolvedCandidate::physical(error.clone()));
                 return Err(error);
             }
         };
         let content = match inspected {
             Ok(content) => content,
             Err(error) => {
-                self.state.unresolved = Some(error.clone());
+                self.state.unresolved = Some(UnresolvedCandidate::physical(error.clone()));
                 return Err(error);
             }
         };
@@ -554,7 +594,10 @@ impl WorkspaceAccess {
 
     /// Unknown containment cannot release writer or disposal eligibility.
     pub(crate) fn unresolved(mut self, detail: String) {
-        self.state.unresolved = Some(bound_settlement_detail(detail));
+        self.state.unresolved = Some(UnresolvedCandidate {
+            reason: super::WorkspaceUnresolvedReason::NestedContainment,
+            detail: bound_settlement_detail(detail),
+        });
     }
 }
 
@@ -757,7 +800,16 @@ mod tests {
         let access = fixture.access(&scope).await;
         let input = access.input().clone();
         std::fs::write(target.join("cache"), b"build cache").unwrap();
+        #[cfg(target_os = "linux")]
         assert_eq!(access.finish(true).await.unwrap(), input);
+        #[cfg(target_os = "macos")]
+        {
+            let _ = input;
+            assert!(
+                access.finish(true).await.is_err(),
+                "vnode cannot distinguish ignored child creation from new unwatched directories"
+            );
+        }
         scope.settle().await;
     }
 
@@ -977,5 +1029,400 @@ mod tests {
                 b"unrelated"
             );
         }
+    }
+    fn journal(
+        fixture: &Fixture,
+        workspace: WorkspaceSettlement,
+        candidate: Option<CandidateReference>,
+    ) -> Arc<crate::durable::SqliteConversationStore> {
+        use crate::durable::ConversationStore;
+        use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
+        let run = &fixture.node.block.run;
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(run.conversation_id.clone())
+                .unwrap(),
+        );
+        for (phase, event) in [
+            (
+                "owned",
+                RuntimeEvent::WorkflowWorkspaceOwned {
+                    run_id: run.clone(),
+                    workspace: workspace.snapshot.clone(),
+                },
+            ),
+            (
+                "settled",
+                RuntimeEvent::WorkflowWorkspaceSettled {
+                    run_id: run.clone(),
+                    workspace,
+                    candidate,
+                },
+            ),
+        ] {
+            store
+                .append_event(RuntimeEventEnvelope {
+                    schema_version: EVENT_SCHEMA_VERSION,
+                    event_id: super::super::workflow_resource_event_id(run, phase),
+                    sequence: 0,
+                    conversation_id: run.conversation_id.clone(),
+                    attempt_id: None,
+                    turn_id: None,
+                    timestamp: chrono::Utc::now(),
+                    event,
+                })
+                .unwrap();
+        }
+        store
+    }
+
+    #[tokio::test]
+    async fn existing_empty_and_nested_directories_cannot_hide_write_and_restore() {
+        for directory in ["tmp", "tmp/nested/empty"] {
+            let fixture = Fixture::new();
+            let scope = fixture.acquire().await;
+            let writer = fixture.access(&scope).await;
+            let path = writer.snapshot().logical_workspace.join(directory);
+            std::fs::create_dir_all(&path).unwrap();
+            writer.finish(false).await.unwrap();
+            // Returning access proves all watches are installed before mutation.
+            let check = fixture.access(&scope).await;
+            let input = check.input().clone();
+            let (go, gate) = tokio::sync::oneshot::channel();
+            let physical = tokio::spawn(async move {
+                gate.await.unwrap();
+                let transient = path.join("transient");
+                std::fs::write(&transient, b"transient source").unwrap();
+                std::fs::remove_file(transient).unwrap();
+            });
+            go.send(()).unwrap();
+            physical.await.unwrap();
+            assert_eq!(
+                check
+                    .state
+                    .lease
+                    .as_ref()
+                    .unwrap()
+                    .source_identity()
+                    .await
+                    .unwrap(),
+                input.content
+            );
+            assert!(check.finish(true).await.is_err());
+            assert!(scope.assert_current(&input).await.is_err());
+            scope.settle().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn settled_inspection_and_watch_loss_release_active_ownership_for_exact_reproof() {
+        for watch_loss in [false, true] {
+            let fixture = Fixture::new();
+            let scope = fixture.acquire().await;
+            let writer = fixture.access(&scope).await;
+            let root = writer.snapshot().logical_workspace.clone();
+            std::fs::create_dir(root.join("empty")).unwrap();
+            writer.finish(false).await.unwrap();
+            let access = fixture.access(&scope).await;
+            let physical_root = root.clone();
+            let index = PathBuf::from(git(
+                &root,
+                &["rev-parse", "--path-format=absolute", "--git-path", "index"],
+            ));
+            let original_index = std::fs::read(&index).unwrap();
+            let physical_index = index.clone();
+            let (go, gate) = tokio::sync::oneshot::channel();
+            let physical = tokio::spawn(async move {
+                gate.await.unwrap();
+                if watch_loss {
+                    std::fs::remove_dir(physical_root.join("empty")).unwrap();
+                } else {
+                    std::fs::write(physical_index, b"invalid index for inspection").unwrap();
+                }
+            });
+            go.send(()).unwrap();
+            physical.await.unwrap(); // known physical settlement before inspection
+            assert!(access.finish(true).await.is_err());
+            let terminal = scope.settle().await;
+            assert_eq!(
+                terminal.unresolved_reason(),
+                Some(WorkspaceUnresolvedReason::PhysicalSettlement)
+            );
+            assert!(
+                fixture
+                    .manager
+                    .require_released(&WorkspaceOwner::Workflow(fixture.node.block.run.clone()))
+                    .is_ok()
+            );
+            if !watch_loss {
+                std::fs::write(index, original_index).unwrap();
+            }
+            let store = journal(&fixture, terminal, scope.final_reference().await);
+            assert_eq!(
+                fixture
+                    .manager
+                    .dispose_workflow_workspace(&*store, &fixture.node.block.run)
+                    .await
+                    .unwrap(),
+                super::super::WorkspaceDisposalSettlement::Disposed
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn live_nested_anchor_preserves_containment_authority_and_rejects_git_only_disposal() {
+        let fixture = Fixture::new();
+        let scope = fixture.acquire().await;
+        let access = fixture.access(&scope).await;
+        let mut process = tokio::process::Command::new("sh")
+            .args(["-c", "read gate"])
+            .stdin(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let gate = process.stdin.take().unwrap();
+        access.unresolved("retained live process anchor".into());
+        let terminal = scope.settle().await;
+        assert_eq!(
+            terminal.unresolved_reason(),
+            Some(WorkspaceUnresolvedReason::NestedContainment)
+        );
+        let store = journal(&fixture, terminal, None);
+        let run = &fixture.node.block.run;
+        assert!(
+            fixture
+                .manager
+                .require_released(&WorkspaceOwner::Workflow(run.clone()))
+                .is_err()
+        );
+        assert!(
+            fixture
+                .manager
+                .dispose_workflow_workspace(&*store, run)
+                .await
+                .is_err()
+        );
+        // Even a reopened manager without the process-local active set cannot
+        // convert Git facts into missing descendant containment proof.
+        let reopened = WorkspaceManager::new(fixture.source.path(), fixture.runtime.path());
+        assert!(
+            reopened
+                .dispose_workflow_workspace(&*store, run)
+                .await
+                .is_err()
+        );
+        drop(gate);
+        process.wait().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn durable_disposal_retries_after_physical_removal_and_failed_settlement_append() {
+        use crate::durable::ConversationStore;
+        use crate::events::types::RuntimeEvent;
+        for branch_removed in [false, true] {
+            let mut fixture = Fixture::new();
+            let hook = Arc::new(super::super::WorkspaceDisposalHook::new());
+            fixture.manager.install_disposal_hook(hook.clone());
+            let scope = fixture.acquire().await;
+            let writer = fixture.access(&scope).await;
+            let root = writer.snapshot().logical_workspace.clone();
+            std::fs::write(root.join("source"), b"retained source").unwrap();
+            writer.finish(false).await.unwrap();
+            let terminal = scope.settle().await;
+            let branch = terminal.snapshot.git_worktree().unwrap().branch.clone();
+            let store = journal(&fixture, terminal, scope.final_reference().await);
+            git(fixture.source.path(), &["branch", "unrelated"]);
+            let unrelated = git(
+                fixture.source.path(),
+                &["rev-parse", "refs/heads/unrelated"],
+            );
+            hook.arm_after_worktree_removal();
+            if !branch_removed {
+                hook.fail_branch_cleanup("injected branch frontier failure");
+            }
+            let manager = fixture.manager.clone();
+            let run = fixture.node.block.run.clone();
+            let task_store = store.clone();
+            let task_run = run.clone();
+            let disposal = tokio::spawn(async move {
+                manager
+                    .dispose_workflow_workspace(&*task_store, &task_run)
+                    .await
+            });
+            hook.wait_until_worktree_removed().await;
+            assert!(!root.exists());
+            assert!(
+                store
+                    .read_events(None, 100)
+                    .unwrap()
+                    .events
+                    .iter()
+                    .any(|e| matches!(
+                        e.event,
+                        RuntimeEvent::WorkflowWorkspaceDisposalStarted { .. }
+                    ))
+            );
+            store.arm_fail_event_times(1);
+            hook.release_after_worktree_removal().await;
+            assert!(disposal.await.unwrap().is_err());
+            let branch_exists = std::process::Command::new("git")
+                .arg("-C")
+                .arg(fixture.source.path())
+                .args([
+                    "show-ref",
+                    "--verify",
+                    "--quiet",
+                    &format!("refs/heads/{branch}"),
+                ])
+                .status()
+                .unwrap()
+                .success();
+            assert_eq!(branch_exists, !branch_removed);
+            assert!(
+                !store
+                    .read_events(None, 100)
+                    .unwrap()
+                    .events
+                    .iter()
+                    .any(|e| matches!(
+                        e.event,
+                        RuntimeEvent::WorkflowWorkspaceDisposalSettled { .. }
+                    ))
+            );
+            let retry = fixture
+                .manager
+                .dispose_workflow_workspace(&*store, &run)
+                .await
+                .unwrap();
+            assert!(matches!(
+                retry,
+                super::super::WorkspaceDisposalSettlement::Disposed
+                    | super::super::WorkspaceDisposalSettlement::AlreadyDisposed
+            ));
+            assert_eq!(
+                fixture
+                    .manager
+                    .dispose_workflow_workspace(&*store, &run)
+                    .await
+                    .unwrap(),
+                super::super::WorkspaceDisposalSettlement::AlreadyDisposed
+            );
+            assert_eq!(
+                git(
+                    fixture.source.path(),
+                    &["rev-parse", "refs/heads/unrelated"]
+                ),
+                unrelated
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn absent_worktree_without_durable_disposal_intent_is_not_authority() {
+        let fixture = Fixture::new();
+        let scope = fixture.acquire().await;
+        let writer = fixture.access(&scope).await;
+        let root = writer.snapshot().logical_workspace.clone();
+        std::fs::write(root.join("source"), b"retained source").unwrap();
+        writer.finish(false).await.unwrap();
+        let terminal = scope.settle().await;
+        let store = journal(&fixture, terminal, scope.final_reference().await);
+        git(
+            fixture.source.path(),
+            &["worktree", "remove", "--force", root.to_str().unwrap()],
+        );
+        assert!(
+            fixture
+                .manager
+                .dispose_workflow_workspace(&*store, &fixture.node.block.run)
+                .await
+                .is_err()
+        );
+    }
+    #[tokio::test]
+    async fn newly_created_directory_tree_cannot_certify_restored_source() {
+        let fixture = Fixture::new();
+        let scope = fixture.acquire().await;
+        let access = fixture.access(&scope).await;
+        let root = access.snapshot().logical_workspace.clone();
+        let input = access.input().clone();
+        std::fs::create_dir_all(root.join("new/nested")).unwrap();
+        std::fs::write(root.join("new/nested/transient"), b"source").unwrap();
+        std::fs::remove_dir_all(root.join("new")).unwrap();
+        assert_eq!(
+            access
+                .state
+                .lease
+                .as_ref()
+                .unwrap()
+                .source_identity()
+                .await
+                .unwrap(),
+            input.content
+        );
+        assert!(access.finish(true).await.is_err());
+        scope.settle().await;
+    }
+
+    #[tokio::test]
+    async fn directory_bound_blocks_candidate_access_before_validator_starts() {
+        let fixture = Fixture::new();
+        let scope = fixture.acquire().await;
+        let writer = fixture.access(&scope).await;
+        let mut path = writer.snapshot().logical_workspace.clone();
+        for _ in 0..65 {
+            path.push("d");
+        }
+        std::fs::create_dir_all(path).unwrap();
+        writer.finish(false).await.unwrap();
+        assert!(
+            scope
+                .borrow(fixture.node.clone(), None, &CancellationSignal::new())
+                .await
+                .unwrap_err()
+                .contains("bound exceeded")
+        );
+        scope.settle().await;
+    }
+
+    #[tokio::test]
+    async fn changed_source_after_disposal_intent_is_preserved_on_first_removal_and_retry() {
+        let mut fixture = Fixture::new();
+        let hook = Arc::new(super::super::WorkspaceDisposalHook::new());
+        fixture.manager.install_disposal_hook(hook.clone());
+        let scope = fixture.acquire().await;
+        let writer = fixture.access(&scope).await;
+        let root = writer.snapshot().logical_workspace.clone();
+        std::fs::write(root.join("source"), b"retained").unwrap();
+        writer.finish(false).await.unwrap();
+        let terminal = scope.settle().await;
+        let store = journal(&fixture, terminal, scope.final_reference().await);
+        hook.arm_before_recheck();
+        let manager = fixture.manager.clone();
+        let task_store = store.clone();
+        let run = fixture.node.block.run.clone();
+        let task_run = run.clone();
+        let task = tokio::spawn(async move {
+            manager
+                .dispose_workflow_workspace(&*task_store, &task_run)
+                .await
+        });
+        hook.wait_until_verified().await; // durable intent exists, deletion has not begun
+        std::fs::write(root.join("source"), b"later user work").unwrap();
+        hook.release().await;
+        assert!(task.await.unwrap().is_err());
+        fixture
+            .manager
+            .install_disposal_hook(Arc::new(super::super::WorkspaceDisposalHook::new()));
+        assert!(
+            fixture
+                .manager
+                .dispose_workflow_workspace(&*store, &run)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            std::fs::read(root.join("source")).unwrap(),
+            b"later user work"
+        );
     }
 }

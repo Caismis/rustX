@@ -1,4 +1,5 @@
 //! The single root/branch block executor. Native children always settle inline.
+use super::expressions::CommittedValue;
 use super::{
     BTreeMap, MAX_VALUE_BYTES, MAX_WORKFLOW_NODES, RuntimeEvent, Value, WorkflowBlockInstance,
     WorkflowBlockProgram, WorkflowDefinitionPath, WorkflowExecutionOutcome, WorkflowNodeInstance,
@@ -126,7 +127,7 @@ impl Drop for LocalReservation<'_> {
 }
 
 pub(super) struct BlockOutput<'a> {
-    pub(super) value: Value,
+    pub(super) value: CommittedValue,
     _reservation: LocalReservation<'a>,
 }
 
@@ -138,7 +139,7 @@ impl WorkflowRuntime {
         run: &'a WorkflowRun,
         block: &'a WorkflowBlockProgram,
         context: &'a crate::runtime::subagent::AttemptSubagentContext,
-        input: Value,
+        input: CommittedValue,
         cancellation: &'a crate::runtime::cancellation::ExecutionCancellation,
     ) -> std::pin::Pin<
         Box<
@@ -181,12 +182,13 @@ impl WorkflowRuntime {
         block: &'a WorkflowBlockProgram,
         instance: &WorkflowBlockInstance,
         context: &'a crate::runtime::subagent::AttemptSubagentContext,
-        input: Value,
+        input: CommittedValue,
         cancellation: &'a crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<BlockOutput<'a>, WorkflowRunError> {
-        validate_commit(&block.input_schema, &input)?;
+        input.assert_current(run).await?;
+        validate_commit(&block.input_schema, &input.value)?;
         let mut reservation = LocalReservation::new(run);
-        reservation.retain(&input)?;
+        reservation.retain(&input.value)?;
         let mut values = BTreeMap::new();
         let mut node_id = block.entry.clone();
         loop {
@@ -257,7 +259,8 @@ impl WorkflowRuntime {
                         result,
                     } => {
                         let arguments = evaluate_value(arguments, &input, &values)?;
-                        let native = self
+                        arguments.assert_current(run).await?;
+                        let (native, candidate) = self
                             .invoke_tool(
                                 run,
                                 context,
@@ -269,8 +272,9 @@ impl WorkflowRuntime {
                             .await?;
                         let value = result.project(&native, &node_instance)?;
                         reservation.retain(&value)?;
-                        // Sole local commit: only validated successful output.
-                        values.insert(node_id.clone(), value);
+                        // Physical settlement and source verification precede
+                        // this sole candidate-bound local commit.
+                        values.insert(node_id.clone(), CommittedValue { value, candidate });
                         Ok(None)
                     }
                     WorkflowNodeProgram::Agent(agent) => {
@@ -289,12 +293,13 @@ impl WorkflowRuntime {
                             .settle_agent(child, &node_instance, &agent.output_schema, cancellation)
                             .await?;
                         reservation.retain(&value)?;
-                        values.insert(node_id.clone(), value);
+                        values.insert(node_id.clone(), value.into());
                         Ok(None)
                     }
                     WorkflowNodeProgram::Branch { condition } => {
                         let condition = evaluate_predicate(condition, &input, &values)?;
-                        let port = if condition {
+                        condition.assert_current(run).await?;
+                        let port = if condition.value.as_bool().expect("predicate boolean") {
                             WorkflowPort::True
                         } else {
                             WorkflowPort::False
@@ -357,11 +362,12 @@ impl WorkflowRuntime {
                         });
                         let settled = futures_util::future::join_all(pending).await;
                         let mut results = serde_json::Map::new();
+                        let mut applicability = CommittedValue::from(Value::Null);
                         let mut failures = BTreeMap::new();
                         for (key, result) in &settled {
                             match result {
                                 Ok(output) => {
-                                    results.insert((*key).clone(), output.value.clone());
+                                    results.insert((*key).clone(), output.value.value.clone());
                                 }
                                 Err(error) => {
                                     failures.insert((*key).clone(), error.clone());
@@ -387,18 +393,27 @@ impl WorkflowRuntime {
                         if cancellation.is_cancelled() {
                             return Err(WorkflowRunError::from_cancellation(cancellation));
                         }
+                        // Native branch failures retain their status before
+                        // validating applicability of an otherwise successful join.
+                        for (_, result) in &settled {
+                            let output = result.as_ref().expect("successful branches");
+                            output.value.assert_current(run).await?;
+                            applicability.depend_on(&output.value)?;
+                        }
                         let value = Value::Object(results);
                         validate_commit(output_schema, &value)?;
                         // Transfer exported output accounting before releasing
                         // branch outputs. Private locals were already retired.
                         reservation.retain(&value)?;
                         drop(settled);
-                        values.insert(node_id.clone(), value);
+                        applicability.value = value;
+                        values.insert(node_id.clone(), applicability);
                         Ok(None)
                     }
                     WorkflowNodeProgram::Return { output } => {
                         let value = evaluate_value(output, &input, &values)?;
-                        validate_commit(&block.output_schema, &value)?;
+                        value.assert_current(run).await?;
+                        validate_commit(&block.output_schema, &value.value)?;
                         Ok(Some(value))
                     }
                 }
@@ -408,7 +423,7 @@ impl WorkflowRuntime {
                 candidate
                     .map(|value| {
                         let mut exported = LocalReservation::new(run);
-                        exported.retain(&value)?;
+                        exported.retain(&value.value)?;
                         Ok(BlockOutput {
                             value,
                             _reservation: exported,

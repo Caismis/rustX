@@ -756,3 +756,181 @@ async fn parallel_candidate_consumers_serialize_and_cancellation_waits_for_physi
         }
     }
 }
+
+#[tokio::test]
+async fn stale_check_cannot_drive_branch_after_writer_commits_new_candidate() {
+    stale_check_after_writer(false, false).await;
+}
+
+#[tokio::test]
+async fn stale_check_cannot_escape_return_through_object_and_array_construction() {
+    stale_check_after_writer(true, false).await;
+}
+
+#[tokio::test]
+async fn parallel_export_preserves_check_applicability_across_later_writer() {
+    stale_check_after_writer(false, true).await;
+}
+
+#[allow(clippy::too_many_lines)] // One composed sequence with distinct consumption frontiers.
+async fn stale_check_after_writer(return_value: bool, parallel_export: bool) {
+    let plane = workflow_test_plane(1);
+    initialize(&plane);
+    let mut child = stage_workflow_child(&plane);
+    let probe = Arc::new(CandidateProbe {
+        status: ToolExecutionStatus::Success,
+        mutate: false,
+        observed: std::sync::Mutex::default(),
+    });
+    let context = setup_context(&plane, probe.clone());
+    let mut definition = program_definition();
+    definition.workspace = Some(WorkflowWorkspace {
+        require_clean_parent: true,
+    });
+    definition.block.nodes.insert(
+        "writer".into(),
+        WorkflowNodeDefinition::Agent {
+            profile: profile("reviewer"),
+            task: "write B".into(),
+            input: BTreeMap::new(),
+            output: schema(json!({}), &[]),
+        },
+    );
+    definition.block.edges.retain(|edge| edge.from != "check");
+    definition.block.edges.push(edge("check", "writer"));
+    if return_value {
+        definition
+            .block
+            .nodes
+            .retain(|key, _| key == "check" || key == "writer");
+        definition.block.output = schema(
+            json!({"checks":{"type":"array","items":{"type":"boolean"}}}),
+            &["checks"],
+        );
+        definition.block.nodes.insert(
+            "return".into(),
+            WorkflowNodeDefinition::Return {
+                output: WorkflowValue::Object {
+                    fields: BTreeMap::from([(
+                        "checks".into(),
+                        WorkflowValue::Array {
+                            items: vec![WorkflowValue::Reference {
+                                path: vec!["check".into(), "passed".into()],
+                            }],
+                        },
+                    )]),
+                },
+            },
+        );
+        definition.block.edges.retain(|edge| edge.from == "check");
+        definition.block.edges.push(edge("writer", "return"));
+    } else {
+        definition.block.edges.push(edge("writer", "branch"));
+    }
+    if parallel_export {
+        let check_schema = schema(json!({"passed":{"type":"boolean"}}), &["passed"]);
+        definition.block.nodes.insert(
+            "relay".into(),
+            WorkflowNodeDefinition::Parallel {
+                branches: BTreeMap::from([(
+                    "copy".into(),
+                    WorkflowBranch {
+                        input: WorkflowValue::Object {
+                            fields: BTreeMap::from([(
+                                "passed".into(),
+                                WorkflowValue::Reference {
+                                    path: vec!["check".into(), "passed".into()],
+                                },
+                            )]),
+                        },
+                        block: WorkflowBlock {
+                            input: check_schema.clone(),
+                            output: check_schema,
+                            entry: "export".into(),
+                            nodes: BTreeMap::from([(
+                                "export".into(),
+                                WorkflowNodeDefinition::Return {
+                                    output: WorkflowValue::Reference {
+                                        path: vec!["args".into()],
+                                    },
+                                },
+                            )]),
+                            edges: vec![],
+                        },
+                    },
+                )]),
+            },
+        );
+        definition.block.edges.retain(|edge| edge.from != "check");
+        definition.block.edges.push(edge("check", "relay"));
+        definition.block.edges.push(edge("relay", "writer"));
+        definition.block.nodes.insert(
+            "branch".into(),
+            WorkflowNodeDefinition::Branch {
+                condition: WorkflowPredicate::Boolean {
+                    value: WorkflowValue::Reference {
+                        path: vec!["relay".into(), "copy".into(), "passed".into()],
+                    },
+                },
+            },
+        );
+    }
+    let program = Arc::new(compile_test(definition).unwrap());
+    let runtime = workflow_runtime(&plane);
+    let (_, cancellation) = workflow_cancellation();
+    let task = tokio::spawn(async move {
+        runtime
+            .run_foreground(
+                program,
+                ToolCallId::new("stale-check"),
+                context,
+                json!({"passed":true}),
+                cancellation,
+            )
+            .await
+    });
+    child.expect_delegate().await; // check A is already committed
+    assert_eq!(probe.observed.lock().unwrap().len(), 1);
+    let snapshot = plane.registry.all_snapshots().pop().unwrap();
+    std::fs::write(
+        snapshot.workspace.logical_workspace.join("candidate"),
+        b"writer produced B",
+    )
+    .unwrap();
+    child
+        .send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some("{}"),
+        )
+        .await;
+    let error = task.await.unwrap().unwrap_err();
+    let WorkflowRunError::WorkspaceSettlement { error, .. } = error else {
+        panic!("missing resource settlement")
+    };
+    assert!(
+        matches!(*error, WorkflowRunError::InvalidValue(ref detail) if detail.contains("stale candidate reference"))
+    );
+    assert_eq!(probe.observed.lock().unwrap().len(), 1);
+    assert_eq!(
+        plane.registry.all_snapshots().len(),
+        1,
+        "exactly one writer"
+    );
+    assert!(plane.registry.unsettled_snapshot().is_empty());
+    let events = plane.store.read_events(None, 256).unwrap().events;
+    assert_eq!(events.iter().filter(|event| matches!(&event.event, RuntimeEvent::WorkflowCandidateInvocation { result: ToolExecutionStatus::Success, candidate_unchanged: true, input, .. } if input.version == 0)).count(), 1);
+    assert_eq!(events.iter().filter(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeStarted { instance } if instance.node == "yes" || instance.node == "no")).count(), 0);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event.event, RuntimeEvent::WorkflowBranchSelected { .. }))
+    );
+    for node in [
+        "check",
+        "writer",
+        if return_value { "return" } else { "branch" },
+    ] {
+        assert_eq!(events.iter().filter(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeStarted { instance } if instance.node == node)).count(), 1, "exact start count for {node}");
+    }
+    assert!(events.iter().any(|event| matches!(&event.event, RuntimeEvent::WorkflowWorkspaceSettled { candidate: Some(reference), .. } if reference.version == 1)));
+}

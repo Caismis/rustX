@@ -1074,6 +1074,7 @@ impl WorkspaceManager {
             handoff,
             WorkspaceDisposalPhase::Authorized,
             false,
+            None,
         )
         .await
     }
@@ -1091,8 +1092,15 @@ impl WorkspaceManager {
         phase: WorkspaceDisposalPhase,
     ) -> Result<WorkspaceDisposalSettlement, WorkspaceDisposalError> {
         let _disposal = self.disposal_lock.lock().await;
-        self.dispose_authorized_workspace_inner(&owner_id.into(), snapshot, handoff, phase, true)
-            .await
+        self.dispose_authorized_workspace_inner(
+            &owner_id.into(),
+            snapshot,
+            handoff,
+            phase,
+            true,
+            None,
+        )
+        .await
     }
 
     #[allow(clippy::too_many_lines)] // One ordered physical settlement protocol.
@@ -1103,6 +1111,7 @@ impl WorkspaceManager {
         handoff: &WorkspaceHandoff,
         phase: WorkspaceDisposalPhase,
         durable_intent_committed: bool,
+        candidate: Option<&CandidateReference>,
     ) -> Result<WorkspaceDisposalSettlement, WorkspaceDisposalError> {
         fn mismatch(detail: impl Into<String>) -> WorkspaceDisposalError {
             WorkspaceDisposalError::OwnershipMismatch {
@@ -1167,6 +1176,20 @@ impl WorkspaceManager {
                     (true, true) => {
                         // The complete proof repeats the path, registration,
                         // worktree HEAD, branch attachment, and ref checks.
+                        if let Some(reference) = candidate {
+                            if !matches!(owner_id, WorkspaceOwner::Workflow(run) if *run == reference.run)
+                            {
+                                return Err(mismatch("candidate run identity mismatch"));
+                            }
+                            let content = candidate::inspect_source(self, owner_id, snapshot)
+                                .await
+                                .map_err(mismatch)?;
+                            if content != reference.content {
+                                return Err(mismatch(
+                                    "retained candidate changed after run settlement",
+                                ));
+                            }
+                        }
                         self.verify_retained_workspace(owner_id, snapshot, handoff)
                             .await?;
                         let removed = self
@@ -2567,6 +2590,23 @@ impl WorkspaceLease {
         WorkspaceSettlement::unresolved_with_reason(
             self.snapshot,
             WorkspaceUnresolvedReason::NestedContainment,
+            detail,
+        )
+    }
+
+    /// Physical users have ended; retain the resource but retire process-local
+    /// ownership so the exact native inspection/disposal route can re-prove it.
+    fn preserve_after_settled_inspection(self, detail: String) -> WorkspaceSettlement {
+        if self.active_registered {
+            self.manager
+                .active
+                .lock()
+                .expect("workspace ownership")
+                .remove(&deterministic_worktree_name(&self.owner));
+        }
+        WorkspaceSettlement::unresolved_with_reason(
+            self.snapshot,
+            WorkspaceUnresolvedReason::PhysicalSettlement,
             detail,
         )
     }

@@ -1948,9 +1948,15 @@ impl WorkflowRuntime {
                 match admission {
                     Ok(candidate) => {
                         run.candidate = candidate;
-                        self.execute_block(&run, &program.block, &context, input, &cancellation)
-                            .await
-                            .map(|output| output.value.clone())
+                        self.execute_block(
+                            &run,
+                            &program.block,
+                            &context,
+                            input.into(),
+                            &cancellation,
+                        )
+                        .await
+                        .map(|output| output.value.value.clone())
                     }
                     Err(error) => Err(error),
                 }
@@ -2066,8 +2072,8 @@ impl WorkflowRuntime {
         &self,
         run: &WorkflowRun,
         context: &crate::runtime::subagent::AttemptSubagentContext,
-        input: &Value,
-        values: &BTreeMap<String, Value>,
+        input: &expressions::CommittedValue,
+        values: &BTreeMap<String, expressions::CommittedValue>,
         node_id: &WorkflowNodeInstance,
         agent: &WorkflowAgentProgram,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
@@ -2086,9 +2092,13 @@ impl WorkflowRuntime {
             });
         }
         let mut bound = serde_json::Map::new();
+        let mut applicability = expressions::CommittedValue::from(Value::Null);
         for (key, binding) in &agent.input {
-            bound.insert(key.clone(), evaluate_value(binding, input, values)?);
+            let value = evaluate_value(binding, input, values)?;
+            applicability.depend_on(&value)?;
+            bound.insert(key.clone(), value.value);
         }
+        applicability.assert_current(run).await?;
         let context_package = serde_json::json!({
             "workflow_node": node_id.node,
             "input": Value::Object(bound),
@@ -2119,7 +2129,11 @@ impl WorkflowRuntime {
         let access = match &run.candidate {
             Some(candidate) => Some(
                 candidate
-                    .borrow(node_id.clone(), None, &child_cancellation)
+                    .borrow(
+                        node_id.clone(),
+                        applicability.candidate.as_ref(),
+                        &child_cancellation,
+                    )
                     .await
                     .map_err(|error| {
                         if cancellation.is_cancelled() {
@@ -4140,7 +4154,9 @@ block:
         let input = json!({"task": "read this"});
         let binding = reference("args.task");
         assert_eq!(
-            evaluate_value(&binding, &input, &BTreeMap::new()).expect("reference"),
+            evaluate_value(&binding, &input.into(), &BTreeMap::new())
+                .expect("reference")
+                .value,
             json!("read this")
         );
     }
