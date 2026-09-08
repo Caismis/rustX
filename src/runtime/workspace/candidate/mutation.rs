@@ -234,7 +234,9 @@ impl Kernel {
             }
             let fd = nix::fcntl::open(
                 path,
-                OFlag::O_EVTONLY | OFlag::O_SYMLINK | OFlag::O_CLOEXEC,
+                // nix does not name these Darwin-only flags. Retain their
+                // libc bits so symlinks are observed, never followed.
+                OFlag::from_bits_retain(libc::O_EVTONLY | libc::O_SYMLINK) | OFlag::O_CLOEXEC,
                 Mode::empty(),
             )
             .map_err(|e| e.to_string())?;
