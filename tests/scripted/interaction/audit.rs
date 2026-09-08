@@ -853,6 +853,11 @@ async fn interaction_audit_survives_client_detach_and_reattach() {
                 .request_questionnaire(
                     AttemptId::new("attempt-detach"),
                     QuestionnaireFacts {
+                        invocation_id: crate::tools::types::ToolInvocationId::Agent {
+                            call_id: crate::runtime::identity::ToolCallId::new(
+                                "questionnaire-call",
+                            ),
+                        },
                         turn: 1,
                         questionnaire: QuestionnaireSpecification {
                             questions: vec![QuestionSpecification {
@@ -933,7 +938,7 @@ async fn interaction_audit_survives_client_detach_and_reattach() {
         facts.as_slice(),
         [
             RuntimeEvent::InteractionRequested {
-                subject: InteractionSubject::Questionnaire { questionnaire },
+                subject: InteractionSubject::Questionnaire { questionnaire, .. },
                 ..
             },
             RuntimeEvent::InteractionSettled {

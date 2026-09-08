@@ -198,6 +198,9 @@ fn questionnaire_specification() -> QuestionnaireSpecification {
 
 fn questionnaire_subject() -> InteractionSubject {
     InteractionSubject::Questionnaire {
+        invocation_id: rustx::tools::types::ToolInvocationId::Agent {
+            call_id: rustx::runtime::identity::ToolCallId::new("questionnaire-call"),
+        },
         questionnaire: questionnaire_specification(),
     }
 }
@@ -1364,6 +1367,9 @@ fn interaction_audit_payload_bounds_are_durable_invariants() {
     oversized_question.questions[0].question = "p".repeat(MAX_QUESTION_TEXT_CHARS + 1);
     refused(
         InteractionSubject::Questionnaire {
+            invocation_id: rustx::tools::types::ToolInvocationId::Agent {
+                call_id: rustx::runtime::identity::ToolCallId::new("questionnaire-call"),
+            },
             questionnaire: oversized_question,
         },
         "oversized question text",
@@ -1390,6 +1396,9 @@ fn interaction_audit_payload_bounds_are_durable_invariants() {
         .collect();
     refused(
         InteractionSubject::Questionnaire {
+            invocation_id: rustx::tools::types::ToolInvocationId::Agent {
+                call_id: rustx::runtime::identity::ToolCallId::new("questionnaire-call"),
+            },
             questionnaire: oversized_count,
         },
         "oversized question count",
@@ -1398,6 +1407,9 @@ fn interaction_audit_payload_bounds_are_durable_invariants() {
     oversized_label.questions[0].options[0].label = "c".repeat(MAX_OPTION_LABEL_CHARS + 1);
     refused(
         InteractionSubject::Questionnaire {
+            invocation_id: rustx::tools::types::ToolInvocationId::Agent {
+                call_id: rustx::runtime::identity::ToolCallId::new("questionnaire-call"),
+            },
             questionnaire: oversized_label,
         },
         "oversized option label",
@@ -1406,6 +1418,9 @@ fn interaction_audit_payload_bounds_are_durable_invariants() {
     duplicate_labels.questions[0].options[1].label = "staging".to_owned();
     refused(
         InteractionSubject::Questionnaire {
+            invocation_id: rustx::tools::types::ToolInvocationId::Agent {
+                call_id: rustx::runtime::identity::ToolCallId::new("questionnaire-call"),
+            },
             questionnaire: duplicate_labels,
         },
         "duplicate option labels",
@@ -1414,6 +1429,9 @@ fn interaction_audit_payload_bounds_are_durable_invariants() {
     too_few_options.questions[0].options.clear();
     refused(
         InteractionSubject::Questionnaire {
+            invocation_id: rustx::tools::types::ToolInvocationId::Agent {
+                call_id: rustx::runtime::identity::ToolCallId::new("questionnaire-call"),
+            },
             questionnaire: too_few_options,
         },
         "an empty authored option list",
@@ -1422,6 +1440,9 @@ fn interaction_audit_payload_bounds_are_durable_invariants() {
     reserved_label.questions[0].options[0].label = "Type something.".to_owned();
     refused(
         InteractionSubject::Questionnaire {
+            invocation_id: rustx::tools::types::ToolInvocationId::Agent {
+                call_id: rustx::runtime::identity::ToolCallId::new("questionnaire-call"),
+            },
             questionnaire: reserved_label,
         },
         "a client-reserved option label",
@@ -1498,6 +1519,9 @@ fn a_questionnaire_settlement_must_satisfy_the_exact_requested_facts() {
     let mut multi_spec = questionnaire_specification();
     multi_spec.questions[0].multi_select = true;
     let multi_subject = InteractionSubject::Questionnaire {
+        invocation_id: rustx::tools::types::ToolInvocationId::Agent {
+            call_id: rustx::runtime::identity::ToolCallId::new("questionnaire-call"),
+        },
         questionnaire: multi_spec,
     };
     store
@@ -1671,4 +1695,64 @@ fn an_older_development_database_is_rejected() {
 
 fn rusqlite_open(path: &std::path::Path) -> rusqlite::Connection {
     rusqlite::Connection::open(path).expect("open the raw database")
+}
+
+#[test]
+fn review_audit_validates_exact_instance_and_remains_inert_across_reopen() {
+    use rustx::events::review::{ReviewDecision, ReviewResponse};
+    for answered in [false, true] {
+        let durable = Durable::new();
+        let id = interaction_id();
+        let store = durable.open();
+        commit_turn_up_to_the_policy_boundary(&store);
+        let request: rustx::runtime::InteractionRequest =
+            serde_json::from_str(include_str!("../fixtures/runtime-client/review-v21.json"))
+                .unwrap();
+        let rustx::runtime::InteractionKind::Review { mut review, .. } = request.kind else {
+            panic!("Review")
+        };
+        review.instance.block.run.conversation_id = ConversationId::new(CONVERSATION);
+        review.instance.block.run.attempt_id = attempt();
+        for fact in &mut review.context {
+            if let Some(candidate) = &mut fact.candidate {
+                candidate.run = review.instance.block.run.clone();
+            }
+        }
+        let response = ReviewResponse {
+            instance: review.instance.clone(),
+            subject_digest: review.digest(),
+            decision: ReviewDecision::Accepted,
+        };
+        store
+            .append_interaction_audit(requested(&id, InteractionSubject::Review { review }))
+            .unwrap();
+        let mut stale = response.clone();
+        stale.instance.visit += 1;
+        assert!(
+            store
+                .append_interaction_audit(settled(
+                    &id,
+                    InteractionSettlement::Reviewed { response: stale }
+                ))
+                .is_err()
+        );
+        assert!(
+            store
+                .append_interaction_audit(settled(&id, InteractionSettlement::Approved))
+                .is_err()
+        );
+        if answered {
+            store
+                .append_interaction_audit(settled(
+                    &id,
+                    InteractionSettlement::Reviewed { response },
+                ))
+                .unwrap();
+        }
+        let before = interaction_facts(&store);
+        drop(store); // exact process-owned state loss boundary
+        let (store, _) = recover_reopened(&durable);
+        assert_eq!(interaction_facts(&store), before);
+        assert!(!has_tool_start(&store));
+    }
 }

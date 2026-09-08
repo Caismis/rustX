@@ -68,8 +68,8 @@ impl Default for BashTool {
 }
 
 impl ToolExecutor for BashTool {
-    fn honors_workspace(&self) -> bool {
-        true
+    fn workspace_use(&self) -> crate::tools::executor::WorkspaceUse {
+        crate::tools::executor::WorkspaceUse::ConsumesProvided
     }
     fn start<'a>(
         &'a self,

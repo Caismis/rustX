@@ -175,6 +175,9 @@ pub enum QuestionnaireResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InteractionSubject {
+    Review {
+        review: super::review::ReviewSpecification,
+    },
     /// A tool invocation was held at the pre-tool policy boundary.
     Approval {
         /// Caller-neutral invocation correlation.
@@ -190,6 +193,7 @@ pub enum InteractionSubject {
     },
     /// The complete questionnaire shown to the user, stored by value.
     Questionnaire {
+        invocation_id: crate::tools::types::ToolInvocationId,
         /// The exact immutable facts projected to the Runtime Client.
         questionnaire: QuestionnaireSpecification,
     },
@@ -199,6 +203,10 @@ pub enum InteractionSubject {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InteractionSettlement {
+    Reviewed {
+        response: super::review::ReviewResponse,
+    },
+    ReviewInvalidated,
     /// A native execution deadline interrupted the approval rendezvous.
     DeadlineExpired {
         kind: crate::tools::deadline::ToolDeadlineKind,
@@ -476,6 +484,7 @@ pub fn normalize_questionnaire_response(
 /// reason, or questionnaire specification.
 pub fn validate_interaction_subject(subject: &InteractionSubject) -> Result<(), String> {
     match subject {
+        InteractionSubject::Review { review } => review.validate(),
         InteractionSubject::Approval {
             invocation_id,
             tool_id,
@@ -509,7 +518,7 @@ pub fn validate_interaction_subject(subject: &InteractionSubject) -> Result<(), 
             }
             Ok(())
         }
-        InteractionSubject::Questionnaire { questionnaire } => {
+        InteractionSubject::Questionnaire { questionnaire, .. } => {
             validate_questionnaire(questionnaire)
         }
     }
@@ -526,11 +535,15 @@ pub fn validate_interaction_settlement(
     settlement: &InteractionSettlement,
 ) -> Result<(), String> {
     match (subject, settlement) {
+        (InteractionSubject::Review { review }, InteractionSettlement::Reviewed { response }) => {
+            review.validate_response(response)
+        }
         (
             _,
             InteractionSettlement::Cancelled { .. } | InteractionSettlement::DeadlineExpired { .. },
         )
-        | (InteractionSubject::Approval { .. }, InteractionSettlement::Approved) => Ok(()),
+        | (InteractionSubject::Approval { .. }, InteractionSettlement::Approved)
+        | (InteractionSubject::Review { .. }, InteractionSettlement::ReviewInvalidated) => Ok(()),
         (InteractionSubject::Approval { .. }, InteractionSettlement::Denied { reason }) => {
             if reason.chars().count() > MAX_APPROVAL_DENIAL_REASON_CHARS {
                 return Err(format!(
@@ -540,7 +553,7 @@ pub fn validate_interaction_settlement(
             Ok(())
         }
         (
-            InteractionSubject::Questionnaire { questionnaire },
+            InteractionSubject::Questionnaire { questionnaire, .. },
             InteractionSettlement::QuestionnaireSubmitted { submission },
         ) => {
             let normalized = normalize_questionnaire_submission(questionnaire, submission)?;
@@ -556,7 +569,7 @@ pub fn validate_interaction_settlement(
             Ok(())
         }
         (
-            InteractionSubject::Questionnaire { questionnaire },
+            InteractionSubject::Questionnaire { questionnaire, .. },
             InteractionSettlement::QuestionnaireDeclined,
         ) => validate_questionnaire(questionnaire),
         _ => Err(
@@ -712,6 +725,9 @@ mod tests {
         assert!(
             validate_interaction_settlement(
                 &InteractionSubject::Questionnaire {
+                    invocation_id: crate::tools::types::ToolInvocationId::Agent {
+                        call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call")
+                    },
                     questionnaire: questionnaire(),
                 },
                 &InteractionSettlement::QuestionnaireSubmitted {

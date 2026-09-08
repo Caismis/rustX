@@ -47,7 +47,7 @@
  * version 11's subagent activity projection; and version 9's closed
  * `interrupted` lifecycle vocabulary. Older schemas are not decoded.
  */
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 20;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 21;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -410,7 +410,22 @@ export type QuestionnaireResponse =
   | { type: "submitted"; value: QuestionnaireSubmission }
   | { type: "declined" };
 
+export type WorkflowNodeInstance = Extract<ToolInvocationId, { caller: "workflow" }>['node'];
+export type ReviewDecision = { type: "accepted" } | { type: "rejected"; feedback: string };
+export type ReviewCandidate = { run: WorkflowNodeInstance['block']['run']; version: number; content: string };
+export type ReviewFact = { value: unknown; candidate: ReviewCandidate | null };
+export type ReviewSpecification = {
+  instance: WorkflowNodeInstance;
+  subject: { type: "plan"; content: Record<string, unknown>; candidate: ReviewCandidate | null } | {
+    type: "candidate";
+    reference: ReviewCandidate;
+    inspection_path: string;
+  };
+  context: ReviewFact[];
+};
+export type ReviewResponse = { instance: WorkflowNodeInstance; subject_digest: string; decision: ReviewDecision };
 export type InteractionResponse =
+  | { type: "review"; response: ReviewResponse }
   | {
       type: "approval";
       decision: ApprovalDecision;
@@ -441,6 +456,7 @@ export type InteractionRequest = {
   attempt_id: AttemptId;
   turn: number;
   kind:
+    | { type: "review"; review: ReviewSpecification; subject_digest: string }
     | {
         type: "approval";
         invocation_id: ToolInvocationId;
@@ -454,6 +470,7 @@ export type InteractionRequest = {
     | {
         type: "questionnaire";
         questionnaire: QuestionnaireSpecification;
+        invocation_id: ToolInvocationId;
       };
 };
 
@@ -475,12 +492,14 @@ export type RoutedInteraction = {
 };
 
 export type InteractionOutcome =
+  | { type: "review_invalidated" }
   | { type: "deadline_expired"; kind: "hard" | "idle" }
   | { type: "responded"; response: InteractionResponse }
   | { type: "cancelled"; reason: CancellationReason };
 
 /** The bounded by-value subject retained by the durable interaction audit. */
 export type InteractionSubject =
+  | { type: "review"; review: ReviewSpecification }
   | {
       type: "approval";
       invocation_id: ToolInvocationId;
@@ -492,10 +511,13 @@ export type InteractionSubject =
   | {
       type: "questionnaire";
       questionnaire: QuestionnaireSpecification;
+      invocation_id: ToolInvocationId;
     };
 
 /** The terminal value retained by the durable interaction audit. */
 export type InteractionSettlement =
+  | { type: "reviewed"; response: ReviewResponse }
+  | { type: "review_invalidated" }
   | { type: "deadline_expired"; kind: "hard" | "idle" }
   | { type: "approved" }
   | { type: "denied"; reason: string }
@@ -916,6 +938,7 @@ export type RuntimeClientSubagentActivity =
 
 /** Why the child is blocked on a native interaction. */
 export type RuntimeClientSubagentWaitReason =
+  | { type: "review" }
   | { type: "approval"; tool_id: ToolId }
   | { type: "questionnaire" };
 

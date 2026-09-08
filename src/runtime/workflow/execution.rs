@@ -14,6 +14,26 @@ pub(super) struct NodeFrontierHook {
     pub release: tokio::sync::oneshot::Receiver<()>,
 }
 
+#[cfg(test)]
+pub(super) struct PreStartHook {
+    pub node: String,
+    pub acquired: tokio::sync::oneshot::Sender<(
+        crate::runtime::workspace::CandidateScope,
+        crate::runtime::workspace::CandidateReference,
+        WorkflowNodeInstance,
+        [usize; 2],
+    )>,
+    pub proceed: tokio::sync::oneshot::Receiver<PreStartAction>,
+    pub released: tokio::sync::oneshot::Sender<[usize; 2]>,
+    pub finish: tokio::sync::oneshot::Receiver<()>,
+}
+#[cfg(test)]
+pub(super) enum PreStartAction {
+    Continue,
+    ExhaustNodes,
+    ExhaustAgents,
+}
+
 #[derive(Debug, Default)]
 pub(super) struct RunBudgets {
     nodes: usize,
@@ -41,6 +61,9 @@ pub(super) fn static_retained_bound(block: &WorkflowBlockProgram) -> usize {
             WorkflowNodeProgram::Agent(agent) => schema_value_bound(&agent.output_schema),
             WorkflowNodeProgram::Tool { result, .. } => schema_value_bound(&result.schema()),
             WorkflowNodeProgram::Branch { .. } => 0,
+            WorkflowNodeProgram::Review { .. } => {
+                schema_value_bound(&super::review::result_schema())
+            }
             WorkflowNodeProgram::Return { .. } => schema_value_bound(&block.output_schema),
             WorkflowNodeProgram::Parallel {
                 branches,
@@ -126,20 +149,92 @@ impl Drop for LocalReservation<'_> {
     }
 }
 
+/// Optional exact human-acceptance constraint, not Tool/workspace permission.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) enum Acceptance {
+    #[default]
+    None,
+    Accepted(crate::runtime::workspace::CandidateReference),
+}
+impl Acceptance {
+    fn candidate(&self) -> Option<&crate::runtime::workspace::CandidateReference> {
+        match self {
+            Self::None => None,
+            Self::Accepted(candidate) => Some(candidate),
+        }
+    }
+    fn apply(&mut self, transition: &AcceptanceTransition) {
+        match transition {
+            AcceptanceTransition::Unchanged => {}
+            AcceptanceTransition::Cleared => *self = Self::None,
+            AcceptanceTransition::Replaced(candidate) => *self = Self::Accepted(candidate.clone()),
+        }
+    }
+}
+
+/// A block's explicit effect relative to its entry, never an inherited snapshot.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+enum AcceptanceTransition {
+    #[default]
+    Unchanged,
+    Cleared,
+    Replaced(crate::runtime::workspace::CandidateReference),
+}
+impl AcceptanceTransition {
+    /// Native mutation is a branch effect even when local acceptance is None.
+    fn candidate_change(
+        pre: &crate::runtime::workspace::CandidateReference,
+        post: &crate::runtime::workspace::CandidateReference,
+    ) -> Self {
+        if pre == post {
+            Self::Unchanged
+        } else {
+            Self::Cleared
+        }
+    }
+
+    /// Sequential composition: a later explicit effect supersedes the earlier one.
+    fn then(&mut self, later: &Self) {
+        if !matches!(later, Self::Unchanged) {
+            *self = later.clone();
+        }
+    }
+    /// Parallel composition: inherited state contributes nothing. Clear/replace
+    /// has no proven common timeline in these facts, so it fails closed too.
+    fn merge(&mut self, other: &Self) -> Result<(), WorkflowRunError> {
+        if matches!(other, Self::Unchanged) {
+            return Ok(());
+        }
+        if matches!(self, Self::Unchanged) {
+            *self = other.clone();
+            return Ok(());
+        }
+        if self == other {
+            return Ok(());
+        }
+        Err(WorkflowRunError::InvalidValue(
+            "conflicting candidate acceptance transitions".into(),
+        ))
+    }
+}
+
 pub(super) struct BlockOutput<'a> {
     pub(super) value: CommittedValue,
+    acceptance_transition: AcceptanceTransition,
     _reservation: LocalReservation<'a>,
 }
 
 impl WorkflowRuntime {
     /// Every lexical scope, including root, enters and exits here. Boxed only
     /// because fixed nested Parallel recursively invokes the same executor.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn execute_block<'a>(
         &'a self,
         run: &'a WorkflowRun,
         block: &'a WorkflowBlockProgram,
         context: &'a crate::runtime::subagent::AttemptSubagentContext,
         input: CommittedValue,
+        acceptance: Acceptance,
         cancellation: &'a crate::runtime::cancellation::ExecutionCancellation,
     ) -> std::pin::Pin<
         Box<
@@ -162,7 +257,15 @@ impl WorkflowRuntime {
                 },
             );
             let result = self
-                .execute_block_body(run, block, &instance, context, input, cancellation)
+                .execute_block_body(
+                    run,
+                    block,
+                    &instance,
+                    context,
+                    input,
+                    acceptance,
+                    cancellation,
+                )
                 .await;
             self.emit_observability(
                 run,
@@ -183,12 +286,15 @@ impl WorkflowRuntime {
         instance: &WorkflowBlockInstance,
         context: &'a crate::runtime::subagent::AttemptSubagentContext,
         input: CommittedValue,
+        acceptance: Acceptance,
         cancellation: &'a crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<BlockOutput<'a>, WorkflowRunError> {
         input.assert_current(run).await?;
         validate_commit(&block.input_schema, &input.value)?;
         let mut reservation = LocalReservation::new(run);
         reservation.retain(&input.value)?;
+        let mut control = acceptance;
+        let mut transition = AcceptanceTransition::Unchanged;
         let mut values = BTreeMap::new();
         let mut node_id = block.entry.clone();
         loop {
@@ -213,37 +319,150 @@ impl WorkflowRuntime {
                     let _ = hook.release.await;
                 }
             }
-            // Node admission frontier: cancellation observation and aggregate
-            // count reservation are synchronous, before any child preparation.
-            {
-                let mut budgets = run.budgets.lock().expect("run budgets");
-                if cancellation.is_cancelled() {
-                    return Err(WorkflowRunError::from_cancellation(cancellation));
+            // Only candidate consumers apply the exact acceptance constraint. Business-only
+            // tools and pure reads of Review decisions do not touch CandidateScope.
+            let consumes = match node {
+                WorkflowNodeProgram::Agent(_) => run.candidate.is_some(),
+                WorkflowNodeProgram::Tool { selector, .. } => {
+                    Self::tool_workspace_use(run, context, selector)?
+                        == crate::tools::executor::WorkspaceUse::ConsumesProvided
                 }
-                let agent = usize::from(matches!(node, WorkflowNodeProgram::Agent(_)));
-                if budgets.nodes >= run.program.total_nodes
-                    || budgets.agents + agent > MAX_WORKFLOW_NODES
-                {
-                    return Err(WorkflowRunError::InvalidProgram(
-                        "aggregate execution count exceeded".into(),
-                    ));
+                _ => false,
+            };
+            let mut dependency = CommittedValue::from(Value::Null);
+            match node {
+                WorkflowNodeProgram::Tool { arguments, .. } => {
+                    dependency.depend_on(&evaluate_value(arguments, &input, &values)?)?;
                 }
-                budgets.nodes += 1;
-                budgets.agents += agent;
+                WorkflowNodeProgram::Agent(agent) => {
+                    for binding in agent.input.values() {
+                        dependency.depend_on(&evaluate_value(binding, &input, &values)?)?;
+                    }
+                }
+                WorkflowNodeProgram::Branch { condition } => {
+                    dependency.depend_on(&evaluate_predicate(condition, &input, &values)?)?;
+                }
+                WorkflowNodeProgram::Return { output } => {
+                    dependency.depend_on(&evaluate_value(output, &input, &values)?)?;
+                }
+                _ => {}
             }
-            self.emit_observability(
-                run,
-                RuntimeEvent::WorkflowNodeStarted {
-                    instance: node_instance.clone(),
-                },
-            );
+            // Explicit data dependencies remain checked even for independent tools,
+            // but never grant them an exclusive workspace borrow during execution.
+            dependency.assert_current(run).await?;
+            if consumes {
+                dependency.depend_on(&CommittedValue {
+                    value: Value::Null,
+                    candidate: control.candidate().cloned(),
+                })?;
+            }
+            let mut admitted_access = if let Some(reference) = dependency
+                .candidate
+                .as_ref()
+                .filter(|_| consumes || !matches!(node, WorkflowNodeProgram::Tool { .. }))
+            {
+                Some(
+                    run.candidate
+                        .as_ref()
+                        .expect("candidate owner")
+                        .borrow(
+                            node_instance.clone(),
+                            Some(reference),
+                            &cancellation.child_signal(),
+                        )
+                        .await
+                        .map_err(|error| {
+                            if cancellation.is_cancelled() {
+                                WorkflowRunError::from_cancellation(cancellation)
+                            } else {
+                                WorkflowRunError::InvalidValue(error)
+                            }
+                        })?,
+                )
+            } else {
+                None
+            };
+            #[cfg(test)]
+            let pre_start_hook = {
+                let mut hook = self.pre_start.lock().expect("pre-start hook");
+                if admitted_access.is_some()
+                    && hook.as_ref().is_some_and(|hook| hook.node == node_id)
+                {
+                    hook.take()
+                } else {
+                    None
+                }
+            };
+            #[cfg(test)]
+            let pre_start_cleanup = if let Some(PreStartHook {
+                acquired,
+                proceed,
+                released,
+                finish,
+                ..
+            }) = pre_start_hook
+            {
+                let counts = {
+                    let budgets = run.budgets.lock().unwrap();
+                    [budgets.nodes, budgets.agents]
+                };
+                let _ = acquired.send((
+                    run.candidate.as_ref().unwrap().clone(),
+                    admitted_access.as_ref().unwrap().input().clone(),
+                    node_instance.clone(),
+                    counts,
+                ));
+                match proceed.await.expect("pre-start action") {
+                    PreStartAction::Continue => {}
+                    PreStartAction::ExhaustNodes => {
+                        run.budgets.lock().unwrap().nodes = run.program.total_nodes;
+                    }
+                    PreStartAction::ExhaustAgents => {
+                        run.budgets.lock().unwrap().agents = MAX_WORKFLOW_NODES;
+                    }
+                }
+                Some((released, finish))
+            } else {
+                None
+            };
+            let mut started = false;
+            // Every fallible step after borrow stays inside this result scope.
+            // The one finalizer below returns any access not transferred to a
+            // native owner, including zero-start cancellation/budget rejection.
             let result: Result<Option<BlockOutput<'_>>, WorkflowRunError> = async {
+                // Node admission frontier: cancellation observation and aggregate
+                // count reservation are synchronous, before any child preparation.
+                {
+                    let mut budgets = run.budgets.lock().expect("run budgets");
+                    if cancellation.is_cancelled() {
+                        return Err(WorkflowRunError::from_cancellation(cancellation));
+                    }
+                    let agent = usize::from(matches!(node, WorkflowNodeProgram::Agent(_)));
+                    if budgets.nodes >= run.program.total_nodes
+                        || budgets.agents + agent > MAX_WORKFLOW_NODES
+                    {
+                        return Err(WorkflowRunError::InvalidProgram(
+                            "aggregate execution count exceeded".into(),
+                        ));
+                    }
+                    budgets.nodes += 1;
+                    budgets.agents += agent;
+                }
+                self.emit_observability(
+                    run,
+                    RuntimeEvent::WorkflowNodeStarted {
+                        instance: node_instance.clone(),
+                    },
+                );
+                started = true;
                 // This lease owns the complete admission/settlement future,
                 // including approval or staged Agent cleanup. It retires only
                 // after the native owner returned; it is not outcome authority.
                 let _native_owner = if matches!(
                     node,
-                    WorkflowNodeProgram::Agent(_) | WorkflowNodeProgram::Tool { .. }
+                    WorkflowNodeProgram::Agent(_)
+                        | WorkflowNodeProgram::Tool { .. }
+                        | WorkflowNodeProgram::Review { .. }
                 ) {
                     context
                         .native
@@ -253,13 +472,59 @@ impl WorkflowRuntime {
                     None
                 };
                 match node {
+                    WorkflowNodeProgram::Review {
+                        subject,
+                        context: checks,
+                    } => {
+                        if let Some(access) = admitted_access.take() {
+                            access
+                                .finish(true)
+                                .await
+                                .map_err(WorkflowRunError::InvalidValue)?;
+                        }
+                        let bound = evaluate_value(subject.value(), &input, &values)?;
+                        bound.assert_current(run).await?;
+                        let mut facts = Vec::new();
+                        for check in checks {
+                            let value = evaluate_value(check, &input, &values)?;
+                            value.assert_current(run).await?;
+                            facts.push(crate::events::review::ReviewFact {
+                                value: value.value,
+                                candidate: value.candidate,
+                            });
+                        }
+                        let checks = facts;
+                        let (value, accepted_candidate) = self
+                            .review(
+                                run,
+                                context,
+                                &node_instance,
+                                subject,
+                                bound,
+                                checks,
+                                cancellation,
+                            )
+                            .await?;
+                        reservation.retain(&value.value)?;
+                        if let Some(candidate) = accepted_candidate {
+                            // A new explicit acceptance replaces the old subject.
+                            // Business-only decisions cannot erase an existing dependency.
+                            transition = AcceptanceTransition::Replaced(candidate);
+                            control.apply(&transition);
+                        }
+                        values.insert(node_id.clone(), value);
+                        Ok(None)
+                    }
+
                     WorkflowNodeProgram::Tool {
                         selector,
                         arguments,
                         result,
                     } => {
                         let arguments = evaluate_value(arguments, &input, &values)?;
-                        arguments.assert_current(run).await?;
+                        if admitted_access.is_none() {
+                            arguments.assert_current(run).await?;
+                        }
                         let (native, candidate) = self
                             .invoke_tool(
                                 run,
@@ -268,6 +533,7 @@ impl WorkflowRuntime {
                                 selector,
                                 arguments,
                                 cancellation,
+                                &mut admitted_access,
                             )
                             .await?;
                         let value = result.project(&native, &node_instance)?;
@@ -278,7 +544,7 @@ impl WorkflowRuntime {
                         Ok(None)
                     }
                     WorkflowNodeProgram::Agent(agent) => {
-                        let child = self
+                        let (child, pre) = self
                             .admit_agent(
                                 run,
                                 context,
@@ -287,18 +553,34 @@ impl WorkflowRuntime {
                                 &node_instance,
                                 agent,
                                 cancellation,
+                                &mut admitted_access,
                             )
                             .await?;
                         let value = self
                             .settle_agent(child, &node_instance, &agent.output_schema, cancellation)
                             .await?;
                         reservation.retain(&value.value)?;
+                        if consumes {
+                            let post = value.candidate.as_ref().filter(|post| post.run == run.run_id)
+                                .ok_or_else(|| WorkflowRunError::InvalidValue(
+                                    "candidate Agent settled without an exact post-node candidate for this run".into(),
+                                ))?;
+                            let pre = pre.as_ref().filter(|pre| pre.run == run.run_id)
+                                .ok_or_else(|| WorkflowRunError::InvalidValue(
+                                    "candidate Agent admitted without an exact pre-node candidate for this run".into(),
+                                ))?;
+                            let effect = AcceptanceTransition::candidate_change(pre, post);
+                            transition.then(&effect);
+                            control.apply(&effect);
+                        }
                         values.insert(node_id.clone(), value);
                         Ok(None)
                     }
                     WorkflowNodeProgram::Branch { condition } => {
                         let condition = evaluate_predicate(condition, &input, &values)?;
-                        condition.assert_current(run).await?;
+                        if admitted_access.is_none() {
+                            condition.assert_current(run).await?;
+                        }
                         let port = if condition.value.as_bool().expect("predicate boolean") {
                             WorkflowPort::True
                         } else {
@@ -327,6 +609,12 @@ impl WorkflowRuntime {
                         branches,
                         output_schema,
                     } => {
+                        if let Some(access) = admitted_access.take() {
+                            access
+                                .finish(true)
+                                .await
+                                .map_err(WorkflowRunError::InvalidValue)?;
+                        }
                         self.emit_observability(
                             run,
                             RuntimeEvent::WorkflowParallelAdmitted {
@@ -342,6 +630,7 @@ impl WorkflowRuntime {
                         let pending = branches.iter().map(|(key, branch)| {
                             let input = &input;
                             let values = &values;
+                            let control = &control;
                             async move {
                                 let bound = evaluate_value(&branch.input, input, values);
                                 let result = match bound {
@@ -351,6 +640,7 @@ impl WorkflowRuntime {
                                             &branch.block,
                                             context,
                                             input,
+                                            control.clone(),
                                             cancellation,
                                         )
                                         .await
@@ -393,13 +683,17 @@ impl WorkflowRuntime {
                         if cancellation.is_cancelled() {
                             return Err(WorkflowRunError::from_cancellation(cancellation));
                         }
+                        let mut joined_transition = AcceptanceTransition::Unchanged;
                         // Native branch failures retain their status before
                         // validating applicability of an otherwise successful join.
                         for (_, result) in &settled {
                             let output = result.as_ref().expect("successful branches");
                             output.value.assert_current(run).await?;
                             applicability.depend_on(&output.value)?;
+                            joined_transition.merge(&output.acceptance_transition)?;
                         }
+                        control.apply(&joined_transition);
+                        transition.then(&joined_transition);
                         let value = Value::Object(results);
                         validate_commit(output_schema, &value)?;
                         // Transfer exported output accounting before releasing
@@ -412,7 +706,9 @@ impl WorkflowRuntime {
                     }
                     WorkflowNodeProgram::Return { output } => {
                         let value = evaluate_value(output, &input, &values)?;
-                        value.assert_current(run).await?;
+                        if admitted_access.is_none() {
+                            value.assert_current(run).await?;
+                        }
                         validate_commit(&block.output_schema, &value.value)?;
                         Ok(Some(value))
                     }
@@ -426,18 +722,38 @@ impl WorkflowRuntime {
                         exported.retain(&value.value)?;
                         Ok(BlockOutput {
                             value,
+                            acceptance_transition: transition.clone(),
                             _reservation: exported,
                         })
                     })
                     .transpose()
             });
-            self.emit_observability(
-                run,
-                RuntimeEvent::WorkflowNodeSettled {
-                    instance: node_instance,
-                    outcome: outcome(&result),
-                },
-            );
+            let result = if let Some(access) = admitted_access.take() {
+                match access.finish(true).await {
+                    Ok(_) => result,
+                    Err(error) => Err(WorkflowRunError::InvalidValue(error)),
+                }
+            } else {
+                result
+            };
+            #[cfg(test)]
+            if let Some((released, finish)) = pre_start_cleanup {
+                let counts = {
+                    let budgets = run.budgets.lock().unwrap();
+                    [budgets.nodes, budgets.agents]
+                };
+                let _ = released.send(counts);
+                let _ = finish.await;
+            }
+            if started {
+                self.emit_observability(
+                    run,
+                    RuntimeEvent::WorkflowNodeSettled {
+                        instance: node_instance,
+                        outcome: outcome(&result),
+                    },
+                );
+            }
             if let Some(output) = result? {
                 // Input and locals retire at owning block completion. Only the
                 // declared export survives, with its own bounded reservation.
@@ -537,5 +853,80 @@ mod tests {
             0,
             "private state retirement releases every byte"
         );
+    }
+}
+
+#[cfg(test)]
+mod acceptance_tests {
+    use super::*;
+    fn candidate(content: char) -> crate::runtime::workspace::CandidateReference {
+        crate::runtime::workspace::CandidateReference {
+            run: super::super::test_instance("acceptance", "node").block.run,
+            version: 1,
+            content: content.to_string().repeat(64),
+        }
+    }
+    #[test]
+    fn parallel_transition_merge_is_commutative_and_conflicts_fail_closed() {
+        use AcceptanceTransition::{Cleared, Replaced, Unchanged};
+        let a = candidate('a');
+        let b = candidate('b');
+        let c = candidate('c');
+        for (left, right, expected) in [
+            (Unchanged, Unchanged, Some(Unchanged)),
+            (Unchanged, Cleared, Some(Cleared)),
+            (Unchanged, Replaced(b.clone()), Some(Replaced(b.clone()))),
+            (Cleared, Cleared, Some(Cleared)),
+            (
+                Replaced(b.clone()),
+                Replaced(b.clone()),
+                Some(Replaced(b.clone())),
+            ),
+            (Replaced(b.clone()), Replaced(c), None),
+            (Cleared, Replaced(b.clone()), None),
+        ] {
+            for (mut merged, other) in [(left.clone(), right.clone()), (right, left)] {
+                let result = merged.merge(&other);
+                if let Some(expected) = &expected {
+                    result.unwrap();
+                    assert_eq!(&merged, expected);
+                    let mut snapshot = Acceptance::Accepted(a.clone());
+                    snapshot.apply(&merged);
+                    match expected {
+                        Unchanged => assert_eq!(snapshot, Acceptance::Accepted(a.clone())),
+                        Cleared => assert_eq!(snapshot, Acceptance::None),
+                        Replaced(candidate) => {
+                            assert_eq!(snapshot.candidate(), Some(candidate));
+                        }
+                    }
+                } else {
+                    assert!(result.is_err());
+                }
+            }
+        }
+    }
+    #[test]
+    fn native_candidate_change_is_an_effect_even_without_local_acceptance() {
+        let a = candidate('a');
+        let b = candidate('b');
+        for mut snapshot in [Acceptance::None, Acceptance::Accepted(a.clone())] {
+            let before = snapshot.clone();
+            let unchanged = AcceptanceTransition::candidate_change(&a, &a);
+            assert_eq!(unchanged, AcceptanceTransition::Unchanged);
+            snapshot.apply(&unchanged);
+            assert_eq!(snapshot, before);
+            let changed = AcceptanceTransition::candidate_change(&a, &b);
+            assert_eq!(changed, AcceptanceTransition::Cleared);
+            snapshot.apply(&changed);
+            assert_eq!(snapshot, Acceptance::None);
+        }
+    }
+    #[test]
+    fn sequential_effects_remain_explicit_even_when_replacement_equals_entry() {
+        let a = candidate('a');
+        let mut effect = AcceptanceTransition::Cleared;
+        effect.then(&AcceptanceTransition::Replaced(a.clone()));
+        effect.then(&AcceptanceTransition::Unchanged);
+        assert_eq!(effect, AcceptanceTransition::Replaced(a));
     }
 }

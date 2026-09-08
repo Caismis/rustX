@@ -168,6 +168,9 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
         attempt_id: AttemptId::new("attempt-questionnaire-v3"),
         turn: 1,
         kind: InteractionKind::Questionnaire {
+            invocation_id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
+            },
             questionnaire: questionnaire.clone(),
         },
     };
@@ -361,7 +364,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
         matches!(
             host.attach(16),
             Err(RuntimeClientError::UnsupportedProtocolVersion {
-                supported: 20,
+                supported: 21,
                 requested: 16,
             })
         ),
@@ -371,15 +374,15 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         incompatible,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 20,
-            requested: 21,
+            supported: 21,
+            requested: 22,
         })
     ));
     let old_protocol = host.attach(7);
     assert!(matches!(
         old_protocol,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 20,
+            supported: 21,
             requested: 7,
         })
     ));
@@ -393,7 +396,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         interrupted_status,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 20,
+            supported: 21,
             requested: 15,
         })
     ));
@@ -406,7 +409,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_disposal,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 20,
+            supported: 21,
             requested: 14,
         })
     ));
@@ -419,7 +422,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         latest_only_status,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 20,
+            supported: 21,
             requested: 13,
         })
     ));
@@ -429,7 +432,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         profile_shaped,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 20,
+            supported: 21,
             requested: 6,
         })
     ));
@@ -441,7 +444,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_workspace_boundary,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 20,
+            supported: 21,
             requested: 12,
         })
     ));
@@ -620,4 +623,38 @@ fn v15_workspace_wire_shape_matches_the_shared_fixtures() {
             serde_json::from_str(&expected).expect("deserialize fixture");
         assert_eq!(&decoded, workspace, "{fixture}: fixture round-trip");
     }
+}
+
+#[test]
+fn review_v21_shared_fixture_pins_complete_subject_and_response_identity() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../fixtures/runtime-client/review-v21.json"
+    ))
+    .unwrap();
+    let request: InteractionRequest = serde_json::from_value(fixture.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&request).unwrap(), fixture);
+    let InteractionKind::Review {
+        review,
+        subject_digest,
+    } = request.kind
+    else {
+        panic!("Review")
+    };
+    review.validate().unwrap();
+    assert_eq!(review.digest(), subject_digest);
+    let response = rustx::events::review::ReviewResponse {
+        instance: review.instance.clone(),
+        subject_digest,
+        decision: rustx::events::review::ReviewDecision::Accepted,
+    };
+    review.validate_response(&response).unwrap();
+    let value = serde_json::to_value(InteractionResponse::Review { response }).unwrap();
+    let mut forged = value.clone();
+    forged["response"]["subject"] = serde_json::json!({"plan":"replacement"});
+    assert!(serde_json::from_value::<InteractionResponse>(forged).is_err());
+    assert_eq!(
+        serde_json::to_value(serde_json::from_value::<InteractionResponse>(value.clone()).unwrap())
+            .unwrap(),
+        value
+    );
 }

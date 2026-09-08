@@ -17,6 +17,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { HumanInteractionOverlay } from "../src/ui/components/hitl.ts";
 import type {
   ApprovalDecision,
+  ReviewResponse,
   InteractionRef,
   QuestionnaireResponse,
   RoutedInteraction,
@@ -49,6 +50,7 @@ const PAGE_UP = "\u001b[5~";
 const PAGE_DOWN = "\u001b[6~";
 
 interface Recorded {
+  reviews: { interaction: InteractionRef; response: ReviewResponse }[];
   decisions: Array<{ interaction: InteractionRef; decision: ApprovalDecision }>;
   submissions: Array<{ interaction: InteractionRef; response: QuestionnaireResponse }>;
   declines: InteractionRef[];
@@ -64,6 +66,7 @@ function surface(initial?: {
   preferences?: PresentationPreferences;
 }): { overlay: HumanInteractionOverlay; recorded: Recorded } {
   const recorded: Recorded = {
+    reviews: [],
     decisions: [],
     submissions: [],
     declines: [],
@@ -73,6 +76,7 @@ function surface(initial?: {
     interrupts: 0,
   };
   const overlay = new HumanInteractionOverlay({
+    onReview: (interaction, response) => recorded.reviews.push({ interaction, response }),
     onDecision: (interaction, decision) =>
       recorded.decisions.push({ interaction, decision }),
     onQuestionnaireSubmit: (interaction, response) =>
@@ -857,5 +861,73 @@ describe("human-input surface", () => {
     assert.equal(recorded.declines.length, 0, "no questionnaire decline");
     assert.equal(recorded.dismissals.length, 0, "no dismissal");
     assert.equal(recorded.interrupts, 0, "no interruption");
+  });
+});
+
+
+describe("candidate/plan Review in the unified queue", () => {
+  function reviewInteraction(id = "review"): RoutedInteraction {
+    const base = approvalInteraction();
+    const instance = { block: { run: { conversation_id: base.request.conversation_id, attempt_id: base.request.attempt_id, invocation: 1 }, definition: { workflow_id: "review-plan", blocks: [] }, invocations: [0] }, node: "review", visit: 0 };
+    return { ...base, interaction: { ...base.interaction, interaction_id: id }, request: { ...base.request, id, kind: { type: "review", subject_digest: "a".repeat(64), review: { instance, subject: { type: "plan", candidate: null, content: { plan: "bounded immutable plan" } }, context: [] } } } };
+  }
+  it("discloses the exact candidate attached to plan context without changing decisions", () => {
+    const review = reviewInteraction();
+    if (review.request.kind.type !== "review") throw new Error("review");
+    review.request.kind.review.context = [{ value: { passed: true }, candidate: { run: review.request.kind.review.instance.block.run, version: 7, content: "b".repeat(64) } }];
+    const { overlay, recorded } = surface({ interactions: [review], focused: review.interaction });
+    let disclosure = rendered(overlay, 100);
+    for (let page = 0; page < 20; page++) {
+      overlay.handleInput(PAGE_DOWN);
+      disclosure += rendered(overlay, 100);
+    }
+    assert.ok(disclosure.includes('"version": 7'));
+    assert.ok(disclosure.includes("b".repeat(64)));
+    assert.ok(disclosure.includes('"passed": true'));
+    assert.equal(recorded.reviews.length, 0);
+    overlay.handleInput(ENTER);
+    assert.equal(recorded.reviews[0]!.response.decision.type, "rejected");
+  });
+  it("defaults to Reject and sends only the original subject and instance once", () => {
+    const review = reviewInteraction();
+    const { overlay, recorded } = surface({ interactions: [review], focused: review.interaction });
+    overlay.handleInput("\r");
+    overlay.handleInput("\r");
+    assert.equal(recorded.reviews.length, 1);
+    assert.equal(recorded.reviews[0]!.response.decision.type, "rejected");
+    assert.deepEqual(recorded.reviews[0]!.interaction, review.interaction);
+    assert.equal(recorded.decisions.length, 0);
+  });
+  it("feedback and scrolling are presentation-only and focus cannot carry an armed Accept", () => {
+    const first = reviewInteraction("first");
+    const second = reviewInteraction("second");
+    const { overlay, recorded } = surface({ interactions: [first, second], focused: first.interaction });
+    overlay.handleInput("\x06"); // Ctrl+F: bounded feedback input
+    overlay.handleInput("x".repeat(2500));
+    overlay.handleInput("\r"); // exit editing, not a decision
+    overlay.render(60);
+    overlay.handleInput("\x1b[6~"); // PgDn changes only disclosure
+    assert.equal(recorded.reviews.length, 0);
+    overlay.handleInput("\x1b[B"); // explicit affirmative choice for first
+    overlay.update([first, second], second.interaction, defaultPreferences());
+    overlay.handleInput("\r");
+    assert.equal(recorded.reviews[0]!.response.decision.type, "rejected");
+    overlay.update([first], first.interaction, defaultPreferences());
+    overlay.handleInput("\r");
+    const decision = recorded.reviews[1]!.response.decision;
+    assert.equal(decision.type, "rejected");
+    if (decision.type === "rejected") assert.equal(decision.feedback.length, 2000);
+  });
+  it("explicit navigation accepts and queue removal preserves an unrelated questionnaire", () => {
+    const review = reviewInteraction();
+    const question = questionnaireInteraction();
+    const { overlay, recorded } = surface({ interactions: [review, question], focused: review.interaction });
+    overlay.handleInput("\x1b[B");
+    overlay.handleInput("\r");
+    assert.equal(recorded.reviews[0]!.response.decision.type, "accepted");
+    overlay.update([question], question.interaction, defaultPreferences());
+    assert.equal(overlay.focusedInteraction?.request.kind.type, "questionnaire");
+    assert.equal(recorded.submissions.length, 0);
+    assert.equal(recorded.declines.length, 0);
   });
 });

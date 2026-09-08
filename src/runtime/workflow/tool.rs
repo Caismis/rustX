@@ -60,10 +60,7 @@ fn eligible(definition: &ToolDefinition) -> bool {
             .as_str()
             .starts_with(super::WORKFLOW_TOOL_ID_PREFIX)
         && !(definition.origin == crate::tools::types::ToolOrigin::Builtin
-            && matches!(
-                definition.name.as_str(),
-                "subagent" | "execution" | "todo" | "ask_user"
-            ))
+            && matches!(definition.name.as_str(), "subagent" | "execution" | "todo"))
 }
 
 impl WorkflowCatalog {
@@ -107,6 +104,23 @@ impl WorkflowCatalog {
 }
 
 impl WorkflowRuntime {
+    pub(super) fn tool_workspace_use(
+        run: &WorkflowRun,
+        context: &AttemptSubagentContext,
+        selector: &ToolSelector,
+    ) -> Result<crate::tools::executor::WorkspaceUse, WorkflowRunError> {
+        let definition = run.tools.get(selector).ok_or_else(|| {
+            WorkflowRunError::CapabilityNotAdmitted("capability was not admitted".into())
+        })?;
+        let registration = context
+            .resources()
+            .capability()
+            .available_tools()
+            .registration(definition)
+            .map_err(WorkflowRunError::IdentityChanged)?;
+        Ok(registration.executor.workspace_use())
+    }
+
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // One node admission followed by native invocation and fact projection.
     pub(super) async fn invoke_tool(
         &self,
@@ -116,6 +130,7 @@ impl WorkflowRuntime {
         selector: &ToolSelector,
         arguments: expressions::CommittedValue,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
+        admitted_access: &mut Option<crate::runtime::workspace::WorkspaceAccess>,
     ) -> Result<
         (
             ToolExecutionResult,
@@ -123,9 +138,20 @@ impl WorkflowRuntime {
         ),
         WorkflowRunError,
     > {
+        let policy = Self::tool_workspace_use(run, context, selector)?;
         let signal = cancellation.child_signal();
-        let access = match &run.candidate {
-            Some(candidate) => Some(
+        if policy == crate::tools::executor::WorkspaceUse::Independent {
+            debug_assert!(admitted_access.is_none());
+        } else if run.candidate.is_some()
+            && policy == crate::tools::executor::WorkspaceUse::Incompatible
+        {
+            return Err(WorkflowRunError::IneligibleCapability(
+                "executor cannot consume a candidate workspace".into(),
+            ));
+        } else if admitted_access.is_none()
+            && let Some(candidate) = &run.candidate
+        {
+            *admitted_access = Some(
                 candidate
                     .borrow(node.clone(), arguments.candidate.as_ref(), &signal)
                     .await
@@ -136,9 +162,10 @@ impl WorkflowRuntime {
                             WorkflowRunError::InvocationAuthority(error)
                         }
                     })?,
-            ),
-            None => None,
-        };
+            );
+        }
+        // Setup errors leave the exact access in the caller's cleanup scope.
+        let access = admitted_access;
         let workspace = access
             .as_ref()
             .map(|access| {
@@ -158,7 +185,7 @@ impl WorkflowRuntime {
             )
             .await;
         let mut applicability = None;
-        if let Some(access) = access {
+        if let Some(access) = access.take() {
             let input = access.input().clone();
             let status = match &result {
                 Ok(result) => result.status.clone(),
@@ -304,6 +331,14 @@ impl WorkflowRuntime {
                     services.runtime.tool_output(),
                     context.resources().capability().effective_environment(),
                 );
+                let native_context = match services.lifecycle.native_questionnaire_requester(
+                    context.attempt_id().clone(),
+                    cancellation.clone(),
+                    services.turn,
+                ) {
+                    Some(requester) => native_context.with_questionnaire_requester(requester),
+                    None => native_context,
+                };
                 let driver = ForegroundInvocation {
                     clock: &*services.clock,
                     policy: services.leaf_policy,

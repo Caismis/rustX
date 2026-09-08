@@ -86,7 +86,8 @@ use crate::runtime::workspace::WorkspaceSnapshot;
 /// this version exits before composing anything.
 /// The current version adds typed native deadline interruption to interaction
 /// outcomes and durable approval settlement, without fabricating user intent.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 18;
+/// Version 19 carries Review and required Questionnaire invocation correlation.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 19;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -1173,6 +1174,9 @@ mod tests {
             attempt_id: crate::runtime::identity::AttemptId::new("attempt-1"),
             turn: 3,
             kind: InteractionKind::Questionnaire {
+                invocation_id: crate::tools::types::ToolInvocationId::Agent {
+                    call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
+                },
                 questionnaire: crate::runtime::interaction::QuestionnaireSpecification {
                     questions: vec![crate::runtime::interaction::QuestionSpecification {
                         question: "Which target?".to_owned(),

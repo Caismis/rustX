@@ -614,3 +614,155 @@ block:
     );
     emulator.finish().await;
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn fixed_question_and_review_use_root_client_while_parent_model_remains_in_outer_call() {
+    use rustx::events::review::{ReviewDecision, ReviewResponse};
+    use rustx::runtime::{InteractionKind, InteractionResponse, QuestionnaireResponse};
+    for accepted in [false, true] {
+        let Some(emulator) = ProviderEmulator::start("workflow_tool").await else {
+            return;
+        };
+        let mut definition: serde_json::Value = serde_yaml::from_str(TOOL_WORKFLOW).unwrap();
+        definition["tools"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"origin":"builtin","name":"ask_user"}));
+        definition["block"]["entry"] = serde_json::json!("question");
+        definition["block"]["nodes"]["question"] = serde_json::json!({
+            "type":"tool","selector":{"origin":"builtin","name":"ask_user"},
+            "arguments":{"type":"literal","value":{"questions":[{"question":"PRIVATE QUESTION: choose a priority","header":"Priority","options":[{"label":"A","description":"First"},{"label":"B","description":"Second"}]}]}},
+            "result":{"type":"json","part":0,"schema":{"type":"object","properties":{"cancelled":{"type":"boolean"},"answers":{"type":"array","items":{"type":"object"}}},"required":["cancelled","answers"],"additionalProperties":false}}
+        });
+        definition["block"]["nodes"]["human"] = serde_json::json!({"type":"review","subject":{"type":"plan","value":{"type":"reference","path":["args"]}},"context":[{"type":"reference","path":["question"]}]});
+        definition["block"]["nodes"]["decision"] = serde_json::json!({"type":"branch","condition":{"type":"boolean","value":{"type":"reference","path":["human","accepted"]}}});
+        definition["block"]["nodes"]["rejected"] = serde_json::json!({"type":"return","output":{"type":"literal","value":{"files":"review_pr.yaml review rejected"}}});
+        definition["block"]["edges"]
+            .as_array_mut()
+            .unwrap()
+            .extend([
+                serde_json::json!({"from":"question","to":"human"}),
+                serde_json::json!({"from":"human","to":"decision"}),
+                serde_json::json!({"from":"decision","to":"inspect","port":"true"}),
+                serde_json::json!({"from":"decision","to":"rejected","port":"false"}),
+            ]);
+        let driver =
+            Driver::start_with_workflow(&emulator, &serde_yaml::to_string(&definition).unwrap())
+                .await;
+        driver.submit();
+        let mut seen = 0;
+        while seen < 2 {
+            let delivery =
+                tokio::time::timeout(std::time::Duration::from_secs(30), driver.events.next())
+                    .await
+                    .expect("human publication liveness guard");
+            let EventDelivery::Event(event) = delivery else {
+                panic!("live event stream")
+            };
+            let RuntimeClientEvent::InteractionPending { interaction } = event.event else {
+                continue;
+            };
+            assert_eq!(
+                interaction.interaction,
+                interaction.request.interaction_ref()
+            );
+            assert!(matches!(
+                interaction.source,
+                rustx::runtime::InteractionSource::Primary
+            ));
+            assert_eq!(
+                emulator.requests().await.len(),
+                1,
+                "parent remains inside its pending outer Workflow call"
+            );
+            let response = match interaction.request.kind {
+                InteractionKind::Questionnaire { invocation_id, .. } => {
+                    assert!(matches!(
+                        invocation_id,
+                        rustx::tools::types::ToolInvocationId::Workflow { .. }
+                    ));
+                    // Decline is ordinary data; this fixed program still reaches Review.
+                    InteractionResponse::Questionnaire {
+                        response: QuestionnaireResponse::Declined,
+                    }
+                }
+                InteractionKind::Review {
+                    review,
+                    subject_digest,
+                } => InteractionResponse::Review {
+                    response: ReviewResponse {
+                        instance: review.instance,
+                        subject_digest,
+                        decision: if accepted {
+                            ReviewDecision::Accepted
+                        } else {
+                            ReviewDecision::Rejected {
+                                feedback: "PRIVATE FEEDBACK".into(),
+                            }
+                        },
+                    },
+                },
+                InteractionKind::Approval { .. } => panic!("no approval expected"),
+            };
+            for wrong in 0..2 {
+                let mut target = interaction.interaction.clone();
+                if wrong == 0 {
+                    target.conversation_id =
+                        rustx::runtime::identity::ConversationId::new("different-owner");
+                } else {
+                    target.interaction_id =
+                        rustx::runtime::identity::InteractionId::new("different-interaction");
+                }
+                let rejected = driver
+                    .attachment
+                    .handle_request_async(
+                        rustx::runtime_client::RuntimeClientRequest::InteractionRespond {
+                            id: rustx::runtime_client::RequestId::new(1000 + seen * 2 + wrong),
+                            interaction: target,
+                            response: response.clone(),
+                        },
+                    )
+                    .await;
+                assert!(
+                    rejected.error.is_some(),
+                    "wrong routed owner/id cannot settle the prompt"
+                );
+            }
+            let result = driver
+                .attachment
+                .handle_request_async(
+                    rustx::runtime_client::RuntimeClientRequest::InteractionRespond {
+                        id: rustx::runtime_client::RequestId::new(220 + seen),
+                        interaction: interaction.interaction.clone(),
+                        response,
+                    },
+                )
+                .await;
+            assert!(
+                matches!(result.result, Some(RuntimeClientResult::InteractionResponseAccepted { interaction: original }) if original == interaction.interaction)
+            );
+            seen += 1;
+        }
+        let (_, outcome) = driver.settle().await;
+        assert!(matches!(outcome, RuntimeClientOutcome::Completed { .. }));
+        assert_eq!(
+            emulator.requests().await.len(),
+            2,
+            "one parent call and its ordinary continuation only"
+        );
+        let (snapshot, _) = driver.runtime.host().snapshot().unwrap();
+        let messages = serde_json::to_string(&snapshot.messages).unwrap();
+        assert!(!messages.contains("PRIVATE QUESTION"));
+        assert!(!messages.contains("PRIVATE FEEDBACK"));
+        assert_eq!(
+            snapshot
+                .messages
+                .iter()
+                .filter(|message| matches!(message, rustx::message::types::MessageBlock::Tool(_)))
+                .count(),
+            1
+        );
+        emulator.finish().await;
+    }
+}

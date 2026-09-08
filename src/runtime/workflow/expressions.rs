@@ -199,7 +199,9 @@ pub(super) fn validate_predicate(
     Ok(())
 }
 
-/// Interpreter-only applicability, never embedded in authored/user JSON.
+/// Runtime-owned data applicability, never granted by authored/user JSON.
+/// Review disclosure preserves this identity as typed facts; human decisions
+/// themselves have no candidate provenance. Acceptance is separate control state.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct CommittedValue {
     pub value: Value,

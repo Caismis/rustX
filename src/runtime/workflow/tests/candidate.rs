@@ -54,8 +54,8 @@ struct CandidateProbe {
     observed: std::sync::Mutex<Vec<(std::path::PathBuf, Vec<u8>)>>,
 }
 impl ToolExecutor for CandidateProbe {
-    fn honors_workspace(&self) -> bool {
-        true
+    fn workspace_use(&self) -> crate::tools::executor::WorkspaceUse {
+        crate::tools::executor::WorkspaceUse::ConsumesProvided
     }
     fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
         crate::tools::deadline::ToolProgressCapability::None
@@ -608,8 +608,8 @@ struct GatedCandidateProbe {
     release: tokio::sync::Semaphore,
 }
 impl ToolExecutor for GatedCandidateProbe {
-    fn honors_workspace(&self) -> bool {
-        true
+    fn workspace_use(&self) -> crate::tools::executor::WorkspaceUse {
+        crate::tools::executor::WorkspaceUse::ConsumesProvided
     }
     fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
         crate::tools::deadline::ToolProgressCapability::None
@@ -931,7 +931,7 @@ async fn stale_check_after_writer(return_value: bool, parallel_export: bool) {
         "writer",
         if return_value { "return" } else { "branch" },
     ] {
-        assert_eq!(events.iter().filter(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeStarted { instance } if instance.node == node)).count(), 1, "exact start count for {node}");
+        assert_eq!(events.iter().filter(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeStarted { instance } if instance.node == node)).count(), usize::from(node == "check" || node == "writer"), "exact start count for {node}");
     }
     assert!(events.iter().any(|event| matches!(&event.event, RuntimeEvent::WorkflowWorkspaceSettled { candidate: Some(reference), .. } if reference.version == 1)));
 }
@@ -1129,7 +1129,7 @@ async fn agent_review_case(writer: bool, parallel: bool) {
     };
     assert_eq!(starts("review"), 1);
     assert_eq!(starts("writer"), usize::from(writer));
-    assert_eq!(starts("branch"), 1);
+    assert_eq!(starts("branch"), usize::from(!writer));
     assert_eq!(starts("yes"), usize::from(!writer));
     assert_eq!(starts("no"), 0);
     assert_eq!(
@@ -1425,4 +1425,1392 @@ async fn agent_inspection_recovery_case(writer: bool, later_edit: bool) {
             .find(|event| event.event_id == run_terminal.event_id),
         Some(run_terminal)
     );
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn review_dirty_candidate_accept_reject_mutation_and_cancel_gate_exact_downstream_admission()
+{
+    for mode in 0..5 {
+        let plane = workflow_test_plane(1);
+        initialize(&plane);
+        let mut child = stage_workflow_child(&plane);
+        let probe = Arc::new(CandidateProbe {
+            status: ToolExecutionStatus::Success,
+            mutate: false,
+            observed: std::sync::Mutex::default(),
+        });
+        let mut context = setup_context(&plane, probe.clone());
+        let (owner, audit, mut published) = super::human::owner(&plane);
+        Arc::make_mut(context.native.as_mut().unwrap()).lifecycle =
+            crate::agent::AttemptLifecycle::default().with_native_interaction(owner.clone());
+        let mut definition = program_definition();
+        definition.workspace = Some(WorkflowWorkspace {
+            require_clean_parent: true,
+        });
+        definition.block.nodes.insert(
+            "implement".into(),
+            WorkflowNodeDefinition::Agent {
+                profile: profile("reviewer"),
+                task: "Implement".into(),
+                input: BTreeMap::new(),
+                output: schema(json!({}), &[]),
+            },
+        );
+        definition.block.nodes.insert(
+            "review".into(),
+            WorkflowNodeDefinition::Review {
+                subject: WorkflowReviewSubject::Candidate {
+                    value: WorkflowValue::Reference {
+                        path: vec!["implement".into()],
+                    },
+                },
+                context: vec![],
+            },
+        );
+        definition.block.nodes.insert(
+            "decision".into(),
+            WorkflowNodeDefinition::Branch {
+                condition: WorkflowPredicate::Boolean {
+                    value: WorkflowValue::Reference {
+                        path: vec!["review".into(), "accepted".into()],
+                    },
+                },
+            },
+        );
+        definition.block.nodes.insert(
+            "rejected".into(),
+            WorkflowNodeDefinition::Return {
+                output: WorkflowValue::Literal {
+                    value: json!({"passed":false}),
+                },
+            },
+        );
+        definition.block.entry = "implement".into();
+        definition.block.edges.extend([
+            edge("implement", "review"),
+            edge("review", "decision"),
+            WorkflowEdgeDefinition {
+                from: "decision".into(),
+                to: "check".into(),
+                port: Some(WorkflowPort::True),
+            },
+            WorkflowEdgeDefinition {
+                from: "decision".into(),
+                to: "rejected".into(),
+                port: Some(WorkflowPort::False),
+            },
+        ]);
+        let program = Arc::new(compile_test(definition).unwrap());
+        let runtime = workflow_runtime(&plane);
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        if mode >= 3 {
+            *runtime.node_frontier.lock().unwrap() =
+                Some(crate::runtime::workflow::execution::NodeFrontierHook {
+                    node: "check".into(),
+                    entered: entered_tx,
+                    release: release_rx,
+                });
+        }
+        let (trigger, cancellation) = workflow_cancellation();
+        let task = tokio::spawn(async move {
+            runtime
+                .run_foreground(
+                    program,
+                    ToolCallId::new("review-candidate"),
+                    context,
+                    json!({"passed":true}),
+                    cancellation,
+                )
+                .await
+        });
+        child.expect_delegate().await;
+        let path = plane
+            .registry
+            .all_snapshots()
+            .pop()
+            .unwrap()
+            .workspace
+            .logical_workspace;
+        std::fs::write(path.join("candidate"), b"candidate A dirty bytes").unwrap();
+        let head = git(&path, &["rev-parse", "HEAD"]);
+        child
+            .send_result(
+                crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+                Some("{}"),
+            )
+            .await;
+        let request = published.recv().await.unwrap();
+        let crate::runtime::interaction::InteractionKind::Review { review, .. } = &request.kind
+        else {
+            panic!("Review")
+        };
+        let crate::events::review::ReviewSubject::Candidate {
+            reference,
+            inspection_path,
+        } = &review.subject
+        else {
+            panic!("candidate")
+        };
+        assert_eq!(std::path::Path::new(inspection_path), path);
+        assert_eq!(reference.version, 1);
+        if mode == 2 {
+            std::fs::write(path.join("candidate"), b"candidate B dirty bytes").unwrap();
+        }
+        let response = super::human::answer(&request, mode != 1);
+        let accepted = owner.respond_async(&request.id, response).await;
+        if mode == 2 {
+            assert!(accepted.is_err());
+        } else {
+            accepted.unwrap();
+        }
+        if mode >= 3 {
+            entered_rx.await.unwrap(); // accepted local data, before downstream borrow/admission
+            if mode == 3 {
+                std::fs::write(path.join("candidate"), b"candidate B dirty bytes").unwrap();
+            } else {
+                trigger.cancel();
+            }
+            release_tx.send(()).unwrap();
+        }
+        let result = task.await.unwrap();
+        if mode <= 1 {
+            assert!(result.is_ok(), "{result:?}");
+        } else {
+            assert!(result.is_err());
+        }
+        assert_eq!(git(&path, &["rev-parse", "HEAD"]), head);
+        assert_eq!(probe.observed.lock().unwrap().len(), usize::from(mode == 0));
+        if mode != 0 {
+            assert!(!plane.store.read_events(None, 256).unwrap().events.iter().any(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeStarted { instance } if instance.node == "check")));
+        }
+        assert_eq!(owner.pending_count(), 0);
+        assert_eq!(audit.events().len(), 2);
+    }
+}
+
+fn review_reference(node: &str) -> Value {
+    json!({"type":"reference","path":[node]})
+}
+fn repair_agent() -> Value {
+    json!({"type":"agent","profile":"reviewer","task":"Produce candidate","input":{},"output":{"type":"object","properties":{},"required":[],"additionalProperties":false}})
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn workspace_independent_question_wait_does_not_borrow_or_validate_candidate() {
+    let plane = workflow_test_plane(1);
+    initialize(&plane);
+    let mut child = stage_workflow_child(&plane);
+    let (owner, _, mut published) = super::human::owner(&plane);
+    let context = context_with_workspace_policy(
+        &plane,
+        crate::tools::native::test_ask_user_registration(),
+        crate::agent::AttemptLifecycle::default().with_native_interaction(owner.clone()),
+        WorkspacePolicy::GitWorktree {
+            require_clean_parent: true,
+        },
+    );
+    let question_schema = json!({"type":"object","properties":{"cancelled":{"type":"boolean"},"answers":{"type":"array","items":{"type":"object"}}},"required":["cancelled","answers"]});
+    let empty = schema(json!({}), &[]);
+    let definition = serde_json::from_value(json!({"description":"Independent human and writer", "workspace":{"require_clean_parent":true},"timeout_ms":600_000,"tools":[{"origin":"builtin","name":"ask_user"}],"block":{
+        "input":empty,"output":empty,"entry":"parallel","nodes":{
+            "parallel":{"type":"parallel","branches":{
+                "question":{"input":{"type":"literal","value":{}},"block":{"input":empty,"output":question_schema,"entry":"ask","nodes":{
+                    "ask":{"type":"tool","selector":{"origin":"builtin","name":"ask_user"},"arguments":{"type":"literal","value":{"questions":[{"question":"Choose","header":"Target","options":[{"label":"A","description":"First"},{"label":"B","description":"Second"}]}]}},"result":{"type":"json","part":0,"schema":question_schema}},
+                    "done":{"type":"return","output":review_reference("ask")}},"edges":[{"from":"ask","to":"done"}]}},
+                "writer":{"input":{"type":"literal","value":{}},"block":{"input":empty,"output":empty,"entry":"writer","nodes":{"writer":repair_agent(),"done":{"type":"return","output":review_reference("writer")}},"edges":[{"from":"writer","to":"done"}]}}
+            }},"done":{"type":"return","output":{"type":"literal","value":{}}}},"edges":[{"from":"parallel","to":"done"}]}})).unwrap();
+    let program = Arc::new(compile_test(definition).unwrap());
+    let runtime = workflow_runtime(&plane);
+    let (entered, waiting) = tokio::sync::oneshot::channel();
+    let (release, gate) = tokio::sync::oneshot::channel();
+    *runtime.node_frontier.lock().unwrap() =
+        Some(crate::runtime::workflow::execution::NodeFrontierHook {
+            node: "writer".into(),
+            entered,
+            release: gate,
+        });
+    let (_, cancellation) = workflow_cancellation();
+    let task = tokio::spawn(async move {
+        runtime
+            .run_foreground(
+                program,
+                ToolCallId::new("independent-question"),
+                context,
+                json!({}),
+                cancellation,
+            )
+            .await
+    });
+    let request = published.recv().await.unwrap();
+    waiting.await.unwrap();
+    assert_eq!(owner.pending_count(), 1);
+    release.send(()).unwrap();
+    // Native child delegation occurs only AFTER CandidateScope's real exclusive
+    // borrow. This cannot happen while ask_user owns that borrow.
+    child.expect_delegate().await;
+    assert_eq!(owner.pending_count(), 1);
+    let path = plane
+        .registry
+        .all_snapshots()
+        .pop()
+        .unwrap()
+        .workspace
+        .logical_workspace;
+    std::fs::write(path.join("candidate"), b"B while questionnaire is pending").unwrap();
+    child
+        .send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some("{}"),
+        )
+        .await;
+    owner
+        .respond_async(&request.id, super::human::answer(&request, true))
+        .await
+        .unwrap();
+    assert!(task.await.unwrap().is_ok());
+    let events = plane.store.read_events(None, 256).unwrap().events;
+    assert!(!events.iter().any(|event| matches!(&event.event, RuntimeEvent::WorkflowCandidateInvocation { node, .. } if node.node == "ask")));
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn rejected_review_survives_writer_b_but_explicit_a_dependency_fails_before_start() {
+    for explicit_a in [false, true] {
+        let plane = workflow_test_plane(1);
+        initialize(&plane);
+        let mut first = stage_workflow_child(&plane);
+        let mut writer = stage_workflow_child(&plane);
+        let (owner, _, mut published) = super::human::owner(&plane);
+        let probe = Arc::new(CandidateProbe {
+            status: ToolExecutionStatus::Success,
+            mutate: false,
+            observed: std::sync::Mutex::default(),
+        });
+        let mut context = setup_context(&plane, probe);
+        Arc::make_mut(context.native.as_mut().unwrap()).lifecycle =
+            crate::agent::AttemptLifecycle::default().with_native_interaction(owner.clone());
+        let empty = schema(json!({}), &[]);
+        let result_schema = crate::runtime::workflow::review::result_schema();
+        let next = if explicit_a {
+            let mut node = repair_agent();
+            node["input"] = json!({"old":review_reference("first")});
+            node
+        } else {
+            json!({"type":"return","output":review_reference("review")})
+        };
+        let mut nodes = json!({"first":repair_agent(),"review":{"type":"review","subject":{"type":"candidate","value":review_reference("first")},"context":[]},"writer":repair_agent(),"branch":{"type":"branch","condition":{"type":"boolean","value":{"type":"reference","path":["review","accepted"]}}},"accepted":{"type":"return","output":review_reference("review")},"rejected":next});
+        let mut edges = json!([{"from":"first","to":"review"},{"from":"review","to":"writer"},{"from":"writer","to":"branch"},{"from":"branch","to":"accepted","port":"true"},{"from":"branch","to":"rejected","port":"false"}]);
+        if explicit_a {
+            nodes["done"] = json!({"type":"return","output":review_reference("review")});
+            edges
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"from":"rejected","to":"done"}));
+        }
+        let definition = serde_json::from_value(json!({"description":"Rejection is business data","workspace":{"require_clean_parent":true},"timeout_ms":600_000,"tools":[],"block":{"input":empty,"output":result_schema,"entry":"first","nodes":nodes,"edges":edges}})).unwrap();
+        let program = Arc::new(compile_test(definition).unwrap());
+        let runtime = workflow_runtime(&plane);
+        let (_, cancellation) = workflow_cancellation();
+        let task = tokio::spawn(async move {
+            runtime
+                .run_foreground(
+                    program,
+                    ToolCallId::new("reject-repair"),
+                    context,
+                    json!({}),
+                    cancellation,
+                )
+                .await
+        });
+        first.expect_delegate().await;
+        let path = plane
+            .registry
+            .all_snapshots()
+            .pop()
+            .unwrap()
+            .workspace
+            .logical_workspace;
+        std::fs::write(path.join("candidate"), b"A").unwrap();
+        first
+            .send_result(
+                crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+                Some("{}"),
+            )
+            .await;
+        let request = published.recv().await.unwrap();
+        owner
+            .respond_async(&request.id, super::human::answer(&request, false))
+            .await
+            .unwrap();
+        writer.expect_delegate().await; // Review local commit preceded writer admission.
+        std::fs::write(path.join("candidate"), b"B").unwrap();
+        writer
+            .send_result(
+                crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+                Some("{}"),
+            )
+            .await;
+        let result = task.await.unwrap();
+        if explicit_a {
+            assert!(result.is_err());
+        } else {
+            assert_eq!(
+                result.unwrap()["output"],
+                json!({"accepted":false,"feedback":"Revise scope"})
+            );
+        }
+        let events = plane.store.read_events(None, 256).unwrap().events;
+        assert!(events.iter().any(|event| matches!(&event.event, RuntimeEvent::WorkflowBranchSelected { port:WorkflowPort::False, successor, .. } if successor == "rejected")));
+        assert_eq!(events.iter().filter(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeStarted { instance } if instance.node == "rejected")).count(), usize::from(!explicit_a));
+    }
+}
+
+#[tokio::test]
+async fn plan_review_candidate_check_is_audited_and_mutation_invalidates_before_settlement() {
+    let plane = workflow_test_plane(1);
+    initialize(&plane);
+    let probe = Arc::new(CandidateProbe {
+        status: ToolExecutionStatus::Success,
+        mutate: false,
+        observed: std::sync::Mutex::default(),
+    });
+    let mut context = setup_context(&plane, probe);
+    let (owner, audit, mut published) = super::human::owner(&plane);
+    Arc::make_mut(context.native.as_mut().unwrap()).lifecycle =
+        crate::agent::AttemptLifecycle::default().with_native_interaction(owner.clone());
+    let mut definition = program_definition();
+    definition.timeout_ms = 600_000;
+    definition.workspace = Some(WorkflowWorkspace {
+        require_clean_parent: true,
+    });
+    definition.block.nodes.insert(
+        "review".into(),
+        WorkflowNodeDefinition::Review {
+            subject: WorkflowReviewSubject::Plan {
+                value: WorkflowValue::Reference {
+                    path: vec!["args".into()],
+                },
+            },
+            context: vec![WorkflowValue::Reference {
+                path: vec!["check".into()],
+            }],
+        },
+    );
+    definition.block.edges.retain(|edge| edge.from != "check");
+    definition
+        .block
+        .edges
+        .extend([edge("check", "review"), edge("review", "branch")]);
+    let program = Arc::new(compile_test(definition).unwrap());
+    let runtime = workflow_runtime(&plane);
+    let (_, cancellation) = workflow_cancellation();
+    let task = tokio::spawn(async move {
+        runtime
+            .run_foreground(
+                program,
+                ToolCallId::new("plan-context"),
+                context,
+                json!({"passed":true}),
+                cancellation,
+            )
+            .await
+    });
+    let request = published.recv().await.unwrap();
+    let crate::runtime::interaction::InteractionKind::Review { review, .. } = &request.kind else {
+        panic!("review")
+    };
+    let reference = review.context[0]
+        .candidate
+        .as_ref()
+        .expect("check candidate identity published");
+    assert_eq!(review.context[0].value, json!({"passed":true}));
+    assert_eq!(review.candidate().unwrap(), Some(reference));
+    assert!(
+        serde_json::to_string(&audit.events())
+            .unwrap()
+            .contains(&reference.content)
+    );
+    let events = plane.store.read_events(None, 256).unwrap().events;
+    let path = events
+        .iter()
+        .find_map(|event| match &event.event {
+            RuntimeEvent::WorkflowWorkspaceOwned { workspace, .. } => {
+                Some(workspace.logical_workspace.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    std::fs::write(path.join("baseline"), b"B while plan is pending").unwrap();
+    assert!(
+        owner
+            .respond_async(&request.id, super::human::answer(&request, true))
+            .await
+            .is_err()
+    );
+    assert!(task.await.unwrap().is_err());
+    assert!(audit.events().iter().any(|event| matches!(
+        event,
+        RuntimeEvent::InteractionSettled {
+            settlement: crate::events::interaction::InteractionSettlement::ReviewInvalidated,
+            ..
+        }
+    )));
+    assert!(!audit.events().iter().any(|event| matches!(
+        event,
+        RuntimeEvent::InteractionSettled {
+            settlement: crate::events::interaction::InteractionSettlement::Reviewed { .. },
+            ..
+        }
+    )));
+    assert!(!plane.store.read_events(None,256).unwrap().events.iter().any(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == "branch")));
+}
+
+#[tokio::test]
+async fn review_mismatched_candidate_context_fails_before_any_prompt() {
+    let plane = workflow_test_plane(1);
+    initialize(&plane);
+    let mut writer = stage_workflow_child(&plane);
+    let probe = Arc::new(CandidateProbe {
+        status: ToolExecutionStatus::Success,
+        mutate: false,
+        observed: std::sync::Mutex::default(),
+    });
+    let mut context = setup_context(&plane, probe);
+    let (owner, audit, mut published) = super::human::owner(&plane);
+    Arc::make_mut(context.native.as_mut().unwrap()).lifecycle =
+        crate::agent::AttemptLifecycle::default().with_native_interaction(owner.clone());
+    let mut definition = program_definition();
+    definition.timeout_ms = 600_000;
+    definition.workspace = Some(WorkflowWorkspace {
+        require_clean_parent: true,
+    });
+    definition.block.nodes.insert(
+        "writer".into(),
+        serde_json::from_value(repair_agent()).unwrap(),
+    );
+    definition.block.nodes.insert(
+        "review".into(),
+        WorkflowNodeDefinition::Review {
+            subject: WorkflowReviewSubject::Candidate {
+                value: WorkflowValue::Reference {
+                    path: vec!["writer".into()],
+                },
+            },
+            context: vec![WorkflowValue::Reference {
+                path: vec!["check".into()],
+            }],
+        },
+    );
+    definition.block.edges.retain(|edge| edge.from != "check");
+    definition.block.edges.extend([
+        edge("check", "writer"),
+        edge("writer", "review"),
+        edge("review", "branch"),
+    ]);
+    let program = Arc::new(compile_test(definition).unwrap());
+    let runtime = workflow_runtime(&plane);
+    let (_, cancellation) = workflow_cancellation();
+    let task = tokio::spawn(async move {
+        runtime
+            .run_foreground(
+                program,
+                ToolCallId::new("mismatched-context"),
+                context,
+                json!({"passed":true}),
+                cancellation,
+            )
+            .await
+    });
+    writer.expect_delegate().await; // check(A) already committed
+    let path = plane
+        .registry
+        .all_snapshots()
+        .pop()
+        .unwrap()
+        .workspace
+        .logical_workspace;
+    std::fs::write(path.join("candidate"), b"B").unwrap();
+    writer
+        .send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some("{}"),
+        )
+        .await;
+    assert!(task.await.unwrap().is_err());
+    assert!(published.try_recv().is_err());
+    assert!(audit.events().is_empty());
+    assert_eq!(owner.pending_count(), 0);
+}
+
+#[tokio::test]
+async fn cancellation_after_candidate_borrow_before_start_returns_exact_access() {
+    for consumer in ["tool", "agent", "return"] {
+        pre_start_candidate_case(consumer, 0).await;
+    }
+}
+
+#[tokio::test]
+async fn budget_rejection_after_candidate_borrow_returns_access_without_count_commit() {
+    pre_start_candidate_case("tool", 1).await;
+    pre_start_candidate_case("agent", 2).await;
+}
+
+#[allow(clippy::too_many_lines)]
+async fn pre_start_candidate_case(consumer: &str, failure: usize) {
+    use crate::runtime::workflow::execution::{PreStartAction, PreStartHook};
+    let plane = workflow_test_plane(1);
+    initialize(&plane);
+    let probe = Arc::new(CandidateProbe {
+        status: ToolExecutionStatus::Success,
+        mutate: false,
+        observed: std::sync::Mutex::default(),
+    });
+    let context = setup_context(&plane, probe.clone());
+    let mut definition = program_definition();
+    definition.workspace = Some(WorkflowWorkspace {
+        require_clean_parent: true,
+    });
+    let mut next = match consumer {
+        "tool" => definition.block.nodes["check"].clone(),
+        "agent" => serde_json::from_value(repair_agent()).unwrap(),
+        "return" => WorkflowNodeDefinition::Return {
+            output: WorkflowValue::Reference {
+                path: vec!["check".into()],
+            },
+        },
+        _ => unreachable!(),
+    };
+    let dependency = WorkflowValue::Reference {
+        path: vec!["check".into()],
+    };
+    match &mut next {
+        WorkflowNodeDefinition::Tool { arguments, .. } => {
+            *arguments = WorkflowValue::Object {
+                fields: BTreeMap::from([
+                    (
+                        "passed".into(),
+                        WorkflowValue::Reference {
+                            path: vec!["check".into(), "passed".into()],
+                        },
+                    ),
+                    (
+                        "label".into(),
+                        WorkflowValue::Literal {
+                            value: json!("next"),
+                        },
+                    ),
+                ]),
+            };
+        }
+        WorkflowNodeDefinition::Agent { input, .. } => {
+            input.insert("candidate".into(), dependency);
+        }
+        _ => {}
+    }
+    definition.block.nodes.retain(|key, _| key == "check");
+    definition.block.nodes.insert("next".into(), next);
+    definition.block.edges = vec![edge("check", "next")];
+    if consumer != "return" {
+        definition.block.nodes.insert(
+            "done".into(),
+            WorkflowNodeDefinition::Return {
+                output: WorkflowValue::Literal {
+                    value: json!({"passed":true}),
+                },
+            },
+        );
+        definition.block.edges.push(edge("next", "done"));
+    }
+    let program = Arc::new(compile_test(definition).unwrap());
+    let total_nodes = program.total_nodes;
+    let runtime = workflow_runtime(&plane);
+    let (acquired, acquire) = tokio::sync::oneshot::channel();
+    let (proceed, proceed_rx) = tokio::sync::oneshot::channel();
+    let (released, release_rx) = tokio::sync::oneshot::channel();
+    let (finish, finish_rx) = tokio::sync::oneshot::channel();
+    *runtime.pre_start.lock().unwrap() = Some(PreStartHook {
+        node: "next".into(),
+        acquired,
+        proceed: proceed_rx,
+        released,
+        finish: finish_rx,
+    });
+    let (trigger, cancellation) = workflow_cancellation();
+    let task = tokio::spawn(async move {
+        runtime
+            .run_foreground(
+                program,
+                ToolCallId::new("pre-start"),
+                context,
+                json!({"passed":true}),
+                cancellation,
+            )
+            .await
+    });
+    let (scope, reference, node, before) = acquire.await.unwrap();
+    assert_eq!(before, [1, 0]);
+    // This is the actual native borrow queue, not an observation-only flag.
+    let (_, fresh) = workflow_cancellation();
+    let signal = fresh.child_signal();
+    let mut borrower = Box::pin(scope.borrow(node, Some(&reference), &signal));
+    assert!(futures_util::poll!(&mut borrower).is_pending());
+    let action = match failure {
+        0 => {
+            trigger.cancel();
+            PreStartAction::Continue
+        }
+        1 => PreStartAction::ExhaustNodes,
+        2 => PreStartAction::ExhaustAgents,
+        _ => unreachable!(),
+    };
+    proceed.send(action).unwrap_or_else(|_| panic!("proceed"));
+    let after = release_rx.await.unwrap();
+    assert_eq!(
+        after,
+        match failure {
+            0 => before,
+            1 => [total_nodes, 0],
+            2 => [1, MAX_WORKFLOW_NODES],
+            _ => unreachable!(),
+        }
+    );
+    // Cleanup cleared native admitted state: the queued borrower acquires A
+    // unchanged before the Workflow is allowed to settle its outer resource.
+    let access = borrower.await.unwrap();
+    assert_eq!(access.input(), &reference);
+    assert_eq!(access.finish(true).await.unwrap(), reference);
+    finish.send(()).unwrap();
+    let error = task.await.unwrap().unwrap_err();
+    let WorkflowRunError::WorkspaceSettlement {
+        error,
+        workspace,
+        candidate,
+        ..
+    } = error
+    else {
+        panic!("workspace settlement")
+    };
+    if failure == 0 {
+        assert!(
+            matches!(*error, WorkflowRunError::Cancelled { .. }),
+            "{error:?}"
+        );
+    } else {
+        assert!(matches!(*error, WorkflowRunError::InvalidProgram(_)));
+    }
+    assert_eq!(candidate.as_ref(), Some(&reference));
+    assert!(workspace.unresolved_reason().is_none(), "{workspace:?}");
+    assert!(!format!("{workspace:?}").contains("abandoned"));
+    assert_eq!(probe.observed.lock().unwrap().len(), 1); // initial check only
+    assert!(plane.registry.all_snapshots().is_empty()); // zero Agent delegation
+    let events = plane.store.read_events(None, 256).unwrap().events;
+    assert!(!events.iter().any(|event| matches!(&event.event,RuntimeEvent::WorkflowNodeStarted {instance} | RuntimeEvent::WorkflowNodeSettled {instance,..} if instance.node == "next")));
+    assert!(!events.iter().any(|event| matches!(&event.event,RuntimeEvent::WorkflowCandidateInvocation {node,..} if node.node == "next")));
+    assert!(!events.iter().any(|event| matches!(&event.event, RuntimeEvent::NativeToolInvocation { invocation_id: crate::tools::types::ToolInvocationId::Workflow { node }, fact: crate::tools::invocation::NativeInvocationFact::Started, .. } if node.node == "next")));
+}
+
+#[tokio::test]
+async fn parallel_untouched_sibling_does_not_conflict_with_replaced_acceptance() {
+    for idle_last in [false, true] {
+        parallel_acceptance_case("replace", false, idle_last).await;
+    }
+}
+
+#[tokio::test]
+async fn parallel_untouched_sibling_cannot_resurrect_consumed_acceptance() {
+    parallel_acceptance_case("clear", false, true).await;
+}
+
+#[tokio::test]
+async fn parallel_unchanged_agent_preserves_incoming_acceptance() {
+    parallel_acceptance_case("inspect", false, true).await;
+}
+
+#[tokio::test]
+async fn parallel_all_unchanged_preserves_incoming_acceptance() {
+    parallel_acceptance_case("unchanged", false, false).await;
+}
+
+#[tokio::test]
+async fn nested_parallel_composes_replacement_relative_to_each_entry() {
+    parallel_acceptance_case("replace", true, true).await;
+}
+
+#[allow(clippy::too_many_lines)]
+async fn parallel_acceptance_case(mode: &str, nested: bool, idle_last: bool) {
+    let plane = workflow_test_plane(1);
+    initialize(&plane);
+    let mut initial = stage_workflow_child(&plane);
+    let mut writer = (mode != "unchanged").then(|| stage_workflow_child(&plane));
+    let probe = Arc::new(CandidateProbe {
+        status: ToolExecutionStatus::Success,
+        mutate: false,
+        observed: std::sync::Mutex::default(),
+    });
+    let mut context = setup_context(&plane, probe.clone());
+    let (owner, _, mut published) = super::human::owner(&plane);
+    Arc::make_mut(context.native.as_mut().unwrap()).lifecycle =
+        crate::agent::AttemptLifecycle::default().with_native_interaction(owner.clone());
+    let empty = schema(json!({}), &[]);
+    let literal_return = json!({"type":"return","output":{"type":"literal","value":{}}});
+    let mut right_nodes = json!({"right_done":literal_return});
+    let mut right_edges = vec![];
+    if mode != "unchanged" {
+        right_nodes["writer"] = repair_agent();
+        if mode == "replace" {
+            right_nodes["review_b"] = json!({"type":"review","subject":{"type":"candidate","value":review_reference("writer")},"context":[]});
+            right_edges.extend([
+                json!({"from":"writer","to":"review_b"}),
+                json!({"from":"review_b","to":"right_done"}),
+            ]);
+        } else {
+            right_edges.push(json!({"from":"writer","to":"right_done"}));
+        }
+    }
+    let mut right_block = json!({"input":empty,"output":empty,"entry":if mode == "unchanged" {"right_done"} else {"writer"},"nodes":right_nodes,"edges":right_edges});
+    if nested {
+        right_block = json!({"input":empty,"output":empty,"entry":"nested","nodes":{
+            "nested":{"type":"parallel","branches":{
+                "writer":{"input":{"type":"literal","value":{}},"block":right_block},
+                "idle":{"input":{"type":"literal","value":{}},"block":{"input":empty,"output":empty,"entry":"nested_idle","nodes":{"nested_idle":literal_return},"edges":[]}}
+            }},"nested_done":literal_return},"edges":[{"from":"nested","to":"nested_done"}]});
+    }
+    let mut definition = program_definition();
+    definition.timeout_ms = 600_000;
+    definition.workspace = Some(WorkflowWorkspace {
+        require_clean_parent: true,
+    });
+    let check = definition.block.nodes["check"].clone();
+    definition.block.nodes = serde_json::from_value(json!({
+        "initial":repair_agent(),
+        "review_a":{"type":"review","subject":{"type":"candidate","value":review_reference("initial")},"context":[]},
+        "parallel":{"type":"parallel","branches":{
+            "left":{"input":{"type":"literal","value":{}},"block":{"input":empty,"output":empty,"entry":"idle","nodes":{"idle":literal_return},"edges":[]}},
+            "right":{"input":{"type":"literal","value":{}},"block":right_block}
+        }},"check":check,"done":{"type":"return","output":review_reference("check")}
+    })).unwrap();
+    definition.block.entry = "initial".into();
+    definition.block.edges = vec![
+        edge("initial", "review_a"),
+        edge("review_a", "parallel"),
+        edge("parallel", "check"),
+        edge("check", "done"),
+    ];
+    let runtime = workflow_runtime(&plane);
+    let mut observations = runtime.observations.subscribe();
+    let (entered, enter) = tokio::sync::oneshot::channel();
+    let (release, gate) = tokio::sync::oneshot::channel();
+    *runtime.node_frontier.lock().unwrap() =
+        Some(crate::runtime::workflow::execution::NodeFrontierHook {
+            node: "idle".into(),
+            entered,
+            release: gate,
+        });
+    let program = Arc::new(compile_test(definition).unwrap());
+    let (_, cancellation) = workflow_cancellation();
+    let task = tokio::spawn(async move {
+        runtime
+            .run_foreground(
+                program,
+                ToolCallId::new("parallel-acceptance"),
+                context,
+                json!({"passed":true}),
+                cancellation,
+            )
+            .await
+    });
+    initial.expect_delegate().await;
+    let path = plane
+        .registry
+        .all_snapshots()
+        .pop()
+        .unwrap()
+        .workspace
+        .logical_workspace;
+    std::fs::write(path.join("candidate"), b"A").unwrap();
+    initial
+        .send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some("{}"),
+        )
+        .await;
+    let a = published.recv().await.unwrap();
+    let crate::runtime::interaction::InteractionKind::Review { review, .. } = &a.kind else {
+        panic!("review")
+    };
+    let expected_a = review.candidate().unwrap().unwrap().clone();
+    owner
+        .respond_async(&a.id, super::human::answer(&a, true))
+        .await
+        .unwrap();
+    enter.await.unwrap();
+    let mut release = Some(release);
+    if !idle_last {
+        release.take().unwrap().send(()).unwrap();
+        observations.wait_for(|events| events.iter().any(|event| matches!(event,RuntimeEvent::WorkflowNodeSettled {instance,..} if instance.node == "idle"))).await.unwrap();
+    }
+    let mut expected = expected_a.clone();
+    if let Some(writer) = &mut writer {
+        writer.expect_delegate().await;
+        if mode != "inspect" {
+            std::fs::write(path.join("candidate"), b"B").unwrap();
+        }
+        writer
+            .send_result(
+                crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+                Some("{}"),
+            )
+            .await;
+        if mode == "replace" {
+            let b = published.recv().await.unwrap();
+            let crate::runtime::interaction::InteractionKind::Review { review, .. } = &b.kind
+            else {
+                panic!("review")
+            };
+            expected = review.candidate().unwrap().unwrap().clone();
+            assert_ne!(expected, expected_a);
+            owner
+                .respond_async(&b.id, super::human::answer(&b, true))
+                .await
+                .unwrap();
+        }
+    }
+    if idle_last {
+        observations.wait_for(|events| events.iter().any(|event| matches!(event,RuntimeEvent::WorkflowNodeSettled {instance,..} if instance.node == "right_done"))).await.unwrap();
+        release.take().unwrap().send(()).unwrap();
+    }
+    let result = task.await.unwrap();
+    let events = plane.store.read_events(None, 256).unwrap().events;
+    if mode == "clear" {
+        expected = events
+            .iter()
+            .find_map(|event| match &event.event {
+                RuntimeEvent::WorkflowWorkspaceSettled { candidate, .. } => candidate.clone(),
+                _ => None,
+            })
+            .expect("settled candidate B");
+        assert_ne!(expected, expected_a);
+    }
+    {
+        assert_eq!(result.unwrap()["output"], json!({"passed":true}));
+        assert_eq!(probe.observed.lock().unwrap().len(), 1);
+        assert_eq!(events.iter().filter(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == "check")).count(), 1);
+        let inputs = events
+            .iter()
+            .filter_map(|event| match &event.event {
+                RuntimeEvent::WorkflowCandidateInvocation { node, input, .. }
+                    if node.node == "check" =>
+                {
+                    Some(input)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(inputs, vec![&expected]);
+        assert_eq!(
+            probe.observed.lock().unwrap()[0].1,
+            if matches!(mode, "unchanged" | "inspect") {
+                b"A"
+            } else {
+                b"B"
+            }
+        );
+    }
+    assert!(events.iter().any(|event| matches!(&event.event,RuntimeEvent::WorkflowNodeSettled {instance,outcome:WorkflowExecutionOutcome::Completed} if instance.node == "parallel")));
+}
+
+#[tokio::test]
+async fn sequential_cleared_acceptance_allows_exact_b_machine_check() {
+    sequential_acceptance_case("check").await;
+}
+
+#[tokio::test]
+async fn cleared_acceptance_allows_repair_agent_b_to_c_before_human_review() {
+    sequential_acceptance_case("repair").await;
+}
+
+#[tokio::test]
+async fn cleared_acceptance_does_not_admit_explicit_stale_a_data() {
+    sequential_acceptance_case("stale").await;
+}
+
+#[tokio::test]
+async fn rejected_candidate_allows_predefined_repair_and_machine_check() {
+    sequential_acceptance_case("reject").await;
+}
+
+#[allow(clippy::too_many_lines)]
+async fn sequential_acceptance_case(mode: &str) {
+    let plane = workflow_test_plane(1);
+    initialize(&plane);
+    let mut initial = stage_workflow_child(&plane);
+    let mut writer = stage_workflow_child(&plane);
+    let mut repair = (mode == "repair").then(|| stage_workflow_child(&plane));
+    let probe = Arc::new(CandidateProbe {
+        status: ToolExecutionStatus::Success,
+        mutate: false,
+        observed: std::sync::Mutex::default(),
+    });
+    let mut context = setup_context(&plane, probe.clone());
+    let (owner, _, mut published) = super::human::owner(&plane);
+    Arc::make_mut(context.native.as_mut().unwrap()).lifecycle =
+        crate::agent::AttemptLifecycle::default().with_native_interaction(owner.clone());
+    let mut definition = program_definition();
+    definition.timeout_ms = 600_000;
+    definition.workspace = Some(WorkflowWorkspace {
+        require_clean_parent: true,
+    });
+    let check = definition.block.nodes["check"].clone();
+    let mut nodes = json!({
+        "initial":repair_agent(),
+        "review_a":{"type":"review","subject":{"type":"candidate","value":review_reference("initial")},"context":[]},
+        "writer":repair_agent(), "check":check,
+        "done":{"type":"return","output":{"type":"literal","value":{"passed":true}}}
+    });
+    let mut edges = vec![edge("initial", "review_a"), edge("review_a", "writer")];
+    if mode == "stale" {
+        let mut stale = repair_agent();
+        stale["input"] = json!({"old":review_reference("initial")});
+        nodes["stale"] = stale;
+        edges.extend([edge("writer", "stale"), edge("stale", "check")]);
+    } else {
+        edges.push(edge("writer", "check"));
+    }
+    if mode == "repair" {
+        let mut next = repair_agent();
+        next["input"] = json!({"current":review_reference("writer")});
+        nodes["repair"] = next;
+        nodes["review_c"] = json!({"type":"review","subject":{"type":"candidate","value":review_reference("repair")},"context":[]});
+        edges.extend([
+            edge("check", "repair"),
+            edge("repair", "review_c"),
+            edge("review_c", "done"),
+        ]);
+    } else {
+        edges.push(edge("check", "done"));
+    }
+    definition.block.nodes = serde_json::from_value(nodes).unwrap();
+    definition.block.edges = edges;
+    definition.block.entry = "initial".into();
+    let program = Arc::new(compile_test(definition).unwrap());
+    let runtime = workflow_runtime(&plane);
+    let (_, cancellation) = workflow_cancellation();
+    let task = tokio::spawn(async move {
+        runtime
+            .run_foreground(
+                program,
+                ToolCallId::new("sequential-acceptance"),
+                context,
+                json!({"passed":true}),
+                cancellation,
+            )
+            .await
+    });
+    initial.expect_delegate().await;
+    let path = plane
+        .registry
+        .all_snapshots()
+        .pop()
+        .unwrap()
+        .workspace
+        .logical_workspace;
+    std::fs::write(path.join("candidate"), b"A").unwrap();
+    initial
+        .send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some("{}"),
+        )
+        .await;
+    let request = published.recv().await.unwrap();
+    let crate::runtime::interaction::InteractionKind::Review { review, .. } = &request.kind else {
+        panic!("review A")
+    };
+    let a = review.candidate().unwrap().unwrap().clone();
+    owner
+        .respond_async(
+            &request.id,
+            super::human::answer(&request, mode != "reject"),
+        )
+        .await
+        .unwrap();
+    writer.expect_delegate().await;
+    std::fs::write(path.join("candidate"), b"B").unwrap();
+    writer
+        .send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some("{}"),
+        )
+        .await;
+    let mut reviewed_c = None;
+    if let Some(repair) = &mut repair {
+        repair.expect_delegate().await; // B's machine check and exact B-bound repair admission completed.
+        assert_eq!(probe.observed.lock().unwrap()[0].1, b"B");
+        assert!(published.try_recv().is_err()); // No Human Review of B.
+        std::fs::write(path.join("candidate"), b"C").unwrap();
+        repair
+            .send_result(
+                crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+                Some("{}"),
+            )
+            .await;
+        let request = published.recv().await.unwrap();
+        let crate::runtime::interaction::InteractionKind::Review { review, .. } = &request.kind
+        else {
+            panic!("review C")
+        };
+        reviewed_c = Some(review.candidate().unwrap().unwrap().clone());
+        owner
+            .respond_async(&request.id, super::human::answer(&request, true))
+            .await
+            .unwrap();
+    }
+    let result = task.await.unwrap();
+    let events = plane.store.read_events(None, 256).unwrap().events;
+    if mode == "stale" {
+        let error = result.unwrap_err();
+        assert!(format!("{error}").contains("stale candidate"), "{error:?}");
+        assert!(probe.observed.lock().unwrap().is_empty());
+        assert!(!events.iter().any(|event| matches!(&event.event,RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == "stale")));
+        return;
+    }
+    assert_eq!(result.unwrap()["output"], json!({"passed":true}));
+    let inputs = events
+        .iter()
+        .filter_map(|event| match &event.event {
+            RuntimeEvent::WorkflowCandidateInvocation { node, input, .. }
+                if node.node == "check" =>
+            {
+                Some(input)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(inputs.len(), 1);
+    let b = inputs[0];
+    assert_ne!(b, &a);
+    assert_eq!(b.version, a.version + 1);
+    assert_eq!(probe.observed.lock().unwrap().len(), 1);
+    assert_eq!(probe.observed.lock().unwrap()[0].1, b"B");
+    assert_eq!(events.iter().filter(|event| matches!(&event.event,RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == "check")).count(),1);
+    let final_candidate = events
+        .iter()
+        .find_map(|event| match &event.event {
+            RuntimeEvent::WorkflowWorkspaceSettled { candidate, .. } => candidate.as_ref(),
+            _ => None,
+        })
+        .unwrap();
+    if let Some(c) = reviewed_c {
+        assert_ne!(&c, b);
+        assert_eq!(c.version, b.version + 1);
+        assert_eq!(final_candidate, &c);
+        assert_eq!(events.iter().filter(|event| matches!(&event.event,RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == "repair")).count(),1);
+    } else {
+        assert_eq!(final_candidate, b);
+    }
+}
+
+#[tokio::test]
+async fn unchanged_agent_preserves_exact_acceptance() {
+    unchanged_agent_case(false).await;
+}
+
+#[tokio::test]
+async fn writer_after_unchanged_agent_cannot_rebind_accepted_a_consumer() {
+    unchanged_agent_case(true).await;
+}
+
+#[allow(clippy::too_many_lines)]
+async fn unchanged_agent_case(writer_wins: bool) {
+    use crate::runtime::workflow::execution::{PreStartAction, PreStartHook};
+    let plane = workflow_test_plane(1);
+    initialize(&plane);
+    let mut initial = stage_workflow_child(&plane);
+    let mut machine = stage_workflow_child(&plane);
+    let probe = Arc::new(CandidateProbe {
+        status: ToolExecutionStatus::Success,
+        mutate: false,
+        observed: std::sync::Mutex::default(),
+    });
+    let mut context = setup_context(&plane, probe.clone());
+    let (owner, _, mut published) = super::human::owner(&plane);
+    Arc::make_mut(context.native.as_mut().unwrap()).lifecycle =
+        crate::agent::AttemptLifecycle::default().with_native_interaction(owner.clone());
+    let mut definition = program_definition();
+    definition.timeout_ms = 600_000;
+    definition.workspace = Some(WorkflowWorkspace {
+        require_clean_parent: true,
+    });
+    let check = definition.block.nodes["check"].clone();
+    definition.block.nodes = serde_json::from_value(json!({
+        "initial":repair_agent(),
+        "review":{"type":"review","subject":{"type":"candidate","value":review_reference("initial")},"context":[]},
+        "machine":repair_agent(),"check":check,
+        "done":{"type":"return","output":{"type":"literal","value":{"passed":true}}}
+    })).unwrap();
+    definition.block.entry = "initial".into();
+    definition.block.edges = vec![
+        edge("initial", "review"),
+        edge("review", "machine"),
+        edge("machine", "check"),
+        edge("check", "done"),
+    ];
+    let runtime = workflow_runtime(&plane);
+    let (acquired, acquire) = tokio::sync::oneshot::channel();
+    let (proceed, proceed_rx) = tokio::sync::oneshot::channel();
+    let (released, release_rx) = tokio::sync::oneshot::channel();
+    let (finish, finish_rx) = tokio::sync::oneshot::channel();
+    *runtime.pre_start.lock().unwrap() = Some(PreStartHook {
+        node: "machine".into(),
+        acquired,
+        proceed: proceed_rx,
+        released,
+        finish: finish_rx,
+    });
+    let program = Arc::new(compile_test(definition).unwrap());
+    let (_, cancellation) = workflow_cancellation();
+    let task = tokio::spawn(async move {
+        runtime
+            .run_foreground(
+                program,
+                ToolCallId::new("unchanged-agent"),
+                context,
+                json!({"passed":true}),
+                cancellation,
+            )
+            .await
+    });
+    initial.expect_delegate().await;
+    let path = plane
+        .registry
+        .all_snapshots()
+        .pop()
+        .unwrap()
+        .workspace
+        .logical_workspace;
+    std::fs::write(path.join("candidate"), b"A").unwrap();
+    initial
+        .send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some("{}"),
+        )
+        .await;
+    let request = published.recv().await.unwrap();
+    let crate::runtime::interaction::InteractionKind::Review { review, .. } = &request.kind else {
+        panic!("review A")
+    };
+    let a = review.candidate().unwrap().unwrap().clone();
+    owner
+        .respond_async(&request.id, super::human::answer(&request, true))
+        .await
+        .unwrap();
+    let (scope, input, node, _) = acquire.await.unwrap();
+    assert_eq!(input, a);
+    proceed
+        .send(PreStartAction::Continue)
+        .unwrap_or_else(|_| panic!("proceed"));
+    machine.expect_delegate().await;
+    // Deliberately leave the native physical candidate untouched.
+    machine
+        .send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some("{}"),
+        )
+        .await;
+    release_rx.await.unwrap(); // Agent physical settlement and local result commit completed.
+    let (_, fresh) = workflow_cancellation();
+    let access = scope
+        .borrow(node, Some(&a), &fresh.child_signal())
+        .await
+        .unwrap();
+    assert_eq!(access.input(), &a); // Authoritative post-Agent candidate is still exact A.
+    let post = if writer_wins {
+        std::fs::write(path.join("candidate"), b"B").unwrap();
+        access.finish(false).await.unwrap() // Legitimate native writer wins before next admission.
+    } else {
+        access.finish(true).await.unwrap()
+    };
+    assert_eq!(post == a, !writer_wins);
+    finish.send(()).unwrap();
+    let result = task.await.unwrap();
+    let events = plane.store.read_events(None, 256).unwrap().events;
+    assert_eq!(events.iter().filter(|event|matches!(&event.event,RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == "machine")).count(),1);
+    let starts = events.iter().filter(|event|matches!(&event.event,RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == "check")).count();
+    if writer_wins {
+        let error = result.unwrap_err();
+        assert!(format!("{error}").contains("stale candidate"), "{error:?}");
+        assert_eq!(starts, 0);
+        assert!(probe.observed.lock().unwrap().is_empty());
+    } else {
+        assert_eq!(result.unwrap()["output"], json!({"passed":true}));
+        assert_eq!(starts, 1);
+        let inputs = events
+            .iter()
+            .filter_map(|event| match &event.event {
+                RuntimeEvent::WorkflowCandidateInvocation { node, input, .. }
+                    if node.node == "check" =>
+                {
+                    Some(input)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(inputs, vec![&a]);
+        assert_eq!(probe.observed.lock().unwrap()[0].1, b"A");
+    }
+}
+
+#[tokio::test]
+async fn parallel_none_entry_review_then_mutation_conflicts_before_downstream() {
+    none_entry_review_mutation_case(false).await;
+}
+
+#[tokio::test]
+async fn nested_none_entry_mutation_exports_clear_against_sibling_review() {
+    none_entry_review_mutation_case(true).await;
+}
+
+#[allow(clippy::too_many_lines)]
+async fn none_entry_review_mutation_case(nested: bool) {
+    use crate::runtime::workflow::execution::{NodeFrontierHook, PreStartAction, PreStartHook};
+    let plane = workflow_test_plane(1);
+    initialize(&plane);
+    let mut initial = stage_workflow_child(&plane);
+    let mut writer = stage_workflow_child(&plane);
+    let probe = Arc::new(CandidateProbe {
+        status: ToolExecutionStatus::Success,
+        mutate: false,
+        observed: std::sync::Mutex::default(),
+    });
+    let mut context = setup_context(&plane, probe.clone());
+    let (owner, _, mut published) = super::human::owner(&plane);
+    Arc::make_mut(context.native.as_mut().unwrap()).lifecycle =
+        crate::agent::AttemptLifecycle::default().with_native_interaction(owner.clone());
+    let empty = schema(json!({}), &[]);
+    let input = json!({"type":"reference","path":["args"]});
+    let done = json!({"type":"return","output":{"type":"literal","value":{}}});
+    let mut agent = repair_agent();
+    agent["input"] = json!({"candidate":input});
+    let mut writer_block = json!({"input":empty,"output":empty,"entry":"writer","nodes":{"writer":agent,"writer_done":done},"edges":[{"from":"writer","to":"writer_done"}]});
+    if nested {
+        writer_block = json!({"input":empty,"output":empty,"entry":"inner","nodes":{
+            "inner":{"type":"parallel","branches":{
+                "writer":{"input":input,"block":writer_block},
+                "idle":{"input":{"type":"literal","value":{}},"block":{"input":empty,"output":empty,"entry":"idle","nodes":{"idle":done},"edges":[]}}
+            }},"inner_done":done},"edges":[{"from":"inner","to":"inner_done"}]});
+    }
+    let mut definition = program_definition();
+    definition.workspace = Some(WorkflowWorkspace {
+        require_clean_parent: true,
+    });
+    definition.timeout_ms = 600_000;
+    let check = definition.block.nodes["check"].clone();
+    definition.block.entry = "initial".into();
+    definition.block.nodes = serde_json::from_value(json!({
+        "initial":repair_agent(),
+        "parallel":{"type":"parallel","branches":{
+            "review":{"input":review_reference("initial"),"block":{"input":empty,"output":empty,"entry":"review","nodes":{
+                "review":{"type":"review","subject":{"type":"candidate","value":input},"context":[]},"review_done":done
+            },"edges":[{"from":"review","to":"review_done"}]}},
+            "writer":{"input":review_reference("initial"),"block":writer_block}
+        }},"check":check,"done":{"type":"return","output":{"type":"literal","value":{"passed":true}}}
+    })).unwrap();
+    definition.block.edges = vec![
+        edge("initial", "parallel"),
+        edge("parallel", "check"),
+        edge("check", "done"),
+    ];
+    let runtime = workflow_runtime(&plane);
+    let (entered, enter) = tokio::sync::oneshot::channel();
+    let (release, gate) = tokio::sync::oneshot::channel();
+    *runtime.node_frontier.lock().unwrap() = Some(NodeFrontierHook {
+        node: "writer".into(),
+        entered,
+        release: gate,
+    });
+    let (acquired, acquire) = tokio::sync::oneshot::channel();
+    let (proceed, proceed_rx) = tokio::sync::oneshot::channel();
+    let (released, release_rx) = tokio::sync::oneshot::channel();
+    let (finish, finish_rx) = tokio::sync::oneshot::channel();
+    *runtime.pre_start.lock().unwrap() = Some(PreStartHook {
+        node: "writer".into(),
+        acquired,
+        proceed: proceed_rx,
+        released,
+        finish: finish_rx,
+    });
+    let program = Arc::new(compile_test(definition).unwrap());
+    let (_, cancellation) = workflow_cancellation();
+    let task = tokio::spawn(async move {
+        runtime
+            .run_foreground(
+                program,
+                ToolCallId::new("none-review-mutation"),
+                context,
+                json!({"passed":true}),
+                cancellation,
+            )
+            .await
+    });
+    initial.expect_delegate().await;
+    let path = plane
+        .registry
+        .all_snapshots()
+        .pop()
+        .unwrap()
+        .workspace
+        .logical_workspace;
+    std::fs::write(path.join("candidate"), b"A").unwrap();
+    initial
+        .send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some("{}"),
+        )
+        .await;
+    let request = published.recv().await.unwrap();
+    let crate::runtime::interaction::InteractionKind::Review { review, .. } = &request.kind else {
+        panic!("review A")
+    };
+    let a = review.candidate().unwrap().unwrap().clone();
+    owner
+        .respond_async(&request.id, super::human::answer(&request, true))
+        .await
+        .unwrap();
+    enter.await.unwrap(); // Block input validation can also wait behind the Review freeze.
+    release.send(()).unwrap();
+    let (scope, pre, node, _) = acquire.await.unwrap(); // Real borrow completes only after freeze release.
+    assert_eq!(pre, a);
+    proceed
+        .send(PreStartAction::Continue)
+        .unwrap_or_else(|_| panic!("proceed"));
+    writer.expect_delegate().await;
+    std::fs::write(path.join("candidate"), b"B").unwrap();
+    writer
+        .send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some("{}"),
+        )
+        .await;
+    release_rx.await.unwrap(); // Native Agent settlement and branch-local result commit completed.
+    let (_, fresh) = workflow_cancellation();
+    let access = scope
+        .borrow(node, None, &fresh.child_signal())
+        .await
+        .unwrap();
+    let post = access.input().clone();
+    assert_ne!(pre, post);
+    assert_eq!(access.finish(true).await.unwrap(), post);
+    finish.send(()).unwrap();
+    let error = task.await.unwrap().unwrap_err();
+    assert!(
+        format!("{error}").contains("conflicting candidate acceptance transitions"),
+        "{error:?}"
+    );
+    let events = plane.store.read_events(None, 256).unwrap().events;
+    assert!(!events.iter().any(|event|matches!(&event.event,RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == "check")));
+    assert!(!events.iter().any(|event|matches!(&event.event,RuntimeEvent::WorkflowCandidateInvocation {node,..} if node.node == "check")));
+    assert!(probe.observed.lock().unwrap().is_empty());
+    assert!(events.iter().any(|event|matches!(&event.event,RuntimeEvent::WorkflowWorkspaceSettled {candidate:Some(candidate),..} if candidate == &post)));
 }

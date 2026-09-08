@@ -80,6 +80,7 @@ export function questionnaireInteraction(
     turn: 3,
     kind: {
       type: "questionnaire",
+      invocation_id: { caller: "agent", call_id: "questionnaire-call" },
       questionnaire: {
         questions: [
           {

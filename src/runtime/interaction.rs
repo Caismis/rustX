@@ -76,6 +76,11 @@ pub use crate::events::interaction::{
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InteractionKind {
+    /// Business acceptance of an immutable subject, never Tool permission.
+    Review {
+        review: crate::events::review::ReviewSpecification,
+        subject_digest: String,
+    },
     /// Ask a client whether the already-resolved tool invocation may start.
     Approval {
         /// Caller-neutral invocation correlation.
@@ -97,6 +102,7 @@ pub enum InteractionKind {
     /// Ask the user one bounded questionnaire. This is one coordinator
     /// interaction, not a sequence of old single-question interactions.
     Questionnaire {
+        invocation_id: crate::tools::types::ToolInvocationId,
         /// The complete immutable facts shown to the Runtime Client.
         questionnaire: QuestionnaireSpecification,
     },
@@ -250,6 +256,10 @@ pub enum ApprovalDecision {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InteractionResponse {
+    /// Only an exact subject/instance decision; no replacement content.
+    Review {
+        response: crate::events::review::ReviewResponse,
+    },
     /// The response to an approval request.
     Approval {
         /// The finite approval decision.  It has no tool arguments.
@@ -268,6 +278,8 @@ pub enum InteractionResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InteractionOutcome {
+    /// Native source interference invalidated the pending business subject.
+    ReviewInvalidated,
     /// A native ancestor deadline won the rendezvous.
     DeadlineExpired {
         kind: crate::tools::deadline::ToolDeadlineKind,
@@ -452,6 +464,7 @@ impl ApprovalFacts {
 /// The bounded facts used to construct one Questionnaire request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct QuestionnaireFacts {
+    pub(crate) invocation_id: crate::tools::types::ToolInvocationId,
     /// The model turn or tool turn that owns the question.
     pub(crate) turn: u32,
     /// The complete immutable questionnaire specification.
@@ -472,6 +485,7 @@ impl QuestionnaireFacts {
     /// produce an answerable interaction.
     pub(crate) fn validate(&self) -> Result<(), String> {
         validate_interaction_subject(&InteractionSubject::Questionnaire {
+            invocation_id: self.invocation_id.clone(),
             questionnaire: self.questionnaire.clone(),
         })
     }
@@ -486,6 +500,7 @@ impl QuestionnaireFacts {
         id: InteractionId,
     ) -> (InteractionRequest, InteractionSubject) {
         let subject = InteractionSubject::Questionnaire {
+            invocation_id: self.invocation_id.clone(),
             questionnaire: self.questionnaire.clone(),
         };
         let request = InteractionRequest {
@@ -494,6 +509,7 @@ impl QuestionnaireFacts {
             attempt_id,
             turn: self.turn,
             kind: InteractionKind::Questionnaire {
+                invocation_id: self.invocation_id.clone(),
                 questionnaire: self.questionnaire,
             },
         };
@@ -524,7 +540,11 @@ pub(crate) fn interaction_settled_event_id(interaction_id: &InteractionId) -> Ev
 /// for a prompt a user could have seen.
 fn audit_settlement(outcome: &InteractionOutcome) -> InteractionSettlement {
     match outcome {
+        InteractionOutcome::ReviewInvalidated => InteractionSettlement::ReviewInvalidated,
         InteractionOutcome::Responded { response } => match response {
+            InteractionResponse::Review { response } => InteractionSettlement::Reviewed {
+                response: response.clone(),
+            },
             InteractionResponse::Approval { decision } => match decision {
                 ApprovalDecision::Allow => InteractionSettlement::Approved,
                 ApprovalDecision::Deny { reason } => InteractionSettlement::Denied {
@@ -922,6 +942,8 @@ impl Drop for WaiterPayload {
 }
 
 struct PendingInteraction {
+    /// Optional workspace-owned freeze; this coordinator never owns a writer.
+    candidate: Option<Arc<crate::runtime::workspace::CandidateFreeze>>,
     request: InteractionRequest,
     /// The exact durable audit subject that was committed before this prompt
     /// was released. Response validation and the settled fact both resolve
@@ -1099,6 +1121,14 @@ pub(crate) struct QuestionnaireRequester {
 }
 
 impl QuestionnaireRequester {
+    /// Follow the native invocation driver's subordinate deadline scope.
+    pub(crate) fn with_cancellation(&self, cancellation: ExecutionCancellation) -> Self {
+        Self {
+            cancellation,
+            ..self.clone()
+        }
+    }
+
     pub(crate) fn new(
         coordinator: Arc<InteractionCoordinator>,
         attempt_id: AttemptId,
@@ -1319,6 +1349,7 @@ impl InteractionCoordinator {
         request: InteractionRequest,
         subject: InteractionSubject,
         cancellation: &ExecutionCancellation,
+        candidate: Option<Arc<crate::runtime::workspace::CandidateFreeze>>,
     ) -> Result<InteractionTicket, InteractionFailure> {
         // Reject malformed facts before asking the root authority for a
         // permit. A permit is the publication frontier, so no post-permit
@@ -1346,7 +1377,26 @@ impl InteractionCoordinator {
         } else {
             false
         };
-        let published = self.publish_inner(request, subject, cancellation, publication_admitted)?;
+        let freeze = candidate.clone();
+        let commit = || {
+            self.publish_inner(
+                request,
+                subject,
+                cancellation,
+                publication_admitted,
+                candidate,
+            )
+        };
+        let published = if let Some(freeze) = freeze {
+            freeze
+                .with_current(|valid| {
+                    valid.map_err(|_| InteractionFailure::Invalid)?;
+                    commit()
+                })
+                .await?
+        } else {
+            commit()?
+        };
         if let Some(route) = route
             && let Err(error) = route
                 .publish(InteractionRouteEvent::Requested(published.request.clone()))
@@ -1403,7 +1453,8 @@ impl InteractionCoordinator {
         } else {
             false
         };
-        let published = self.publish_inner(request, subject, cancellation, publication_admitted)?;
+        let published =
+            self.publish_inner(request, subject, cancellation, publication_admitted, None)?;
         if let Some(route) = route
             && let Err(error) =
                 route.try_publish(InteractionRouteEvent::Requested(published.request.clone()))
@@ -1422,6 +1473,7 @@ impl InteractionCoordinator {
         subject: InteractionSubject,
         cancellation: &ExecutionCancellation,
         publication_admitted: bool,
+        candidate: Option<Arc<crate::runtime::workspace::CandidateFreeze>>,
     ) -> Result<PublishedInteraction, InteractionFailure> {
         let id = request.id.clone();
         let published_request = request.clone();
@@ -1444,6 +1496,7 @@ impl InteractionCoordinator {
                 let previous = state.pending.insert(
                     id.clone(),
                     PendingInteraction {
+                        candidate,
                         request,
                         subject,
                         cancellation: cancellation.clone(),
@@ -1499,7 +1552,8 @@ impl InteractionCoordinator {
     ) -> Result<InteractionTicket, InteractionFailure> {
         let id = self.allocate_id(&attempt_id)?;
         let (request, subject) = facts.into_published(self.conversation_id.clone(), attempt_id, id);
-        self.publish_async(request, subject, cancellation).await
+        self.publish_async(request, subject, cancellation, None)
+            .await
     }
 
     async fn publish_questionnaire_async(
@@ -1510,7 +1564,45 @@ impl InteractionCoordinator {
     ) -> Result<InteractionTicket, InteractionFailure> {
         let id = self.allocate_id(&attempt_id)?;
         let (request, subject) = facts.into_published(self.conversation_id.clone(), attempt_id, id);
-        self.publish_async(request, subject, cancellation).await
+        self.publish_async(request, subject, cancellation, None)
+            .await
+    }
+
+    pub(crate) async fn request_review(
+        &self,
+        review: crate::events::review::ReviewSpecification,
+        turn: u32,
+        cancellation: ExecutionCancellation,
+        candidate: Option<Arc<crate::runtime::workspace::CandidateFreeze>>,
+    ) -> Result<InteractionOutcome, InteractionFailure> {
+        let attempt_id = review.instance.block.run.attempt_id.clone();
+        if review.instance.block.run.conversation_id != self.conversation_id {
+            return Err(InteractionFailure::Invalid);
+        }
+        let expected = review
+            .candidate()
+            .map_err(|_| InteractionFailure::Invalid)?;
+        if expected != candidate.as_ref().map(|freeze| freeze.reference()) {
+            return Err(InteractionFailure::Invalid);
+        }
+        let id = self.allocate_id(&attempt_id)?;
+        let subject = InteractionSubject::Review {
+            review: review.clone(),
+        };
+        let request = InteractionRequest {
+            id,
+            conversation_id: self.conversation_id.clone(),
+            attempt_id,
+            turn,
+            kind: InteractionKind::Review {
+                subject_digest: review.digest(),
+                review,
+            },
+        };
+        let ticket = self
+            .publish_async(request, subject, &cancellation, candidate)
+            .await?;
+        self.wait_result(ticket, cancellation).await
     }
 
     /// Requests approval through the coordinator and waits for the owner.
@@ -1663,8 +1755,50 @@ impl InteractionCoordinator {
         interaction_id: &InteractionId,
         response: InteractionResponse,
     ) -> Result<(), InteractionError> {
-        let outcome = InteractionOutcome::Responded { response };
-        let delivery = self.begin_settle(interaction_id, outcome, true)?;
+        let outcome = InteractionOutcome::Responded {
+            response: response.clone(),
+        };
+        {
+            let state = self.state.lock().expect("interaction state");
+            let pending =
+                state
+                    .pending
+                    .get(interaction_id)
+                    .ok_or_else(|| InteractionError::NotPending {
+                        interaction_id: interaction_id.clone(),
+                    })?;
+            if !pending.cancellation.is_cancelled() {
+                validate_response_for(&pending.subject, &response)?;
+            }
+        }
+        let candidate = self
+            .state
+            .lock()
+            .expect("interaction state")
+            .pending
+            .get(interaction_id)
+            .and_then(|pending| pending.candidate.clone());
+        let delivery = if let Some(candidate) = candidate {
+            candidate
+                .with_current(|valid| {
+                    if valid.is_err() {
+                        self.begin_settle(
+                            interaction_id,
+                            InteractionOutcome::ReviewInvalidated,
+                            true,
+                        )
+                    } else {
+                        self.begin_settle(interaction_id, outcome, true)
+                    }
+                })
+                .await?
+        } else {
+            self.begin_settle(interaction_id, outcome, true)?
+        };
+        let invalidated = matches!(
+            delivery.payload.outcome,
+            InteractionOutcome::ReviewInvalidated
+        );
         let transition = delivery.transition;
         let delivery_result = self.deliver_async(delivery).await;
         if transition.cancellation_won {
@@ -1683,6 +1817,11 @@ impl InteractionCoordinator {
                 | InteractionFailure::PublicationFailed => InteractionError::ControlLost {
                     interaction_id: interaction_id.clone(),
                 },
+            });
+        }
+        if invalidated {
+            return Err(InteractionError::InvalidResponse {
+                message: "Review candidate changed".into(),
             });
         }
         if !transition.audit_committed {
@@ -2149,7 +2288,16 @@ fn validate_response_for(
 ) -> Result<InteractionResponse, InteractionError> {
     match (subject, response) {
         (
-            InteractionSubject::Questionnaire { questionnaire },
+            InteractionSubject::Review { review },
+            InteractionResponse::Review { response: decision },
+        ) => {
+            review
+                .validate_response(decision)
+                .map_err(|message| InteractionError::InvalidResponse { message })?;
+            Ok(response.clone())
+        }
+        (
+            InteractionSubject::Questionnaire { questionnaire, .. },
             InteractionResponse::Questionnaire { response },
         ) => normalize_questionnaire_response(questionnaire, response)
             .and_then(|response| {
@@ -2161,12 +2309,7 @@ fn validate_response_for(
                     }
                     QuestionnaireResponse::Declined => InteractionSettlement::QuestionnaireDeclined,
                 };
-                validate_interaction_settlement(
-                    &InteractionSubject::Questionnaire {
-                        questionnaire: questionnaire.clone(),
-                    },
-                    &settlement,
-                )?;
+                validate_interaction_settlement(subject, &settlement)?;
                 Ok(InteractionResponse::Questionnaire { response })
             })
             .map_err(|message| InteractionError::InvalidResponse { message }),
@@ -2248,6 +2391,9 @@ mod tests {
 
     fn questionnaire_facts() -> QuestionnaireFacts {
         QuestionnaireFacts {
+            invocation_id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
+            },
             turn: 4,
             questionnaire: questionnaire_specification(),
         }
@@ -2255,6 +2401,9 @@ mod tests {
 
     fn multi_questionnaire_facts() -> QuestionnaireFacts {
         QuestionnaireFacts {
+            invocation_id: crate::tools::types::ToolInvocationId::Agent {
+                call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
+            },
             turn: 5,
             questionnaire: QuestionnaireSpecification {
                 questions: vec![QuestionSpecification {
@@ -2523,6 +2672,92 @@ mod tests {
         (coordinator, audit)
     }
 
+    #[tokio::test]
+    async fn candidate_bound_review_cannot_publish_without_matching_native_freeze() {
+        let (owner, audit) = audited_coordinator();
+        owner.set_provider_available(true);
+        let mut instance = crate::runtime::workflow::test_instance("review", "human");
+        instance.block.run.conversation_id = ConversationId::new("conversation");
+        let candidate = crate::runtime::workspace::CandidateReference {
+            run: instance.block.run.clone(),
+            version: 1,
+            content: "a".repeat(64),
+        };
+        let review = crate::events::review::ReviewSpecification {
+            instance: Box::new(instance),
+            subject: crate::events::review::ReviewSubject::Plan {
+                content: serde_json::json!({"plan":"P"}),
+                candidate: None,
+            },
+            context: vec![crate::events::review::ReviewFact {
+                value: serde_json::json!({"passed":true}),
+                candidate: Some(candidate),
+            }],
+        };
+        let cancellation =
+            crate::agent::cancellation::AgentCancellation::new(CancellationReason::UserRequested);
+        assert!(matches!(
+            owner
+                .request_review(review, 1, cancellation.execution_cancellation(), None)
+                .await,
+            Err(InteractionFailure::Invalid)
+        ));
+        assert_eq!(owner.pending_count(), 0);
+        assert!(audit.events().is_empty());
+    }
+
+    #[tokio::test]
+    async fn review_requested_and_accepted_history_never_recreate_a_waiter() {
+        for accepted in [false, true] {
+            let (first, audit) = audited_coordinator();
+            first.set_provider_available(true);
+            let mut instance = crate::runtime::workflow::test_instance("review", "human");
+            instance.block.run.conversation_id = ConversationId::new("conversation");
+            let review = crate::events::review::ReviewSpecification {
+                instance: Box::new(instance),
+                subject: crate::events::review::ReviewSubject::Plan {
+                    candidate: None,
+                    content: serde_json::json!({"plan":"A"}),
+                },
+                context: vec![],
+            };
+            let response = InteractionResponse::Review {
+                response: crate::events::review::ReviewResponse {
+                    instance: review.instance.clone(),
+                    subject_digest: review.digest(),
+                    decision: crate::events::review::ReviewDecision::Accepted,
+                },
+            };
+            let cancellation = crate::agent::cancellation::AgentCancellation::new(
+                CancellationReason::UserRequested,
+            );
+            let mut wait = Box::pin(first.request_review(
+                review,
+                1,
+                cancellation.execution_cancellation(),
+                None,
+            ));
+            assert!(futures_util::poll!(&mut wait).is_pending());
+            let id = first.pending_snapshot()[0].id.clone();
+            if accepted {
+                first.respond_async(&id, response.clone()).await.unwrap();
+                assert!(futures_util::poll!(&mut wait).is_ready());
+            }
+            drop(wait);
+            drop(first);
+            let lifecycle = ConversationLifecycle::new();
+            assert!(lifecycle.activate());
+            let restarted = InteractionCoordinator::new(
+                ConversationId::new("conversation"),
+                lifecycle,
+                audit.clone(),
+            );
+            assert!(restarted.pending_snapshot().is_empty());
+            assert!(restarted.respond_async(&id, response).await.is_err());
+            assert_eq!(audit.events().len(), if accepted { 2 } else { 1 });
+        }
+    }
+
     #[test]
     fn identity_is_attempt_owned_and_non_reused_across_attempts() {
         let coordinator = coordinator();
@@ -2681,13 +2916,13 @@ mod tests {
         assert_eq!(request.id, id);
         assert!(matches!(
             request.kind,
-            InteractionKind::Questionnaire { questionnaire }
+            InteractionKind::Questionnaire { questionnaire, .. }
                 if questionnaire == expected.questionnaire
         ));
         assert!(matches!(
             audit.events().as_slice(),
             [RuntimeEvent::InteractionRequested {
-                subject: InteractionSubject::Questionnaire { questionnaire },
+                subject: InteractionSubject::Questionnaire { questionnaire, .. },
                 ..
             }] if questionnaire == &expected.questionnaire
         ));
@@ -3009,6 +3244,7 @@ mod tests {
                     decision: ApprovalDecision::Allow,
                 },
                 InteractionKind::Questionnaire { .. } => single_response("staging"),
+                InteractionKind::Review { .. } => panic!("this fixture has no Review"),
             };
             coordinator
                 .respond_async(&request.id, response)
@@ -3750,14 +3986,23 @@ mod tests {
         too_few.questions[0].options.truncate(1);
         for facts in [
             QuestionnaireFacts {
+                invocation_id: crate::tools::types::ToolInvocationId::Agent {
+                    call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
+                },
                 turn: 4,
                 questionnaire: too_long,
             },
             QuestionnaireFacts {
+                invocation_id: crate::tools::types::ToolInvocationId::Agent {
+                    call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
+                },
                 turn: 4,
                 questionnaire: duplicate_options,
             },
             QuestionnaireFacts {
+                invocation_id: crate::tools::types::ToolInvocationId::Agent {
+                    call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
+                },
                 turn: 4,
                 questionnaire: too_few,
             },

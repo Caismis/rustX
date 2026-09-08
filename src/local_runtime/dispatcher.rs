@@ -1507,6 +1507,9 @@ mod tests {
             attempt_id: AttemptId::new("attempt-1"),
             turn: 2,
             kind: InteractionKind::Questionnaire {
+                invocation_id: crate::tools::types::ToolInvocationId::Agent {
+                    call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
+                },
                 questionnaire: crate::runtime::interaction::QuestionnaireSpecification {
                     questions: vec![crate::runtime::interaction::QuestionSpecification {
                         question: "Which target?".to_owned(),

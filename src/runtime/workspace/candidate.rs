@@ -640,6 +640,58 @@ impl WorkspaceAccess {
     }
 }
 
+/// Shared access to one native exclusive borrow, never a second workspace owner.
+/// Validation and a synchronous consumer commit happen without releasing it.
+#[derive(Debug)]
+pub(crate) struct CandidateFreeze {
+    access: Mutex<Option<WorkspaceAccess>>,
+    reference: CandidateReference,
+}
+impl CandidateFreeze {
+    pub(crate) fn new(access: WorkspaceAccess) -> Arc<Self> {
+        Arc::new(Self {
+            reference: access.input().clone(),
+            access: Mutex::new(Some(access)),
+        })
+    }
+    pub(crate) fn reference(&self) -> &CandidateReference {
+        &self.reference
+    }
+    pub(crate) async fn with_current<T>(&self, commit: impl FnOnce(Result<(), String>) -> T) -> T {
+        let mut access = self.access.lock().await;
+        let valid = match access.as_mut() {
+            Some(access) => access.validate_frozen().await,
+            None => Err("candidate freeze already released".into()),
+        };
+        commit(valid)
+    }
+    pub(crate) async fn finish(&self) -> Result<CandidateReference, String> {
+        let access = self
+            .access
+            .lock()
+            .await
+            .take()
+            .ok_or("candidate freeze already released")?;
+        access.finish(true).await
+    }
+}
+impl WorkspaceAccess {
+    pub(crate) async fn validate_frozen(&mut self) -> Result<(), String> {
+        let lease = self.state.lease.as_ref().ok_or("missing candidate lease")?;
+        let content = lease.source_identity().await?;
+        if content != self.input.content || self.mutation.changed(lease).await? {
+            self.state.unresolved = Some(UnresolvedCandidate::physical(
+                "frozen candidate changed".into(),
+            ));
+            return Err("frozen candidate changed".into());
+        }
+        if self.state.unresolved.is_some() {
+            return Err("candidate invalidated".into());
+        }
+        Ok(())
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -715,6 +767,41 @@ mod tests {
                 .await
                 .unwrap()
         }
+    }
+
+    #[tokio::test]
+    async fn candidate_freeze_excludes_queued_writer_and_old_acceptance_cannot_borrow_new_dirty_bytes()
+     {
+        let fixture = Fixture::new();
+        let scope = fixture.acquire().await;
+        let access = fixture.access(&scope).await;
+        let path = access.snapshot().logical_workspace.clone();
+        let head = git(&path, &["rev-parse", "HEAD"]);
+        std::fs::write(path.join("source"), b"dirty A").unwrap();
+        let a = access.finish(false).await.unwrap();
+        let access = scope
+            .borrow(fixture.node.clone(), Some(&a), &CancellationSignal::new())
+            .await
+            .unwrap();
+        let freeze = CandidateFreeze::new(access);
+        let signal = CancellationSignal::new();
+        let mut writer = Box::pin(scope.borrow(fixture.node.clone(), None, &signal));
+        assert!(futures_util::poll!(&mut writer).is_pending()); // enqueued behind the REAL workspace guard
+        freeze.with_current(|valid| valid.unwrap()).await; // settlement callback still owns A
+        assert!(futures_util::poll!(&mut writer).is_pending());
+        freeze.finish().await.unwrap();
+        let writer = writer.await.unwrap();
+        std::fs::write(path.join("source"), b"dirty B").unwrap();
+        let b = writer.finish(false).await.unwrap();
+        assert_ne!(a, b);
+        assert_eq!(head, git(&path, &["rev-parse", "HEAD"]));
+        assert!(
+            scope
+                .borrow(fixture.node.clone(), Some(&a), &signal)
+                .await
+                .is_err()
+        );
+        scope.settle().await;
     }
 
     #[tokio::test]

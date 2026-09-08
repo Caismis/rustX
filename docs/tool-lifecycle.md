@@ -216,8 +216,25 @@ confirmed timeout. The scope counter is ownership accounting, not another outcom
 state machine or an executor registry.
 ## Candidate-bound native invocation
 
-WF-03 supplies the exact authorized candidate through `ToolExecutionContext.workspace` to the same native invocation lifecycle. `ToolExecutor::honors_workspace` defaults false; unsupported executors fail admission, never fall back to parent cwd. Native filesystem executors and Bash honor the context. Candidate access precedes scheduling/approval and stays owned through physical settlement. Every candidate Tool is an exclusive validator: an actual source change invalidates its input certification even when native execution succeeded. `WorkflowCandidateInvocation` records the original native outcome, input candidate and unchanged flag. No Workflow-specific executor or model-text evidence path exists. See [the candidate contract](workflow-programs.md#run-scoped-candidate-workspace-wf-03).
+WF-03 supplies the exact authorized candidate through `ToolExecutionContext.workspace` to the same native invocation lifecycle. `ToolExecutor::workspace_use` defaults to `Incompatible`; incompatible executors fail admission, never fall back to parent cwd. Native filesystem executors and Bash declare `ConsumesProvided`. Candidate access precedes scheduling/approval and stays owned through physical settlement. Each consuming Tool is an exclusive validator: an actual source change invalidates its input certification even when native execution succeeded. `WorkflowCandidateInvocation` records the original native outcome, input candidate and unchanged flag. Workspace-independent executors such as ask_user take no candidate borrow and emit no candidate invocation fact. No Workflow-specific executor or model-text evidence path exists. See [the candidate contract](workflow-programs.md#run-scoped-candidate-workspace-wf-03).
 
 A successful candidate projection receives CandidateReference directly from invoke_tool after physical settlement and source/mutation verification. The interpreter commits it beside JSON and preserves it through value construction and Parallel export. Derived arguments are checked against live currentness and rechecked under exclusive admission. A later writer can make the check stale; rejection belongs to Workflow consumption and leaves the native historical status intact. The Event Journal is not consulted for applicability.
 
 Mutation observation covers existing empty directories under fixed entry/depth/watch limits. New directories on Linux and directory-entry events on macOS conservatively invalidate incomplete coverage; ignored file activity may remain excluded, but unknown coverage cannot certify a check. Watch/inspection uncertainty after a settled operation produces PhysicalSettlement resource retention and retirement of ended active ownership. OutcomeUnknown physical work retains NestedContainment authority. See the candidate contract for exact platform semantics and disposal continuation after failed durable settlement append.
+
+
+### Fixed Workflow human waits
+
+Fixed Tool(ask_user) uses ordinary preparation, normalization, execution and typed
+result projection. ToolExecutionContext reborrow rebinds its existing Questionnaire
+requester to the driver's subordinate cancellation/deadline view. Explicit decline
+is the ordinary successful JSON result, not cancellation. Review is a Workflow
+business node using the same InteractionCoordinator, outside Tool Approval.
+FullAccess affects only the configured permission gate. The existing durable
+Allow-before-unchanged-prepared-invocation-start ordering remains unchanged.
+
+Tool workspace authority uses `WorkspaceUse::{ConsumesProvided, Independent,
+Incompatible}`. Native ask_user is Independent: its ordinary Questionnaire wait
+never borrows or validates a candidate. Filesystem/Bash executors consume the
+provided workspace; fixed/external executors default to Incompatible. Workflow
+admission checks this shared executor policy, never a tool-name exception.

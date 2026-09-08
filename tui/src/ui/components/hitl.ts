@@ -54,6 +54,7 @@ import {
 
 import type {
   ApprovalDecision,
+  ReviewResponse,
   InteractionRef,
   QuestionnaireResponse,
   RoutedInteraction,
@@ -96,6 +97,7 @@ const APPROVAL_FOOTER =
   "↑↓ choose · Enter confirm (Deny preselected) · Ctrl+E expand · PgUp/PgDn scroll detail · Ctrl+↑↓ other pending · Esc dismiss · Ctrl+C cancel attempt";
 
 export interface HumanInteractionOverlayOptions {
+  onReview: (interaction: InteractionRef, response: ReviewResponse) => void;
   /** The one typed response path for approvals: allow once, or deny. */
   onDecision: (interaction: InteractionRef, decision: ApprovalDecision) => void;
   /** The existing typed questionnaire submission, for the exact ref. */
@@ -158,6 +160,8 @@ export class HumanInteractionOverlay implements PopupContent {
    */
   readonly #questionnaires = new Map<string, QuestionnaireOverlay>();
   #bodyHeight = 24;
+  readonly #feedback = new Map<string, string>();
+  #editingFeedback = false;
 
   constructor(options: HumanInteractionOverlayOptions) {
     this.#options = options;
@@ -193,6 +197,7 @@ export class HumanInteractionOverlay implements PopupContent {
     this.#preferences = preferences;
     if (this.#focusedKey !== previousKey) {
       this.#approvalChoice = 0;
+      this.#editingFeedback = false;
     }
     const live = new Set(
       interactions.map((entry) => interactionKey(entry.interaction)),
@@ -208,6 +213,9 @@ export class HumanInteractionOverlay implements PopupContent {
       if (!live.has(key)) {
         this.#approvalScroll.delete(key);
       }
+    }
+    for (const key of [...this.#feedback.keys()]) {
+      if (!live.has(key)) this.#feedback.delete(key);
     }
     for (const key of [...this.#questionnaires.keys()]) {
       if (!live.has(key)) {
@@ -241,7 +249,7 @@ export class HumanInteractionOverlay implements PopupContent {
     if (focused === undefined) {
       return;
     }
-    if (focused.request.kind.type === "approval") {
+    if (focused.request.kind.type !== "questionnaire") {
       // An in-flight response keeps its surface up: dismissal is
       // presentation-only and must not look like a second answer path.
       if (!this.#inFlight.has(interactionKey(focused.interaction))) {
@@ -287,6 +295,9 @@ export class HumanInteractionOverlay implements PopupContent {
     if (focused === undefined) {
       return [];
     }
+    if (focused.request.kind.type === "review") {
+      return ["↑↓ choose · Enter confirm (Reject preselected) · Ctrl+F edit feedback · PgUp/PgDn inspect · Esc dismiss"];
+    }
     if (focused.request.kind.type === "approval") {
       return [APPROVAL_FOOTER];
     }
@@ -316,6 +327,7 @@ export class HumanInteractionOverlay implements PopupContent {
       return;
     }
     const kind = focused.request.kind;
+    if (kind.type === "review") { this.#reviewInput(focused, data); return; }
     if (kind.type === "approval") {
       this.#approvalInput(focused.interaction, data);
       return;
@@ -354,7 +366,9 @@ export class HumanInteractionOverlay implements PopupContent {
     const detail =
       focused.request.kind.type === "approval"
         ? this.#renderApproval(focused, safeWidth, detailHeight)
-        : this.#renderQuestionnaire(focused, safeWidth, detailHeight);
+        : focused.request.kind.type === "review"
+          ? this.#renderReview(focused, safeWidth, detailHeight)
+          : this.#renderQuestionnaire(focused, safeWidth, detailHeight);
 
     return [...queue, "", ...detail]
       .slice(0, this.#bodyHeight)
@@ -371,9 +385,55 @@ export class HumanInteractionOverlay implements PopupContent {
     const summary =
       kind.type === "approval"
         ? `Approval · ${kind.tool_name}`
+        : kind.type === "review" ? `Review · ${kind.review.instance.node}`
         : `Question · ${kind.questionnaire.questions[0]?.header ?? "questionnaire"}`;
     const marker = focused ? role.accent("›") : " ";
     return `${marker} ${role.accent(`[${source}]`)} ${clipText(summary, HEADER_BUDGET.maxChars)}`;
+  }
+
+  #reviewInput(routed: RoutedInteraction, data: string): void {
+    const kind = routed.request.kind;
+    if (kind.type !== "review") return;
+    const key = interactionKey(routed.interaction);
+    if (this.#inFlight.has(key)) return;
+    if (matchesKey(data, Key.escape)) { this.#options.onDismiss(routed.interaction); return; }
+    if (matchesKey(data, Key.ctrl("f"))) { this.#editingFeedback = !this.#editingFeedback; this.#approvalChoice = 0; this.#changed(); return; }
+    if (this.#editingFeedback) {
+      if (matchesKey(data, Key.enter)) this.#editingFeedback = false;
+      else if (matchesKey(data, Key.backspace)) this.#feedback.set(key, [...(this.#feedback.get(key) ?? "")].slice(0, -1).join(""));
+      else if (!/[\x00-\x1f\x7f]/u.test(data)) this.#feedback.set(key, [...(this.#feedback.get(key) ?? ""), ...data].slice(0, 2000).join(""));
+      this.#changed(); return;
+    }
+    if (matchesKey(data, Key.enter)) {
+      this.#inFlight.add(key);
+      this.#options.onReview(routed.interaction, {
+        instance: kind.review.instance, subject_digest: kind.subject_digest,
+        decision: this.#approvalChoice === 1 ? { type: "accepted" } : { type: "rejected", feedback: this.#feedback.get(key) ?? "" },
+      });
+      this.#changed(); return;
+    }
+    this.#approvalInput(routed.interaction, data);
+  }
+
+  #renderReview(routed: RoutedInteraction, width: number, height: number): string[] {
+    const kind = routed.request.kind;
+    if (kind.type !== "review") return [];
+    const key = interactionKey(routed.interaction);
+    const review = kind.review;
+    const disclosure = review.subject.type === "candidate"
+      ? "Candidate content is NOT inlined. Inspect the frozen workspace at inspection_path; the reference covers the complete native source contract, including dirty bytes."
+      : "Complete structured plan and context below. Candidate-bound facts identify their exact source version; PgUp/PgDn reveals all rows.";
+    const rows = [disclosure, `Subject digest: ${kind.subject_digest}`, ...JSON.stringify(review, null, 2).split("\n")].flatMap(line => hardWrapLossless(line, width));
+    const room = Math.max(1, height - 4);
+    const offset = Math.min(this.#approvalScroll.get(key) ?? 0, Math.max(0, rows.length - room));
+    this.#detailViewport = { key, room, total: rows.length };
+    return [
+      `Review from ${interactionSourceName(routed.source)} · ${review.instance.node}`,
+      ...rows.slice(offset, offset + room),
+      `Subject rows ${offset + 1}–${Math.min(offset + room, rows.length)} of ${rows.length}`,
+      `${this.#approvalChoice === 0 ? "›" : " "} Reject  ${this.#approvalChoice === 1 ? "›" : " "} Accept`,
+      `${this.#editingFeedback ? "Editing" : "Feedback"} (max 2000): ${this.#feedback.get(key) ?? ""}`,
+    ];
   }
 
   #approvalInput(interaction: InteractionRef, data: string): void {

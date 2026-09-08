@@ -57,7 +57,7 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 28 is the only accepted schema; version 27 and every older
+schema version 29 is the only accepted schema; version 28 and every older
 development schema fail explicitly at open and are not migrated. Version 10
 froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation
@@ -7374,3 +7374,31 @@ inspection failure guards B. Any current bytes differing from the guard survive.
 Native disposal compares `inspect_source` immediately before the first removal;
 exact durable intent permits continuation without rehash only after that physical
 frontier. Schema 28 durably separates these meanings without compatibility code.
+
+
+### Candidate-bound human business acceptance
+
+Review is distinct from Questionnaire and Tool Approval. InteractionRequested
+commits before presentation; InteractionSettled commits before human waiter
+release. Candidate acceptance carries its exact native version, never just HEAD.
+Downstream admission borrows that expected version before node start and transfers
+the borrow to the effect. A writer that wins first invalidates old acceptance;
+cancellation observed before admission starts no next work. Historical acceptance
+and requested facts cannot reconstruct runtime authority after process death.
+See [the owner/frontier table](workflow-programs.md#ownership-and-linearization).
+
+WF-04 Review decisions/feedback are immutable business data, separate from
+a run-local accepted-candidate constraint. Reject A remains readable after writer B;
+explicit A-derived inputs remain stale. Plan and context facts preserve candidate
+applicability in the Review specification/digest/audit, and all dependencies share
+the native freeze. Native ask_user is workspace-independent under WorkspaceUse:
+it never holds a CandidateScope borrow while waiting.
+
+Parallel acceptance joins merge explicit branch effects relative to entry,
+not inherited snapshots. Unchanged siblings neither conflict with a replacement
+nor resurrect cleared acceptance. Conflicting replacements and clear/replacement
+mixtures fail closed; completion order grants no authority.
+
+Clearing human acceptance removes its exact-candidate constraint, not Tool/workspace permission. Normal machine checking and repair may continue on the current candidate; explicit data applicability remains independently enforced.
+
+An Agent compares native admitted and post-node candidate identities. A -> A emits Unchanged; A -> B emits Cleared even under local acceptance None. The effect survives nested joins, preventing a sibling Replaced(A) from surviving mutation. Agent execution/write capability is not itself a mutation fact.
