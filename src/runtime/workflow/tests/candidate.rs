@@ -164,7 +164,10 @@ async fn agent_dirty_bytes_reach_exact_tool_context_after_child_settlement_with_
     assert_eq!(result["output"], json!({"passed":true}));
     assert_eq!(
         probe.observed.lock().unwrap().as_slice(),
-        &[(path.clone(), b"uncommitted implementation bytes\0".to_vec())]
+        &[(
+            path.canonicalize().unwrap(),
+            b"uncommitted implementation bytes\0".to_vec()
+        )]
     );
     assert!(path.exists());
     assert!(!parent.join("candidate").exists());
