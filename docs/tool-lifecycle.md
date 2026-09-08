@@ -214,3 +214,6 @@ cleanup does not compete with an equal outer timer. A composite that then fails
 to settle still produces control-plane failure and OutcomeUnknown, not a false
 confirmed timeout. The scope counter is ownership accounting, not another outcome
 state machine or an executor registry.
+## Candidate-bound native invocation
+
+WF-03 supplies the exact authorized candidate through `ToolExecutionContext.workspace` to the same native invocation lifecycle. `ToolExecutor::honors_workspace` defaults false; unsupported executors fail admission, never fall back to parent cwd. Native filesystem executors and Bash honor the context. Candidate access precedes scheduling/approval and stays owned through physical settlement. Every candidate Tool is an exclusive validator: an actual source change invalidates its input certification even when native execution succeeded. `WorkflowCandidateInvocation` records the original native outcome, input candidate and unchanged flag. No Workflow-specific executor or model-text evidence path exists. See [the candidate contract](workflow-programs.md#run-scoped-candidate-workspace-wf-03).

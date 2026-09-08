@@ -1059,6 +1059,7 @@ async fn the_child_spec_carries_the_frozen_timeout_policy() {
             )
             .await
             .expect("shared workspace lease");
+    let workspace = rustx::runtime::workspace::WorkspaceUse::from(workspace);
     let spec = plan.child_spec(
         &subagent_id,
         &ConversationId::new("conv-x-subagent-1"),

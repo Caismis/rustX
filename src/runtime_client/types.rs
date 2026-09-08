@@ -286,7 +286,7 @@ pub enum RuntimeClientSessionRequest {
 /// the same terminal vocabulary as foreground `ToolResults` (Issue #206).
 /// The current version adds typed native deadline interruption to interaction
 /// outcomes and durable approval settlement, without fabricating user intent.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 19;
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 20;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1246,7 +1246,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 19);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 20);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1278,6 +1278,7 @@ mod tests {
                 .expect("timestamp")
                 .with_timezone(&Utc),
             workspace: super::RuntimeClientSubagentWorkspace {
+                borrowed_from: None,
                 logical_workspace: std::path::PathBuf::from("<shared-workspace>"),
                 isolation: super::RuntimeClientWorkspaceIsolation::Shared,
                 resource_state: crate::runtime::subagent::SubagentWorkspaceResourceState::None,

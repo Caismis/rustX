@@ -468,3 +468,6 @@ Destination-unique `MessageId` and `ToolCallId` values are remapped. Retained
 `ToolExecutionId`, `SubagentId`, and background identifiers remain opaque
 history and never reacquire live owners. Future destination requests use the
 destination runtime's current resources and current Session intent.
+## Candidate access is not resource rediscovery
+
+WF-03 binds the run to a native-retained isolated candidate. Agent profile workspace policy must exactly match the run policy before acquisition. Instructions, Skills, model/profile configuration, capability allowlists, Python ToolVersion identities, MCP definitions, approval and deadlines continue to come from the invoking immutable generation. Candidate cwd never triggers ancestor instruction walks or project capability discovery. Current MCP bindings and nested orchestration are rejected for candidate consumers instead of being silently reconfigured. Noncandidate Workflows acquire no Git resource. See [WF-03 ownership and freeze rules](workflow-programs.md#run-scoped-candidate-workspace-wf-03).

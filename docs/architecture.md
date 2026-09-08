@@ -51,7 +51,10 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 26. Version 26 adds typed native
+The SQLite schema is development schema version 27. Version 27 adds native
+Workflow candidate ownership, settlement, invocation correlation and disposal,
+with borrowed-run association in child IPC 18 and Runtime Client 20.
+Version 26 adds typed native
 deadline interruption to interaction outcomes/audit settlements; Runtime Client 19
 and child IPC 17 mirror it. Version 25 added caller-neutral
 approval correlation and native Workflow invocation facts with typed Workflow
@@ -4268,7 +4271,8 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
-The current Runtime Client protocol is version 19. Version 19 adds typed deadline
+The current Runtime Client protocol is version 20. Version 20 adds borrowed
+Workflow run identity to child workspace facts. Version 19 adds typed deadline
 interruption of approval waits. Version 18 distinguishes
 Agent and Workflow approval invocation identity. Version 17 preserves
 `denied` in background lifecycle projections. Version 16 introduced the
@@ -8382,3 +8386,8 @@ decide what to do next.
 ## 8. Compatibility policy
 
 Before 1.0, rustX intentionally does not preserve compatibility with previous runtimes or flawed abstractions. Breaking changes are preferred when they materially improve correctness, separation of concerns, or long-term maintainability.
+## WF-03 native candidate ownership
+
+The shared native owner is `runtime::workspace`, not a Subagent-specific Git manager. A Workflow holds a logical `CandidateScope`; its native state owns exactly one retained `WorkspaceLease`. Exclusive `WorkspaceAccess` transfers to the ordinary Agent process driver or Tool invocation until physical descendants settle. Child exit returns access rather than disposing the run lease. All candidate consumers serialize before child capacity/Tool scheduling. Matching frozen isolated profile policy is required; unsupported bindings fail before Git acquisition. See [the complete candidate contract](workflow-programs.md#run-scoped-candidate-workspace-wf-03) for content identity, mutation detection, cancellation and exact commit points.
+
+SQLite development schema 27 adds run workspace ownership/settlement, native candidate invocation correlation and separate identity-only disposal facts. Child IPC 18 adds borrowed-run association; Runtime Client/TUI 20 mirrors it. Superseded schemas are rejected without migration. Resource persistence is not Workflow continuation. Providers have no workspace orchestration responsibilities.

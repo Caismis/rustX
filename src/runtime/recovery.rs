@@ -2651,6 +2651,7 @@ mod tests {
         let subagent_id = SubagentId::for_conversation(&conversation(), 1);
         let child_agent_id = crate::runtime::identity::AgentId::new("agent-child");
         let workspace = WorkspaceSnapshot {
+            borrowed_from: None,
             logical_workspace: std::path::PathBuf::from("/tmp/rustx-worktree-1/backend"),
             isolation: crate::runtime::workspace::WorkspaceIsolation::GitWorktree(
                 crate::runtime::workspace::GitWorktreeSnapshot {
@@ -2812,6 +2813,7 @@ mod tests {
         let subagent_id = SubagentId::for_conversation(&conversation(), 1);
         let child_agent_id = crate::runtime::identity::AgentId::new("agent-child");
         let workspace = WorkspaceSnapshot {
+            borrowed_from: None,
             logical_workspace: std::path::PathBuf::from("/tmp/rustx-worktree-unresolved/backend"),
             isolation: crate::runtime::workspace::WorkspaceIsolation::GitWorktree(
                 crate::runtime::workspace::GitWorktreeSnapshot {

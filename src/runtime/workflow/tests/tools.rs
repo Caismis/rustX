@@ -1,5 +1,7 @@
 //! WF-02 boundary tests. Gates identify the interleaving; no sleeps establish order.
 #![cfg(unix)]
+#[path = "candidate.rs"]
+mod candidate;
 #[path = "tool_composition.rs"]
 mod composition;
 use super::*;
@@ -140,6 +142,20 @@ fn context_with_registration(
     registration: ToolRegistration,
     lifecycle: crate::agent::AttemptLifecycle,
 ) -> crate::runtime::subagent::AttemptSubagentContext {
+    context_with_workspace_policy(
+        plane,
+        registration,
+        lifecycle,
+        WorkspacePolicy::SharedWorkspace,
+    )
+}
+
+fn context_with_workspace_policy(
+    plane: &WorkflowTestPlane,
+    registration: ToolRegistration,
+    lifecycle: crate::agent::AttemptLifecycle,
+    workspace_policy: WorkspacePolicy,
+) -> crate::runtime::subagent::AttemptSubagentContext {
     let model_catalog = ModelCatalog::from_jsonc_slice(WORKFLOW_TEST_MODELS.as_bytes()).unwrap();
     let models = ModelBindingRegistry::new(
         model_catalog
@@ -163,7 +179,13 @@ fn context_with_registration(
         Arc::new(McpRuntimeLeaseAuthority::empty()),
         Arc::new(BTreeMap::new()),
     ));
-    let agents = workflow_test_context(plane);
+    let agents = workflow_test_context_with_policy(
+        plane,
+        1,
+        "Frozen candidate instructions",
+        WorkflowCatalog::empty(),
+        workspace_policy,
+    );
     let resources = Arc::new(
         crate::runtime::RuntimeResourceSnapshot::new(
             RuntimeResourceRevision::new(1),
@@ -836,6 +858,7 @@ fn authority_rejects_changed_identity_and_unadmitted_selection() {
     );
     let program = program();
     let mut definition = WorkflowDefinition {
+        workspace: None,
         description: "unadmitted".into(),
         tools: BTreeSet::new(),
         timeout_ms: 100,

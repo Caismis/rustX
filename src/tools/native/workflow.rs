@@ -116,7 +116,23 @@ impl ToolExecutor for WorkflowToolExecutor {
                     .await
                 {
                     Ok(value) => success_json(value),
-                    Err(error) => crate::tools::invocation::terminal(error.execution_status()),
+                    Err(error) => {
+                        let mut result =
+                            crate::tools::invocation::terminal(error.execution_status());
+                        if let crate::runtime::workflow::WorkflowRunError::WorkspaceSettlement {
+                            workspace,
+                            candidate,
+                            ..
+                        } = error
+                        {
+                            result
+                                .content
+                                .push(crate::tools::types::ToolResultContent::Json {
+                                value: serde_json::json!({"workspace": workspace, "candidate": candidate}),
+                                });
+                        }
+                        result
+                    }
                 }
             }),
             context.cancellation.clone(),

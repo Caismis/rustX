@@ -287,6 +287,11 @@ impl<'a> ToolExecutionContext<'a> {
 ///
 /// [`ToolExecutionStatus::Failed`]: crate::tools::types::ToolExecutionStatus::Failed
 pub trait ToolExecutor: Send + Sync {
+    /// Whether every invocation uses the supplied workspace as its execution
+    /// cwd/file authority. External servers and fixed-cwd executors fail closed.
+    fn honors_workspace(&self) -> bool {
+        false
+    }
     /// Constructs the handle of one caller-neutral native invocation.
     ///
     /// This method must not dispatch physical work. Dispatch and its cleanup

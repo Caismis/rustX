@@ -46,6 +46,7 @@ fn wrap(block: WorkflowBlock, count: usize) -> WorkflowBlock {
 
 fn compile_block_fixture(block: WorkflowBlock) -> Result<WorkflowProgram, WorkflowCompileError> {
     compile_test(WorkflowDefinition {
+        workspace: None,
         tools: std::collections::BTreeSet::default(),
         timeout_ms: 600_000,
         description: "scoped test".into(),
@@ -210,6 +211,7 @@ fn nested_program_and_expression_limits_are_aggregate() {
     };
     assert!(value_schema(&bad_reference, &SchemaMap::default(), "reference", 0).is_err());
     let mut definition = WorkflowDefinition {
+        workspace: None,
         tools: std::collections::BTreeSet::default(),
         timeout_ms: 600_000,
         description: "large aggregate".into(),

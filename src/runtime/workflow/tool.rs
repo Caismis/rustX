@@ -117,6 +117,86 @@ impl WorkflowRuntime {
         arguments: Value,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
     ) -> Result<ToolExecutionResult, WorkflowRunError> {
+        let signal = cancellation.child_signal();
+        let access = match &run.candidate {
+            Some(candidate) => Some(
+                candidate
+                    .borrow(node.clone(), None, &signal)
+                    .await
+                    .map_err(|error| {
+                        if cancellation.is_cancelled() {
+                            WorkflowRunError::from_cancellation(cancellation)
+                        } else {
+                            WorkflowRunError::InvocationAuthority(error)
+                        }
+                    })?,
+            ),
+            None => None,
+        };
+        let workspace = access
+            .as_ref()
+            .map(|access| {
+                crate::tools::workspace::Workspace::new(&access.snapshot().logical_workspace)
+            })
+            .transpose()
+            .map_err(|error| WorkflowRunError::InvocationAuthority(error.to_string()))?;
+        let mut result = self
+            .invoke_tool_bound(
+                run,
+                context,
+                node,
+                selector,
+                arguments,
+                cancellation,
+                workspace.as_ref(),
+            )
+            .await;
+        if let Some(access) = access {
+            let input = access.input().clone();
+            let status = match &result {
+                Ok(result) => result.status.clone(),
+                Err(error) => error.execution_status(),
+            };
+            let unchanged = if result.as_ref().is_ok_and(|result| {
+                matches!(result.status, ToolExecutionStatus::OutcomeUnknown { .. })
+            }) {
+                access.unresolved("Tool physical settlement is unknown".into());
+                false
+            } else {
+                match access.finish(true).await {
+                    Ok(_) => true,
+                    Err(error) => {
+                        if result
+                            .as_ref()
+                            .is_ok_and(|result| result.status == ToolExecutionStatus::Success)
+                        {
+                            result = Ok(terminal(ToolExecutionStatus::Failed { error }));
+                        }
+                        false
+                    }
+                }
+            };
+            self.commit_resource(RuntimeEvent::WorkflowCandidateInvocation {
+                node: node.clone(),
+                input,
+                result: status,
+                candidate_unchanged: unchanged,
+            })?;
+        }
+        result
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    async fn invoke_tool_bound(
+        &self,
+        run: &WorkflowRun,
+        context: &AttemptSubagentContext,
+        node: &WorkflowNodeInstance,
+        selector: &ToolSelector,
+        arguments: Value,
+        cancellation: &crate::runtime::cancellation::ExecutionCancellation,
+        workspace: Option<&crate::tools::workspace::Workspace>,
+    ) -> Result<ToolExecutionResult, WorkflowRunError> {
         let services = context.native.as_ref().ok_or_else(|| {
             WorkflowRunError::InvocationAuthority(
                 "attempt has no native invocation services".into(),
@@ -208,7 +288,7 @@ impl WorkflowRuntime {
                     &run.run_id.conversation_id,
                     None,
                     cancellation.clone(),
-                    services.runtime.workspace(),
+                    workspace.unwrap_or_else(|| services.runtime.workspace()),
                     &progress,
                     services.runtime.artifacts(),
                     services.runtime.tool_output(),

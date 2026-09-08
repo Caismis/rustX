@@ -8332,6 +8332,7 @@ mod tests {
             crate::runtime::WorkflowProgram::compile(
                 crate::runtime::WorkflowId::parse("reload_workflow").expect("workflow id"),
                 crate::runtime::WorkflowDefinition {
+                    workspace: None,
                     tools: std::collections::BTreeSet::default(),
                     timeout_ms: 600_000,
                     description: description.to_owned(),

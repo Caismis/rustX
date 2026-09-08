@@ -68,8 +68,9 @@ use super::{
     bound_utf8, ownership_event, terminal_publication, terminal_settlement, workflow_output_event,
 };
 use crate::runtime::workspace::{
-    WorkspaceDisposalPhase, WorkspaceDisposalSettlement, WorkspaceHandoff, WorkspaceLease,
+    WorkspaceAccess, WorkspaceDisposalPhase, WorkspaceDisposalSettlement, WorkspaceHandoff,
     WorkspaceManager, WorkspaceSettlementDisposition, WorkspaceSnapshot, WorkspaceUnresolvedReason,
+    WorkspaceUse,
 };
 
 /// The highest lifecycle state of one subagent child.
@@ -1832,6 +1833,45 @@ impl SubagentRegistry {
         spec: &SubagentStartSpec,
         preparation_cancellation: &CancellationSignal,
     ) -> Result<PreparedSubagent, SubagentStartError> {
+        self.prepare_in_workspace(spec, preparation_cancellation, None)
+            .await
+    }
+
+    pub(crate) fn workspace_manager(&self) -> &WorkspaceManager {
+        &self.config.workspace
+    }
+
+    pub(crate) async fn prepare_in_workspace(
+        &self,
+        spec: &SubagentStartSpec,
+        preparation_cancellation: &CancellationSignal,
+        mut access: Option<WorkspaceAccess>,
+    ) -> Result<PreparedSubagent, SubagentStartError> {
+        let result = self
+            .prepare_inner(spec, preparation_cancellation, &mut access)
+            .await;
+        if let Some(access) = access {
+            let _ = access.finish(false).await;
+        }
+        result
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn prepare_inner(
+        &self,
+        spec: &SubagentStartSpec,
+        preparation_cancellation: &CancellationSignal,
+        access: &mut Option<WorkspaceAccess>,
+    ) -> Result<PreparedSubagent, SubagentStartError> {
+        if let Some(access) = access.as_ref() {
+            let matches = matches!(&spec.terminal, SubagentTerminalMode::WorkflowOutput { node_id, .. } if node_id.as_ref() == access.node());
+            if !matches || spec.resolved.workspace_policy != access.policy() {
+                return Err(SubagentStartError::Workspace {
+                    detail: "candidate access does not match the frozen child/node authority"
+                        .into(),
+                });
+            }
+        }
         if preparation_cancellation.is_cancelled() {
             return Err(SubagentStartError::Cancelled);
         }
@@ -1871,34 +1911,39 @@ impl SubagentRegistry {
             // Workspace acquisition is staged child ownership. It happens
             // after resolution/freeze and before any child preparation, but
             // the lease is not durable until the commit below succeeds.
-            let workspace_lease = self
-                .config
-                .workspace
-                .acquire(
-                    spec.resolved.workspace_policy,
-                    &subagent_id,
-                    preparation_cancellation,
+            let workspace_lease = if let Some(access) = access.take() {
+                WorkspaceUse::from(access)
+            } else {
+                WorkspaceUse::from(
+                    self.config
+                        .workspace
+                        .acquire(
+                            spec.resolved.workspace_policy,
+                            &subagent_id,
+                            preparation_cancellation,
+                        )
+                        .await
+                        .map_err(|error| match error {
+                            crate::runtime::workspace::WorkspaceAcquireError::Cancelled => {
+                                SubagentStartError::Cancelled
+                            }
+                            crate::runtime::workspace::WorkspaceAcquireError::Settlement {
+                                detail,
+                            } => SubagentStartError::Rollback { detail },
+                            // Issue #188: the dirty-parent rejection keeps its typed
+                            // identity across this boundary. Flattening it into a
+                            // string here would destroy the only fact the
+                            // model-facing tool boundary needs to render actionable
+                            // remediation without parsing prose.
+                            crate::runtime::workspace::WorkspaceAcquireError::DirtyParent {
+                                base_commit,
+                            } => SubagentStartError::WorkspaceDirtyParent { base_commit },
+                            error => SubagentStartError::Workspace {
+                                detail: error.to_string(),
+                            },
+                        })?,
                 )
-                .await
-                .map_err(|error| match error {
-                    crate::runtime::workspace::WorkspaceAcquireError::Cancelled => {
-                        SubagentStartError::Cancelled
-                    }
-                    crate::runtime::workspace::WorkspaceAcquireError::Settlement { detail } => {
-                        SubagentStartError::Rollback { detail }
-                    }
-                    // Issue #188: the dirty-parent rejection keeps its typed
-                    // identity across this boundary. Flattening it into a
-                    // string here would destroy the only fact the
-                    // model-facing tool boundary needs to render actionable
-                    // remediation without parsing prose.
-                    crate::runtime::workspace::WorkspaceAcquireError::DirtyParent {
-                        base_commit,
-                    } => SubagentStartError::WorkspaceDirtyParent { base_commit },
-                    error => SubagentStartError::Workspace {
-                        detail: error.to_string(),
-                    },
-                })?;
+            };
             #[cfg(test)]
             {
                 let override_child = self
@@ -1927,9 +1972,15 @@ impl SubagentRegistry {
             let runtime_root = match self.config.spawn.allocate_child_runtime_root(&subagent_id) {
                 Ok(runtime_root) => runtime_root,
                 Err(super::process::SpawnError::ConversationIdentityInUse { .. }) => {
+                    let borrowed = matches!(workspace_lease, WorkspaceUse::Borrowed(_));
                     if let Err(error) = workspace_lease.settle_staged().await {
                         return Err(SubagentStartError::Rollback {
                             detail: error.detail,
+                        });
+                    }
+                    if borrowed {
+                        return Err(SubagentStartError::Workspace {
+                            detail: "candidate child identity is already occupied".into(),
                         });
                     }
                     continue;
@@ -3808,7 +3859,9 @@ impl SubagentRegistry {
             || runtime_root_cleanup_error.is_some();
         let workspace_handoff = workspace.handoff().cloned();
         let (workspace_resource_state, workspace_unresolved) = match &workspace.disposition {
-            WorkspaceSettlementDisposition::Shared | WorkspaceSettlementDisposition::Removed => {
+            WorkspaceSettlementDisposition::Borrowed
+            | WorkspaceSettlementDisposition::Shared
+            | WorkspaceSettlementDisposition::Removed => {
                 (SubagentWorkspaceResourceState::None, None)
             }
             WorkspaceSettlementDisposition::Retained { .. } => {
@@ -4546,7 +4599,7 @@ impl SubagentRegistry {
 /// strengthened to a rollback failure and the workspace manager preserves the
 /// evidence.
 async fn settle_staged_workspace(
-    workspace: WorkspaceLease,
+    workspace: WorkspaceUse,
     original: SubagentStartError,
 ) -> SubagentStartError {
     match workspace.settle_staged().await {

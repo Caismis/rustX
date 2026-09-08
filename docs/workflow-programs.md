@@ -1,6 +1,6 @@
 # Fixed scoped Workflow programs
 
-WF-01 (#217) and WF-02 (#218) extend the native Workflow foundation (#83). A registered
+WF-01 (#217), WF-02 (#218), and WF-03 (#219) extend the native Workflow foundation (#83). A registered
 Workflow remains one foreground Tool. Configuration explicitly registers
 `.agents/workflows/<id>.yaml` and separately exposes it through
 `workflows.main`. Profiles must belong to `subagents.workflow`. Files do not
@@ -62,8 +62,9 @@ leaves fail closed. Available-but-inactive capabilities remain invisible to the
 parent model. Admission rejects background-only capabilities, composites,
 Workflow dispatch, subagents, execution control and interactive intrinsics.
 No rediscovery or current-file lookup can replace a frozen registration.
-The workspace/environment is the ordinary invoking Tool context; WF-03 leases
-and workspace handoff are not implemented.
+Without a run `workspace` binding, Tools use the ordinary invoking context.
+With a binding, every Tool consumes the exact native-authorized candidate as
+an exclusive validation consumer, under the contract below.
 
 `result` projects exactly one zero-based native `ToolExecutionResult.content`
 part. `type: json` requires `ToolResultContent::Json` and a declared closed
@@ -436,12 +437,155 @@ outer siblings remain sequential, and no replay/resume is introduced.
 The Event Journal adds bounded block/node start and terminal facts and typed
 instance associations. It remains best-effort observation for ordinary
 Workflow lifecycle; the native child output/terminal pair retains its atomic
-durable contract. WF-02 uses SQLite development schema 26, child IPC 17 and
-Runtime Client/TUI 19 for caller-neutral approval identity and typed execution
+durable contract. WF-03 uses SQLite development schema 27, child IPC 18 and
+Runtime Client/TUI 20 for candidate resource ownership and borrowed child workspace
 facts. The event envelope stays version 1 because framing is unchanged. The
 client projector explicitly ignores journal-only execution facts pending WF-06;
 approval remains on the existing human interaction surface.
 
-Tool/deadline composition is WF-02 (#218). Workspace handoff (#219), Review/ask_user
-(#220), Loop (#221), full projection (#222), and reference workflows (#223)
-remain outside WF-01/WF-02.
+Review/ask_user (#220), Loop (#221), full projection (#222), and reference
+workflows (#223) remain outside WF-03.
+
+## Run-scoped candidate workspace (WF-03)
+
+Trusted definitions can add this run resource, never a graph node:
+
+```yaml
+workspace:
+  require_clean_parent: true
+```
+
+Omission means no new Git requirement, discovery or acquisition. An empty
+`workspace: {}` selects the same strict isolated-worktree default. Explicit
+`false` permits a dirty parent but does not copy arbitrary parent bytes.
+The native `.worktreeinclude` policy is the only authorized ignored-file
+overlay; its frozen source and safe materialization rules remain unchanged.
+
+All Agent profiles in all branches must already resolve to exactly the same
+`GitWorktree { require_clean_parent }` policy. Shared profiles and mismatched
+cleanliness policies fail before acquisition or child/Tool side effects.
+Candidate Agents cannot select MCP (including managed Python) or nested
+`subagent`/`execution` orchestration: their existing bindings cannot safely
+promise candidate cwd or descendant access. These combinations are rejected,
+not stripped from a profile. Tool executors must explicitly implement the
+native `honors_workspace` contract; the default is false. Native filesystem
+Tools and Bash support it; current MCP executors do not. No frozen policy is
+reinterpreted against a different checkout.
+
+Agents are exclusive source-writing borrowers. Every Tool in a candidate run
+is an exclusive **validation** borrower, regardless of its name. This is not
+a read-only sandbox: a test may write, but then cannot certify its input.
+All candidate consumers serialize, including consumers in Parallel branches
+and Tools whose ordinary scheduler permits parallel execution. There is no
+parallel-reader claim. Candidate access is acquired before child capacity or
+Tool scheduling. No borrower waits for another candidate-consuming child;
+nested orchestration is rejected before execution. Ordinary supervised OS
+descendants stay inside their existing physical containment boundary.
+
+### One owner and explicit frontiers
+
+```text
+Workflow run (logical candidate scope)
+  -> runtime::workspace::CandidateScope (native owner)
+      -> one WorkspaceLease
+          -> one WorkspaceAccess for an exact node instance
+              -> Agent process / native Tool / supervised descendants
+```
+
+`runtime::workspace`, moved from `runtime::subagent::workspace`, is the sole
+Git/resource owner. `WorkspaceUse::Owned` transfers a one-shot lease to the
+native process driver; `Borrowed` transfers access only. There is no second
+Workflow Git manager. WorkflowRuntime holds the logical scope and never
+runs Git. Candidate access changes cwd, not instructions, Skills, model,
+profile, capability allowlists, ToolVersion/MCP identities, approvals or
+deadlines. Downstream Agents receive explicit values and their own context,
+not the preceding Agent's transcript.
+
+The linearization points are:
+
+1. Native `acquire` freezes repository identity, logical relative scope,
+   baseline, cleanliness/overlay facts and deterministic physical ownership.
+   A staged failure settles that same lease; dirty or unknown work is preserved.
+2. `retain_for_run` transfers the sole lease into native scope state. Required
+   durable `WorkflowWorkspaceOwned` publication commits run admission. Failed
+   publication or observed cancellation settles staging; no node starts.
+3. `CandidateScope::borrow` takes the exclusive native mutex, validates the
+   exact run/reference/Git ownership and content, installs mutation observation,
+   checks cancellation, then marks access admitted. Paths and references alone
+   cannot construct access. Cancellation while waiting starts no new work.
+4. Native physical settlement precedes `WorkspaceAccess::finish`: Agent reap
+   and nested-anchor containment, or native Tool settlement. Only then is
+   content inspected and the current version published. Dropping an access
+   future leaves it admitted/unresolved, not released.
+5. Clearing admitted state and releasing the guard makes the next borrower
+   eligible. Unknown containment poisons the scope; no next writer is granted.
+6. `CandidateScope::settle` waits for access, revalidates final content, then
+   consumes the lease through the same native settlement on every terminal
+   path. Settlement is absorbing. Inspection/removal never precedes physical
+   containment. A run-scoped native settlement anchor also covers acquisition
+   and final cleanup, so outer cancellation cannot outrun this boundary.
+7. Exact native proof plus settled ownership authorizes disposal. Automatic
+   disposal removes only clean, unchanged managed work. Changed work is retained;
+   unknown ownership is durably unresolved. Explicit disposal takes run identity
+   and authoritative journal facts, never a caller-supplied path, branch or SHA.
+
+Cancellation is intent, not rollback. Once physical work starts, cancellation
+propagates and settlement is still awaited. Cancellation observed at final
+run commit prevents a success outcome but cannot reverse already completed
+physical settlement. No terminal path automatically commits, integrates,
+resets, stashes or force-removes dirty source.
+
+### Candidate content and interference
+
+`CandidateReference { run, version, content }` is a historical native fact,
+not an access token. The SHA-256 content identity covers frozen repository,
+logical/physical workspace and baseline facts, current HEAD, exact stage/index
+entries, and the repository-wide union of tracked, HEAD-tree and non-ignored
+untracked paths. Length-framed names and bytes distinguish deletions, staged
+versus working-tree state, regular-file executable modes and symlink target
+bytes (links are not followed). Thus identical HEAD with different dirty bytes
+is not the same candidate. Ignored untracked build/cache/runtime files are
+excluded, including ignored overlay files; tracked files remain included even
+if an ignore rule matches them.
+
+Unmerged index stages, gitlinks/submodules, sparse/assume-unchanged entries,
+special files, unsafe paths and oversized content fail closed. The bounded
+algorithm permits at most 100,000 paths, 16 MiB Git listings and 256 MiB source
+bytes; it is not a source archive. Native ownership is re-proved around two
+matching content scans using stable directory-relative, no-follow reads.
+
+The runtime prevents overlapping **runtime-owned** writers. It does not
+sandbox arbitrary host processes. Every access revalidates exact source facts;
+Linux inotify/macOS vnode observation detects observed source/control writes
+during validation, including writes followed by restoration of identical bytes.
+Observation loss/overflow or invalid ownership fails closed. macOS directory
+notifications may conservatively invalidate a check for directory changes.
+Kernel notification semantics are not universal external-process isolation:
+privileged interference, remote filesystem changes, and writes outside kernel
+notification coverage are outside this guarantee. Timestamps are never proof.
+
+A validation mutation publishes a new version and fails the applicable result,
+even if final bytes were restored. The durable `WorkflowCandidateInvocation`
+correlates the actual native outcome with the input reference and an explicit
+`candidate_unchanged` fact; native Success alone is insufficient. Historical
+checks never authorize a later version. External net changes between borrowers
+or before final settlement invalidate admission/final reference and preserve
+the workspace conservatively. Model text is not native verification evidence.
+
+### Terminal handoff and resource persistence
+
+Successful candidate runs return `{output, workspace, candidate}`. Failed or
+cancelled runs attach the same bounded structured workspace settlement and
+optional final candidate reference to their native Tool result, even without
+business Return. Unresolved ownership has no final valid reference. Required
+resource journal facts are separate from best-effort execution observation.
+
+`WorkspaceManager::inspect_workflow_workspace` reads historical settlement
+and separate disposal status; `dispose_workflow_workspace` accepts only the
+run identity and conversation store. Its durable intent and physical phases
+use the existing native disposal primitive. Repeated disposal is idempotent
+and retained source bytes are revalidated before deletion, including retries
+that have not yet removed the worktree. A changed handoff fails closed
+and cannot rewrite the Workflow terminal outcome. Recovery exposes retained
+or unresolved resource facts, never resurrects borrowers, nodes or execution
+authority. No Workflow resume or full inspector UI is introduced here.

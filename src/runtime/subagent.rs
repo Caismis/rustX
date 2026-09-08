@@ -685,9 +685,9 @@ pub(crate) fn terminal_workspace_resource(
     settlement: &WorkspaceSettlement,
 ) -> SubagentWorkspaceTerminalResource {
     match &settlement.disposition {
-        WorkspaceSettlementDisposition::Shared | WorkspaceSettlementDisposition::Removed => {
-            SubagentWorkspaceTerminalResource::None
-        }
+        WorkspaceSettlementDisposition::Borrowed
+        | WorkspaceSettlementDisposition::Shared
+        | WorkspaceSettlementDisposition::Removed => SubagentWorkspaceTerminalResource::None,
         WorkspaceSettlementDisposition::Retained { handoff, .. } => {
             SubagentWorkspaceTerminalResource::Retained {
                 handoff: handoff.clone(),

@@ -2883,6 +2883,7 @@ mod subagent_child_tests {
                 require_clean_parent: false,
             };
         child_spec.workspace_snapshot = crate::runtime::workspace::WorkspaceSnapshot {
+            borrowed_from: None,
             logical_workspace: worktree.clone(),
             isolation: crate::runtime::workspace::WorkspaceIsolation::GitWorktree(
                 crate::runtime::workspace::GitWorktreeSnapshot {

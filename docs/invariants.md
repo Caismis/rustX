@@ -57,7 +57,7 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 26 is the only accepted schema; version 25 and every older
+schema version 27 is the only accepted schema; version 26 and every older
 development schema fail explicitly at open and are not migrated. Version 10
 froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation
@@ -7334,3 +7334,8 @@ restarted from an earlier offset. The TUI uses the loaded length as the
 monotonic no-op offset for the exhausted side while the other side continues;
 it does not duplicate rows or turn client-side search into a native unbounded
 query.
+## WF-03 candidate invariants
+
+One native owner retains one exact candidate across fixed nodes. Access is admitted only after exact run/node identity, lease/Git proof, content verification and cancellation checks. A candidate reference or path is not access authority. One exclusive borrower survives until actual Tool/Agent/nested physical settlement; cancellation and future drop do not release it. Unknown containment prevents new access and disposal. Run settlement is absorbing and occurs before the Workflow terminal result on success and every failure path.
+
+Tool candidate consumers are exclusive validators, not presumed readers. Source mutation (including observed write-and-restore) invalidates certification and advances the version; native results remain correlated to their historical input. No check authorizes a changed version. Runtime serialization is not arbitrary-host isolation. [The canonical content and interference contract](workflow-programs.md#candidate-content-and-interference) defines coverage, exclusions and unsupported content. Candidate rebinding cannot rediscover or widen frozen authority.

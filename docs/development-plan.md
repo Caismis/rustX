@@ -1513,3 +1513,6 @@ single model stream
 -> recovery
 -> production integration
 ```
+## WF-03 — candidate-bound workspace handoff (#219)
+
+Implemented run-scoped managed workspace declaration, one generalized native owner, retained leases with serialized node borrowing, exact dirty-source version identity, native Tool context binding, mutation invalidation and failure handoff. Durable resource inspection/disposal remains distinct from execution recovery. SQLite/IPC/Runtime Client development contracts are 27/18/20. Deterministic regressions cover cross-node bytes, frozen baseline/resources, physical-user gates, stale authority, acquisition cancellation, mutation, retention and idempotent disposal. Review (#220), Loop (#221), inspector (#222) and reference suite (#223) remain separate. See [WF-03 contract](workflow-programs.md#run-scoped-candidate-workspace-wf-03).

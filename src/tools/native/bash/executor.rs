@@ -68,6 +68,9 @@ impl Default for BashTool {
 }
 
 impl ToolExecutor for BashTool {
+    fn honors_workspace(&self) -> bool {
+        true
+    }
     fn start<'a>(
         &'a self,
         invocation: ToolInvocation,

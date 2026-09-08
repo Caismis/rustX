@@ -1554,6 +1554,7 @@ mod tests {
         };
         let mut snapshot = subagent_snapshot();
         snapshot.workspace = crate::runtime::workspace::WorkspaceSnapshot {
+            borrowed_from: None,
             logical_workspace: std::path::PathBuf::from("/physical/worktree/project"),
             isolation: WorkspaceIsolation::GitWorktree(GitWorktreeSnapshot {
                 source_repository_root: std::path::PathBuf::from("/repo"),

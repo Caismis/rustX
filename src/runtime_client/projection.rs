@@ -1186,7 +1186,12 @@ impl RuntimeClientProjection {
             // project the bounded parent Tool call/result and does not expose
             // workflow-local values or child transcripts as a second
             // conversation surface.
-            RuntimeEvent::WorkflowStarted { .. }
+            RuntimeEvent::WorkflowWorkspaceOwned { .. }
+            | RuntimeEvent::WorkflowWorkspaceDisposalStarted { .. }
+            | RuntimeEvent::WorkflowWorkspaceDisposalSettled { .. }
+            | RuntimeEvent::WorkflowWorkspaceSettled { .. }
+            | RuntimeEvent::WorkflowCandidateInvocation { .. }
+            | RuntimeEvent::WorkflowStarted { .. }
             | RuntimeEvent::WorkflowBlockStarted { .. }
             | RuntimeEvent::WorkflowBlockSettled { .. }
             | RuntimeEvent::NativeToolInvocation { .. }
@@ -1899,6 +1904,7 @@ pub(crate) fn subagent_view(
         execution_profile: snapshot.profile.clone(),
         started_at: snapshot.started_at,
         workspace: super::snapshot::RuntimeClientSubagentWorkspace {
+            borrowed_from: snapshot.workspace.borrowed_from.clone(),
             logical_workspace: snapshot.workspace.logical_workspace.clone(),
             isolation: match &snapshot.workspace.isolation {
                 crate::runtime::workspace::WorkspaceIsolation::Shared => {

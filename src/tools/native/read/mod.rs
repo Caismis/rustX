@@ -60,6 +60,9 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
 pub struct ReadTool;
 
 impl ToolExecutor for ReadTool {
+    fn honors_workspace(&self) -> bool {
+        true
+    }
     fn start<'a>(
         &'a self,
         invocation: ToolInvocation,

@@ -58,7 +58,7 @@ ignore = "0.4.33"
 grep-matcher = "0.1.9"
 grep-regex = "0.1.14"
 grep-searcher = "0.1.17"
-nix ={ version = "0.31.3", features = ["signal", "process", "fs"] }
+nix = { version = "0.31.3", features = ["signal", "process", "fs", "inotify", "event"] }
 libc = "0.2"
 serde_yaml = "0.9"
 toml = "0.8"

@@ -86,7 +86,7 @@ use crate::runtime::workspace::WorkspaceSnapshot;
 /// this version exits before composing anything.
 /// The current version adds typed native deadline interruption to interaction
 /// outcomes and durable approval settlement, without fabricating user intent.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 17;
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 18;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///

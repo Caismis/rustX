@@ -24,7 +24,7 @@ import {
 
 describe("subagent identity", () => {
   it("negotiates v18, which adds caller-neutral approval identity", () => {
-    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 19);
+    assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 20);
   });
 
   it("carries agent and definition_digest from the snapshot", () => {

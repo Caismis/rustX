@@ -198,7 +198,7 @@ use super::inbox::{
 /// Older stores are rejected; there is no compatibility decoding.
 /// The current version adds typed native deadline interruption to interaction
 /// outcomes and durable approval settlement, without fabricating user intent.
-pub const SQLITE_SCHEMA_VERSION: i64 = 26;
+pub const SQLITE_SCHEMA_VERSION: i64 = 27;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -6729,11 +6729,164 @@ fn validate_unresolved_disposal_handoff(
 }
 
 #[allow(clippy::too_many_lines)] // Keeps all cross-domain reference checks at one transaction seam.
+fn validate_workflow_workspace_identity(
+    envelope: &RuntimeEventEnvelope,
+    run: &crate::runtime::workflow::WorkflowRunId,
+    phase: &str,
+) -> Result<(), ConversationStoreError> {
+    if run.conversation_id != envelope.conversation_id
+        || run.attempt_id.as_str().is_empty()
+        || run.invocation == 0
+        || envelope.event_id != crate::runtime::workspace::workflow_resource_event_id(run, phase)
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "invalid Workflow workspace resource identity".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn find_workflow_workspace(
+    transaction: &Transaction<'_>,
+    run: &crate::runtime::workflow::WorkflowRunId,
+) -> Result<crate::runtime::workspace::WorkspaceSnapshot, ConversationStoreError> {
+    let event = find_event_by_id(
+        transaction,
+        &crate::runtime::workspace::workflow_resource_event_id(run, "owned"),
+    )?
+    .ok_or_else(|| {
+        ConversationStoreError::InvalidReference("missing Workflow workspace lease".into())
+    })?;
+    match event.event {
+        RuntimeEvent::WorkflowWorkspaceOwned { run_id, workspace } if run_id == *run => {
+            Ok(workspace)
+        }
+        _ => Err(ConversationStoreError::InvalidReference(
+            "wrong Workflow workspace owner".into(),
+        )),
+    }
+}
+
+#[allow(clippy::too_many_lines)] // Closed validation of every durable event family.
 fn validate_event_reference(
     transaction: &Transaction<'_>,
     envelope: &RuntimeEventEnvelope,
 ) -> Result<(), ConversationStoreError> {
     match &envelope.event {
+        RuntimeEvent::WorkflowWorkspaceOwned { run_id, workspace } => {
+            validate_workflow_workspace_identity(envelope, run_id, "owned")?;
+            workspace
+                .validate()
+                .map_err(ConversationStoreError::InvalidReference)?;
+            if !workspace.is_isolated() || workspace.borrowed_from.is_some() {
+                return Err(ConversationStoreError::InvalidReference(
+                    "run must own one isolated workspace".into(),
+                ));
+            }
+        }
+        RuntimeEvent::WorkflowWorkspaceSettled {
+            run_id,
+            workspace,
+            candidate,
+        } => {
+            validate_workflow_workspace_identity(envelope, run_id, "settled")?;
+            if candidate.as_ref().is_some_and(|reference| {
+                reference.run != *run_id
+                    || reference.content.len() != 64
+                    || !reference.content.bytes().all(|b| b.is_ascii_hexdigit())
+            }) {
+                return Err(ConversationStoreError::InvalidReference(
+                    "invalid final candidate identity".into(),
+                ));
+            }
+            let owned = find_workflow_workspace(transaction, run_id)?;
+            if owned != workspace.snapshot
+                || matches!(
+                    workspace.disposition,
+                    crate::runtime::workspace::WorkspaceSettlementDisposition::Shared
+                        | crate::runtime::workspace::WorkspaceSettlementDisposition::Borrowed
+                )
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "run workspace settlement differs from acquisition ownership".into(),
+                ));
+            }
+            if let Some(handoff) = workspace.handoff()
+                && !owned.matches_handoff(handoff)
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "run handoff differs from acquisition ownership".into(),
+                ));
+            }
+        }
+        RuntimeEvent::WorkflowCandidateInvocation { node, input, .. } => {
+            let _ = find_workflow_workspace(transaction, &node.block.run)?;
+            if input.run != node.block.run
+                || input.content.len() != 64
+                || !input.content.bytes().all(|b| b.is_ascii_hexdigit())
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "candidate invocation has invalid source/run identity".into(),
+                ));
+            }
+        }
+        RuntimeEvent::WorkflowWorkspaceDisposalStarted { run_id, handoff } => {
+            validate_workflow_workspace_identity(envelope, run_id, "disposal-started")?;
+            let snapshot = find_workflow_workspace(transaction, run_id)?;
+            let terminal = find_event_by_id(
+                transaction,
+                &crate::runtime::workspace::workflow_resource_event_id(run_id, "settled"),
+            )?
+            .ok_or_else(|| {
+                ConversationStoreError::InvalidReference(
+                    "cannot dispose unsettled candidate".into(),
+                )
+            })?;
+            let RuntimeEvent::WorkflowWorkspaceSettled { workspace, .. } = terminal.event else {
+                return Err(ConversationStoreError::InvalidReference(
+                    "wrong candidate terminal fact".into(),
+                ));
+            };
+            let eligible = match workspace.disposition {
+                crate::runtime::workspace::WorkspaceSettlementDisposition::Retained { handoff: retained, .. } => retained == *handoff,
+                crate::runtime::workspace::WorkspaceSettlementDisposition::PreservedUnresolved { reason: crate::runtime::workspace::WorkspaceUnresolvedReason::PhysicalSettlement, .. } => snapshot.git_worktree().is_some_and(|tree| tree.base_commit == handoff.head_commit),
+                _ => false,
+            };
+            if !eligible || !snapshot.matches_handoff(handoff) {
+                return Err(ConversationStoreError::InvalidReference(
+                    "candidate disposal lacks settled ownership".into(),
+                ));
+            }
+        }
+        RuntimeEvent::WorkflowWorkspaceDisposalSettled { run_id, settlement } => {
+            let phase = match settlement {
+                crate::runtime::workspace::WorkspaceDisposalSettlement::WorktreeRemoved {
+                    ..
+                } => "disposal-worktree-removed",
+                crate::runtime::workspace::WorkspaceDisposalSettlement::Disposed
+                | crate::runtime::workspace::WorkspaceDisposalSettlement::AlreadyDisposed => {
+                    "disposal-disposed"
+                }
+                crate::runtime::workspace::WorkspaceDisposalSettlement::NothingRemoved {
+                    ..
+                } => {
+                    return Err(ConversationStoreError::InvalidReference(
+                        "no physical disposal transition".into(),
+                    ));
+                }
+            };
+            validate_workflow_workspace_identity(envelope, run_id, phase)?;
+            if find_event_by_id(
+                transaction,
+                &crate::runtime::workspace::workflow_resource_event_id(run_id, "disposal-started"),
+            )?
+            .is_none()
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "candidate disposal lacks durable intent".into(),
+                ));
+            }
+        }
         RuntimeEvent::AgentStatusEmitted {
             request_id,
             message_id,
@@ -6953,6 +7106,7 @@ fn validate_event_reference(
             subagent_id,
             tool_call_id,
             workspace,
+            ownership,
             ..
         } => {
             workspace.validate().map_err(|detail| {
@@ -6960,6 +7114,17 @@ fn validate_event_reference(
                     "subagent {subagent_id} has an invalid workspace snapshot: {detail}"
                 ))
             })?;
+            if let Some(run) = &workspace.borrowed_from {
+                let mut actual = workspace.clone();
+                actual.borrowed_from = None;
+                if *ownership != crate::events::types::SubagentOwnershipKind::Workflow
+                    || find_workflow_workspace(transaction, run)? != actual
+                {
+                    return Err(ConversationStoreError::InvalidReference(
+                        "borrowed child workspace has no matching run ownership".into(),
+                    ));
+                }
+            }
             record_tool_proposal_dependency(
                 transaction,
                 tool_call_id,
@@ -7815,7 +7980,60 @@ fn ledger_message_exists(
         .map_err(|error| storage(format!("event Ledger reference: {error}")))
 }
 
+fn workflow_workspace_lifecycle(event: &RuntimeEventEnvelope) -> Option<(String, bool)> {
+    match &event.event {
+        RuntimeEvent::WorkflowWorkspaceDisposalStarted { run_id, .. } => {
+            return Some((
+                crate::runtime::workspace::workflow_resource_event_id(run_id, "disposal-lifecycle")
+                    .to_string(),
+                false,
+            ));
+        }
+        RuntimeEvent::WorkflowWorkspaceDisposalSettled { run_id, settlement } => {
+            return Some((
+                crate::runtime::workspace::workflow_resource_event_id(run_id, "disposal-lifecycle")
+                    .to_string(),
+                matches!(
+                    settlement,
+                    crate::runtime::workspace::WorkspaceDisposalSettlement::Disposed
+                        | crate::runtime::workspace::WorkspaceDisposalSettlement::AlreadyDisposed
+                ),
+            ));
+        }
+        _ => {}
+    }
+    match &event.event {
+        RuntimeEvent::WorkflowWorkspaceOwned { run_id, .. }
+        | RuntimeEvent::WorkflowCandidateInvocation {
+            node:
+                crate::runtime::workflow::WorkflowNodeInstance {
+                    block: crate::runtime::workflow::WorkflowBlockInstance { run: run_id, .. },
+                    ..
+                },
+            ..
+        } => {
+            return Some((
+                crate::runtime::workspace::workflow_resource_event_id(run_id, "lifecycle")
+                    .to_string(),
+                false,
+            ));
+        }
+        RuntimeEvent::WorkflowWorkspaceSettled { run_id, .. } => {
+            return Some((
+                crate::runtime::workspace::workflow_resource_event_id(run_id, "lifecycle")
+                    .to_string(),
+                true,
+            ));
+        }
+        _ => {}
+    }
+    None
+}
+
 fn lifecycle_keys(event: &RuntimeEventEnvelope) -> Vec<(String, bool)> {
+    if let Some(lifecycle) = workflow_workspace_lifecycle(event) {
+        return vec![lifecycle];
+    }
     // The detached-execution lifecycle is opened by the ownership commit and
     // closed exactly once by the terminal publication. Recording the open
     // state durably is what lets a restart tell "owned and unsettled" from
@@ -10488,6 +10706,7 @@ mod tests {
             crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 2);
         let isolated_child = crate::runtime::identity::AgentId::new(format!("agent-{isolated_id}"));
         let workspace = crate::runtime::workspace::WorkspaceSnapshot {
+            borrowed_from: None,
             logical_workspace: std::path::PathBuf::from("/tmp/rustx-worktree-9/backend"),
             isolation: crate::runtime::workspace::WorkspaceIsolation::GitWorktree(
                 crate::runtime::workspace::GitWorktreeSnapshot {
@@ -10676,6 +10895,7 @@ mod tests {
             crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
         let physical = std::path::PathBuf::from("/tmp/rustx-worktree-1");
         let workspace = crate::runtime::workspace::WorkspaceSnapshot {
+            borrowed_from: None,
             logical_workspace: physical.clone(),
             isolation: crate::runtime::workspace::WorkspaceIsolation::GitWorktree(
                 crate::runtime::workspace::GitWorktreeSnapshot {
@@ -10719,6 +10939,7 @@ mod tests {
             crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
         let child_agent_id = AgentId::new(format!("agent-{subagent_id}"));
         let workspace = crate::runtime::workspace::WorkspaceSnapshot {
+            borrowed_from: None,
             logical_workspace: std::path::PathBuf::from("/tmp/rustx-worktree-1/backend"),
             isolation: crate::runtime::workspace::WorkspaceIsolation::GitWorktree(
                 crate::runtime::workspace::GitWorktreeSnapshot {
@@ -10952,6 +11173,7 @@ mod tests {
             crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
         let child_agent_id = AgentId::new(format!("agent-{subagent_id}"));
         let workspace = crate::runtime::workspace::WorkspaceSnapshot {
+            borrowed_from: None,
             logical_workspace: std::path::PathBuf::from("/tmp/rustx-unresolved/backend"),
             isolation: crate::runtime::workspace::WorkspaceIsolation::GitWorktree(
                 crate::runtime::workspace::GitWorktreeSnapshot {
