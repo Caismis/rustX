@@ -54,8 +54,8 @@ use crate::runtime::identity::SubagentId;
 
 mod candidate;
 mod retained_candidate;
+pub(crate) use candidate::{CandidateFreeze, CandidateScope, WorkspaceAccess, WorkspaceUse};
 pub use candidate::{CandidateRecoveryGuard, CandidateReference};
-pub(crate) use candidate::{CandidateScope, WorkspaceAccess, WorkspaceUse};
 pub use retained_candidate::WorkflowWorkspaceInspection;
 
 /// Native allocation authority. A run identity never impersonates a child.

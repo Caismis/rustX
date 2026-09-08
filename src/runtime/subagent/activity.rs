@@ -206,6 +206,7 @@ impl SubagentObservationProjector {
                         tool_id: tool_id.clone(),
                     },
                     InteractionKind::Questionnaire { .. } => SubagentWaitReason::Questionnaire,
+                    InteractionKind::Review { .. } => SubagentWaitReason::Review,
                 };
                 self.visible_tool = None;
                 self.observation.activity = SubagentActivity::Waiting { on };
@@ -438,6 +439,7 @@ pub enum SubagentActivity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SubagentWaitReason {
+    Review,
     /// A tool invocation awaits an approval decision.
     Approval {
         /// The tool awaiting approval.
@@ -1014,6 +1016,9 @@ mod tests {
             attempt_id: AttemptId::new("attempt-1"),
             turn: 1,
             kind: InteractionKind::Questionnaire {
+                invocation_id: crate::tools::types::ToolInvocationId::Agent {
+                    call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
+                },
                 questionnaire: crate::events::interaction::QuestionnaireSpecification {
                     questions: vec![crate::events::interaction::QuestionSpecification {
                         question: "Which?".to_owned(),

@@ -754,6 +754,15 @@ impl AttemptLifecycle {
             .request_approval(attempt_id, facts, cancellation)
     }
 
+    pub(crate) fn native_interaction_coordinator(&self) -> Option<Arc<InteractionCoordinator>> {
+        match &self.interaction {
+            InteractionBinding::Native(owner) => Some(owner.clone()),
+            InteractionBinding::Unavailable => None,
+            #[cfg(test)]
+            InteractionBinding::Test(_) => None,
+        }
+    }
+
     /// Binds the one native Questionnaire capability for a foreground invocation.
     /// The returned value is crate-private and carries only a read-only
     /// cancellation view; it never exposes the attempt cancellation owner.

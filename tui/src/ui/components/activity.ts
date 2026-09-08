@@ -383,6 +383,9 @@ function renderInteraction(
   const interaction = routed.request;
   const identity = formatInteraction(routed);
   const source = sourceLabel(routed);
+  if (interaction.kind.type === "review") {
+    return `Review · ${source} · ${interaction.kind.review.instance.node} · Ctrl+G to inspect and decide`;
+  }
   if (interaction.kind.type === "questionnaire") {
     const questions = interaction.kind.questionnaire.questions.flatMap((question, index) => [
       `${index + 1}. ${question.header}: ${clipText(question.question, HEADER_BUDGET.maxChars)}`,

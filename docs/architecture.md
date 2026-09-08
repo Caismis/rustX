@@ -51,7 +51,8 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 28. Version 28 adds a distinct
+The SQLite schema is development schema version 29. Version 29 adds native Review
+audit facts and required Questionnaire invocation correlation. Version 28 adds a distinct
 Workflow resource recovery guard for uncertain final candidate settlement;
 child IPC 18 and Runtime Client 20 are unchanged. Version 27 adds native
 Workflow candidate ownership, settlement, invocation correlation and disposal,
@@ -4273,7 +4274,8 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
-The current Runtime Client protocol is version 20. Version 20 adds borrowed
+The current Runtime Client protocol is version 21. Version 21 adds Review and
+Questionnaire invocation correlation. Version 20 adds borrowed
 Workflow run identity to child workspace facts. Version 19 adds typed deadline
 interruption of approval waits. Version 18 distinguishes
 Agent and Workflow approval invocation identity. Version 17 preserves
@@ -8440,3 +8442,20 @@ removal; changed bytes or a missing guard fail closed. No second disposal state
 machine or Workflow Git owner exists. See the candidate contract for exact
 limits and crash windows. SQLite schema 28 rejects older stores without
 migration; IPC and client mirrors need no new fields.
+
+
+## WF-04 human interaction ownership
+
+See [Workflow human review and its exact frontiers](workflow-programs.md#human-questions-and-business-review-wf-04).
+Workflow owns Review progression and local values; the conversation's existing
+InteractionCoordinator owns requests, waiters, validation and durable settlement.
+CandidateFreeze belongs to the native workspace plane and retains a real
+WorkspaceAccess borrow. It is not another interaction or approval manager.
+Candidate-dependent downstream admission transfers that same borrow into native
+Tool/Agent work. Native Tool(ask_user) uses the existing requester, now bound to
+the invocation driver's cancellation scope. Approval remains permission for a
+prepared invocation; FullAccess changes only that permission gate.
+
+Runtime Client 21, child IPC 19 and SQLite development schema 29 carry the coherent
+new vocabulary. Event envelope framing remains version 1. No pending recovery or
+compatibility protocol is introduced.

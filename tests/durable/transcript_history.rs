@@ -338,6 +338,9 @@ fn requested_interaction(interaction_id: &InteractionId) -> RuntimeEventEnvelope
         RuntimeEvent::InteractionRequested {
             interaction_id: interaction_id.clone(),
             subject: InteractionSubject::Questionnaire {
+                invocation_id: rustx::tools::types::ToolInvocationId::Agent {
+                    call_id: rustx::runtime::identity::ToolCallId::new("questionnaire-call"),
+                },
                 questionnaire: QuestionnaireSpecification {
                     questions: vec![QuestionSpecification {
                         question: "Which environment?".to_owned(),

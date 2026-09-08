@@ -1,0 +1,78 @@
+description: Ask for missing information, then review the complete supplied plan.
+timeout_ms: 600000
+tools:
+  - {origin: builtin, name: ask_user}
+block:
+  input:
+    type: object
+    properties:
+      title: {type: string}
+      steps: {type: array, items: {type: string}}
+    required: [title, steps]
+    additionalProperties: false
+  output: &decision
+    type: object
+    properties:
+      accepted: {type: boolean}
+      feedback: {type: string}
+    required: [accepted, feedback]
+    additionalProperties: false
+  entry: question
+  nodes:
+    question:
+      type: tool
+      selector: {origin: builtin, name: ask_user}
+      arguments:
+        type: literal
+        value:
+          questions:
+            - question: Which delivery constraint should the plan prioritize?
+              header: Priority
+              options:
+                - {label: Reliability, description: Prefer additional validation.}
+                - {label: Speed, description: Prefer a smaller first delivery.}
+      result:
+        type: json
+        part: 0
+        schema:
+          type: object
+          properties:
+            cancelled: {type: boolean}
+            answers: {type: array, items: {type: object}}
+          required: [cancelled, answers]
+          additionalProperties: false
+    declined:
+      type: branch
+      condition:
+        type: boolean
+        value: {type: reference, path: [question, cancelled]}
+    review:
+      type: review
+      subject:
+        type: plan
+        value: {type: reference, path: [args]}
+      context:
+        - {type: reference, path: [question]}
+    decision:
+      type: branch
+      condition:
+        type: boolean
+        value: {type: reference, path: [review, accepted]}
+    accepted:
+      type: return
+      output: {type: reference, path: [review]}
+    rejected:
+      type: return
+      output: {type: reference, path: [review]}
+    unanswered:
+      type: return
+      output:
+        type: literal
+        value: {accepted: false, feedback: Questionnaire explicitly declined.}
+  edges:
+    - {from: question, to: declined}
+    - {from: declined, to: unanswered, port: 'true'}
+    - {from: declined, to: review, port: 'false'}
+    - {from: review, to: decision}
+    - {from: decision, to: accepted, port: 'true'}
+    - {from: decision, to: rejected, port: 'false'}

@@ -201,7 +201,8 @@ use super::inbox::{
 /// Version 28 separates proven final Workflow candidates from last-proven
 /// `PhysicalSettlement` recovery guards. Older stores lack this source-content
 /// disposal authority and are rejected without migration.
-pub const SQLITE_SCHEMA_VERSION: i64 = 28;
+/// Version 29 adds Review audit and required Questionnaire invocation identity.
+pub const SQLITE_SCHEMA_VERSION: i64 = 29;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -7212,6 +7213,22 @@ fn validate_event_reference(
                     "interaction {interaction_id} requested an unbounded subject: {message}"
                 ))
             })?;
+            let workflow_node = match subject {
+                InteractionSubject::Review { review } => Some(review.instance.as_ref()),
+                InteractionSubject::Questionnaire {
+                    invocation_id: crate::tools::types::ToolInvocationId::Workflow { node },
+                    ..
+                } => Some(node.as_ref()),
+                _ => None,
+            };
+            if workflow_node.is_some_and(|node| {
+                node.block.run.conversation_id != envelope.conversation_id
+                    || &node.block.run.attempt_id != attempt_id
+            }) {
+                return Err(ConversationStoreError::InvalidReference(
+                    "interaction Workflow correlation differs from its owning envelope".into(),
+                ));
+            }
             validate_approval_subject_against_canonical(
                 transaction,
                 &envelope.conversation_id,
@@ -12072,7 +12089,7 @@ mod tests {
             SqliteConversationStore::open(conversation, &path),
             Err(ConversationStoreError::SchemaVersionMismatch {
                 stored: 27,
-                expected: 28
+                expected: SQLITE_SCHEMA_VERSION
             })
         ));
     }

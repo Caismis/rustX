@@ -354,6 +354,8 @@ function renderInteractionRequested(
       ...bar(entry.subject.reason, style.dim),
       ...bar(`arguments digest: ${entry.subject.arguments_digest}`, style.dim),
     );
+  } else if (entry.subject.type === "review") {
+    lines.push(role.warning(`Review · ${entry.subject.review.instance.node} · ${entry.subject.review.subject.type}`));
   } else {
     lines.push(role.warning("questionnaire"));
     for (const question of entry.subject.questionnaire.questions) {
@@ -397,6 +399,8 @@ function settlementLabel(
   settlement: TranscriptInteractionSettled["settlement"],
 ): string {
   switch (settlement.type) {
+    case "reviewed": return settlement.response.decision.type;
+    case "review_invalidated": return "review invalidated";
     case "deadline_expired":
       return "deadline expired";
     case "approved":

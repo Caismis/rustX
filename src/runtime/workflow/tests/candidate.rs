@@ -1426,3 +1426,166 @@ async fn agent_inspection_recovery_case(writer: bool, later_edit: bool) {
         Some(run_terminal)
     );
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn review_dirty_candidate_accept_reject_mutation_and_cancel_gate_exact_downstream_admission()
+{
+    for mode in 0..5 {
+        let plane = workflow_test_plane(1);
+        initialize(&plane);
+        let mut child = stage_workflow_child(&plane);
+        let probe = Arc::new(CandidateProbe {
+            status: ToolExecutionStatus::Success,
+            mutate: false,
+            observed: std::sync::Mutex::default(),
+        });
+        let mut context = setup_context(&plane, probe.clone());
+        let (owner, audit, mut published) = super::human::owner(&plane);
+        Arc::make_mut(context.native.as_mut().unwrap()).lifecycle =
+            crate::agent::AttemptLifecycle::default().with_native_interaction(owner.clone());
+        let mut definition = program_definition();
+        definition.workspace = Some(WorkflowWorkspace {
+            require_clean_parent: true,
+        });
+        definition.block.nodes.insert(
+            "implement".into(),
+            WorkflowNodeDefinition::Agent {
+                profile: profile("reviewer"),
+                task: "Implement".into(),
+                input: BTreeMap::new(),
+                output: schema(json!({}), &[]),
+            },
+        );
+        definition.block.nodes.insert(
+            "review".into(),
+            WorkflowNodeDefinition::Review {
+                subject: WorkflowReviewSubject::Candidate {
+                    value: WorkflowValue::Reference {
+                        path: vec!["implement".into()],
+                    },
+                },
+                context: vec![],
+            },
+        );
+        definition.block.nodes.insert(
+            "decision".into(),
+            WorkflowNodeDefinition::Branch {
+                condition: WorkflowPredicate::Boolean {
+                    value: WorkflowValue::Reference {
+                        path: vec!["review".into(), "accepted".into()],
+                    },
+                },
+            },
+        );
+        definition.block.nodes.insert(
+            "rejected".into(),
+            WorkflowNodeDefinition::Return {
+                output: WorkflowValue::Literal {
+                    value: json!({"passed":false}),
+                },
+            },
+        );
+        definition.block.entry = "implement".into();
+        definition.block.edges.extend([
+            edge("implement", "review"),
+            edge("review", "decision"),
+            WorkflowEdgeDefinition {
+                from: "decision".into(),
+                to: "check".into(),
+                port: Some(WorkflowPort::True),
+            },
+            WorkflowEdgeDefinition {
+                from: "decision".into(),
+                to: "rejected".into(),
+                port: Some(WorkflowPort::False),
+            },
+        ]);
+        let program = Arc::new(compile_test(definition).unwrap());
+        let runtime = workflow_runtime(&plane);
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        if mode >= 3 {
+            *runtime.node_frontier.lock().unwrap() =
+                Some(crate::runtime::workflow::execution::NodeFrontierHook {
+                    node: "check".into(),
+                    entered: entered_tx,
+                    release: release_rx,
+                });
+        }
+        let (trigger, cancellation) = workflow_cancellation();
+        let task = tokio::spawn(async move {
+            runtime
+                .run_foreground(
+                    program,
+                    ToolCallId::new("review-candidate"),
+                    context,
+                    json!({"passed":true}),
+                    cancellation,
+                )
+                .await
+        });
+        child.expect_delegate().await;
+        let path = plane
+            .registry
+            .all_snapshots()
+            .pop()
+            .unwrap()
+            .workspace
+            .logical_workspace;
+        std::fs::write(path.join("candidate"), b"candidate A dirty bytes").unwrap();
+        let head = git(&path, &["rev-parse", "HEAD"]);
+        child
+            .send_result(
+                crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+                Some("{}"),
+            )
+            .await;
+        let request = published.recv().await.unwrap();
+        let crate::runtime::interaction::InteractionKind::Review { review, .. } = &request.kind
+        else {
+            panic!("Review")
+        };
+        let crate::events::review::ReviewSubject::Candidate {
+            reference,
+            inspection_path,
+        } = &review.subject
+        else {
+            panic!("candidate")
+        };
+        assert_eq!(std::path::Path::new(inspection_path), path);
+        assert_eq!(reference.version, 1);
+        if mode == 2 {
+            std::fs::write(path.join("candidate"), b"candidate B dirty bytes").unwrap();
+        }
+        let response = super::human::answer(&request, mode != 1);
+        let accepted = owner.respond_async(&request.id, response).await;
+        if mode == 2 {
+            assert!(accepted.is_err());
+        } else {
+            accepted.unwrap();
+        }
+        if mode >= 3 {
+            entered_rx.await.unwrap(); // accepted local data, before downstream borrow/admission
+            if mode == 3 {
+                std::fs::write(path.join("candidate"), b"candidate B dirty bytes").unwrap();
+            } else {
+                trigger.cancel();
+            }
+            release_tx.send(()).unwrap();
+        }
+        let result = task.await.unwrap();
+        if mode <= 1 {
+            assert!(result.is_ok(), "{result:?}");
+        } else {
+            assert!(result.is_err());
+        }
+        assert_eq!(git(&path, &["rev-parse", "HEAD"]), head);
+        assert_eq!(probe.observed.lock().unwrap().len(), usize::from(mode == 0));
+        if mode != 0 {
+            assert!(!plane.store.read_events(None, 256).unwrap().events.iter().any(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeStarted { instance } if instance.node == "check")));
+        }
+        assert_eq!(owner.pending_count(), 0);
+        assert_eq!(audit.events().len(), 2);
+    }
+}

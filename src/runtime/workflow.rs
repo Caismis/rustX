@@ -27,6 +27,8 @@ pub use crate::tools::executor::WORKFLOW_OUTPUT_TOOL_NAME;
 use super::subagent::SubagentName;
 
 mod execution;
+mod review;
+pub use review::WorkflowReviewSubject;
 mod expressions;
 mod tool;
 mod workspace;
@@ -293,6 +295,11 @@ pub struct WorkflowBlock {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 pub enum WorkflowNodeDefinition {
+    Review {
+        subject: WorkflowReviewSubject,
+        context: Vec<WorkflowValue>,
+    },
+
     /// One statically selected, explicitly admitted foreground capability.
     Tool {
         selector: crate::capabilities::selection::ToolSelector,
@@ -527,6 +534,11 @@ impl WorkflowProgram {
 /// A compiled node whose references and schemas have been admitted.
 #[derive(Debug, Clone)]
 pub enum WorkflowNodeProgram {
+    Review {
+        subject: WorkflowReviewSubject,
+        context: Vec<WorkflowValue>,
+    },
+
     Tool {
         selector: crate::capabilities::selection::ToolSelector,
         arguments: WorkflowValue,
@@ -916,6 +928,37 @@ fn compile_block(
             intersect_schema_maps(&predecessors)
         };
         let compiled = match node {
+            WorkflowNodeDefinition::Review { subject, context } => {
+                if !matches!(subject.value(), WorkflowValue::Reference { .. }) {
+                    return Err(WorkflowCompileError::InvalidField(
+                        "Review subject must reference a committed value".into(),
+                    ));
+                }
+                let schema = value_schema(subject.value(), &available_before, &node_id, 0)?;
+                if matches!(subject, WorkflowReviewSubject::Plan { .. })
+                    && schema_type(&schema) != Some("object")
+                {
+                    return Err(WorkflowCompileError::InvalidField(
+                        "Review plan must be structured".into(),
+                    ));
+                }
+                if context.len() > 8 {
+                    return Err(WorkflowCompileError::InvalidField(
+                        "Review context exceeds eight entries".into(),
+                    ));
+                }
+                for value in context {
+                    value_schema(value, &available_before, &node_id, 0)?;
+                }
+                available_after.insert(
+                    node_id.clone(),
+                    available_before.with_prefix(&node_id, &review::result_schema()),
+                );
+                WorkflowNodeProgram::Review {
+                    subject: subject.clone(),
+                    context: context.clone(),
+                }
+            }
             WorkflowNodeDefinition::Tool {
                 selector,
                 arguments,
@@ -2082,6 +2125,7 @@ impl WorkflowRuntime {
         node_id: &WorkflowNodeInstance,
         agent: &WorkflowAgentProgram,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
+        admitted_access: Option<crate::runtime::workspace::WorkspaceAccess>,
     ) -> Result<crate::runtime::identity::SubagentId, WorkflowRunError> {
         let resolved = context.resolve_workflow(&agent.profile).map_err(|error| {
             WorkflowRunError::ChildStart {
@@ -2103,7 +2147,19 @@ impl WorkflowRuntime {
             applicability.depend_on(&value)?;
             bound.insert(key.clone(), value.value);
         }
-        applicability.assert_current(run).await?;
+        if let Some(access) = &admitted_access {
+            if applicability
+                .candidate
+                .as_ref()
+                .is_some_and(|reference| reference != access.input())
+            {
+                return Err(WorkflowRunError::InvalidValue(
+                    "Agent input differs from accepted candidate".into(),
+                ));
+            }
+        } else {
+            applicability.assert_current(run).await?;
+        }
         let context_package = serde_json::json!({
             "workflow_node": node_id.node,
             "input": Value::Object(bound),
@@ -2131,24 +2187,28 @@ impl WorkflowRuntime {
             },
         };
         let child_cancellation = cancellation.child_signal();
-        let access = match &run.candidate {
-            Some(candidate) => Some(
-                candidate
-                    .borrow(
-                        node_id.clone(),
-                        applicability.candidate.as_ref(),
-                        &child_cancellation,
-                    )
-                    .await
-                    .map_err(|error| {
-                        if cancellation.is_cancelled() {
-                            WorkflowRunError::from_cancellation(cancellation)
-                        } else {
-                            WorkflowRunError::InvocationAuthority(error)
-                        }
-                    })?,
-            ),
-            None => None,
+        let access = if admitted_access.is_some() {
+            admitted_access
+        } else {
+            match &run.candidate {
+                Some(candidate) => Some(
+                    candidate
+                        .borrow(
+                            node_id.clone(),
+                            applicability.candidate.as_ref(),
+                            &child_cancellation,
+                        )
+                        .await
+                        .map_err(|error| {
+                            if cancellation.is_cancelled() {
+                                WorkflowRunError::from_cancellation(cancellation)
+                            } else {
+                                WorkflowRunError::InvocationAuthority(error)
+                            }
+                        })?,
+                ),
+                None => None,
+            }
         };
         let prepared = self
             .subagents

@@ -301,6 +301,7 @@ describe("presentation projection", () => {
           interaction_id: "interaction-1",
           subject: {
             type: "questionnaire",
+            invocation_id: { caller: "agent", call_id: "questionnaire-call" },
             questionnaire: {
               questions: [
                 {

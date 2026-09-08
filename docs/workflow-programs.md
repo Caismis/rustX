@@ -13,7 +13,7 @@ admission set, and trusted `timeout_ms` (default 600000). Every block contains
 `input` and `output` JSON Schemas, `entry`, `nodes`, and `edges`. Parallel
 branches contain an `input` value expression and another `block` of exactly
 the same shape. There is no Block node, callable subworkflow, conversation,
-or independent job. The node vocabulary is Agent, Tool, Branch, Parallel, Return.
+or independent job. The node vocabulary is Agent, Tool, Branch, Parallel, Review, Return.
 
 ## Fixed native Tool nodes (WF-02)
 
@@ -60,7 +60,7 @@ capability registrations, **not** its model-visible registry. Source availabilit
 invalid selectors, changed identity, missing explicit admission and ineligible
 leaves fail closed. Available-but-inactive capabilities remain invisible to the
 parent model. Admission rejects background-only capabilities, composites,
-Workflow dispatch, subagents, execution control and interactive intrinsics.
+Workflow dispatch, subagents, execution control and todo. Ordinary ask_user is eligible.
 No rediscovery or current-file lookup can replace a frozen registration.
 Without a run `workspace` binding, Tools use the ordinary invoking context.
 With a binding, every Tool consumes the exact native-authorized candidate as
@@ -443,8 +443,8 @@ facts. The event envelope stays version 1 because framing is unchanged. The
 client projector explicitly ignores journal-only execution facts pending WF-06;
 approval remains on the existing human interaction surface.
 
-Review/ask_user (#220), Loop (#221), full projection (#222), and reference
-workflows (#223) remain outside WF-03.
+Review/ask_user is described in WF-04 below. Loop (#221), full projection (#222),
+and composed reference workflows (#223) remain separate slices.
 
 ## Run-scoped candidate workspace (WF-03)
 
@@ -712,3 +712,121 @@ intent, partial absence, replaced paths, unrelated refs and changed retained
 source before the destructive frontier fail closed. There is one native
 physical disposal state machine; the Workflow wrapper only carries durable
 identity, candidate applicability and phase facts.
+
+## Human questions and business Review (WF-04)
+
+`Tool(ask_user)` is an ordinary explicitly selected native capability. It uses
+exactly the same normalizer, schema, executor, Questionnaire requester, and typed
+JSON result as an Agent invocation. It is foreground, sequential, approval-never.
+Its existing `cancelled: true` result means explicit questionnaire decline; it is
+successful business data, not execution cancellation. Actual cancellation,
+deadlines, provider absence and control failures never create that answer.
+The native context reborrow also rebinds the requester to the driver's leaf
+cancellation/deadline scope. Both leaf and finite outer deadlines remain active.
+
+[The executable human_review example](../examples/local-runtime/workspace/.agents/workflows/human_review.yaml)
+shows static capability selection, literal arguments, typed results, Branch and
+Review. Register it explicitly through the usual Workflow resource configuration.
+Its input object is the complete plan being reviewed; answering the question does
+not rewrite that plan. The answer is explicit immutable review context.
+
+There are three distinct contracts:
+
+| Contract | Meaning | Result |
+| --- | --- | --- |
+| Questionnaire | Supply missing business information | Existing submitted/declined answer contract |
+| Review | Accept/reject one immutable business subject | `{accepted: boolean, feedback: string}` |
+| Tool Approval | Permit the exact prepared invocation to start | Existing Allow once/Deny |
+
+FullAccess affects only configured Tool Approval. It does not answer either
+Questionnaire or Review, select capabilities, or change workspace authority.
+No Review policy or model/provider interpretation is involved.
+
+A Review node has `type: review`, a `subject`, and a `context` array. The subject
+must reference an already committed value, including a validated block input:
+
+```yaml
+human_review:
+  type: review
+  subject:
+    type: candidate
+    value: {type: reference, path: [implement]}
+  context:
+    - {type: reference, path: [check]}
+```
+
+`type: plan` freezes the actual structured object by value. It does not certify
+files named by strings inside that object. `type: candidate` requires the referenced
+value's interpreter-owned CandidateReference; authored JSON cannot manufacture it.
+The reference includes the owning run, monotonically changing version and native
+content digest. The WF-03 source contract (dirty tracked bytes, admitted untracked
+source, deletions, index/modes/symlinks, exclusions and unsupported-content rules)
+continues unchanged. Equal HEAD with different source bytes is a different subject.
+Context/check values retain their original candidate applicability and cannot be
+attached to another candidate version.
+
+### Ownership and linearization
+
+| Frontier | Owner and rule |
+| --- | --- |
+| Subject selection | Workflow evaluates a committed explicit reference and bounded context. |
+| Candidate freeze | Workspace plane borrows the exact expected CandidateReference, starts native mutation observation and holds its exclusive borrow. |
+| Requested commit | InteractionCoordinator commits InteractionRequested before installing/publishing the actionable prompt through the existing route. |
+| Response validation | Coordinator checks the live identity, kind, concrete instance and whole-subject digest. CandidateFreeze validates while retaining that native borrow. |
+| Settled commit | Under coordinator terminal ownership, durable InteractionSettled precedes waiter release. Observable cancellation/deadline overrides a response. Source invalidation is a separate runtime outcome, never rejection. |
+| Review local commit | Workflow validates native freeze settlement and commits the typed business value with candidate applicability. This is not a standing grant. |
+| Downstream admission | Candidate-dependent control acquires the exact expected native borrow **before** WorkflowNodeStarted. Tool/Agent receives that same borrow through execution and physical settlement. |
+
+The borrow may be released between settled Review and later admission. A queued
+writer can win that interval and publish B. In that case the next admission of A
+fails before its node starts. There is no unlocked currentness-check followed by
+later execution: acquisition, exact-reference validation and the effect's access
+are one ownership transfer. Pure Branch/Return consumes its dependent value while
+holding the borrow. Parallel passes the dependency explicitly to child blocks and
+does not hold a parent borrow while they wait. A mutating Agent consumes A at its
+start; its resulting B needs a new explicit Review to gain acceptance. Older
+Review values remain historical for A and cannot be combined with B.
+
+Native writer exclusion is not a sandbox against arbitrary external host processes.
+WF-03's kernel observation and content checks detect interference at the native
+freeze/settlement/admission boundaries. Review does not claim a new containment
+mechanism. Invalidation fails closed without automatic reprompt/retry.
+
+Questionnaire facts now carry ordinary ToolInvocationId; Workflow invocations use
+concrete run/block/node/visit identity. Review carries that same concrete node
+instance. The original conversation owns every InteractionRef and waiter. Child
+Questionnaire/Approval retains its child coordinator and existing reliable root
+route; no parent-owned copy, model request or canonical transcript relay is created.
+The root Runtime Client remains the only answer surface. Queue order and focus
+never determine settlement ownership.
+
+Human waiting consumes the outer wall-clock deadline. Cancellation observable
+before downstream admission prevents that work. No capable provider before
+publication fails closed. Detach after publication preserves the live waiter;
+resync shows the same request without another audit/request. Process death removes
+live authority. Neither audit history nor SQLite reopen reconstructs waiters,
+Workflow execution or acceptance grants.
+
+### Disclosure and limits
+
+Plans are complete inline structured objects, limited to 32768 serialized UTF-8
+bytes. Context has at most eight entries and 8192 total serialized bytes. Concrete
+instance serialization is bounded to 8192 bytes. Candidate inspection paths are
+native-generated and at most 4096 UTF-8 bytes. Feedback is at most 2000 Unicode
+scalar values; Accept has no feedback channel. Review uses the existing Workflow
+value/depth and aggregate local-data bounds as well.
+
+The unified overlay starts on Reject. Accept requires explicit navigation. Ctrl+F
+edits bounded rejection feedback; Enter exits feedback editing without submitting.
+PgUp/PgDn scrolls complete plan/context rows and reports the visible range.
+Candidate content is explicitly **not inlined**: the trusted inspection path is
+shown with its exact candidate identity, and no shortened diff is presented as
+complete. Inspection is read-only in meaning and conveys no write authority.
+Esc dismisses Review presentation; it does not answer it. Removing one pending
+item leaves unrelated drafts and interactions intact.
+
+WF-04 uses Runtime Client/TUI 21 and child IPC 19 for Review and required
+Questionnaire invocation correlation. SQLite development schema 29 freezes the
+changed audit payloads; older stores are refused, without migration. Event
+envelope version remains 1 because framing has not changed. No durable Workflow
+or pending-interaction tables are added.

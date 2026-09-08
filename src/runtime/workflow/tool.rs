@@ -60,10 +60,7 @@ fn eligible(definition: &ToolDefinition) -> bool {
             .as_str()
             .starts_with(super::WORKFLOW_TOOL_ID_PREFIX)
         && !(definition.origin == crate::tools::types::ToolOrigin::Builtin
-            && matches!(
-                definition.name.as_str(),
-                "subagent" | "execution" | "todo" | "ask_user"
-            ))
+            && matches!(definition.name.as_str(), "subagent" | "execution" | "todo"))
 }
 
 impl WorkflowCatalog {
@@ -116,6 +113,7 @@ impl WorkflowRuntime {
         selector: &ToolSelector,
         arguments: expressions::CommittedValue,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
+        admitted_access: Option<crate::runtime::workspace::WorkspaceAccess>,
     ) -> Result<
         (
             ToolExecutionResult,
@@ -124,20 +122,24 @@ impl WorkflowRuntime {
         WorkflowRunError,
     > {
         let signal = cancellation.child_signal();
-        let access = match &run.candidate {
-            Some(candidate) => Some(
-                candidate
-                    .borrow(node.clone(), arguments.candidate.as_ref(), &signal)
-                    .await
-                    .map_err(|error| {
-                        if cancellation.is_cancelled() {
-                            WorkflowRunError::from_cancellation(cancellation)
-                        } else {
-                            WorkflowRunError::InvocationAuthority(error)
-                        }
-                    })?,
-            ),
-            None => None,
+        let access = if admitted_access.is_some() {
+            admitted_access
+        } else {
+            match &run.candidate {
+                Some(candidate) => Some(
+                    candidate
+                        .borrow(node.clone(), arguments.candidate.as_ref(), &signal)
+                        .await
+                        .map_err(|error| {
+                            if cancellation.is_cancelled() {
+                                WorkflowRunError::from_cancellation(cancellation)
+                            } else {
+                                WorkflowRunError::InvocationAuthority(error)
+                            }
+                        })?,
+                ),
+                None => None,
+            }
         };
         let workspace = access
             .as_ref()
@@ -304,6 +306,14 @@ impl WorkflowRuntime {
                     services.runtime.tool_output(),
                     context.resources().capability().effective_environment(),
                 );
+                let native_context = match services.lifecycle.native_questionnaire_requester(
+                    context.attempt_id().clone(),
+                    cancellation.clone(),
+                    services.turn,
+                ) {
+                    Some(requester) => native_context.with_questionnaire_requester(requester),
+                    None => native_context,
+                };
                 let driver = ForegroundInvocation {
                     clock: &*services.clock,
                     policy: services.leaf_policy,

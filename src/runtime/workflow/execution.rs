@@ -41,6 +41,9 @@ pub(super) fn static_retained_bound(block: &WorkflowBlockProgram) -> usize {
             WorkflowNodeProgram::Agent(agent) => schema_value_bound(&agent.output_schema),
             WorkflowNodeProgram::Tool { result, .. } => schema_value_bound(&result.schema()),
             WorkflowNodeProgram::Branch { .. } => 0,
+            WorkflowNodeProgram::Review { .. } => {
+                schema_value_bound(&super::review::result_schema())
+            }
             WorkflowNodeProgram::Return { .. } => schema_value_bound(&block.output_schema),
             WorkflowNodeProgram::Parallel {
                 branches,
@@ -189,6 +192,10 @@ impl WorkflowRuntime {
         validate_commit(&block.input_schema, &input.value)?;
         let mut reservation = LocalReservation::new(run);
         reservation.retain(&input.value)?;
+        let mut control = CommittedValue {
+            value: Value::Null,
+            candidate: input.candidate.clone(),
+        };
         let mut values = BTreeMap::new();
         let mut node_id = block.entry.clone();
         loop {
@@ -212,6 +219,37 @@ impl WorkflowRuntime {
                     let _ = hook.entered.send(());
                     let _ = hook.release.await;
                 }
+            }
+            // A candidate-dependent control edge acquires the native borrow
+            // before admission and transfers that SAME borrow into effects.
+            // A queued writer may win first; then this node never starts.
+            let mut admitted_access = if let Some(reference) = &control.candidate {
+                Some(
+                    run.candidate
+                        .as_ref()
+                        .expect("candidate owner")
+                        .borrow(
+                            node_instance.clone(),
+                            Some(reference),
+                            &cancellation.child_signal(),
+                        )
+                        .await
+                        .map_err(|error| {
+                            if cancellation.is_cancelled() {
+                                WorkflowRunError::from_cancellation(cancellation)
+                            } else {
+                                WorkflowRunError::InvalidValue(error)
+                            }
+                        })?,
+                )
+            } else {
+                None
+            };
+            if cancellation.is_cancelled() {
+                if let Some(access) = admitted_access.take() {
+                    let _ = access.finish(true).await;
+                }
+                return Err(WorkflowRunError::from_cancellation(cancellation));
             }
             // Node admission frontier: cancellation observation and aggregate
             // count reservation are synchronous, before any child preparation.
@@ -243,7 +281,9 @@ impl WorkflowRuntime {
                 // after the native owner returned; it is not outcome authority.
                 let _native_owner = if matches!(
                     node,
-                    WorkflowNodeProgram::Agent(_) | WorkflowNodeProgram::Tool { .. }
+                    WorkflowNodeProgram::Agent(_)
+                        | WorkflowNodeProgram::Tool { .. }
+                        | WorkflowNodeProgram::Review { .. }
                 ) {
                     context
                         .native
@@ -253,13 +293,55 @@ impl WorkflowRuntime {
                     None
                 };
                 match node {
+                    WorkflowNodeProgram::Review {
+                        subject,
+                        context: checks,
+                    } => {
+                        if let Some(access) = admitted_access.take() {
+                            access
+                                .finish(true)
+                                .await
+                                .map_err(WorkflowRunError::InvalidValue)?;
+                        }
+                        let mut bound = evaluate_value(subject.value(), &input, &values)?;
+                        bound.assert_current(run).await?;
+                        let mut facts = Vec::new();
+                        for check in checks {
+                            let value = evaluate_value(check, &input, &values)?;
+                            value.assert_current(run).await?;
+                            bound.depend_on(&value)?;
+                            facts.push(value.value);
+                        }
+                        let checks = facts;
+                        let value = self
+                            .review(
+                                run,
+                                context,
+                                &node_instance,
+                                subject,
+                                bound,
+                                checks,
+                                cancellation,
+                            )
+                            .await?;
+                        reservation.retain(&value.value)?;
+                        if value.value["accepted"] == true {
+                            control.depend_on(&value)?;
+                        }
+                        values.insert(node_id.clone(), value);
+                        Ok(None)
+                    }
+
                     WorkflowNodeProgram::Tool {
                         selector,
                         arguments,
                         result,
                     } => {
-                        let arguments = evaluate_value(arguments, &input, &values)?;
-                        arguments.assert_current(run).await?;
+                        let mut arguments = evaluate_value(arguments, &input, &values)?;
+                        arguments.depend_on(&control)?;
+                        if admitted_access.is_none() {
+                            arguments.assert_current(run).await?;
+                        }
                         let (native, candidate) = self
                             .invoke_tool(
                                 run,
@@ -268,6 +350,7 @@ impl WorkflowRuntime {
                                 selector,
                                 arguments,
                                 cancellation,
+                                admitted_access.take(),
                             )
                             .await?;
                         let value = result.project(&native, &node_instance)?;
@@ -287,6 +370,7 @@ impl WorkflowRuntime {
                                 &node_instance,
                                 agent,
                                 cancellation,
+                                admitted_access.take(),
                             )
                             .await?;
                         let value = self
@@ -294,11 +378,15 @@ impl WorkflowRuntime {
                             .await?;
                         reservation.retain(&value.value)?;
                         values.insert(node_id.clone(), value);
+                        control.candidate = None; // this Agent consumed A; its new B needs fresh review
                         Ok(None)
                     }
                     WorkflowNodeProgram::Branch { condition } => {
-                        let condition = evaluate_predicate(condition, &input, &values)?;
-                        condition.assert_current(run).await?;
+                        let mut condition = evaluate_predicate(condition, &input, &values)?;
+                        condition.depend_on(&control)?;
+                        if admitted_access.is_none() {
+                            condition.assert_current(run).await?;
+                        }
                         let port = if condition.value.as_bool().expect("predicate boolean") {
                             WorkflowPort::True
                         } else {
@@ -327,6 +415,12 @@ impl WorkflowRuntime {
                         branches,
                         output_schema,
                     } => {
+                        if let Some(access) = admitted_access.take() {
+                            access
+                                .finish(true)
+                                .await
+                                .map_err(WorkflowRunError::InvalidValue)?;
+                        }
                         self.emit_observability(
                             run,
                             RuntimeEvent::WorkflowParallelAdmitted {
@@ -342,8 +436,14 @@ impl WorkflowRuntime {
                         let pending = branches.iter().map(|(key, branch)| {
                             let input = &input;
                             let values = &values;
+                            let control = &control;
                             async move {
-                                let bound = evaluate_value(&branch.input, input, values);
+                                let bound = evaluate_value(&branch.input, input, values).and_then(
+                                    |mut input| {
+                                        input.depend_on(control)?;
+                                        Ok(input)
+                                    },
+                                );
                                 let result = match bound {
                                     Ok(input) => {
                                         self.execute_block(
@@ -411,8 +511,11 @@ impl WorkflowRuntime {
                         Ok(None)
                     }
                     WorkflowNodeProgram::Return { output } => {
-                        let value = evaluate_value(output, &input, &values)?;
-                        value.assert_current(run).await?;
+                        let mut value = evaluate_value(output, &input, &values)?;
+                        value.depend_on(&control)?;
+                        if admitted_access.is_none() {
+                            value.assert_current(run).await?;
+                        }
                         validate_commit(&block.output_schema, &value.value)?;
                         Ok(Some(value))
                     }
@@ -431,6 +534,14 @@ impl WorkflowRuntime {
                     })
                     .transpose()
             });
+            let result = if let Some(access) = admitted_access.take() {
+                match access.finish(true).await {
+                    Ok(_) => result,
+                    Err(error) => Err(WorkflowRunError::InvalidValue(error)),
+                }
+            } else {
+                result
+            };
             self.emit_observability(
                 run,
                 RuntimeEvent::WorkflowNodeSettled {

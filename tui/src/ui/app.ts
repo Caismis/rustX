@@ -1743,6 +1743,7 @@ export class RustxTuiApp {
     }
     const lease = this.#presentationLease();
     const overlay = new HumanInteractionOverlay({
+      onReview: (interaction, response) => this.#respondToInteraction(lease, overlay, interaction, { type: "review", response }),
       onDecision: (interaction, decision) =>
         this.#respondToInteraction(lease, overlay, interaction, {
           type: "approval",

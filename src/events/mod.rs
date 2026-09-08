@@ -8,6 +8,7 @@
 //! durable journal.
 
 pub mod interaction;
+pub mod review;
 pub mod types;
 
 /// The narrow optional non-durable execution-fact projection of the tool

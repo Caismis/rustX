@@ -117,9 +117,9 @@ pub(crate) async fn authorize(
                             decision: ApprovalDecision::Deny { reason },
                         },
                 }) => reason,
-                Ok(InteractionOutcome::Responded { .. }) => {
-                    "approval interaction returned a questionnaire response".into()
-                }
+                Ok(
+                    InteractionOutcome::Responded { .. } | InteractionOutcome::ReviewInvalidated,
+                ) => "approval interaction returned a mismatched response".into(),
                 Ok(InteractionOutcome::Cancelled { reason }) => {
                     return Ok(Some(terminal(ToolExecutionStatus::Cancelled {
                         reason,

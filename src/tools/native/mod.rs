@@ -435,6 +435,15 @@ pub fn register_subagent_child_tools(
 }
 
 #[cfg(test)]
+pub(crate) fn test_ask_user_registration() -> crate::tools::executor::ToolRegistration {
+    let native = ask_user::registration();
+    let mut registration =
+        crate::tools::executor::ToolRegistration::plain(native.definition, native.executor);
+    registration.normalizer = native.normalizer;
+    registration
+}
+
+#[cfg(test)]
 mod tests {
     use super::{register_subagent_child_tools, subagent_child_definition};
     use crate::tools::executor::ToolRegistry;

@@ -221,3 +221,14 @@ WF-03 supplies the exact authorized candidate through `ToolExecutionContext.work
 A successful candidate projection receives CandidateReference directly from invoke_tool after physical settlement and source/mutation verification. The interpreter commits it beside JSON and preserves it through value construction and Parallel export. Derived arguments are checked against live currentness and rechecked under exclusive admission. A later writer can make the check stale; rejection belongs to Workflow consumption and leaves the native historical status intact. The Event Journal is not consulted for applicability.
 
 Mutation observation covers existing empty directories under fixed entry/depth/watch limits. New directories on Linux and directory-entry events on macOS conservatively invalidate incomplete coverage; ignored file activity may remain excluded, but unknown coverage cannot certify a check. Watch/inspection uncertainty after a settled operation produces PhysicalSettlement resource retention and retirement of ended active ownership. OutcomeUnknown physical work retains NestedContainment authority. See the candidate contract for exact platform semantics and disposal continuation after failed durable settlement append.
+
+
+### Fixed Workflow human waits
+
+Fixed Tool(ask_user) uses ordinary preparation, normalization, execution and typed
+result projection. ToolExecutionContext reborrow rebinds its existing Questionnaire
+requester to the driver's subordinate cancellation/deadline view. Explicit decline
+is the ordinary successful JSON result, not cancellation. Review is a Workflow
+business node using the same InteractionCoordinator, outside Tool Approval.
+FullAccess affects only the configured permission gate. The existing durable
+Allow-before-unchanged-prepared-invocation-start ordering remains unchanged.

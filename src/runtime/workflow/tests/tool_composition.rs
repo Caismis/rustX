@@ -288,14 +288,7 @@ async fn every_native_non_success_survives_the_actual_outer_adapter_once() {
 #[tokio::test]
 async fn fixed_admission_rejects_orchestration_background_and_composite_leaves() {
     use crate::capabilities::selection::ToolSelector;
-    for name in [
-        "subagent",
-        "execution",
-        "ask_user",
-        "todo",
-        "background",
-        "composite",
-    ] {
+    for name in ["subagent", "execution", "todo", "background", "composite"] {
         let plane = workflow_test_plane(1);
         let runtime = workflow_runtime(&plane);
         let probe = Probe::new(ToolExecutionStatus::Success);
