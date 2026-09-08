@@ -462,6 +462,7 @@ fn failed_with_continuation(
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        workflow: None,
         managed_output: Some(continuation),
     }
 }
@@ -820,6 +821,7 @@ async fn run_bash_unix(
             truncated: true,
             original_bytes: combined.complete.then_some(combined.total_bytes),
         }),
+        workflow: None,
         managed_output,
     }
 }

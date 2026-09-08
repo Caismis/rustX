@@ -86,6 +86,46 @@ record is omitted rather than publishing an ambiguous truncated identity.
 
 ## Cancellation and reconnect
 
+### Historical identity outlives detailed retention
+
+A still-visible canonical Workflow ToolCall must never become an ordinary Tool
+card just because its native detailed run was retired. The native outer Tool
+executor therefore attaches `ToolExecutionResult.workflow`: configured Workflow
+ID and immutable admitted program digest. This is typed runtime metadata, not
+tool-owned content, and is excluded from the model-facing result projection.
+Runtime Client carries it with the existing canonical result/foreground
+settlement; it does not reconstruct it from journal events or catalog names.
+
+The full native run view wins when available. Otherwise the card identifies a
+Workflow invocation and explicitly displays “Historical Workflow details
+unavailable (retired or process reopened)”. This says nothing about execution
+success, business acceptance, current candidate applicability or control rights.
+
+There is no tombstone registry. The additional identity is at most 192 serialized
+bytes (64-byte configured ID and 64-character digest), exactly one per existing
+outer result. Additional projected storage is bounded by 192 times the number
+of Tool results on the current canonical/foreground surface; removal of a result
+removes its metadata too. No independent history, eviction queue or executable
+owner survives. Native detail retention remains eight runs with terminal-first
+eviction. All ordinary results have no Workflow identity metadata.
+
+Detailed retirement is a process-local retention decision. Process reopen loses
+all live run details but may retain legitimately committed outer-result identity.
+Neither restores execution or waiters. Client replay expiration instead requires
+a fresh snapshot of the current surface, including these existing result facts.
+Event Journal evidence remains separate and is never replayed to recover details.
+
+The real stdio regression executes nine native terminal Workflow calls, asserts
+eight retained runs and one omitted run, keeps the oldest canonical call visible,
+and renders it through production reduction/correlation/Tool-card code. It checks
+explicit unavailability versus an otherwise identical ordinary card, reconnect
+and process reopen, unchanged canonical history and exact provider request count.
+Provider gates separate the nine invocations with snapshot cuts, independently
+of OS scheduling and replay throughput. There are exactly ten scripted provider
+requests; inspecting or reopening adds none.
+
+### Execution cancellation
+
 The existing foreground invocation/attempt cancellation signal is the sole
 authority. A read-only observer publishes draining when cancellation is seen,
 then awaits the same execution future. Node and iteration frontiers still use

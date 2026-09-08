@@ -267,6 +267,7 @@ fn successful_tool_result() -> ToolExecutionResult {
         exit_code: Some(0),
         artifacts: Vec::new(),
         truncation: None,
+        workflow: None,
         managed_output: None,
     }
 }
@@ -1892,6 +1893,7 @@ fn audited_proposals_reject_all_dependent_tool_transitions_atomically() {
                         exit_code: Some(0),
                         artifacts: Vec::new(),
                         truncation: None,
+                        workflow: None,
                         managed_output: None,
                     },
                 },
@@ -2086,6 +2088,7 @@ fn canonical_proposal_can_execute_and_commit_its_tool_result() {
                     exit_code: None,
                     artifacts: Vec::new(),
                     truncation: None,
+                    workflow: None,
                     managed_output: None,
                 },
             },

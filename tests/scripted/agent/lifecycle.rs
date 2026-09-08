@@ -624,6 +624,7 @@ impl ToolExecutor for InstantTool {
                     exit_code: Some(0),
                     artifacts: Vec::new(),
                     truncation: None,
+                    workflow: None,
                     managed_output: None,
                 }
             }),
@@ -755,6 +756,7 @@ impl ToolExecutor for GatedTool {
                     exit_code: Some(0),
                     artifacts: Vec::new(),
                     truncation: None,
+                    workflow: None,
                     managed_output: None,
                 }
             }),

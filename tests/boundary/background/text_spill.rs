@@ -759,6 +759,7 @@ async fn genuine_artifacts_still_publish_as_file_blocks_in_the_terminal_inbound(
                             description: None,
                         }],
                         truncation: None,
+                        workflow: None,
                         managed_output: None,
                     }
                 }),

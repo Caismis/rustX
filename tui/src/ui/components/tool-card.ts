@@ -158,6 +158,16 @@ export function renderToolCard(
     pushResult(lines, renderer, tool, args, context);
     return drawable(lines);
   }
+  if (tool.lifecycle?.type === "settled" && tool.lifecycle.result.workflow !== undefined) {
+    const identity = tool.lifecycle.result.workflow;
+    lines.push(`${role.meta("◇")} ${sanitizeLine(tool.name)} · Workflow invocation`);
+    if (part !== "call") {
+      lines.push(`  admitted Workflow ${identity.workflow_id} · program ${identity.program_digest}`);
+      lines.push("  Historical Workflow details unavailable (retired or process reopened)");
+      pushResult(lines, renderer, tool, args, context);
+    }
+    return drawable(lines);
+  }
 
   if (part === "continuation") {
     // The terminal continuation of the same entity, at the canonical position

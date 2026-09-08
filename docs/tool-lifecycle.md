@@ -30,6 +30,13 @@ an ancestor hard deadline stays `Deadline(Hard)`, never `Attempt(UserRequested)`
 Only a locally expired deadline emits a local Deadline fact. Physical adapters'
 attempt `reason()` is not native provenance. Settled results remain immutable.
 
+Hard-versus-idle eligibility is decided at the owner's logical clock cut, not
+merely by timer-future polling order. When idle wakes, the owner rechecks the
+absolute hard deadline before committing a cause. Time may have advanced after
+the hard future was polled Pending; if hard is now eligible it wins. The
+simultaneous-deadline regression forces precisely this between-polls advance
+with a manual clock, without scheduler timing or sleeps.
+
 Trusted registrations, not `ToolExecutor`, freeze `ForegroundPolicy`: ordinary Leaf uses the current
 ordinary finite execution policy; Composite supplies a validated finite hard-only
 total policy. Workflow defaults to ten minutes (at most 24 hours), ordinary Tools

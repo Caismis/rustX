@@ -92,6 +92,7 @@ fn tool_message(id: &str, call_id: &str) -> MessageBlock {
             exit_code: None,
             artifacts: Vec::new(),
             truncation: None,
+            workflow: None,
             managed_output: None,
         },
     })

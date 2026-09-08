@@ -448,6 +448,7 @@ fn execution_boundary_result(status: ToolExecutionStatus) -> ToolExecutionResult
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        workflow: None,
         managed_output: None,
     }
 }
@@ -1293,6 +1294,7 @@ mod tests {
                     exit_code: None,
                     artifacts: Vec::new(),
                     truncation: None,
+                    workflow: None,
                     managed_output: None,
                 },
             }
@@ -1970,6 +1972,7 @@ mod tests {
                         exit_code: None,
                         artifacts: Vec::new(),
                         truncation: None,
+                        workflow: None,
                         managed_output: None,
                     })),
                     context.cancellation.clone(),

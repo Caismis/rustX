@@ -259,6 +259,7 @@ fn published_result(id: &str, snapshot: &TodoSnapshot) -> MessageBlock {
             exit_code: None,
             artifacts: Vec::new(),
             truncation: None,
+            workflow: None,
             managed_output: None,
         },
     })

@@ -4967,6 +4967,7 @@ fn translate_result(
         exit_code: None,
         artifacts: Vec::new(),
         truncation,
+        workflow: None,
         managed_output: continuation,
     }
 }
@@ -5328,6 +5329,7 @@ fn failed_mcp_storage(diagnostic: &str, locator: PathBuf, started: Instant) -> T
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        workflow: None,
         managed_output: Some(crate::tools::types::ManagedOutputContinuation::Partial {
             locator,
             diagnostic,
@@ -5399,6 +5401,7 @@ fn mcp_empty_terminal(
             exit_code: None,
             artifacts: Vec::new(),
             truncation: None,
+            workflow: None,
             managed_output: None,
         };
     };
@@ -5416,6 +5419,7 @@ fn mcp_empty_terminal(
                 exit_code: None,
                 artifacts: Vec::new(),
                 truncation: None,
+                workflow: None,
                 managed_output: Some(ManagedOutputContinuation::Complete { locator }),
             }
         }
@@ -5440,6 +5444,7 @@ fn mcp_empty_terminal(
                 exit_code: None,
                 artifacts: Vec::new(),
                 truncation: None,
+                workflow: None,
                 managed_output: Some(ManagedOutputContinuation::Partial {
                     locator,
                     diagnostic: bound_error(&diagnostic),

@@ -40,6 +40,15 @@ pub use tool::WorkflowToolResult;
 use tool::default_workflow_timeout_ms;
 
 /// Runtime-owned identity, independent of model `ToolCall` text.
+/// Retained with the canonical outer result, not with an execution owner.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowToolIdentity {
+    pub workflow_id: WorkflowId,
+    pub program_digest: String,
+}
+
+/// Runtime-owned identity, independent of model `ToolCall` text.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct WorkflowRunId {
     /// Owning conversation.
@@ -532,6 +541,15 @@ impl WorkflowProgram {
     #[must_use]
     pub fn id(&self) -> &WorkflowId {
         &self.id
+    }
+
+    /// Bounded immutable identity, with no executable state.
+    #[must_use]
+    pub fn tool_identity(&self) -> WorkflowToolIdentity {
+        WorkflowToolIdentity {
+            workflow_id: self.id.clone(),
+            program_digest: self.digest.clone(),
+        }
     }
 
     /// The model-facing description.

@@ -24,7 +24,8 @@
  */
 
 /**
- * Version 22 adds bounded native Workflow snapshots and replacement events.
+ * Version 22 adds bounded native Workflow snapshots, replacement events,
+ * and historical Workflow identity on the existing outer Tool result.
  * Version 17 adds `denied` to background terminal states (Issue #206).
  * Version 16 carries Issue #202's explicit tool outcome certainty: tool
  * status `interrupted` becomes `outcome_unknown` with a bounded `detail`;
@@ -257,6 +258,8 @@ export interface TruncationState {
 }
 
 export interface ToolExecutionResult {
+  /** Native historical identity, never executable state or business acceptance. */
+  workflow?: { workflow_id: string; program_digest: string };
   status: ToolExecutionStatus;
   content?: ToolResultContent[];
   duration_ms: number;

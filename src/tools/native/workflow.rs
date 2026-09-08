@@ -97,6 +97,7 @@ impl ToolExecutor for WorkflowToolExecutor {
         };
         let runtime = self.runtime.clone();
         let program = Arc::clone(&self.program);
+        let identity = program.tool_identity();
         let run_id = invocation
             .id
             .canonical_call_id()
@@ -105,7 +106,7 @@ impl ToolExecutor for WorkflowToolExecutor {
         let operation_cancellation = context.cancellation.clone();
         ToolExecutionHandle::settled_by_operation(
             Box::pin(async move {
-                match runtime
+                let mut result = match runtime
                     .run_foreground(
                         program,
                         run_id,
@@ -133,7 +134,9 @@ impl ToolExecutor for WorkflowToolExecutor {
                         }
                         result
                     }
-                }
+                };
+                result.workflow = Some(Box::new(identity));
+                result
             }),
             context.cancellation.clone(),
         )

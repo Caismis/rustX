@@ -414,6 +414,7 @@ fn additional_event_variants_round_trip() {
             exit_code: None,
             artifacts: Vec::new(),
             truncation: None,
+            workflow: None,
             managed_output: None,
         },
     };

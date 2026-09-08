@@ -567,6 +567,7 @@ fn empty_tool_result(status: ToolExecutionStatus) -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        workflow: None,
         managed_output: None,
     }
 }
@@ -1020,6 +1021,7 @@ fn json_result(value: &impl serde::Serialize) -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        workflow: None,
         managed_output: None,
     }
 }
@@ -1034,6 +1036,7 @@ fn failed(error: impl Into<String>) -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        workflow: None,
         managed_output: None,
     }
 }
@@ -1634,6 +1637,7 @@ mod tests {
                 exit_code: Some(0),
                 artifacts: Vec::new(),
                 truncation: None,
+                workflow: None,
                 managed_output: None,
             }),
         };

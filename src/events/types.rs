@@ -1153,6 +1153,7 @@ mod tests {
                 exit_code: Some(0),
                 artifacts: Vec::new(),
                 truncation: None,
+                workflow: None,
                 managed_output: None,
             },
         };
@@ -1346,6 +1347,7 @@ mod tests {
                     exit_code: Some(0),
                     artifacts: Vec::new(),
                     truncation: None,
+                    workflow: None,
                     managed_output: None,
                 },
             },
@@ -1359,6 +1361,7 @@ mod tests {
                     exit_code: Some(0),
                     artifacts: Vec::new(),
                     truncation: None,
+                    workflow: None,
                     managed_output: None,
                 },
             },

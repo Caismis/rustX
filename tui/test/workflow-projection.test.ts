@@ -5,9 +5,35 @@ import { isKnownRuntimeClientEvent } from "../src/protocol/types.ts";
 import type { WorkflowRunView, WorkflowInstanceView } from "../src/protocol/types.ts";
 import { reduce, replaceFromSnapshot } from "../src/presentation/projection.ts";
 import { workflowDetails, workflowStatus } from "../src/ui/components/workflow-details.ts";
-import { snapshot, runtimeCursor } from "./support/fixtures.ts";
+import { snapshot, runtimeCursor, assistantBlocks, toolCallBlock, toolMessage } from "./support/fixtures.ts";
+import { correlateTools } from "../src/presentation/tools.ts";
+import { renderToolCard } from "../src/ui/components/tool-card.ts";
+import { plainText } from "../src/ui/theme.ts";
 
 const id = { conversation_id: "conv-test", attempt_id: "attempt", invocation: 1 };
+
+it("canonical Workflow identity survives details retirement, snapshot/event fold, and pure rendering", () => {
+  const result = JSON.parse(readFileSync(new URL("../../tests/fixtures/runtime-client/workflow-result-v22.json", import.meta.url), "utf8"));
+  const messages = [assistantBlocks("assistant", [toolCallBlock("outer", "opaque", "not_a_workflow_hint", {})]),
+    toolMessage("result", "outer", "opaque", result)];
+  const initial = replaceFromSnapshot(snapshot({ messages }), runtimeCursor(0));
+  const workflows = { revision: 20, runs: [], omitted_runs: 1 };
+  const folded = reduce(initial, { cursor: runtimeCursor(1), event: { type: "workflows_updated", workflows } });
+  const reconnected = replaceFromSnapshot(snapshot({ messages, workflows }), runtimeCursor(1));
+  assert.deepEqual(folded, reconnected);
+  const frozen = JSON.stringify(folded);
+  for (const state of [folded, reconnected]) {
+    const tool = correlateTools(state).byCallId.get("outer")!;
+    for (const expanded of [false, true]) {
+      const text = plainText(renderToolCard(tool, { expanded, budget: { maxLines: 10, maxChars: 2000 } }));
+      assert.match(text, /Workflow invocation/);
+      assert.match(text, /Historical Workflow details unavailable/);
+      assert.doesNotMatch(text, /task accepted/);
+    }
+  }
+  assert.equal(JSON.stringify(folded), frozen);
+  assert.deepEqual(folded.transcript, initial.transcript);
+});
 it("Rust v22 fixture is accepted at the transport boundary and folded unchanged", () => {
   const event: unknown = JSON.parse(readFileSync(new URL("../../tests/fixtures/runtime-client/workflow-v22.json", import.meta.url), "utf8"));
   assert.ok(isKnownRuntimeClientEvent(event));

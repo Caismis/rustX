@@ -152,6 +152,7 @@ impl ToolExecutor for ControlledExecutor {
                                 exit_code: None,
                                 artifacts: Vec::new(),
                                 truncation: None,
+                                workflow: None,
                                 managed_output: None,
                             };
                         }
@@ -234,6 +235,7 @@ fn success() -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        workflow: None,
         managed_output: None,
     }
 }
@@ -249,6 +251,7 @@ fn cancelled() -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        workflow: None,
         managed_output: None,
     }
 }

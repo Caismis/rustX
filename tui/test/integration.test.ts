@@ -42,6 +42,8 @@ import { TempFixture } from "./support/temp-fixture.ts";
 import { until } from "./support/scripted-peer.ts";
 import { correlateTools } from "../src/presentation/tools.ts";
 import { workflowDetails } from "../src/ui/components/workflow-details.ts";
+import { renderToolCard } from "../src/ui/components/tool-card.ts";
+import { plainText } from "../src/ui/theme.ts";
 
 /** The cargo target directory, overridable for a non-default layout. */
 const BINARY =
@@ -118,8 +120,8 @@ const BEFORE_START_RUNTIME_CONFIG_JSON = JSON.stringify({
   defaultTools: ["bash"],
 });
 
-it("native Workflow crosses real stdio and reconnect without new work", { skip: SKIP, timeout: 20_000 }, async () => {
-  const provider = await ProviderEmulator.start("workflow_tool");
+it("native Workflow retirement preserves visible Tool identity through stdio, reconnect and reopen", { skip: SKIP, timeout: 20_000 }, async (test) => {
+  const provider = await ProviderEmulator.start("workflow_retention");
   const fixture = TempFixture.create("rustx-workflow-projection-");
   const workspace = fixture.path("workspace");
   mkdirSync(join(workspace, ".agents/workflows"), { recursive: true });
@@ -164,14 +166,48 @@ block:
   const connection = new RuntimeClientConnection({ input: child.stdout, output: child.stdin });
   void child.wait().then(exit => connection.reportProcessExit(exit.code, exit.signal, exit.spawnError));
   const session = new RuntimeClientAttachment({ connection });
+  let phase = "attach";
+  const aborted = () => {
+    console.error("Workflow test aborted", phase);
+    child.closeStdin();
+  };
+  test.signal.addEventListener("abort", aborted, { once: true });
   try {
     await session.attach();
+    phase = "submit";
     await session.submitInbound([{ type: "text", text: "workflow conformance request" }]);
-    await until(() => session.state?.attempt !== undefined);
-    await session.waitForAttemptSettlement(session.state!.attempt!.attemptId);
+    for (let i = 0; i < 9; i++) {
+      phase = `provider gate ${i}`;
+      await provider.awaitGate(`workflow-${i}`);
+      // Prior invocation is canonically settled before the provider's next
+      // request. Pin each read cut while no next Workflow can be admitted.
+      await session.resync();
+      await provider.releaseGate(`workflow-${i}`);
+    }
+    await provider.awaitGate("workflow-complete");
+    await session.resync();
+    const attemptId = session.state!.attempt!.attemptId;
+    await provider.releaseGate("workflow-complete");
+    phase = "attempt settlement";
+    await session.waitForAttemptSettlement(attemptId);
+    phase = "resync";
     await session.resync();
     const state = session.state!;
-    assert.equal(state.workflows.runs.length, 1);
+    assert.equal(state.workflows.runs.length, 8);
+    assert.equal(state.workflows.omitted_runs, 1);
+    assert.ok(!state.workflows.runs.some(run => run.tool_call_id === "call-review-pr-0"));
+    const correlation = correlateTools(state);
+    assert.ok(correlation.anchoredCalls.has("call-review-pr-0"), "oldest canonical call remains visible");
+    const oldest = correlation.byCallId.get("call-review-pr-0")!;
+    assert.equal(oldest.workflow, undefined, "native details really retired");
+    const renderContext = { expanded: true, budget: { maxLines: 20, maxChars: 4000 } };
+    const retired = plainText(renderToolCard(oldest, renderContext));
+    assert.match(retired, /Workflow invocation/);
+    assert.match(retired, /Historical Workflow details unavailable/);
+    assert.equal(oldest.lifecycle.type, "settled");
+    if (oldest.lifecycle.type !== "settled") throw new Error("terminal oldest call");
+    const ordinary = { ...oldest, lifecycle: { ...oldest.lifecycle, result: { ...oldest.lifecycle.result, workflow: undefined } } };
+    assert.doesNotMatch(plainText(renderToolCard(ordinary, renderContext)), /Workflow invocation/);
     const run = state.workflows.runs[0]!;
     assert.deepEqual(run.state, { type: "settled", outcome: "completed" });
     assert.equal(run.program_digest.length, 64);
@@ -180,14 +216,19 @@ block:
     const canonical = JSON.stringify(state.transcript);
     const requests = await provider.requests();
     for (let i = 0; i < 10; i++) workflowDetails(run);
+    phase = "detach";
     await session.detach();
+    phase = "reattach";
     await session.attach();
+    phase = "reconnect resync";
     await session.resync();
     assert.deepEqual(session.state!.workflows, state.workflows);
+    assert.equal(plainText(renderToolCard(correlateTools(session.state!).byCallId.get(oldest.callId)!, renderContext)), retired);
     assert.equal(JSON.stringify(session.state!.transcript), canonical);
     assert.equal((await provider.requests()).length, requests.length);
-    assert.equal(requests.length, 2);
+    assert.equal(requests.length, 10);
     assert.equal(state.pendingInteractions.length, 0);
+    phase = "close first process";
     child.closeStdin();
     await child.waitOrTerminate(10_000);
     const reopened = ChildRuntimeProcess.spawn({ binary: BINARY,
@@ -199,10 +240,12 @@ block:
     void reopened.wait().then(exit => reopenedConnection.reportProcessExit(exit.code, exit.signal, exit.spawnError));
     try {
       const historical = new RuntimeClientAttachment({ connection: reopenedConnection });
+      phase = "reopen attach";
       await historical.attach();
       assert.equal(historical.state!.workflows.runs.length, 0, "process reopen cannot resurrect an executable run");
       assert.equal(historical.state!.pendingInteractions.length, 0);
       assert.equal(JSON.stringify(historical.state!.transcript), canonical);
+      assert.equal(plainText(renderToolCard(correlateTools(historical.state!).byCallId.get(oldest.callId)!, renderContext)), retired);
       assert.equal((await provider.requests()).length, requests.length);
     } catch (error) {
       console.error("Workflow reopen failure", error, reopened.stderrTail());
@@ -215,6 +258,7 @@ block:
     console.error("Workflow bridge failure", error, child.stderrTail());
     throw error;
   } finally {
+    test.signal.removeEventListener("abort", aborted);
     child.closeStdin();
     await child.waitOrTerminate(10_000);
     await provider.finish();

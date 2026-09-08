@@ -840,6 +840,7 @@ impl RecoveryEvidence {
                                     exit_code: None,
                                     artifacts: Vec::new(),
                                     truncation: None,
+                                    workflow: None,
                                     managed_output: None,
                                 },
                             )),
@@ -1794,6 +1795,7 @@ impl RecoveryPlan {
                             exit_code: None,
                             artifacts: Vec::new(),
                             truncation: None,
+                            workflow: None,
                             managed_output: None,
                         },
                     },
@@ -2562,6 +2564,7 @@ fn unknown_outcome_result() -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        workflow: None,
         managed_output: None,
     }
 }

@@ -159,6 +159,7 @@ fn success_result(body: &str) -> ToolExecutionResult {
         exit_code: Some(0),
         artifacts: Vec::new(),
         truncation: None,
+        workflow: None,
         managed_output: None,
     }
 }
@@ -1893,6 +1894,7 @@ fn second_crash_after_tool_repair_preserves_external_start_evidence() {
                 exit_code: None,
                 artifacts: Vec::new(),
                 truncation: None,
+                workflow: None,
                 managed_output: None,
             },
         );
@@ -2971,6 +2973,7 @@ fn a_mixed_unresolved_batch_keeps_unknown_dominance_after_repair() {
             exit_code: None,
             artifacts: Vec::new(),
             truncation: None,
+            workflow: None,
             managed_output: None,
         },
     );
