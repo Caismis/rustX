@@ -118,6 +118,14 @@ enum Decision {
     Failed(SubagentStartError),
 }
 
+/// Unique live Workflow child result. Candidate applicability is native,
+/// process-local metadata and is never written into the output event or IPC.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct WorkflowAgentOutput {
+    pub value: serde_json::Value,
+    pub candidate: Option<crate::runtime::workspace::CandidateReference>,
+}
+
 /// The canonicalized terminal outcome awaiting publication.
 #[derive(Debug, Clone)]
 struct TerminalCandidate {
@@ -344,7 +352,7 @@ struct SubagentRecord {
     /// The parent-validated Workflow output value of a successful
     /// Workflow-owned child: the live Workflow result channel, deliberately
     /// kept out of the observation snapshot.
-    terminal_workflow_value: Option<serde_json::Value>,
+    terminal_workflow_value: Option<WorkflowAgentOutput>,
     pending_terminal: Option<TerminalCandidate>,
     publication_abandoned: bool,
     notification: NotificationState,
@@ -2788,7 +2796,10 @@ impl SubagentRegistry {
         if record.lifecycle != SubagentLifecycle::Succeeded {
             return None;
         }
-        record.terminal_workflow_value.clone()
+        record
+            .terminal_workflow_value
+            .as_ref()
+            .map(|output| output.value.clone())
     }
 
     /// Transfers the settled Workflow value to its live owner exactly once.
@@ -2798,7 +2809,7 @@ impl SubagentRegistry {
         &self,
         subagent_id: &SubagentId,
         instance: &crate::runtime::workflow::WorkflowNodeInstance,
-    ) -> Option<serde_json::Value> {
+    ) -> Option<WorkflowAgentOutput> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let &index = state.index.get(subagent_id)?;
         let record = &mut state.records[index];
@@ -3834,7 +3845,15 @@ impl SubagentRegistry {
             nested,
             runtime_root_cleanup_error,
             workspace,
+            candidate: workspace_candidate,
         } = settlement;
+        let candidate_diagnostic = (matches!(
+            workspace.disposition,
+            WorkspaceSettlementDisposition::Borrowed
+        ) && workspace_candidate.as_ref().is_none_or(|reference| {
+            Some(&reference.run) != workspace.snapshot.borrowed_from.as_ref()
+        }))
+        .then(|| "borrowed child candidate settlement produced no valid reference".to_owned());
         // An unproven nested settlement, workspace settlement, or failed
         // exact-root cleanup is a terminal classification input, not an
         // ignorable warning. A successful semantic frame cannot become a
@@ -3842,6 +3861,7 @@ impl SubagentRegistry {
         // proven settled.
         let settlement_diagnostic = [
             nested.unproven_diagnostic(),
+            candidate_diagnostic.clone(),
             workspace
                 .error()
                 .map(|detail| format!("the child workspace was not settled: {detail}")),
@@ -3855,6 +3875,7 @@ impl SubagentRegistry {
         let settlement_diagnostic =
             (!settlement_diagnostic.is_empty()).then_some(settlement_diagnostic.join("; "));
         let physical_settlement_unproven = !nested.unproven.is_empty()
+            || candidate_diagnostic.is_some()
             || workspace.error().is_some()
             || runtime_root_cleanup_error.is_some();
         let workspace_handoff = workspace.handoff().cloned();
@@ -4118,9 +4139,14 @@ impl SubagentRegistry {
                     .map(|reason| reason_text(reason).to_owned())
             });
             if candidate.state == TerminalState::Succeeded {
-                record
-                    .terminal_workflow_value
-                    .clone_from(&candidate.workflow_value);
+                record.terminal_workflow_value =
+                    candidate
+                        .workflow_value
+                        .clone()
+                        .map(|value| WorkflowAgentOutput {
+                            value,
+                            candidate: workspace_candidate,
+                        });
             }
             abort_deadline_task(deadline_task);
             candidate
@@ -6019,7 +6045,10 @@ mod tests {
             plane
                 .registry
                 .take_workflow_agent_output(&accepted.subagent_id, &instance),
-            Some(serde_json::json!({"summary":"answer"}))
+            Some(WorkflowAgentOutput {
+                value: serde_json::json!({"summary":"answer"}),
+                candidate: None
+            })
         );
         assert_eq!(
             plane
@@ -6683,6 +6712,7 @@ mod tests {
                 )],
             },
             runtime_root_cleanup_error: None,
+            candidate: None,
             workspace: crate::runtime::workspace::WorkspaceSettlement::shared(
                 WorkspaceSnapshot::shared(std::path::PathBuf::from("<shared-workspace>")),
             ),

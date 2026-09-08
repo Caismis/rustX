@@ -790,6 +790,9 @@ pub(crate) struct PhysicalSettlement {
     pub runtime_root_cleanup_error: Option<String>,
     /// The final workspace inspection and cleanup/handoff facts.
     pub workspace: crate::runtime::workspace::WorkspaceSettlement,
+    /// Exact post-node candidate from borrowed access settlement, not a later
+    /// read of the run owner. Missing on unproven or noncandidate settlement.
+    pub candidate: Option<crate::runtime::workspace::CandidateReference>,
 }
 
 impl PhysicalSettlement {
@@ -802,6 +805,7 @@ impl PhysicalSettlement {
                 unproven: Vec::new(),
             },
             runtime_root_cleanup_error: None,
+            candidate: None,
             workspace: crate::runtime::workspace::WorkspaceSettlement::shared(
                 WorkspaceSnapshot::shared(PathBuf::from("<shared-workspace>")),
             ),
@@ -965,7 +969,7 @@ impl StagedChild {
         let settlement = contain_retained(self.retained.take()).await;
         let workspace_result = if let Some(workspace) = self.workspace.take() {
             if settlement.unproven.is_empty() {
-                workspace.settle_after_child().await
+                workspace.settle_after_child().await.workspace
             } else {
                 workspace.preserve_after_unresolved_nested(
                     "a nested supervised process anchor remains physically unresolved",
@@ -1826,12 +1830,15 @@ async fn settle_nested(
     // child exits; only the complete physical settlement permits cleanup.
     let workspace = match workspace {
         Some(lease) if nested.unproven.is_empty() => lease.settle_after_child().await,
-        Some(lease) => lease.preserve_after_unresolved_nested(
-            "a nested supervised process anchor remains physically unresolved",
-        ),
+        Some(lease) => lease
+            .preserve_after_unresolved_nested(
+                "a nested supervised process anchor remains physically unresolved",
+            )
+            .into(),
         None => crate::runtime::workspace::WorkspaceSettlement::shared(WorkspaceSnapshot::shared(
             PathBuf::from("<shared-workspace>"),
-        )),
+        ))
+        .into(),
     };
     let runtime_root_cleanup_error = if nested.unproven.is_empty() {
         let path = runtime_root.path().display().to_string();
@@ -1850,7 +1857,8 @@ async fn settle_nested(
         outcome,
         nested,
         runtime_root_cleanup_error,
-        workspace,
+        candidate: workspace.candidate,
+        workspace: workspace.workspace,
     }
 }
 
@@ -2411,6 +2419,11 @@ mod tests {
         assert_eq!(
             settlement.workspace.disposition,
             WorkspaceSettlementDisposition::Borrowed
+        );
+        assert_eq!(
+            settlement.candidate.as_ref().unwrap().version,
+            1,
+            "the exact post-write reference is published after nested containment"
         );
         assert!(matches!(
             nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), None),

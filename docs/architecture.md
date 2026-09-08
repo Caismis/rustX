@@ -8392,6 +8392,35 @@ The shared native owner is `runtime::workspace`, not a Subagent-specific Git man
 
 SQLite development schema 27 adds run workspace ownership/settlement, native candidate invocation correlation and separate identity-only disposal facts. Child IPC 18 adds borrowed-run association; Runtime Client/TUI 20 mirrors it. Superseded schemas are rejected without migration. Resource persistence is not Workflow continuation. Providers have no workspace orchestration responsibilities.
 
-The interpreter's internal CommittedValue pairs JSON with one optional exact CandidateReference. Tool applicability returns directly from the native settlement path; constructions/references/Parallel merge it and reject incompatible references. Consumption checks live CandidateScope state, with expected-reference checks inside queued Tool/Agent admission. Journal correlation remains historical evidence. No user JSON field, provenance graph or second physical owner is introduced.
+The interpreter's internal CommittedValue pairs JSON with one optional exact
+CandidateReference. Tool applicability returns directly from the native
+settlement path. Candidate Agent applicability originates at
+`WorkspaceAccess::finish(false)` after child and nested physical settlement,
+flows through `WorkspaceUseSettlement.candidate` and
+`PhysicalSettlement.candidate`, then the registry stores it alongside JSON in
+process-local `WorkflowAgentOutput` at the unique terminal outcome. Workflow
+Agent settlement commits both into `CommittedValue` only after successful
+terminal publication. It never reads a later `CandidateScope::current` to infer
+the reference: a writer's output binds its post-write B, and a machine-review
+output for A becomes stale after another writer. Inspection/containment failure
+cannot publish a successful candidate-bound local value. Value
+constructions/references/Parallel merge it and reject incompatible references.
+Consumption checks live CandidateScope state, with expected-reference checks
+inside queued Tool/Agent admission. Journal correlation remains historical
+evidence. No user JSON field, provenance graph or second physical owner is
+introduced.
 
-Mutation admission traverses existing directories without following symlinks, including empty directories, under entry/depth/watch bounds. Linux directory creation and macOS directory-entry notifications invalidate incomplete coverage. Typed PhysicalSettlement preserves the resource but retires ended active ownership; NestedContainment preserves the stricter process authority. The native disposal owner checks candidate content only when the exact worktree remains present. Committed exact intent permits continuation after worktree removal and failed durable append, including branch-only completion or AlreadyDisposed; absence without intent fails closed. See the candidate contract for exact limits and crash windows. These internal repairs add no schema or protocol version.
+Mutation admission traverses existing directories without following symlinks,
+including empty directories, under entry/depth/watch bounds. Linux directory
+creation and macOS directory-entry notifications invalidate incomplete coverage.
+Typed PhysicalSettlement preserves the resource but retires ended active
+ownership. Without a trusted durable terminal HEAD, Workflow disposal re-proof
+requires checkout and branch HEAD to remain at acquisition base. Advanced-HEAD
+unresolved candidates need explicit user/manual recovery; readable Git facts
+cannot supply missing terminal authority. NestedContainment preserves the
+stricter process authority. The native disposal owner checks candidate content
+only when the exact worktree remains present. Committed exact intent permits
+continuation after worktree removal and failed durable append, including
+branch-only completion or AlreadyDisposed; absence without intent fails closed.
+See the candidate contract for exact limits and crash windows. These internal
+repairs add no schema or protocol version.

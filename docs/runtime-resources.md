@@ -474,4 +474,27 @@ WF-03 binds the run to a native-retained isolated candidate. Agent profile works
 
 CandidateScope also owns live currentness: internal Workflow committed values carry the exact checked candidate through constructions and Parallel exports. Stale values fail at Branch, Return and execution-input consumption; history never reacquires authority.
 
-After physical users settle, hashing/watch/Git uncertainty is PhysicalSettlement. Absorbing scope settlement preserves the native resource and releases process-local active registration, enabling the supported exact native re-proof/disposal path. NestedContainment means physical descendants remain unproven: active ownership remains, and Git-only disposal is forbidden even after reopening. Durable disposal intent and exact native identity allow continuation after physical removal despite failed settlement append; a still-present checkout must pass candidate-content verification before removal. No resource recovery restores Workflow execution.
+After physical users settle, hashing/watch/Git uncertainty is
+PhysicalSettlement. Absorbing scope settlement preserves the native resource and
+releases process-local active registration, enabling the supported exact native
+re-proof/disposal path only within its durable authority: without a trusted
+terminal HEAD, checkout and branch HEAD must still equal the immutable
+acquisition base. Current dirty/index/source facts may be repaired and re-proved
+there. An advanced-HEAD unresolved candidate remains retained for explicit
+user/manual recovery; readability cannot fabricate terminal commit authority.
+NestedContainment means physical descendants remain unproven: active ownership
+remains, and Git-only disposal is forbidden even after reopening. Durable
+disposal intent and exact native identity allow continuation after physical
+removal despite failed settlement append; a still-present checkout must pass
+candidate-content verification before removal. No resource recovery restores
+Workflow execution.
+
+Candidate Agent structured output carries process-local applicability from the
+post-node `WorkspaceAccess::finish(false)` reference, through native physical
+settlement and the registry's unique terminal result into Workflow's
+`CommittedValue`. No mutation binds A to A; a writer binds its output to
+produced B. Failed inspection or unresolved containment grants no successful
+local candidate-bound output. Machine-review A cannot authorize a later B, and
+Event Journal output/correlation remains historical rather than execution
+authority. This metadata does not change SQLite 27, Child IPC 18 or Runtime
+Client 20.

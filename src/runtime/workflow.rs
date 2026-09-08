@@ -2193,7 +2193,7 @@ impl WorkflowRuntime {
         node_id: &WorkflowNodeInstance,
         output_schema: &Value,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
-    ) -> Result<Value, WorkflowRunError> {
+    ) -> Result<expressions::CommittedValue, WorkflowRunError> {
         let mut wait = Box::pin(self.subagents.wait_until_settled(&subagent_id));
         let snapshot = tokio::select! {
             biased;
@@ -2240,7 +2240,7 @@ impl WorkflowRuntime {
         node_id: &WorkflowNodeInstance,
         output_schema: &Value,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
-    ) -> Result<Value, WorkflowRunError> {
+    ) -> Result<expressions::CommittedValue, WorkflowRunError> {
         match snapshot.state {
             crate::runtime::subagent::SubagentState::Succeeded => {
                 // The committed output value is the live Workflow result
@@ -2253,7 +2253,7 @@ impl WorkflowRuntime {
                         node: node_id.to_string(),
                         detail: "workflow Agent completed without committed output".to_owned(),
                     })?;
-                let value = content;
+                let value = content.value;
                 // This validation is not redundant with
                 // `validate_workflow_candidate` in the registry: the registry
                 // revalidates the untrusted cross-process child wire frame
@@ -2279,7 +2279,10 @@ impl WorkflowRuntime {
                 // Do not append a second observability event here: the
                 // WorkflowRun consumes that durable handoff but is not a
                 // second Event Journal authority.
-                Ok(value)
+                Ok(expressions::CommittedValue {
+                    value,
+                    candidate: content.candidate,
+                })
             }
             crate::runtime::subagent::SubagentState::Cancelled => {
                 Err(WorkflowRunError::from_cancellation(cancellation))

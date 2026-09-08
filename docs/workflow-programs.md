@@ -583,7 +583,17 @@ The interpreter retains `CommittedValue { value: Value, candidate:
 Option<CandidateReference> }`. This metadata is internal, never an authored
 JSON field. A successful candidate Tool projection carries the exact input
 reference returned directly by native invocation after physical settlement and
-source/mutation verification. Literals and external run arguments are unbound.
+source/mutation verification. Successful candidate Agent structured outputs
+carry the exact post-node reference returned by `WorkspaceAccess::finish(false)`
+after child and nested physical settlement. `WorkspaceUseSettlement.candidate`
+passes this fact through `PhysicalSettlement.candidate` to the registry's
+process-local `WorkflowAgentOutput.candidate`, then Agent settlement commits it
+in `CommittedValue`. No candidate identity enters authored JSON or durable child
+output. With no mutation A stays A; a writer transforming A into B binds its
+output to B. Inspection failure or unresolved containment supplies no successful
+candidate-bound local output. A machine-review Agent's `passed=true` for A
+becomes stale after a later writer produces B, just like a Tool check.
+Literals and external run arguments are unbound.
 References retain applicability, including field selection; objects and arrays
 merge their dependencies. Parallel inputs, branch Returns and keyed exports
 retain the same metadata. Mixing different references fails explicitly; there
@@ -658,8 +668,13 @@ including after reopening. `PhysicalSettlement` means physical users have
 settled but final hashing, Git inspection or mutation coverage is uncertain.
 At absorbing run settlement the native lease preserves the workspace and
 retires its active registration before returning this fact. The existing exact
-native re-proof/disposal route may then inspect current facts and dispose it;
-no borrower or execution is recreated. Missing terminal settlement remains
+native re-proof/disposal route may recover dirty/index/source facts only while
+the runtime-created branch and checkout HEAD still equal the immutable
+acquisition base. An unresolved terminal fact has no trusted durable terminal
+HEAD: if the Agent committed a newer HEAD before inspection failed, readable
+current Git facts cannot authorize that commit's disposal. The worktree and
+branch remain retained for explicit user/manual recovery. No borrower or
+execution is recreated. Missing terminal settlement remains
 conservatively `NestedContainment`.
 
 ```text

@@ -73,6 +73,21 @@ pub(crate) enum WorkspaceUse {
     Borrowed(Box<WorkspaceAccess>),
 }
 
+/// Process-local physical settlement facts; never serialized as child output.
+#[derive(Debug)]
+pub(crate) struct WorkspaceUseSettlement {
+    pub workspace: WorkspaceSettlement,
+    pub candidate: Option<CandidateReference>,
+}
+impl From<WorkspaceSettlement> for WorkspaceUseSettlement {
+    fn from(workspace: WorkspaceSettlement) -> Self {
+        Self {
+            workspace,
+            candidate: None,
+        }
+    }
+}
+
 impl From<WorkspaceLease> for WorkspaceUse {
     fn from(lease: WorkspaceLease) -> Self {
         Self::Owned(Box::new(lease))
@@ -96,17 +111,20 @@ impl WorkspaceUse {
         &self.snapshot().logical_workspace
     }
 
-    pub(crate) async fn settle_after_child(self) -> WorkspaceSettlement {
+    pub(crate) async fn settle_after_child(self) -> WorkspaceUseSettlement {
         match self {
-            Self::Owned(lease) => lease.settle_after_child().await,
+            Self::Owned(lease) => lease.settle_after_child().await.into(),
             Self::Borrowed(access) => {
                 let snapshot = access.snapshot().clone();
                 // Source inspection errors poison the run owner. They never
                 // give the child a second retained/disposable worktree.
-                let _ = access.finish(false).await;
-                WorkspaceSettlement {
-                    snapshot,
-                    disposition: WorkspaceSettlementDisposition::Borrowed,
+                let candidate = access.finish(false).await.ok();
+                WorkspaceUseSettlement {
+                    workspace: WorkspaceSettlement {
+                        snapshot,
+                        disposition: WorkspaceSettlementDisposition::Borrowed,
+                    },
+                    candidate,
                 }
             }
         }
@@ -116,7 +134,7 @@ impl WorkspaceUse {
     ) -> Result<WorkspaceSettlement, WorkspaceSettlementError> {
         match self {
             Self::Owned(lease) => lease.settle_staged().await,
-            borrowed @ Self::Borrowed(_) => Ok(borrowed.settle_after_child().await),
+            borrowed @ Self::Borrowed(_) => Ok(borrowed.settle_after_child().await.workspace),
         }
     }
     pub(crate) fn preserve_after_unresolved_nested(
@@ -688,7 +706,7 @@ mod tests {
         std::fs::write(path.join("uncommitted"), b"exact upstream bytes\0\xff").unwrap();
         let settled = WorkspaceUse::from(first).settle_after_child().await;
         assert_eq!(
-            settled.disposition,
+            settled.workspace.disposition,
             WorkspaceSettlementDisposition::Borrowed
         );
         assert!(path.exists());
@@ -1424,5 +1442,78 @@ mod tests {
             std::fs::read(root.join("source")).unwrap(),
             b"later user work"
         );
+    }
+    #[tokio::test]
+    async fn physical_settlement_without_trusted_terminal_head_rejects_advanced_head_disposal() {
+        let fixture = Fixture::new();
+        let scope = fixture.acquire().await;
+        let access = fixture.access(&scope).await;
+        let root = access.snapshot().logical_workspace.clone();
+        let branch = access.snapshot().git_worktree().unwrap().branch.clone();
+        let base = access
+            .snapshot()
+            .git_worktree()
+            .unwrap()
+            .base_commit
+            .clone();
+        git(fixture.source.path(), &["branch", "unrelated"]);
+        let (go, gate) = tokio::sync::oneshot::channel();
+        let physical_root = root.clone();
+        let physical = tokio::spawn(async move {
+            gate.await.unwrap();
+            std::fs::write(physical_root.join("source"), b"committed B").unwrap();
+            git(&physical_root, &["add", "source"]);
+            git(&physical_root, &["commit", "-m", "candidate B"]);
+        });
+        go.send(()).unwrap();
+        physical.await.unwrap();
+        let advanced = git(&root, &["rev-parse", "HEAD"]);
+        assert_ne!(advanced, base);
+        // Inject final inspection uncertainty after the physical user settled.
+        let index = PathBuf::from(git(
+            &root,
+            &["rev-parse", "--path-format=absolute", "--git-path", "index"],
+        ));
+        let original = std::fs::read(&index).unwrap();
+        std::fs::write(&index, b"invalid terminal index").unwrap();
+        assert!(access.finish(false).await.is_err());
+        let terminal = scope.settle().await;
+        assert_eq!(
+            terminal.unresolved_reason(),
+            Some(WorkspaceUnresolvedReason::PhysicalSettlement)
+        );
+        assert!(scope.final_reference().await.is_none());
+        assert!(
+            fixture
+                .manager
+                .require_released(&WorkspaceOwner::Workflow(fixture.node.block.run.clone()))
+                .is_ok()
+        );
+        let store = journal(&fixture, terminal, None);
+        std::fs::write(index, original).unwrap();
+        assert!(
+            fixture
+                .manager
+                .dispose_workflow_workspace(&*store, &fixture.node.block.run)
+                .await
+                .is_err()
+        );
+        assert!(root.exists());
+        assert_eq!(git(&root, &["rev-parse", "HEAD"]), advanced);
+        assert_eq!(
+            git(
+                fixture.source.path(),
+                &["rev-parse", &format!("refs/heads/{branch}")]
+            ),
+            advanced
+        );
+        assert_eq!(
+            git(
+                fixture.source.path(),
+                &["rev-parse", "refs/heads/unrelated"]
+            ),
+            base
+        );
+        assert_eq!(std::fs::read(root.join("source")).unwrap(), b"committed B");
     }
 }

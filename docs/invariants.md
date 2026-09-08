@@ -7340,6 +7340,24 @@ One native owner retains one exact candidate across fixed nodes. Access is admit
 
 Tool candidate consumers are exclusive validators, not presumed readers. Source mutation (including observed write-and-restore) invalidates certification and advances the version; native results remain correlated to their historical input. No check authorizes a changed version. Runtime serialization is not arbitrary-host isolation. [The canonical content and interference contract](workflow-programs.md#candidate-content-and-interference) defines coverage, exclusions and unsupported content. Candidate rebinding cannot rediscover or widen frozen authority.
 
-Workflow committed values retain internal candidate applicability through references, objects, arrays and Parallel inputs/exports. Branch, Return and derived execution inputs reject stale applicability against the live CandidateScope; queued Tool/Agent consumers recheck under exclusive admission. A successful check of A cannot authorize B. Event Journal correlation is historical evidence, never interpreter authority.
+Workflow committed values retain internal candidate applicability through
+references, objects, arrays and Parallel inputs/exports. Branch, Return and
+derived execution inputs reject stale applicability against the live
+CandidateScope; queued Tool/Agent consumers recheck under exclusive admission.
+Successful candidate Agent outputs carry the exact post-node reference from
+native borrowed-access physical settlement: unchanged A binds A, a writer's B
+binds B. Both structured output and candidate settlement must succeed before
+local commit. Machine review of A cannot authorize B, just like a Tool check.
+Event Journal correlation is historical evidence, never interpreter authority.
 
-Bounded no-follow directory admission includes existing empty directories (100,000 entries, depth 64, 100,000 source/control/directory watch candidates). New unwatched trees or notification loss fail closed; macOS directory-entry events conservatively invalidate coverage. PhysicalSettlement retires ended process-local ownership and permits exact re-proof; NestedContainment retains active ownership and rejects Git-only recovery. Durable disposal intent authorizes exact continuation after removal, never arbitrary absence or deletion of changed source before the destructive frontier.
+Bounded no-follow directory admission includes existing empty directories
+(100,000 entries, depth 64, 100,000 source/control/directory watch candidates).
+New unwatched trees or notification loss fail closed; macOS directory-entry
+events conservatively invalidate coverage. PhysicalSettlement retires ended
+process-local ownership. Durable Workflow re-proof requires checkout and branch
+HEAD to equal the acquisition base when no trusted terminal HEAD exists;
+advanced-HEAD unresolved resources remain retained for explicit user/manual
+recovery. Readable current facts do not manufacture terminal authority;
+NestedContainment retains active ownership and rejects Git-only recovery.
+Durable disposal intent authorizes exact continuation after removal, never
+arbitrary absence or deletion of changed source before the destructive frontier.

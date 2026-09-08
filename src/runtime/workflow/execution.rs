@@ -292,8 +292,8 @@ impl WorkflowRuntime {
                         let value = self
                             .settle_agent(child, &node_instance, &agent.output_schema, cancellation)
                             .await?;
-                        reservation.retain(&value)?;
-                        values.insert(node_id.clone(), value.into());
+                        reservation.retain(&value.value)?;
+                        values.insert(node_id.clone(), value);
                         Ok(None)
                     }
                     WorkflowNodeProgram::Branch { condition } => {
