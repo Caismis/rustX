@@ -388,6 +388,17 @@ impl ClientInner {
             .lock()
             .expect("runtime client host lock poisoned");
         guard.apply_pending(&self.pending);
+        if let Some(runtime) = &self.runtime {
+            let revision = guard.projection.snapshot_ref().workflows.revision;
+            let cuts = runtime.tool_runtime().workflows().cuts_after(revision);
+            // Coordinator publication precedes return to a Workflow waiter.
+            // Drain again after the native read so a completed human step
+            // cannot retain its earlier queued actionable reference at this cut.
+            guard.apply_pending(&self.pending);
+            for cut in cuts {
+                guard.projection.fold_workflows(cut);
+            }
+        }
         guard
     }
 
@@ -480,9 +491,21 @@ impl ClientInner {
         }
         let weak = Arc::downgrade(self);
         let pending = Arc::clone(&self.pending);
+        let mut workflows = self
+            .runtime
+            .as_ref()
+            .map(|runtime| runtime.tool_runtime().workflows().subscribe());
         tokio::spawn(async move {
             loop {
-                pending.wait().await;
+                tokio::select! {
+                    () = pending.wait() => {},
+                    () = async {
+                        match &mut workflows {
+                            Some(receiver) => { let _ = receiver.changed().await; },
+                            None => std::future::pending::<()>().await,
+                        }
+                    } => {},
+                }
                 if pending.is_closed() {
                     break;
                 }

@@ -3,6 +3,12 @@
 The rustX reference terminal client: a Pi-TUI presentation layer over the
 Runtime Client protocol.
 
+Foreground Workflow Tool cards expose expandable native execution details under
+protocol 22. Parallel branches and Loop iterations retain concrete identities;
+execution settlement, business checks and human Review are separate. Responses
+use the root HITL queue and children use the read-only inspector. See the
+[native projection contract](../docs/workflow-run-projection.md).
+
 ## The one architectural rule
 
 **Pi TUI is only the terminal input/output projection of rustX.**

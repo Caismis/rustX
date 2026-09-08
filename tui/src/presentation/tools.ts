@@ -102,6 +102,7 @@ export type ToolLifecycle =
 
 /** One logical tool call, as one visual entity. */
 export interface CorrelatedTool {
+  workflow?: import("../protocol/types.ts").WorkflowRunView;
   /** The stable runtime identity this entity is keyed by. */
   callId: ToolCallId;
   toolId: ToolId;
@@ -226,6 +227,10 @@ export function correlateTools(state: PresentationState): ToolCorrelation {
     });
   }
 
+  for (const run of state.workflows.runs) {
+    const tool = byCallId.get(run.tool_call_id);
+    if (tool !== undefined) byCallId.set(run.tool_call_id, { ...tool, workflow: run });
+  }
   const orphans = [...byCallId.values()].filter(
     (tool) =>
       !anchoredCalls.has(tool.callId) && !anchoredResults.has(tool.callId),

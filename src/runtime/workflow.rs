@@ -27,6 +27,7 @@ pub use crate::tools::executor::WORKFLOW_OUTPUT_TOOL_NAME;
 use super::subagent::SubagentName;
 
 mod execution;
+pub mod read_model;
 mod review;
 pub use review::WorkflowReviewSubject;
 mod expressions;
@@ -485,6 +486,7 @@ pub struct WorkflowBranch {
 /// A compiled, immutable executable workflow.
 #[derive(Debug, Clone)]
 pub struct WorkflowProgram {
+    digest: String,
     workspace: Option<WorkflowWorkspace>,
     id: WorkflowId,
     description: String,
@@ -806,6 +808,10 @@ fn compile_program(
             "aggregate program size exceeded".into(),
         ));
     }
+    let digest = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&definition).expect("validated definition"))
+    );
     let mut total_nodes = 0;
     let block = compile_block(
         definition.block,
@@ -822,6 +828,7 @@ fn compile_program(
         ));
     }
     Ok(WorkflowProgram {
+        digest,
         workspace: definition.workspace,
         id,
         description: definition.description,
@@ -1977,6 +1984,7 @@ impl WorkflowRun {
 /// The native Workflow orchestrator over the existing `SubagentRegistry`.
 #[derive(Clone)]
 pub struct WorkflowRuntime {
+    read_model: read_model::WorkflowReadModel,
     subagents: crate::runtime::subagent::SubagentRegistry,
     /// The existing conversation Event Journal. Workflow lifecycle facts are
     /// best-effort observability here; the journal never becomes the
@@ -2030,8 +2038,10 @@ impl WorkflowRuntime {
     pub fn new(
         subagents: crate::runtime::subagent::SubagentRegistry,
         event_store: Arc<dyn ConversationStore>,
+        read_model: read_model::WorkflowReadModel,
     ) -> Self {
         Self {
+            read_model,
             subagents,
             event_store,
             next_run: Arc::new(std::sync::atomic::AtomicU64::new(1)),
@@ -2102,6 +2112,22 @@ impl WorkflowRuntime {
                 invocation,
             },
         );
+        self.read_model.register(read_model::WorkflowRunView {
+            id: run.run_id.clone(),
+            workflow_id: program.id.clone(),
+            program_digest: program.digest.clone(),
+            resource_revision: context.resources().revision(),
+            tool_call_id: tool_call_id.clone(),
+            state: read_model::WorkflowState::Running,
+            instances: Vec::new(),
+            omitted_instances: 0,
+            steps_consumed: 0,
+            steps_max: program.execution_bound,
+            agents_consumed: 0,
+            candidate: None,
+            handoff: None,
+            candidate_users: 0,
+        });
         self.emit_observability(
             &run,
             RuntimeEvent::WorkflowStarted {
@@ -2110,53 +2136,98 @@ impl WorkflowRuntime {
                 run_id: run.run_id.clone(),
             },
         );
-        let execution = match tool::freeze(&program, &context) {
-            Ok(tools) => {
-                run.tools = tools;
-                let admission =
-                    match execution::validate_commit(&program.block.input_schema, &input) {
-                        Ok(()) => self.prepare_workspace(&run, &context, &cancellation).await,
-                        Err(error) => Err(error),
-                    };
-                match admission {
-                    Ok(candidate) => {
-                        run.candidate = candidate;
-                        self.execute_block(
-                            &run,
-                            &program.block,
-                            &context,
-                            input.into(),
-                            execution::Acceptance::default(),
-                            vec![0],
-                            &cancellation,
-                        )
-                        .await
-                        .map(|output| output.value.value.clone())
+        let (execution, workspace, candidate_reference) = {
+            let id = run.run_id.clone();
+            let execute = async {
+                let execution = match tool::freeze(&program, &context) {
+                    Ok(tools) => {
+                        run.tools = tools;
+                        let admission =
+                            match execution::validate_commit(&program.block.input_schema, &input) {
+                                Ok(()) => {
+                                    if program.workspace.is_some() {
+                                        self.read_model.update(&run.run_id, |view| {
+                                            if !matches!(
+                                                view.state,
+                                                read_model::WorkflowState::Draining
+                                            ) {
+                                                view.state = read_model::WorkflowState::Waiting {
+                                                    reason: read_model::WorkflowWait::Workspace,
+                                                };
+                                            }
+                                        });
+                                    }
+                                    self.prepare_workspace(&run, &context, &cancellation).await
+                                }
+                                Err(error) => Err(error),
+                            };
+                        match admission {
+                            Ok(candidate) => {
+                                run.candidate = candidate;
+                                self.read_model.update(&run.run_id, |view| {
+                                    if !matches!(view.state, read_model::WorkflowState::Draining) {
+                                        view.state = read_model::WorkflowState::Running;
+                                    }
+                                });
+                                self.execute_block(
+                                    &run,
+                                    &program.block,
+                                    &context,
+                                    input.into(),
+                                    execution::Acceptance::default(),
+                                    vec![0],
+                                    &cancellation,
+                                )
+                                .await
+                                .map(|output| output.value.value.clone())
+                            }
+                            Err(error) => Err(error),
+                        }
                     }
                     Err(error) => Err(error),
+                };
+                self.read_model.update(&run.run_id, |view| {
+                    if !matches!(view.state, read_model::WorkflowState::Draining) {
+                        view.state = read_model::WorkflowState::Waiting {
+                            reason: read_model::WorkflowWait::Settlement,
+                        };
+                    }
+                });
+                let workspace = match &run.candidate {
+                    Some(candidate) => Some(candidate.settle().await),
+                    None => None,
+                };
+                let candidate_reference = match &run.candidate {
+                    Some(candidate) => candidate.final_reference().await,
+                    None => None,
+                };
+                let recovery_guard = match &run.candidate {
+                    Some(candidate) => candidate.recovery_guard().await,
+                    None => None,
+                };
+                let execution = self.commit_workspace_settlement(
+                    &run,
+                    workspace.as_ref(),
+                    candidate_reference.as_ref(),
+                    recovery_guard.as_ref(),
+                    execution,
+                );
+                self.read_model.update(&run.run_id, |view| {
+                    view.candidate.clone_from(&candidate_reference);
+                    view.handoff = workspace.as_ref().map(Into::into);
+                });
+                (execution, workspace, candidate_reference)
+            };
+            tokio::pin!(execute);
+            tokio::select! {
+                biased;
+                () = cancellation.cancelled() => {
+                    self.read_model.draining(&id);
+                    execute.await
                 }
+                result = &mut execute => result,
             }
-            Err(error) => Err(error),
         };
-        let workspace = match &run.candidate {
-            Some(candidate) => Some(candidate.settle().await),
-            None => None,
-        };
-        let candidate_reference = match &run.candidate {
-            Some(candidate) => candidate.final_reference().await,
-            None => None,
-        };
-        let recovery_guard = match &run.candidate {
-            Some(candidate) => candidate.recovery_guard().await,
-            None => None,
-        };
-        let execution = self.commit_workspace_settlement(
-            &run,
-            workspace.as_ref(),
-            candidate_reference.as_ref(),
-            recovery_guard.as_ref(),
-            execution,
-        );
         // Run terminal frontier. The shared block executor has already
         // validated its result and settled all owned native work. No await
         // separates this cancellation observation from the unique run commit.
@@ -2169,6 +2240,11 @@ impl WorkflowRuntime {
         match execution {
             Ok(value) => {
                 run.settle(WorkflowTerminalState::Completed(value.clone()))?;
+                self.read_model.update(&run.run_id, |view| {
+                    view.state = read_model::WorkflowState::Settled {
+                        outcome: WorkflowExecutionOutcome::Completed,
+                    }
+                });
                 self.emit_observability(
                     &run,
                     RuntimeEvent::WorkflowCompleted {
@@ -2191,6 +2267,11 @@ impl WorkflowRuntime {
                     _ => WorkflowTerminalState::Failed(error.clone()),
                 };
                 run.settle(terminal)?;
+                self.read_model.update(&run.run_id, |view| {
+                    view.state = read_model::WorkflowState::Settled {
+                        outcome: execution::outcome::<()>(&Err(error.clone())),
+                    }
+                });
                 match &error {
                     WorkflowRunError::Cancelled(reason) => self.emit_observability(
                         &run,
@@ -2328,6 +2409,11 @@ impl WorkflowRuntime {
         if admitted_access.is_none()
             && let Some(candidate) = &run.candidate
         {
+            self.read_model.node(node_id, |view| {
+                view.state = read_model::WorkflowState::Waiting {
+                    reason: read_model::WorkflowWait::Workspace,
+                }
+            });
             *admitted_access = Some(
                 candidate
                     .borrow(
@@ -2359,6 +2445,11 @@ impl WorkflowRuntime {
         }
         // Preparation takes ownership only here. Every earlier error leaves
         // the access in execute_block_body's explicit async cleanup scope.
+        self.read_model.node(node_id, |view| {
+            view.state = read_model::WorkflowState::Waiting {
+                reason: read_model::WorkflowWait::Capacity,
+            }
+        });
         let prepared = self
             .subagents
             .prepare_in_workspace(&spec, &child_cancellation, admitted_access.take())
@@ -2388,6 +2479,12 @@ impl WorkflowRuntime {
         let crate::runtime::subagent::SubagentStartOutcome::Accepted(accepted) = accepted else {
             return Err(WorkflowRunError::from_cancellation(cancellation));
         };
+        self.read_model.node(node_id, |view| {
+            view.child = Some(accepted.subagent_id.clone());
+            view.state = read_model::WorkflowState::Waiting {
+                reason: read_model::WorkflowWait::Agent,
+            };
+        });
         self.emit_observability(
             run,
             RuntimeEvent::WorkflowAgentAdmitted {
@@ -3296,6 +3393,8 @@ mod tests {
         let mut alpha = stage_workflow_child(&plane);
         let mut zulu = stage_workflow_child(&plane);
         let runtime = workflow_runtime(&plane);
+        let native = runtime.read_model.clone();
+        let mut changed = native.subscribe();
         let context = workflow_test_context(&plane);
         let program = parallel_test_program(&["alpha", "zulu"]);
         let (_, cancellation) = workflow_cancellation();
@@ -3321,6 +3420,38 @@ mod tests {
         // physical result order is controlled independently of that order.
         alpha.expect_delegate().await;
         zulu.expect_delegate().await;
+        loop {
+            let view = native.snapshot();
+            if view.runs[0]
+                .instances
+                .iter()
+                .filter(|row| row.child.is_some())
+                .count()
+                == 2
+            {
+                break;
+            }
+            changed.changed().await.unwrap();
+        }
+        let before = native.snapshot();
+        let children = plane.registry.all_snapshots().len();
+        let history = plane.store.load_canonical().unwrap();
+        for _ in 0..20 {
+            assert_eq!(native.snapshot(), before);
+        }
+        assert_eq!(plane.registry.all_snapshots().len(), children);
+        assert_eq!(plane.store.load_canonical().unwrap(), history);
+        let branches: BTreeSet<_> = before.runs[0]
+            .instances
+            .iter()
+            .filter(|row| row.child.is_some())
+            .map(|row| row.block.clone())
+            .collect();
+        assert_eq!(
+            branches.len(),
+            2,
+            "concurrent concrete branches are independent"
+        );
         zulu.send_result(
             crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
             Some(r#"{"summary":"zulu"}"#),
@@ -3489,6 +3620,8 @@ mod tests {
         let mut alpha = stage_workflow_child(&plane);
         let mut zulu = stage_workflow_child(&plane);
         let runtime = workflow_runtime(&plane);
+        let views = runtime.read_model.clone();
+        let mut changes = views.subscribe();
         let context = workflow_test_context(&plane);
         let program = parallel_test_program(&["alpha", "zulu"]);
         let (signal, cancellation) = workflow_cancellation();
@@ -3507,6 +3640,21 @@ mod tests {
         alpha.expect_delegate().await;
         zulu.expect_delegate().await;
         signal.cancel();
+        loop {
+            if matches!(
+                views.snapshot().runs[0].state,
+                read_model::WorkflowState::Draining
+            ) {
+                break;
+            }
+            changes.changed().await.unwrap();
+        }
+        signal.cancel();
+        assert_eq!(
+            plane.registry.all_snapshots().len(),
+            2,
+            "cancellation never admits more branches"
+        );
         alpha.cancel_after_delegate().await;
         zulu.cancel_after_delegate().await;
 
@@ -3515,6 +3663,22 @@ mod tests {
             .expect("workflow task")
             .expect_err("workflow cancellation");
         assert!(error.is_cancelled());
+        let cuts = views.cuts_after(read_model::WorkflowRevision(0));
+        assert_eq!(
+            cuts.iter()
+                .filter(|cut| matches!(
+                    cut.runs[0].state,
+                    read_model::WorkflowState::Settled { .. }
+                ))
+                .count(),
+            1
+        );
+        assert!(matches!(
+            views.snapshot().runs[0].state,
+            read_model::WorkflowState::Settled {
+                outcome: WorkflowExecutionOutcome::Cancelled
+            }
+        ));
         let snapshots = plane.registry.all_snapshots();
         assert_eq!(snapshots.len(), 2);
         assert!(snapshots.iter().all(|snapshot| {
@@ -3690,7 +3854,11 @@ mod tests {
 
     #[cfg(unix)]
     fn workflow_runtime(plane: &WorkflowTestPlane) -> WorkflowRuntime {
-        WorkflowRuntime::new(plane.registry.clone(), plane.store.clone())
+        WorkflowRuntime::new(
+            plane.registry.clone(),
+            plane.store.clone(),
+            read_model::WorkflowReadModel::new(plane.conversation_id.clone()),
+        )
     }
 
     #[cfg(unix)]

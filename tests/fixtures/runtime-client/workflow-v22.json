@@ -1,0 +1,39 @@
+{
+  "type": "workflows_updated",
+  "workflows": {
+    "revision": 7,
+    "omitted_runs": 0,
+    "runs": [{
+      "id": {"conversation_id":"conv-test","attempt_id":"attempt","invocation":1},
+      "workflow_id":"review",
+      "program_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "resource_revision":1,
+      "tool_call_id":"outer",
+      "state":{"type":"draining"},
+      "instances":[{
+        "block":{"run":{"conversation_id":"conv-test","attempt_id":"attempt","invocation":1},"definition":{"workflow_id":"review","blocks":["repair","body"]},"invocations":[0,2]},
+        "node":"check",
+        "visit":0,
+        "kind":"tool",
+        "state":{"type":"settled","outcome":"completed"},
+        "child":null,
+        "invocation":null,
+        "tool_id":null,
+        "interaction":null,
+        "iteration":null,
+        "iterations_max":null,
+        "loop_exit":null,
+        "candidate":{"run":{"conversation_id":"conv-test","attempt_id":"attempt","invocation":1},"version":2,"content":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+        "checks_passed":false,
+        "review_accepted":null
+      }],
+      "omitted_instances":3,
+      "steps_consumed":7,
+      "steps_max":20,
+      "agents_consumed":1,
+      "candidate_users":0,
+      "candidate":null,
+      "handoff":{"state":"retained","path":"/candidate","truncated":false}
+    }]
+  }
+}

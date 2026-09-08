@@ -252,6 +252,7 @@ impl ConversationRuntimeConfig {
 /// replaced.
 #[derive(Clone)]
 pub struct ConversationToolRuntime {
+    workflows: crate::runtime::workflow::read_model::WorkflowReadModel,
     conversation_id: ConversationId,
     workspace: Workspace,
     artifacts: ArtifactStore,
@@ -436,6 +437,9 @@ impl ConversationToolRuntime {
         )
         .map_err(ConversationRuntimeError::TodoList)?;
         Ok(Self {
+            workflows: crate::runtime::workflow::read_model::WorkflowReadModel::new(
+                conversation_id.clone(),
+            ),
             conversation_id,
             workspace,
             artifacts,
@@ -477,6 +481,12 @@ impl ConversationToolRuntime {
     #[must_use]
     pub fn todo_snapshot(&self) -> crate::tools::todo::TodoSnapshot {
         self.todos.committed()
+    }
+
+    /// Process-local Workflow read authority shared with the native orchestrator.
+    #[must_use]
+    pub fn workflows(&self) -> &crate::runtime::workflow::read_model::WorkflowReadModel {
+        &self.workflows
     }
 
     /// Returns the full durable authority composed for this tool runtime.

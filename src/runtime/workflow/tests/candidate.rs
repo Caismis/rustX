@@ -2578,6 +2578,7 @@ async fn parallel_acceptance_case(mode: &str, nested: bool, idle_last: bool) {
             entered,
             release: gate,
         });
+    let views = runtime.read_model.clone();
     let program = Arc::new(compile_test(definition).unwrap());
     let (_, cancellation) = workflow_cancellation();
     let task = tokio::spawn(async move {
@@ -2641,6 +2642,28 @@ async fn parallel_acceptance_case(mode: &str, nested: bool, idle_last: bool) {
             };
             expected = review.candidate().unwrap().unwrap().clone();
             assert_ne!(expected, expected_a);
+            let snapshot = views.snapshot();
+            let projected = &snapshot.runs[0];
+            assert_eq!(projected.candidate.as_ref(), Some(&expected));
+            assert!(
+                projected
+                    .instances
+                    .iter()
+                    .any(|row| row.review_accepted == Some(true)
+                        && row.candidate.as_ref() == Some(&expected_a)),
+                "old accepted Review is retained for A, not rebound to B"
+            );
+            assert!(
+                projected.instances.iter().any(|row| row.node.as_ref()
+                    == Some(&review.instance.node)
+                    && matches!(
+                        row.state,
+                        crate::runtime::workflow::read_model::WorkflowState::Waiting {
+                            reason: crate::runtime::workflow::read_model::WorkflowWait::Review
+                        }
+                    )),
+                "native Review wait remains associated with its concrete branch"
+            );
             owner
                 .respond_async(&b.id, super::human::answer(&b, true))
                 .await

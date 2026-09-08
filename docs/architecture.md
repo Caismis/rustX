@@ -4277,7 +4277,9 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
-The current Runtime Client protocol is version 21. Version 21 adds Review and
+The current Runtime Client protocol is version 22. Version 22 adds the
+[native Workflow projection and cursor handoff](workflow-run-projection.md).
+Version 21 adds Review and
 Questionnaire invocation correlation. Version 20 adds borrowed
 Workflow run identity to child workspace facts. Version 19 adds typed deadline
 interruption of approval waits. Version 18 distinguishes

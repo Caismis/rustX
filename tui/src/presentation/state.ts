@@ -144,6 +144,7 @@ export interface AttemptPresentation {
 }
 
 export interface PresentationState {
+  workflows: import("../protocol/types.ts").WorkflowSnapshot;
   conversationId: ConversationId;
   /** The cursor this state is consistent through. */
   cursor: RuntimeClientCursor;

@@ -40,6 +40,8 @@ import type { RuntimeClientProtocolEvent } from "../src/protocol/types.ts";
 import { ProviderEmulator } from "./support/provider-emulator.ts";
 import { TempFixture } from "./support/temp-fixture.ts";
 import { until } from "./support/scripted-peer.ts";
+import { correlateTools } from "../src/presentation/tools.ts";
+import { workflowDetails } from "../src/ui/components/workflow-details.ts";
 
 /** The cargo target directory, overridable for a non-default layout. */
 const BINARY =
@@ -114,6 +116,110 @@ const BEFORE_START_RUNTIME_CONFIG_JSON = JSON.stringify({
   // client cancels while the runtime is waiting there, before Bash can start.
   nativeTools: { bash: { approval: "always" } },
   defaultTools: ["bash"],
+});
+
+it("native Workflow crosses real stdio and reconnect without new work", { skip: SKIP, timeout: 20_000 }, async () => {
+  const provider = await ProviderEmulator.start("workflow_tool");
+  const fixture = TempFixture.create("rustx-workflow-projection-");
+  const workspace = fixture.path("workspace");
+  mkdirSync(join(workspace, ".agents/workflows"), { recursive: true });
+  writeFileSync(fixture.path("models.jsonc"), modelsJson(provider.url("/v1")).replaceAll("integration-model", "workflow-model"));
+  writeFileSync(fixture.path("rustx.jsonc"), JSON.stringify({
+    ...JSON.parse(RUNTIME_CONFIG_JSON), model: { model: "fixture/workflow-model" }, defaultTools: ["read"],
+    workflows: { definitions: ["review_pr"], main: ["review_pr"] },
+  }));
+  writeFileSync(join(workspace, ".agents/workflows/review_pr.yaml"), `description: Inspect registered workflow files.
+tools: [{origin: builtin, name: glob}]
+block:
+  input:
+    type: object
+    properties: {task: {type: string}}
+    required: [task]
+    additionalProperties: false
+  output:
+    type: object
+    properties: {files: {type: string}}
+    required: [files]
+    additionalProperties: false
+  entry: inspect
+  nodes:
+    inspect:
+      type: tool
+      selector: {origin: builtin, name: glob}
+      arguments:
+        type: literal
+        value: {path: .agents/workflows, pattern: '*.yaml'}
+      result: {type: text, part: 0}
+    done:
+      type: return
+      output:
+        type: object
+        fields: {files: {type: reference, path: [inspect]}}
+  edges: [{from: inspect, to: done}]
+`);
+  const child = ChildRuntimeProcess.spawn({ binary: BINARY,
+    paths: { models: fixture.path("models.jsonc"), config: fixture.path("rustx.jsonc"), workspace, runtimeRoot: fixture.path("private") },
+    env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE },
+  });
+  const connection = new RuntimeClientConnection({ input: child.stdout, output: child.stdin });
+  void child.wait().then(exit => connection.reportProcessExit(exit.code, exit.signal, exit.spawnError));
+  const session = new RuntimeClientAttachment({ connection });
+  try {
+    await session.attach();
+    await session.submitInbound([{ type: "text", text: "workflow conformance request" }]);
+    await until(() => session.state?.attempt !== undefined);
+    await session.waitForAttemptSettlement(session.state!.attempt!.attemptId);
+    await session.resync();
+    const state = session.state!;
+    assert.equal(state.workflows.runs.length, 1);
+    const run = state.workflows.runs[0]!;
+    assert.deepEqual(run.state, { type: "settled", outcome: "completed" });
+    assert.equal(run.program_digest.length, 64);
+    assert.equal(run.instances.filter(row => row.kind === "tool").length, 1);
+    assert.equal(correlateTools(state).byCallId.get(run.tool_call_id)?.workflow?.id.invocation, run.id.invocation);
+    const canonical = JSON.stringify(state.transcript);
+    const requests = await provider.requests();
+    for (let i = 0; i < 10; i++) workflowDetails(run);
+    await session.detach();
+    await session.attach();
+    await session.resync();
+    assert.deepEqual(session.state!.workflows, state.workflows);
+    assert.equal(JSON.stringify(session.state!.transcript), canonical);
+    assert.equal((await provider.requests()).length, requests.length);
+    assert.equal(requests.length, 2);
+    assert.equal(state.pendingInteractions.length, 0);
+    child.closeStdin();
+    await child.waitOrTerminate(10_000);
+    const reopened = ChildRuntimeProcess.spawn({ binary: BINARY,
+      paths: { models: fixture.path("models.jsonc"), config: fixture.path("rustx.jsonc"), workspace, runtimeRoot: fixture.path("private") },
+      startup: { continueActiveSession: true, skillPaths: [], noSkills: false, noBuiltinTools: false, noTools: false },
+      env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE },
+    });
+    const reopenedConnection = new RuntimeClientConnection({ input: reopened.stdout, output: reopened.stdin });
+    void reopened.wait().then(exit => reopenedConnection.reportProcessExit(exit.code, exit.signal, exit.spawnError));
+    try {
+      const historical = new RuntimeClientAttachment({ connection: reopenedConnection });
+      await historical.attach();
+      assert.equal(historical.state!.workflows.runs.length, 0, "process reopen cannot resurrect an executable run");
+      assert.equal(historical.state!.pendingInteractions.length, 0);
+      assert.equal(JSON.stringify(historical.state!.transcript), canonical);
+      assert.equal((await provider.requests()).length, requests.length);
+    } catch (error) {
+      console.error("Workflow reopen failure", error, reopened.stderrTail());
+      throw error;
+    } finally {
+      reopened.closeStdin();
+      await reopened.waitOrTerminate(10_000);
+    }
+  } catch (error) {
+    console.error("Workflow bridge failure", error, child.stderrTail());
+    throw error;
+  } finally {
+    child.closeStdin();
+    await child.waitOrTerminate(10_000);
+    await provider.finish();
+    fixture.cleanup();
+  }
 });
 
 interface Harness {

@@ -364,7 +364,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
         matches!(
             host.attach(16),
             Err(RuntimeClientError::UnsupportedProtocolVersion {
-                supported: 21,
+                supported: 22,
                 requested: 16,
             })
         ),
@@ -374,15 +374,15 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         incompatible,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 21,
-            requested: 22,
+            supported: 22,
+            requested: 23,
         })
     ));
     let old_protocol = host.attach(7);
     assert!(matches!(
         old_protocol,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 21,
+            supported: 22,
             requested: 7,
         })
     ));
@@ -396,7 +396,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         interrupted_status,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 21,
+            supported: 22,
             requested: 15,
         })
     ));
@@ -409,7 +409,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_disposal,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 21,
+            supported: 22,
             requested: 14,
         })
     ));
@@ -422,7 +422,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         latest_only_status,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 21,
+            supported: 22,
             requested: 13,
         })
     ));
@@ -432,7 +432,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         profile_shaped,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 21,
+            supported: 22,
             requested: 6,
         })
     ));
@@ -444,7 +444,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_workspace_boundary,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 21,
+            supported: 22,
             requested: 12,
         })
     ));
@@ -657,4 +657,15 @@ fn review_v21_shared_fixture_pins_complete_subject_and_response_identity() {
             .unwrap(),
         value
     );
+}
+
+#[test]
+fn workflow_v22_fixture_pins_native_tree_and_revision_contract() {
+    let source: serde_json::Value = serde_json::from_str(include_str!(
+        "../../fixtures/runtime-client/workflow-v22.json"
+    ))
+    .unwrap();
+    let event: rustx::runtime_client::RuntimeClientEvent =
+        serde_json::from_value(source.clone()).unwrap();
+    assert_eq!(serde_json::to_value(event).unwrap(), source);
 }

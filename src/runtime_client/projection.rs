@@ -123,6 +123,9 @@ use crate::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
 /// expired cursor fails with `resync_required` and the client repairs with
 /// a fresh snapshot. This is an in-memory bound, never a durability claim.
 pub const RUNTIME_CLIENT_REPLAY_LIMIT_DEFAULT: usize = 4096;
+/// Workflow replacement payload ceiling, in addition to the event-count limit.
+/// Ordinary calls without Workflow retain their existing replay behavior.
+pub const RUNTIME_CLIENT_WORKFLOW_REPLAY_BYTES: usize = 16 * 1024 * 1024;
 
 /// One registered subscriber of the observation stream.
 ///
@@ -202,6 +205,8 @@ pub(crate) struct RuntimeClientProjection {
     snapshot: RuntimeClientSnapshot,
     /// The bounded projection replay ring, oldest first.
     replay: VecDeque<(RuntimeClientCursor, RuntimeClientEvent)>,
+    replay_sizes: VecDeque<usize>,
+    replay_bytes: usize,
     /// The explicit bounded retention limit.
     replay_limit: usize,
     /// The registered subscribers in registration order.
@@ -227,6 +232,7 @@ impl RuntimeClientProjection {
             cursor: RuntimeClientCursor::new(0),
             exhausted: false,
             snapshot: RuntimeClientSnapshot {
+                workflows: crate::runtime::workflow::read_model::WorkflowSnapshot::default(),
                 conversation_id,
                 shutting_down: false,
                 effective_approval_mode: ApprovalMode::Policy,
@@ -251,6 +257,8 @@ impl RuntimeClientProjection {
                 todos: crate::tools::todo::TodoSnapshot::empty(),
             },
             replay: VecDeque::new(),
+            replay_sizes: VecDeque::new(),
+            replay_bytes: 0,
             replay_limit,
             subscribers: Vec::new(),
             next_subscriber_id: 1,
@@ -1451,14 +1459,72 @@ impl RuntimeClientProjection {
         ForegroundSettlement::Applied
     }
 
-    /// Publishes one folded client event: allocate the next cursor,
-    /// retain the bounded replay entry, and wake every subscriber.
-    ///
-    /// Waking is edge-triggered and payload-free: no event copy is queued
-    /// per subscriber, so publication is O(subscribers) pointer work with
-    /// no per-subscriber memory and no possibility of blocking on a slow
-    /// consumer.
-    #[allow(clippy::needless_pass_by_value)] // the owned event is retained in the ring
+    /// Called under the host lock after reading one coherent native cut.
+    /// A skipped native revision invalidates every older cursor; clients
+    /// repair from this complete replacement instead of interpreting absence.
+    pub(crate) fn fold_workflows(
+        &mut self,
+        mut workflows: crate::runtime::workflow::read_model::WorkflowSnapshot,
+    ) {
+        use crate::runtime::interaction::InteractionKind;
+        for pending in &self.snapshot.pending_interactions {
+            let (node, reason) = match &pending.request.kind {
+                InteractionKind::Review { review, .. } => (
+                    &*review.instance,
+                    crate::runtime::workflow::read_model::WorkflowWait::Review,
+                ),
+                InteractionKind::Approval {
+                    invocation_id: crate::tools::types::ToolInvocationId::Workflow { node },
+                    ..
+                } => (
+                    &**node,
+                    crate::runtime::workflow::read_model::WorkflowWait::Approval,
+                ),
+                InteractionKind::Questionnaire {
+                    invocation_id: crate::tools::types::ToolInvocationId::Workflow { node },
+                    ..
+                } => (
+                    &**node,
+                    crate::runtime::workflow::read_model::WorkflowWait::Questionnaire,
+                ),
+                _ => continue,
+            };
+            if let Some(run) = workflows
+                .runs
+                .iter_mut()
+                .find(|run| run.id == node.block.run)
+                && let Some(instance) = run.instances.iter_mut().find(|instance| {
+                    instance.block == node.block
+                        && instance.node.as_ref() == Some(&node.node)
+                        && instance.visit == Some(node.visit)
+                })
+            {
+                // Correlation never interprets or changes native execution
+                // state. A queued older request cannot turn a settled node
+                // back into an actionable wait.
+                if instance.state
+                    == (crate::runtime::workflow::read_model::WorkflowState::Waiting { reason })
+                {
+                    instance.interaction = Some(pending.interaction.clone());
+                }
+            }
+        }
+        let previous = self.snapshot.workflows.revision.0;
+        if workflows.revision.0 < previous || workflows == self.snapshot.workflows {
+            return;
+        }
+        let skipped = workflows.revision.0 > previous + 1;
+        self.snapshot.workflows = workflows.clone();
+        self.publish(RuntimeClientEvent::WorkflowsUpdated { workflows });
+        if skipped {
+            self.replay.clear();
+            self.replay_sizes.clear();
+            self.replay_bytes = 0;
+        }
+    }
+
+    /// Allocate the client cursor, retain the bounded replay entry and wake
+    /// subscribers. No subscriber owns an event queue or blocks publication.
     fn publish(&mut self, event: RuntimeClientEvent) {
         let next = self.cursor.get().checked_add(1);
         let Some(next_value) = next else {
@@ -1470,9 +1536,24 @@ impl RuntimeClientProjection {
             return;
         };
         self.cursor = RuntimeClientCursor::new(next_value);
+        let bytes = if matches!(&event, RuntimeClientEvent::WorkflowsUpdated { .. }) {
+            serde_json::to_vec(&event)
+                .expect("client event serialization")
+                .len()
+        } else {
+            0
+        };
+        self.replay_sizes.push_back(bytes);
+        self.replay_bytes += bytes;
         self.replay.push_back((self.cursor, event));
-        while self.replay.len() > self.replay_limit {
+        while self.replay.len() > self.replay_limit
+            || self.replay_bytes > RUNTIME_CLIENT_WORKFLOW_REPLAY_BYTES
+        {
             self.replay.pop_front();
+            self.replay_bytes -= self
+                .replay_sizes
+                .pop_front()
+                .expect("replay size accompanies event");
         }
         self.wake_subscribers();
     }
@@ -2180,6 +2261,75 @@ mod tests {
             model_view(),
             64,
         )
+    }
+
+    #[test]
+    fn workflow_skipped_revision_requires_resync_and_snapshot_repairs() {
+        use crate::runtime::workflow::read_model::{WorkflowRevision, WorkflowSnapshot};
+        let mut projection = projection();
+        let (_, cursor) = projection.snapshot().unwrap();
+        let (subscriber, _) = projection.subscribe(cursor).unwrap();
+        projection.fold_workflows(WorkflowSnapshot {
+            revision: WorkflowRevision(3),
+            runs: vec![],
+            omitted_runs: 2,
+        });
+        assert!(matches!(
+            projection.poll_subscriber(subscriber),
+            SubscriberPoll::Lagged { .. }
+        ));
+        let (snapshot, cursor) = projection.snapshot().unwrap();
+        assert_eq!(snapshot.workflows.revision, WorkflowRevision(3));
+        let (subscriber, _) = projection.subscribe(cursor).unwrap();
+        projection.fold_workflows(WorkflowSnapshot {
+            revision: WorkflowRevision(4),
+            runs: vec![],
+            omitted_runs: 3,
+        });
+        let SubscriberPoll::Event(event) = projection.poll_subscriber(subscriber) else {
+            panic!("next native cut must be observable");
+        };
+        let crate::runtime_client::RuntimeClientEvent::WorkflowsUpdated { workflows } = event.event
+        else {
+            panic!("Workflow replacement event");
+        };
+        assert_eq!(workflows, projection.snapshot().unwrap().0.workflows);
+        assert!(projection.snapshot().unwrap().0.messages.is_empty());
+    }
+
+    #[test]
+    fn queued_old_review_cannot_resurrect_a_settled_workflow_node() {
+        let mut client = projection();
+        let request: crate::runtime::interaction::InteractionRequest = serde_json::from_str(
+            include_str!("../../tests/fixtures/runtime-client/review-v21.json"),
+        )
+        .unwrap();
+        let crate::runtime::interaction::InteractionKind::Review { review, .. } = &request.kind
+        else {
+            panic!("Review fixture");
+        };
+        let node = (*review.instance).clone();
+        let event: crate::runtime_client::RuntimeClientEvent = serde_json::from_str(include_str!(
+            "../../tests/fixtures/runtime-client/workflow-v22.json"
+        ))
+        .unwrap();
+        let crate::runtime_client::RuntimeClientEvent::WorkflowsUpdated { mut workflows } = event
+        else {
+            panic!("Workflow fixture");
+        };
+        workflows.runs[0].id = node.block.run.clone();
+        workflows.runs[0].instances[0].block = node.block;
+        workflows.runs[0].instances[0].node = Some(node.node);
+        client.snapshot.pending_interactions.push(
+            crate::runtime::interaction::RoutedInteraction::primary(request),
+        );
+        client.fold_workflows(workflows);
+        let row = &client.snapshot.workflows.runs[0].instances[0];
+        assert!(matches!(
+            row.state,
+            crate::runtime::workflow::read_model::WorkflowState::Settled { .. }
+        ));
+        assert!(row.interaction.is_none());
     }
 
     fn apply_event(projection: &mut RuntimeClientProjection, event: RuntimeEvent) {

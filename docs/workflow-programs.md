@@ -1084,3 +1084,10 @@ WF-04 audit payloads introduced in schema 29 and adds Loop facts; older stores
 are refused, without migration. Event
 envelope version remains 1 because framing has not changed. No durable Workflow
 or pending-interaction tables are added.
+
+## Foreground native details (WF-06)
+
+Runtime Client protocol 22 projects live native run cuts into the foreground
+Workflow Tool details. See [run projection](workflow-run-projection.md) for
+ownership, revision domains, cursor/resync synchronization, finite retention,
+cancellation draining, candidate applicability, and reconnect/process death.

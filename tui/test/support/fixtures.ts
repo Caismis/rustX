@@ -244,6 +244,7 @@ export function snapshot(
       })),
     };
   return {
+    workflows: { revision: 0, runs: [], omitted_runs: 0 },
     conversation_id: "conv-test",
     shutting_down: false,
     effective_approval_mode: "policy",
