@@ -1,7 +1,7 @@
 //! WF-03 cross-owner regressions using the real registry/process settlement.
 use super::*;
 
-fn git(root: &std::path::Path, args: &[&str]) {
+fn git(root: &std::path::Path, args: &[&str]) -> String {
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(root)
@@ -17,6 +17,7 @@ fn git(root: &std::path::Path, args: &[&str]) {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
 }
 fn initialize(plane: &WorkflowTestPlane) {
     let root = plane.dir.path().join("workspace");
@@ -1237,6 +1238,21 @@ async fn agent_writer_summary_is_bound_to_post_write_candidate_b_for_next_tool()
 
 #[tokio::test]
 async fn agent_inspection_failure_commits_no_successful_workflow_value() {
+    agent_inspection_recovery_case(false, false).await;
+}
+
+#[tokio::test]
+async fn physical_settlement_recovery_guard_preserves_post_settlement_source_edits() {
+    agent_inspection_recovery_case(false, true).await;
+}
+
+#[tokio::test]
+async fn agent_writer_inspection_failure_preserves_unproven_output_against_recovery_guard() {
+    agent_inspection_recovery_case(true, false).await;
+}
+
+#[allow(clippy::too_many_lines)] // One gated child settlement and durable recovery transaction.
+async fn agent_inspection_recovery_case(writer: bool, later_edit: bool) {
     let plane = workflow_test_plane(1);
     initialize(&plane);
     let mut child = stage_workflow_child(&plane);
@@ -1261,8 +1277,13 @@ async fn agent_inspection_failure_commits_no_successful_workflow_value() {
     });
     child.expect_delegate().await;
     let snapshot = plane.registry.all_snapshots().pop().unwrap();
-    let git_file =
-        std::fs::read_to_string(snapshot.workspace.logical_workspace.join(".git")).unwrap();
+    let root = &snapshot.workspace.logical_workspace;
+    let tree = snapshot.workspace.git_worktree().unwrap();
+    git(root, &["branch", "unrelated-recovery"]);
+    if writer {
+        std::fs::write(root.join("baseline"), b"unproven writer B").unwrap();
+    }
+    let git_file = std::fs::read_to_string(root.join(".git")).unwrap();
     let index =
         std::path::Path::new(git_file.trim().strip_prefix("gitdir: ").unwrap()).join("index");
     let original = std::fs::read(&index).unwrap();
@@ -1303,5 +1324,105 @@ async fn agent_inspection_failure_commits_no_successful_workflow_value() {
             | RuntimeEvent::WorkflowBranchSelected { .. }
     )));
     assert!(!events.iter().any(|e| matches!(&e.event, RuntimeEvent::WorkflowNodeStarted { instance } if instance.node == "branch")));
+    let (run, terminal) = events
+        .iter()
+        .find_map(|event| match &event.event {
+            RuntimeEvent::WorkflowWorkspaceSettled {
+                run_id,
+                candidate: None,
+                recovery_guard: Some(guard),
+                ..
+            } => {
+                assert_eq!(guard.reference.run, *run_id);
+                assert_eq!(
+                    guard.reference.version, 0,
+                    "only A was proven before uncertainty"
+                );
+                Some((run_id.clone(), event.clone()))
+            }
+            _ => None,
+        })
+        .unwrap();
     std::fs::write(index, original).unwrap();
+    if later_edit {
+        std::fs::write(root.join("baseline"), b"later user A prime").unwrap();
+    }
+    assert_eq!(git(root, &["rev-parse", "HEAD"]), tree.base_commit);
+    let manager = WorkspaceManager::new(plane.dir.path().join("workspace"), &plane.runtime_root);
+    let disposal = manager
+        .dispose_workflow_workspace(&*plane.store, &run)
+        .await;
+    if writer || later_edit {
+        let error = disposal.unwrap_err().to_string();
+        assert!(error.contains("candidate changed"), "{error}");
+        assert!(root.exists());
+        assert_eq!(
+            std::fs::read(root.join("baseline")).unwrap(),
+            if writer {
+                b"unproven writer B".as_slice()
+            } else {
+                b"later user A prime".as_slice()
+            }
+        );
+        assert_eq!(
+            git(root, &["rev-parse", &format!("refs/heads/{}", tree.branch)]),
+            tree.base_commit
+        );
+        assert!(
+            !plane
+                .store
+                .read_events(None, 256)
+                .unwrap()
+                .events
+                .iter()
+                .any(|event| matches!(
+                    event.event,
+                    RuntimeEvent::WorkflowWorkspaceDisposalSettled { .. }
+                ))
+        );
+    } else {
+        assert_eq!(
+            disposal.unwrap(),
+            crate::runtime::workspace::WorkspaceDisposalSettlement::Disposed
+        );
+        assert!(!root.exists());
+        assert!(
+            git(
+                &plane.dir.path().join("workspace"),
+                &["for-each-ref", &format!("refs/heads/{}", tree.branch)]
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            manager
+                .dispose_workflow_workspace(&*plane.store, &run)
+                .await
+                .unwrap(),
+            crate::runtime::workspace::WorkspaceDisposalSettlement::AlreadyDisposed
+        );
+    }
+    assert_eq!(
+        git(
+            &plane.dir.path().join("workspace"),
+            &["rev-parse", "refs/heads/unrelated-recovery"]
+        ),
+        tree.base_commit
+    );
+    let after = plane.store.read_events(None, 256).unwrap().events;
+    assert_eq!(
+        after
+            .iter()
+            .find(|event| event.event_id == terminal.event_id),
+        Some(&terminal)
+    );
+    let run_terminal = events
+        .iter()
+        .find(|event| matches!(event.event, RuntimeEvent::WorkflowFailed { .. }))
+        .unwrap();
+    assert_eq!(
+        after
+            .iter()
+            .find(|event| event.event_id == run_terminal.event_id),
+        Some(run_terminal)
+    );
 }

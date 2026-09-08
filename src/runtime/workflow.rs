@@ -1971,10 +1971,15 @@ impl WorkflowRuntime {
             Some(candidate) => candidate.final_reference().await,
             None => None,
         };
+        let recovery_guard = match &run.candidate {
+            Some(candidate) => candidate.recovery_guard().await,
+            None => None,
+        };
         let execution = self.commit_workspace_settlement(
             &run,
             workspace.as_ref(),
             candidate_reference.as_ref(),
+            recovery_guard.as_ref(),
             execution,
         );
         // Run terminal frontier. The shared block executor has already

@@ -479,15 +479,19 @@ PhysicalSettlement. Absorbing scope settlement preserves the native resource and
 releases process-local active registration, enabling the supported exact native
 re-proof/disposal path only within its durable authority: without a trusted
 terminal HEAD, checkout and branch HEAD must still equal the immutable
-acquisition base. Current dirty/index/source facts may be repaired and re-proved
-there. An advanced-HEAD unresolved candidate remains retained for explicit
-user/manual recovery; readability cannot fabricate terminal commit authority.
-NestedContainment means physical descendants remain unproven: active ownership
-remains, and Git-only disposal is forbidden even after reopening. Durable
-disposal intent and exact native identity allow continuation after physical
-removal despite failed settlement append; a still-present checkout must pass
-candidate-content verification before removal. No resource recovery restores
-Workflow execution.
+acquisition base. Recovery also requires current source identity to match the
+durable `WorkflowWorkspaceSettled.recovery_guard.reference`. That guard is a
+`CandidateRecoveryGuard` copied from the native owner's last proven candidate;
+it is separate from `candidate`, which describes exact terminal state and is
+absent when final inspection is unresolved. Repairing inspection conditions
+cannot authorize deleting source that differs from the guard. An advanced-HEAD
+unresolved candidate remains retained for explicit user/manual recovery;
+readability cannot fabricate terminal commit authority. NestedContainment means
+physical descendants remain unproven: active ownership remains, and Git-only
+disposal is forbidden even after reopening. Durable disposal intent and exact
+native identity allow continuation after physical removal despite failed
+settlement append; a still-present checkout must pass candidate-content
+verification before removal. No resource recovery restores Workflow execution.
 
 Candidate Agent structured output carries process-local applicability from the
 post-node `WorkspaceAccess::finish(false)` reference, through native physical
@@ -496,5 +500,14 @@ settlement and the registry's unique terminal result into Workflow's
 produced B. Failed inspection or unresolved containment grants no successful
 local candidate-bound output. Machine-review A cannot authorize a later B, and
 Event Journal output/correlation remains historical rather than execution
-authority. This metadata does not change SQLite 27, Child IPC 18 or Runtime
-Client 20.
+authority. Agent applicability remains process-local. SQLite development schema
+28 adds the separate durable resource recovery guard; Child IPC 18 and Runtime
+Client 20 are unchanged. Old stores are rejected without migration.
+
+A recovery guard grants no execution or access authority and is not
+model-visible. A failed writer inspection retains prior guard A, preserving any
+unproven B. A successful writer proof of B followed by final-run inspection
+failure retains guard B; unchanged B may recover, while later C must survive.
+The native disposer rehashes source immediately before first removal. Durable
+intent permits exact continuation after removal without hashing a checkout that
+no longer exists.

@@ -57,7 +57,7 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 27 is the only accepted schema; version 26 and every older
+schema version 28 is the only accepted schema; version 27 and every older
 development schema fail explicitly at open and are not migrated. Version 10
 froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation
@@ -7355,9 +7355,22 @@ Bounded no-follow directory admission includes existing empty directories
 New unwatched trees or notification loss fail closed; macOS directory-entry
 events conservatively invalidate coverage. PhysicalSettlement retires ended
 process-local ownership. Durable Workflow re-proof requires checkout and branch
-HEAD to equal the acquisition base when no trusted terminal HEAD exists;
+HEAD to equal the acquisition base when no trusted terminal HEAD exists and
+current source content to equal the durable recovery guard;
 advanced-HEAD unresolved resources remain retained for explicit user/manual
 recovery. Readable current facts do not manufacture terminal authority;
 NestedContainment retains active ownership and rejects Git-only recovery.
 Durable disposal intent authorizes exact continuation after removal, never
 arbitrary absence or deletion of changed source before the destructive frontier.
+
+`WorkflowWorkspaceSettled.candidate` is exact proven terminal state.
+`recovery_guard: Option<CandidateRecoveryGuard>` is instead the last proven
+`CandidateReference` from `CandidateScope.state.current`, committed only for
+PhysicalSettlement. Uncertainty clears the former, never upgrades the latter.
+The guard is a destructive-recovery baseline, not a final candidate, local-value
+applicability, access authority, or model-visible data. Missing guard fails closed.
+An uncertain writer B cannot replace guard A; proven B followed by later final
+inspection failure guards B. Any current bytes differing from the guard survive.
+Native disposal compares `inspect_source` immediately before the first removal;
+exact durable intent permits continuation without rehash only after that physical
+frontier. Schema 28 durably separates these meanings without compatibility code.

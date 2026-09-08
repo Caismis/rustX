@@ -681,7 +681,10 @@ pub enum RuntimeEvent {
     WorkflowWorkspaceSettled {
         run_id: crate::runtime::workflow::WorkflowRunId,
         workspace: crate::runtime::workspace::WorkspaceSettlement,
+        /// Exact proven terminal candidate; absent when final state is unknown.
         candidate: Option<crate::runtime::workspace::CandidateReference>,
+        /// Last proven content, only for destructive `PhysicalSettlement` recovery.
+        recovery_guard: Option<Box<crate::runtime::workspace::CandidateRecoveryGuard>>,
     },
     WorkflowCandidateInvocation {
         node: crate::runtime::workflow::WorkflowNodeInstance,

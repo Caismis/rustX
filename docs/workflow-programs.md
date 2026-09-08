@@ -437,7 +437,7 @@ outer siblings remain sequential, and no replay/resume is introduced.
 The Event Journal adds bounded block/node start and terminal facts and typed
 instance associations. It remains best-effort observation for ordinary
 Workflow lifecycle; the native child output/terminal pair retains its atomic
-durable contract. WF-03 uses SQLite development schema 27, child IPC 18 and
+durable contract. WF-03 uses SQLite development schema 28, child IPC 18 and
 Runtime Client/TUI 20 for candidate resource ownership and borrowed child workspace
 facts. The event envelope stays version 1 because framing is unchanged. The
 client projector explicitly ignores journal-only execution facts pending WF-06;
@@ -670,8 +670,21 @@ At absorbing run settlement the native lease preserves the workspace and
 retires its active registration before returning this fact. The existing exact
 native re-proof/disposal route may recover dirty/index/source facts only while
 the runtime-created branch and checkout HEAD still equal the immutable
-acquisition base. An unresolved terminal fact has no trusted durable terminal
-HEAD: if the Agent committed a newer HEAD before inspection failed, readable
+acquisition base, and current exact content matches its durable recovery guard.
+`WorkflowWorkspaceSettled.candidate` means the exact proven terminal candidate;
+it remains `None` for unresolved final state. The separate
+`recovery_guard: Option<CandidateRecoveryGuard>` contains a `reference` copied
+from native `CandidateScope.state.current`, the last successful candidate proof
+before uncertainty. It is not a final candidate, execution authority, or
+model-visible JSON: it is only a destructive-recovery comparison baseline.
+
+If a writer's `finish(false)` failed after changing A to B, only A can guard
+recovery, so B is preserved. If `finish(false)` proved B and final run inspection
+later failed, the guard is B. Recovery may remove unchanged B, but later B-to-C
+edits are preserved. Missing guard means no destructive authority.
+
+An unresolved terminal fact has no trusted durable terminal HEAD: if the Agent
+committed a newer HEAD before inspection failed, readable
 current Git facts cannot authorize that commit's disposal. The worktree and
 branch remain retained for explicit user/manual recovery. No borrower or
 execution is recreated. Missing terminal settlement remains
@@ -683,8 +696,11 @@ Retained -> DisposalStarted (durable exact intent)
          -> DisposalSettled (durable physical phase)
 ```
 
-The native physical owner revalidates candidate content and exact ownership
-immediately before the first removal whenever the worktree remains present,
+The native physical owner (`WorkspaceManager::dispose_authorized_workspace_inner`)
+recomputes `inspect_source` and compares its content digest to the final candidate
+or recovery guard, then re-proves exact ownership immediately before the first
+`git worktree remove --force`. This comparison applies whenever the worktree
+remains present,
 including retries with committed intent. If removal succeeded but the durable
 settlement append failed, retry uses that same intent and exact absence of
 both path and Git registration to continue branch/ref settlement without

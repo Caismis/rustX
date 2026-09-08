@@ -196,9 +196,12 @@ use super::inbox::{
 /// Version 23 preserves Denied in detached terminal facts (Issue #206).
 /// Version 24 adds Workflow block/node instance lifecycle facts (Issue #217).
 /// Older stores are rejected; there is no compatibility decoding.
-/// The current version adds typed native deadline interruption to interaction
+/// Version 26 adds typed native deadline interruption to interaction
 /// outcomes and durable approval settlement, without fabricating user intent.
-pub const SQLITE_SCHEMA_VERSION: i64 = 27;
+/// Version 28 separates proven final Workflow candidates from last-proven
+/// `PhysicalSettlement` recovery guards. Older stores lack this source-content
+/// disposal authority and are rejected without migration.
+pub const SQLITE_SCHEMA_VERSION: i64 = 28;
 
 const MAX_AGENT_STATUS_EMISSION_KEY_BYTES: usize = 128;
 const MAX_AGENT_STATUS_EMISSION_FINGERPRINT_BYTES: usize = 128;
@@ -6788,15 +6791,29 @@ fn validate_event_reference(
             run_id,
             workspace,
             candidate,
+            recovery_guard,
         } => {
             validate_workflow_workspace_identity(envelope, run_id, "settled")?;
-            if candidate.as_ref().is_some_and(|reference| {
-                reference.run != *run_id
-                    || reference.content.len() != 64
-                    || !reference.content.bytes().all(|b| b.is_ascii_hexdigit())
-            }) {
+            if candidate
+                .as_ref()
+                .into_iter()
+                .chain(recovery_guard.as_ref().map(|guard| &guard.reference))
+                .any(|reference| {
+                    reference.run != *run_id
+                        || reference.content.len() != 64
+                        || !reference.content.bytes().all(|b| b.is_ascii_hexdigit())
+                })
+            {
                 return Err(ConversationStoreError::InvalidReference(
-                    "invalid final candidate identity".into(),
+                    "invalid candidate content proof identity".into(),
+                ));
+            }
+            if (workspace.unresolved_reason().is_some() && candidate.is_some())
+                || (recovery_guard.is_some()
+                    && workspace.unresolved_reason() != Some(crate::runtime::workspace::WorkspaceUnresolvedReason::PhysicalSettlement))
+            {
+                return Err(ConversationStoreError::InvalidReference(
+                    "final candidate and recovery guard have distinct settlement authority".into(),
                 ));
             }
             let owned = find_workflow_workspace(transaction, run_id)?;
@@ -6842,14 +6859,20 @@ fn validate_event_reference(
                     "cannot dispose unsettled candidate".into(),
                 )
             })?;
-            let RuntimeEvent::WorkflowWorkspaceSettled { workspace, .. } = terminal.event else {
+            let RuntimeEvent::WorkflowWorkspaceSettled {
+                workspace,
+                candidate,
+                recovery_guard,
+                ..
+            } = terminal.event
+            else {
                 return Err(ConversationStoreError::InvalidReference(
                     "wrong candidate terminal fact".into(),
                 ));
             };
             let eligible = match workspace.disposition {
-                crate::runtime::workspace::WorkspaceSettlementDisposition::Retained { handoff: retained, .. } => retained == *handoff,
-                crate::runtime::workspace::WorkspaceSettlementDisposition::PreservedUnresolved { reason: crate::runtime::workspace::WorkspaceUnresolvedReason::PhysicalSettlement, .. } => snapshot.git_worktree().is_some_and(|tree| tree.base_commit == handoff.head_commit),
+                crate::runtime::workspace::WorkspaceSettlementDisposition::Retained { handoff: retained, .. } => candidate.is_some() && retained == *handoff,
+                crate::runtime::workspace::WorkspaceSettlementDisposition::PreservedUnresolved { reason: crate::runtime::workspace::WorkspaceUnresolvedReason::PhysicalSettlement, .. } => recovery_guard.is_some() && snapshot.git_worktree().is_some_and(|tree| tree.base_commit == handoff.head_commit),
                 _ => false,
             };
             if !eligible || !snapshot.matches_handoff(handoff) {
@@ -12024,6 +12047,32 @@ mod tests {
             Err(ConversationStoreError::SchemaVersionMismatch {
                 stored: 1,
                 expected: SQLITE_SCHEMA_VERSION
+            })
+        ));
+    }
+
+    #[test]
+    fn schema_27_without_workflow_recovery_guards_is_rejected() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("without-recovery-guard.sqlite");
+        let conversation = ConversationId::new("guard-schema");
+        {
+            let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+            store
+                .conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE rustx_store SET schema_version = 27 WHERE id = 1",
+                    [],
+                )
+                .unwrap();
+        }
+        assert!(matches!(
+            SqliteConversationStore::open(conversation, &path),
+            Err(ConversationStoreError::SchemaVersionMismatch {
+                stored: 27,
+                expected: 28
             })
         ));
     }

@@ -118,11 +118,13 @@ impl WorkflowRuntime {
         run: &WorkflowRun,
         workspace: Option<&WorkspaceSettlement>,
         candidate: Option<&crate::runtime::workspace::CandidateReference>,
+        recovery_guard: Option<&crate::runtime::workspace::CandidateRecoveryGuard>,
         execution: Result<Value, WorkflowRunError>,
     ) -> Result<Value, WorkflowRunError> {
         if let Some(workspace) = workspace {
             self.commit_resource(RuntimeEvent::WorkflowWorkspaceSettled {
                 candidate: candidate.cloned(),
+                recovery_guard: recovery_guard.cloned().map(Box::new),
                 run_id: run.run_id.clone(),
                 workspace: workspace.clone(),
             })?;

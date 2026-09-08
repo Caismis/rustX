@@ -18,6 +18,7 @@ fn mismatch(detail: impl Into<String>) -> WorkspaceDisposalError {
 struct Facts {
     workspace: WorkspaceSettlement,
     candidate: Option<super::CandidateReference>,
+    recovery_guard: Option<super::CandidateRecoveryGuard>,
     intent: Option<super::WorkspaceHandoff>,
     phase: WorkspaceDisposalPhase,
     disposed: bool,
@@ -42,6 +43,7 @@ fn read_facts(
     let mut owned = None;
     let mut terminal = None;
     let mut candidate = None;
+    let mut recovery_guard = None;
     let mut intent = None;
     let mut phase = WorkspaceDisposalPhase::Authorized;
     let mut disposed = false;
@@ -62,9 +64,11 @@ fn read_facts(
                     run_id,
                     workspace,
                     candidate: reference,
+                    recovery_guard: guard,
                 } if run_id == *run => {
                     terminal = Some(workspace);
                     candidate = reference;
+                    recovery_guard = guard.map(|guard| *guard);
                 }
                 RuntimeEvent::WorkflowWorkspaceDisposalStarted { run_id, handoff }
                     if run_id == *run =>
@@ -101,6 +105,7 @@ fn read_facts(
     Ok(Facts {
         workspace,
         candidate,
+        recovery_guard,
         intent,
         phase,
         disposed,
@@ -172,6 +177,14 @@ impl WorkspaceManager {
         ) {
             return Ok(WorkspaceDisposalSettlement::AlreadyDisposed);
         }
+        let content_proof = match facts.workspace.unresolved_reason() {
+            Some(WorkspaceUnresolvedReason::PhysicalSettlement) => {
+                facts.recovery_guard.as_ref().map(|guard| &guard.reference)
+            }
+            None => facts.candidate.as_ref(),
+            Some(WorkspaceUnresolvedReason::NestedContainment) => None,
+        }
+        .ok_or_else(|| mismatch("Workflow disposal lacks candidate content proof"))?;
         let snapshot = &facts.workspace.snapshot;
         let handoff = if let Some(handoff) = facts.intent {
             handoff
@@ -204,7 +217,7 @@ impl WorkspaceManager {
                 &handoff,
                 facts.phase,
                 true,
-                facts.candidate.as_ref(),
+                Some(content_proof),
             )
             .await?;
         if facts.disposed {

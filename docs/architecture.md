@@ -51,7 +51,9 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 27. Version 27 adds native
+The SQLite schema is development schema version 28. Version 28 adds a distinct
+Workflow resource recovery guard for uncertain final candidate settlement;
+child IPC 18 and Runtime Client 20 are unchanged. Version 27 adds native
 Workflow candidate ownership, settlement, invocation correlation and disposal,
 with borrowed-run association in child IPC 18 and Runtime Client 20.
 Version 26 adds typed native
@@ -8390,7 +8392,11 @@ Before 1.0, rustX intentionally does not preserve compatibility with previous ru
 
 The shared native owner is `runtime::workspace`, not a Subagent-specific Git manager. A Workflow holds a logical `CandidateScope`; its native state owns exactly one retained `WorkspaceLease`. Exclusive `WorkspaceAccess` transfers to the ordinary Agent process driver or Tool invocation until physical descendants settle. Child exit returns access rather than disposing the run lease. All candidate consumers serialize before child capacity/Tool scheduling. Matching frozen isolated profile policy is required; unsupported bindings fail before Git acquisition. See [the complete candidate contract](workflow-programs.md#run-scoped-candidate-workspace-wf-03) for content identity, mutation detection, cancellation and exact commit points.
 
-SQLite development schema 27 adds run workspace ownership/settlement, native candidate invocation correlation and separate identity-only disposal facts. Child IPC 18 adds borrowed-run association; Runtime Client/TUI 20 mirrors it. Superseded schemas are rejected without migration. Resource persistence is not Workflow continuation. Providers have no workspace orchestration responsibilities.
+SQLite development schema 28 adds a distinct recovery guard to the Workflow
+resource settlement facts introduced in schema 27. Child IPC 18 adds
+borrowed-run association; Runtime Client/TUI 20 mirrors it. Superseded schemas
+are rejected without migration. Resource persistence is not Workflow
+continuation. Providers have no workspace orchestration responsibilities.
 
 The interpreter's internal CommittedValue pairs JSON with one optional exact
 CandidateReference. Tool applicability returns directly from the native
@@ -8415,12 +8421,22 @@ including empty directories, under entry/depth/watch bounds. Linux directory
 creation and macOS directory-entry notifications invalidate incomplete coverage.
 Typed PhysicalSettlement preserves the resource but retires ended active
 ownership. Without a trusted durable terminal HEAD, Workflow disposal re-proof
-requires checkout and branch HEAD to remain at acquisition base. Advanced-HEAD
+requires checkout and branch HEAD to remain at acquisition base, plus exact
+source equality with its durable last-proven recovery guard. Advanced-HEAD
 unresolved candidates need explicit user/manual recovery; readable Git facts
 cannot supply missing terminal authority. NestedContainment preserves the
 stricter process authority. The native disposal owner checks candidate content
 only when the exact worktree remains present. Committed exact intent permits
 continuation after worktree removal and failed durable append, including
 branch-only completion or AlreadyDisposed; absence without intent fails closed.
-See the candidate contract for exact limits and crash windows. These internal
-repairs add no schema or protocol version.
+`WorkflowWorkspaceSettled.candidate` remains the exact proven terminal
+candidate. A separate `recovery_guard: Option<CandidateRecoveryGuard>` stores
+the last proven `reference` copied from native `CandidateScope.state.current`
+for PhysicalSettlement. It does not certify final state, supply Workflow
+applicability, or enter authored JSON. A failed writer inspection cannot advance
+the guard; successful node proof of B followed by failed final inspection guards
+B. Native disposal rehashes via `inspect_source` and compares the guard before
+removal; changed bytes or a missing guard fail closed. No second disposal state
+machine or Workflow Git owner exists. See the candidate contract for exact
+limits and crash windows. SQLite schema 28 rejects older stores without
+migration; IPC and client mirrors need no new fields.

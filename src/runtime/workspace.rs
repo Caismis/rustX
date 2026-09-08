@@ -54,7 +54,7 @@ use crate::runtime::identity::SubagentId;
 
 mod candidate;
 mod retained_candidate;
-pub use candidate::CandidateReference;
+pub use candidate::{CandidateRecoveryGuard, CandidateReference};
 pub(crate) use candidate::{CandidateScope, WorkspaceAccess, WorkspaceUse};
 pub use retained_candidate::WorkflowWorkspaceInspection;
 
@@ -1111,7 +1111,8 @@ impl WorkspaceManager {
         handoff: &WorkspaceHandoff,
         phase: WorkspaceDisposalPhase,
         durable_intent_committed: bool,
-        candidate: Option<&CandidateReference>,
+        // A proven terminal candidate or a last-proven recovery baseline.
+        content_reference: Option<&CandidateReference>,
     ) -> Result<WorkspaceDisposalSettlement, WorkspaceDisposalError> {
         fn mismatch(detail: impl Into<String>) -> WorkspaceDisposalError {
             WorkspaceDisposalError::OwnershipMismatch {
@@ -1176,7 +1177,14 @@ impl WorkspaceManager {
                     (true, true) => {
                         // The complete proof repeats the path, registration,
                         // worktree HEAD, branch attachment, and ref checks.
-                        if let Some(reference) = candidate {
+                        if matches!(owner_id, WorkspaceOwner::Workflow(_))
+                            && content_reference.is_none()
+                        {
+                            return Err(mismatch(
+                                "Workflow disposal lacks candidate content proof",
+                            ));
+                        }
+                        if let Some(reference) = content_reference {
                             if !matches!(owner_id, WorkspaceOwner::Workflow(run) if *run == reference.run)
                             {
                                 return Err(mismatch("candidate run identity mismatch"));
@@ -1186,7 +1194,7 @@ impl WorkspaceManager {
                                 .map_err(mismatch)?;
                             if content != reference.content {
                                 return Err(mismatch(
-                                    "retained candidate changed after run settlement",
+                                    "candidate changed from proven disposal content",
                                 ));
                             }
                         }

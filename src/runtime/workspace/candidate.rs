@@ -23,6 +23,14 @@ pub struct CandidateReference {
     pub content: String,
 }
 
+/// Last proven content before physical-settlement uncertainty. This is only a
+/// destructive-recovery comparison baseline, never a final candidate or access.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateRecoveryGuard {
+    pub reference: CandidateReference,
+}
+
 #[derive(Debug, Clone)]
 struct UnresolvedCandidate {
     reason: super::WorkspaceUnresolvedReason,
@@ -45,6 +53,7 @@ struct State {
     unresolved: Option<UnresolvedCandidate>,
     settlement: Option<WorkspaceSettlement>,
     final_reference: Option<CandidateReference>,
+    recovery_guard: Option<CandidateRecoveryGuard>,
 }
 
 /// Logical access to native retained ownership. Clones duplicate neither the
@@ -185,6 +194,7 @@ impl WorkspaceLease {
                 unresolved: None,
                 settlement: None,
                 final_reference: None,
+                recovery_guard: None,
             })),
         })
     }
@@ -524,8 +534,19 @@ impl CandidateScope {
         if settlement.unresolved_reason().is_some() {
             state.final_reference = None;
         }
+        if settlement.unresolved_reason()
+            == Some(super::WorkspaceUnresolvedReason::PhysicalSettlement)
+        {
+            state.recovery_guard = Some(CandidateRecoveryGuard {
+                reference: state.current.clone(),
+            });
+        }
         state.settlement = Some(settlement.clone());
         settlement
+    }
+
+    pub(crate) async fn recovery_guard(&self) -> Option<CandidateRecoveryGuard> {
+        self.state.lock().await.recovery_guard.clone()
     }
 
     pub(crate) async fn final_reference(&self) -> Option<CandidateReference> {
@@ -1052,6 +1073,7 @@ mod tests {
         fixture: &Fixture,
         workspace: WorkspaceSettlement,
         candidate: Option<CandidateReference>,
+        recovery_guard: Option<CandidateRecoveryGuard>,
     ) -> Arc<crate::durable::SqliteConversationStore> {
         use crate::durable::ConversationStore;
         use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
@@ -1074,6 +1096,7 @@ mod tests {
                     run_id: run.clone(),
                     workspace,
                     candidate,
+                    recovery_guard: recovery_guard.map(Box::new),
                 },
             ),
         ] {
@@ -1174,7 +1197,12 @@ mod tests {
             if !watch_loss {
                 std::fs::write(index, original_index).unwrap();
             }
-            let store = journal(&fixture, terminal, scope.final_reference().await);
+            let store = journal(
+                &fixture,
+                terminal,
+                scope.final_reference().await,
+                scope.recovery_guard().await,
+            );
             assert_eq!(
                 fixture
                     .manager
@@ -1204,7 +1232,7 @@ mod tests {
             terminal.unresolved_reason(),
             Some(WorkspaceUnresolvedReason::NestedContainment)
         );
-        let store = journal(&fixture, terminal, None);
+        let store = journal(&fixture, terminal, None, scope.recovery_guard().await);
         let run = &fixture.node.block.run;
         assert!(
             fixture
@@ -1234,6 +1262,16 @@ mod tests {
 
     #[tokio::test]
     async fn durable_disposal_retries_after_physical_removal_and_failed_settlement_append() {
+        durable_disposal_retry_case(false).await;
+    }
+
+    #[tokio::test]
+    async fn recovery_guard_disposal_retries_after_removal_without_rehashing_deleted_checkout() {
+        durable_disposal_retry_case(true).await;
+    }
+
+    #[allow(clippy::too_many_lines)] // Both exact physical frontiers under one fault gate.
+    async fn durable_disposal_retry_case(recovery: bool) {
         use crate::durable::ConversationStore;
         use crate::events::types::RuntimeEvent;
         for branch_removed in [false, true] {
@@ -1245,9 +1283,30 @@ mod tests {
             let root = writer.snapshot().logical_workspace.clone();
             std::fs::write(root.join("source"), b"retained source").unwrap();
             writer.finish(false).await.unwrap();
+            let repair = if recovery {
+                let index = PathBuf::from(git(
+                    &root,
+                    &["rev-parse", "--path-format=absolute", "--git-path", "index"],
+                ));
+                let original = std::fs::read(&index).unwrap();
+                std::fs::write(&index, b"uncertain final run inspection").unwrap();
+                Some((index, original))
+            } else {
+                None
+            };
             let terminal = scope.settle().await;
+            if let Some((index, original)) = repair {
+                assert!(scope.final_reference().await.is_none());
+                assert!(scope.recovery_guard().await.is_some());
+                std::fs::write(index, original).unwrap();
+            }
             let branch = terminal.snapshot.git_worktree().unwrap().branch.clone();
-            let store = journal(&fixture, terminal, scope.final_reference().await);
+            let store = journal(
+                &fixture,
+                terminal,
+                scope.final_reference().await,
+                scope.recovery_guard().await,
+            );
             git(fixture.source.path(), &["branch", "unrelated"]);
             let unrelated = git(
                 fixture.source.path(),
@@ -1343,7 +1402,12 @@ mod tests {
         std::fs::write(root.join("source"), b"retained source").unwrap();
         writer.finish(false).await.unwrap();
         let terminal = scope.settle().await;
-        let store = journal(&fixture, terminal, scope.final_reference().await);
+        let store = journal(
+            &fixture,
+            terminal,
+            scope.final_reference().await,
+            scope.recovery_guard().await,
+        );
         git(
             fixture.source.path(),
             &["worktree", "remove", "--force", root.to_str().unwrap()],
@@ -1413,7 +1477,12 @@ mod tests {
         std::fs::write(root.join("source"), b"retained").unwrap();
         writer.finish(false).await.unwrap();
         let terminal = scope.settle().await;
-        let store = journal(&fixture, terminal, scope.final_reference().await);
+        let store = journal(
+            &fixture,
+            terminal,
+            scope.final_reference().await,
+            scope.recovery_guard().await,
+        );
         hook.arm_before_recheck();
         let manager = fixture.manager.clone();
         let task_store = store.clone();
@@ -1489,7 +1558,7 @@ mod tests {
                 .require_released(&WorkspaceOwner::Workflow(fixture.node.block.run.clone()))
                 .is_ok()
         );
-        let store = journal(&fixture, terminal, None);
+        let store = journal(&fixture, terminal, None, scope.recovery_guard().await);
         std::fs::write(index, original).unwrap();
         assert!(
             fixture
@@ -1515,5 +1584,180 @@ mod tests {
             base
         );
         assert_eq!(std::fs::read(root.join("source")).unwrap(), b"committed B");
+    }
+    #[tokio::test]
+    async fn proven_writer_b_is_recovery_guard_after_final_run_inspection_failure() {
+        proven_writer_recovery_case(false).await;
+    }
+
+    #[tokio::test]
+    async fn recovery_guard_b_rejects_later_c_after_final_run_inspection_failure() {
+        proven_writer_recovery_case(true).await;
+    }
+
+    async fn proven_writer_recovery_case(later_edit: bool) {
+        use crate::durable::ConversationStore;
+        use crate::events::types::RuntimeEvent;
+        let fixture = Fixture::new();
+        let scope = fixture.acquire().await;
+        let access = fixture.access(&scope).await;
+        let root = access.snapshot().logical_workspace.clone();
+        let branch = access.snapshot().git_worktree().unwrap().branch.clone();
+        let base = access
+            .snapshot()
+            .git_worktree()
+            .unwrap()
+            .base_commit
+            .clone();
+        std::fs::write(root.join("source"), b"proven B").unwrap();
+        let proven = access.finish(false).await.unwrap();
+        assert_eq!(proven.version, 1);
+        // Node physical settlement has completed and published B. Inject only
+        // the later run-settlement inspection failure, without changing source.
+        let index = PathBuf::from(git(
+            &root,
+            &["rev-parse", "--path-format=absolute", "--git-path", "index"],
+        ));
+        let original = std::fs::read(&index).unwrap();
+        std::fs::write(&index, b"failed final run inspection").unwrap();
+        let terminal = scope.settle().await;
+        assert_eq!(
+            terminal.unresolved_reason(),
+            Some(WorkspaceUnresolvedReason::PhysicalSettlement)
+        );
+        assert!(scope.final_reference().await.is_none());
+        let guard = scope.recovery_guard().await.unwrap();
+        assert_eq!(guard.reference, proven);
+        let store = journal(&fixture, terminal, None, Some(guard.clone()));
+        assert!(store.read_events(None, 32).unwrap().events.iter().any(
+            |event| matches!(&event.event, RuntimeEvent::WorkflowWorkspaceSettled {
+                candidate: None, recovery_guard: Some(durable_guard), ..
+            } if **durable_guard == guard)
+        ));
+        std::fs::write(index, original).unwrap();
+        if later_edit {
+            std::fs::write(root.join("source"), b"later C").unwrap();
+        }
+        let result = fixture
+            .manager
+            .dispose_workflow_workspace(&*store, &fixture.node.block.run)
+            .await;
+        if later_edit {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("candidate changed")
+            );
+            assert_eq!(std::fs::read(root.join("source")).unwrap(), b"later C");
+            assert_eq!(
+                git(&root, &["rev-parse", &format!("refs/heads/{branch}")]),
+                base
+            );
+        } else {
+            assert_eq!(
+                result.unwrap(),
+                super::super::WorkspaceDisposalSettlement::Disposed
+            );
+            assert!(!root.exists());
+            assert!(
+                git(
+                    fixture.source.path(),
+                    &["for-each-ref", &format!("refs/heads/{branch}")]
+                )
+                .is_empty()
+            );
+            assert_eq!(
+                fixture
+                    .manager
+                    .dispose_workflow_workspace(&*store, &fixture.node.block.run)
+                    .await
+                    .unwrap(),
+                super::super::WorkspaceDisposalSettlement::AlreadyDisposed
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn physical_settlement_without_recovery_guard_has_no_disposal_authority() {
+        let fixture = Fixture::new();
+        let scope = fixture.acquire().await;
+        let access = fixture.access(&scope).await;
+        let root = access.snapshot().logical_workspace.clone();
+        std::fs::write(root.join("retained"), b"dirty retained source").unwrap();
+        access.finish(false).await.unwrap();
+        // Missing durable proof must not become permission to skip content.
+        let mut terminal = scope.settle().await;
+        terminal.disposition = WorkspaceSettlementDisposition::PreservedUnresolved {
+            reason: WorkspaceUnresolvedReason::PhysicalSettlement,
+            detail: "no stored recovery proof".into(),
+        };
+        let store = journal(&fixture, terminal, None, None);
+        assert!(
+            fixture
+                .manager
+                .dispose_workflow_workspace(&*store, &fixture.node.block.run)
+                .await
+                .is_err()
+        );
+        assert!(root.exists());
+        assert_eq!(std::fs::read(root.join("source")).unwrap(), b"baseline\n");
+    }
+    #[tokio::test]
+    async fn durable_recovery_guard_rejects_final_candidate_and_wrong_authority() {
+        use crate::durable::ConversationStore;
+        use crate::events::types::RuntimeEvent;
+        let fixture = Fixture::new();
+        let scope = fixture.acquire().await;
+        let access = fixture.access(&scope).await;
+        std::fs::write(
+            access.snapshot().logical_workspace.join("source"),
+            b"retained",
+        )
+        .unwrap();
+        let reference = access.finish(false).await.unwrap();
+        let mut terminal = scope.settle().await;
+        terminal.disposition = WorkspaceSettlementDisposition::PreservedUnresolved {
+            reason: WorkspaceUnresolvedReason::PhysicalSettlement,
+            detail: "guard validation fixture".into(),
+        };
+        let store = journal(
+            &fixture,
+            terminal,
+            None,
+            Some(CandidateRecoveryGuard {
+                reference: reference.clone(),
+            }),
+        );
+        let events = store.read_events(None, 32).unwrap().events;
+        for invalid in 0..3 {
+            let fresh = crate::durable::SqliteConversationStore::in_memory(
+                fixture.node.block.run.conversation_id.clone(),
+            )
+            .unwrap();
+            fresh.append_event(events[0].clone()).unwrap();
+            let mut event = events[1].clone();
+            let RuntimeEvent::WorkflowWorkspaceSettled {
+                workspace,
+                candidate,
+                recovery_guard,
+                ..
+            } = &mut event.event
+            else {
+                unreachable!()
+            };
+            match invalid {
+                0 => *candidate = Some(reference.clone()),
+                1 => {
+                    workspace.disposition = WorkspaceSettlementDisposition::PreservedUnresolved {
+                        reason: WorkspaceUnresolvedReason::NestedContainment,
+                        detail: "not physical settlement".into(),
+                    }
+                }
+                _ => recovery_guard.as_mut().unwrap().reference.run.invocation += 1,
+            }
+            assert!(fresh.append_event(event).is_err());
+            assert_eq!(fresh.read_events(None, 32).unwrap().events.len(), 1);
+        }
     }
 }
