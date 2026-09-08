@@ -7393,3 +7393,8 @@ explicit A-derived inputs remain stale. Plan and context facts preserve candidat
 applicability in the Review specification/digest/audit, and all dependencies share
 the native freeze. Native ask_user is workspace-independent under WorkspaceUse:
 it never holds a CandidateScope borrow while waiting.
+
+Parallel acceptance joins merge explicit branch effects relative to entry,
+not inherited snapshots. Unchanged siblings neither conflict with a replacement
+nor resurrect consumed acceptance. Conflicting replacements and clear/replacement
+mixtures fail closed; completion order grants no authority.

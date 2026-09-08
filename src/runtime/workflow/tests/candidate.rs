@@ -2111,3 +2111,200 @@ async fn pre_start_candidate_case(consumer: &str, failure: usize) {
     assert!(!events.iter().any(|event| matches!(&event.event,RuntimeEvent::WorkflowCandidateInvocation {node,..} if node.node == "next")));
     assert!(!events.iter().any(|event| matches!(&event.event, RuntimeEvent::NativeToolInvocation { invocation_id: crate::tools::types::ToolInvocationId::Workflow { node }, fact: crate::tools::invocation::NativeInvocationFact::Started, .. } if node.node == "next")));
 }
+
+#[tokio::test]
+async fn parallel_untouched_sibling_does_not_conflict_with_replaced_acceptance() {
+    for idle_last in [false, true] {
+        parallel_acceptance_case("replace", false, idle_last).await;
+    }
+}
+
+#[tokio::test]
+async fn parallel_untouched_sibling_cannot_resurrect_consumed_acceptance() {
+    parallel_acceptance_case("clear", false, true).await;
+}
+
+#[tokio::test]
+async fn parallel_all_unchanged_preserves_incoming_acceptance() {
+    parallel_acceptance_case("unchanged", false, false).await;
+}
+
+#[tokio::test]
+async fn nested_parallel_composes_replacement_relative_to_each_entry() {
+    parallel_acceptance_case("replace", true, true).await;
+}
+
+#[allow(clippy::too_many_lines)]
+async fn parallel_acceptance_case(mode: &str, nested: bool, idle_last: bool) {
+    let plane = workflow_test_plane(1);
+    initialize(&plane);
+    let mut initial = stage_workflow_child(&plane);
+    let mut writer = (mode != "unchanged").then(|| stage_workflow_child(&plane));
+    let probe = Arc::new(CandidateProbe {
+        status: ToolExecutionStatus::Success,
+        mutate: false,
+        observed: std::sync::Mutex::default(),
+    });
+    let mut context = setup_context(&plane, probe.clone());
+    let (owner, _, mut published) = super::human::owner(&plane);
+    Arc::make_mut(context.native.as_mut().unwrap()).lifecycle =
+        crate::agent::AttemptLifecycle::default().with_native_interaction(owner.clone());
+    let empty = schema(json!({}), &[]);
+    let literal_return = json!({"type":"return","output":{"type":"literal","value":{}}});
+    let mut right_nodes = json!({"right_done":literal_return});
+    let mut right_edges = vec![];
+    if mode != "unchanged" {
+        right_nodes["writer"] = repair_agent();
+        if mode == "replace" {
+            right_nodes["review_b"] = json!({"type":"review","subject":{"type":"candidate","value":review_reference("writer")},"context":[]});
+            right_edges.extend([
+                json!({"from":"writer","to":"review_b"}),
+                json!({"from":"review_b","to":"right_done"}),
+            ]);
+        } else {
+            right_edges.push(json!({"from":"writer","to":"right_done"}));
+        }
+    }
+    let mut right_block = json!({"input":empty,"output":empty,"entry":if mode == "unchanged" {"right_done"} else {"writer"},"nodes":right_nodes,"edges":right_edges});
+    if nested {
+        right_block = json!({"input":empty,"output":empty,"entry":"nested","nodes":{
+            "nested":{"type":"parallel","branches":{
+                "writer":{"input":{"type":"literal","value":{}},"block":right_block},
+                "idle":{"input":{"type":"literal","value":{}},"block":{"input":empty,"output":empty,"entry":"nested_idle","nodes":{"nested_idle":literal_return},"edges":[]}}
+            }},"nested_done":literal_return},"edges":[{"from":"nested","to":"nested_done"}]});
+    }
+    let mut definition = program_definition();
+    definition.timeout_ms = 600_000;
+    definition.workspace = Some(WorkflowWorkspace {
+        require_clean_parent: true,
+    });
+    let check = definition.block.nodes["check"].clone();
+    definition.block.nodes = serde_json::from_value(json!({
+        "initial":repair_agent(),
+        "review_a":{"type":"review","subject":{"type":"candidate","value":review_reference("initial")},"context":[]},
+        "parallel":{"type":"parallel","branches":{
+            "left":{"input":{"type":"literal","value":{}},"block":{"input":empty,"output":empty,"entry":"idle","nodes":{"idle":literal_return},"edges":[]}},
+            "right":{"input":{"type":"literal","value":{}},"block":right_block}
+        }},"check":check,"done":{"type":"return","output":review_reference("check")}
+    })).unwrap();
+    definition.block.entry = "initial".into();
+    definition.block.edges = vec![
+        edge("initial", "review_a"),
+        edge("review_a", "parallel"),
+        edge("parallel", "check"),
+        edge("check", "done"),
+    ];
+    let runtime = workflow_runtime(&plane);
+    let mut observations = runtime.observations.subscribe();
+    let (entered, enter) = tokio::sync::oneshot::channel();
+    let (release, gate) = tokio::sync::oneshot::channel();
+    *runtime.node_frontier.lock().unwrap() =
+        Some(crate::runtime::workflow::execution::NodeFrontierHook {
+            node: "idle".into(),
+            entered,
+            release: gate,
+        });
+    let program = Arc::new(compile_test(definition).unwrap());
+    let (_, cancellation) = workflow_cancellation();
+    let task = tokio::spawn(async move {
+        runtime
+            .run_foreground(
+                program,
+                ToolCallId::new("parallel-acceptance"),
+                context,
+                json!({"passed":true}),
+                cancellation,
+            )
+            .await
+    });
+    initial.expect_delegate().await;
+    let path = plane
+        .registry
+        .all_snapshots()
+        .pop()
+        .unwrap()
+        .workspace
+        .logical_workspace;
+    std::fs::write(path.join("candidate"), b"A").unwrap();
+    initial
+        .send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some("{}"),
+        )
+        .await;
+    let a = published.recv().await.unwrap();
+    let crate::runtime::interaction::InteractionKind::Review { review, .. } = &a.kind else {
+        panic!("review")
+    };
+    let expected_a = review.candidate().unwrap().unwrap().clone();
+    owner
+        .respond_async(&a.id, super::human::answer(&a, true))
+        .await
+        .unwrap();
+    enter.await.unwrap();
+    let mut release = Some(release);
+    if !idle_last {
+        release.take().unwrap().send(()).unwrap();
+        observations.wait_for(|events| events.iter().any(|event| matches!(event,RuntimeEvent::WorkflowNodeSettled {instance,..} if instance.node == "idle"))).await.unwrap();
+    }
+    let mut expected = expected_a.clone();
+    if let Some(writer) = &mut writer {
+        writer.expect_delegate().await;
+        std::fs::write(path.join("candidate"), b"B").unwrap();
+        writer
+            .send_result(
+                crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+                Some("{}"),
+            )
+            .await;
+        if mode == "replace" {
+            let b = published.recv().await.unwrap();
+            let crate::runtime::interaction::InteractionKind::Review { review, .. } = &b.kind
+            else {
+                panic!("review")
+            };
+            expected = review.candidate().unwrap().unwrap().clone();
+            assert_ne!(expected, expected_a);
+            owner
+                .respond_async(&b.id, super::human::answer(&b, true))
+                .await
+                .unwrap();
+        }
+    }
+    if idle_last {
+        observations.wait_for(|events| events.iter().any(|event| matches!(event,RuntimeEvent::WorkflowNodeSettled {instance,..} if instance.node == "right_done"))).await.unwrap();
+        release.take().unwrap().send(()).unwrap();
+    }
+    let result = task.await.unwrap();
+    let events = plane.store.read_events(None, 256).unwrap().events;
+    if mode == "clear" {
+        let error = result.unwrap_err();
+        assert!(
+            format!("{error}").contains("new Review is required"),
+            "{error:?}"
+        );
+        assert!(probe.observed.lock().unwrap().is_empty());
+        assert!(!events.iter().any(|event| matches!(&event.event,RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == "check")));
+    } else {
+        assert_eq!(result.unwrap()["output"], json!({"passed":true}));
+        assert_eq!(probe.observed.lock().unwrap().len(), 1);
+        assert_eq!(events.iter().filter(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == "check")).count(), 1);
+        let inputs = events
+            .iter()
+            .filter_map(|event| match &event.event {
+                RuntimeEvent::WorkflowCandidateInvocation { node, input, .. }
+                    if node.node == "check" =>
+                {
+                    Some(input)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(inputs, vec![&expected]);
+        assert_eq!(
+            probe.observed.lock().unwrap()[0].1,
+            if mode == "unchanged" { b"A" } else { b"B" }
+        );
+    }
+    assert!(events.iter().any(|event| matches!(&event.event,RuntimeEvent::WorkflowNodeSettled {instance,outcome:WorkflowExecutionOutcome::Completed} if instance.node == "parallel")));
+}

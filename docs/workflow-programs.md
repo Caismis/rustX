@@ -828,6 +828,46 @@ A-bound producer remains stale and cannot start a repair Agent against B. Accept
 A likewise cannot admit a candidate-dependent operation against B. Acceptance is
 not encoded in `CommittedValue.candidate`; that field remains data provenance.
 
+### Parallel acceptance transitions
+
+Parallel branches inherit the current `Acceptance` for execution, but their outputs
+carry an explicit `AcceptanceTransition` relative to that entry: `Unchanged`,
+`Cleared`, or `Replaced(CandidateReference)`. The join merges these effects, then
+applies the merged transition to its entry state. It never merges inherited
+snapshots as competing decisions.
+
+| Incoming | Branch transitions | Result |
+| --- | --- | --- |
+| Accepted A | Unchanged, Unchanged | Accepted A |
+| Accepted A | Unchanged, Replaced(B) | Accepted B |
+| Accepted A | Unchanged, Cleared | RequiresReview; no candidate authority |
+| Accepted A | Replaced(B), Replaced(B) | Accepted B, using exact reference equality |
+| Accepted A | Replaced(B), Replaced(C), B != C | Conflict |
+| Accepted A | Cleared, Replaced(B) | Conflict; no coherent timeline proven |
+| Accepted A | Cleared, Cleared | RequiresReview |
+
+`Unchanged` is the merge identity. Merge is commutative; neither definition nor
+completion order selects a winner. Clear/replacement mixtures fail closed because
+the transitions do not prove whether the replacement survived the other branch's
+candidate consumption. CandidateScope still serializes every physical consumer;
+there are no independent branch candidates or workspace copies.
+
+Only explicit Accepted candidate Review emits `Replaced`. Rejection and business
+values do not change acceptance. A candidate Agent consuming existing human
+acceptance emits `Cleared`; candidate validators retain acceptance when unchanged.
+The current snapshot distinguishes initial `Unreviewed` execution (candidate
+production/checking before the first Review) from `RequiresReview` after authority
+was consumed. The latter blocks candidate-consuming admission until a new explicit
+Review accepts a candidate. Initial work with no human authority to consume stays
+Unreviewed; this does not create acceptance.
+
+Within a block, the latest explicit effect supersedes earlier effects. Unchanged
+steps preserve that effect. Nested Parallel contributes its joined transition in
+exactly this way. Clearing and then explicitly reaccepting the entry candidate is
+still `Replaced(A)`, not inferred `Unchanged`. An untouched sibling can never
+resurrect acceptance consumed by another branch. All state is run-local and remains
+separate from `CommittedValue` data applicability.
+
 Native writer exclusion is not a sandbox against arbitrary external host processes.
 WF-03's kernel observation and content checks detect interference at the native
 freeze/settlement/admission boundaries. Review does not claim a new containment

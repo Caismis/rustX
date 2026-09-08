@@ -149,32 +149,74 @@ impl Drop for LocalReservation<'_> {
     }
 }
 
-/// Run-local acceptance is authority for candidate consumers, never JSON provenance.
-#[derive(Clone, Default)]
-pub(super) struct Acceptance {
-    candidate: Option<crate::runtime::workspace::CandidateReference>,
+/// Current run-local authority, separate from value provenance and branch effects.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) enum Acceptance {
+    /// Initial Workflow work may produce/check a candidate before its first Review.
+    #[default]
+    Unreviewed,
+    Accepted(crate::runtime::workspace::CandidateReference),
+    /// A consumer used prior human acceptance; the resulting candidate needs Review.
+    RequiresReview,
 }
 impl Acceptance {
-    fn merge(&mut self, other: &Self) -> Result<(), WorkflowRunError> {
-        if let Some(candidate) = &other.candidate {
-            if self
-                .candidate
-                .as_ref()
-                .is_some_and(|current| current != candidate)
-            {
-                return Err(WorkflowRunError::InvalidValue(
-                    "conflicting candidate acceptances".into(),
-                ));
-            }
-            self.candidate = Some(candidate.clone());
+    fn candidate(
+        &self,
+    ) -> Result<Option<&crate::runtime::workspace::CandidateReference>, WorkflowRunError> {
+        match self {
+            Self::Unreviewed => Ok(None),
+            Self::Accepted(candidate) => Ok(Some(candidate)),
+            Self::RequiresReview => Err(WorkflowRunError::InvalidValue(
+                "candidate acceptance was consumed; a new Review is required".into(),
+            )),
         }
-        Ok(())
+    }
+    fn apply(&mut self, transition: &AcceptanceTransition) {
+        match transition {
+            AcceptanceTransition::Unchanged => {}
+            AcceptanceTransition::Cleared => *self = Self::RequiresReview,
+            AcceptanceTransition::Replaced(candidate) => *self = Self::Accepted(candidate.clone()),
+        }
+    }
+}
+
+/// A block's explicit effect relative to its entry, never an inherited snapshot.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+enum AcceptanceTransition {
+    #[default]
+    Unchanged,
+    Cleared,
+    Replaced(crate::runtime::workspace::CandidateReference),
+}
+impl AcceptanceTransition {
+    /// Sequential composition: a later explicit effect supersedes the earlier one.
+    fn then(&mut self, later: &Self) {
+        if !matches!(later, Self::Unchanged) {
+            *self = later.clone();
+        }
+    }
+    /// Parallel composition: inherited state contributes nothing. Clear/replace
+    /// has no proven common timeline in these facts, so it fails closed too.
+    fn merge(&mut self, other: &Self) -> Result<(), WorkflowRunError> {
+        if matches!(other, Self::Unchanged) {
+            return Ok(());
+        }
+        if matches!(self, Self::Unchanged) {
+            *self = other.clone();
+            return Ok(());
+        }
+        if self == other {
+            return Ok(());
+        }
+        Err(WorkflowRunError::InvalidValue(
+            "conflicting candidate acceptance transitions".into(),
+        ))
     }
 }
 
 pub(super) struct BlockOutput<'a> {
     pub(super) value: CommittedValue,
-    acceptance: Acceptance,
+    acceptance_transition: AcceptanceTransition,
     _reservation: LocalReservation<'a>,
 }
 
@@ -248,6 +290,7 @@ impl WorkflowRuntime {
         let mut reservation = LocalReservation::new(run);
         reservation.retain(&input.value)?;
         let mut control = acceptance;
+        let mut transition = AcceptanceTransition::Unchanged;
         let mut values = BTreeMap::new();
         let mut node_id = block.entry.clone();
         loop {
@@ -306,7 +349,7 @@ impl WorkflowRuntime {
             if consumes {
                 dependency.depend_on(&CommittedValue {
                     value: Value::Null,
-                    candidate: control.candidate.clone(),
+                    candidate: control.candidate()?.cloned(),
                 })?;
             }
             let mut admitted_access = if let Some(reference) = dependency
@@ -462,9 +505,8 @@ impl WorkflowRuntime {
                         if let Some(candidate) = accepted_candidate {
                             // A new explicit acceptance replaces the old subject.
                             // Business-only decisions cannot erase an existing dependency.
-                            control = Acceptance {
-                                candidate: Some(candidate),
-                            };
+                            transition = AcceptanceTransition::Replaced(candidate);
+                            control.apply(&transition);
                         }
                         values.insert(node_id.clone(), value);
                         Ok(None)
@@ -515,7 +557,10 @@ impl WorkflowRuntime {
                             .await?;
                         reservation.retain(&value.value)?;
                         values.insert(node_id.clone(), value);
-                        control.candidate = None; // this Agent consumed A; its new B needs fresh review
+                        if consumes && matches!(control, Acceptance::Accepted(_)) {
+                            transition = AcceptanceTransition::Cleared;
+                            control.apply(&transition);
+                        }
                         Ok(None)
                     }
                     WorkflowNodeProgram::Branch { condition } => {
@@ -625,16 +670,17 @@ impl WorkflowRuntime {
                         if cancellation.is_cancelled() {
                             return Err(WorkflowRunError::from_cancellation(cancellation));
                         }
-                        let mut joined_acceptance = Acceptance::default();
+                        let mut joined_transition = AcceptanceTransition::Unchanged;
                         // Native branch failures retain their status before
                         // validating applicability of an otherwise successful join.
                         for (_, result) in &settled {
                             let output = result.as_ref().expect("successful branches");
                             output.value.assert_current(run).await?;
                             applicability.depend_on(&output.value)?;
-                            joined_acceptance.merge(&output.acceptance)?;
+                            joined_transition.merge(&output.acceptance_transition)?;
                         }
-                        control = joined_acceptance;
+                        control.apply(&joined_transition);
+                        transition.then(&joined_transition);
                         let value = Value::Object(results);
                         validate_commit(output_schema, &value)?;
                         // Transfer exported output accounting before releasing
@@ -663,7 +709,7 @@ impl WorkflowRuntime {
                         exported.retain(&value.value)?;
                         Ok(BlockOutput {
                             value,
-                            acceptance: control.clone(),
+                            acceptance_transition: transition.clone(),
                             _reservation: exported,
                         })
                     })
@@ -794,5 +840,64 @@ mod tests {
             0,
             "private state retirement releases every byte"
         );
+    }
+}
+
+#[cfg(test)]
+mod acceptance_tests {
+    use super::*;
+    fn candidate(content: char) -> crate::runtime::workspace::CandidateReference {
+        crate::runtime::workspace::CandidateReference {
+            run: super::super::test_instance("acceptance", "node").block.run,
+            version: 1,
+            content: content.to_string().repeat(64),
+        }
+    }
+    #[test]
+    fn parallel_transition_merge_is_commutative_and_conflicts_fail_closed() {
+        use AcceptanceTransition::{Cleared, Replaced, Unchanged};
+        let a = candidate('a');
+        let b = candidate('b');
+        let c = candidate('c');
+        for (left, right, expected) in [
+            (Unchanged, Unchanged, Some(Unchanged)),
+            (Unchanged, Cleared, Some(Cleared)),
+            (Unchanged, Replaced(b.clone()), Some(Replaced(b.clone()))),
+            (Cleared, Cleared, Some(Cleared)),
+            (
+                Replaced(b.clone()),
+                Replaced(b.clone()),
+                Some(Replaced(b.clone())),
+            ),
+            (Replaced(b.clone()), Replaced(c), None),
+            (Cleared, Replaced(b.clone()), None),
+        ] {
+            for (mut merged, other) in [(left.clone(), right.clone()), (right, left)] {
+                let result = merged.merge(&other);
+                if let Some(expected) = &expected {
+                    result.unwrap();
+                    assert_eq!(&merged, expected);
+                    let mut snapshot = Acceptance::Accepted(a.clone());
+                    snapshot.apply(&merged);
+                    match expected {
+                        Unchanged => assert_eq!(snapshot, Acceptance::Accepted(a.clone())),
+                        Cleared => assert!(snapshot.candidate().is_err()),
+                        Replaced(candidate) => {
+                            assert_eq!(snapshot.candidate().unwrap(), Some(candidate));
+                        }
+                    }
+                } else {
+                    assert!(result.is_err());
+                }
+            }
+        }
+    }
+    #[test]
+    fn sequential_effects_remain_explicit_even_when_replacement_equals_entry() {
+        let a = candidate('a');
+        let mut effect = AcceptanceTransition::Cleared;
+        effect.then(&AcceptanceTransition::Replaced(a.clone()));
+        effect.then(&AcceptanceTransition::Unchanged);
+        assert_eq!(effect, AcceptanceTransition::Replaced(a));
     }
 }
