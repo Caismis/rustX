@@ -2278,14 +2278,16 @@ async fn parallel_acceptance_case(mode: &str, nested: bool, idle_last: bool) {
     let result = task.await.unwrap();
     let events = plane.store.read_events(None, 256).unwrap().events;
     if mode == "clear" {
-        let error = result.unwrap_err();
-        assert!(
-            format!("{error}").contains("new Review is required"),
-            "{error:?}"
-        );
-        assert!(probe.observed.lock().unwrap().is_empty());
-        assert!(!events.iter().any(|event| matches!(&event.event,RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == "check")));
-    } else {
+        expected = events
+            .iter()
+            .find_map(|event| match &event.event {
+                RuntimeEvent::WorkflowWorkspaceSettled { candidate, .. } => candidate.clone(),
+                _ => None,
+            })
+            .expect("settled candidate B");
+        assert_ne!(expected, expected_a);
+    }
+    {
         assert_eq!(result.unwrap()["output"], json!({"passed":true}));
         assert_eq!(probe.observed.lock().unwrap().len(), 1);
         assert_eq!(events.iter().filter(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == "check")).count(), 1);
@@ -2307,4 +2309,194 @@ async fn parallel_acceptance_case(mode: &str, nested: bool, idle_last: bool) {
         );
     }
     assert!(events.iter().any(|event| matches!(&event.event,RuntimeEvent::WorkflowNodeSettled {instance,outcome:WorkflowExecutionOutcome::Completed} if instance.node == "parallel")));
+}
+
+#[tokio::test]
+async fn sequential_cleared_acceptance_allows_exact_b_machine_check() {
+    sequential_acceptance_case("check").await;
+}
+
+#[tokio::test]
+async fn cleared_acceptance_allows_repair_agent_b_to_c_before_human_review() {
+    sequential_acceptance_case("repair").await;
+}
+
+#[tokio::test]
+async fn cleared_acceptance_does_not_admit_explicit_stale_a_data() {
+    sequential_acceptance_case("stale").await;
+}
+
+#[tokio::test]
+async fn rejected_candidate_allows_predefined_repair_and_machine_check() {
+    sequential_acceptance_case("reject").await;
+}
+
+#[allow(clippy::too_many_lines)]
+async fn sequential_acceptance_case(mode: &str) {
+    let plane = workflow_test_plane(1);
+    initialize(&plane);
+    let mut initial = stage_workflow_child(&plane);
+    let mut writer = stage_workflow_child(&plane);
+    let mut repair = (mode == "repair").then(|| stage_workflow_child(&plane));
+    let probe = Arc::new(CandidateProbe {
+        status: ToolExecutionStatus::Success,
+        mutate: false,
+        observed: std::sync::Mutex::default(),
+    });
+    let mut context = setup_context(&plane, probe.clone());
+    let (owner, _, mut published) = super::human::owner(&plane);
+    Arc::make_mut(context.native.as_mut().unwrap()).lifecycle =
+        crate::agent::AttemptLifecycle::default().with_native_interaction(owner.clone());
+    let mut definition = program_definition();
+    definition.timeout_ms = 600_000;
+    definition.workspace = Some(WorkflowWorkspace {
+        require_clean_parent: true,
+    });
+    let check = definition.block.nodes["check"].clone();
+    let mut nodes = json!({
+        "initial":repair_agent(),
+        "review_a":{"type":"review","subject":{"type":"candidate","value":review_reference("initial")},"context":[]},
+        "writer":repair_agent(), "check":check,
+        "done":{"type":"return","output":{"type":"literal","value":{"passed":true}}}
+    });
+    let mut edges = vec![edge("initial", "review_a"), edge("review_a", "writer")];
+    if mode == "stale" {
+        let mut stale = repair_agent();
+        stale["input"] = json!({"old":review_reference("initial")});
+        nodes["stale"] = stale;
+        edges.extend([edge("writer", "stale"), edge("stale", "check")]);
+    } else {
+        edges.push(edge("writer", "check"));
+    }
+    if mode == "repair" {
+        let mut next = repair_agent();
+        next["input"] = json!({"current":review_reference("writer")});
+        nodes["repair"] = next;
+        nodes["review_c"] = json!({"type":"review","subject":{"type":"candidate","value":review_reference("repair")},"context":[]});
+        edges.extend([
+            edge("check", "repair"),
+            edge("repair", "review_c"),
+            edge("review_c", "done"),
+        ]);
+    } else {
+        edges.push(edge("check", "done"));
+    }
+    definition.block.nodes = serde_json::from_value(nodes).unwrap();
+    definition.block.edges = edges;
+    definition.block.entry = "initial".into();
+    let program = Arc::new(compile_test(definition).unwrap());
+    let runtime = workflow_runtime(&plane);
+    let (_, cancellation) = workflow_cancellation();
+    let task = tokio::spawn(async move {
+        runtime
+            .run_foreground(
+                program,
+                ToolCallId::new("sequential-acceptance"),
+                context,
+                json!({"passed":true}),
+                cancellation,
+            )
+            .await
+    });
+    initial.expect_delegate().await;
+    let path = plane
+        .registry
+        .all_snapshots()
+        .pop()
+        .unwrap()
+        .workspace
+        .logical_workspace;
+    std::fs::write(path.join("candidate"), b"A").unwrap();
+    initial
+        .send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some("{}"),
+        )
+        .await;
+    let request = published.recv().await.unwrap();
+    let crate::runtime::interaction::InteractionKind::Review { review, .. } = &request.kind else {
+        panic!("review A")
+    };
+    let a = review.candidate().unwrap().unwrap().clone();
+    owner
+        .respond_async(
+            &request.id,
+            super::human::answer(&request, mode != "reject"),
+        )
+        .await
+        .unwrap();
+    writer.expect_delegate().await;
+    std::fs::write(path.join("candidate"), b"B").unwrap();
+    writer
+        .send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some("{}"),
+        )
+        .await;
+    let mut reviewed_c = None;
+    if let Some(repair) = &mut repair {
+        repair.expect_delegate().await; // B's machine check and exact B-bound repair admission completed.
+        assert_eq!(probe.observed.lock().unwrap()[0].1, b"B");
+        assert!(published.try_recv().is_err()); // No Human Review of B.
+        std::fs::write(path.join("candidate"), b"C").unwrap();
+        repair
+            .send_result(
+                crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+                Some("{}"),
+            )
+            .await;
+        let request = published.recv().await.unwrap();
+        let crate::runtime::interaction::InteractionKind::Review { review, .. } = &request.kind
+        else {
+            panic!("review C")
+        };
+        reviewed_c = Some(review.candidate().unwrap().unwrap().clone());
+        owner
+            .respond_async(&request.id, super::human::answer(&request, true))
+            .await
+            .unwrap();
+    }
+    let result = task.await.unwrap();
+    let events = plane.store.read_events(None, 256).unwrap().events;
+    if mode == "stale" {
+        let error = result.unwrap_err();
+        assert!(format!("{error}").contains("stale candidate"), "{error:?}");
+        assert!(probe.observed.lock().unwrap().is_empty());
+        assert!(!events.iter().any(|event| matches!(&event.event,RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == "stale")));
+        return;
+    }
+    assert_eq!(result.unwrap()["output"], json!({"passed":true}));
+    let inputs = events
+        .iter()
+        .filter_map(|event| match &event.event {
+            RuntimeEvent::WorkflowCandidateInvocation { node, input, .. }
+                if node.node == "check" =>
+            {
+                Some(input)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(inputs.len(), 1);
+    let b = inputs[0];
+    assert_ne!(b, &a);
+    assert_eq!(b.version, a.version + 1);
+    assert_eq!(probe.observed.lock().unwrap().len(), 1);
+    assert_eq!(probe.observed.lock().unwrap()[0].1, b"B");
+    assert_eq!(events.iter().filter(|event| matches!(&event.event,RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == "check")).count(),1);
+    let final_candidate = events
+        .iter()
+        .find_map(|event| match &event.event {
+            RuntimeEvent::WorkflowWorkspaceSettled { candidate, .. } => candidate.as_ref(),
+            _ => None,
+        })
+        .unwrap();
+    if let Some(c) = reviewed_c {
+        assert_ne!(&c, b);
+        assert_eq!(c.version, b.version + 1);
+        assert_eq!(final_candidate, &c);
+        assert_eq!(events.iter().filter(|event| matches!(&event.event,RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == "repair")).count(),1);
+    } else {
+        assert_eq!(final_candidate, b);
+    }
 }

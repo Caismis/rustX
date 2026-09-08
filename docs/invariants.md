@@ -7388,7 +7388,7 @@ and requested facts cannot reconstruct runtime authority after process death.
 See [the owner/frontier table](workflow-programs.md#ownership-and-linearization).
 
 WF-04 Review decisions/feedback are immutable business data, separate from
-run-local accepted-candidate authority. Reject A remains readable after writer B;
+a run-local accepted-candidate constraint. Reject A remains readable after writer B;
 explicit A-derived inputs remain stale. Plan and context facts preserve candidate
 applicability in the Review specification/digest/audit, and all dependencies share
 the native freeze. Native ask_user is workspace-independent under WorkspaceUse:
@@ -7398,3 +7398,5 @@ Parallel acceptance joins merge explicit branch effects relative to entry,
 not inherited snapshots. Unchanged siblings neither conflict with a replacement
 nor resurrect consumed acceptance. Conflicting replacements and clear/replacement
 mixtures fail closed; completion order grants no authority.
+
+Clearing human acceptance removes its exact-candidate constraint, not Tool/workspace permission. Normal machine checking and repair may continue on the current candidate; explicit data applicability remains independently enforced.

@@ -808,7 +808,7 @@ and retain the same native freeze used by candidate subjects.
 | Response validation | Coordinator checks the live identity, kind, concrete instance and whole-subject digest. CandidateFreeze validates while retaining that native borrow. |
 | Settled commit | Under coordinator terminal ownership, durable InteractionSettled precedes waiter release. Observable cancellation/deadline overrides a response. Source invalidation is a separate runtime outcome, never rejection. |
 | Review local commit | Workflow validates native freeze settlement and commits immutable decision/feedback JSON without candidate provenance. Accepted candidate identity is retained separately in run-local Acceptance state. |
-| Downstream admission | A candidate-consuming Tool/Agent combines explicit data applicability with Acceptance and acquires the exact expected native borrow **before** WorkflowNodeStarted. Tool/Agent receives that same borrow through execution and physical settlement. |
+| Downstream admission | When explicit data applicability or Accepted(A) supplies an exact expected reference, the candidate-consuming Tool/Agent acquires that native borrow **before** WorkflowNodeStarted and receives the same access through physical settlement. With neither constraint, ordinary native admission borrows the current run candidate; no Human Review is required. |
 
 The borrow may be released between settled Review and later admission. A queued
 writer can win that interval and publish B. In that case the next admission of A
@@ -840,11 +840,11 @@ snapshots as competing decisions.
 | --- | --- | --- |
 | Accepted A | Unchanged, Unchanged | Accepted A |
 | Accepted A | Unchanged, Replaced(B) | Accepted B |
-| Accepted A | Unchanged, Cleared | RequiresReview; no candidate authority |
+| Accepted A | Unchanged, Cleared | None; no accepted-candidate constraint |
 | Accepted A | Replaced(B), Replaced(B) | Accepted B, using exact reference equality |
 | Accepted A | Replaced(B), Replaced(C), B != C | Conflict |
 | Accepted A | Cleared, Replaced(B) | Conflict; no coherent timeline proven |
-| Accepted A | Cleared, Cleared | RequiresReview |
+| Accepted A | Cleared, Cleared | None |
 
 `Unchanged` is the merge identity. Merge is commutative; neither definition nor
 completion order selects a winner. Clear/replacement mixtures fail closed because
@@ -855,11 +855,13 @@ there are no independent branch candidates or workspace copies.
 Only explicit Accepted candidate Review emits `Replaced`. Rejection and business
 values do not change acceptance. A candidate Agent consuming existing human
 acceptance emits `Cleared`; candidate validators retain acceptance when unchanged.
-The current snapshot distinguishes initial `Unreviewed` execution (candidate
-production/checking before the first Review) from `RequiresReview` after authority
-was consumed. The latter blocks candidate-consuming admission until a new explicit
-Review accepts a candidate. Initial work with no human authority to consume stays
-Unreviewed; this does not create acceptance.
+The snapshot is either `Accepted(A)` (human acceptance applies to exact A) or
+`None` (no currently applicable human acceptance). Clearing acceptance removes
+that constraint; it does not revoke candidate execution authority. Agent A -> B
+clears Accepted(A), but B remains available to normal Tool/Agent execution,
+including machine validation and repair before any later Human Review.
+Human Review is not a workspace/Tool permission gate. Explicit candidate-derived
+inputs still enforce their own exact applicability even when acceptance is None.
 
 Within a block, the latest explicit effect supersedes earlier effects. Unchanged
 steps preserve that effect. Nested Parallel contributes its joined transition in

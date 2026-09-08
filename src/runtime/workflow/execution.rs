@@ -149,32 +149,24 @@ impl Drop for LocalReservation<'_> {
     }
 }
 
-/// Current run-local authority, separate from value provenance and branch effects.
+/// Optional exact human-acceptance constraint, not Tool/workspace permission.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) enum Acceptance {
-    /// Initial Workflow work may produce/check a candidate before its first Review.
     #[default]
-    Unreviewed,
+    None,
     Accepted(crate::runtime::workspace::CandidateReference),
-    /// A consumer used prior human acceptance; the resulting candidate needs Review.
-    RequiresReview,
 }
 impl Acceptance {
-    fn candidate(
-        &self,
-    ) -> Result<Option<&crate::runtime::workspace::CandidateReference>, WorkflowRunError> {
+    fn candidate(&self) -> Option<&crate::runtime::workspace::CandidateReference> {
         match self {
-            Self::Unreviewed => Ok(None),
-            Self::Accepted(candidate) => Ok(Some(candidate)),
-            Self::RequiresReview => Err(WorkflowRunError::InvalidValue(
-                "candidate acceptance was consumed; a new Review is required".into(),
-            )),
+            Self::None => None,
+            Self::Accepted(candidate) => Some(candidate),
         }
     }
     fn apply(&mut self, transition: &AcceptanceTransition) {
         match transition {
             AcceptanceTransition::Unchanged => {}
-            AcceptanceTransition::Cleared => *self = Self::RequiresReview,
+            AcceptanceTransition::Cleared => *self = Self::None,
             AcceptanceTransition::Replaced(candidate) => *self = Self::Accepted(candidate.clone()),
         }
     }
@@ -315,7 +307,7 @@ impl WorkflowRuntime {
                     let _ = hook.release.await;
                 }
             }
-            // Only candidate consumers acquire acceptance authority. Business-only
+            // Only candidate consumers apply the exact acceptance constraint. Business-only
             // tools and pure reads of Review decisions do not touch CandidateScope.
             let consumes = match node {
                 WorkflowNodeProgram::Agent(_) => run.candidate.is_some(),
@@ -349,7 +341,7 @@ impl WorkflowRuntime {
             if consumes {
                 dependency.depend_on(&CommittedValue {
                     value: Value::Null,
-                    candidate: control.candidate()?.cloned(),
+                    candidate: control.candidate().cloned(),
                 })?;
             }
             let mut admitted_access = if let Some(reference) = dependency
@@ -881,9 +873,9 @@ mod acceptance_tests {
                     snapshot.apply(&merged);
                     match expected {
                         Unchanged => assert_eq!(snapshot, Acceptance::Accepted(a.clone())),
-                        Cleared => assert!(snapshot.candidate().is_err()),
+                        Cleared => assert_eq!(snapshot, Acceptance::None),
                         Replaced(candidate) => {
-                            assert_eq!(snapshot.candidate().unwrap(), Some(candidate));
+                            assert_eq!(snapshot.candidate(), Some(candidate));
                         }
                     }
                 } else {
