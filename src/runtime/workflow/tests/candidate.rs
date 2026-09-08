@@ -2661,3 +2661,156 @@ async fn unchanged_agent_case(writer_wins: bool) {
         assert_eq!(probe.observed.lock().unwrap()[0].1, b"A");
     }
 }
+
+#[tokio::test]
+async fn parallel_none_entry_review_then_mutation_conflicts_before_downstream() {
+    none_entry_review_mutation_case(false).await;
+}
+
+#[tokio::test]
+async fn nested_none_entry_mutation_exports_clear_against_sibling_review() {
+    none_entry_review_mutation_case(true).await;
+}
+
+#[allow(clippy::too_many_lines)]
+async fn none_entry_review_mutation_case(nested: bool) {
+    use crate::runtime::workflow::execution::{NodeFrontierHook, PreStartAction, PreStartHook};
+    let plane = workflow_test_plane(1);
+    initialize(&plane);
+    let mut initial = stage_workflow_child(&plane);
+    let mut writer = stage_workflow_child(&plane);
+    let probe = Arc::new(CandidateProbe {
+        status: ToolExecutionStatus::Success,
+        mutate: false,
+        observed: std::sync::Mutex::default(),
+    });
+    let mut context = setup_context(&plane, probe.clone());
+    let (owner, _, mut published) = super::human::owner(&plane);
+    Arc::make_mut(context.native.as_mut().unwrap()).lifecycle =
+        crate::agent::AttemptLifecycle::default().with_native_interaction(owner.clone());
+    let empty = schema(json!({}), &[]);
+    let input = json!({"type":"reference","path":["args"]});
+    let done = json!({"type":"return","output":{"type":"literal","value":{}}});
+    let mut agent = repair_agent();
+    agent["input"] = json!({"candidate":input});
+    let mut writer_block = json!({"input":empty,"output":empty,"entry":"writer","nodes":{"writer":agent,"writer_done":done},"edges":[{"from":"writer","to":"writer_done"}]});
+    if nested {
+        writer_block = json!({"input":empty,"output":empty,"entry":"inner","nodes":{
+            "inner":{"type":"parallel","branches":{
+                "writer":{"input":input,"block":writer_block},
+                "idle":{"input":{"type":"literal","value":{}},"block":{"input":empty,"output":empty,"entry":"idle","nodes":{"idle":done},"edges":[]}}
+            }},"inner_done":done},"edges":[{"from":"inner","to":"inner_done"}]});
+    }
+    let mut definition = program_definition();
+    definition.workspace = Some(WorkflowWorkspace {
+        require_clean_parent: true,
+    });
+    definition.timeout_ms = 600_000;
+    let check = definition.block.nodes["check"].clone();
+    definition.block.entry = "initial".into();
+    definition.block.nodes = serde_json::from_value(json!({
+        "initial":repair_agent(),
+        "parallel":{"type":"parallel","branches":{
+            "review":{"input":review_reference("initial"),"block":{"input":empty,"output":empty,"entry":"review","nodes":{
+                "review":{"type":"review","subject":{"type":"candidate","value":input},"context":[]},"review_done":done
+            },"edges":[{"from":"review","to":"review_done"}]}},
+            "writer":{"input":review_reference("initial"),"block":writer_block}
+        }},"check":check,"done":{"type":"return","output":{"type":"literal","value":{"passed":true}}}
+    })).unwrap();
+    definition.block.edges = vec![
+        edge("initial", "parallel"),
+        edge("parallel", "check"),
+        edge("check", "done"),
+    ];
+    let runtime = workflow_runtime(&plane);
+    let (entered, enter) = tokio::sync::oneshot::channel();
+    let (release, gate) = tokio::sync::oneshot::channel();
+    *runtime.node_frontier.lock().unwrap() = Some(NodeFrontierHook {
+        node: "writer".into(),
+        entered,
+        release: gate,
+    });
+    let (acquired, acquire) = tokio::sync::oneshot::channel();
+    let (proceed, proceed_rx) = tokio::sync::oneshot::channel();
+    let (released, release_rx) = tokio::sync::oneshot::channel();
+    let (finish, finish_rx) = tokio::sync::oneshot::channel();
+    *runtime.pre_start.lock().unwrap() = Some(PreStartHook {
+        node: "writer".into(),
+        acquired,
+        proceed: proceed_rx,
+        released,
+        finish: finish_rx,
+    });
+    let program = Arc::new(compile_test(definition).unwrap());
+    let (_, cancellation) = workflow_cancellation();
+    let task = tokio::spawn(async move {
+        runtime
+            .run_foreground(
+                program,
+                ToolCallId::new("none-review-mutation"),
+                context,
+                json!({"passed":true}),
+                cancellation,
+            )
+            .await
+    });
+    initial.expect_delegate().await;
+    let path = plane
+        .registry
+        .all_snapshots()
+        .pop()
+        .unwrap()
+        .workspace
+        .logical_workspace;
+    std::fs::write(path.join("candidate"), b"A").unwrap();
+    initial
+        .send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some("{}"),
+        )
+        .await;
+    let request = published.recv().await.unwrap();
+    let crate::runtime::interaction::InteractionKind::Review { review, .. } = &request.kind else {
+        panic!("review A")
+    };
+    let a = review.candidate().unwrap().unwrap().clone();
+    owner
+        .respond_async(&request.id, super::human::answer(&request, true))
+        .await
+        .unwrap();
+    enter.await.unwrap(); // Block input validation can also wait behind the Review freeze.
+    release.send(()).unwrap();
+    let (scope, pre, node, _) = acquire.await.unwrap(); // Real borrow completes only after freeze release.
+    assert_eq!(pre, a);
+    proceed
+        .send(PreStartAction::Continue)
+        .unwrap_or_else(|_| panic!("proceed"));
+    writer.expect_delegate().await;
+    std::fs::write(path.join("candidate"), b"B").unwrap();
+    writer
+        .send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some("{}"),
+        )
+        .await;
+    release_rx.await.unwrap(); // Native Agent settlement and branch-local result commit completed.
+    let (_, fresh) = workflow_cancellation();
+    let access = scope
+        .borrow(node, None, &fresh.child_signal())
+        .await
+        .unwrap();
+    let post = access.input().clone();
+    assert_ne!(pre, post);
+    assert_eq!(access.finish(true).await.unwrap(), post);
+    finish.send(()).unwrap();
+    let error = task.await.unwrap().unwrap_err();
+    assert!(
+        format!("{error}").contains("conflicting candidate acceptance transitions"),
+        "{error:?}"
+    );
+    let events = plane.store.read_events(None, 256).unwrap().events;
+    assert!(!events.iter().any(|event|matches!(&event.event,RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == "check")));
+    assert!(!events.iter().any(|event|matches!(&event.event,RuntimeEvent::WorkflowCandidateInvocation {node,..} if node.node == "check")));
+    assert!(probe.observed.lock().unwrap().is_empty());
+    assert!(events.iter().any(|event|matches!(&event.event,RuntimeEvent::WorkflowWorkspaceSettled {candidate:Some(candidate),..} if candidate == &post)));
+}

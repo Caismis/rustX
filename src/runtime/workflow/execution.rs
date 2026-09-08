@@ -181,6 +181,18 @@ enum AcceptanceTransition {
     Replaced(crate::runtime::workspace::CandidateReference),
 }
 impl AcceptanceTransition {
+    /// Native mutation is a branch effect even when local acceptance is None.
+    fn candidate_change(
+        pre: &crate::runtime::workspace::CandidateReference,
+        post: &crate::runtime::workspace::CandidateReference,
+    ) -> Self {
+        if pre == post {
+            Self::Unchanged
+        } else {
+            Self::Cleared
+        }
+    }
+
     /// Sequential composition: a later explicit effect supersedes the earlier one.
     fn then(&mut self, later: &Self) {
         if !matches!(later, Self::Unchanged) {
@@ -532,7 +544,7 @@ impl WorkflowRuntime {
                         Ok(None)
                     }
                     WorkflowNodeProgram::Agent(agent) => {
-                        let child = self
+                        let (child, pre) = self
                             .admit_agent(
                                 run,
                                 context,
@@ -553,12 +565,13 @@ impl WorkflowRuntime {
                                 .ok_or_else(|| WorkflowRunError::InvalidValue(
                                     "candidate Agent settled without an exact post-node candidate for this run".into(),
                                 ))?;
-                            // Native physical settlement is the sole mutation fact.
-                            // Write-capable execution alone does not invalidate acceptance.
-                            if control.candidate().is_some_and(|accepted| accepted != post) {
-                                transition = AcceptanceTransition::Cleared;
-                                control.apply(&transition);
-                            }
+                            let pre = pre.as_ref().filter(|pre| pre.run == run.run_id)
+                                .ok_or_else(|| WorkflowRunError::InvalidValue(
+                                    "candidate Agent admitted without an exact pre-node candidate for this run".into(),
+                                ))?;
+                            let effect = AcceptanceTransition::candidate_change(pre, post);
+                            transition.then(&effect);
+                            control.apply(&effect);
                         }
                         values.insert(node_id.clone(), value);
                         Ok(None)
@@ -890,6 +903,22 @@ mod acceptance_tests {
                     assert!(result.is_err());
                 }
             }
+        }
+    }
+    #[test]
+    fn native_candidate_change_is_an_effect_even_without_local_acceptance() {
+        let a = candidate('a');
+        let b = candidate('b');
+        for mut snapshot in [Acceptance::None, Acceptance::Accepted(a.clone())] {
+            let before = snapshot.clone();
+            let unchanged = AcceptanceTransition::candidate_change(&a, &a);
+            assert_eq!(unchanged, AcceptanceTransition::Unchanged);
+            snapshot.apply(&unchanged);
+            assert_eq!(snapshot, before);
+            let changed = AcceptanceTransition::candidate_change(&a, &b);
+            assert_eq!(changed, AcceptanceTransition::Cleared);
+            snapshot.apply(&changed);
+            assert_eq!(snapshot, Acceptance::None);
         }
     }
     #[test]

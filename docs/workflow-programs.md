@@ -819,9 +819,8 @@ need no candidate authority. Ordinary candidate-derived data and explicit old
 candidate references still require currentness; pure consumers hold their native
 borrow through consumption. Parallel passes acceptance separately from input data
 and does not hold a parent borrow while branches wait. An Agent executes under
-Accepted(A); its authoritative native post-node reference determines whether that
-constraint remains applicable. Result A preserves Accepted(A); result B != A
-clears it. B needs a new explicit Review only to gain human acceptance.
+Accepted(A); the exact native admitted and post-node references determine its
+branch effect. A -> A preserves Accepted(A); A -> B emits Cleared. B needs a new explicit Review only to gain human acceptance.
 
 Both accepted and rejected Review JSON are immutable business records. Rejection
 establishes no standing candidate authorization: after Reject A, a writer can
@@ -855,11 +854,14 @@ candidate consumption. CandidateScope still serializes every physical consumer;
 there are no independent branch candidates or workspace copies.
 
 Only explicit Accepted candidate Review emits `Replaced`. Rejection and business
-values do not change acceptance. A candidate Agent emits `Cleared` only when its authoritative post-node
-reference differs from the accepted reference; otherwise its effect is Unchanged.
+values do not change acceptance. A candidate Agent emits `Cleared` whenever its authoritative post-node
+reference differs from its native admitted reference, regardless of local acceptance;
+otherwise its effect is Unchanged.
 Agent type or write capability alone does not imply mutation. Machine-review
 Agents leaving the exact candidate unchanged preserve existing acceptance.
-This comparison uses the native committed result, with no extra source scan.
+The pre-node reference is cloned from WorkspaceAccess::input() immediately before
+transfer to native child preparation; post-node identity comes from the native
+committed result. This adds no borrow, source scan, or ownership clone.
 Missing or wrong-run post-node candidate facts fail closed. Candidate validators
 retain acceptance when unchanged.
 The snapshot is either `Accepted(A)` (human acceptance applies to exact A) or
@@ -869,6 +871,20 @@ clears Accepted(A), but B remains available to normal Tool/Agent execution,
 including machine validation and repair before any later Human Review.
 Human Review is not a workspace/Tool permission gate. Explicit candidate-derived
 inputs still enforce their own exact applicability even when acceptance is None.
+
+| Entry acceptance | Native pre -> post | Agent branch effect |
+| --- | --- | --- |
+| None | A -> A | Unchanged |
+| None | A -> B | Cleared |
+| Accepted(A) | A -> A | Unchanged |
+| Accepted(A) | A -> B | Cleared |
+
+Applying Cleared to a local None snapshot is a snapshot no-op, but the transition
+must still be exported so a concurrent sibling Replaced(A) cannot survive a later
+A -> B mutation. For Parallel entry None/current A: one branch Review/Accepts A
+(Replaced(A)); after its freeze releases, a sibling Agent changes A -> B (Cleared).
+The join fails with conflicting transitions. It cannot reinstall Accepted(A).
+Nested Parallel exports the same mutation effect through its enclosing block.
 
 Within a block, the latest explicit effect supersedes earlier effects. Unchanged
 steps preserve that effect. Nested Parallel contributes its joined transition in

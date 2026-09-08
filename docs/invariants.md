@@ -7401,4 +7401,4 @@ mixtures fail closed; completion order grants no authority.
 
 Clearing human acceptance removes its exact-candidate constraint, not Tool/workspace permission. Normal machine checking and repair may continue on the current candidate; explicit data applicability remains independently enforced.
 
-An Agent preserves Accepted(A) when its native post-node candidate remains exactly A, and clears it only when that reference changes. Agent execution/write capability is not itself a mutation fact.
+An Agent compares native admitted and post-node candidate identities. A -> A emits Unchanged; A -> B emits Cleared even under local acceptance None. The effect survives nested joins, preventing a sibling Replaced(A) from surviving mutation. Agent execution/write capability is not itself a mutation fact.

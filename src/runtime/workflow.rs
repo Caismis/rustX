@@ -2131,7 +2131,13 @@ impl WorkflowRuntime {
         agent: &WorkflowAgentProgram,
         cancellation: &crate::runtime::cancellation::ExecutionCancellation,
         admitted_access: &mut Option<crate::runtime::workspace::WorkspaceAccess>,
-    ) -> Result<crate::runtime::identity::SubagentId, WorkflowRunError> {
+    ) -> Result<
+        (
+            crate::runtime::identity::SubagentId,
+            Option<crate::runtime::workspace::CandidateReference>,
+        ),
+        WorkflowRunError,
+    > {
         let resolved = context.resolve_workflow(&agent.profile).map_err(|error| {
             WorkflowRunError::ChildStart {
                 node: node_id.to_string(),
@@ -2212,6 +2218,18 @@ impl WorkflowRuntime {
                     })?,
             );
         }
+        // Capture identity, not ownership, from the exact access transferred below.
+        let candidate_input = admitted_access
+            .as_ref()
+            .map(|access| access.input().clone());
+        if candidate_input
+            .as_ref()
+            .is_some_and(|input| input.run != run.run_id)
+        {
+            return Err(WorkflowRunError::InvalidValue(
+                "Agent candidate input belongs to another run".into(),
+            ));
+        }
         // Preparation takes ownership only here. Every earlier error leaves
         // the access in execute_block_body's explicit async cleanup scope.
         let prepared = self
@@ -2253,7 +2271,7 @@ impl WorkflowRuntime {
                 profile: agent.profile.clone(),
             },
         );
-        Ok(accepted.subagent_id)
+        Ok((accepted.subagent_id, candidate_input))
     }
 
     async fn settle_agent(
