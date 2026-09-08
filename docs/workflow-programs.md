@@ -1065,7 +1065,8 @@ Esc dismisses Review presentation; it does not answer it. Removing one pending
 item leaves unrelated drafts and interactions intact.
 
 WF-04 uses Runtime Client/TUI 21 and child IPC 19 for Review and required
-Questionnaire invocation correlation. SQLite development schema 29 freezes the
-changed audit payloads; older stores are refused, without migration. Event
+Questionnaire invocation correlation. SQLite development schema 30 retains the
+WF-04 audit payloads introduced in schema 29 and adds Loop facts; older stores
+are refused, without migration. Event
 envelope version remains 1 because framing has not changed. No durable Workflow
 or pending-interaction tables are added.

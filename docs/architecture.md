@@ -8459,8 +8459,9 @@ Tool/Agent work. Native Tool(ask_user) uses the existing requester, now bound to
 the invocation driver's cancellation scope. Approval remains permission for a
 prepared invocation; FullAccess changes only that permission gate.
 
-Runtime Client 21, child IPC 19 and SQLite development schema 29 carry the coherent
-new vocabulary. Event envelope framing remains version 1. No pending recovery or
+Runtime Client 21 and child IPC 19 carry the coherent human-step vocabulary.
+SQLite development schema 30 retains its schema-29 audit payloads and adds Loop
+facts. Event envelope framing remains version 1. No pending recovery or
 compatibility protocol is introduced.
 
 WF-04 Review decisions/feedback are immutable business data, separate from
