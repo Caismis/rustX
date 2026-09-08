@@ -2125,6 +2125,11 @@ async fn parallel_untouched_sibling_cannot_resurrect_consumed_acceptance() {
 }
 
 #[tokio::test]
+async fn parallel_unchanged_agent_preserves_incoming_acceptance() {
+    parallel_acceptance_case("inspect", false, true).await;
+}
+
+#[tokio::test]
 async fn parallel_all_unchanged_preserves_incoming_acceptance() {
     parallel_acceptance_case("unchanged", false, false).await;
 }
@@ -2250,7 +2255,9 @@ async fn parallel_acceptance_case(mode: &str, nested: bool, idle_last: bool) {
     let mut expected = expected_a.clone();
     if let Some(writer) = &mut writer {
         writer.expect_delegate().await;
-        std::fs::write(path.join("candidate"), b"B").unwrap();
+        if mode != "inspect" {
+            std::fs::write(path.join("candidate"), b"B").unwrap();
+        }
         writer
             .send_result(
                 crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
@@ -2305,7 +2312,11 @@ async fn parallel_acceptance_case(mode: &str, nested: bool, idle_last: bool) {
         assert_eq!(inputs, vec![&expected]);
         assert_eq!(
             probe.observed.lock().unwrap()[0].1,
-            if mode == "unchanged" { b"A" } else { b"B" }
+            if matches!(mode, "unchanged" | "inspect") {
+                b"A"
+            } else {
+                b"B"
+            }
         );
     }
     assert!(events.iter().any(|event| matches!(&event.event,RuntimeEvent::WorkflowNodeSettled {instance,outcome:WorkflowExecutionOutcome::Completed} if instance.node == "parallel")));
@@ -2498,5 +2509,155 @@ async fn sequential_acceptance_case(mode: &str) {
         assert_eq!(events.iter().filter(|event| matches!(&event.event,RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == "repair")).count(),1);
     } else {
         assert_eq!(final_candidate, b);
+    }
+}
+
+#[tokio::test]
+async fn unchanged_agent_preserves_exact_acceptance() {
+    unchanged_agent_case(false).await;
+}
+
+#[tokio::test]
+async fn writer_after_unchanged_agent_cannot_rebind_accepted_a_consumer() {
+    unchanged_agent_case(true).await;
+}
+
+#[allow(clippy::too_many_lines)]
+async fn unchanged_agent_case(writer_wins: bool) {
+    use crate::runtime::workflow::execution::{PreStartAction, PreStartHook};
+    let plane = workflow_test_plane(1);
+    initialize(&plane);
+    let mut initial = stage_workflow_child(&plane);
+    let mut machine = stage_workflow_child(&plane);
+    let probe = Arc::new(CandidateProbe {
+        status: ToolExecutionStatus::Success,
+        mutate: false,
+        observed: std::sync::Mutex::default(),
+    });
+    let mut context = setup_context(&plane, probe.clone());
+    let (owner, _, mut published) = super::human::owner(&plane);
+    Arc::make_mut(context.native.as_mut().unwrap()).lifecycle =
+        crate::agent::AttemptLifecycle::default().with_native_interaction(owner.clone());
+    let mut definition = program_definition();
+    definition.timeout_ms = 600_000;
+    definition.workspace = Some(WorkflowWorkspace {
+        require_clean_parent: true,
+    });
+    let check = definition.block.nodes["check"].clone();
+    definition.block.nodes = serde_json::from_value(json!({
+        "initial":repair_agent(),
+        "review":{"type":"review","subject":{"type":"candidate","value":review_reference("initial")},"context":[]},
+        "machine":repair_agent(),"check":check,
+        "done":{"type":"return","output":{"type":"literal","value":{"passed":true}}}
+    })).unwrap();
+    definition.block.entry = "initial".into();
+    definition.block.edges = vec![
+        edge("initial", "review"),
+        edge("review", "machine"),
+        edge("machine", "check"),
+        edge("check", "done"),
+    ];
+    let runtime = workflow_runtime(&plane);
+    let (acquired, acquire) = tokio::sync::oneshot::channel();
+    let (proceed, proceed_rx) = tokio::sync::oneshot::channel();
+    let (released, release_rx) = tokio::sync::oneshot::channel();
+    let (finish, finish_rx) = tokio::sync::oneshot::channel();
+    *runtime.pre_start.lock().unwrap() = Some(PreStartHook {
+        node: "machine".into(),
+        acquired,
+        proceed: proceed_rx,
+        released,
+        finish: finish_rx,
+    });
+    let program = Arc::new(compile_test(definition).unwrap());
+    let (_, cancellation) = workflow_cancellation();
+    let task = tokio::spawn(async move {
+        runtime
+            .run_foreground(
+                program,
+                ToolCallId::new("unchanged-agent"),
+                context,
+                json!({"passed":true}),
+                cancellation,
+            )
+            .await
+    });
+    initial.expect_delegate().await;
+    let path = plane
+        .registry
+        .all_snapshots()
+        .pop()
+        .unwrap()
+        .workspace
+        .logical_workspace;
+    std::fs::write(path.join("candidate"), b"A").unwrap();
+    initial
+        .send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some("{}"),
+        )
+        .await;
+    let request = published.recv().await.unwrap();
+    let crate::runtime::interaction::InteractionKind::Review { review, .. } = &request.kind else {
+        panic!("review A")
+    };
+    let a = review.candidate().unwrap().unwrap().clone();
+    owner
+        .respond_async(&request.id, super::human::answer(&request, true))
+        .await
+        .unwrap();
+    let (scope, input, node, _) = acquire.await.unwrap();
+    assert_eq!(input, a);
+    proceed
+        .send(PreStartAction::Continue)
+        .unwrap_or_else(|_| panic!("proceed"));
+    machine.expect_delegate().await;
+    // Deliberately leave the native physical candidate untouched.
+    machine
+        .send_result(
+            crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+            Some("{}"),
+        )
+        .await;
+    release_rx.await.unwrap(); // Agent physical settlement and local result commit completed.
+    let (_, fresh) = workflow_cancellation();
+    let access = scope
+        .borrow(node, Some(&a), &fresh.child_signal())
+        .await
+        .unwrap();
+    assert_eq!(access.input(), &a); // Authoritative post-Agent candidate is still exact A.
+    let post = if writer_wins {
+        std::fs::write(path.join("candidate"), b"B").unwrap();
+        access.finish(false).await.unwrap() // Legitimate native writer wins before next admission.
+    } else {
+        access.finish(true).await.unwrap()
+    };
+    assert_eq!(post == a, !writer_wins);
+    finish.send(()).unwrap();
+    let result = task.await.unwrap();
+    let events = plane.store.read_events(None, 256).unwrap().events;
+    assert_eq!(events.iter().filter(|event|matches!(&event.event,RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == "machine")).count(),1);
+    let starts = events.iter().filter(|event|matches!(&event.event,RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == "check")).count();
+    if writer_wins {
+        let error = result.unwrap_err();
+        assert!(format!("{error}").contains("stale candidate"), "{error:?}");
+        assert_eq!(starts, 0);
+        assert!(probe.observed.lock().unwrap().is_empty());
+    } else {
+        assert_eq!(result.unwrap()["output"], json!({"passed":true}));
+        assert_eq!(starts, 1);
+        let inputs = events
+            .iter()
+            .filter_map(|event| match &event.event {
+                RuntimeEvent::WorkflowCandidateInvocation { node, input, .. }
+                    if node.node == "check" =>
+                {
+                    Some(input)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(inputs, vec![&a]);
+        assert_eq!(probe.observed.lock().unwrap()[0].1, b"A");
     }
 }

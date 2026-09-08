@@ -7396,7 +7396,9 @@ it never holds a CandidateScope borrow while waiting.
 
 Parallel acceptance joins merge explicit branch effects relative to entry,
 not inherited snapshots. Unchanged siblings neither conflict with a replacement
-nor resurrect consumed acceptance. Conflicting replacements and clear/replacement
+nor resurrect cleared acceptance. Conflicting replacements and clear/replacement
 mixtures fail closed; completion order grants no authority.
 
 Clearing human acceptance removes its exact-candidate constraint, not Tool/workspace permission. Normal machine checking and repair may continue on the current candidate; explicit data applicability remains independently enforced.
+
+An Agent preserves Accepted(A) when its native post-node candidate remains exactly A, and clears it only when that reference changes. Agent execution/write capability is not itself a mutation fact.

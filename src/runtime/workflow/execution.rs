@@ -548,11 +548,19 @@ impl WorkflowRuntime {
                             .settle_agent(child, &node_instance, &agent.output_schema, cancellation)
                             .await?;
                         reservation.retain(&value.value)?;
-                        values.insert(node_id.clone(), value);
-                        if consumes && matches!(control, Acceptance::Accepted(_)) {
-                            transition = AcceptanceTransition::Cleared;
-                            control.apply(&transition);
+                        if consumes {
+                            let post = value.candidate.as_ref().filter(|post| post.run == run.run_id)
+                                .ok_or_else(|| WorkflowRunError::InvalidValue(
+                                    "candidate Agent settled without an exact post-node candidate for this run".into(),
+                                ))?;
+                            // Native physical settlement is the sole mutation fact.
+                            // Write-capable execution alone does not invalidate acceptance.
+                            if control.candidate().is_some_and(|accepted| accepted != post) {
+                                transition = AcceptanceTransition::Cleared;
+                                control.apply(&transition);
+                            }
                         }
+                        values.insert(node_id.clone(), value);
                         Ok(None)
                     }
                     WorkflowNodeProgram::Branch { condition } => {

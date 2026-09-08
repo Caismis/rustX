@@ -818,8 +818,10 @@ are one ownership transfer. Pure Branch/Return reads of Review decision/feedback
 need no candidate authority. Ordinary candidate-derived data and explicit old
 candidate references still require currentness; pure consumers hold their native
 borrow through consumption. Parallel passes acceptance separately from input data
-and does not hold a parent borrow while branches wait. A mutating Agent consumes A
-at its start; its resulting B needs a new explicit Review to gain acceptance.
+and does not hold a parent borrow while branches wait. An Agent executes under
+Accepted(A); its authoritative native post-node reference determines whether that
+constraint remains applicable. Result A preserves Accepted(A); result B != A
+clears it. B needs a new explicit Review only to gain human acceptance.
 
 Both accepted and rejected Review JSON are immutable business records. Rejection
 establishes no standing candidate authorization: after Reject A, a writer can
@@ -853,8 +855,13 @@ candidate consumption. CandidateScope still serializes every physical consumer;
 there are no independent branch candidates or workspace copies.
 
 Only explicit Accepted candidate Review emits `Replaced`. Rejection and business
-values do not change acceptance. A candidate Agent consuming existing human
-acceptance emits `Cleared`; candidate validators retain acceptance when unchanged.
+values do not change acceptance. A candidate Agent emits `Cleared` only when its authoritative post-node
+reference differs from the accepted reference; otherwise its effect is Unchanged.
+Agent type or write capability alone does not imply mutation. Machine-review
+Agents leaving the exact candidate unchanged preserve existing acceptance.
+This comparison uses the native committed result, with no extra source scan.
+Missing or wrong-run post-node candidate facts fail closed. Candidate validators
+retain acceptance when unchanged.
 The snapshot is either `Accepted(A)` (human acceptance applies to exact A) or
 `None` (no currently applicable human acceptance). Clearing acceptance removes
 that constraint; it does not revoke candidate execution authority. Agent A -> B
@@ -867,7 +874,7 @@ Within a block, the latest explicit effect supersedes earlier effects. Unchanged
 steps preserve that effect. Nested Parallel contributes its joined transition in
 exactly this way. Clearing and then explicitly reaccepting the entry candidate is
 still `Replaced(A)`, not inferred `Unchanged`. An untouched sibling can never
-resurrect acceptance consumed by another branch. All state is run-local and remains
+resurrect acceptance cleared by another branch. All state is run-local and remains
 separate from `CommittedValue` data applicability.
 
 Native writer exclusion is not a sandbox against arbitrary external host processes.
