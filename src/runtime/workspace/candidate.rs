@@ -129,13 +129,16 @@ impl WorkspaceLease {
     pub(crate) async fn retain_for_run(
         self,
         run: WorkflowRunId,
-    ) -> Result<CandidateScope, (Self, String)> {
+    ) -> Result<CandidateScope, (Box<Self>, String)> {
         if self.owner != WorkspaceOwner::Workflow(run.clone()) || !self.created {
-            return Err((self, "lease is not owned by this Workflow run".into()));
+            return Err((
+                Box::new(self),
+                "lease is not owned by this Workflow run".into(),
+            ));
         }
         let content = match self.source_identity().await {
             Ok(content) => content,
-            Err(error) => return Err((self, error)),
+            Err(error) => return Err((Box::new(self), error)),
         };
         Ok(CandidateScope {
             run: run.clone(),

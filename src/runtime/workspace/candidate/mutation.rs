@@ -1,8 +1,8 @@
 //! Kernel mutation observation, drained synchronously at physical settlement.
 //! Queue loss and watch loss invalidate validation, never imply unchanged.
-#[cfg(target_os = "macos")]
-use super::super::super::{Mode, OFlag};
 use super::{BTreeSet, PathBuf, WorkspaceLease};
+#[cfg(target_os = "macos")]
+use nix::{fcntl::OFlag, sys::stat::Mode};
 
 #[derive(Debug)]
 pub(super) struct MutationWatch {

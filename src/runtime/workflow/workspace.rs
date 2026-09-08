@@ -63,7 +63,7 @@ impl WorkflowRuntime {
         let candidate = match lease.retain_for_run(run.run_id.clone()).await {
             Ok(candidate) => candidate,
             Err((lease, detail)) => {
-                let workspace = lease
+                let workspace = (*lease)
                     .settle_staged()
                     .await
                     .unwrap_or_else(|error| *error.settlement);
