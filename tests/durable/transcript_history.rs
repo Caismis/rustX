@@ -132,6 +132,7 @@ fn tool_result(message_id: &str, call_id: &str, body: &str) -> MessageBlock {
             exit_code: Some(0),
             artifacts: Vec::new(),
             truncation: None,
+            workflow: None,
             managed_output: Some(rustx::tools::types::ManagedOutputContinuation::Complete {
                 locator: "/private/tool-output/results/result_1.txt".into(),
             }),

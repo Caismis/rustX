@@ -94,7 +94,7 @@ fn request(model: &Arc<FakeModel>) -> AgentExecutionRequest {
 
 fn context_runtime(
     model: &Arc<FakeModel>,
-    clock: Arc<ManualMonotonicClock>,
+    clock: Arc<dyn MonotonicClock>,
 ) -> rustx::context::ContextRuntime {
     let snapshot = support::attempt_model(model.clone(), "fake-model");
     rustx::context::ContextRuntime::for_attempt(
@@ -114,7 +114,7 @@ fn context_runtime(
 
 fn execution_policy(
     tool_deadline_policy: ToolExecutionDeadlinePolicy,
-    clock: Arc<ManualMonotonicClock>,
+    clock: Arc<dyn MonotonicClock>,
 ) -> crate::agent::execution::AgentExecutionRuntimePolicy {
     crate::agent::execution::AgentExecutionRuntimePolicy {
         model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
@@ -295,6 +295,7 @@ impl DeadlineProbeTool {
                 exit_code: None,
                 artifacts: Vec::new(),
                 truncation: None,
+                workflow: None,
                 managed_output: None,
             },
             ProbeCancelSettlement::OutcomeUnknown => ToolExecutionResult {
@@ -308,6 +309,7 @@ impl DeadlineProbeTool {
                 exit_code: None,
                 artifacts: Vec::new(),
                 truncation: None,
+                workflow: None,
                 managed_output: None,
             },
             ProbeCancelSettlement::Completed => self.result.clone(),
@@ -637,6 +639,7 @@ impl ToolExecutor for DetachedSettlementTool {
                 exit_code: None,
                 artifacts: Vec::new(),
                 truncation: None,
+                workflow: None,
                 managed_output: None,
             })
         });
@@ -760,7 +763,7 @@ async fn run(
     model: &Arc<FakeModel>,
     tools: ToolRegistry,
     policy: ToolExecutionDeadlinePolicy,
-    clock: Arc<ManualMonotonicClock>,
+    clock: Arc<dyn MonotonicClock>,
     cancellation: &AgentCancellation,
 ) -> common::DurableExecutionAudit {
     let tool_runtime = common::tool_runtime(CONVERSATION);
@@ -1177,24 +1180,18 @@ async fn issue204_simultaneous_hard_and_idle_have_one_winner() {
         ProbeCancelSettlement::Cancelled,
         false,
     );
-    let mut started = probe.started;
-
-    let clock = Arc::new(ManualMonotonicClock::new());
-    let controller_clock = clock.clone();
-    let controller = tokio::spawn(async move {
-        await_started(&mut started, "tied tool").await;
-        controller_clock.advance(10_000);
-    });
+    let _probe = probe;
+    let clock = Arc::new(BetweenDeadlinePollsClock::default());
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let audit = run(
         &model,
         tools,
         deadline_policy(10_000, Some(10_000)),
-        clock,
+        clock.clone(),
         &cancellation,
     )
     .await;
-    controller.await.expect("tie controller");
+    assert!(clock.crossed.load(std::sync::atomic::Ordering::SeqCst));
 
     let messages = tool_messages(&audit);
     assert_eq!(messages.len(), 1, "no duplicate settlement");
@@ -1213,6 +1210,37 @@ async fn issue204_simultaneous_hard_and_idle_have_one_winner() {
         ],
         "the hard deadline is the documented simultaneous-eligibility winner"
     );
+}
+
+/// Force hard Pending at zero, then advance to the common deadline before
+/// idle is polled. Biased polling alone must fail this exact interleaving.
+#[derive(Debug, Default)]
+struct BetweenDeadlinePollsClock {
+    clock: Arc<ManualMonotonicClock>,
+    crossed: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl MonotonicClock for BetweenDeadlinePollsClock {
+    fn now_millis(&self) -> u64 {
+        self.clock.now_millis()
+    }
+
+    fn wait_until_millis(&self, deadline: u64) -> futures_util::future::BoxFuture<'static, ()> {
+        let mut wait = self.clock.wait_until_millis(deadline);
+        let clock = self.clock.clone();
+        let crossed = self.crossed.clone();
+        Box::pin(std::future::poll_fn(move |cx| {
+            let ready = wait.as_mut().poll(cx);
+            if deadline == 10_000
+                && ready.is_pending()
+                && !crossed.swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                assert_eq!(clock.now_millis(), 0);
+                clock.advance(10_000);
+            }
+            ready
+        }))
+    }
 }
 
 /// F: an executor that crossed its external-effect frontier and cannot

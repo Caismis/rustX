@@ -67,6 +67,8 @@ pub struct RuntimeDurabilityFailure {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeClientSnapshot {
+    /// Bounded native Workflow state, never reconstructed from the journal.
+    pub workflows: crate::runtime::workflow::read_model::WorkflowSnapshot,
     /// The conversation this snapshot belongs to.
     pub conversation_id: ConversationId,
     /// Whether runtime drain has begun and new inbound admission is closed.

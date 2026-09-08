@@ -270,6 +270,7 @@ impl ToolExecutor for SubagentExecutor {
                             exit_code: None,
                             artifacts: Vec::new(),
                             truncation: None,
+                            workflow: None,
                             managed_output: None,
                         };
                     }
@@ -291,6 +292,7 @@ impl ToolExecutor for SubagentExecutor {
                         exit_code: None,
                         artifacts: Vec::new(),
                         truncation: None,
+                        workflow: None,
                         managed_output: None,
                     },
                     Err(SubagentStartError::ConversationInactive) => {

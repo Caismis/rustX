@@ -1519,3 +1519,12 @@ single model stream
 ## WF-03 — candidate-bound workspace handoff (#219)
 
 Implemented run-scoped managed workspace declaration, one generalized native owner, retained leases with serialized node borrowing, exact dirty-source version identity, native Tool context binding, mutation invalidation and failure handoff. Durable resource inspection/disposal remains distinct from execution recovery. SQLite/IPC/Runtime Client development contracts are 28/18/20. Deterministic regressions cover cross-node bytes, frozen baseline/resources, physical-user gates, stale authority, acquisition cancellation, mutation, retention and idempotent disposal. Review (#220), Loop (#221), inspector (#222) and reference suite (#223) remain separate. See [WF-03 contract](workflow-programs.md#run-scoped-candidate-workspace-wf-03).
+
+## WF-06 — native foreground run details (#222)
+
+Runtime Client development protocol 22 carries authoritative process-local
+Workflow cuts and concrete execution instances. Journal/SQLite and child IPC
+contracts are unchanged by this read-model addition. The foreground Tool card
+projects native waits, cancellation draining, candidate applicability, finite
+Loop exits and retained handoff. See [the projection contract](workflow-run-projection.md)
+for the revision/cursor handoff, retention limits and reconnect/death boundary.

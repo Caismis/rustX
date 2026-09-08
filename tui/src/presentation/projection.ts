@@ -59,6 +59,7 @@ export function emptyPresentationState(
 ): PresentationState {
   return {
     conversationId: "",
+    workflows: { revision: 0, runs: [], omitted_runs: 0 },
     cursor: 0 as RuntimeClientCursor,
     transcript: [],
     inbound: { pending: [], last_drain: undefined },
@@ -127,6 +128,7 @@ export function replaceFromSnapshot(
 
   return {
     conversationId: snapshot.conversation_id,
+    workflows: snapshot.workflows,
     cursor,
     transcript: orderTranscript(transcript),
     transcriptNextCursor: snapshot.transcript.next_cursor,
@@ -208,6 +210,8 @@ export function reduce(
   const next = { ...state, cursor: protocolEvent.cursor };
 
   switch (event.type) {
+    case "workflows_updated":
+      return { ...state, cursor: protocolEvent.cursor, workflows: event.workflows };
     case "attempt_started":
       // The frozen model travels with the event, so the active attempt's
       // model is known without a snapshot round trip and without inference.

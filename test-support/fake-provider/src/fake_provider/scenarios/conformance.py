@@ -289,6 +289,27 @@ def workflow_tool() -> Scenario:
     )
 
 
+def workflow_retention() -> Scenario:
+    """Nine sequential native Workflow calls exceed the eight-run detail cap."""
+    return Scenario(
+        "workflow_retention",
+        *(Step(
+            Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
+                   body_contains=("workflow conformance request",), tools_include=("review_pr",)),
+            Stream(Gate(f"workflow-{i}"),
+                   ToolCall(f"call-review-pr-{i}", "review_pr",
+                            '{"task":"workflow conformance request"}'),
+                   Finish("tool_calls")),
+        ) for i in range(9)),
+        Step(
+            Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=WORKFLOW_MODEL,
+                   body_contains=("review_pr.yaml",), tools_include=("review_pr",),
+                   body_excludes=("program_digest",)),
+            Stream(Gate("workflow-complete"), Text("workflow conformance complete"), Finish("stop")),
+        ),
+    )
+
+
 def workflow_greeting() -> Scenario:
     """The checked-in managed Python verifier returns successful false findings."""
     return Scenario(
@@ -551,6 +572,7 @@ SCENARIOS = {
     "skill_read_turn": skill_read_turn,
     "workflow_output": workflow_output,
     "workflow_tool": workflow_tool,
+    "workflow_retention": workflow_retention,
     "workflow_greeting": workflow_greeting,
     "provider_http_error": provider_http_error,
     "gated_stream_cancellation": gated_stream_cancellation,

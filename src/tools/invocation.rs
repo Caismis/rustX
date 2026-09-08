@@ -144,6 +144,7 @@ pub(crate) fn terminal(status: ToolExecutionStatus) -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        workflow: None,
         managed_output: None,
     }
 }
@@ -282,7 +283,17 @@ impl ForegroundInvocation<'_> {
                 Winner::Cancellation(reason)
             },
             () = self.clock.wait_until_millis(hard_deadline) => Winner::Deadline(ToolDeadlineKind::Hard),
-            () = idle_wait => Winner::Deadline(ToolDeadlineKind::Idle),
+            () = idle_wait => {
+                // Biased polling is not an atomic clock cut: time can advance
+                // after the hard future returned Pending, before idle is polled.
+                // Commit deadline priority from one current logical-clock read.
+                let kind = if self.clock.now_millis() >= hard_deadline {
+                    ToolDeadlineKind::Hard
+                } else {
+                    ToolDeadlineKind::Idle
+                };
+                Winner::Deadline(kind)
+            },
             result = completion.as_mut() => {
                 #[cfg(test)]
                 if let Some(hook) = self.completion_won { hook(); }

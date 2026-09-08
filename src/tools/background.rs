@@ -1965,6 +1965,7 @@ impl ConversationBackgroundRegistry {
                                 exit_code: None,
                                 artifacts: Vec::new(),
                                 truncation: None,
+                                workflow: None,
                                 managed_output: None,
                             }
                         }
@@ -2056,6 +2057,7 @@ fn accepted_result(
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        workflow: None,
         managed_output: None,
     }
 }
@@ -2460,6 +2462,7 @@ mod tests {
             exit_code: None,
             artifacts: Vec::new(),
             truncation: None,
+            workflow: None,
             managed_output: None,
         }
     }
@@ -4819,6 +4822,7 @@ mod tests {
             exit_code: Some(0),
             artifacts: Vec::new(),
             truncation: None,
+            workflow: None,
             managed_output: Some(crate::tools::types::ManagedOutputContinuation::Complete {
                 locator: std::path::PathBuf::from(path),
             }),
@@ -4895,6 +4899,7 @@ mod tests {
             exit_code: None,
             artifacts: Vec::new(),
             truncation: None,
+            workflow: None,
             managed_output: None,
         }));
         let prepared = prepare(&fixture, &executor);
@@ -4971,6 +4976,7 @@ mod tests {
             exit_code: Some(0),
             artifacts: Vec::new(),
             truncation: None,
+            workflow: None,
             managed_output: Some(crate::tools::types::ManagedOutputContinuation::Partial {
                 locator: std::path::PathBuf::from(path),
                 diagnostic: enormous.clone(),
@@ -5008,6 +5014,7 @@ mod tests {
         // still bounded rather than silently breaking the invariant.
         let giant_locator = format!("/{}", "a".repeat(bound * 2));
         let pathological = ToolExecutionResult {
+            workflow: None,
             managed_output: Some(crate::tools::types::ManagedOutputContinuation::Complete {
                 locator: std::path::PathBuf::from(&giant_locator),
             }),

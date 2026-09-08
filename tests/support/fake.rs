@@ -526,6 +526,7 @@ fn cancelled_execution_result() -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        workflow: None,
         managed_output: None,
     }
 }
@@ -610,6 +611,7 @@ pub fn success_result(text: &str) -> ToolExecutionResult {
         exit_code: Some(0),
         artifacts: Vec::new(),
         truncation: None,
+        workflow: None,
         managed_output: None,
     }
 }
@@ -626,6 +628,7 @@ pub fn failed_result(error: &str) -> ToolExecutionResult {
         exit_code: Some(1),
         artifacts: Vec::new(),
         truncation: None,
+        workflow: None,
         managed_output: None,
     }
 }

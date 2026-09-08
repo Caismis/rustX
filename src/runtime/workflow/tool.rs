@@ -151,6 +151,11 @@ impl WorkflowRuntime {
         } else if admitted_access.is_none()
             && let Some(candidate) = &run.candidate
         {
+            self.read_model.node(node, |view| {
+                view.state = super::read_model::WorkflowState::Waiting {
+                    reason: super::read_model::WorkflowWait::Workspace,
+                }
+            });
             *admitted_access = Some(
                 candidate
                     .borrow(node.clone(), arguments.candidate.as_ref(), &signal)
@@ -253,6 +258,10 @@ impl WorkflowRuntime {
         let id = ToolInvocationId::Workflow {
             node: Box::new(node.clone()),
         };
+        self.read_model.node(node, |view| {
+            view.invocation = Some(id.clone());
+            view.tool_id = Some(definition.id.clone());
+        });
         let prepared = match registration
             .prepare_fixed(id.clone(), definition, &arguments)
             .map_err(WorkflowRunError::IdentityChanged)?
@@ -282,6 +291,11 @@ impl WorkflowRuntime {
             audit_arguments: &prepared.invocation.arguments,
             approval_policy: prepared.approval,
         };
+        self.read_model.node(node, |view| {
+            view.state = super::read_model::WorkflowState::Waiting {
+                reason: super::read_model::WorkflowWait::Approval,
+            }
+        });
         let result = if let Some(result) =
             crate::tools::invocation::authorize(&services.lifecycle, &view, cancellation)
                 .await
@@ -307,6 +321,11 @@ impl WorkflowRuntime {
                     },
                 }
             };
+            self.read_model.node(node, |view| {
+                view.state = super::read_model::WorkflowState::Waiting {
+                    reason: super::read_model::WorkflowWait::Capacity,
+                }
+            });
             let permit = tokio::select! {
                 biased;
                 () = cancellation.cancelled() => None,
@@ -320,6 +339,15 @@ impl WorkflowRuntime {
             } else {
                 // Execution-start frontier, before construction or first poll.
                 emit(NativeInvocationFact::Started);
+                self.read_model.node(node, |view| {
+                    view.state = super::read_model::WorkflowState::Waiting {
+                        reason: if definition.name == "ask_user" {
+                            super::read_model::WorkflowWait::Questionnaire
+                        } else {
+                            super::read_model::WorkflowWait::Tool
+                        },
+                    }
+                });
                 let progress = NativeProgress(std::sync::Mutex::new(Vec::new()));
                 let native_context = ToolExecutionContext::new(
                     &run.run_id.conversation_id,

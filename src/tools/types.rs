@@ -297,6 +297,11 @@ pub struct ToolInvocation {
 /// keeping one source of truth for tool results.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolExecutionResult {
+    /// Immutable native Workflow identity on the existing outer result.
+    /// Historical identity only: no execution state or continuation authority.
+    /// Its retention is exactly that of this result, never a separate registry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<Box<crate::runtime::workflow::WorkflowToolIdentity>>,
     /// Typed execution status, including unknown external outcomes.
     pub status: ToolExecutionStatus,
     /// Tool-owned result content.
@@ -1055,6 +1060,7 @@ mod tests {
                 truncated: false,
                 original_bytes: None,
             }),
+            workflow: None,
             managed_output: None,
         };
         let json = serde_json::to_string(&result).expect("serialize result");
@@ -1133,6 +1139,7 @@ mod tests {
             exit_code: None,
             artifacts: Vec::new(),
             truncation: None,
+            workflow: None,
             managed_output: None,
         };
         let projection = result.model_facing_projection();
@@ -1164,6 +1171,7 @@ mod tests {
             exit_code: None,
             artifacts: Vec::new(),
             truncation: None,
+            workflow: None,
             managed_output: Some(super::ManagedOutputContinuation::Complete {
                 locator: std::path::PathBuf::from("/tmp/rustx/results/result_7.txt"),
             }),
@@ -1196,6 +1204,7 @@ mod tests {
             exit_code: None,
             artifacts: Vec::new(),
             truncation: None,
+            workflow: None,
             managed_output: None,
         };
         let projection = result.model_facing_projection();
@@ -1221,6 +1230,7 @@ mod tests {
             exit_code: None,
             artifacts: Vec::new(),
             truncation: None,
+            workflow: None,
             managed_output: Some(super::ManagedOutputContinuation::Complete {
                 locator: std::path::PathBuf::from("/tmp/rustx/results/result_8.txt"),
             }),
@@ -1269,6 +1279,7 @@ mod tests {
                 exit_code: None,
                 artifacts: Vec::new(),
                 truncation: None,
+                workflow: None,
                 managed_output: None,
             };
             let projection = result.model_facing_projection();

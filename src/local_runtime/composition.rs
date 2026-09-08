@@ -1298,8 +1298,11 @@ impl LocalConversationCore {
                 max_active: runtime_config.subagents.max_concurrent,
             },
         );
-        let workflow_runtime =
-            WorkflowRuntime::new(subagents.clone(), tool_runtime.durable_store());
+        let workflow_runtime = WorkflowRuntime::new(
+            subagents.clone(),
+            tool_runtime.durable_store(),
+            tool_runtime.workflows().clone(),
+        );
         let mut base_registry = ToolRegistry::new();
         let native_resources = NativeToolResources {
             background: tool_runtime.background().clone(),

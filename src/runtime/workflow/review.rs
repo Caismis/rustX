@@ -98,6 +98,12 @@ impl WorkflowRuntime {
         } else {
             None
         };
+        self.read_model.node(node, |view| {
+            view.state = super::read_model::WorkflowState::Waiting {
+                reason: super::read_model::WorkflowWait::Review,
+            };
+            view.candidate.clone_from(&candidate);
+        });
         let outcome = coordinator
             .request_review(
                 specification,
@@ -128,6 +134,8 @@ impl WorkflowRuntime {
                     ReviewDecision::Accepted => (true, String::new()),
                     ReviewDecision::Rejected { feedback } => (false, feedback),
                 };
+                self.read_model
+                    .node(node, |view| view.review_accepted = Some(accepted));
                 Ok((
                     expressions::CommittedValue::from(
                         serde_json::json!({"accepted":accepted,"feedback":feedback}),

@@ -107,6 +107,7 @@ fn tool_result(id: &str, call: &ToolCall) -> MessageBlock {
             exit_code: Some(0),
             artifacts: Vec::new(),
             truncation: None,
+            workflow: None,
             managed_output: None,
         },
     })

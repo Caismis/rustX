@@ -1848,6 +1848,7 @@ mod tests {
                 exit_code: None,
                 artifacts: Vec::new(),
                 truncation: None,
+                workflow: None,
                 managed_output: None,
             },
         })

@@ -674,6 +674,7 @@ async fn issue136_cancellation_winner_keeps_the_executor_settled_outcome_unknown
             exit_code: None,
             artifacts: Vec::new(),
             truncation: None,
+            workflow: None,
             managed_output: None,
         })
         .await;
@@ -733,6 +734,7 @@ async fn issue136_physical_result_winner_freezes_executor_cancellation_reason() 
             exit_code: None,
             artifacts: Vec::new(),
             truncation: None,
+            workflow: None,
             managed_output: None,
         },
     }

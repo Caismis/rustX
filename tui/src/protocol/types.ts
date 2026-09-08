@@ -24,6 +24,8 @@
  */
 
 /**
+ * Version 22 adds bounded native Workflow snapshots, replacement events,
+ * and historical Workflow identity on the existing outer Tool result.
  * Version 17 adds `denied` to background terminal states (Issue #206).
  * Version 16 carries Issue #202's explicit tool outcome certainty: tool
  * status `interrupted` becomes `outcome_unknown` with a bounded `detail`;
@@ -47,7 +49,7 @@
  * version 11's subagent activity projection; and version 9's closed
  * `interrupted` lifecycle vocabulary. Older schemas are not decoded.
  */
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 21;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 22;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -256,6 +258,8 @@ export interface TruncationState {
 }
 
 export interface ToolExecutionResult {
+  /** Native historical identity, never executable state or business acceptance. */
+  workflow?: { workflow_id: string; program_digest: string };
   status: ToolExecutionStatus;
   content?: ToolResultContent[];
   duration_ms: number;
@@ -1204,7 +1208,48 @@ export interface TodoSnapshot {
   next_id: number;
 }
 
+export type WorkflowOutcome = "completed" | "failed" | "cancelled" | "denied" | "timed_out" | "outcome_unknown";
+export type WorkflowWait = "tool" | "agent" | "capacity" | "workspace" | "questionnaire" | "approval" | "review" | "settlement";
+export type WorkflowState = { type: "pending" | "running" | "draining" }
+  | { type: "waiting"; reason: WorkflowWait }
+  | { type: "settled"; outcome: WorkflowOutcome };
+export interface WorkflowInstanceView {
+  block: WorkflowNodeInstance["block"];
+  node: string | null;
+  visit: number | null;
+  kind: "block" | "agent" | "tool" | "branch" | "parallel" | "review" | "loop" | "return";
+  state: WorkflowState;
+  child: SubagentId | null;
+  invocation: ToolInvocationId | null;
+  tool_id: ToolId | null;
+  interaction: InteractionRef | null;
+  iteration: number | null;
+  iterations_max: number | null;
+  loop_exit: "satisfied" | "exhausted" | null;
+  candidate: ReviewCandidate | null;
+  checks_passed: boolean | null;
+  review_accepted: boolean | null;
+}
+export interface WorkflowRunView {
+  id: WorkflowNodeInstance["block"]["run"];
+  workflow_id: string;
+  program_digest: string;
+  resource_revision: number;
+  tool_call_id: ToolCallId;
+  state: WorkflowState;
+  instances: WorkflowInstanceView[];
+  omitted_instances: number;
+  steps_consumed: number;
+  steps_max: number;
+  agents_consumed: number;
+  candidate_users: number;
+  candidate: ReviewCandidate | null;
+  handoff: { state: string; path: string; truncated: boolean } | null;
+}
+export interface WorkflowSnapshot { revision: number; runs: WorkflowRunView[]; omitted_runs: number }
+
 export interface RuntimeClientSnapshot {
+  workflows: WorkflowSnapshot;
   conversation_id: ConversationId;
   shutting_down: boolean;
   effective_approval_mode: ApprovalMode;
@@ -1320,6 +1365,7 @@ export interface PublicationAudit {
 }
 
 export type RuntimeClientEvent =
+  | { type: "workflows_updated"; workflows: WorkflowSnapshot }
   | {
       type: "attempt_started";
       attempt_id: AttemptId;
@@ -1934,6 +1980,7 @@ export function isKnownRuntimeClientEvent(
     case "tool_call_assembled":
     case "assistant_publication_settled":
     case "tool_execution_started":
+    case "workflows_updated":
     case "tool_execution_progress":
     case "tool_execution_settled":
     case "message_committed":

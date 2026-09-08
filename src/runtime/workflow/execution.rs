@@ -1,5 +1,6 @@
 //! The single root/Parallel/Loop block executor. Native children settle inline.
 use super::expressions::CommittedValue;
+use super::read_model::{WorkflowState, WorkflowWait};
 use super::{
     BTreeMap, MAX_VALUE_BYTES, MAX_WORKFLOW_AGENTS, MAX_WORKFLOW_STEPS, RuntimeEvent, Value,
     WorkflowBlockInstance, WorkflowBlockProgram, WorkflowDefinitionPath, WorkflowExecutionOutcome,
@@ -340,6 +341,7 @@ impl WorkflowRuntime {
                 },
                 invocations,
             };
+            self.read_model.block(&run.run_id, block, &instance);
             self.emit_observability(
                 run,
                 RuntimeEvent::WorkflowBlockStarted {
@@ -357,6 +359,17 @@ impl WorkflowRuntime {
                     cancellation,
                 )
                 .await;
+            self.read_model.update(&run.run_id, |view| {
+                if let Some(view) = view
+                    .instances
+                    .iter_mut()
+                    .find(|view| view.block == instance && view.node.is_none())
+                {
+                    view.state = WorkflowState::Settled {
+                        outcome: outcome(&result),
+                    };
+                }
+            });
             self.emit_observability(
                 run,
                 RuntimeEvent::WorkflowBlockSettled {
@@ -451,6 +464,11 @@ impl WorkflowRuntime {
                 .as_ref()
                 .filter(|_| consumes || !matches!(node, WorkflowNodeProgram::Tool { .. }))
             {
+                self.read_model.node(&node_instance, |view| {
+                    view.state = WorkflowState::Waiting {
+                        reason: WorkflowWait::Workspace,
+                    };
+                });
                 Some(
                     run.candidate
                         .as_ref()
@@ -525,6 +543,17 @@ impl WorkflowRuntime {
                 {
                     let mut budgets = run.budgets.lock().expect("run budgets");
                     budgets.admit(run.program.execution_bound, matches!(node, WorkflowNodeProgram::Agent(_)), cancellation)?;
+                    // Both locks belong to Workflow; no callback or await enters
+                    // another owner. Admission and its bounded native cut commit
+                    // together before the first poll of any descendant work.
+                    self.read_model.update(&run.run_id, |view| {
+                        view.steps_consumed = budgets.steps;
+                        view.agents_consumed = budgets.agents;
+                        if let Some(row) = view.instances.iter_mut().find(|row| row.block == node_instance.block && row.node.as_ref() == Some(&node_instance.node)) {
+                            row.state = WorkflowState::Running;
+                        }
+                        if consumes { view.candidate = None; view.candidate_users += 1; }
+                    });
                 }
                 self.emit_observability(
                     run,
@@ -574,6 +603,13 @@ impl WorkflowRuntime {
                             {
                                 let mut budgets = run.budgets.lock().expect("run budgets");
                                 budgets.admit(run.program.execution_bound, false, cancellation)?;
+                                self.read_model.update(&run.run_id, |view| {
+                                    view.steps_consumed = budgets.steps;
+                                    view.agents_consumed = budgets.agents;
+                                    if let Some(row) = view.instances.iter_mut().find(|row| row.block == node_instance.block && row.node.as_ref() == Some(&node_instance.node)) {
+                                        row.iteration = Some(iteration);
+                                    }
+                                });
                             }
                             let mut invocations = instance.invocations.clone();
                             invocations.push(iteration);
@@ -609,6 +645,7 @@ impl WorkflowRuntime {
                                 if cancellation.is_cancelled() { return Err(WorkflowRunError::from_cancellation(cancellation)); }
                                 values.insert(node_id.clone(), CommittedValue { value, candidate: scope["result"].candidate.clone() });
                                 self.emit_observability(run, RuntimeEvent::WorkflowLoopExited { node: node_instance.clone(), iterations: iteration, status });
+                                self.read_model.node(&node_instance, |view| view.loop_exit = Some(status));
                                 let port = match status {
                                     super::WorkflowLoopExit::Satisfied => WorkflowPort::Satisfied,
                                     super::WorkflowLoopExit::Exhausted => WorkflowPort::Exhausted,
@@ -698,6 +735,11 @@ impl WorkflowRuntime {
                             )
                             .await?;
                         let value = result.project(&native, &node_instance)?;
+                        self.read_model.node(&node_instance, |view| {
+                            view.candidate.clone_from(&candidate);
+                            view.checks_passed = value.get("passed").and_then(Value::as_bool);
+                        });
+                        if let Some(candidate) = &candidate { self.read_model.update(&run.run_id, |view| view.candidate = Some(candidate.clone())); }
                         reservation.retain(&value)?;
                         // Physical settlement and source verification precede
                         // this sole candidate-bound local commit.
@@ -720,6 +762,7 @@ impl WorkflowRuntime {
                         let value = self
                             .settle_agent(child, &node_instance, &agent.output_schema, cancellation)
                             .await?;
+                        if let Some(candidate) = &value.candidate { self.read_model.update(&run.run_id, |view| view.candidate = Some(candidate.clone())); }
                         reservation.retain(&value.value)?;
                         if consumes {
                             let post = value.candidate.as_ref().filter(|post| post.run == run.run_id)
@@ -908,6 +951,15 @@ impl WorkflowRuntime {
                 let _ = finish.await;
             }
             if started {
+                if consumes {
+                    self.read_model
+                        .update(&run.run_id, |view| view.candidate_users -= 1);
+                }
+                self.read_model.node(&node_instance, |view| {
+                    view.state = WorkflowState::Settled {
+                        outcome: outcome(&result),
+                    }
+                });
                 self.emit_observability(
                     run,
                     RuntimeEvent::WorkflowNodeSettled {
@@ -942,7 +994,7 @@ pub(super) fn validate_commit(schema: &Value, value: &Value) -> Result<(), Workf
     Ok(())
 }
 
-fn outcome<T>(result: &Result<T, WorkflowRunError>) -> WorkflowExecutionOutcome {
+pub(super) fn outcome<T>(result: &Result<T, WorkflowRunError>) -> WorkflowExecutionOutcome {
     match result {
         Ok(_) => WorkflowExecutionOutcome::Completed,
         Err(error) => match error.execution_status() {

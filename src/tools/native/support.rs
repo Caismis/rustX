@@ -222,6 +222,7 @@ pub fn failed_result(error: impl Into<String>) -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        workflow: None,
         managed_output: None,
     }
 }
@@ -241,6 +242,7 @@ pub fn cancelled_result(reason: CancellationReason) -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        workflow: None,
         managed_output: None,
     }
 }
@@ -256,6 +258,7 @@ pub fn success_json(value: serde_json::Value) -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+        workflow: None,
         managed_output: None,
     }
 }
@@ -275,6 +278,7 @@ pub fn success_text(
         exit_code: None,
         artifacts: Vec::new(),
         truncation,
+        workflow: None,
         managed_output: None,
     }
 }

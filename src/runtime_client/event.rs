@@ -47,6 +47,10 @@ use crate::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolProg
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeClientEvent {
+    /// Complete bounded replacement at one native Workflow revision.
+    WorkflowsUpdated {
+        workflows: crate::runtime::workflow::read_model::WorkflowSnapshot,
+    },
     /// An attempt started executing.
     ///
     /// The event is self-contained: it carries the immutable model snapshot

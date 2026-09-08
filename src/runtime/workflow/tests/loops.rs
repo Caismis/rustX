@@ -25,6 +25,64 @@ fn assert_no_normal_exit(events: &[RuntimeEvent]) {
     }));
 }
 
+#[tokio::test]
+async fn native_observation_lag_does_not_change_loop_requests_or_outcome() {
+    let plane = workflow_test_plane(1);
+    let runtime = workflow_runtime(&plane);
+    let checker = Arc::new(Checker {
+        starts: AtomicUsize::new(0),
+        satisfied_at: usize::MAX,
+        received: std::sync::Mutex::new(Vec::new()),
+    });
+    let context = context_with_registration(
+        &plane,
+        ToolRegistration::plain(definition(), checker.clone()),
+        crate::agent::AttemptLifecycle::default(),
+    );
+    let (_, cancellation) = workflow_cancellation();
+    let history = plane.store.load_canonical().unwrap();
+    // The native cut consumer is deliberately absent for the entire run.
+    let output = runtime
+        .run_foreground(
+            Arc::new(compile_test(checker_definition(100)).unwrap()),
+            ToolCallId::new("lagged"),
+            context,
+            json!({"passed":false,"label":"initial"}),
+            cancellation,
+        )
+        .await
+        .unwrap();
+    let cuts = runtime
+        .read_model
+        .cuts_after(read_model::WorkflowRevision(0));
+    assert!(
+        cuts[0].revision.0 > 1,
+        "bounded native observations expired"
+    );
+    let snapshot = runtime.read_model.snapshot();
+    assert_eq!(
+        cuts.last(),
+        Some(&snapshot),
+        "repair is the current native authority"
+    );
+    assert_eq!(checker.starts.load(Ordering::SeqCst), 100);
+    assert_eq!(output["status"], "exhausted");
+    assert_eq!(output["iterations"], 100);
+    assert!(snapshot.runs[0].omitted_instances > 0);
+    assert!(matches!(
+        snapshot.runs[0].state,
+        read_model::WorkflowState::Settled {
+            outcome: WorkflowExecutionOutcome::Completed
+        }
+    ));
+    assert_eq!(plane.store.load_canonical().unwrap(), history);
+    assert!(plane.registry.all_snapshots().is_empty());
+    for _ in 0..10 {
+        assert_eq!(runtime.read_model.snapshot(), snapshot);
+    }
+    assert_eq!(checker.starts.load(Ordering::SeqCst), 100);
+}
+
 #[test]
 fn loop_requires_both_explicit_outcome_ports_even_when_body_result_is_projected() {
     let shared = checker_definition(3);
@@ -107,6 +165,48 @@ async fn explicit_outcomes_select_only_the_matching_successor_with_the_full_valu
         assert_eq!(
             output,
             json!({"status":status,"iterations":count,"result":{"passed":status == "satisfied","label":format!("committed-{count}")}})
+        );
+        assert_eq!(checker.starts.load(Ordering::SeqCst), count);
+        let native = runtime.read_model.snapshot();
+        assert_eq!(native.runs.len(), 1);
+        let run = &native.runs[0];
+        assert!(matches!(
+            run.state,
+            read_model::WorkflowState::Settled {
+                outcome: WorkflowExecutionOutcome::Completed
+            }
+        ));
+        let loop_node = run
+            .instances
+            .iter()
+            .find(|row| row.node.as_deref() == Some("feedback"))
+            .unwrap();
+        assert_eq!(loop_node.iteration, Some(u32::try_from(count).unwrap()));
+        assert_eq!(loop_node.iterations_max, Some(3));
+        assert_eq!(
+            loop_node.loop_exit,
+            Some(if status == "satisfied" {
+                WorkflowLoopExit::Satisfied
+            } else {
+                WorkflowLoopExit::Exhausted
+            })
+        );
+        let bodies: Vec<_> = run
+            .instances
+            .iter()
+            .filter(|row| row.node.is_none() && row.block.invocations.len() == 2)
+            .collect();
+        assert_eq!(bodies.len(), count);
+        for (index, body) in bodies.iter().enumerate() {
+            assert_eq!(
+                body.block.invocations,
+                [0, u32::try_from(index + 1).unwrap()]
+            );
+        }
+        assert_eq!(
+            runtime.read_model.snapshot(),
+            native,
+            "viewing has no native side effects"
         );
         assert_eq!(checker.starts.load(Ordering::SeqCst), count);
         let events = observations.borrow();
@@ -720,6 +820,17 @@ async fn nested_loops_inside_parallel_have_bounded_counts_and_inherited_identity
         })
         .collect::<Vec<_>>();
     assert_eq!(instances.len(), 18);
+    let native = runtime.read_model.snapshot();
+    let blocks: BTreeSet<_> = native.runs[0]
+        .instances
+        .iter()
+        .filter(|row| row.node.is_none())
+        .map(|row| row.block.clone())
+        .collect();
+    assert!(
+        instances.iter().all(|instance| blocks.contains(instance)),
+        "all concrete nested Loop bodies are projected, independently of journal evidence"
+    );
     assert_eq!(instances.iter().collect::<BTreeSet<_>>().len(), 18);
     assert!(
         instances

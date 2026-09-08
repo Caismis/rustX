@@ -1179,6 +1179,7 @@ async fn continuation_tail_preserves_tool_then_users_order() {
                 exit_code: Some(0),
                 artifacts: Vec::new(),
                 truncation: None,
+                workflow: None,
                 managed_output: None,
             },
         })),

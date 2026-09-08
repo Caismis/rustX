@@ -141,6 +141,16 @@ export class ProviderEmulator {
     return body.requests;
   }
 
+  /** Await an exact provider frontier, without polling or sleeping. */
+  async awaitGate(name: string): Promise<void> {
+    await this.#control("GET", `/observations/await?kind=gate_reached&name=${encodeURIComponent(name)}`);
+  }
+
+  /** Release only the named scenario gate. */
+  async releaseGate(name: string): Promise<void> {
+    await this.#control("POST", `/gates/${encodeURIComponent(name)}/release`);
+  }
+
   /** The captured provider diagnostics. */
   get diagnostics(): string {
     return this.#diagnostics.text;

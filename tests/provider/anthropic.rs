@@ -1332,6 +1332,7 @@ async fn tool_results_merge_into_one_user_message() {
                 exit_code: Some(0),
                 artifacts: Vec::new(),
                 truncation: None,
+                workflow: None,
                 managed_output: None,
             },
         })
@@ -1698,6 +1699,7 @@ async fn tool_then_consecutive_inbound_users_translate_in_order() {
                 exit_code: Some(0),
                 artifacts: Vec::new(),
                 truncation: None,
+                workflow: None,
                 managed_output: None,
             },
         })),

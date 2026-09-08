@@ -83,6 +83,7 @@
  */
 
 import type { ToolExecutionResult } from "../../protocol/types.ts";
+import { workflowDetails, workflowStatus } from "./workflow-details.ts";
 import type { CorrelatedTool, ToolLifecycle } from "../../presentation/tools.ts";
 import {
   HEADER_BUDGET,
@@ -151,6 +152,22 @@ export function renderToolCard(
   const renderer = rendererFor(tool.toolId);
   const call = presentCall(renderer.renderCall(args), tool, args);
   const lines: string[] = [];
+  if (tool.workflow !== undefined && part !== "call") {
+    lines.push(`${role.meta("◇")} ${sanitizeLine(tool.name)} · ${workflowStatus(tool.workflow.state)}`);
+    for (const line of preview(workflowDetails(tool.workflow), context, "Workflow detail line")) lines.push(`  ${line}`);
+    pushResult(lines, renderer, tool, args, context);
+    return drawable(lines);
+  }
+  if (tool.lifecycle?.type === "settled" && tool.lifecycle.result.workflow !== undefined) {
+    const identity = tool.lifecycle.result.workflow;
+    lines.push(`${role.meta("◇")} ${sanitizeLine(tool.name)} · Workflow invocation`);
+    if (part !== "call") {
+      lines.push(`  admitted Workflow ${identity.workflow_id} · program ${identity.program_digest}`);
+      lines.push("  Historical Workflow details unavailable (retired or process reopened)");
+      pushResult(lines, renderer, tool, args, context);
+    }
+    return drawable(lines);
+  }
 
   if (part === "continuation") {
     // The terminal continuation of the same entity, at the canonical position
@@ -219,6 +236,7 @@ function drawableTool(tool: CorrelatedTool): CorrelatedTool {
     // list this function would have to keep current.
     lifecycle: sanitizeData(tool.lifecycle) as ToolLifecycle,
     committed: tool.committed,
+    workflow: sanitizeData(tool.workflow) as CorrelatedTool["workflow"],
   };
 }
 
