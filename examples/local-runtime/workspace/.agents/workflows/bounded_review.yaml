@@ -17,6 +17,7 @@ block:
   output:
     type: object
     properties:
+      next_action: {type: string, enum: [use_accepted_plan, revise_manually]}
       status: {type: string, enum: [satisfied, exhausted]}
       iterations: {type: integer}
       result: &body_result
@@ -27,7 +28,7 @@ block:
           feedback: {type: string}
         required: [plan, accepted, feedback]
         additionalProperties: false
-    required: [status, iterations, result]
+    required: [next_action, status, iterations, result]
     additionalProperties: false
   entry: feedback
   nodes:
@@ -73,8 +74,25 @@ block:
         fields:
           plan: {type: reference, path: [result, plan]}
           feedback: {type: reference, path: [result, feedback]}
-    done:
+    accepted:
       type: return
-      # Preserve explicit exhaustion in the public business result.
-      output: {type: reference, path: [feedback]}
-  edges: [{from: feedback, to: done}]
+      output:
+        type: object
+        fields:
+          next_action: {type: literal, value: use_accepted_plan}
+          status: {type: reference, path: [feedback, status]}
+          iterations: {type: reference, path: [feedback, iterations]}
+          result: {type: reference, path: [feedback, result]}
+    needs_revision:
+      type: return
+      # Exhaustion hands off the last plan and feedback for manual revision.
+      output:
+        type: object
+        fields:
+          next_action: {type: literal, value: revise_manually}
+          status: {type: reference, path: [feedback, status]}
+          iterations: {type: reference, path: [feedback, iterations]}
+          result: {type: reference, path: [feedback, result]}
+  edges:
+    - {from: feedback, port: satisfied, to: accepted}
+    - {from: feedback, port: exhausted, to: needs_revision}

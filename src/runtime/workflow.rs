@@ -415,18 +415,22 @@ pub struct WorkflowEdgeDefinition {
     pub from: String,
     /// Destination node id.
     pub to: String,
-    /// Branch port. Non-Branch nodes must omit it.
+    /// Required Branch/Loop outcome port. Ordinary nodes must omit it.
     #[serde(default)]
     pub port: Option<WorkflowPort>,
 }
 
-/// A control-flow port of a Branch node.
+/// A control-flow port of a fixed Workflow node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum WorkflowPort {
     /// The true successor.
     True,
     /// The false successor.
     False,
+    /// The Loop predicate was satisfied.
+    Satisfied,
+    /// The Loop consumed its finite allowance without satisfaction.
+    Exhausted,
     /// The ordinary single-successor port.
     Next,
 }
@@ -436,6 +440,8 @@ impl Serialize for WorkflowPort {
         serializer.serialize_str(match self {
             Self::True => "true",
             Self::False => "false",
+            Self::Satisfied => "satisfied",
+            Self::Exhausted => "exhausted",
             Self::Next => "next",
         })
     }
@@ -455,6 +461,8 @@ impl<'de> Deserialize<'de> for WorkflowPort {
             RawPort::Text(text) => match text.as_str() {
                 "true" => Ok(Self::True),
                 "false" => Ok(Self::False),
+                "satisfied" => Ok(Self::Satisfied),
+                "exhausted" => Ok(Self::Exhausted),
                 "next" => Ok(Self::Next),
                 _ => Err(serde::de::Error::custom(format!(
                     "unknown workflow edge port {text:?}"
@@ -902,10 +910,20 @@ fn compile_block(
                     edge.from
                 )));
             }
+            (
+                WorkflowNodeDefinition::Loop { .. },
+                Some(port @ (WorkflowPort::Satisfied | WorkflowPort::Exhausted)),
+            ) => port,
+            (WorkflowNodeDefinition::Loop { .. }, _) => {
+                return Err(WorkflowCompileError::InvalidField(format!(
+                    "Loop node {:?} must use satisfied and exhausted ports",
+                    edge.from
+                )));
+            }
             (_, None) => WorkflowPort::Next,
             (_, Some(port)) => {
                 return Err(WorkflowCompileError::InvalidField(format!(
-                    "non-Branch node {:?} cannot have port {port:?}",
+                    "ordinary node {:?} cannot have port {port:?}",
                     edge.from
                 )));
             }
@@ -974,6 +992,19 @@ fn compile_block(
                 carry,
                 max_iterations,
             } => {
+                let edges = &outgoing[&node_id];
+                if edges.len() != 2
+                    || !edges
+                        .iter()
+                        .any(|edge| edge.port == WorkflowPort::Satisfied)
+                    || !edges
+                        .iter()
+                        .any(|edge| edge.port == WorkflowPort::Exhausted)
+                {
+                    return Err(WorkflowCompileError::InvalidField(format!(
+                        "Loop {node_id:?} must have exactly satisfied and exhausted successors"
+                    )));
+                }
                 if *max_iterations == 0 || *max_iterations > MAX_LOOP_ITERATIONS {
                     return Err(WorkflowCompileError::InvalidField(format!(
                         "Loop max_iterations must be 1..={MAX_LOOP_ITERATIONS}"
@@ -1196,7 +1227,8 @@ fn compile_block(
         };
         let edges = &outgoing[&node_id];
         match &compiled {
-            WorkflowNodeProgram::Return { .. } => {}
+            // Return and both Loop ports were validated above.
+            WorkflowNodeProgram::Return { .. } | WorkflowNodeProgram::Loop { .. } => {}
             WorkflowNodeProgram::Branch { .. } if edges.len() == 2 => {}
             WorkflowNodeProgram::Branch { .. } => {
                 return Err(WorkflowCompileError::InvalidBranch(format!(

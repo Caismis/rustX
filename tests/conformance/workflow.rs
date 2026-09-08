@@ -133,7 +133,7 @@ async fn bounded_loop_exhaustion_keeps_one_outer_result_and_no_internal_provider
         "feedback":{"type":"loop","input":{"type":"reference","path":["args"]},"body":body,"max_iterations":3,
             "until":{"type":"boolean","value":{"type":"literal","value":false}},"carry":{"type":"literal","value":{"task":"inspect again"}}},
         "done":{"type":"return","output":{"type":"reference","path":["feedback"]}}
-    },"edges":[{"from":"feedback","to":"done"}]});
+    },"edges":[{"from":"feedback","port":"satisfied","to":"done"},{"from":"feedback","port":"exhausted","to":"done"}]});
     let driver =
         Driver::start_with_workflow(&emulator, &serde_yaml::to_string(&definition).unwrap()).await;
     driver.submit();

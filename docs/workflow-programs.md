@@ -217,7 +217,8 @@ completes exactly its owning block. A branch Return does not stop siblings;
 the root's completed result is the only candidate for WorkflowRun completion.
 
 The compiler checks each graph for an explicit valid entry, dangling edges,
-cycles, reachability, termination, and complete true/false Branch ports.
+cycles, reachability, termination, complete true/false Branch ports, and complete
+satisfied/exhausted Loop ports.
 Ordinary nodes have exactly one unlabelled outgoing edge; Return has none.
 At joins, availability is the intersection of every predecessor's available
 producers, not their union. A reference crosses only required object fields.
@@ -536,10 +537,22 @@ The Loop node always commits this exact structural result:
 Here `result` uses the example body's schema; each Loop embeds its own body schema.
 `iterations` is exactly 1 through the trusted local maximum. `satisfied` means
 the typed predicate was true; `exhausted` means every consumed body was valid
-and the last predicate was false at the maximum. Authors handle exhaustion by
-Branch on `[feedback,status]` or return the structural result to their caller.
-Returning only business fields is an explicit author projection, never an
-implicit Loop conversion. A completed Workflow is not a claim that checks passed.
+and the last predicate was false at the maximum. Every Loop must explicitly
+route exactly two normal outcome ports, `satisfied` and `exhausted`.
+Default/`next`, Branch `true`/`false`, missing and duplicate ports are rejected.
+The full structural result is available on either path:
+
+```yaml
+edges:
+  - {from: feedback, port: satisfied, to: accepted}
+  - {from: feedback, port: exhausted, to: needs_revision}
+```
+
+Authors may intentionally target the same successor with both ports or merge
+the paths afterward. Projection of business fields is possible only after this
+explicit routing decision; it cannot replace routing exhaustion. Failures never
+take either normal outcome port. Exhaustion is finite normal control flow, not
+predicate satisfaction, and a completed Workflow is not a claim that checks passed.
 
 Iteration reservation begins after validating the carried input. Reservation,
 admission and consumption form one synchronous run-budget critical section:
@@ -555,7 +568,8 @@ and becomes available to Loop only after block finalization, including every
 native borrower and all Parallel siblings. A carry commits only after projection,
 current candidate checks, input validation, byte reservation and cancellation
 observation all succeed. Exit similarly validates/reserves the complete tagged
-result before its one local insertion and `WorkflowLoopExited` fact. Neither a
+result before its one local insertion and `WorkflowLoopExited` fact, then selects
+exactly the successor matching that committed status. Neither a
 failed projection nor a rejected byte reservation installs partial state.
 
 The compiler expands worst-case node and iteration counts across all fixed

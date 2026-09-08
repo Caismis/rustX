@@ -609,6 +609,15 @@ impl WorkflowRuntime {
                                 if cancellation.is_cancelled() { return Err(WorkflowRunError::from_cancellation(cancellation)); }
                                 values.insert(node_id.clone(), CommittedValue { value, candidate: scope["result"].candidate.clone() });
                                 self.emit_observability(run, RuntimeEvent::WorkflowLoopExited { node: node_instance.clone(), iterations: iteration, status });
+                                let port = match status {
+                                    super::WorkflowLoopExit::Satisfied => WorkflowPort::Satisfied,
+                                    super::WorkflowLoopExit::Exhausted => WorkflowPort::Exhausted,
+                                };
+                                let successor = block.outgoing[&node_id].iter()
+                                    .find(|edge| edge.port == port)
+                                    .ok_or_else(|| WorkflowRunError::InvalidProgram(node_id.clone()))?
+                                    .to.clone();
+                                node_id = successor;
                                 return Ok(None);
                             }
                             let next = evaluate_value(carry, &Value::Null.into(), &scope)?;
@@ -912,7 +921,10 @@ impl WorkflowRuntime {
                 // declared export survives, with its own bounded reservation.
                 return Ok(output);
             }
-            if !matches!(node, WorkflowNodeProgram::Branch { .. }) {
+            if !matches!(
+                node,
+                WorkflowNodeProgram::Branch { .. } | WorkflowNodeProgram::Loop { .. }
+            ) {
                 node_id = single_successor(block, &node_id)?;
             }
         }
@@ -1026,8 +1038,11 @@ mod tests {
         }
         assert_eq!(run.budgets.lock().unwrap().retained_bytes, MAX_LOCAL_BYTES);
         let mut nested = LocalReservation::new(&run);
-        assert!(
-            nested.retain(&value).is_err(),
+        assert_eq!(
+            nested.retain(&value),
+            Err(WorkflowRunError::LimitExceeded(
+                super::super::WorkflowLimit::RetainedData
+            )),
             "child scope cannot reset aggregate counter"
         );
         assert_eq!(nested.bytes, 0, "rejected reservation commits nothing");

@@ -1,6 +1,143 @@
 //! WF-05: fixed bodies, exact admission gates, native settlement and typed exits.
 use super::*;
 
+fn distinct_outcomes(mut definition: WorkflowDefinition) -> WorkflowDefinition {
+    let successor = definition.block.nodes.remove("done").unwrap();
+    definition
+        .block
+        .nodes
+        .insert("satisfied".into(), successor.clone());
+    definition.block.nodes.insert("exhausted".into(), successor);
+    definition.block.edges = vec![
+        branch_edge("feedback", "satisfied", WorkflowPort::Satisfied),
+        branch_edge("feedback", "exhausted", WorkflowPort::Exhausted),
+    ];
+    definition
+}
+
+fn assert_no_normal_exit(events: &[RuntimeEvent]) {
+    assert!(!events.iter().any(|event| match event {
+        RuntimeEvent::WorkflowLoopExited { .. } => true,
+        RuntimeEvent::WorkflowNodeStarted { instance } =>
+            instance.block.definition.blocks.is_empty()
+                && matches!(instance.node.as_str(), "satisfied" | "exhausted" | "done"),
+        _ => false,
+    }));
+}
+
+#[test]
+fn loop_requires_both_explicit_outcome_ports_even_when_body_result_is_projected() {
+    let shared = checker_definition(3);
+    assert!(compile_test(shared.clone()).is_ok());
+    assert!(compile_test(distinct_outcomes(shared.clone())).is_ok());
+    for ports in [
+        vec![Some(WorkflowPort::Satisfied)],
+        vec![Some(WorkflowPort::Exhausted)],
+        vec![None],
+        vec![Some(WorkflowPort::Next)],
+        vec![Some(WorkflowPort::True), Some(WorkflowPort::False)],
+        vec![Some(WorkflowPort::Satisfied), Some(WorkflowPort::Satisfied)],
+        vec![Some(WorkflowPort::Exhausted), Some(WorkflowPort::Exhausted)],
+        vec![
+            Some(WorkflowPort::Satisfied),
+            Some(WorkflowPort::Exhausted),
+            Some(WorkflowPort::Exhausted),
+        ],
+    ] {
+        let mut definition = shared.clone();
+        definition.block.edges = ports
+            .iter()
+            .map(|port| WorkflowEdgeDefinition {
+                from: "feedback".into(),
+                to: "done".into(),
+                port: *port,
+            })
+            .collect();
+        // A valid body-only projection cannot bypass the control-flow contract.
+        let WorkflowNodeDefinition::Loop { body, .. } = &definition.block.nodes["feedback"] else {
+            unreachable!()
+        };
+        definition.block.output = body.output.clone();
+        definition.block.nodes.insert(
+            "done".into(),
+            WorkflowNodeDefinition::Return {
+                output: reference("feedback.result"),
+            },
+        );
+        assert!(
+            compile_test(definition).is_err(),
+            "accepted ports {ports:?}"
+        );
+    }
+    let mut unknown = serde_json::to_value(&shared).unwrap();
+    unknown["block"]["edges"][0]["port"] = json!("unexpected");
+    assert!(serde_json::from_value::<WorkflowDefinition>(unknown).is_err());
+    let mut backedge = shared;
+    backedge.block.edges[0].to = "feedback".into();
+    assert!(compile_test(backedge).is_err());
+}
+
+#[tokio::test]
+async fn explicit_outcomes_select_only_the_matching_successor_with_the_full_value() {
+    for (satisfied_at, count, status) in [(1, 1, "satisfied"), (9, 3, "exhausted")] {
+        let plane = workflow_test_plane(1);
+        let runtime = workflow_runtime(&plane);
+        let observations = runtime.observations.subscribe();
+        let checker = Arc::new(Checker {
+            starts: AtomicUsize::new(0),
+            satisfied_at,
+            received: std::sync::Mutex::new(Vec::new()),
+        });
+        let context = context_with_registration(
+            &plane,
+            ToolRegistration::plain(definition(), checker.clone()),
+            crate::agent::AttemptLifecycle::default(),
+        );
+        let (_, cancellation) = workflow_cancellation();
+        let output = runtime
+            .run_foreground(
+                Arc::new(compile_test(distinct_outcomes(checker_definition(3))).unwrap()),
+                ToolCallId::new("explicit-outcomes"),
+                context,
+                json!({"passed":false,"label":"initial"}),
+                cancellation,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            output,
+            json!({"status":status,"iterations":count,"result":{"passed":status == "satisfied","label":format!("committed-{count}")}})
+        );
+        assert_eq!(checker.starts.load(Ordering::SeqCst), count);
+        let events = observations.borrow();
+        let selected: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                RuntimeEvent::WorkflowNodeStarted { instance }
+                    if instance.block.definition.blocks.is_empty()
+                        && instance.node != "feedback" =>
+                {
+                    Some(instance.node.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(selected, [status]);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, RuntimeEvent::WorkflowLoopExited { .. }))
+                .count(),
+            1
+        );
+        let exited = events
+            .iter()
+            .position(|event| matches!(event, RuntimeEvent::WorkflowLoopExited { .. }))
+            .unwrap();
+        assert!(events[..exited].iter().all(|event| !matches!(event, RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == status)));
+    }
+}
+
 #[test]
 fn documented_bounded_review_uses_the_current_grammar() {
     let definition = serde_yaml::from_str(include_str!(
@@ -194,7 +331,10 @@ pub(super) fn wrap_definition(
                 },
             ),
         ]),
-        edges: vec![edge("feedback", "done")],
+        edges: vec![
+            branch_edge("feedback", "done", WorkflowPort::Satisfied),
+            branch_edge("feedback", "done", WorkflowPort::Exhausted),
+        ],
     };
     definition
 }
@@ -374,6 +514,7 @@ async fn cancellation_at_second_iteration_frontier_consumes_and_starts_nothing_n
     trigger.cancel();
     release.send(()).unwrap();
     assert!(task.await.unwrap().unwrap_err().is_cancelled());
+    assert_no_normal_exit(&observations.borrow());
     assert_eq!(probe.starts.load(Ordering::SeqCst), 1);
     assert_eq!(
         observations
@@ -428,6 +569,7 @@ async fn every_native_non_success_remains_outer_status_without_a_second_iteratio
         .await;
         assert_eq!(result.status, status);
         assert!(result.content.is_empty());
+        assert_no_normal_exit(&observations.borrow());
         assert_eq!(probe.starts.load(Ordering::SeqCst), 1);
         assert_eq!(
             observations
@@ -590,6 +732,7 @@ async fn nested_loops_inside_parallel_have_bounded_counts_and_inherited_identity
 async fn global_step_limit_does_not_reset_at_iteration_entry() {
     let plane = workflow_test_plane(1);
     let runtime = workflow_runtime(&plane);
+    let observations = runtime.observations.subscribe();
     let checker = Arc::new(Checker {
         starts: AtomicUsize::new(0),
         satisfied_at: 9,
@@ -615,6 +758,49 @@ async fn global_step_limit_does_not_reset_at_iteration_entry() {
         .unwrap_err();
     assert_eq!(error, WorkflowRunError::LimitExceeded(WorkflowLimit::Steps));
     assert_eq!(checker.starts.load(Ordering::SeqCst), 1);
+    assert_no_normal_exit(&observations.borrow());
+}
+
+#[tokio::test]
+async fn retained_limit_in_admitted_body_never_routes_a_normal_outcome() {
+    let plane = workflow_test_plane(1);
+    let runtime = workflow_runtime(&plane);
+    let observations = runtime.observations.subscribe();
+    let probe = Probe::new(ToolExecutionStatus::Success);
+    let context = context(
+        &plane,
+        probe.clone(),
+        crate::agent::AttemptLifecycle::default(),
+    );
+    let mut program =
+        compile_test(distinct_outcomes(wrap_definition(program_definition(), 3))).unwrap();
+    // Root input and explicit carry fit; the body's private input cannot.
+    program.retained_bound = 2 * serde_json::to_vec(&json!({"passed":false})).unwrap().len();
+    let (_, cancellation) = workflow_cancellation();
+    let error = runtime
+        .run_foreground(
+            Arc::new(program),
+            ToolCallId::new("retained-limit"),
+            context,
+            json!({"passed":false}),
+            cancellation,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error,
+        WorkflowRunError::LimitExceeded(WorkflowLimit::RetainedData)
+    );
+    assert_eq!(probe.starts.load(Ordering::SeqCst), 0);
+    let events = observations.borrow();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::WorkflowLoopIterationAdmitted { .. }))
+            .count(),
+        1
+    );
+    assert_no_normal_exit(&events);
 }
 
 #[tokio::test]
@@ -666,6 +852,7 @@ async fn outer_deadline_during_second_iteration_drains_and_never_resets() {
     settle.notify_one();
     let (result, _) = task.await.unwrap();
     assert_eq!(result.status, ToolExecutionStatus::TimedOut);
+    assert_no_normal_exit(&observations.borrow());
     assert_eq!(probe.starts.load(Ordering::SeqCst), 2);
     assert!(
         !observations

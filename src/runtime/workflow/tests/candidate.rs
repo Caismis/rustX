@@ -300,7 +300,11 @@ async fn loop_candidate_mutation_clears_old_acceptance_and_stale_review_cannot_c
     *arguments = WorkflowValue::Literal {
         value: json!({"passed":true,"label":"current"}),
     };
-    definition.block.edges = vec![edge("feedback", "check"), edge("check", "done")];
+    definition.block.edges = vec![
+        branch_edge("feedback", "check", WorkflowPort::Satisfied),
+        branch_edge("feedback", "check", WorkflowPort::Exhausted),
+        edge("check", "done"),
+    ];
     definition.block.output = output_schema;
     let runtime = workflow_runtime(&plane);
     let (_, cancellation) = workflow_cancellation();
@@ -2280,18 +2284,23 @@ async fn review_mismatched_candidate_context_fails_before_any_prompt() {
 #[tokio::test]
 async fn cancellation_after_candidate_borrow_before_start_returns_exact_access() {
     for consumer in ["tool", "agent", "return"] {
-        pre_start_candidate_case(consumer, 0).await;
+        pre_start_candidate_case(consumer, 0, false).await;
     }
 }
 
 #[tokio::test]
 async fn budget_rejection_after_candidate_borrow_returns_access_without_count_commit() {
-    pre_start_candidate_case("tool", 1).await;
-    pre_start_candidate_case("agent", 2).await;
+    pre_start_candidate_case("tool", 1, false).await;
+    pre_start_candidate_case("agent", 2, false).await;
+}
+
+#[tokio::test]
+async fn loop_agent_budget_failure_releases_candidate_without_normal_exit() {
+    pre_start_candidate_case("agent", 2, true).await;
 }
 
 #[allow(clippy::too_many_lines)]
-async fn pre_start_candidate_case(consumer: &str, failure: usize) {
+async fn pre_start_candidate_case(consumer: &str, failure: usize, looped: bool) {
     use crate::runtime::workflow::execution::{PreStartAction, PreStartHook};
     let plane = workflow_test_plane(1);
     initialize(&plane);
@@ -2356,6 +2365,9 @@ async fn pre_start_candidate_case(consumer: &str, failure: usize) {
         );
         definition.block.edges.push(edge("next", "done"));
     }
+    if looped {
+        definition = super::loops::wrap_definition(definition, 3);
+    }
     let program = Arc::new(compile_test(definition).unwrap());
     let execution_bound = program.execution_bound;
     let runtime = workflow_runtime(&plane);
@@ -2383,7 +2395,7 @@ async fn pre_start_candidate_case(consumer: &str, failure: usize) {
             .await
     });
     let (scope, reference, node, before) = acquire.await.unwrap();
-    assert_eq!(before, [1, 0]);
+    assert_eq!(before, [if looped { 3 } else { 1 }, 0]);
     // This is the actual native borrow queue, not an observation-only flag.
     let (_, fresh) = workflow_cancellation();
     let signal = fresh.child_signal();
@@ -2405,7 +2417,7 @@ async fn pre_start_candidate_case(consumer: &str, failure: usize) {
         match failure {
             0 => before,
             1 => [execution_bound, 0],
-            2 => [1, MAX_WORKFLOW_AGENTS],
+            2 => [before[0], MAX_WORKFLOW_AGENTS],
             _ => unreachable!(),
         }
     );
@@ -2431,7 +2443,14 @@ async fn pre_start_candidate_case(consumer: &str, failure: usize) {
             "{error:?}"
         );
     } else {
-        assert!(matches!(*error, WorkflowRunError::LimitExceeded(_)));
+        assert_eq!(
+            *error,
+            WorkflowRunError::LimitExceeded(if failure == 1 {
+                WorkflowLimit::Steps
+            } else {
+                WorkflowLimit::Agents
+            })
+        );
     }
     assert_eq!(candidate.as_ref(), Some(&reference));
     assert!(workspace.unresolved_reason().is_none(), "{workspace:?}");
@@ -2439,6 +2458,24 @@ async fn pre_start_candidate_case(consumer: &str, failure: usize) {
     assert_eq!(probe.observed.lock().unwrap().len(), 1); // initial check only
     assert!(plane.registry.all_snapshots().is_empty()); // zero Agent delegation
     let events = plane.store.read_events(None, 256).unwrap().events;
+    if looped {
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    &event.event,
+                    RuntimeEvent::WorkflowLoopIterationAdmitted { .. }
+                ))
+                .count(),
+            1
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(&event.event, RuntimeEvent::WorkflowLoopExited { .. }))
+        );
+        assert!(!events.iter().any(|event| matches!(&event.event, RuntimeEvent::WorkflowNodeStarted {instance} if instance.node == "done")));
+    }
     assert!(!events.iter().any(|event| matches!(&event.event,RuntimeEvent::WorkflowNodeStarted {instance} | RuntimeEvent::WorkflowNodeSettled {instance,..} if instance.node == "next")));
     assert!(!events.iter().any(|event| matches!(&event.event,RuntimeEvent::WorkflowCandidateInvocation {node,..} if node.node == "next")));
     assert!(!events.iter().any(|event| matches!(&event.event, RuntimeEvent::NativeToolInvocation { invocation_id: crate::tools::types::ToolInvocationId::Workflow { node }, fact: crate::tools::invocation::NativeInvocationFact::Started, .. } if node.node == "next")));
