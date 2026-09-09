@@ -83,7 +83,11 @@ impl AgentExecutionObserver for StartedSignal {
 async fn issue204_bash_hard_deadline_settles_proven_timed_out() {
     // The fixture stays whole: its private TempDir field owns the workspace
     // the supervisor spawns into.
-    let fixture = common::native_fixture();
+    // The deadline test owns executor start; Tool approval has separate
+    // deterministic coverage and must not park this execution fixture.
+    let mut policies = rustx::tools::NativeToolPolicies::default();
+    policies.bash.approval = rustx::tools::ToolApprovalPolicy::Never;
+    let fixture = common::native_fixture_with(Vec::new(), policies);
     let registry = fixture.registry;
     let bash_id = registry
         .definitions()
@@ -97,7 +101,7 @@ async fn issue204_bash_hard_deadline_settles_proven_timed_out() {
         id: "call-bash-deadline",
         tool_id: Box::leak(bash_id.into_boxed_str()),
         name: "bash",
-        arguments: serde_json::json!({"command": "sleep 30"}),
+        arguments: serde_json::json!({"command": "sleep 30", "execution_mode": "foreground"}),
     };
     let mut first = vec![FakeStep::Emit(ModelEvent::Started)];
     for event in tool_call_events(0, &scripted) {

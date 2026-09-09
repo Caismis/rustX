@@ -155,6 +155,8 @@ impl SkillSnapshot {
 
 /// Renders the compact `## Skills` catalog deterministically.
 ///
+/// Callers projecting to a model must first apply `admitted_skill_entries`.
+///
 /// The rendered form gives each Skill its canonical host `SKILL.md` location
 /// in deterministic sorted order. No `SKILL.md` body, supporting resource, or
 /// dependency metadata ever appears.
@@ -181,6 +183,24 @@ pub fn render_skill_catalog(entries: &[SkillCatalogEntry]) -> String {
     }
     out.push_str("</available_skills>");
     out
+}
+
+/// The single lazy-Skill dependency projection for every execution domain.
+/// Package discovery and child Skill admission stay intact; only guidance
+/// requiring a model-callable native Read is hidden when Read is not admitted.
+pub(crate) fn admitted_skill_entries<'a>(
+    entries: &'a [SkillCatalogEntry],
+    tools: &crate::tools::executor::ToolRegistry,
+) -> &'a [SkillCatalogEntry] {
+    if tools.definitions().iter().any(|definition| {
+        definition.id.as_str() == crate::tools::native::READ_TOOL_ID
+            && definition.name == "read"
+            && definition.origin == crate::tools::types::ToolOrigin::Builtin
+    }) {
+        entries
+    } else {
+        &[]
+    }
 }
 
 /// Escapes text placed inside the compact XML-shaped catalog representation.

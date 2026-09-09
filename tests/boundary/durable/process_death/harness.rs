@@ -113,7 +113,8 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
         "context": {"reserveTokens": 0, "keepRecentTokens": 0},
         "nativeTools": {
             "read": {"approval": read_approval},
-            "bash": {"execution": "model_selectable"}
+            // Process-death tests own execution gates, not approval interaction.
+            "bash": {"execution": "model_selectable", "approval": "never"}
         },
         "defaultTools": default_tools,
         // One named subagent definition (Issue #144). The instruction

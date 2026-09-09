@@ -5077,17 +5077,11 @@ impl<'a> AgentExecution<'a> {
         messages: Vec<ModelInputMessage>,
     ) -> ModelRequest {
         let primary = self.request.model.primary();
-        // Tool definitions are compiled only for a model whose effective
-        // capabilities include tool calls: a text-only model is usable, it
-        // simply never receives runtime tool definitions.
-        let mut tools = if primary.capabilities().tool_calls {
-            self.tool_registry().model_definitions()
-        } else {
-            Vec::new()
-        };
-        if primary.capabilities().tool_calls
-            && let Some(workflow_output) = self.workflow_output.as_ref()
-        {
+        // Projection and invocation share exactly the frozen registry.
+        // Model capability validation may reject an unsupported request;
+        // it must not silently rewrite the admitted Tool authority.
+        let mut tools = self.tool_registry().model_definitions();
+        if let Some(workflow_output) = self.workflow_output.as_ref() {
             tools.push(crate::tools::types::ModelToolDefinition {
                 id: ToolId::new("runtime-workflow-output"),
                 name: crate::runtime::workflow::WORKFLOW_OUTPUT_TOOL_NAME.to_owned(),

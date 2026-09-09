@@ -1889,8 +1889,7 @@ pub(crate) fn capability_view(
         .map(project_tool)
         .collect();
     let skills = snapshot
-        .skills()
-        .catalog_entries()
+        .model_skill_entries()
         .iter()
         .zip(snapshot.skills().visible_bindings())
         .map(|(entry, binding)| super::snapshot::RuntimeClientSkill {

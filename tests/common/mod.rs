@@ -1015,12 +1015,12 @@ impl rustx::tools::executor::ProgressReporter for NoopProgress {
     fn report(&self, _progress: rustx::tools::types::ToolProgress) {}
 }
 
-/// Executes one preflighted native tool call against a fixture with a
+/// Executes one foreground native tool call against a fixture with a
 /// caller-controlled cancellation signal.
 pub async fn run_tool_with_cancellation(
     fixture: &NativeFixture,
     name: &str,
-    arguments: serde_json::Value,
+    mut arguments: serde_json::Value,
     cancellation: rustx::runtime::CancellationSignal,
 ) -> rustx::tools::types::ToolExecutionResult {
     use rustx::runtime::identity::ToolCallId;
@@ -1032,6 +1032,9 @@ pub async fn run_tool_with_cancellation(
         .into_iter()
         .find(|definition| definition.name == name)
         .expect("tool registered");
+    if definition.execution_policy == rustx::tools::types::ToolExecutionPolicy::ModelSelectable {
+        arguments["execution_mode"] = serde_json::json!("foreground");
+    }
     let call = ToolCall {
         id: ToolCallId::new("call-m5"),
         tool_id: definition.id,
@@ -1063,11 +1066,11 @@ pub async fn run_tool_with_cancellation(
         .await
 }
 
-/// Executes one preflighted native tool call against a fixture.
+/// Executes one foreground native tool call against a fixture.
 pub async fn run_tool(
     fixture: &NativeFixture,
     name: &str,
-    arguments: serde_json::Value,
+    mut arguments: serde_json::Value,
 ) -> rustx::tools::types::ToolExecutionResult {
     use rustx::runtime::identity::ToolCallId;
     use rustx::tools::executor::{PreflightOutcome, ToolExecutionContext};
@@ -1078,6 +1081,9 @@ pub async fn run_tool(
         .into_iter()
         .find(|definition| definition.name == name)
         .expect("tool registered");
+    if definition.execution_policy == rustx::tools::types::ToolExecutionPolicy::ModelSelectable {
+        arguments["execution_mode"] = serde_json::json!("foreground");
+    }
     let call = ToolCall {
         id: ToolCallId::new("call-m5"),
         tool_id: definition.id,

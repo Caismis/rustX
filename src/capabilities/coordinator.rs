@@ -534,7 +534,10 @@ impl CapabilityCoordinator {
             config.conversation_id.clone(),
             config.workspace.root().to_path_buf(),
             CapabilityRevision::default(),
-            config.base_tool_registry.clone(),
+            // Revision zero has not completed selection (external discovery
+            // may still be required). Only a prepared candidate may publish
+            // executable authority; bootstrap never exposes the base catalog.
+            Arc::new(ToolRegistry::new()),
             Arc::new(AvailableToolCatalog::new(
                 config.base_tool_registry.registrations(),
             )),

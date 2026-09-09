@@ -199,8 +199,14 @@ impl CapabilitySnapshot {
     /// Effective System Prompt; it is not canonical conversation history.
     #[must_use]
     pub fn skill_catalog(&self) -> Option<String> {
-        let entries = self.skills.catalog_entries();
+        let entries = self.model_skill_entries();
         (!entries.is_empty()).then(|| crate::skills::render_skill_catalog(entries))
+    }
+
+    /// Lazy Skill metadata usable under this domain's frozen Tool authority.
+    #[must_use]
+    pub fn model_skill_entries(&self) -> &[crate::skills::SkillCatalogEntry] {
+        crate::skills::admitted_skill_entries(self.skills.catalog_entries(), &self.tool_registry)
     }
 
     /// The deterministic `CapabilitiesManifest` data of this snapshot.

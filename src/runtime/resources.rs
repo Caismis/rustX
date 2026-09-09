@@ -174,8 +174,10 @@ impl RuntimeResourceSnapshot {
     /// untouched: only catalog metadata is frozen, never a `SKILL.md` body.
     #[must_use]
     pub fn with_frozen_skill_catalog(mut self, entries: &[SkillCatalogEntry]) -> Self {
-        self.skill_catalog = (!entries.is_empty())
-            .then(|| Arc::<str>::from(crate::skills::render_skill_catalog(entries)));
+        let visible =
+            crate::skills::admitted_skill_entries(entries, self.capability.tool_registry());
+        self.skill_catalog = (!visible.is_empty())
+            .then(|| Arc::<str>::from(crate::skills::render_skill_catalog(visible)));
         self.skill_sources = entries
             .iter()
             .map(|entry| PathBuf::from(&entry.location))

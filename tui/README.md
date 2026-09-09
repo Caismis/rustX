@@ -125,8 +125,15 @@ The TUI may also forward the runtime's bounded startup controls:
 `--skill <path>` (repeatable), `--no-skills`, `--no-builtin-tools`,
 `--no-tools`, `--tools <a,b,c>`, and `--exclude-tools <a,b,c>`. It preserves
 their supplied values and order; Rust owns discovery, validation, activation,
-and all semantic errors. Normal rustX composition keeps mandatory native Read
-active even when these controls disable optional tools.
+and all semantic errors. `--no-tools` means zero ordinary main-model tools,
+including Read and generated dispatchers; `--tools` is exact and exclusions
+subtract last. `--no-tools` conflicts with the other three Tool flags, and
+`--tools` conflicts with `--no-builtin-tools`. Lists reject empty entries,
+duplicates and unknown/unavailable/ambiguous names. `/tools` distinguishes
+model authority from available but inactive capabilities; exposure filtering
+does not disable source preparation. Lazy Skills require native Read in the
+model's own frozen registry. See the
+[native default table](../docs/runtime-resources.md#exact-tool-authority-and-native-defaults).
 
 ## Startup sequence
 

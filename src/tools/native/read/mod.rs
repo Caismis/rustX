@@ -53,7 +53,6 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
         ),
         std::sync::Arc::new(ReadTool),
     )
-    .mandatory()
 }
 
 /// The native Read executor.

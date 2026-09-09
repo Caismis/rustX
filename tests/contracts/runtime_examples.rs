@@ -153,7 +153,8 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
         policies.bash.execution,
         ToolExecutionPolicy::ModelSelectable
     );
-    assert_eq!(policies.grep.execution, ToolExecutionPolicy::BackgroundOnly);
+    assert_eq!(policies.grep.execution, ToolExecutionPolicy::ForegroundOnly);
+    assert_eq!(policies.edit.approval, ToolApprovalPolicy::Always);
     assert_eq!(policies.bash.concurrency, ToolConcurrencyPolicy::Sequential);
     assert_eq!(policies.bash.approval, ToolApprovalPolicy::Always);
 }

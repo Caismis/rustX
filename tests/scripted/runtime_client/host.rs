@@ -1177,10 +1177,9 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
     let Some(RuntimeClientResult::Capability { capabilities }) = response.result else {
         panic!("capability result");
     };
-    // The workspace carries no Skill or Python content, so the prepared
-    // candidate is a no-op and the active revision stays zero (the base
-    // registry is the active tool set from construction).
-    assert_eq!(capabilities.revision.get(), 0);
+    // Bootstrap has no executable authority. Preparation publishes the
+    // selected base registry as the first active generation.
+    assert_eq!(capabilities.revision.get(), 1);
     assert_eq!(capabilities.tools.len(), 1);
     assert_eq!(capabilities.tools[0].id, ToolId::new("tool-ls"));
     assert_eq!(capabilities.tools[0].name, "ls");

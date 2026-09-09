@@ -54,7 +54,15 @@ pub const USAGE: &str = "usage: rustx [--models <models.jsonc>] [--config <rustx
                          [--model <provider/model>] [--trust grant|revoke] \
                          [--inspect-conversation <conversation-id>] \
                          [--continue | --session <session-id> [--node <node-id>]] \
-                         [--name <text>] [tool/skill options]";
+                         [--name <text>] [--skill <path>] [--no-skills] \
+                         [--no-tools | --tools <a,b> | --no-builtin-tools] \
+                         [--exclude-tools <a,b>]\n\
+Tool selection: defaults include Read. --tools is exact; exclusions subtract last.\n\
+--no-tools exposes zero main-model Tools and conflicts with --tools, --exclude-tools,\n\
+and --no-builtin-tools. --tools conflicts with --no-builtin-tools.\n\
+Explicit lists must be non-empty, unique, known and unambiguous.\n\
+Tool exposure does not disable source preparation; use source enabled:false.\n\
+Lazy Skills are advertised only when this domain admits native Read.";
 
 /// Parses the bounded startup arguments.
 ///
@@ -142,6 +150,16 @@ pub fn parse_arguments(
         }
     }
 
+    let selection = crate::capabilities::ToolActivationPolicy {
+        no_tools,
+        no_builtin_tools,
+        tools: tools.clone(),
+        exclude_tools: exclude_tools.clone().unwrap_or_default(),
+        ..Default::default()
+    };
+    if let Some((first, second)) = selection.conflict() {
+        return Err(ArgumentError::Conflicting { first, second });
+    }
     let startup_session = startup_request(
         inspect_conversation,
         continue_active_session,
@@ -292,9 +310,10 @@ fn set_names(slot: &mut Option<Vec<String>>, value: &str, flag: &str) -> Result<
     let names = value
         .split(',')
         .map(str::trim)
-        .filter(|name| !name.is_empty())
         .map(str::to_owned)
         .collect::<Vec<_>>();
+    crate::capabilities::validate_tool_names(&names, flag)
+        .map_err(|_| ArgumentError::InvalidValue { flag: flag.into() })?;
     *slot = Some(names);
     Ok(())
 }
@@ -667,7 +686,6 @@ mod tests {
             "one",
             "--skill",
             "two",
-            "--no-builtin-tools",
             "--tools",
             "read, search",
             "--exclude-tools",
@@ -690,6 +708,48 @@ mod tests {
             paths.exclude_tools,
             Some(vec!["bash".to_owned(), "grep".to_owned()])
         );
-        assert!(paths.no_builtin_tools);
+        assert!(!paths.no_builtin_tools);
+    }
+
+    #[test]
+    fn exact_tool_flag_conflicts_and_explicit_lists_fail_closed() {
+        for flags in [
+            vec!["--no-tools", "--tools", "read"],
+            vec!["--no-tools", "--exclude-tools", "read"],
+            vec!["--no-tools", "--no-builtin-tools"],
+            vec!["--tools", "read", "--no-builtin-tools"],
+        ] {
+            assert!(matches!(
+                parse_arguments(args(&flags)),
+                Err(ArgumentError::Conflicting { .. })
+            ));
+        }
+        for flag in ["--tools", "--exclude-tools"] {
+            for value in [
+                "",
+                " ",
+                ",",
+                "read,",
+                ",read",
+                "read,,grep",
+                "read,read",
+                "read, read",
+            ] {
+                assert!(
+                    matches!(
+                        parse_arguments(args(&[flag, value])),
+                        Err(ArgumentError::InvalidValue { .. })
+                    ),
+                    "{flag} {value:?}"
+                );
+            }
+        }
+        for flags in [
+            vec!["--no-tools"],
+            vec!["--tools", "read,grep", "--exclude-tools", "read"],
+            vec!["--no-builtin-tools", "--exclude-tools", "external"],
+        ] {
+            assert!(parse_arguments(args(&flags)).is_ok());
+        }
     }
 }

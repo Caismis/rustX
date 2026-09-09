@@ -2045,6 +2045,148 @@ async fn deferred_post_tool_context_cannot_bypass_a_later_policy_rejection() {
 // Native pre-tool interaction and Tool Plane settlement
 // ---------------------------------------------------------------------------
 
+/// Native definitions and configured approval policy, with a watch at
+/// executor start and an approval oneshot. The pending publication is the
+/// rendezvous: start must remain false until an affirmative decision.
+#[tokio::test]
+async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access() {
+    use crate::agent::lifecycle::ConfiguredApprovalPolicy;
+    use crate::runtime::ApprovalMode;
+    for name in ["write", "edit", "bash"] {
+        for decision in ["allow", "deny", "cancel", "full_access"] {
+            let fixture = common::native_fixture();
+            let definition = fixture
+                .registry
+                .definitions()
+                .into_iter()
+                .find(|tool| tool.name == name)
+                .unwrap();
+            assert_eq!(definition.approval_policy, ToolApprovalPolicy::Always);
+            let (probe, mut handle) =
+                GatedTool::new(definition.clone(), Arc::new(Mutex::new(Vec::new())));
+            let mut tools = ToolRegistry::new();
+            probe.register(&mut tools);
+            let arguments = match name {
+                "write" => serde_json::json!({"path":"test.txt","content":"new"}),
+                "edit" => {
+                    serde_json::json!({"path":"test.txt","edits":[{"oldText":"old","newText":"new"}]})
+                }
+                "bash" => serde_json::json!({"command":"true","execution_mode":"foreground"}),
+                _ => unreachable!(),
+            };
+            let call = ScriptedCall {
+                id: "native-approval",
+                tool_id: match name {
+                    "write" => "tool-write",
+                    "edit" => "tool-edit",
+                    _ => "tool-bash",
+                },
+                name,
+                arguments: arguments.clone(),
+            };
+            let model = fake_model(tool_turn_then_stop(&[call]));
+            let (tx, rx) = oneshot::channel();
+            let rendezvous = ScriptedInteractionRendezvous::new(vec![rx]);
+            let mut pending = rendezvous.subscribe_count();
+            let facts = rendezvous.requests();
+            let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+            let mode = if decision == "full_access" {
+                ApprovalMode::FullAccess
+            } else {
+                ApprovalMode::Policy
+            };
+            let task = {
+                let model = model.clone();
+                let cancellation = cancellation.clone();
+                tokio::spawn(async move {
+                    run(
+                        &model,
+                        tools,
+                        ContextAssembly::new(),
+                        AttemptLifecycle::inert()
+                            .with_pre_tool_policy(Arc::new(ConfiguredApprovalPolicy::new(mode)))
+                            .with_test_interaction_rendezvous(rendezvous),
+                        &cancellation,
+                    )
+                    .await
+                })
+            };
+            if decision != "full_access" {
+                pending.wait_for(|count| *count == 1).await.unwrap();
+                assert!(!*handle.started.borrow(), "{name} started before approval");
+                assert!(handle.invocations().is_empty());
+                let observed = facts.lock().unwrap()[0].clone();
+                assert_eq!(observed.tool_id, definition.id);
+                assert_eq!(observed.mode, ToolInvocationMode::Foreground);
+                // Bash's execution metadata was stripped at frozen preflight.
+                let mut business = arguments.clone();
+                business.as_object_mut().unwrap().remove("execution_mode");
+                assert_eq!(observed.arguments, business);
+                if decision == "cancel" {
+                    cancellation.cancel();
+                } else {
+                    tx.send(InteractionOutcome::Responded {
+                        response: InteractionResponse::Approval {
+                            decision: if decision == "allow" {
+                                ApprovalDecision::Allow
+                            } else {
+                                ApprovalDecision::Deny {
+                                    reason: "denied by test".into(),
+                                }
+                            },
+                        },
+                    })
+                    .unwrap();
+                }
+            }
+            if decision == "allow" || decision == "full_access" {
+                handle.await_started().await;
+                handle.release_and_await_completion().await;
+            }
+            let audit = task.await.unwrap();
+            assert_single_terminal(&audit.event_history);
+            let starts = audit
+                .event_history
+                .iter()
+                .filter(|event| matches!(event, RuntimeEvent::ToolExecutionStarted { .. }))
+                .count();
+            if decision == "deny" || decision == "cancel" {
+                assert_eq!(starts, 0);
+                assert!(handle.invocations().is_empty());
+            } else {
+                assert_eq!(starts, 1);
+                assert_eq!(handle.invocations().len(), 1);
+                assert_eq!(handle.invocations()[0].mode, ToolInvocationMode::Foreground);
+            }
+            if decision == "full_access" {
+                assert!(
+                    facts.lock().unwrap().is_empty(),
+                    "only the Tool approval gate was bypassed"
+                );
+            }
+            if decision == "deny" {
+                assert!(matches!(
+                    tool_messages(&audit)[0].result.status,
+                    ToolExecutionStatus::Denied { .. }
+                ));
+            }
+            if decision == "cancel" {
+                assert!(matches!(audit.outcome, AttemptOutcome::Cancelled { .. }));
+                assert!(matches!(
+                    tool_messages(&audit)[0].result.status,
+                    ToolExecutionStatus::Cancelled {
+                        phase: rustx::tools::types::ToolCancellationPhase::BeforeStart,
+                        ..
+                    }
+                ));
+                assert_eq!(model.requests().len(), 1);
+            } else {
+                assert_eq!(model.requests().len(), 2);
+            }
+        }
+    }
+}
+
 /// An approval response resumes the original Tool Plane invocation. The
 /// recorded facts, executor invocation, Assistant `ToolCall`, and canonical
 /// `ToolMessage` all retain the same identity and validated arguments.

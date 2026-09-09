@@ -215,11 +215,10 @@ mod tests {
         };
         let mut registry = ToolRegistry::new();
         registry
-            .register_with_activation_metadata(
+            .register_with_execution_metadata(
                 definition.clone(),
                 executor,
                 |value| Ok(value.clone()),
-                false,
                 composite,
             )
             .unwrap();

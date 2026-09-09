@@ -2767,7 +2767,7 @@ mod tests {
     /// Builds the conversation runtime + host, optionally activating the
     /// real native tool plane. Skill projection tests opt into this variant
     /// so the fixture exercises the normal native composition and its
-    /// mandatory Read capability.
+    /// default-enabled Read capability.
     async fn host_fixture_with_native_tools(
         scripts: Vec<Vec<GatedStep>>,
         mut tools: ToolRegistry,

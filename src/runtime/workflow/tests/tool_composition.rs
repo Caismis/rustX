@@ -302,11 +302,10 @@ async fn fixed_admission_rejects_orchestration_background_and_composite_leaves()
         if name == "composite" {
             let mut registry = crate::tools::executor::ToolRegistry::new();
             registry
-                .register_with_activation_metadata(
+                .register_with_execution_metadata(
                     registration.definition,
                     registration.executor,
                     registration.normalizer,
-                    false,
                     crate::tools::deadline::ForegroundPolicy::Composite {
                         total: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
                     },

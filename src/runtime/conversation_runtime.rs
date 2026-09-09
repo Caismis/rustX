@@ -6235,6 +6235,17 @@ mod tests {
         }
     }
 
+    /// Skill context fixtures explicitly admit the native lazy-load dependency.
+    fn with_native_read(mut registry: ToolRegistry) -> ToolRegistry {
+        let read = crate::tools::native::subagent_child_definition(
+            "read",
+            crate::tools::NativeToolPolicies::default().read,
+        )
+        .unwrap();
+        crate::tools::native::register_subagent_child_tools(&mut registry, &[read]).unwrap();
+        registry
+    }
+
     /// The configurable headless fixture variant used by exact context-input
     /// regressions without changing the defaults of the broad runtime suite.
     async fn headless_runtime_with_options(
@@ -7418,7 +7429,7 @@ mod tests {
         let (runtime_with_skill, _) = headless_runtime_with_options(
             &with_skill,
             vec![text_turn_script("S")],
-            None,
+            Some(with_native_read(ToolRegistry::new())),
             None,
             HeadlessRuntimeOptions {
                 skill_discovery: crate::skills::SkillDiscoveryConfig {
@@ -8581,7 +8592,7 @@ mod tests {
             let tool = FakeTool::new(definition, success_result("unused"));
             let mut registry = ToolRegistry::new();
             tool.register(&mut registry);
-            registry
+            with_native_read(registry)
         }
 
         let dir = tempfile::tempdir().expect("temp dir");
@@ -8801,7 +8812,7 @@ mod tests {
         tool.register(&mut registry);
         loader.set_capability_inputs(crate::capabilities::CapabilityResourceInputs {
             python_sources: std::collections::BTreeMap::new(),
-            base_tool_registry: Arc::new(registry),
+            base_tool_registry: Arc::new(with_native_read(registry)),
             tool_activation: crate::capabilities::ToolActivationPolicy::default(),
             skill_discovery: crate::skills::SkillDiscoveryConfig {
                 automatic_roots: Vec::new(),
