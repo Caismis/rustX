@@ -9,7 +9,510 @@ use std::path::Path;
 struct Fixture {
     root: tempfile::TempDir,
     host: HostEnvironment,
+    credentials: crate::credentials::CredentialSnapshot,
     request: LaunchRequest,
+}
+
+#[test]
+fn cfg235_static_check_show_have_zero_effects_and_redacted_outputs() {
+    let f = Fixture::new();
+    let sentinel = "RUSTX_SECRET_SENTINEL_DO_NOT_LEAK";
+    for configuration in [
+        json!({}),
+        json!({"unknownField": true}),
+        json!({"environment":{"DECLARED_LITERAL":sentinel}}),
+        json!({"mcpServers":{"offline":{"enabled":true,"url":"http://127.0.0.1:9/mcp"}}}),
+        json!({"mcpServers":{"disabled":{"enabled":false,"command":"must-never-spawn","args":[sentinel]}}}),
+        json!({"mcpServers":{"unconfigured":{"command":"must-never-spawn"}}}),
+    ] {
+        f.project(configuration);
+        for operation in ["config_check", "config_show"] {
+            let ((report, _), counts) = super::static_effects::measure(|| {
+                super::diagnostics::inspect(operation, &f.request, &f.host)
+            });
+            assert_eq!(counts, [0; 8]);
+            if let Some(projection) = &report.launch {
+                for name in projection.sources.keys() {
+                    let diagnostic = report
+                        .diagnostics
+                        .iter()
+                        .find(|diagnostic| diagnostic.path == format!("mcpServers.{name}"))
+                        .unwrap();
+                    assert!(diagnostic.file.is_some());
+                    assert!(!diagnostic.reason.is_empty() && !diagnostic.correction.is_empty());
+                    assert!(matches!(diagnostic.classification, "info" | "warning"));
+                }
+            }
+            for output in [
+                report.render(false),
+                report.render(true),
+                format!("{report:?}"),
+            ] {
+                assert!(!output.contains(sentinel), "{output}");
+                assert!(!output.contains("current Session uses"));
+            }
+            assert!(!f.resolve_locations_only().runtime_root.exists());
+        }
+    }
+    f.project(json!({"mcpServers":{"untrusted":{"enabled":true,"command":"must-never-spawn"}}}));
+    f.trust(TrustAction::Revoke);
+    let ((report, launch), counts) = super::static_effects::measure(|| {
+        super::diagnostics::inspect("config_show", &f.request, &f.host)
+    });
+    assert_eq!(counts, [0; 8]);
+    assert_eq!(report.exit_code(), 3);
+    assert!(
+        launch
+            .unwrap()
+            .admit(|| panic!("untrusted admission must never capture credentials"))
+            .is_err()
+    );
+}
+
+#[test]
+fn cfg235_prospective_values_and_origins_equal_runtime_resolution() {
+    let mut f = Fixture::new();
+    f.project(json!({"context":{"reserveTokens":8192},"environment":{"PRIVATE":"RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"}}));
+    f.request.exclude_tools = Some(vec!["read".into()]);
+    let prospective = analyze(&f.request, &f.host).unwrap();
+    let runtime = f.resolve();
+    assert_eq!(prospective.config(), runtime.config());
+    assert_eq!(prospective.provenance(), runtime.provenance());
+    assert_eq!(prospective.workspace, runtime.workspace);
+    assert_eq!(prospective.runtime_root, runtime.runtime_root);
+    assert!(
+        !prospective
+            .selected_tools
+            .as_ref()
+            .unwrap()
+            .contains(&"read".into())
+    );
+    assert!(!format!("{prospective:?} {runtime:?}").contains("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"));
+}
+
+#[test]
+fn cfg235_projection_has_a_structured_size_bound_without_changing_validity() {
+    let f = Fixture::new();
+    f.project(json!({"environment":(0..4096).map(|index| (format!("FIELD_{index}"), "RUSTX_SECRET_SENTINEL_DO_NOT_LEAK")).collect::<std::collections::BTreeMap<_,_>>()}));
+    let (report, _) = super::diagnostics::inspect("config_show", &f.request, &f.host);
+    assert_eq!(report.exit_code(), 0);
+    let output = report.render(true);
+    assert!(output.len() < 256 * 1024);
+    let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(value["projection_omitted"], true);
+    assert_eq!(value["validity"], "valid");
+    assert!(value["launch"].is_null());
+    assert!(!output.contains("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"));
+    assert!(report.render(false).len() < 256 * 1024);
+}
+
+#[test]
+fn cfg235_all_example_layers_use_real_resolver_and_workflow_compiler() {
+    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/local-runtime");
+    for (workspace, config, model, expected_workflows) in [
+        ("minimal/workspace", None, "minimal/models.jsonc", 0),
+        ("workflow-basic", None, "minimal/models.jsonc", 1),
+        ("workspace", Some("rustx.jsonc"), "models.jsonc", 2),
+    ] {
+        let f = Fixture::new();
+        let mut host = f.host.clone();
+        host.launch_directory = base.join(workspace);
+        std::fs::write(
+            host.config_directory.join("models.jsonc"),
+            std::fs::read(base.join(model)).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            host.config_directory.join("settings.jsonc"),
+            std::fs::read(base.join("minimal/settings.jsonc")).unwrap(),
+        )
+        .unwrap();
+        let request = LaunchRequest {
+            workspace: Some(host.launch_directory.clone()),
+            config: config.map(|path| base.join(path)),
+            ..Default::default()
+        };
+        change_trust(&request, &host, TrustAction::Grant).unwrap();
+        let prospective = analyze(&request, &host).unwrap();
+        assert_eq!(
+            prospective.workflows.definitions().len(),
+            expected_workflows
+        );
+        assert!(
+            prospective
+                .admit(crate::credentials::CredentialSnapshot::default)
+                .is_ok()
+        );
+    }
+}
+
+#[tokio::test]
+async fn cfg235_probe_verifies_mcp_without_business_calls_and_respects_inert_sources() {
+    use super::probes::{ProbeState, execute, plan};
+    use crate::tools::mcp::fixture::streamable_http::{HttpFixture, HttpFixtureControl};
+    let fixture = HttpFixture::start(HttpFixtureControl::new()).await;
+    let f = Fixture::new();
+    f.project(json!({"mcpServers":{
+        "enabled":{"enabled":true,"url":fixture.endpoint},
+        "disabled":{"enabled":false,"command":"must-never-execute"},
+        "unconfigured":{"command":"must-never-execute"}
+    },"pythonSources":{"python:optional":"enabled"}}));
+    let launch = analyze(&f.request, &f.host).unwrap();
+    let probe_plan = plan(&launch, false);
+    let results = execute(
+        &launch,
+        &probe_plan,
+        crate::runtime::CancellationSignal::new(),
+    )
+    .await;
+    let state = |name: &str| {
+        results
+            .iter()
+            .find(|result| result.target == name)
+            .unwrap()
+            .state
+    };
+    assert_eq!(state("enabled"), ProbeState::Verified);
+    assert_eq!(state("disabled"), ProbeState::Skipped);
+    assert_eq!(state("unconfigured"), ProbeState::Skipped);
+    assert_eq!(state("python:optional"), ProbeState::Unavailable);
+    assert_eq!(fixture.control.accepted_calls(), 0);
+    assert!(!launch.environment_store_root().exists());
+    f.trust(TrustAction::Revoke);
+    let untrusted = analyze(&f.request, &f.host).unwrap();
+    let plan = plan(&untrusted, true);
+    assert!(plan.targets.iter().all(|target| !target.spawn_process
+        && !target.network
+        && !target.prepare_environment
+        && !target.resolve_credentials));
+    let results = execute(&untrusted, &plan, crate::runtime::CancellationSignal::new()).await;
+    assert_eq!(
+        results
+            .iter()
+            .find(|result| result.target == "enabled")
+            .unwrap()
+            .state,
+        ProbeState::Unavailable
+    );
+    fixture.shutdown().await;
+}
+
+#[test]
+fn cfg235_diagnostics_keep_source_field_classification_and_correction() {
+    let f = Fixture::new();
+    for (configuration, field) in [
+        (json!({"unknownField":true}), "unknownField"),
+        (json!({"approvalMode":"full_access"}), "approvalMode"),
+        (
+            json!({"subagents":{"definitions":{"missing":{"description":"missing","instructionsFile":"missing.md"}}}}),
+            "subagents.definitions.missing.instructionsFile",
+        ),
+    ] {
+        f.project(configuration);
+        let (report, _) = super::diagnostics::inspect("config_check", &f.request, &f.host);
+        assert_eq!(report.exit_code(), 2);
+        let diagnostic = &report.diagnostics[0];
+        assert_eq!(diagnostic.path, field);
+        assert!(diagnostic.file.is_some());
+        assert_eq!(diagnostic.classification, "error");
+        assert_eq!(diagnostic.category, "invalid");
+        assert!(!diagnostic.reason.is_empty());
+        assert!(!diagnostic.correction.is_empty());
+    }
+    std::fs::write(f.host.launch_directory.join("rustx.jsonc"), "{\n bad").unwrap();
+    let (report, _) = super::diagnostics::inspect("config_check", &f.request, &f.host);
+    assert_eq!(report.diagnostics[0].line, Some(2));
+    assert!(report.diagnostics[0].column.is_some());
+}
+
+#[tokio::test]
+async fn cfg235_probe_stdio_timeout_and_cancel_reap_owned_process() {
+    use super::probes::{ProbeState, execute, plan};
+    use crate::tools::mcp::fixture::{
+        FIXTURE_MODE_ENV, FixtureServer, fixture_spawn_args, serve_if_fixture_mode,
+    };
+    use std::sync::Arc;
+    if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
+        return;
+    }
+    for timed_out in [false, true] {
+        let f = Fixture::new();
+        f.user(json!({"model":{"model":"host/one"}, "mcpServers":{"owned":{
+            "enabled":true, "command":std::env::current_exe().unwrap(),
+            "args":fixture_spawn_args("local_runtime::launch_tests::cfg235_probe_stdio_timeout_and_cancel_reap_owned_process"),
+            "env":{FIXTURE_MODE_ENV:"1"}
+        }}}));
+        let launch = analyze(&f.request, &f.host).unwrap();
+        let mut plan = plan(&launch, false);
+        let pause = Arc::new(crate::tools::mcp::test_sync::ConnectOwnershipPause::default());
+        let expire = Arc::new(tokio::sync::Notify::new());
+        plan.hooks.ownership_pause = Some(pause.clone());
+        plan.hooks.expire = Some(expire.clone());
+        let cancellation = crate::runtime::CancellationSignal::new();
+        let work = execute(&launch, &plan, cancellation.clone());
+        tokio::pin!(work);
+        tokio::select! { () = pause.wait_entered() => {}, _ = &mut work => panic!("probe returned before owned pause") }
+        let pid =
+            nix::unistd::Pid::from_raw(i32::try_from(pause.supervisor_pid().unwrap()).unwrap());
+        if timed_out {
+            expire.notify_one();
+        } else {
+            cancellation.cancel();
+        }
+        assert!(
+            futures_util::poll!(&mut work).is_pending(),
+            "caller must await physical owner"
+        );
+        pause.release();
+        let results = work.await;
+        let result = results
+            .iter()
+            .find(|result| result.target == "owned")
+            .unwrap();
+        assert_eq!(
+            result.state,
+            if timed_out {
+                ProbeState::TimedOut
+            } else {
+                ProbeState::Cancelled
+            }
+        );
+        assert_eq!(
+            nix::sys::wait::waitpid(pid, Some(nix::sys::wait::WaitPidFlag::WNOHANG)),
+            Err(nix::errno::Errno::ECHILD)
+        );
+        assert_eq!(
+            nix::sys::signal::kill(pid, None),
+            Err(nix::errno::Errno::ESRCH)
+        );
+        assert!(
+            !launch.runtime_root.exists(),
+            "no Session or recovery state"
+        );
+    }
+}
+
+#[tokio::test]
+async fn cfg235_probe_close_is_awaited_and_failed_close_is_not_verified() {
+    use super::probes::{ProbeState, execute, plan};
+    use crate::tools::mcp::fixture::streamable_http::{HttpFixture, HttpFixtureControl};
+    use std::sync::Arc;
+    let fixture = HttpFixture::start(HttpFixtureControl::new()).await;
+    let f = Fixture::new();
+    f.project(json!({"mcpServers":{"owned":{"enabled":true,"url":fixture.endpoint}}}));
+    let launch = analyze(&f.request, &f.host).unwrap();
+    let mut plan = plan(&launch, false);
+    let close = Arc::new(crate::tools::mcp::test_sync::CloseProbe::parking());
+    plan.hooks.close = Some(close.clone());
+    let cancellation = crate::runtime::CancellationSignal::new();
+    let work = execute(&launch, &plan, cancellation.clone());
+    tokio::pin!(work);
+    tokio::select! { () = close.wait_entered() => {}, _ = &mut work => panic!("returned before close") }
+    cancellation.cancel();
+    assert!(futures_util::poll!(&mut work).is_pending());
+    close.release();
+    let results = work.await;
+    assert_eq!(results[1].state, ProbeState::Cancelled);
+    assert!(results[1].verified.is_none());
+    let mut plan = super::probes::plan(&launch, false);
+    plan.hooks.close = Some(Arc::new(crate::tools::mcp::test_sync::CloseProbe::failing(
+        "RUSTX_SECRET_SENTINEL_DO_NOT_LEAK",
+    )));
+    let results = execute(&launch, &plan, crate::runtime::CancellationSignal::new()).await;
+    assert_eq!(results[1].state, ProbeState::Failed);
+    assert!(results[1].verified.is_none());
+    assert!(
+        !super::probes::render_results(&results, true)
+            .contains("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK")
+    );
+    assert_eq!(fixture.control.accepted_calls(), 0);
+    fixture.shutdown().await;
+}
+
+#[test]
+fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states() {
+    let mut f = Fixture::new();
+    let model_path = f.host.config_directory.join("models.jsonc");
+    let mut model: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&model_path).unwrap()).unwrap();
+    model["providers"]["host"]["apiKey"] = json!("$CFG235_UNSET_CREDENTIAL");
+    std::fs::write(&model_path, serde_json::to_vec(&model).unwrap()).unwrap();
+    let ((report, _), counts) = super::static_effects::measure(|| {
+        super::diagnostics::inspect("config_check", &f.request, &f.host)
+    });
+    assert_eq!(counts, [0; 8]);
+    assert_eq!(
+        report.exit_code(),
+        0,
+        "offline checking never tests credential presence"
+    );
+    f.request.config = Some("explicit-missing.jsonc".into());
+    let (report, _) = super::diagnostics::inspect("config_check", &f.request, &f.host);
+    assert_eq!(report.exit_code(), 2);
+    assert_eq!(
+        report.diagnostics[0].file,
+        Some(f.host.launch_directory.join("explicit-missing.jsonc"))
+    );
+    f.request.config = None;
+    let workflow = f
+        .host
+        .launch_directory
+        .join(".agents/workflows/broken.yaml");
+    std::fs::create_dir_all(workflow.parent().unwrap()).unwrap();
+    std::fs::write(&workflow, "RUSTX_SECRET_SENTINEL_DO_NOT_LEAK: [").unwrap();
+    f.project(json!({"workflows":{"definitions":["broken"],"main":["broken"]}}));
+    let ((report, _), counts) = super::static_effects::measure(|| {
+        super::diagnostics::inspect("config_check", &f.request, &f.host)
+    });
+    assert_eq!(counts, [0; 8]);
+    assert_eq!(report.exit_code(), 2);
+    assert_eq!(report.diagnostics[0].file, Some(workflow));
+    assert!(
+        !report
+            .render(true)
+            .contains("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK")
+    );
+    f.project(json!({}));
+    let valid = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples/local-runtime/workflow-basic/.agents/workflows/read_file.yaml"),
+    )
+    .unwrap();
+    std::fs::write(
+        f.host
+            .launch_directory
+            .join(".agents/workflows/broken.yaml"),
+        valid.replace("entry: read", "entry: missing_node"),
+    )
+    .unwrap();
+    f.project(json!({"workflows":{"definitions":["broken"],"main":["broken"]}}));
+    let ((report, _), counts) = super::static_effects::measure(|| {
+        super::diagnostics::inspect("config_check", &f.request, &f.host)
+    });
+    assert_eq!(counts, [0; 8]);
+    assert_eq!(
+        report.exit_code(),
+        2,
+        "native compiler rejects the missing entry node"
+    );
+    assert_eq!(report.diagnostics[0].path, "workflows.definitions.broken");
+    f.project(json!({}));
+    f.user(json!({}));
+    let (report, _) = super::diagnostics::inspect("config_show", &f.request, &f.host);
+    assert_eq!(report.exit_code(), 3);
+    assert_eq!(report.diagnostics[0].category, "incomplete");
+    assert!(report.partial.is_some());
+    std::fs::remove_file(model_path).unwrap();
+    let (report, _) = super::diagnostics::inspect("config_show", &f.request, &f.host);
+    assert_eq!(report.exit_code(), 3);
+    assert!(report.partial.is_some());
+}
+
+#[tokio::test]
+async fn cfg235_preparation_requires_authorization_and_uses_existing_python_owner() {
+    use crate::runtime::process_runner::{
+        CapturedProcessResult, RunnerTestControl, SupervisedCommandSpec, SupervisedProcessRunner,
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    #[derive(Default)]
+    struct FailingRunner(AtomicUsize);
+    impl SupervisedProcessRunner for FailingRunner {
+        fn run(
+            &self,
+            _: SupervisedCommandSpec,
+            _: Option<RunnerTestControl>,
+        ) -> futures_util::future::BoxFuture<'_, Result<CapturedProcessResult, String>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Err("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK".into()) })
+        }
+    }
+    let f = Fixture::new();
+    let package = f.host.launch_directory.join(".agents/tools/optional");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("server.py"), "# never executed by this test\n").unwrap();
+    std::fs::write(package.join("requirements.txt"), "").unwrap();
+    f.project(json!({"pythonSources":{"python:optional":"enabled"}}));
+    let launch = analyze(&f.request, &f.host).unwrap();
+    let runner = Arc::new(FailingRunner::default());
+    let store = crate::tools::python::PythonToolStore::with_binaries_and_runner(
+        f.root.path().join("recorded-store"),
+        "/fixture/uv".into(),
+        "/fixture/python3".into(),
+        runner.clone(),
+    )
+    .unwrap();
+    for authorized in [false, true, true] {
+        let before = runner.0.load(Ordering::SeqCst);
+        let mut plan = super::probes::plan(&launch, authorized);
+        plan.hooks.python_store = Some(store.clone());
+        let results =
+            super::probes::execute(&launch, &plan, crate::runtime::CancellationSignal::new()).await;
+        let result = results
+            .iter()
+            .find(|result| result.target == "python:optional")
+            .unwrap();
+        if authorized {
+            assert!(
+                runner.0.load(Ordering::SeqCst) > before,
+                "existing Python owner attempted preparation; failed build was fully retired"
+            );
+            assert_eq!(result.state, super::probes::ProbeState::Failed);
+        } else {
+            assert_eq!(runner.0.load(Ordering::SeqCst), before);
+            assert_eq!(result.state, super::probes::ProbeState::Unavailable);
+        }
+        assert!(
+            !super::probes::render_results(&results, true)
+                .contains("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK")
+        );
+        assert!(!launch.runtime_root.exists());
+    }
+}
+
+#[tokio::test]
+async fn cfg235_probe_credential_use_and_failures_never_leak_values() {
+    use crate::tools::mcp::fixture::streamable_http::{HttpFixture, HttpFixtureControl};
+    let fixture = HttpFixture::start(HttpFixtureControl::new()).await;
+    let f = Fixture::new();
+    f.user(json!({"model":{"model":"host/one"},"mcpServers":{"secret":{"enabled":true,"url":fixture.endpoint,"sensitiveHeaders":{"Authorization":"$CFG235_TOKEN"}}}}));
+    let launch = analyze(&f.request, &f.host).unwrap();
+    for present in [false, true] {
+        let mut plan = super::probes::plan(&launch, false);
+        plan.hooks.credentials = Some(crate::credentials::CredentialSnapshot::new(if present {
+            vec![(
+                "CFG235_TOKEN".into(),
+                "RUSTX_SECRET_SENTINEL_DO_NOT_LEAK".into(),
+            )]
+        } else {
+            vec![]
+        }));
+        assert!(plan.targets[1].resolve_credentials);
+        let results =
+            super::probes::execute(&launch, &plan, crate::runtime::CancellationSignal::new()).await;
+        assert_eq!(
+            results[1].state,
+            if present {
+                super::probes::ProbeState::Verified
+            } else {
+                super::probes::ProbeState::Failed
+            }
+        );
+        for output in [
+            plan.render(false),
+            plan.render(true),
+            format!("{plan:?} {results:?}"),
+            super::probes::render_results(&results, false),
+            super::probes::render_results(&results, true),
+        ] {
+            assert!(!output.contains("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"));
+        }
+    }
+    assert_eq!(fixture.control.accepted_calls(), 0);
+    assert!(!launch.runtime_root.exists());
+    fixture.shutdown().await;
 }
 
 impl Fixture {
@@ -35,6 +538,7 @@ impl Fixture {
         let fixture = Self {
             root,
             host,
+            credentials: crate::credentials::CredentialSnapshot::default(),
             request: LaunchRequest::default(),
         };
         fixture.user(json!({"model":{"model":"host/one"}}));
@@ -59,7 +563,13 @@ impl Fixture {
         change_trust(&self.request, &self.host, action).unwrap();
     }
     fn resolve(&self) -> ResolvedLaunch {
-        resolve(&self.request, &self.host).unwrap()
+        analyze(&self.request, &self.host)
+            .unwrap()
+            .admit(|| self.credentials.clone())
+            .unwrap()
+    }
+    fn resolve_locations_only(&self) -> LaunchLocations {
+        resolve_locations(&self.request, &self.host).unwrap().0
     }
 }
 
@@ -142,7 +652,7 @@ fn cfg233_configuration_accepts_only_declarative_python_enablement() {
 #[test]
 fn cfg233_whole_source_replacement_never_rebinds_host_credentials() {
     let mut f = Fixture::new();
-    f.host.credentials = crate::credentials::CredentialSnapshot::new([(
+    f.credentials = crate::credentials::CredentialSnapshot::new([(
         "HOST_SECRET".into(),
         "CFG233_HOST_SECRET_SENTINEL".into(),
     )]);
@@ -193,12 +703,12 @@ async fn cfg233_provider_binding_uses_launch_snapshot_and_ignores_unused_missing
     document["providers"]["unused"] = document["providers"]["host"].clone();
     document["providers"]["unused"]["apiKey"] = json!("$UNSET_UNUSED_KEY");
     std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
-    f.host.credentials = crate::credentials::CredentialSnapshot::new([(
+    f.credentials = crate::credentials::CredentialSnapshot::new([(
         "CAPTURED_KEY".into(),
         "CFG233_PROVIDER_SENTINEL".into(),
     )]);
     let launch = f.resolve();
-    f.host.credentials = crate::credentials::CredentialSnapshot::default();
+    f.credentials = crate::credentials::CredentialSnapshot::default();
     let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
@@ -373,8 +883,7 @@ async fn cfg233_http_credential_failure_redacts_peer_echo_and_configuration() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     const SENTINEL: &str = "CFG233_HTTP_SECRET_BEARER_62df";
     let mut f = Fixture::new();
-    f.host.credentials =
-        crate::credentials::CredentialSnapshot::new([("AUTH".into(), SENTINEL.into())]);
+    f.credentials = crate::credentials::CredentialSnapshot::new([("AUTH".into(), SENTINEL.into())]);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = listener.local_addr().unwrap();
     let peer = tokio::spawn(async move {
@@ -421,6 +930,7 @@ async fn cfg233_http_credential_failure_redacts_peer_echo_and_configuration() {
 #[test]
 fn precedence_absence_empty_and_whole_entries_keep_provenance() {
     let mut f = Fixture::new();
+    std::fs::write(f.host.launch_directory.join("new.md"), "Project role").unwrap();
     let builtin = f.resolve();
     assert_eq!(builtin.config.agent_id.as_str(), "rustx");
     assert_eq!(builtin.config.context.reserve_tokens, 1024);
@@ -548,6 +1058,22 @@ fn optional_explicit_malformed_unknown_and_null_are_distinct() {
 #[test]
 fn relative_paths_keep_their_document_and_cli_bases() {
     let mut f = Fixture::new();
+    std::fs::write(f.host.config_directory.join("user.md"), "User role").unwrap();
+    for file in ["project.md", "instructions.md"] {
+        std::fs::write(f.host.launch_directory.join(file), "Project instructions").unwrap();
+    }
+    for path in [
+        f.host.config_directory.join("user-skills"),
+        f.host.launch_directory.join("cli-skill"),
+    ] {
+        std::fs::create_dir(&path).unwrap();
+        let name = path.file_name().unwrap().to_str().unwrap();
+        std::fs::write(
+            path.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: Path fixture\n---\nInstructions\n"),
+        )
+        .unwrap();
+    }
     f.user(json!({"model":{"model":"host/one"}, "skills":["user-skills"], "subagents":{"definitions":{"user":{"description":"user","instructionsFile":"user.md"}}}}));
     f.project(json!({"subagents":{"definitions":{"project":{"description":"project","instructionsFile":"project.md","agentsMd":{"files":["instructions.md"]}}}}}));
     let resolved = f.resolve();
@@ -736,11 +1262,9 @@ async fn resolution_and_composition_failures_preserve_published_session_selectio
     assert!(resolve(&f.request, &f.host).is_err());
     assert_eq!(before, std::fs::read(&catalog).unwrap());
     f.project(json!({"skills":["missing-skill"]}));
-    let invalid_resources = f.resolve();
     assert!(
-        LocalSessionProduct::compose(&invalid_resources, &LocalRuntimeDependencies::default())
-            .await
-            .is_err()
+        analyze(&f.request, &f.host).is_err(),
+        "static resource failures precede composition"
     );
     assert_eq!(before, std::fs::read(&catalog).unwrap());
 }
@@ -1147,8 +1671,7 @@ fn project_directory_symlinks_cannot_authorize_builtin_or_declared_resources() {
     f.project(json!({}));
     std::os::unix::fs::symlink(&other, f.host.launch_directory.join(".agents")).unwrap();
     assert!(
-        f.resolve()
-            .validate_resource_authority()
+        resolve(&f.request, &f.host)
             .unwrap_err()
             .contains("outside trusted workspace")
     );

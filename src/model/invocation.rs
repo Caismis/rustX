@@ -846,6 +846,10 @@ pub(crate) fn build_protocol_adapter(
     credential: &str,
     base_url: &str,
 ) -> Arc<dyn ModelAdapter> {
+    #[cfg(test)]
+    crate::local_runtime::static_effects::observe(
+        crate::local_runtime::static_effects::Effect::Provider,
+    );
     let inner: Arc<dyn ModelAdapter> = match protocol {
         ModelProtocol::OpenAiChatCompletions => {
             use crate::model::adapter::openai::{
@@ -996,60 +1000,8 @@ impl ModelBindingRegistry {
         layer: RequestParamsLayer,
     ) -> Result<ResolvedModelInvocation, ModelInvocationError> {
         let (provider, model) = self.catalog.binding(&selection.model)?;
-        let protocol = model.protocol;
-
-        let (profile_id, profile) = select_reasoning_profile(&selection.model, model, selection)?;
-
-        validate_request_params_layer(&selection.request_params, protocol, layer)
-            .map_err(ModelInvocationError::ProtectedKey)?;
-
-        // The selected profile owns every top-level key it declares.
-        if let (Some(profile_id), Some(profile)) = (profile_id.as_ref(), profile) {
-            for key in selection.request_params.keys() {
-                if profile.request_params.contains_key(key) {
-                    return Err(ModelInvocationError::ReasoningProfileKeyOwnership {
-                        model: selection.model.clone(),
-                        profile: profile_id.clone(),
-                        key: key.clone(),
-                    });
-                }
-            }
-        }
-
-        let mut request_params = model.request_params.clone();
-        if let Some(profile) = profile {
-            overlay_shallow(&mut request_params, &profile.request_params);
-        }
-        overlay_shallow(&mut request_params, &selection.request_params);
-
-        let effective_output_tokens = match selection.max_output_tokens {
-            None => model.max_output_tokens,
-            Some(0) => {
-                return Err(ModelInvocationError::InvalidOutputBudget {
-                    model: selection.model.clone(),
-                    detail: "the output budget must be positive".to_owned(),
-                });
-            }
-            Some(requested) if requested > model.max_output_tokens => {
-                return Err(ModelInvocationError::InvalidOutputBudget {
-                    model: selection.model.clone(),
-                    detail: format!(
-                        "requested {requested} exceeds the model maximum {}",
-                        model.max_output_tokens
-                    ),
-                });
-            }
-            Some(requested) => requested,
-        };
-
-        let capabilities = effective_capabilities(&model.capabilities, protocol);
-        if !capabilities.supports_text_conversation() {
-            return Err(ModelInvocationError::UnusableCapabilities {
-                model: selection.model.clone(),
-                detail: "the effective capabilities cannot carry text input and text output"
-                    .to_owned(),
-            });
-        }
+        let analyzed = analyze_selection(model, selection, layer)?;
+        let protocol = analyzed.protocol;
 
         let credential = provider.credential()?;
         let adapter = self
@@ -1066,24 +1018,17 @@ impl ModelBindingRegistry {
 
         Ok(ResolvedModelInvocation {
             provider: provider.id().clone(),
-            model_ref: selection.model.clone(),
+            model_ref: analyzed.model,
             adapter,
             protocol,
-            context_window: model.context_window,
-            model_max_output_tokens: model.max_output_tokens,
-            effective_output_tokens,
-            reasoning_profile: profile_id,
-            // A reasoning-capable model without a profile block has
-            // provider-default reasoning semantics: reasoning is always on,
-            // but there is no selectable profile and no synthetic wire field.
-            reasoning_enabled: if model.capabilities.reasoning {
-                profile.is_none_or(|profile| profile.enabled)
-            } else {
-                false
-            },
-            request_params,
-            capabilities,
-            declared_capabilities: model.capabilities.clone(),
+            context_window: analyzed.context_window,
+            model_max_output_tokens: analyzed.model_max_output_tokens,
+            effective_output_tokens: analyzed.max_output_tokens,
+            reasoning_profile: analyzed.reasoning_profile,
+            reasoning_enabled: analyzed.reasoning_enabled,
+            request_params: analyzed.request_params,
+            capabilities: analyzed.capabilities,
+            declared_capabilities: analyzed.declared_capabilities,
             compat: model.compat,
         })
     }
@@ -1189,6 +1134,90 @@ pub(crate) trait ScriptedProviderAdapterFactory: Send + Sync {
         provider: &ResolvedProvider,
         protocol: ModelProtocol,
     ) -> Result<Arc<dyn ModelAdapter>, ModelInvocationError>;
+}
+
+/// Resolve model selection semantics without credentials, clients, or Sessions.
+///
+/// # Errors
+/// Returns the same static model selection errors as runtime binding.
+pub fn analyze_selection(
+    model: &ModelDefinition,
+    selection: &ModelSelection,
+    layer: RequestParamsLayer,
+) -> Result<ModelInvocationView, ModelInvocationError> {
+    let protocol = model.protocol;
+
+    let (profile_id, profile) = select_reasoning_profile(&selection.model, model, selection)?;
+
+    validate_request_params_layer(&selection.request_params, protocol, layer)
+        .map_err(ModelInvocationError::ProtectedKey)?;
+
+    // The selected profile owns every top-level key it declares.
+    if let (Some(profile_id), Some(profile)) = (profile_id.as_ref(), profile) {
+        for key in selection.request_params.keys() {
+            if profile.request_params.contains_key(key) {
+                return Err(ModelInvocationError::ReasoningProfileKeyOwnership {
+                    model: selection.model.clone(),
+                    profile: profile_id.clone(),
+                    key: key.clone(),
+                });
+            }
+        }
+    }
+
+    let mut request_params = model.request_params.clone();
+    if let Some(profile) = profile {
+        overlay_shallow(&mut request_params, &profile.request_params);
+    }
+    overlay_shallow(&mut request_params, &selection.request_params);
+
+    let effective_output_tokens = match selection.max_output_tokens {
+        None => model.max_output_tokens,
+        Some(0) => {
+            return Err(ModelInvocationError::InvalidOutputBudget {
+                model: selection.model.clone(),
+                detail: "the output budget must be positive".to_owned(),
+            });
+        }
+        Some(requested) if requested > model.max_output_tokens => {
+            return Err(ModelInvocationError::InvalidOutputBudget {
+                model: selection.model.clone(),
+                detail: format!(
+                    "requested {requested} exceeds the model maximum {}",
+                    model.max_output_tokens
+                ),
+            });
+        }
+        Some(requested) => requested,
+    };
+
+    let capabilities = effective_capabilities(&model.capabilities, protocol);
+    if !capabilities.supports_text_conversation() {
+        return Err(ModelInvocationError::UnusableCapabilities {
+            model: selection.model.clone(),
+            detail: "the effective capabilities cannot carry text input and text output".to_owned(),
+        });
+    }
+
+    Ok(ModelInvocationView {
+        model: selection.model.clone(),
+        protocol,
+        context_window: model.context_window,
+        model_max_output_tokens: model.max_output_tokens,
+        max_output_tokens: effective_output_tokens,
+        reasoning_profile: profile_id,
+        // A reasoning-capable model without a profile block has
+        // provider-default reasoning semantics: reasoning is always on,
+        // but there is no selectable profile and no synthetic wire field.
+        reasoning_enabled: if model.capabilities.reasoning {
+            profile.is_none_or(|profile| profile.enabled)
+        } else {
+            false
+        },
+        request_params,
+        capabilities,
+        declared_capabilities: model.capabilities.clone(),
+    })
 }
 
 type SelectedProfile<'a> = (

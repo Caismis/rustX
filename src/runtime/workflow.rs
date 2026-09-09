@@ -191,6 +191,7 @@ pub const WORKFLOW_TOOL_ID_PREFIX: &str = "tool-workflow-";
 /// is deliberately not repeated inside YAML.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
+#[derive(schemars::JsonSchema)]
 pub struct WorkflowId(String);
 
 impl WorkflowId {
@@ -280,6 +281,7 @@ impl std::error::Error for WorkflowIdError {}
 /// The canonical YAML/domain representation of one workflow.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct WorkflowDefinition {
     /// Explicit run-scoped candidate acquisition; absent means no Git resource.
     #[serde(default)]
@@ -300,6 +302,7 @@ pub struct WorkflowDefinition {
 /// explicit and retains the native committed-baseline/overlay semantics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct WorkflowWorkspace {
     #[serde(default = "workspace::strict_parent")]
     pub require_clean_parent: bool,
@@ -308,6 +311,7 @@ pub struct WorkflowWorkspace {
 /// A fixed lexical graph shared by root, Parallel branches and Loop bodies.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct WorkflowBlock {
     /// The workflow input JSON Schema.
     pub input: Value,
@@ -326,6 +330,7 @@ pub struct WorkflowBlock {
 /// One Workflow node in the authoring/domain layer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum WorkflowNodeDefinition {
     /// Repeat one fixed typed body until its committed result satisfies `until`.
     Loop {
@@ -379,6 +384,7 @@ pub enum WorkflowNodeDefinition {
 /// Closed, explicitly tagged value syntax; no evaluation of expression strings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum WorkflowValue {
     /// First component is `args` or a local producer; remaining components are fields.
     Reference { path: Vec<String> },
@@ -396,6 +402,7 @@ pub enum WorkflowValue {
 /// Typed predicates. Equality requires matching scalar types; no coercion.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum WorkflowPredicate {
     /// A boolean value.
     Boolean { value: WorkflowValue },
@@ -420,6 +427,7 @@ pub enum WorkflowPredicate {
 /// One explicit edge in the workflow graph.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct WorkflowEdgeDefinition {
     /// Source node id.
     pub from: String,
@@ -457,6 +465,27 @@ impl Serialize for WorkflowPort {
     }
 }
 
+impl schemars::JsonSchema for WorkflowPort {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "WorkflowPort".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let names: Vec<_> = [
+            Self::True,
+            Self::False,
+            Self::Satisfied,
+            Self::Exhausted,
+            Self::Next,
+        ]
+        .iter()
+        .map(|port| serde_json::to_value(port).expect("port serializes"))
+        .collect();
+        serde_json::json!({"anyOf":[{"type":"boolean"},{"type":"string","enum":names}]})
+            .try_into()
+            .expect("schema object")
+    }
+}
+
 impl<'de> Deserialize<'de> for WorkflowPort {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
@@ -485,6 +514,7 @@ impl<'de> Deserialize<'de> for WorkflowPort {
 /// One explicit input projection and fixed private Parallel block.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct WorkflowBranch {
     /// Evaluated in the parent scope and checked against the child input schema.
     pub input: WorkflowValue,

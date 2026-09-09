@@ -35,17 +35,18 @@ pub(crate) const TOOL_ID: &str = "tool-edit";
 
 /// The tool-owned registration of the native Edit tool.
 #[must_use]
-pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
-    NativeToolRegistration::new(
-        native_definition::<EditInput>(
-            TOOL_ID,
-            NAME,
-            "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
-            policy,
-        ),
-        std::sync::Arc::new(EditTool),
+pub(super) fn definition(policy: ToolInvocationPolicy) -> crate::tools::types::ToolDefinition {
+    native_definition::<EditInput>(
+        TOOL_ID,
+        NAME,
+        "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+        policy,
     )
-    .with_normalizer(input::normalize_arguments)
+}
+
+pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
+    NativeToolRegistration::new(definition(policy), std::sync::Arc::new(EditTool))
+        .with_normalizer(input::normalize_arguments)
 }
 
 /// The native Edit executor.

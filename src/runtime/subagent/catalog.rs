@@ -69,6 +69,7 @@ pub const MAX_SUBAGENT_EXECUTION_DEADLINE_MS: u64 = 24 * 60 * 60 * 1000;
 /// configuration boundary rather than normalized later.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
+#[derive(schemars::JsonSchema)]
 pub struct SubagentName(String);
 
 impl SubagentName {

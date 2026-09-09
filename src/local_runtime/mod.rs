@@ -20,25 +20,32 @@
 //! ```
 //!
 //! The internal `rustx --subagent-child` mode ([`subagent_child`]) is the
-//! one exception: fd 0 is the reliable subagent control IPC and
+//! an independent transport: fd 0 is the reliable subagent control IPC and
 //! fd 1/stdout is the protocol-owned framed Activity observation IPC
 //! (Issue #178), not human-readable output. Diagnostics stay on stderr in
-//! every mode.
+//! runtime transport modes. Configuration subcommands instead own stdout for
+//! their bounded human/JSON results and never create a runtime transport.
 //!
 //! `println!` is never used for diagnostics anywhere in the process.
 
 pub mod cli;
 pub mod composition;
 pub mod config;
+mod diagnostics;
 pub(crate) mod dispatcher;
+mod initialization;
 pub mod launch;
 #[cfg(test)]
 mod launch_tests;
 pub(crate) mod live_inspection;
 #[cfg(all(test, unix))]
 mod preparation_e2e;
+mod probes;
+pub mod schemas;
 pub mod serve;
 pub mod session;
+#[cfg(test)]
+pub(crate) mod static_effects;
 pub mod subagent_child;
 pub mod supervisor;
 

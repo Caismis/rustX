@@ -93,6 +93,7 @@ const DEFAULT_ENABLED: bool = true;
 /// boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[derive(schemars::JsonSchema)]
 pub struct AgentStatusConfig {
     /// The Time module configuration.
     #[serde(default)]
@@ -105,12 +106,14 @@ pub struct AgentStatusConfig {
 /// Launch-scoped configuration for the Time status module.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[derive(schemars::JsonSchema)]
 pub struct TimeStatusConfig {
     /// Whether Time participates in an available Agent Status opportunity.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     /// The optional IANA timezone used only by Time presentation.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
     pub timezone: Option<Tz>,
 }
 
@@ -126,6 +129,7 @@ impl Default for TimeStatusConfig {
 /// Launch-scoped configuration for the Background status module.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[derive(schemars::JsonSchema)]
 pub struct BackgroundStatusConfig {
     /// Whether Background participates in an available Agent Status opportunity.
     #[serde(default = "default_enabled")]

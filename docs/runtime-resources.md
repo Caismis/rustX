@@ -1,5 +1,12 @@
 # Runtime resources and executable authority
 
+The shared launch analysis loads authorized local resources and invokes the same
+Workflow static compiler without executors, Sessions, or online schemas. Initial
+composition consumes its compiled catalogs; runtime resource reload retains its
+existing explicit ownership. Pure native Tool metadata selection is shared with
+runtime registration selection, not a checker-specific Tool interpreter. See
+[configuration diagnostics](configuration-diagnostics.md) for deferred online facts.
+
 External discovery is inert until host trust and explicit source activation
 admit preparation. See [source activation and credentials](source-activation.md)
 for JSONC settings, whole-source replacement, secret authority, and the exact

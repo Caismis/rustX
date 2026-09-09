@@ -26,16 +26,17 @@ pub const NAME: &str = "grep";
 
 /// The tool-owned registration of the native Grep tool.
 #[must_use]
-pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
-    NativeToolRegistration::new(
-        native_definition::<GrepInput>(
-            "tool-grep",
-            NAME,
-            "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
-            policy,
-        ),
-        std::sync::Arc::new(GrepTool),
+pub(super) fn definition(policy: ToolInvocationPolicy) -> crate::tools::types::ToolDefinition {
+    native_definition::<GrepInput>(
+        "tool-grep",
+        NAME,
+        "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+        policy,
     )
+}
+
+pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
+    NativeToolRegistration::new(definition(policy), std::sync::Arc::new(GrepTool))
 }
 
 /// The native Grep executor.

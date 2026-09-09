@@ -388,6 +388,12 @@ impl SkillDiscovery {
     /// malformed candidate package, or a candidate root that cannot be
     /// canonicalized or published as UTF-8.
     pub fn discover(&self) -> Result<Vec<SkillPackage>, SkillPackageError> {
+        if self.config.automatic_roots.len() + self.config.explicit_paths.len() > 128 {
+            return Err(SkillPackageError::Io {
+                path: "skills".into(),
+                detail: "Skill discovery exceeds 128 roots".into(),
+            });
+        }
         let mut candidates = Vec::<(String, PathBuf)>::new();
         for root in &self.config.automatic_roots {
             collect_root(root, false, &mut candidates)?;
@@ -396,6 +402,12 @@ impl SkillDiscovery {
             collect_root(path, true, &mut candidates)?;
         }
         candidates.sort();
+        if candidates.len() > 128 {
+            return Err(SkillPackageError::Io {
+                path: "skills".into(),
+                detail: "Skill discovery exceeds 128 packages".into(),
+            });
+        }
         let mut packages = Vec::with_capacity(candidates.len());
         for (name, root) in candidates {
             // The single normalization point of the package root invariant:
@@ -520,7 +532,13 @@ fn collect_root(
         detail: error.to_string(),
     })?;
     let mut children = Vec::new();
-    for entry in entries {
+    for (index, entry) in entries.enumerate() {
+        if index >= 1024 {
+            return Err(SkillPackageError::Io {
+                path: path.display().to_string(),
+                detail: "Skill root exceeds 1024 entries".into(),
+            });
+        }
         let entry = entry.map_err(|error| SkillPackageError::Io {
             path: path.display().to_string(),
             detail: error.to_string(),
@@ -548,6 +566,7 @@ fn collect_root(
 }
 
 /// Parses, validates, and hashes one Skill package directory.
+#[allow(clippy::too_many_lines)] // Bounded package validation stays in its owner.
 fn discover_package(root: &Path, directory_name: &str) -> Result<SkillPackage, SkillPackageError> {
     validate_skill_name(directory_name).map_err(|detail| SkillPackageError::InvalidName {
         directory: directory_name.to_owned(),
@@ -566,9 +585,11 @@ fn discover_package(root: &Path, directory_name: &str) -> Result<SkillPackage, S
             directory: directory_name.to_owned(),
         });
     }
-    let markdown_bytes = std::fs::read(&skill_markdown).map_err(|error| SkillPackageError::Io {
-        path: skill_markdown.display().to_string(),
-        detail: error.to_string(),
+    let markdown_bytes = crate::config_format::read_bounded(&skill_markdown).map_err(|error| {
+        SkillPackageError::Io {
+            path: skill_markdown.display().to_string(),
+            detail: error,
+        }
     })?;
     let markdown_text = String::from_utf8(markdown_bytes.clone()).map_err(|error| {
         SkillPackageError::MalformedFrontmatter {
@@ -630,7 +651,7 @@ fn discover_package(root: &Path, directory_name: &str) -> Result<SkillPackage, S
     // package root, deterministically sorted by workspace-relative path,
     // with package-internal symlinks rejected.
     let mut files = Vec::new();
-    walk_package_files(root, root, &mut files)?;
+    walk_package_files(root, root, &mut files, &mut 4096)?;
     let version_id = package_version_id(root, &files, &markdown_bytes).map_err(|detail| {
         SkillPackageError::Io {
             path: root.display().to_string(),
@@ -674,13 +695,30 @@ fn walk_package_files(
     root: &Path,
     directory: &Path,
     files: &mut Vec<PathBuf>,
+    remaining: &mut usize,
 ) -> Result<(), SkillPackageError> {
+    if directory
+        .strip_prefix(root)
+        .map_or(usize::MAX, |path| path.components().count())
+        > 64
+    {
+        return Err(SkillPackageError::Io {
+            path: directory.display().to_string(),
+            detail: "Skill directory depth exceeds 64".into(),
+        });
+    }
     let entries = std::fs::read_dir(directory).map_err(|error| SkillPackageError::Io {
         path: directory.display().to_string(),
         detail: error.to_string(),
     })?;
     let mut paths = Vec::new();
     for entry in entries {
+        *remaining = remaining
+            .checked_sub(1)
+            .ok_or_else(|| SkillPackageError::Io {
+                path: directory.display().to_string(),
+                detail: "Skill package exceeds 4096 entries".into(),
+            })?;
         let entry = entry.map_err(|error| SkillPackageError::Io {
             path: directory.display().to_string(),
             detail: error.to_string(),
@@ -700,7 +738,7 @@ fn walk_package_files(
             });
         }
         if file_type.is_dir() {
-            walk_package_files(root, &path, files)?;
+            walk_package_files(root, &path, files, remaining)?;
         } else if file_type.is_file() {
             let relative = path.strip_prefix(root).map_err(|_| SkillPackageError::Io {
                 path: path.display().to_string(),

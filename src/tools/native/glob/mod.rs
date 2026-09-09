@@ -23,16 +23,17 @@ pub const NAME: &str = "glob";
 
 /// The tool-owned registration of the native Glob tool.
 #[must_use]
-pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
-    NativeToolRegistration::new(
-        native_definition::<GlobInput>(
-            "tool-glob",
-            NAME,
-            "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
-            policy,
-        ),
-        std::sync::Arc::new(GlobTool),
+pub(super) fn definition(policy: ToolInvocationPolicy) -> crate::tools::types::ToolDefinition {
+    native_definition::<GlobInput>(
+        "tool-glob",
+        NAME,
+        "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+        policy,
     )
+}
+
+pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
+    NativeToolRegistration::new(definition(policy), std::sync::Arc::new(GlobTool))
 }
 
 /// The native Glob executor.

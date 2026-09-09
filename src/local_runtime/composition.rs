@@ -848,7 +848,7 @@ impl RuntimeResourceLoader for FrozenSubagentResourceLoader {
 /// instruction document and each explicit project-instruction file are read
 /// and frozen into the definition, so the child never resolves a path or
 /// walks an ancestor of its own.
-fn load_subagent_catalog(
+pub(crate) fn load_subagent_catalog(
     workspace: &Path,
     document: &SubagentsDocument,
 ) -> Result<SubagentCatalog, RuntimeResourceLoadError> {
@@ -894,7 +894,7 @@ fn load_subagent_catalog(
 /// scanned, so an unregistered YAML file cannot become model-visible by
 /// accident. Compilation happens before the candidate reaches the runtime
 /// resource publication boundary.
-fn load_workflow_catalog(
+pub(crate) fn load_workflow_catalog(
     workspace: &Path,
     document: &WorkflowsDocument,
     workflow_profiles: &BTreeSet<crate::runtime::subagent::SubagentName>,
@@ -902,24 +902,28 @@ fn load_workflow_catalog(
     let mut programs = Vec::with_capacity(document.definitions.len());
     for id in &document.definitions {
         let path = workspace_workflow_path(workspace, id);
-        crate::runtime::resources::validate_project_resource_path(workspace, &path)?;
-        let bytes = std::fs::read(&path).map_err(|error| {
+        crate::runtime::resources::validate_project_resource_path(workspace, &path)
+            .map_err(|error| error.at(&path, format!("workflows.definitions.{id}")))?;
+        let bytes = crate::config_format::read_bounded(&path).map_err(|error| {
             RuntimeResourceLoadError::new(format!(
                 "cannot read registered workflow {id} at {}: {error}",
                 path.display()
             ))
+            .at(&path, format!("workflows.definitions.{id}"))
         })?;
         if bytes.len() > MAX_WORKFLOW_BYTES {
             return Err(RuntimeResourceLoadError::new(format!(
                 "workflow {id} at {} exceeds the {MAX_WORKFLOW_BYTES}-byte bound",
                 path.display()
-            )));
+            ))
+            .at(&path, format!("workflows.definitions.{id}")));
         }
         let definition: WorkflowDefinition = serde_yaml::from_slice(&bytes).map_err(|error| {
             RuntimeResourceLoadError::new(format!(
                 "cannot deserialize registered workflow {id} at {}: {error}",
                 path.display()
             ))
+            .at(&path, format!("workflows.definitions.{id}"))
         })?;
         let program = WorkflowProgram::compile(id.clone(), definition, workflow_profiles).map_err(
             |error| {
@@ -927,6 +931,7 @@ fn load_workflow_catalog(
                     "cannot compile registered workflow {id} at {}: {error}",
                     path.display()
                 ))
+                .at(&path, format!("workflows.definitions.{id}"))
             },
         )?;
         programs.push(program);
@@ -989,17 +994,19 @@ fn read_resource(
     agent: &str,
     field: &str,
 ) -> Result<String, RuntimeResourceLoadError> {
-    let bytes = std::fs::read(path).map_err(|error| {
+    let bytes = crate::config_format::read_bounded(path).map_err(|error| {
         RuntimeResourceLoadError::new(format!(
             "cannot read subagents.definitions.{agent}.{field} {}: {error}",
             path.display()
         ))
+        .at(path, format!("subagents.definitions.{agent}.{field}"))
     })?;
     let content = String::from_utf8(bytes).map_err(|error| {
         RuntimeResourceLoadError::new(format!(
             "subagents.definitions.{agent}.{field} {} is not UTF-8: {error}",
             path.display()
         ))
+        .at(path, format!("subagents.definitions.{agent}.{field}"))
     })?;
     Ok(match content.strip_prefix('\u{feff}') {
         Some(without_bom) => without_bom.to_owned(),
@@ -1175,10 +1182,7 @@ impl LocalConversationCore {
         // loaded before the base registry, because the `subagent`
         // intrinsic's model-facing description is generated from exactly
         // the catalog this generation admits.
-        let subagent_catalog = load_subagent_catalog(&paths.workspace, &runtime_config.subagents)
-            .map_err(|error| LocalRuntimeError::Capability {
-            detail: error.to_string(),
-        })?;
+        let subagent_catalog = paths.subagents.clone();
         let main_admission = runtime_config
             .subagents
             .main
@@ -1196,14 +1200,7 @@ impl LocalConversationCore {
             .map_err(|error| LocalRuntimeError::Capability {
                 detail: error.to_string(),
             })?;
-        let workflows = load_workflow_catalog(
-            &paths.workspace,
-            &runtime_config.workflows,
-            &workflow_admission,
-        )
-        .map_err(|error| LocalRuntimeError::Capability {
-            detail: error.to_string(),
-        })?;
+        let workflows = paths.workflows.clone();
         let default_tools = default_tools_with_workflows(&runtime_config.default_tools, &workflows);
         //
         // The frozen model timeout policy is resolved once here so the

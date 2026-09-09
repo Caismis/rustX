@@ -620,7 +620,7 @@ async fn a_child_may_select_a_capability_that_is_available_but_inactive_for_the_
 /// Statically invalid references — capability, model, or Skill — reject
 /// resource-generation preparation deterministically.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn statically_invalid_references_fail_composition_closed() {
+async fn statically_invalid_references_fail_launch_analysis_closed() {
     for (subagents, expected) in [
         (
             serde_json::json!({
@@ -683,10 +683,11 @@ async fn statically_invalid_references_fail_composition_closed() {
     ] {
         let lab = Lab::new();
         lab.write_config(&subagents);
-        let error = LocalSessionProduct::compose(&(lab.paths()).resolve(), &dependencies())
-            .await
-            .expect_err("a statically invalid definition fails composition");
-        let rendered = format!("{error}");
+        let error = lab
+            .paths()
+            .try_resolve()
+            .expect_err("a statically invalid definition fails shared launch analysis");
+        let rendered = error;
         assert!(
             rendered.contains(expected),
             "the refusal names the offending reference {expected}: {rendered}"
@@ -701,12 +702,9 @@ async fn recursive_and_execution_selections_are_rejected_at_admission() {
     for capability in ["subagent", "execution"] {
         let lab = Lab::new();
         lab.write_config(&explore(&[capability]));
-        let error = LocalSessionProduct::compose(&(lab.paths()).resolve(), &dependencies())
-            .await
-            .err()
-            .unwrap_or_else(|| panic!("selecting {capability} must fail composition"));
+        let error = lab.paths().try_resolve().unwrap_err();
         assert!(
-            format!("{error}").contains(capability),
+            error.contains(capability),
             "the refusal names {capability}: {error}"
         );
     }
@@ -1588,10 +1586,11 @@ async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
     )
     .expect("rustx.jsonc");
 
-    let error = LocalSessionProduct::compose(&(lab.paths()).resolve(), &dependencies())
-        .await
-        .expect_err("a statically invalid selector rejects the candidate generation");
-    let rendered = format!("{error}");
+    let error = lab
+        .paths()
+        .try_resolve()
+        .expect_err("a statically invalid selector rejects shared launch analysis");
+    let rendered = error;
     assert!(
         rendered.contains("mcp:python:ghost/not_a_real_tool"),
         "the selector after the unavailable source is still validated: {rendered}"

@@ -3,6 +3,19 @@
 The rustX reference terminal client: a Pi-TUI presentation layer over the
 Runtime Client protocol.
 
+Configuration commands can also be forwarded without starting the interactive UI:
+
+```sh
+pnpm start --binary /absolute/path/to/rustx config check --json
+pnpm start --binary /absolute/path/to/rustx config show --sources
+pnpm start --binary /absolute/path/to/rustx doctor --probe
+pnpm start --binary /absolute/path/to/rustx --help
+```
+
+In this form `--binary PATH` comes first, then the Rust command and its opaque
+arguments (including `init` declarations). Streams and exit status are forwarded.
+All [configuration semantics](../docs/configuration-diagnostics.md) stay in Rust.
+
 Foreground Workflow Tool cards expose expandable native execution details under
 protocol 23. Source availability also distinguishes inert decisions and enabled/unprepared sources. Parallel branches and Loop iterations retain concrete identities;
 execution settlement, business checks and human Review are separate. Responses

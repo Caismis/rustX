@@ -14,9 +14,7 @@
 use crate::launch_fixture::LaunchFixture;
 use std::sync::Arc;
 
-use rustx::local_runtime::composition::{
-    LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimeError,
-};
+use rustx::local_runtime::composition::{LocalConversationRuntime, LocalRuntimeDependencies};
 use rustx::model::catalog::MapCredentialEnvironment;
 use rustx::runtime::identity::ConversationId;
 use rustx::runtime_client::snapshot::{CapabilitySourceDescriptor, CapabilitySourceStateView};
@@ -416,12 +414,12 @@ async fn core_and_base_plane_failures_remain_fatal() {
     let skill = paths.workspace.join(".agents/skills/broken");
     std::fs::create_dir_all(&skill).expect("skill directory");
     std::fs::write(skill.join("SKILL.md"), "not valid frontmatter at all").expect("SKILL.md");
-    assert!(matches!(
-        LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
-            .await
-            .expect_err("a malformed Skill fails the base capability plane"),
-        LocalRuntimeError::Capability { .. }
-    ));
+    assert!(
+        paths
+            .try_resolve()
+            .expect_err("a malformed Skill fails shared static analysis")
+            .contains("malformed frontmatter")
+    );
 }
 
 /// MCP-level regressions driving the real self-spawned fixture servers.

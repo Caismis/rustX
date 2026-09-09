@@ -1,5 +1,11 @@
 # External source activation and credentials
 
+Offline [configuration diagnostics](configuration-diagnostics.md) stop before
+this activation pipeline. Host path capture is separate from credential capture.
+Explicit `doctor --probe` uses the same authority and lifecycle owners; it never
+enables sources, grants trust, installs a recovery task or invokes business Tools.
+Managed Python preparation additionally requires `--prepare`.
+
 The source pipeline is:
 
 ```text
@@ -139,7 +145,8 @@ Sensitive MCP fields support references only, not literals. Ordinary and
 sensitive maps cannot define the same process variable or HTTP header. Header
 comparison is case-insensitive.
 
-The host captures its environment once. Each admitted source resolves and
+At admitted runtime/probe use, the host captures its credential environment once.
+Static path discovery and config check/show never capture it. Each admitted source resolves and
 caches its own references before the existing spawn/connect owner starts work.
 Reconnect uses the same frozen cache. Providers validate required credentials
 and construct their adapter on binding, so an unused provider's missing key

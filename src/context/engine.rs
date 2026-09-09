@@ -74,6 +74,31 @@ pub struct SessionContextPolicy {
 }
 
 impl SessionContextPolicy {
+    /// Validate primary and summary budgets without binding a provider.
+    ///
+    /// # Errors
+    /// Rejects impossible input budgets and a zero summary cap.
+    pub fn validate_budgets(
+        &self,
+        primary: (u64, u32),
+        summary: (u64, u32),
+    ) -> Result<(), ContextError> {
+        if self.summary_output_cap == Some(0) {
+            return Err(ContextError::new(
+                ContextErrorKind::InvalidConfiguration,
+                "summary_output_cap must be positive when present",
+            ));
+        }
+        self.config_for_window(primary.0)
+            .soft_input_limit(primary.1)?;
+        let summary_output = self
+            .summary_output_cap
+            .map_or(summary.1, |cap| cap.min(summary.1));
+        self.config_for_window(summary.0)
+            .soft_input_limit(summary_output)?;
+        Ok(())
+    }
+
     /// Derives the attempt context configuration for one model context
     /// window.
     #[must_use]

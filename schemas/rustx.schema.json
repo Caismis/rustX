@@ -1,0 +1,727 @@
+{
+  "$defs": {
+    "AgentId": {
+      "description": "Identifies an agent.",
+      "type": "string"
+    },
+    "AgentStatusConfig": {
+      "additionalProperties": false,
+      "description": "Launch-scoped Agent Status configuration.\n\nOmitting `agentStatus` or either nested module enables both built-in\nmodules. Unknown fields remain rejected by the surrounding strict serde\nboundary.",
+      "properties": {
+        "background": {
+          "$ref": "#/$defs/BackgroundStatusConfig",
+          "default": {
+            "enabled": true
+          },
+          "description": "The Background module configuration."
+        },
+        "time": {
+          "$ref": "#/$defs/TimeStatusConfig",
+          "default": {
+            "enabled": true
+          },
+          "description": "The Time module configuration."
+        }
+      },
+      "type": "object"
+    },
+    "ApprovalMode": {
+      "description": "The runtime-wide control state for tool approval behavior.\n\n`Policy` consults each resolved Tool's\n[`ToolApprovalPolicy`](crate::tools::types::ToolApprovalPolicy).\n`FullAccess` changes only the effective approval result to `Never`; it\nnever changes availability, activation, execution ownership, concurrency,\nor tool authority.",
+      "oneOf": [
+        {
+          "const": "policy",
+          "description": "Use each Tool's configured approval policy.",
+          "type": "string"
+        },
+        {
+          "const": "full_access",
+          "description": "Bypass approval prompts for eligible tool calls only.",
+          "type": "string"
+        }
+      ]
+    },
+    "ApprovalPolicyDocument": {
+      "description": "The configurable HITL approval policy of one Tool.",
+      "oneOf": [
+        {
+          "const": "never",
+          "description": "Execute without an approval interaction.",
+          "type": "string"
+        },
+        {
+          "const": "always",
+          "description": "Require an approval interaction before execution.",
+          "type": "string"
+        }
+      ]
+    },
+    "BackgroundStatusConfig": {
+      "additionalProperties": false,
+      "description": "Launch-scoped configuration for the Background status module.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Whether Background participates in an available Agent Status opportunity.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ConcurrencyPolicyDocument": {
+      "description": "The configurable in-batch scheduling policy of one tool.",
+      "oneOf": [
+        {
+          "const": "sequential",
+          "description": "Calls within one batch run one at a time.",
+          "type": "string"
+        },
+        {
+          "const": "parallel",
+          "description": "Calls within one batch may run concurrently.",
+          "type": "string"
+        }
+      ]
+    },
+    "EnvironmentReference": {
+      "description": "A validated reference, written as `$ENV_VAR` only in declared secret fields.",
+      "pattern": "^\\$[A-Za-z_][A-Za-z0-9_]*$",
+      "type": "string"
+    },
+    "ExecutionPolicyDocument": {
+      "description": "The configurable execution-ownership policy of one tool.",
+      "oneOf": [
+        {
+          "const": "foreground_only",
+          "description": "Attempt-owned execution only.",
+          "type": "string"
+        },
+        {
+          "const": "background_only",
+          "description": "Conversation-owned execution only.",
+          "type": "string"
+        },
+        {
+          "const": "model_selectable",
+          "description": "The model selects the execution mode per invocation.",
+          "type": "string"
+        }
+      ]
+    },
+    "InvocationPolicyDocument": {
+      "additionalProperties": false,
+      "description": "One tool invocation policy document.",
+      "properties": {
+        "approval": {
+          "$ref": "#/$defs/ApprovalPolicyDocument",
+          "default": "never",
+          "description": "Human approval behavior for otherwise eligible calls."
+        },
+        "concurrency": {
+          "$ref": "#/$defs/ConcurrencyPolicyDocument",
+          "default": "sequential",
+          "description": "In-batch scheduling policy."
+        },
+        "execution": {
+          "$ref": "#/$defs/ExecutionPolicyDocument",
+          "default": "foreground_only",
+          "description": "Foreground/background ownership policy."
+        }
+      },
+      "type": "object"
+    },
+    "McpServerDocument": {
+      "additionalProperties": false,
+      "description": "One `mcpServers` entry, in the shape mainstream MCP clients use.\n\nThe document is deliberately flat and permissive at the *field* level and\nstrict at the *combination* level: every accepted field is declared here,\nunknown fields fail, and [`Self::to_transport`] rejects every ambiguous or\ncontradictory combination rather than guessing.\n\nTwo entry shapes are accepted per transport — the canonical one with an\nexplicit `type`, and the shorthand the ecosystem's own READMEs use:\n\n- `{\"type\": \"http\", \"url\": ..., \"headers\": {...}}` / `{\"url\": ...}`;\n- `{\"type\": \"stdio\", \"command\": ..., \"args\": [...], \"env\": {...},\n  \"cwd\": ...}` / `{\"command\": ..., \"args\": [...]}`.\n\nNo other spellings are accepted. There is no `streamable-http` alias, no\n`sse`, and no `ws`: rustX has exactly two runtime transports.",
+      "properties": {
+        "args": {
+          "description": "The stdio server arguments.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "command": {
+          "description": "The stdio server executable path or explicit executable name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "description": "The stdio document-relative working directory; absent means the\nworkspace root. The runtime keeps enforcing that it stays inside the\nworkspace.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Omission is discovery only; true explicitly admits preparation under host trust.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The explicit stdio child environment.",
+          "type": "object"
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Static request headers sent with every HTTP request.",
+          "type": "object"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/McpTransportType"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The explicit transport selector, when the entry declares one."
+        },
+        "url": {
+          "description": "The Streamable HTTP endpoint URL.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "McpTransportType": {
+      "description": "The transport an `mcpServers` entry selects explicitly.",
+      "oneOf": [
+        {
+          "const": "http",
+          "description": "Streamable HTTP. This is the canonical spelling for a remote server.",
+          "type": "string"
+        },
+        {
+          "const": "stdio",
+          "description": "A locally launched stdio server.",
+          "type": "string"
+        }
+      ]
+    },
+    "ModelRef": {
+      "description": "A fully qualified catalog model reference: `provider-id/model-id`.\n\nThe first `/` separates the provider from the model. The model ID itself\nmay contain additional `/` characters, as is common for Hugging Face\nidentities such as `Qwen/Qwen3`, but no model-ID segment may be empty.\n\nThis is the explicit model-identity domain of the runtime. Concatenated\nstrings never travel through the runtime in its place: a reference either\nresolves to exactly one catalog model or it fails.",
+      "type": "string"
+    },
+    "NativePolicyOverrideDocument": {
+      "additionalProperties": false,
+      "description": "Explicit native policy axes, resolved over that tool's product default.\nAbsence never applies the generic external-tool policy to a native tool.",
+      "properties": {
+        "approval": {
+          "$ref": "#/$defs/ApprovalPolicyDocument",
+          "description": "Tool approval override."
+        },
+        "concurrency": {
+          "$ref": "#/$defs/ConcurrencyPolicyDocument",
+          "description": "In-batch scheduling override."
+        },
+        "execution": {
+          "$ref": "#/$defs/ExecutionPolicyDocument",
+          "description": "Foreground/background ownership override."
+        }
+      },
+      "type": "object"
+    },
+    "NativeToolPoliciesDocument": {
+      "additionalProperties": false,
+      "description": "The per-tool execution, concurrency, and approval policies of the native\ntool plane.\n\n`execution`, `ask_user`, and `todo` are deliberately outside this\nset: they own fixed foreground-only, sequential, approval-never policies,\nand the registry enforces the intrinsic ones itself.",
+      "properties": {
+        "bash": {
+          "$ref": "#/$defs/NativePolicyOverrideDocument",
+          "default": {},
+          "description": "The policy of the native Bash tool."
+        },
+        "edit": {
+          "$ref": "#/$defs/NativePolicyOverrideDocument",
+          "default": {},
+          "description": "The policy of the native Edit tool."
+        },
+        "glob": {
+          "$ref": "#/$defs/NativePolicyOverrideDocument",
+          "default": {},
+          "description": "The policy of the native Glob tool."
+        },
+        "grep": {
+          "$ref": "#/$defs/NativePolicyOverrideDocument",
+          "default": {},
+          "description": "The policy of the native Grep tool."
+        },
+        "read": {
+          "$ref": "#/$defs/NativePolicyOverrideDocument",
+          "default": {},
+          "description": "The policy of the native Read tool."
+        },
+        "write": {
+          "$ref": "#/$defs/NativePolicyOverrideDocument",
+          "default": {},
+          "description": "The policy of the native Write tool."
+        }
+      },
+      "type": "object"
+    },
+    "PartialContext": {
+      "additionalProperties": false,
+      "properties": {
+        "keepRecentTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reserveTokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "summaryOutputCap": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "PartialModel": {
+      "additionalProperties": false,
+      "properties": {
+        "maxOutputTokens": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "model": {
+          "$ref": "#/$defs/ModelRef"
+        },
+        "reasoningProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningProfileId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestParams": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "summaryModel": {
+          "$ref": "#/$defs/SummaryModelPolicy"
+        }
+      },
+      "type": "object"
+    },
+    "PartialSubagents": {
+      "additionalProperties": false,
+      "properties": {
+        "definitions": {
+          "$ref": "#/$defs/UniqueDefinitions"
+        },
+        "main": {
+          "items": {
+            "$ref": "#/$defs/SubagentName"
+          },
+          "type": "array"
+        },
+        "maxConcurrent": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "workflow": {
+          "items": {
+            "$ref": "#/$defs/SubagentName"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "PartialTimeout": {
+      "additionalProperties": false,
+      "properties": {
+        "responseStartTimeoutMs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "streamIdleTimeoutMs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "PartialToolDeadline": {
+      "additionalProperties": false,
+      "properties": {
+        "hardDeadlineMs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "idleLivenessMs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "PartialWorkflows": {
+      "additionalProperties": false,
+      "properties": {
+        "definitions": {
+          "items": {
+            "$ref": "#/$defs/WorkflowId"
+          },
+          "type": "array"
+        },
+        "main": {
+          "items": {
+            "$ref": "#/$defs/WorkflowId"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ReasoningProfileId": {
+      "description": "The identity of one reasoning profile declared by a model.\n\nThe runtime assigns no meaning to the name: `off`, `on`, `low`,\n`thinking-32k`, and `deep` are all just names whose wire behaviour is\nexactly the profile's configured `requestParams`.",
+      "type": "string"
+    },
+    "SourceEnablement": {
+      "description": "Configuration authors can express intent, never host evaluation results.",
+      "oneOf": [
+        {
+          "const": "enabled",
+          "description": "Request activation, subject to host trust and resource authority.",
+          "type": "string"
+        },
+        {
+          "const": "disabled",
+          "description": "Keep the source inert.",
+          "type": "string"
+        }
+      ]
+    },
+    "SubagentAgentsMdDocument": {
+      "additionalProperties": false,
+      "description": "The project-instruction policy of one named definition.",
+      "properties": {
+        "files": {
+          "default": [],
+          "description": "Explicit agent-owned project instruction files, in deterministic\nconfigured order. Relative paths resolve against the owning\nconfiguration document's directory at launch resolution.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "inherit": {
+          "default": true,
+          "description": "Whether the invoking generation's normal project instruction chain is\nprepended to the explicit files.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "SubagentDocument": {
+      "additionalProperties": false,
+      "description": "One named subagent definition, as configured.\n\nEverything here is *definition* state. None of it is exposed as a\nper-call model argument: the model chooses which named agent runs and\nnothing else.",
+      "properties": {
+        "agentsMd": {
+          "$ref": "#/$defs/SubagentAgentsMdDocument",
+          "default": {
+            "files": [],
+            "inherit": true
+          },
+          "description": "The project-instruction policy of this agent."
+        },
+        "description": {
+          "description": "The bounded model-facing routing description.",
+          "type": "string"
+        },
+        "instructionsFile": {
+          "description": "The child instruction document. Relative paths resolve against the\nowning configuration document's directory at launch resolution.",
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The explicit model this agent runs on. Omit to inherit the invoking\nattempt's frozen effective model configuration."
+        },
+        "skills": {
+          "default": [],
+          "description": "The exact Skill allowlist over the admitted Skill catalog.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "timeoutMs": {
+          "description": "The optional maximum wall-clock duration of the complete child\nlifecycle, in milliseconds. The model cannot override or extend it.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "tools": {
+          "$ref": "#/$defs/SubagentToolsDocument",
+          "default": {
+            "builtin": [],
+            "mcp": {}
+          },
+          "description": "The exact source-qualified capability selection."
+        },
+        "worktree": {
+          "$ref": "#/$defs/SubagentWorktreeDocument",
+          "default": {
+            "enabled": false,
+            "requireCleanParent": true
+          },
+          "description": "The bounded project-workspace policy of this agent."
+        }
+      },
+      "required": [
+        "description",
+        "instructionsFile"
+      ],
+      "type": "object"
+    },
+    "SubagentName": {
+      "description": "The canonical typed name of one admitted subagent definition.\n\nThe keyspace is deliberately narrow: lowercase ASCII letters, digits,\n`-`, and `_`, starting with a letter. A name is the model-facing routing\ntoken, the durable ownership identity, and the Runtime Client projection\nidentity, so an ambiguous or shell-shaped spelling is rejected at the\nconfiguration boundary rather than normalized later.",
+      "type": "string"
+    },
+    "SubagentToolsDocument": {
+      "additionalProperties": false,
+      "description": "The source-qualified capability selection of one named definition.\n\nOrigins are named explicitly rather than collapsed into bare strings, so\na Builtin `read` and an MCP server's `read` are never interchangeable and\nresolution keeps exact source identity. Wildcards are deliberately\nabsent: a selection is an exact list. Managed Python tool packages are\nselected through the `mcp` map under their synthesized server identity\n(`python:<folder>`, Issue #174).\n\nThe `python:` namespace is reserved for those synthesized identities:\n`mcpServers` configuration may never declare a server under it (rejected\nduring validation), so a subagent selection naming `python:<folder>`\nalways resolves to the managed package, never to a configured server.",
+      "properties": {
+        "builtin": {
+          "default": [],
+          "description": "Built-in/native capabilities, by canonical model-facing name.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "mcp": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "default": {},
+          "description": "MCP capabilities, keyed by server identity.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "SubagentWorktreeDocument": {
+      "additionalProperties": false,
+      "description": "The JSONC representation of a named subagent's optional Git worktree\nisolation. An omitted or disabled value is the existing shared-workspace\nbehavior; there is no model-facing per-call override.\n\nIssue #188: when enabled, isolation runs the child from the committed\nparent `HEAD` snapshot. `require_clean_parent` defaults to `true`\n(strict): the parent source workspace must be clean, otherwise the child\nis rejected rather than silently dropping parent-local changes. Only an\nexplicit `\"requireCleanParent\": false` permits a dirty parent while the\nchild still receives exactly the committed snapshot.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Whether this named definition uses an isolated Git worktree.",
+          "type": "boolean"
+        },
+        "requireCleanParent": {
+          "default": true,
+          "description": "Whether acquisition rejects a dirty parent workspace/index.\n\nThis is the one authoritative strictness switch, normalized at the\nconfiguration boundary: it defaults to `true` whenever isolation is\nenabled, and an explicit `false` is the intentional opt-out that runs\nfrom the captured committed `HEAD` while excluding dirty parent bytes.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "SummaryModelPolicy": {
+      "description": "The compaction summary model policy of a session.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Summary generation follows the admitted attempt's primary model.",
+          "properties": {
+            "mode": {
+              "const": "session",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Summary generation uses an explicitly configured catalog model.",
+          "properties": {
+            "max_output_tokens": {
+              "description": "The explicit summary output-budget override.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "mode": {
+              "const": "explicit",
+              "type": "string"
+            },
+            "model": {
+              "$ref": "#/$defs/ModelRef",
+              "description": "The catalog model reference."
+            },
+            "reasoning_profile": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ReasoningProfileId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The selected reasoning profile; the model default is used when\nabsent."
+            },
+            "request_params": {
+              "additionalProperties": true,
+              "default": {},
+              "description": "The explicit summary request-parameter overrides.",
+              "type": "object"
+            }
+          },
+          "required": [
+            "mode",
+            "model"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TimeStatusConfig": {
+      "additionalProperties": false,
+      "description": "Launch-scoped configuration for the Time status module.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Whether Time participates in an available Agent Status opportunity.",
+          "type": "boolean"
+        },
+        "timezone": {
+          "description": "The optional IANA timezone used only by Time presentation.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "UniqueDefinitions": {
+      "additionalProperties": {
+        "$ref": "#/$defs/SubagentDocument"
+      },
+      "type": "object"
+    },
+    "WorkflowId": {
+      "description": "The configured workflow identity.\n\nThis is both the catalog key and the eventual model-facing Tool name. It\nis deliberately not repeated inside YAML.",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "agentId": {
+      "$ref": "#/$defs/AgentId"
+    },
+    "agentStatus": {
+      "$ref": "#/$defs/AgentStatusConfig"
+    },
+    "context": {
+      "$ref": "#/$defs/PartialContext"
+    },
+    "defaultTools": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "environment": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "type": "object"
+    },
+    "mcpServers": {
+      "additionalProperties": {
+        "$ref": "#/$defs/McpServerDocument"
+      },
+      "type": "object"
+    },
+    "model": {
+      "$ref": "#/$defs/PartialModel"
+    },
+    "modelTimeoutPolicy": {
+      "$ref": "#/$defs/PartialTimeout"
+    },
+    "pythonSources": {
+      "additionalProperties": {
+        "$ref": "#/$defs/SourceEnablement"
+      },
+      "type": "object"
+    },
+    "schemaVersion": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "skills": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "subagents": {
+      "$ref": "#/$defs/PartialSubagents"
+    },
+    "toolDeadlinePolicy": {
+      "$ref": "#/$defs/PartialToolDeadline"
+    },
+    "workflows": {
+      "$ref": "#/$defs/PartialWorkflows"
+    }
+  },
+  "title": "PartialRuntime",
+  "type": "object"
+}

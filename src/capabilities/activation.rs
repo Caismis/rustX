@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Configuration authors can express intent, never host evaluation results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum SourceEnablement {
     /// Request activation, subject to host trust and resource authority.
     Enabled,

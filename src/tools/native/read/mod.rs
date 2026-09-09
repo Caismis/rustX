@@ -43,16 +43,17 @@ pub(crate) const TOOL_ID: &str = "tool-read";
 
 /// The tool-owned registration of the native Read tool.
 #[must_use]
-pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
-    NativeToolRegistration::new(
-        native_definition::<ReadInput>(
-            TOOL_ID,
-            NAME,
-            "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
-            policy,
-        ),
-        std::sync::Arc::new(ReadTool),
+pub(super) fn definition(policy: ToolInvocationPolicy) -> crate::tools::types::ToolDefinition {
+    native_definition::<ReadInput>(
+        TOOL_ID,
+        NAME,
+        "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+        policy,
     )
+}
+
+pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
+    NativeToolRegistration::new(definition(policy), std::sync::Arc::new(ReadTool))
 }
 
 /// The native Read executor.

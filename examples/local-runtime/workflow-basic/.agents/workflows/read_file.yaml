@@ -1,0 +1,35 @@
+description: Read one explicitly supplied file through the native Read Tool.
+tools:
+  - {origin: builtin, name: read}
+timeout_ms: 30000
+block:
+  input:
+    type: object
+    properties:
+      path: {type: string}
+    required: [path]
+    additionalProperties: false
+  output:
+    type: object
+    properties:
+      text: {type: string}
+    required: [text]
+    additionalProperties: false
+  entry: read
+  nodes:
+    read:
+      type: tool
+      selector: {origin: builtin, name: read}
+      arguments:
+        type: object
+        fields:
+          path: {type: reference, path: [args, path]}
+      result: {type: text, part: 0}
+    done:
+      type: return
+      output:
+        type: object
+        fields:
+          text: {type: reference, path: [read]}
+  edges:
+    - {from: read, to: done}

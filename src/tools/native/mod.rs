@@ -72,6 +72,33 @@ pub(crate) use read::ReadTool;
 use registration::NativeToolRegistration;
 
 pub use subagent::SUBAGENT_TOOL_NAME;
+pub(crate) use workflow::definition as workflow_definition;
+
+/// Canonical native metadata without constructing any execution resource.
+pub(crate) fn definitions(
+    policies: NativeToolPolicies,
+    subagents: &crate::runtime::subagent::SubagentCatalog,
+) -> Vec<(
+    crate::tools::types::ToolDefinition,
+    crate::tools::deadline::ForegroundPolicy,
+)> {
+    let mut definitions = vec![
+        execution::definition(),
+        ask_user::definition(),
+        read::definition(policies.read),
+        write::definition(policies.write),
+        edit::definition(policies.edit),
+        glob::definition(policies.glob),
+        grep::definition(policies.grep),
+        bash::definition(policies.bash),
+        todo::definition(),
+    ];
+    definitions.extend(subagent::definition(subagents));
+    definitions
+        .into_iter()
+        .map(|definition| (definition, NativeToolRegistration::ordinary_foreground()))
+        .collect()
+}
 
 // The per-invocation Bash supervisor process entry points are reachable
 // only from the supervisor binary and from test binaries via self-exec;

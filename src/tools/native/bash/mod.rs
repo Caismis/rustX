@@ -201,17 +201,18 @@ pub const NAME: &str = "bash";
 
 /// The tool-owned registration of the native Bash tool.
 #[must_use]
-pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
-    NativeToolRegistration::new(
-        native_definition::<BashInput>(
-            "tool-bash",
-            NAME,
-            "Run one non-interactive /bin/bash command inside the workspace. No shell state \
+pub(super) fn definition(policy: ToolInvocationPolicy) -> crate::tools::types::ToolDefinition {
+    native_definition::<BashInput>(
+        "tool-bash",
+        NAME,
+        "Run one non-interactive /bin/bash command inside the workspace. No shell state \
              survives between calls. The optional timeout is in seconds. A background execution \
              immediately returns its live output file's absolute path; use Read or Grep on it to \
              inspect the output while the command runs.",
-            policy,
-        ),
-        std::sync::Arc::new(BashTool::new()),
+        policy,
     )
+}
+
+pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
+    NativeToolRegistration::new(definition(policy), std::sync::Arc::new(BashTool::new()))
 }

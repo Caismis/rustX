@@ -53,6 +53,7 @@ pub mod selected;
 pub mod selection;
 mod snapshot;
 mod tools;
+pub(crate) use tools::select_definitions;
 
 pub use availability::{
     CAPABILITY_FAILURE_REASON_MAX_BYTES, CapabilityAvailability, CapabilitySourceId,

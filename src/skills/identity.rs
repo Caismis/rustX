@@ -50,12 +50,16 @@ pub fn package_version_id(
     markdown_bytes: &[u8],
 ) -> Result<SkillVersionId, String> {
     let mut hasher = Sha256::new();
+    let mut remaining = 16 * 1024 * 1024_u64;
     hasher.update(SKILL_VERSION_DOMAIN);
     for relative in files {
         let path = package_root.join(relative);
         let len = std::fs::metadata(&path)
             .map_err(|error| format!("cannot stat {}: {error}", path.display()))?
             .len();
+        remaining = remaining
+            .checked_sub(len)
+            .ok_or("Skill package exceeds 16 MiB")?;
         hasher.update(format!("path={}\n", relative.display()));
         hasher.update(format!("len={len}\n"));
         if relative == Path::new(crate::skills::package::SKILL_MARKDOWN_FILE) {
@@ -67,7 +71,9 @@ pub fn package_version_id(
             continue;
         }
         let mut file = std::fs::File::open(&path)
-            .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
+            .map_err(|error| format!("cannot open {}: {error}", path.display()))?
+            .take(len + 1);
+        let mut consumed = 0_u64;
         let mut buffer = vec![0u8; 64 * 1024];
         loop {
             let read = file
@@ -75,6 +81,10 @@ pub fn package_version_id(
                 .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
             if read == 0 {
                 break;
+            }
+            consumed += read as u64;
+            if consumed > len {
+                return Err("Skill resource grew during bounded inspection".into());
             }
             hasher.update(&buffer[..read]);
         }

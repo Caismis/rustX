@@ -6,8 +6,9 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
 /// A validated reference, written as `$ENV_VAR` only in declared secret fields.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EnvironmentReference(String);
+#[derive(Debug, Clone, PartialEq, Eq, schemars::JsonSchema)]
+#[schemars(transparent)]
+pub struct EnvironmentReference(#[schemars(pattern(r"^\$[A-Za-z_][A-Za-z0-9_]*$"))] String);
 
 /// Environment names are ASCII identifiers, never shell expressions.
 #[must_use]
@@ -51,6 +52,10 @@ impl CredentialSnapshot {
     /// Capture once at the host boundary, never in a reconnect loop.
     #[must_use]
     pub fn capture() -> Self {
+        #[cfg(test)]
+        crate::local_runtime::static_effects::observe(
+            crate::local_runtime::static_effects::Effect::Credentials,
+        );
         Self::new(
             std::env::vars_os().filter_map(|(key, value)| {
                 Some((key.into_string().ok()?, value.into_string().ok()?))
@@ -69,6 +74,10 @@ impl CredentialEnvironment for CredentialSnapshot {
         self.clone()
     }
     fn var(&self, name: &str) -> Option<String> {
+        #[cfg(test)]
+        crate::local_runtime::static_effects::observe(
+            crate::local_runtime::static_effects::Effect::Credentials,
+        );
         self.0.get(name).cloned()
     }
 }

@@ -314,6 +314,10 @@ impl SqliteConversationStore {
         conversation_id: ConversationId,
         path: &Path,
     ) -> Result<Self, ConversationStoreError> {
+        #[cfg(test)]
+        crate::local_runtime::static_effects::observe(
+            crate::local_runtime::static_effects::Effect::State,
+        );
         let mut connection = Connection::open(path)
             .map_err(|error| storage(format!("open {}: {error}", path.display())))?;
         configure_connection(&mut connection, false)?;

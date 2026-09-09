@@ -649,3 +649,12 @@ See [the conformance map](../../docs/workflow-conformance.md) for ownership, det
 frontiers and tests, and [run details](../../docs/workflow-run-projection.md) for TUI
 progress, resync and historical inspection. Live reconnect observes the same owner;
 process restart never resumes old nodes or recreates actionable human decisions.
+# Example layers
+
+- `minimal/` is the daily first-run path: one explicit user model selection,
+  ordinary native Tools, and a workspace with no project configuration.
+- `workflow-basic/` adds one fixed native Read Workflow using today's YAML
+  contract, with no Python, MCP, or Subagent prerequisite.
+- The existing files in this directory and `workspace/` remain the full
+  reference/conformance stack. They demonstrate advanced capabilities and
+  preserve executable conformance coverage; they are not a first-run requirement.
