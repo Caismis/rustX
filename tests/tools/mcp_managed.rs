@@ -3,6 +3,11 @@
 //! real boundary — a real uv materialization and a real `FastMCP`
 //! (rustX-pinned) stdio child.
 //!
+//! Since Issue #241 the rustX-owned peer is `FastMCP` 4, whose child speaks
+//! the MCP `2026-07-28` inline lifecycle; the modern-revision conformance is
+//! proven from the negotiated revision of a real connection below, never
+//! from the installed package version.
+//!
 //! What is proven here, and the linearization point of each proof:
 //!
 //! - **One folder = one server, many tools**: a package exposing several
@@ -13,6 +18,14 @@
 //!   `mcp_tool_id` identity.
 //! - **Sibling module imports**: `server.py` importing a sibling `common.py`
 //!   works because the frozen `source/` directory is on `sys.path`.
+//! - **Modern protocol conformance**: the real child negotiates MCP
+//!   `2026-07-28` through the ordinary generic `McpServerRuntime::connect`
+//!   and serves `tools/list`/`tools/call` on it; the assertion reads the
+//!   connection's own negotiated revision.
+//! - **Package-scoped dependency failure**: a package whose declared
+//!   dependencies are unsatisfiable against the managed `FastMCP` baseline
+//!   fails only its own synthesized source; unrelated managed and native
+//!   capabilities stay available and executable.
 //! - **Per-folder environment identity**: two folders prepare two distinct
 //!   fingerprint-keyed state directories.
 //! - **Process reuse**: the launch specification names the prepared venv
@@ -44,6 +57,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use rmcp::model::ProtocolVersion;
 use rustx::runtime::identity::{ConversationId, McpServerId, ToolCallId};
 use rustx::tools::mcp::{
     CanonicalMcpTool, McpInvalidationState, McpServerRuntime, McpTransportConfig,
@@ -892,4 +906,341 @@ def add(a: int, b: int) -> str:
         frozen.contains(&server_v1.to_owned()) && frozen.contains(&server_v2.clone()),
         "each prepared state froze its own source generation: {frozen:?}"
     );
+}
+
+/// **The MCP 2026-07-28 conformance of the managed protocol peer**
+/// (Issue #241).
+///
+/// The whole point of the rustX-owned `FastMCP` pin is that a prepared
+/// managed package is an *ordinary* generic MCP peer. This drives the real
+/// boundary end to end — real uv materialization of the exact
+/// `MANAGED_FASTMCP_VERSION` build, a real stdio child, the generic
+/// `McpServerRuntime::connect` (`server/discover` first, legacy `initialize`
+/// only as its fallback), and the canonical `ToolExecutor` path — and reads
+/// the negotiated revision back off the **connection**.
+///
+/// The revision is observed, never inferred: `protocol_version()` is the
+/// generic MCP runtime's record of what this concrete connection actually
+/// negotiated (the same accessor the generic `mcp_runtime.rs` suite asserts
+/// on), so the assertion would fail if the child fell back to a legacy
+/// handshake — regardless of which `FastMCP` version is installed. The
+/// installed pin is checked separately, as the frozen manifest claim, so a
+/// failure distinguishes "wrong build" from "modern lifecycle not
+/// negotiated".
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_real_managed_child_negotiates_the_modern_mcp_revision() {
+    require_uv!();
+    let directory = tempfile::tempdir().expect("fixture root");
+    let workspace_root = directory.path().join("workspace");
+    std::fs::create_dir_all(&workspace_root).expect("workspace");
+    write_package(
+        &workspace_root,
+        "modern",
+        &[
+            (
+                "server.py",
+                "from fastmcp import FastMCP
+
+mcp = FastMCP('modern')
+
+
+@mcp.tool
+def greet(name: str) -> str:
+    \"\"\"Greets one name.\"\"\"
+    return f'hello:{name}'
+",
+            ),
+            ("requirements.txt", "# none\n"),
+        ],
+    );
+
+    let store = PythonToolStore::new(directory.path().join("runtime")).expect("store");
+    let package = discover(&workspace_root, "modern");
+    let prepared = prepare(&store, &package).await;
+
+    // The materialized environment really is the rustX-owned pin: the frozen
+    // manifest records it, and the generated project metadata requested it
+    // exactly (never a range).
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(prepared.state_dir.join("manifest.json")).expect("manifest"),
+    )
+    .expect("manifest json");
+    assert_eq!(
+        manifest["fastmcp"].as_str(),
+        Some(rustx::tools::python::MANAGED_FASTMCP_VERSION),
+        "the prepared state records the rustX-owned FastMCP pin: {manifest}"
+    );
+    let pyproject =
+        std::fs::read_to_string(prepared.state_dir.join("pyproject.toml")).expect("pyproject");
+    assert!(
+        pyproject.contains(&format!(
+            "\"fastmcp=={}\"",
+            rustx::tools::python::MANAGED_FASTMCP_VERSION
+        )),
+        "the generated project metadata pins the managed build exactly: {pyproject}"
+    );
+
+    let server =
+        ConnectedServer::connect(&prepared, "modern", &workspace_root, "conv-managed-2026").await;
+
+    // The negotiated revision, read off the live generic MCP connection.
+    assert_eq!(
+        server.runtime.protocol_version(),
+        &ProtocolVersion::V_2026_07_28,
+        "the managed child negotiates the modern MCP revision through the \
+         generic rustX MCP connect, not a legacy handshake"
+    );
+
+    // The same real child serves an ordinary `tools/list` catalog...
+    assert_eq!(
+        server
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["greet"],
+        "the modern connection publishes the package's catalog"
+    );
+    let definition = server.definition("greet");
+    assert_eq!(
+        definition.origin,
+        ToolOrigin::Mcp {
+            server_id: server.server_id.clone(),
+        },
+        "the managed tool keeps canonical generic MCP provenance"
+    );
+
+    // ...and an ordinary `tools/call` that becomes the canonical rustX
+    // execution result.
+    let result = server
+        .call("greet", serde_json::json!({"name": "issue241"}))
+        .await;
+    assert!(
+        matches!(result.status, ToolExecutionStatus::Success),
+        "the modern-revision call succeeds: {:?}",
+        result.status
+    );
+    assert_eq!(result_text(&result), "hello:issue241");
+    assert!(
+        result.exit_code.is_none() && result.artifacts.is_empty() && result.workflow.is_none(),
+        "an MCP call maps onto the ordinary canonical result shape: {result:?}"
+    );
+
+    // The revision is stable across the connection's whole lifetime: the
+    // call did not silently renegotiate a different one.
+    assert_eq!(
+        server.runtime.protocol_version(),
+        &ProtocolVersion::V_2026_07_28,
+    );
+    server.close().await;
+}
+
+/// **Dependency-resolution failures stay package-scoped** (Issue #241).
+///
+/// The managed `FastMCP` build carries a dependency baseline (4.0.3 resolves
+/// `pydantic>=2.12.0` through `fastmcp-slim`), so a package that pins against
+/// it cannot be materialized. uv stays the resolution authority — rustX only
+/// has to keep the failure attributable and bounded: the conflicting package
+/// fails its own preparation, its own synthesized source becomes
+/// unavailable, and nothing else does. An unrelated managed package still
+/// prepares, connects, and executes, and an unrelated native capability is
+/// still published by the same committed snapshot.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_dependency_conflict_fails_only_its_own_managed_source() {
+    require_uv!();
+    let directory = tempfile::tempdir().expect("fixture root");
+    let workspace_root = directory.path().join("workspace");
+    std::fs::create_dir_all(&workspace_root).expect("workspace");
+    // The conflict is derived from the exact selected FastMCP build's own
+    // metadata rather than assumed: `fastmcp==4.0.3` depends on
+    // `fastmcp-slim[client,server]==4.0.3`, which requires
+    // `pydantic[email]>=2.12.0`.
+    write_package(
+        &workspace_root,
+        "conflicting",
+        &[
+            (
+                "server.py",
+                "from fastmcp import FastMCP\n\nmcp = FastMCP('conflicting')\n",
+            ),
+            ("requirements.txt", "pydantic<2.12\n"),
+        ],
+    );
+    write_package(
+        &workspace_root,
+        "healthy",
+        &[
+            (
+                "server.py",
+                "from fastmcp import FastMCP
+
+mcp = FastMCP('healthy')
+
+
+@mcp.tool
+def ping() -> str:
+    \"\"\"Answers pong.\"\"\"
+    return 'pong'
+",
+            ),
+            ("requirements.txt", "# none\n"),
+        ],
+    );
+
+    // One unrelated non-MCP capability, composed exactly like the native
+    // plane is: its survival is the "unrelated capabilities stay available"
+    // half of the isolation contract.
+    let base_tool_registry = rustx::tools::executor::ToolRegistry::new()
+        .compose([(
+            rustx::tools::types::ToolDefinition {
+                id: rustx::runtime::identity::ToolId::new("native-unrelated"),
+                name: "unrelated_native".to_owned(),
+                description: "An unrelated native capability.".to_owned(),
+                input_schema: serde_json::json!({
+                    "type": "object", "properties": {}, "additionalProperties": false
+                }),
+                execution_policy: rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
+                concurrency_policy: rustx::tools::types::ToolConcurrencyPolicy::Sequential,
+                approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
+                replay_policy: rustx::tools::types::ToolReplayPolicy::Never,
+                origin: ToolOrigin::Builtin,
+            },
+            Arc::new(UnusedExecutor) as Arc<dyn ToolExecutor>,
+        )])
+        .expect("base registry");
+
+    let coordinator = rustx::capabilities::CapabilityCoordinator::new(
+        rustx::capabilities::CapabilityCoordinatorConfig {
+            python_sources: ["conflicting", "healthy"]
+                .map(|name| {
+                    (
+                        python_server_id(name),
+                        rustx::capabilities::activation::SourceActivation::Enabled,
+                    )
+                })
+                .into(),
+            conversation_id: ConversationId::new("conv-managed-conflict"),
+            workspace: Workspace::new(&workspace_root).expect("workspace"),
+            base_tool_registry: Arc::new(base_tool_registry),
+            tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
+            // Keep this fixture independent of the developer's HOME.
+            skill_discovery: rustx::skills::SkillDiscoveryConfig {
+                automatic_roots: vec![workspace_root.join(".agents/skills")],
+                explicit_paths: Vec::new(),
+            },
+            mcp_servers: std::collections::BTreeMap::new(),
+            base_environment: rustx::tools::environment::ToolEnvironment::new(),
+            environment_store_root: directory.path().join("skill-env"),
+        },
+    )
+    .expect("coordinator");
+
+    let candidate = tokio::time::timeout(LIVENESS, coordinator.prepare_candidate())
+        .await
+        .expect("a dependency conflict must not hang the capability preparation")
+        .expect("a package-local dependency conflict must not fail the candidate");
+
+    let conflicting = rustx::capabilities::CapabilitySourceId::Mcp(python_server_id("conflicting"));
+    let Some(rustx::capabilities::CapabilitySourceState::Unavailable { reason }) =
+        candidate.availability().get(&conflicting)
+    else {
+        panic!(
+            "the unsatisfiable package lands on its own synthesized source: {:?}",
+            candidate.availability()
+        );
+    };
+    assert!(
+        reason.contains("python:conflicting"),
+        "the diagnostic names the affected managed source: {reason}"
+    );
+    assert!(
+        reason.contains("dependency preparation failed"),
+        "the diagnostic names the failing phase: {reason}"
+    );
+    assert!(
+        reason.len() <= rustx::capabilities::CAPABILITY_FAILURE_REASON_MAX_BYTES,
+        "the diagnostic stays bounded: {} bytes",
+        reason.len()
+    );
+
+    // The sibling managed source is untouched by its neighbour's failure.
+    let healthy_id = python_server_id("healthy");
+    assert_eq!(
+        candidate
+            .availability()
+            .get(&rustx::capabilities::CapabilitySourceId::Mcp(
+                healthy_id.clone()
+            )),
+        Some(&rustx::capabilities::CapabilitySourceState::Ready),
+        "an unrelated managed source is unaffected: {:?}",
+        candidate.availability()
+    );
+
+    let snapshot = coordinator.commit(candidate).expect("commit");
+    let published = snapshot
+        .tool_registry()
+        .definitions()
+        .iter()
+        .map(|definition| definition.name.clone())
+        .collect::<Vec<_>>();
+    assert!(
+        published.contains(&"unrelated_native".to_owned()),
+        "the unrelated native capability survives the preparation failure: {published:?}"
+    );
+    assert!(
+        published.contains(&"ping".to_owned()),
+        "the unrelated managed capability survives the preparation failure: {published:?}"
+    );
+    assert!(
+        !published.iter().any(|name| name.contains("conflicting")),
+        "the failed source publishes nothing: {published:?}"
+    );
+
+    // And the surviving managed source is genuinely executable, not merely
+    // listed: the neighbouring failure did not poison its connection.
+    let pong = call_through_snapshot(
+        &workspace_root,
+        &healthy_id,
+        &snapshot,
+        "ping",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(result_text(&pong), "pong");
+}
+
+/// A registry-composition placeholder: the unrelated native capability of
+/// the isolation test is never invoked, only published.
+struct UnusedExecutor;
+
+impl ToolExecutor for UnusedExecutor {
+    fn start<'a>(
+        &'a self,
+        _invocation: ToolInvocation,
+        context: rustx::tools::executor::ToolExecutionContext<'a>,
+    ) -> rustx::tools::executor::ToolExecutionHandle<'a> {
+        rustx::tools::executor::ToolExecutionHandle::settled_by_operation(
+            Box::pin(async {
+                ToolExecutionResult {
+                    status: ToolExecutionStatus::Failed {
+                        error: "never invoked".to_owned(),
+                    },
+                    content: Vec::new(),
+                    duration_ms: 0,
+                    exit_code: None,
+                    artifacts: Vec::new(),
+                    truncation: None,
+                    workflow: None,
+                    managed_output: None,
+                }
+            }),
+            context.cancellation.clone(),
+        )
+    }
+
+    fn progress_capability(&self) -> rustx::tools::ToolProgressCapability {
+        rustx::tools::ToolProgressCapability::None
+    }
 }

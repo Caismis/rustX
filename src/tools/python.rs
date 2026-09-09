@@ -81,10 +81,20 @@ use crate::tools::workspace::Workspace;
 ///
 /// Pinned exactly: the `FastMCP` SDK is rustX's MCP protocol peer, so its
 /// identity is a fingerprint input, never a workspace-declared dependency.
-/// Verified against the rustX MCP client (rmcp) before pinning: a real
-/// `FastMCP` 3.4.7 stdio server negotiates the `2025-11-25` revision with the
-/// legacy `initialize` handshake and serves `tools/list`/`tools/call`.
-pub const MANAGED_FASTMCP_VERSION: &str = "3.4.7";
+/// One version, never a range and never a workspace-selectable one: rustX
+/// owns the wire implementation, so there is no `FastMCP` mode, fallback, or
+/// compatibility shim to choose between.
+///
+/// Verified against the rustX MCP client (rmcp) before pinning (Issue #241):
+/// a real `FastMCP` 4.0.3 stdio child answers the modern `server/discover`
+/// probe advertising `supportedVersions: ["2026-07-28"]`, so the generic
+/// rustX MCP connect negotiates the `2026-07-28` revision inline and serves
+/// `tools/list`/`tools/call` on it. That evidence is a property of the
+/// *connection*, not of this constant: it is asserted from the negotiated
+/// revision of a real child in `tests/tools/mcp_managed.rs`. rustX's generic
+/// negotiated fallback to genuinely older external peers is unchanged and
+/// unrelated to this pin.
+pub const MANAGED_FASTMCP_VERSION: &str = "4.0.3";
 
 /// The fixed custom tool root below a Workspace.
 pub const TOOLS_DIRECTORY: &str = ".agents";
@@ -433,6 +443,31 @@ fn package_fingerprint(
     python_identity: &str,
     uv_identity: &str,
 ) -> String {
+    // The managed pin is a constant, never a caller-selectable input: the
+    // only production fingerprint is the one derived from
+    // `MANAGED_FASTMCP_VERSION`.
+    package_fingerprint_with(
+        package,
+        python_identity,
+        uv_identity,
+        MANAGED_FASTMCP_VERSION,
+    )
+}
+
+/// The fingerprint derivation with the managed `FastMCP` pin as an explicit
+/// argument.
+///
+/// The argument exists so the pin's materiality is provable — a changed
+/// managed `FastMCP` build must always be a different prepared-state
+/// identity — without making the production pin configurable: the only
+/// non-test caller is [`package_fingerprint`], which always passes
+/// [`MANAGED_FASTMCP_VERSION`].
+fn package_fingerprint_with(
+    package: &PythonToolPackage,
+    python_identity: &str,
+    uv_identity: &str,
+    fastmcp_version: &str,
+) -> String {
     let mut canonical = Vec::new();
     canonical.extend_from_slice(b"rustx:managed-python-package:v2\0");
     append_bytes(
@@ -442,7 +477,7 @@ fn package_fingerprint(
     append_bytes(&mut canonical, source_digest(&package.files).as_bytes());
     append_bytes(&mut canonical, python_identity.as_bytes());
     append_bytes(&mut canonical, uv_identity.as_bytes());
-    append_bytes(&mut canonical, MANAGED_FASTMCP_VERSION.as_bytes());
+    append_bytes(&mut canonical, fastmcp_version.as_bytes());
     append_bytes(&mut canonical, std::env::consts::OS.as_bytes());
     append_bytes(&mut canonical, std::env::consts::ARCH.as_bytes());
     format!("sha256:{}", hex_digest(&sha2::Sha256::digest(canonical)))
@@ -1212,7 +1247,16 @@ async fn stage_and_build(
             }
         };
         if let Some(failure) = failure {
-            return Err(PythonToolError::Environment(failure));
+            // uv is the dependency-resolution authority; rustX only has to
+            // make the failure attributable. The diagnostic names the
+            // managed source identity and the phase, and carries uv's own
+            // bounded explanation — a package whose declared dependencies
+            // cannot be resolved against the managed `FastMCP` pin fails
+            // exactly this one source.
+            return Err(PythonToolError::Environment(format!(
+                "{} dependency preparation failed: {failure}",
+                python_server_id(&package.name)
+            )));
         }
     }
     Ok(PreparedManifest {
@@ -1367,7 +1411,7 @@ mod tests {
 
     #[test]
     fn requirements_reject_the_managed_fastmcp_dependency() {
-        for line in ["fastmcp", "fastmcp==3.4.7", "FastMCP[cli]>=2"] {
+        for line in ["fastmcp", "fastmcp==4.0.0", "FastMCP[cli]>=2"] {
             let error = parse_requirements(line.as_bytes()).expect_err("fastmcp is managed");
             assert!(
                 error.contains(MANAGED_FASTMCP_VERSION),
@@ -1453,6 +1497,40 @@ mod tests {
             package_fingerprint(&package, python_identity, "/usr/bin/uv (uv 0.12.0)"),
             "the uv identity is a fingerprint input"
         );
+    }
+
+    /// The managed `FastMCP` build is a material fingerprint input
+    /// (Issue #241): moving the rustX-owned protocol peer to another version
+    /// is always a different prepared-state identity, so a `FastMCP` 3 state
+    /// directory can never be reused — or mutated in place — by a `FastMCP` 4
+    /// preparation of the same package bytes.
+    #[test]
+    fn the_managed_fastmcp_version_is_a_material_prepared_state_input() {
+        let package = package("demo");
+        let python_identity = "/usr/bin/python3 (Python 3.12.13)";
+        let uv_identity = "/usr/bin/uv (uv 0.11.12)";
+        let current = package_fingerprint(&package, python_identity, uv_identity);
+        assert_eq!(
+            current,
+            package_fingerprint_with(
+                &package,
+                python_identity,
+                uv_identity,
+                MANAGED_FASTMCP_VERSION,
+            ),
+            "the production fingerprint is the managed pin's fingerprint"
+        );
+        for other in ["3.4.7", "4.0.2"] {
+            assert_ne!(
+                other, MANAGED_FASTMCP_VERSION,
+                "the counter-example must be a different build"
+            );
+            assert_ne!(
+                current,
+                package_fingerprint_with(&package, python_identity, uv_identity, other),
+                "a different managed FastMCP build is a different prepared identity"
+            );
+        }
     }
 
     /// Issue #174 environment-identity invariant: two distinct package
@@ -1713,6 +1791,9 @@ mod tests {
 
         tamper(&|manifest| manifest.entrypoint = "tool.py:run".to_owned());
         expect_rejection("a foreign entrypoint claim fails closed");
+
+        tamper(&|manifest| manifest.fastmcp = "3.4.7".to_owned());
+        expect_rejection("a foreign managed FastMCP claim fails closed");
 
         tamper(&|manifest| manifest.python = "other-python".to_owned());
         expect_rejection("a foreign Python identity claim fails closed");

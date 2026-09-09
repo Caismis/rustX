@@ -632,7 +632,10 @@ async fn byte_identical_folders_never_share_a_prepared_environment() {
         "byte-identical folders never share one prepared environment: {states:?}"
     );
     // Each state carries its own package identity in its frozen manifest.
-    let manifests = states
+    // The states are keyed by fingerprint, so their directory order is a
+    // hash order, not the package order: assert the *set* of identities, the
+    // property the invariant is actually about.
+    let mut manifests = states
         .iter()
         .map(|state| {
             let manifest: serde_json::Value = serde_json::from_slice(
@@ -645,6 +648,7 @@ async fn byte_identical_folders_never_share_a_prepared_environment() {
                 .to_owned()
         })
         .collect::<Vec<_>>();
+    manifests.sort();
     assert_eq!(manifests, ["alpha", "beta"]);
 }
 
