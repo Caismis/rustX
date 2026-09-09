@@ -49,7 +49,7 @@
  * version 11's subagent activity projection; and version 9's closed
  * `interrupted` lifecycle vocabulary. Older schemas are not decoded.
  */
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 22;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 23;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -1149,6 +1149,8 @@ export type CapabilitySourceDescriptor = { type: "mcp"; server_id: McpServerId }
 
 /** The availability of one optional capability source. */
 export type CapabilitySourceStateView =
+  | { type: "inactive"; activation: "unconfigured" | "disabled" | "enabled" | "untrusted" }
+  | { type: "unprepared" }
   | { type: "ready" }
   | { type: "unavailable"; reason: string };
 

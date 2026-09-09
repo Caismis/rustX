@@ -237,16 +237,11 @@ impl CredentialSource {
         let Some(name) = value.strip_prefix('$') else {
             return Ok(Self::Literal(value.to_owned()));
         };
-        let valid = !name.is_empty()
-            && name
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        let valid = crate::credentials::valid_environment_name(name);
         if !valid {
             return Err(ModelCatalogError::InvalidCredentialSource {
                 provider: provider.clone(),
-                detail: format!("{name:?} is not a valid environment variable name"),
+                detail: "expected a valid $ENV_VAR credential reference".into(),
             });
         }
         Ok(Self::Environment(name.to_owned()))
@@ -272,6 +267,23 @@ impl fmt::Debug for CredentialSource {
             Self::Literal(_) => f.write_str("CredentialSource::Literal(<redacted>)"),
             Self::Environment(name) => write!(f, "CredentialSource::Environment({name})"),
         }
+    }
+}
+
+impl Serialize for CredentialSource {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Environment(name) => serializer.serialize_str(&format!("${name}")),
+            Self::Literal(_) => serde_json::json!({"redacted": true}).serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for CredentialSource {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let raw = value.as_str().ok_or_else(|| serde::de::Error::custom("expected a credential literal or $ENV_VAR reference; redacted projections are not replayable"))?;
+        Self::parse(raw, &ProviderId::new("configured")).map_err(serde::de::Error::custom)
     }
 }
 
@@ -820,38 +832,26 @@ impl ModelCatalog {
         })
     }
 
-    /// Resolves every provider credential against the given environment.
+    /// Captures credential inputs for every provider without requiring unused keys.
     ///
     /// # Errors
     ///
-    /// Returns [`ModelCatalogError::MissingEnvironmentCredential`] when a
-    /// referenced environment variable is absent or empty. The missing
-    /// variable's *name* appears in the error; no value ever does.
+    /// Kept as a fallible binding boundary; missing references are diagnosed
+    /// lazily by `ResolvedProvider::credential` when a provider is admitted.
     pub fn resolve(
         &self,
         environment: &dyn CredentialEnvironment,
     ) -> Result<ResolvedModelCatalog, ModelCatalogError> {
         let mut providers = BTreeMap::new();
+        let captured = environment.snapshot();
         for (id, provider) in &self.providers {
-            let credential = match &provider.api_key {
-                CredentialSource::Literal(value) => ResolvedCredential::new(value.clone()),
-                CredentialSource::Environment(name) => {
-                    let value = environment.var(name).filter(|value| !value.is_empty());
-                    let Some(value) = value else {
-                        return Err(ModelCatalogError::MissingEnvironmentCredential {
-                            provider: id.clone(),
-                            variable: name.clone(),
-                        });
-                    };
-                    ResolvedCredential::new(value)
-                }
-            };
             providers.insert(
                 id.clone(),
                 ResolvedProvider {
                     id: id.clone(),
                     base_url: provider.base_url.clone(),
-                    credential,
+                    credential: std::sync::Arc::new(std::sync::OnceLock::new()),
+                    captured: captured.clone(),
                     source: provider.api_key.clone(),
                     models: provider.models.clone(),
                 },
@@ -869,7 +869,8 @@ impl ModelCatalog {
 pub struct ResolvedProvider {
     id: ProviderId,
     base_url: String,
-    credential: ResolvedCredential,
+    credential: std::sync::Arc<std::sync::OnceLock<Result<ResolvedCredential, ModelCatalogError>>>,
+    captured: crate::credentials::CredentialSnapshot,
     source: CredentialSource,
     models: BTreeMap<ModelId, Arc<ModelDefinition>>,
 }
@@ -888,9 +889,25 @@ impl ResolvedProvider {
     }
 
     /// The bound credential.
-    #[must_use]
-    pub const fn credential(&self) -> &ResolvedCredential {
-        &self.credential
+    ///
+    /// # Errors
+    /// Returns a provider-specific missing-reference error on first admitted use.
+    pub fn credential(&self) -> Result<&ResolvedCredential, ModelCatalogError> {
+        self.credential
+            .get_or_init(|| match &self.source {
+                CredentialSource::Literal(value) => Ok(ResolvedCredential::new(value.clone())),
+                CredentialSource::Environment(name) => self
+                    .captured
+                    .var(name)
+                    .filter(|value| !value.is_empty())
+                    .map(ResolvedCredential::new)
+                    .ok_or_else(|| ModelCatalogError::MissingEnvironmentCredential {
+                        provider: self.id.clone(),
+                        variable: name.clone(),
+                    }),
+            })
+            .as_ref()
+            .map_err(Clone::clone)
     }
 
     /// The redacted credential source view.
@@ -920,6 +937,7 @@ impl fmt::Debug for ResolvedProvider {
             .field("id", &self.id)
             .field("base_url", &self.base_url)
             .field("credential", &"<redacted>")
+            .field("captured", &self.captured)
             .field("credential_source", &self.source)
             .field("models", &self.models.keys().collect::<Vec<_>>())
             .finish()
@@ -980,6 +998,8 @@ impl ResolvedModelCatalog {
 
 /// The process-environment lookup used to resolve `$ENV_VAR` credentials.
 pub trait CredentialEnvironment: Send + Sync {
+    /// Capture a stable host input without resolving a particular reference.
+    fn snapshot(&self) -> crate::credentials::CredentialSnapshot;
     /// Reads one environment variable.
     fn var(&self, name: &str) -> Option<String>;
 }
@@ -989,6 +1009,9 @@ pub trait CredentialEnvironment: Send + Sync {
 pub struct ProcessCredentialEnvironment;
 
 impl CredentialEnvironment for ProcessCredentialEnvironment {
+    fn snapshot(&self) -> crate::credentials::CredentialSnapshot {
+        crate::credentials::CredentialSnapshot::capture()
+    }
     fn var(&self, name: &str) -> Option<String> {
         std::env::var(name).ok()
     }
@@ -996,9 +1019,15 @@ impl CredentialEnvironment for ProcessCredentialEnvironment {
 
 /// An explicit in-memory environment, used by deterministic tests and by
 /// callers that resolve credentials from an already-collected map.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct MapCredentialEnvironment {
     variables: BTreeMap<String, String>,
+}
+
+impl fmt::Debug for MapCredentialEnvironment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("MapCredentialEnvironment(<redacted>)")
+    }
 }
 
 impl MapCredentialEnvironment {
@@ -1012,6 +1041,9 @@ impl MapCredentialEnvironment {
 }
 
 impl CredentialEnvironment for MapCredentialEnvironment {
+    fn snapshot(&self) -> crate::credentials::CredentialSnapshot {
+        crate::credentials::CredentialSnapshot::new(self.variables.clone())
+    }
     fn var(&self, name: &str) -> Option<String> {
         self.variables.get(name).cloned()
     }
@@ -1048,7 +1080,7 @@ pub struct ProviderDocument {
     /// The mandatory explicit provider endpoint.
     pub base_url: String,
     /// The mandatory credential source: a literal or `$ENV_VAR`.
-    pub api_key: String,
+    pub api_key: CredentialSource,
     /// The provider's models.
     pub models: Vec<ModelDocument>,
 }
@@ -1117,7 +1149,7 @@ fn validate_provider(
     document: ProviderDocument,
 ) -> Result<ProviderDefinition, ModelCatalogError> {
     validate_base_url(id, &document.base_url)?;
-    let api_key = CredentialSource::parse(&document.api_key, id)?;
+    let api_key = document.api_key.clone();
     if document.models.is_empty() {
         return Err(ModelCatalogError::ProviderWithoutModels {
             provider: id.clone(),
@@ -1736,7 +1768,7 @@ mod tests {
             MapCredentialEnvironment::new([("RUSTX_KEY".to_owned(), "sk-secret".to_owned())]);
         let resolved = catalog.resolve(&environment).expect("resolves");
         let provider = resolved.provider(&ProviderId::new("p")).expect("provider");
-        assert_eq!(provider.credential().expose(), "sk-secret");
+        assert_eq!(provider.credential().unwrap().expose(), "sk-secret");
         assert_eq!(
             provider.credential_source(),
             CredentialSourceView::Environment {
@@ -1745,7 +1777,14 @@ mod tests {
         );
 
         let empty = MapCredentialEnvironment::default();
-        let error = catalog.resolve(&empty).expect_err("must fail");
+        let unresolved = catalog
+            .resolve(&empty)
+            .expect("unused credentials are lazy");
+        let error = unresolved
+            .provider(&ProviderId::new("p"))
+            .unwrap()
+            .credential()
+            .expect_err("binding must fail");
         assert!(matches!(
             error,
             ModelCatalogError::MissingEnvironmentCredential { .. }
@@ -1780,6 +1819,7 @@ mod tests {
                 .provider(&ProviderId::new("p"))
                 .expect("provider")
                 .credential()
+                .unwrap()
                 .expose(),
             secret
         );

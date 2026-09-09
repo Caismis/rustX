@@ -813,12 +813,14 @@ impl From<crate::model::catalog::ModelCatalogError> for ModelInvocationError {
 /// one adapter per provider/protocol pair it uses.
 ///
 /// One registry exists per local runtime process. Resolving a selection is a
-/// pure lookup, so admission never constructs an HTTP client.
+/// a cached binding; the first admitted use constructs that provider's client.
 #[derive(Clone)]
 pub struct ModelBindingRegistry {
     catalog: ResolvedModelCatalog,
-    adapters: BTreeMap<(ProviderId, ModelProtocol), Arc<dyn ModelAdapter>>,
+    adapters: BTreeMap<(ProviderId, ModelProtocol), LazyAdapter>,
 }
+
+type LazyAdapter = Arc<std::sync::OnceLock<Arc<dyn ModelAdapter>>>;
 
 impl fmt::Debug for ModelBindingRegistry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -844,7 +846,7 @@ pub(crate) fn build_protocol_adapter(
     credential: &str,
     base_url: &str,
 ) -> Arc<dyn ModelAdapter> {
-    match protocol {
+    let inner: Arc<dyn ModelAdapter> = match protocol {
         ModelProtocol::OpenAiChatCompletions => {
             use crate::model::adapter::openai::{
                 OpenAiAdapterConfig, OpenAiChatCompletionsAdapter,
@@ -867,28 +869,73 @@ pub(crate) fn build_protocol_adapter(
                 credential, base_url,
             )))
         }
+    };
+    Arc::new(CredentialRedactingAdapter {
+        inner,
+        credential: crate::model::catalog::ResolvedCredential::new(credential),
+    })
+}
+
+/// Adapter diagnostics cross into runtime-owned state only after redaction.
+struct CredentialRedactingAdapter {
+    inner: Arc<dyn ModelAdapter>,
+    credential: crate::model::catalog::ResolvedCredential,
+}
+
+fn redact_provider_error(
+    error: &mut ModelError,
+    credential: &crate::model::catalog::ResolvedCredential,
+) {
+    if !credential.expose().is_empty() {
+        error.message = error.message.replace(credential.expose(), "<redacted>");
+        if let Some(code) = &mut error.provider_code {
+            *code = code.replace(credential.expose(), "<redacted>");
+        }
+    }
+}
+
+impl ModelAdapter for CredentialRedactingAdapter {
+    fn protocol(&self) -> ModelProtocol {
+        self.inner.protocol()
+    }
+
+    fn stream(
+        &self,
+        request: crate::model::types::ModelRequest,
+        cancellation: crate::runtime::cancellation::CancellationSignal,
+    ) -> crate::model::adapter::ModelStream {
+        use futures_util::StreamExt;
+        let credential = self.credential.clone();
+        Box::pin(
+            self.inner
+                .stream(request, cancellation)
+                .map(move |mut item| {
+                    if let crate::model::adapter::ModelStreamItem::Event(
+                        crate::model::event::ModelEvent::Failed { error },
+                    ) = &mut item
+                    {
+                        redact_provider_error(error, &credential);
+                    }
+                    item
+                }),
+        )
     }
 }
 
 impl ModelBindingRegistry {
-    /// Builds every supported adapter binding directly from the resolved
-    /// provider endpoint and credential.
+    /// Allocates lazy adapter slots. Only an admitted provider resolves its
+    /// credential and constructs its supported protocol client.
     ///
     /// # Errors
     ///
     /// Returns the first adapter construction failure.
     pub fn new(catalog: ResolvedModelCatalog) -> Result<Self, ModelInvocationError> {
-        let mut adapters: BTreeMap<(ProviderId, ModelProtocol), Arc<dyn ModelAdapter>> =
-            BTreeMap::new();
+        let mut adapters = BTreeMap::new();
         for reference in catalog.model_refs().collect::<Vec<_>>() {
             let (provider, model) = catalog.binding(&reference)?;
             let key = (provider.id().clone(), model.protocol);
             if let std::collections::btree_map::Entry::Vacant(slot) = adapters.entry(key) {
-                slot.insert(build_protocol_adapter(
-                    model.protocol,
-                    provider.credential().expose(),
-                    provider.base_url(),
-                ));
+                slot.insert(Arc::new(std::sync::OnceLock::new()));
             }
         }
         Ok(Self { catalog, adapters })
@@ -905,13 +952,14 @@ impl ModelBindingRegistry {
         catalog: ResolvedModelCatalog,
         factory: &dyn ScriptedProviderAdapterFactory,
     ) -> Result<Self, ModelInvocationError> {
-        let mut adapters: BTreeMap<(ProviderId, ModelProtocol), Arc<dyn ModelAdapter>> =
-            BTreeMap::new();
+        let mut adapters = BTreeMap::new();
         for reference in catalog.model_refs().collect::<Vec<_>>() {
             let (provider, model) = catalog.binding(&reference)?;
             let key = (provider.id().clone(), model.protocol);
             if let std::collections::btree_map::Entry::Vacant(slot) = adapters.entry(key) {
-                slot.insert(factory.adapter(provider, model.protocol)?);
+                let adapter = std::sync::OnceLock::new();
+                let _ = adapter.set(factory.adapter(provider, model.protocol)?);
+                slot.insert(Arc::new(adapter));
             }
         }
         Ok(Self { catalog, adapters })
@@ -1003,6 +1051,7 @@ impl ModelBindingRegistry {
             });
         }
 
+        let credential = provider.credential()?;
         let adapter = self
             .adapters
             .get(&(provider.id().clone(), protocol))
@@ -1010,6 +1059,9 @@ impl ModelBindingRegistry {
                 model: selection.model.clone(),
                 protocol,
             })?
+            .get_or_init(|| {
+                build_protocol_adapter(protocol, credential.expose(), provider.base_url())
+            })
             .clone();
 
         Ok(ResolvedModelInvocation {
@@ -1068,6 +1120,7 @@ impl ModelBindingRegistry {
         let (provider, _) = self.catalog.binding(&selection.model)?;
         Ok(crate::model::frozen::FrozenModelInvocation {
             binding: crate::model::frozen::FrozenProviderBinding {
+                resolved_credential: Some(provider.credential()?.clone()),
                 provider: provider.id().clone(),
                 base_url: provider.base_url().to_owned(),
                 credential: provider.credential_declaration().clone(),
@@ -1269,6 +1322,24 @@ pub fn validate_content_modalities(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cfg233_provider_error_redaction_preserves_failure_semantics() {
+        use crate::model::{
+            catalog::ResolvedCredential, deadline::ModelTimeoutPhase, error::ModelError,
+        };
+        let sentinel = "CFG233_PROVIDER_ERROR_SENTINEL_8571";
+        let mut error = ModelError::timeout(ModelTimeoutPhase::ResponseStart);
+        error.message = format!("remote diagnostic {sentinel}");
+        error.provider_code = Some(sentinel.into());
+        let kind = error.kind.clone();
+        let retry = error.retry_disposition;
+        super::redact_provider_error(&mut error, &ResolvedCredential::new(sentinel));
+        assert_eq!(error.kind, kind);
+        assert_eq!(error.retry_disposition, retry);
+        assert!(!format!("{error:?}").contains(sentinel));
+        assert!(!serde_json::to_string(&error).unwrap().contains(sentinel));
+        assert!(error.message.contains("<redacted>"));
+    }
     use super::{
         DEFAULT_RUNTIME_REASONING_BYTE_SHARE_DENOMINATOR,
         DEFAULT_RUNTIME_REASONING_BYTE_SHARE_NUMERATOR, ModelInvocationError,

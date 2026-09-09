@@ -56,10 +56,10 @@ const MODELS: &str = r#"{
 
 fn dependencies() -> LocalRuntimeDependencies {
     LocalRuntimeDependencies {
-        credentials: Arc::new(MapCredentialEnvironment::new([(
+        credentials: Some(Arc::new(MapCredentialEnvironment::new([(
             KEY_ENV.to_owned(),
             "test-only-secret".to_owned(),
-        )])),
+        )]))),
         ..LocalRuntimeDependencies::default()
     }
 }
@@ -69,7 +69,7 @@ fn dependencies() -> LocalRuntimeDependencies {
 fn model_registry() -> ModelBindingRegistry {
     let catalog = ModelCatalog::from_jsonc_slice(MODELS.as_bytes()).expect("model catalog");
     let resolved = catalog
-        .resolve(dependencies().credentials.as_ref())
+        .resolve(dependencies().credentials.as_deref().unwrap())
         .expect("resolved catalog");
     ModelBindingRegistry::new(resolved).expect("binding registry")
 }
@@ -167,7 +167,7 @@ impl Lab {
                 .or_insert_with(|| serde_json::Value::Array(definition_names));
         }
         let document = serde_json::json!({
-            "schemaVersion": 6,
+            "schemaVersion": 7,
             "agentId": "agent-issue144",
             "model": {"model": "local/model-a"},
             "context": {"reserveTokens": 0, "keepRecentTokens": 0},
@@ -727,13 +727,13 @@ async fn an_explicit_ask_user_selection_is_admitted_for_a_child() {
 async fn an_unavailable_source_keeps_the_runtime_healthy_but_blocks_the_agent_that_needs_it() {
     let lab = Lab::new();
     let document = serde_json::json!({
-        "schemaVersion": 6,
+        "schemaVersion": 7,
         "agentId": "agent-issue144",
         "model": {"model": "local/model-a"},
         "context": {"reserveTokens": 0, "keepRecentTokens": 0},
         "defaultTools": ["read", "subagent"],
         "mcpServers": {
-            "offline": {"type": "stdio", "command": "missing-rustx-issue144-mcp"}
+            "offline": {"enabled": true, "type": "stdio", "command": "missing-rustx-issue144-mcp"}
         },
         "subagents": {
             "maxConcurrent": 4,
@@ -1021,7 +1021,7 @@ async fn the_definition_digest_ignores_incidental_formatting_and_tracks_semantic
         lab.root().join("rustx.jsonc"),
         r#"{
   // A comment cannot change the semantic identity of a definition.
-  "schemaVersion": 6, "agentId": "agent-issue144",
+  "schemaVersion": 7, "agentId": "agent-issue144",
   "context": {"keepRecentTokens": 0, "reserveTokens": 0},
   "model": {"model": "local/model-a"},
   "defaultTools": ["read", "subagent"],
@@ -1400,7 +1400,7 @@ async fn a_frozen_child_model_never_observes_a_later_models_jsonc_edit() {
     let mutated = ModelCatalog::from_jsonc_slice(MODELS_MUTATED.as_bytes()).expect("M2 parses");
     let mutated_registry = ModelBindingRegistry::new(
         mutated
-            .resolve(dependencies().credentials.as_ref())
+            .resolve(dependencies().credentials.as_deref().unwrap())
             .expect("M2 resolves"),
     )
     .expect("M2 binds");
@@ -1421,9 +1421,11 @@ async fn a_frozen_child_model_never_observes_a_later_models_jsonc_edit() {
 
     // The child composes its model authority from the frozen specification
     // — exactly what `compose_subagent_child` does — and observes M1.
-    let child =
-        SessionModelState::frozen(&over_the_wire.model, dependencies().credentials.as_ref())
-            .expect("the child materializes the frozen authority");
+    let child = SessionModelState::frozen(
+        &over_the_wire.model,
+        dependencies().credentials.as_deref().unwrap(),
+    )
+    .expect("the child materializes the frozen authority");
     let attempt = child.snapshot();
     assert_eq!(
         attempt.primary().protocol(),
@@ -1456,7 +1458,11 @@ async fn a_frozen_child_model_never_observes_a_later_models_jsonc_edit() {
     )
     .expect("the parent froze model-b under M1");
     assert!(
-        SessionModelState::frozen(&pinned_frozen, dependencies().credentials.as_ref()).is_ok(),
+        SessionModelState::frozen(
+            &pinned_frozen,
+            dependencies().credentials.as_deref().unwrap()
+        )
+        .is_ok(),
         "a child frozen on a model M2 removed still starts"
     );
 }
@@ -1473,7 +1479,7 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
     let lab = Lab::new();
     // The generation admits `grep` with a non-default policy on every axis.
     let document = serde_json::json!({
-        "schemaVersion": 6,
+        "schemaVersion": 7,
         "agentId": "agent-issue144",
         "model": {"model": "local/model-a"},
         "context": {"reserveTokens": 0, "keepRecentTokens": 0},
@@ -1550,7 +1556,7 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
 async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
     let lab = Lab::new();
     let document = serde_json::json!({
-        "schemaVersion": 6,
+        "schemaVersion": 7,
         "agentId": "agent-issue144",
         "model": {"model": "local/model-a"},
         "context": {"reserveTokens": 0, "keepRecentTokens": 0},

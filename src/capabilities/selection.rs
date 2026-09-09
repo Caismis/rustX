@@ -74,11 +74,25 @@ pub(crate) fn resolve_selector<'a>(
 ) -> Result<&'a ToolDefinition, ToolSelectionError> {
     if let ToolSelector::Mcp { server_id, .. } = selector {
         let source = CapabilitySourceId::Mcp(server_id.clone());
-        if let Some(CapabilitySourceState::Unavailable { reason }) = availability.get(&source) {
+        let reason = match availability.get(&source) {
+            Some(CapabilitySourceState::Unavailable { reason }) => Some(reason.clone()),
+            Some(CapabilitySourceState::Inactive { activation }) => Some(
+                activation
+                    .admit()
+                    .err()
+                    .unwrap_or("source is not prepared")
+                    .to_owned(),
+            ),
+            Some(CapabilitySourceState::Unprepared) => {
+                Some("source is enabled but not prepared".to_owned())
+            }
+            _ => None,
+        };
+        if let Some(reason) = reason {
             return Err(ToolSelectionError::SourceUnavailable {
                 selector: selector.canonical(),
                 source: source.to_string(),
-                reason: reason.clone(),
+                reason,
             });
         }
     }

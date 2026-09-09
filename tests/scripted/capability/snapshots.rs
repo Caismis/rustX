@@ -138,6 +138,7 @@ fn conversation_with_options(
     .expect("native tools");
     let coordinator = CapabilityCoordinator::with_backend(
         CapabilityCoordinatorConfig {
+            python_sources: std::collections::BTreeMap::new(),
             conversation_id: conversation_id.clone(),
             workspace: workspace.clone(),
             base_tool_registry: Arc::new(base_tool_registry),
@@ -487,6 +488,7 @@ async fn absolute_store_path_does_not_change_the_digest() {
         let backend = common::FakeSkillEnvironmentBackend::new();
         let coordinator = CapabilityCoordinator::with_backend(
             CapabilityCoordinatorConfig {
+                python_sources: std::collections::BTreeMap::new(),
                 conversation_id: conversation_id.clone(),
                 workspace: workspace.clone(),
                 base_tool_registry: Arc::new(ToolRegistry::new()),
@@ -947,6 +949,7 @@ fn environment_store_inside_workspace_is_rejected_before_creation() {
     let store = workspace.root().join("private-env");
     let Err(error) = CapabilityCoordinator::with_backend(
         CapabilityCoordinatorConfig {
+            python_sources: std::collections::BTreeMap::new(),
             conversation_id: ConversationId::new("conv-isolation"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
@@ -976,6 +979,7 @@ fn workspace_inside_environment_store_is_rejected() {
     let workspace = Workspace::new(&workspace_root).expect("workspace");
     let Err(error) = CapabilityCoordinator::with_backend(
         CapabilityCoordinatorConfig {
+            python_sources: std::collections::BTreeMap::new(),
             conversation_id: ConversationId::new("conv-isolation"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
@@ -1004,6 +1008,7 @@ fn external_environment_store_is_accepted() {
     let store = dir.path().join("external").join("private-env");
     let coordinator = CapabilityCoordinator::with_backend(
         CapabilityCoordinatorConfig {
+            python_sources: std::collections::BTreeMap::new(),
             conversation_id: ConversationId::new("conv-isolation"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
@@ -1040,6 +1045,7 @@ fn symlink_prefix_environment_store_is_rejected_before_creation() {
     let configured = outside.join("link/private-env");
     let Err(error) = CapabilityCoordinator::with_backend(
         CapabilityCoordinatorConfig {
+            python_sources: std::collections::BTreeMap::new(),
             conversation_id: ConversationId::new("conv-isolation"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
@@ -1656,6 +1662,7 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
     let tools = Arc::new(tools);
     let coordinator = CapabilityCoordinator::with_backend(
         CapabilityCoordinatorConfig {
+            python_sources: std::collections::BTreeMap::new(),
             conversation_id: ConversationId::new("conv-m6"),
             workspace: conversation.workspace.clone(),
             base_tool_registry: tools.clone(),

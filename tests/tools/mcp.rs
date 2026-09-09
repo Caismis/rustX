@@ -43,6 +43,8 @@ mod unix_tests {
         let invalidation = Arc::new(rustx::tools::mcp::McpInvalidationState::new());
         let server_id = rustx::runtime::identity::McpServerId::new("fixture");
         let binding = rustx::tools::mcp::McpServerBinding {
+            credentials: rustx::credentials::SourceCredentials::default(),
+            activation: rustx::capabilities::activation::SourceActivation::Enabled,
             resource_workspace: None,
             transport: rustx::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
@@ -271,6 +273,8 @@ mod unix_tests {
                 );
             }
             let binding = rustx::tools::mcp::McpServerBinding {
+                credentials: rustx::credentials::SourceCredentials::default(),
+                activation: rustx::capabilities::activation::SourceActivation::Enabled,
                 resource_workspace: None,
                 transport: rustx::tools::mcp::McpTransportConfig::Stdio {
                     program: std::env::current_exe()
@@ -425,6 +429,8 @@ mod unix_tests {
         let workspace = rustx::tools::Workspace::new(directory.path()).expect("workspace");
         let server_id = rustx::runtime::identity::McpServerId::new("mcp-background");
         let binding = rustx::tools::mcp::McpServerBinding {
+            credentials: rustx::credentials::SourceCredentials::default(),
+            activation: rustx::capabilities::activation::SourceActivation::Enabled,
             resource_workspace: None,
             transport: rustx::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
@@ -583,6 +589,8 @@ mod unix_tests {
         let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
         let server_id = rustx::runtime::identity::McpServerId::new("http-fixture");
         let binding = rustx::tools::mcp::McpServerBinding {
+            credentials: rustx::credentials::SourceCredentials::default(),
+            activation: rustx::capabilities::activation::SourceActivation::Enabled,
             resource_workspace: None,
             transport: rustx::tools::mcp::McpTransportConfig::StreamableHttp {
                 endpoint: format!("http://{address}/mcp"),
@@ -750,6 +758,8 @@ mod unix_tests {
         let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
         let server_id = rustx::runtime::identity::McpServerId::new("paged-fixture");
         let binding = rustx::tools::mcp::McpServerBinding {
+            credentials: rustx::credentials::SourceCredentials::default(),
+            activation: rustx::capabilities::activation::SourceActivation::Enabled,
             resource_workspace: None,
             transport: rustx::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
@@ -969,6 +979,8 @@ mod unix_tests {
         let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
         let server_id = rustx::runtime::identity::McpServerId::new("dangling-fixture");
         let binding = rustx::tools::mcp::McpServerBinding {
+            credentials: rustx::credentials::SourceCredentials::default(),
+            activation: rustx::capabilities::activation::SourceActivation::Enabled,
             resource_workspace: None,
             transport: rustx::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()

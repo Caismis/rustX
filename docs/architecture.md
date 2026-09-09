@@ -4274,7 +4274,8 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
-The current Runtime Client protocol is version 22. Version 22 adds the
+The current Runtime Client protocol is version 23, adding distinct source
+activation/unprepared projections. Version 22 added the
 [native Workflow projection and cursor handoff](workflow-run-projection.md).
 Version 21 adds Review and
 Questionnaire invocation correlation. Version 20 adds borrowed
@@ -5932,10 +5933,11 @@ re-derive any of it. Three representations carry that weight:
   child's provider binding, protocol, limits, or reasoning semantics, or make
   a model the parent authorized fail to resolve at all. The child's work is
   purely physical: it builds the adapter through the runtime's one
-  adapter-construction site and resolves the declared credential source
-  against its own process `CredentialEnvironment` — rustX's existing
-  credential boundary, not a second credential system. A resolved credential
-  value and an `Arc<dyn ModelAdapter>` never cross the wire. Consequently a
+  adapter-construction site using the admitted credential transferred by the
+  parent process owner through a private child environment entry. The control
+  channel carries only its rewritten reference, never resolved bytes; it does
+  not rebind the frozen endpoint to a changing host variable. An
+  `Arc<dyn ModelAdapter>` never crosses the wire. Consequently a
   child owns **no** mutable model authority: `SessionModelState::registry()`
   is `None`, `catalog_view()` publishes exactly the frozen model, and a live
   model replacement is refused with `ImmutableModelAuthority`. That is also
@@ -7034,7 +7036,7 @@ Representative current runtime/project configuration:
 
 ```jsonc
 {
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "agentId": "agent-default",
   "model": {
     "model": "gateway/reasoner",
@@ -8493,3 +8495,12 @@ explicit A-derived inputs remain stale. Plan and context facts preserve candidat
 applicability in the Review specification/digest/audit, and all dependencies share
 the native freeze. Native ask_user is workspace-independent under WorkspaceUse:
 it never holds a CandidateScope borrow while waiting.
+## External source activation and credential authority (CFG-02)
+
+External sources follow inert discovery -> host trust/activation -> frozen
+credential resolution -> existing preparation/connection -> availability ->
+domain admission -> exposure. A Tool selector never grants source activation.
+The coordinator admits preparation; the shared MCP connection owner enforces
+frozen admission on startup/child/reconnect paths. Generation retirement closes
+future reconnect admission but preserves admitted leases and terminal ownership.
+See [the complete source contract](source-activation.md).

@@ -167,3 +167,6 @@ workflow.
 ## License
 
 MIT
+External sources are opt-in: see [source activation and credentials](docs/source-activation.md).
+Native-only startup needs no Python, `uv`, MCP executable/endpoint or external
+source secret. `--no-tools` controls model exposure; source disabling controls preparation.

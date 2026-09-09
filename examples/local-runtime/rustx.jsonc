@@ -4,7 +4,7 @@
 // `models.jsonc` is the provider/model catalog; this file selects the model
 // and defines the current runtime's policies and admitted resources.
 {
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "agentId": "default-agent",
 
   // The default model/session policy. The model catalog supplies the provider
@@ -53,18 +53,23 @@
   // stay inside the named server map:
   "mcpServers": {
     // "http-server": {
+    //   "enabled": true,
     //   "type": "http",
     //   "url": "https://example.invalid/mcp",
-    //   "headers": {"Authorization": "Bearer YOUR_TOKEN"},
+    //   "headers": {"Accept-Language": "en"},
     // },
     // "stdio-server": {
+    //   "enabled": true,
     //   "type": "stdio",
     //   "command": "npx",
     //   "args": ["-y", "some-mcp-server"],
-    //   "env": {"SERVICE_TOKEN": "YOUR_TOKEN"},
+    //   "env": {"LOG_LEVEL": "warn"},
     //   "cwd": "workspace/subdirectory",
     // },
   },
+
+  // No Python, uv or package installation is needed for this disabled demo.
+  "pythonSources": {"python:echo": "disabled"},
 
   // MCP invocation policy is host-owned: configure mcpToolPolicies in user
   // settings, never here. Project trust does not grant Tool approval.

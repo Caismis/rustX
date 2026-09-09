@@ -68,10 +68,10 @@ fn paths(root: &std::path::Path, config: &std::path::Path) -> LaunchFixture {
 
 fn dependencies() -> LocalRuntimeDependencies {
     LocalRuntimeDependencies {
-        credentials: Arc::new(MapCredentialEnvironment::new([(
+        credentials: Some(Arc::new(MapCredentialEnvironment::new([(
             "RUSTX_ISSUE96_KEY".to_owned(),
             "test-only-secret".to_owned(),
-        )])),
+        )]))),
         ..LocalRuntimeDependencies::default()
     }
 }
@@ -88,7 +88,8 @@ fn config_json(
     let mcp_servers = if include_old_mcp {
         serde_json::json!({
             "old": {
-                "type": "stdio",
+                "enabled": true,
+                    "type": "stdio",
                 "command": "missing-rustx-issue96-mcp"
             }
         })
@@ -96,7 +97,7 @@ fn config_json(
         serde_json::json!({})
     };
     serde_json::json!({
-        "schemaVersion": 6,
+        "schemaVersion": 7,
         "agentId": "agent-issue96",
         "model": {"model": model},
         "agentStatus": {
@@ -463,7 +464,7 @@ async fn commented_configuration_documents_compose_a_runtime() {
     std::fs::write(
         &config_path,
         r#"{
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "agentId": "agent-issue96",
   // The default model of a brand-new Session.
   "model": {"model": "local/model-a"},
@@ -506,7 +507,7 @@ async fn relaxations_beyond_jsonc_still_fail_composition() {
     std::fs::write(
         &config_path,
         r#"{
-  schemaVersion: 6,
+  schemaVersion: 7,
   'agentId': 'agent-issue96',
   "model": {"model": "local/model-a"},
   "context": {"reserveTokens": 11, "keepRecentTokens": 4096}

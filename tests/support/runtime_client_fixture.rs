@@ -282,6 +282,11 @@ impl RuntimeClientFixtureBuilder {
 
         let coordinator = rustx::capabilities::CapabilityCoordinator::with_backend(
             rustx::capabilities::CapabilityCoordinatorConfig {
+                python_sources: [(
+                    rustx::tools::python::python_server_id("py-echo"),
+                    rustx::capabilities::activation::SourceActivation::Enabled,
+                )]
+                .into(),
                 conversation_id: tool_runtime.conversation_id().clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: Arc::new(base_tools),

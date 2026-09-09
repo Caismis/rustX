@@ -46,6 +46,13 @@ impl core::fmt::Display for CapabilitySourceId {
 /// The availability of one optional capability source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CapabilitySourceState {
+    /// Inert source discovered without effective activation authority.
+    Inactive {
+        /// Explicit disable, absent grant, or host trust rejection.
+        activation: super::activation::SourceActivation,
+    },
+    /// Admitted source whose preparation has not completed.
+    Unprepared,
     /// The source initialized; its capabilities are part of the committed
     /// executable set.
     Ready,

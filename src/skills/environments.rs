@@ -1345,6 +1345,7 @@ mod tests {
         let backend = Arc::new(RunnerBackedSkillEnvironmentBackend::new(runner));
         let coordinator = crate::capabilities::CapabilityCoordinator::with_backend(
             crate::capabilities::CapabilityCoordinatorConfig {
+                python_sources: std::collections::BTreeMap::new(),
                 conversation_id,
                 workspace: workspace.clone(),
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),

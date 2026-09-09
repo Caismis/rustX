@@ -2,6 +2,7 @@
 #![allow(clippy::needless_pass_by_value, clippy::too_many_lines)] // linear fixture scenarios
 use super::launch::*;
 use super::{LocalRuntimeDependencies, LocalSessionProduct};
+use crate::capabilities::{CapabilitySourceId, CapabilitySourceState};
 use serde_json::json;
 use std::path::Path;
 
@@ -60,6 +61,240 @@ impl Fixture {
     fn resolve(&self) -> ResolvedLaunch {
         resolve(&self.request, &self.host).unwrap()
     }
+}
+
+#[test]
+fn cfg233_whole_source_replacement_never_rebinds_host_credentials() {
+    let mut f = Fixture::new();
+    f.host.credentials = crate::credentials::CredentialSnapshot::new([(
+        "HOST_SECRET".into(),
+        "CFG233_HOST_SECRET_SENTINEL".into(),
+    )]);
+    for (host, project) in [
+        (
+            json!({"enabled":true,"url":"https://host.invalid/mcp","sensitiveHeaders":{"Authorization":"$HOST_SECRET"}}),
+            json!({"enabled":true,"url":"https://project.invalid/mcp"}),
+        ),
+        (
+            json!({"enabled":true,"command":"host-server","sensitiveEnv":{"TOKEN":"$HOST_SECRET"}}),
+            json!({"enabled":true,"command":"project-server"}),
+        ),
+    ] {
+        f.user(json!({"model":{"model":"host/one"},"mcpServers":{"service":host}}));
+        f.project(json!({"mcpServers":{"service":project}}));
+        let launch = f.resolve();
+        let bindings = super::composition::mcp_bindings_with_authority(
+            launch.config(),
+            &launch.workspace,
+            launch.provenance(),
+            &launch.credentials,
+        )
+        .unwrap();
+        let binding = &bindings[&crate::runtime::identity::McpServerId::new("service")];
+        assert!(binding.credentials.environment.is_empty());
+        assert!(binding.credentials.headers.is_empty());
+        assert!(!format!("{launch:?}").contains("CFG233_HOST_SECRET_SENTINEL"));
+        for key in ["sensitiveEnv", "sensitiveHeaders"] {
+            let mut forbidden = project.clone();
+            forbidden[key] = json!({"TOKEN":"$HOST_SECRET"});
+            f.project(json!({"mcpServers":{"service":forbidden}}));
+            assert!(
+                resolve(&f.request, &f.host)
+                    .unwrap_err()
+                    .contains("host-owned")
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn cfg233_provider_binding_uses_launch_snapshot_and_ignores_unused_missing_keys() {
+    let mut f = Fixture::new();
+    let path = f.host.config_directory.join("models.jsonc");
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    document["providers"]["host"]["apiKey"] = json!("$CAPTURED_KEY");
+    document["providers"]["unused"] = document["providers"]["host"].clone();
+    document["providers"]["unused"]["apiKey"] = json!("$UNSET_UNUSED_KEY");
+    std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+    f.host.credentials = crate::credentials::CredentialSnapshot::new([(
+        "CAPTURED_KEY".into(),
+        "CFG233_PROVIDER_SENTINEL".into(),
+    )]);
+    let launch = f.resolve();
+    f.host.credentials = crate::credentials::CredentialSnapshot::default();
+    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+        .await
+        .unwrap();
+    assert!(!format!("{launch:?}").contains("CFG233_PROVIDER_SENTINEL"));
+    product.runtime().shutdown().await.unwrap();
+    assert!(
+        LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("CAPTURED_KEY")
+    );
+}
+
+#[tokio::test]
+async fn cfg233_enabled_missing_credentials_and_connection_failures_are_source_local() {
+    let f = Fixture::new();
+    f.user(json!({"model":{"model":"host/one"},"mcpServers":{
+        "credential":{"enabled":true,"command":"/does/not/exist","sensitiveEnv":{"TOKEN":"$REQUIRED_KEY"}},
+        "connection":{"enabled":true,"command":"/does/not/exist"},
+        "disabled":{"enabled":false,"command":"/does/not/exist","sensitiveEnv":{"TOKEN":"$IGNORED_KEY"}}
+    }}));
+    let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+        .await
+        .unwrap();
+    let sources = product.runtime().capability().availability();
+    let source = |id| CapabilitySourceId::Mcp(crate::runtime::identity::McpServerId::new(id));
+    let CapabilitySourceState::Unavailable { reason } = &sources[&source("credential")] else {
+        panic!("source failure")
+    };
+    assert!(reason.contains("credential") && reason.contains("env:REQUIRED_KEY"));
+    assert!(matches!(
+        sources[&source("connection")],
+        CapabilitySourceState::Unavailable { .. }
+    ));
+    assert!(matches!(
+        sources[&source("disabled")],
+        CapabilitySourceState::Inactive { .. }
+    ));
+    assert!(!format!("{sources:?}").contains("IGNORED_KEY"));
+    product.runtime().shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn cfg233_native_composition_keeps_disabled_and_discovered_resources_inert() {
+    let mut f = Fixture::new();
+    f.request.no_tools = true;
+    let package = f.host.launch_directory.join(".agents/tools/discovered");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        package.join("server.py"),
+        "raise Exception('must not import')",
+    )
+    .unwrap();
+    // No requirements file: inert discovery cannot require package validity.
+    f.user(json!({"model":{"model":"host/one"},"mcpServers":{
+        "missing":{"enabled":false,"command":"/nonexistent/cfg233","sensitiveEnv":{"TOKEN":"$UNSET"}},
+        "offline":{"enabled":false,"url":"http://127.0.0.1:1/mcp","sensitiveHeaders":{"Authorization":"$UNSET"}}
+    }}));
+    let launch = f.resolve();
+    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+        .await
+        .unwrap();
+    assert!(
+        !launch
+            .environment_store_root()
+            .read_dir()
+            .unwrap()
+            .any(|entry| entry.unwrap().path().join("python-tools").exists())
+    );
+    assert_eq!(std::fs::read_dir(&package).unwrap().count(), 1);
+    product.runtime().shutdown().await.unwrap();
+    f.trust(TrustAction::Revoke);
+    assert!(
+        resolve(&f.request, &f.host)
+            .unwrap_err()
+            .contains("not trusted")
+    );
+    assert_eq!(std::fs::read_dir(&package).unwrap().count(), 1);
+}
+
+#[tokio::test]
+async fn cfg233_shared_connect_gate_rejects_all_inert_states_without_spawn_or_network() {
+    use crate::capabilities::activation::SourceActivation;
+    use crate::tools::mcp::{McpInvalidationState, McpServerRuntime};
+    let f = Fixture::new();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let marker = f.root.path().join("spawn-marker");
+    f.user(json!({"model":{"model":"host/one"},"mcpServers":{
+        "stdio":{"command":"/bin/sh","args":["-c",format!("touch {}", marker.display())],"sensitiveEnv":{"TOKEN":"$UNSET"}},
+        "http":{"url":format!("http://{}/mcp", listener.local_addr().unwrap()),"sensitiveHeaders":{"Authorization":"$UNSET"}}
+    }}));
+    let launch = f.resolve();
+    let workspace = crate::tools::Workspace::new(&launch.workspace).unwrap();
+    for decision in [
+        SourceActivation::Disabled,
+        SourceActivation::Untrusted,
+        SourceActivation::Unconfigured,
+    ] {
+        for (id, mut binding) in launch.config.mcp_bindings().unwrap() {
+            binding.activation = decision;
+            let error = McpServerRuntime::connect(
+                &id,
+                &binding,
+                &workspace,
+                std::sync::Arc::new(McpInvalidationState::default()),
+            )
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains(decision.admit().unwrap_err()));
+            assert!(
+                !error.to_string().contains("UNSET"),
+                "activation precedes credential resolution"
+            );
+        }
+    }
+    assert!(!marker.exists());
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+#[tokio::test]
+async fn cfg233_http_credential_failure_redacts_peer_echo_and_configuration() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    const SENTINEL: &str = "CFG233_HTTP_SECRET_BEARER_62df";
+    let mut f = Fixture::new();
+    f.host.credentials =
+        crate::credentials::CredentialSnapshot::new([("AUTH".into(), SENTINEL.into())]);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = listener.local_addr().unwrap();
+    let peer = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut byte = [0];
+        while !request.ends_with(b"\r\n\r\n") {
+            socket.read_exact(&mut byte).await.unwrap();
+            request.push(byte[0]);
+        }
+        assert!(String::from_utf8(request).unwrap().contains(SENTINEL));
+        let body = format!("credential rejected: {SENTINEL}");
+        socket.write_all(format!("HTTP/1.1 401 Unauthorized\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+    });
+    f.user(json!({"model":{"model":"host/one"},"mcpServers":{"authenticated":{"enabled":true,"url":format!("http://{endpoint}/mcp"),"sensitiveHeaders":{"Authorization":"$AUTH"}}}}));
+    let launch = f.resolve();
+    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+        .await
+        .unwrap();
+    peer.await.unwrap();
+    let sources = product.runtime().capability().availability();
+    assert!(matches!(
+        sources.values().next(),
+        Some(CapabilitySourceState::Unavailable { .. })
+    ));
+    assert!(!format!("{sources:?} {launch:?}").contains(SENTINEL));
+    assert!(
+        !serde_json::to_string(launch.config())
+            .unwrap()
+            .contains(SENTINEL)
+    );
+    let response = product.endpoint().handle_request(
+        crate::runtime_client::RuntimeClientRequest::Initialize {
+            id: crate::runtime_client::RequestId::new(1),
+            protocol_version: crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
+        },
+    );
+    let payload = serde_json::to_string(&response).unwrap();
+    assert!(payload.contains("authenticated") && payload.contains("unavailable"));
+    assert!(!payload.contains(SENTINEL));
+    product.runtime().shutdown().await.unwrap();
 }
 
 #[test]
@@ -861,12 +1096,13 @@ async fn frozen_mcp_binding_rechecks_project_authority_on_every_connect() {
     let f = Fixture::new();
     let program = f.host.launch_directory.join("server");
     std::fs::write(&program, "initial project resource").unwrap();
-    f.project(json!({"mcpServers":{"x":{"command":"./server"}}}));
+    f.project(json!({"mcpServers":{"x":{"enabled":true,"command":"./server"}}}));
     let launch = f.resolve();
     let bindings = super::composition::mcp_bindings_with_authority(
         launch.config(),
         &launch.workspace,
         launch.provenance(),
+        &launch.credentials,
     )
     .unwrap();
     let id = crate::runtime::identity::McpServerId::new("x");

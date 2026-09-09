@@ -507,6 +507,7 @@ impl std::error::Error for RollbackError {}
 ///
 /// Returns the typed [`SpawnError`] of the first failing stage, or
 /// [`SpawnError::Cancelled`] when the preparation cancellation won.
+#[allow(clippy::too_many_lines)] // staging and rollback stay together under one process owner
 pub(crate) async fn spawn_staged(
     plan: &SubagentSpawnPlan,
     spec: &SubagentChildSpec,
@@ -572,7 +573,23 @@ pub(crate) async fn spawn_staged(
         )
         .await);
     }
-    let spawned = match spawn_process(plan, runtime_root.path(), workspace.logical_workspace()) {
+    let mut wire_spec = spec.clone();
+    let mut credentials = Vec::new();
+    wire_spec
+        .resolved
+        .model
+        .export_process_credentials(&mut credentials);
+    for binding in wire_spec.resolved.materialization.mcp_servers.values_mut() {
+        binding
+            .credentials
+            .export_process_credentials(&mut credentials);
+    }
+    let spawned = match spawn_process(
+        plan,
+        runtime_root.path(),
+        workspace.logical_workspace(),
+        &credentials,
+    ) {
         Ok(spawned) => spawned,
         Err(error) => {
             return Err(discard_unstaged_resources(runtime_root, workspace, error).await);
@@ -590,7 +607,7 @@ pub(crate) async fn spawn_staged(
     // temporary configuration file is ever written.
     if let Err(error) = write_parent_frame(
         &mut staged.control,
-        &ParentFrame::Hello(Box::new(spec.clone())),
+        &ParentFrame::Hello(Box::new(wire_spec)),
     )
     .await
     {
@@ -665,6 +682,7 @@ fn spawn_process(
     plan: &SubagentSpawnPlan,
     runtime_root: &Path,
     project_workspace: &Path,
+    credentials: &[(String, String)],
 ) -> Result<SpawnedProcess, SpawnError> {
     // The control channel: one UnixStream pair. The child end becomes the
     // child's fd 0; both ends are CLOEXEC, so no other descendant of either
@@ -704,6 +722,7 @@ fn spawn_process(
             detail: format!("diagnostics log: {error}"),
         })?;
     let mut command = tokio::process::Command::new(&plan.program);
+    command.envs(credentials.iter().map(|(key, value)| (key, value)));
     command
         // The typed child spec is the project-workspace authority. This
         // matters for subprocesses that inherit cwd in addition to the

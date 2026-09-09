@@ -348,17 +348,16 @@ impl WorkflowRuntime {
                     instance: instance.clone(),
                 },
             );
-            let result = self
-                .execute_block_body(
-                    run,
-                    block,
-                    &instance,
-                    context,
-                    input,
-                    acceptance,
-                    cancellation,
-                )
-                .await;
+            let result = Box::pin(self.execute_block_body(
+                run,
+                block,
+                &instance,
+                context,
+                input,
+                acceptance,
+                cancellation,
+            ))
+            .await;
             self.read_model.update(&run.run_id, |view| {
                 if let Some(view) = view
                     .instances

@@ -288,7 +288,8 @@ pub enum RuntimeClientSessionRequest {
 /// outcomes and durable approval settlement, without fabricating user intent.
 /// Version 21 carries Review and required Questionnaire invocation correlation.
 /// Version 22 adds authoritative bounded Workflow snapshots and replacement events.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 22;
+/// Version 23 distinguishes inactive source decisions and enabled/unprepared sources.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 23;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1248,7 +1249,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 22);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 23);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

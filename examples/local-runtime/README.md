@@ -46,7 +46,7 @@ examples/local-runtime/
 | `rustx.jsonc` | Project configuration: default model selection, context, Agent Status modules/timezone, tool activation, project MCP sources, contained Skill roots, and tool environment. It cannot set Tool approval/invocation policies. |
 | `workspace/` | The authoritative execution cwd and conventional project/source tree, including Skills and editable custom Python tool packages. Relative native file-tool paths resolve here. This is not a general filesystem sandbox for Read/Write/Edit/Grep/Glob. |
 | `workspace/.agents/skills/*` | Canonical project Skills, automatically discovered through the Skill plane's own semantics; a directory does not register a Workflow or Subagent. |
-| `workspace/.agents/tools/*` | Automatically discovered managed Python tool packages (FastMCP servers); there is no separate registration entry in `rustx.jsonc`. |
+| `workspace/.agents/tools/*` | Inertly discovered managed Python packages. Explicit `pythonSources` enablement is required before preparing their ordinary MCP servers. |
 | `workspace/.agents/subagents/*` | Explicitly defined/admitted Subagent instruction and project-guidance sources. The config controls admission; filesystem presence alone does not expose a profile. |
 | `workspace/.agents/workflows/*` | Explicitly registered native Workflow YAML sources. The config controls both registration and model visibility; the directory is never scanned. |
 | User state `workspaces/<identity>/` | Runtime-owned generated artifacts, prepared Python environments and Session storage, disjoint from `workspace/`. |
@@ -330,14 +330,16 @@ require an external MCP process or endpoint at startup. `rustx.jsonc` carries
 one http and one stdio entry commented out next to it; uncommenting one is
 the whole edit.
 
-`mcpServers` is a named map keyed by MCP server identity — the same shape
-mainstream MCP clients use, so an entry can be copied straight from a
-server's own documentation. Three canonical entries:
+`mcpServers` is a named map keyed by MCP server identity. Every entry needs
+explicit `enabled: true` under host project trust. Credential-bearing entries
+belong entirely in user settings, and replace as whole entries. See
+[source activation](../../docs/source-activation.md). Three canonical entries:
 
 ```jsonc
 {
   "mcpServers": {
     "exa": {
+      "enabled": true,
       "type": "http",
       "url": "https://mcp.exa.ai/mcp"
     }
@@ -349,10 +351,11 @@ server's own documentation. Three canonical entries:
 {
   "mcpServers": {
     "exa": {
+      "enabled": true,
       "type": "http",
       "url": "https://mcp.exa.ai/mcp",
-      "headers": {
-        "x-api-key": "YOUR_EXA_API_KEY"
+      "sensitiveHeaders": {
+        "x-api-key": "$RUSTX_EXA_API_KEY"
       }
     }
   }
@@ -363,11 +366,12 @@ server's own documentation. Three canonical entries:
 {
   "mcpServers": {
     "exa": {
+      "enabled": true,
       "type": "stdio",
       "command": "npx",
       "args": ["-y", "exa-mcp-server"],
-      "env": {
-        "EXA_API_KEY": "YOUR_EXA_API_KEY"
+      "sensitiveEnv": {
+        "EXA_API_KEY": "$RUSTX_EXA_API_KEY"
       }
     }
   }
@@ -420,7 +424,9 @@ interpret, or configure MCP independently.
 
 ## Custom Python tool
 
-The `echo` tool is discovered automatically from its package folder:
+The `echo` package is discovered inertly from its folder. The example disables
+it; set `"pythonSources": {"python:echo": "enabled"}` to authorize preparation
+in a trusted project. `--no-tools` does not disable this preparation.
 
 ```text
 <workspace>/.agents/tools/echo/
@@ -539,7 +545,7 @@ Use `--tools parallel_review,implement_and_review` on the runtime/TUI launch
 above to select exactly the two foreground Workflow Tools. This does not grant
 leaf capabilities to the parent. Profiles and fixed Tool selectors have separate
 explicit allowlists. Managed Python/MCP tools are unnecessary for these workflows.
-The optional `echo` package illustrates the separate Python Tool Plane.
+The optional `echo` package is disabled by default and illustrates managed Python using the same MCP Tool Plane.
 
 | Tool / YAML under `.agents/workflows/` | Input | Profiles / fixed Tools | Git | Nodes |
 | --- | --- | --- | --- | --- |

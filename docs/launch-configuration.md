@@ -207,7 +207,7 @@ references fail clearly even if the catalog contains only one model.
 New domain defaults are `agentId: "rustx"` and context
 `reserveTokens: 1024`, `keepRecentTokens: 4096`, `summaryOutputCap: 1024`.
 These do not infer or change the selected model's context window. Existing
-domain defaults remain authoritative: schema 6, approval `policy`, model
+domain defaults remain authoritative: schema 7, approval `policy`, model
 summary policy `session`, model-declared reasoning/output defaults, no request
 parameter overrides, native policies from `NativeToolPoliciesDocument`, the
 native default tool list (`execution`, `ask_user`, `read`, `write`, `edit`,
@@ -257,3 +257,6 @@ established terminal-agent practice; see the
 [Claude Code scope documentation](https://code.claude.com/docs/en/settings) and
 [workspace trust documentation](https://code.claude.com/docs/en/errors).
 rustX deliberately has only the finite layers and fail-closed policy specified here.
+External-source activation is separate from launch trust and Tool exposure.
+The [source activation contract](source-activation.md) defines schema 7's
+`mcpServers.<name>.enabled`, `pythonSources`, and host-only sensitive references.

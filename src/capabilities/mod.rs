@@ -74,3 +74,4 @@ pub use tools::{AvailableTool, AvailableToolCatalog, ToolActivationPolicy};
 pub(crate) use coordinator::test_sync;
 
 pub(crate) use coordinator::RuntimeCapabilityPublication;
+pub mod activation;
