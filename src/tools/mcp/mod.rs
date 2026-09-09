@@ -45,6 +45,51 @@
 //! invalidation mechanism is installed per connection; when the server
 //! advertises `tools.listChanged`, exactly one revision-appropriate
 //! mechanism is installed.
+//!
+//! # Invalidation ownership
+//!
+//! The two mechanisms are revision-specific and mutually exclusive, and
+//! neither is capability authority. A received `tools/list_changed` — from
+//! either mechanism — does exactly one thing: it advances the shared
+//! invalidation epoch once, through the single
+//! [`McpInvalidationState`] boundary. What that epoch *means* is decided by
+//! the capability coordinator, which owns candidate preparation, epoch
+//! validation, and publication. A connection generation is a transport and
+//! session authority; it never publishes, retires, or edits capability
+//! knowledge.
+//!
+//! # There is exactly one semantic capability cache
+//!
+//! rustX's committed capability snapshot is the single semantic source of
+//! truth for MCP tool availability:
+//!
+//! ```text
+//! remote MCP peer -> fresh protocol response -> adapter translation
+//!   -> prepared capability candidate -> invalidation-epoch validation
+//!   -> capability commit -> canonical rustX tool snapshot
+//! ```
+//!
+//! The SDK is transport and protocol machinery in that chain, never a second
+//! capability store. rmcp 3.x can cache list results per peer when a server
+//! supplies `ttlMs`, and can serve an expired entry when a re-fetch fails;
+//! both would decide what a `tools/list` refresh returns. rustX therefore
+//! disables that cache outright on every connection generation, at the one
+//! construction seam every generation passes through
+//! ([`disable_sdk_response_cache`], called from [`start_client_service`]).
+//! There is deliberately no rustX option, feature flag, or compatibility
+//! mode that re-enables it.
+//!
+//! # Streamable HTTP ownership
+//!
+//! The Streamable HTTP protocol — session semantics (or their 2026-07-28
+//! absence), SEP-2243 `Mcp-Method` / `Mcp-Name` / `Mcp-Param-*` routing
+//! metadata, SSE framing, resumption — is rmcp's. rustX supplies its own
+//! [`StreamableHttpClient`](rmcp::transport::streamable_http_client::StreamableHttpClient)
+//! for exactly one reason: a cancelled tool call must be able to terminate,
+//! and prove the release of, its own in-flight HTTP request. That wrapper
+//! forwards rmcp's generated headers unchanged and synthesizes none of its
+//! own, and rustX introduces no session identity of its own — a modern peer
+//! that issues no MCP session id stays stateless.
 
 #[cfg(feature = "mcp-fixture")]
 #[doc(hidden)]
@@ -4518,6 +4563,20 @@ fn protocol_violation_call_diagnostic(server_id: &McpServerId, violation: &str) 
     ))
 }
 
+/// Establishes one MCP client service: the **single connection-construction
+/// seam** of the adapter.
+///
+/// Every rustX MCP connection generation is born here — the initial stdio
+/// connection, the initial Streamable HTTP connection, and every
+/// replacement generation a bounded reconnect establishes — because
+/// `connect_owned` is the only path that builds a transport and
+/// `McpConnection::acquire` reaches it again for a replacement. Anything
+/// that must hold for *every* generation therefore belongs here, and only
+/// here.
+///
+/// The one such policy is the SDK response cache: it is disabled on the
+/// running peer the instant the peer exists and before rustX issues any
+/// semantic request over it. See [`disable_sdk_response_cache`].
 async fn start_client_service<T, E, A>(
     handler: McpClientHandler,
     transport: T,
@@ -4526,7 +4585,7 @@ where
     T: rmcp::transport::IntoTransport<RoleClient, E, A>,
     E: std::error::Error + Send + Sync + 'static,
 {
-    handler
+    let service = handler
         .serve_with_lifecycle(
             transport,
             // `Auto` runs the real negotiation: it probes the inline
@@ -4556,7 +4615,52 @@ where
                 }
             ))),
             error => McpError::Discovery(bound_error(&error.to_string())),
-        })
+        })?;
+    disable_sdk_response_cache(service.peer()).await;
+    Ok(service)
+}
+
+/// Removes the SDK response cache from one freshly established peer.
+///
+/// # Why the SDK cache is not a rustX cache
+///
+/// rmcp 3.x caches `tools/list` (and the other list/read results) per peer
+/// whenever a server supplies a positive `ttlMs`, and by default also serves
+/// an *expired* entry when a re-fetch fails. Both behaviours are semantic:
+/// they decide what a `tools/list` refresh returns.
+///
+/// rustX already owns that decision. Its layering is
+///
+/// ```text
+/// remote MCP peer -> fresh protocol response -> adapter translation
+///   -> prepared capability candidate -> invalidation-epoch validation
+///   -> capability commit -> canonical rustX tool snapshot
+/// ```
+///
+/// and the committed snapshot is the *only* semantic cache of MCP tool
+/// availability. An SDK cache in that chain would be a second, unowned
+/// capability store: a positive `ttlMs` could hide a real catalog change
+/// from a refresh, and stale-on-error could turn a failed refresh into a
+/// fabricated success — exactly the fact the capability coordinator must
+/// see in order to keep the last-known-good generation honestly.
+///
+/// The cache is therefore disabled outright, not merely narrowed by turning
+/// stale-on-error off: rustX issues no MCP request whose semantics may come
+/// from an SDK cache.
+///
+/// # Why here
+///
+/// This runs on the peer of a *running* service, so the lifecycle handshake
+/// (`server/discover` or `initialize`) is already complete, and it runs
+/// before [`McpServerRuntime::connect_owned`] performs any semantic
+/// operation — capability validation, `subscriptions/listen`, `tools/list`,
+/// `tools/call`. The lifecycle handshake itself never consults the cache
+/// (rmcp reads it only from the list/read request methods), so no rustX
+/// request can observe SDK response-cache semantics at any point in a
+/// generation's life.
+async fn disable_sdk_response_cache(peer: &rmcp::service::Peer<RoleClient>) {
+    peer.set_response_cache_config(rmcp::ClientCacheConfig::disabled())
+        .await;
 }
 
 /// Settles a stdio process whose MCP connection failed before the capability
@@ -5649,6 +5753,71 @@ mod tests {
                 ToolResultContent::Image(_) => "image",
             })
             .collect()
+    }
+
+    /// Issue #240: `structuredContent` is arbitrary JSON at the adapter
+    /// boundary and stays arbitrary JSON in the canonical projection.
+    ///
+    /// The canonical representation is deliberately untyped
+    /// (`ToolResultContent::Json`): rustX projects the remote value
+    /// verbatim and derives nothing from the tool's `outputSchema`. A scalar
+    /// and an array are therefore ordinary values here, not shapes some
+    /// object-only narrowing has to be taught about.
+    #[test]
+    fn mcp_structured_content_is_not_narrowed_to_a_json_object() {
+        for value in [
+            serde_json::json!(42),
+            serde_json::json!([1, 2, 3]),
+            serde_json::json!("text"),
+            serde_json::json!(null),
+            serde_json::json!({"nested": true}),
+        ] {
+            let (_directory, runtime) = runtime("mcp-structured-shapes");
+            let progress = NoProgress;
+            let mut call = CallToolResult::success(Vec::new());
+            call.structured_content = Some(value.clone());
+            let result =
+                translate_result(call, &context(&runtime, None, &progress), Instant::now());
+
+            assert_eq!(
+                result.status,
+                ToolExecutionStatus::Success,
+                "structured content of shape {value} is accepted"
+            );
+            assert_eq!(content_kinds(&result.content), vec!["json"]);
+            assert!(
+                matches!(
+                    result.content.first(),
+                    Some(ToolResultContent::Json { value: projected }) if *projected == value
+                ),
+                "the remote value is projected verbatim: {:?}",
+                result.content
+            );
+        }
+    }
+
+    /// Issue #240: the MCP 2026 complete result framing — a `resultType` of
+    /// `complete` alongside both content and structured content — is
+    /// translated as one ordinary successful tool result.
+    #[test]
+    fn mcp_2026_complete_result_framing_carries_content_and_structured_content() {
+        let (_directory, runtime) = runtime("mcp-2026-complete-framing");
+        let progress = NoProgress;
+        let value = serde_json::json!([1, 2, 3]);
+        let call = CallToolResult::structured(value.clone());
+        assert_eq!(
+            call.result_type,
+            Some(rmcp::model::ResultType::COMPLETE),
+            "the fixture result carries the 2026 complete discriminator"
+        );
+        let result = translate_result(call, &context(&runtime, None, &progress), Instant::now());
+
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        assert_eq!(content_kinds(&result.content), vec!["text", "json"]);
+        assert!(matches!(
+            result.content.last(),
+            Some(ToolResultContent::Json { value: projected }) if *projected == value
+        ));
     }
 
     #[test]

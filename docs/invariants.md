@@ -3095,6 +3095,35 @@ A package rewrite is observed only at the next quiescent re-discovery.
   a subscription, or a published tool. There is no user-facing knob for
   selecting a revision: protocol compatibility is not session product
   configuration.
+- **rustX's committed capability snapshot is the only semantic cache of MCP
+  tool availability.** The layering is `remote peer -> fresh protocol
+  response -> adapter translation -> prepared candidate -> invalidation-epoch
+  validation -> capability commit -> canonical tool snapshot`. The MCP SDK is
+  transport and protocol machinery inside that chain, never a second
+  capability store: rmcp 3.x caches list results per peer whenever a server
+  supplies a positive SEP-2549 `ttlMs`, and by default serves an expired
+  entry when a re-fetch fails, and either behavior would decide what a
+  `tools/list` refresh returns. rustX therefore disables the SDK response
+  cache outright — not merely its stale-on-error mode — at the single
+  connection-construction seam every generation is born from
+  (`start_client_service`), on the running peer before any semantic request
+  crosses it. Every connection generation inherits the policy by
+  construction, replacement generations from bounded reconnection included;
+  there is no rustX configuration switch, feature flag, or compatibility mode
+  that re-enables it, and no `tools/list` call site clears or reconfigures a
+  cache of its own. A positive `ttlMs` therefore never suppresses the next
+  refresh's request, and a failed refresh is always observed as the failure
+  it is — which is precisely the fact the capability plane needs to retain
+  its last-known-good generation honestly.
+- **Streamable HTTP protocol semantics stay rmcp's.** rustX supplies its own
+  `StreamableHttpClient` for exactly one reason — a cancelled tool call must
+  terminate, and prove the release of, its own in-flight HTTP request — and
+  that wrapper is protocol-transparent: it forwards rmcp's generated
+  headers, the SEP-2243 `Mcp-Method` / `Mcp-Name` / `Mcp-Param-*` routing
+  metadata included, without adding, rewriting, or synthesizing any. rustX
+  introduces no session authority of its own, so a peer negotiating
+  2026-07-28 — where SEP-2567 removes sessions — stays stateless and usable
+  with no MCP session id on the wire in either direction.
 - **MCP protocol-corruption observability (stdio).** A stdio server's
   stdout is protocol-owned — it is the MCP wire and nothing else — and
   stderr is the diagnostics channel. The generic rmcp transport framing

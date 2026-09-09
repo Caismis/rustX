@@ -24,6 +24,19 @@
 //!              response                       request's lifecycle entry
 //! ```
 //!
+//! # What this layer is *not*
+//!
+//! It is not a second Streamable HTTP implementation and must never become
+//! one. Every protocol decision stays rmcp's: session semantics (and their
+//! deliberate absence from 2026-07-28 under SEP-2567), SSE framing and
+//! resumption, and the SEP-2243 routing metadata — `Mcp-Method`,
+//! `Mcp-Name`, `Mcp-Param-*`, `Mcp-Protocol-Version` — that rmcp generates
+//! per request and hands down as `custom_headers`. This client forwards
+//! those headers verbatim to the inner reqwest client and synthesizes none
+//! of its own; it introduces no session identity, no cache, and no
+//! retry/reinit policy. The only thing it adds to an exchange is the
+//! ownership registration of a request-carrying POST.
+//!
 //! # The request lifecycle
 //!
 //! [`McpHttpRequestOwnership`] is the per-connection-generation registry of
