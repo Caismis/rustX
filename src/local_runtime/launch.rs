@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::io::Read;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -272,10 +273,7 @@ pub fn resolve_locations(
         Some(path) => canonical_directory(&absolute(&launch, path))?,
         None => discover_workspace(&launch)?,
     };
-    let identity = format!(
-        "{:x}",
-        Sha256::digest(workspace.as_os_str().as_encoded_bytes())
-    );
+    let identity = workspace_identity(&workspace);
     let runtime_root = absolute(
         &launch,
         &request
@@ -612,6 +610,16 @@ fn absolute(base: &Path, path: &Path) -> PathBuf {
     } else {
         base.join(path)
     }
+}
+
+/// Persistent Linux/macOS identity: full lowercase SHA-256 of Unix-native
+/// path bytes. The caller supplies the canonical workspace, without further
+/// case/Unicode normalization. Never use Rust's unspecified `OsStr` encoding.
+pub(super) fn workspace_identity(canonical_workspace: &Path) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(canonical_workspace.as_os_str().as_bytes())
+    )
 }
 
 fn canonical_directory(path: &Path) -> Result<PathBuf, String> {

@@ -5802,6 +5802,15 @@ host trust, defaults and path provenance. See [launch configuration](launch-conf
 Profiles, includes and generated initialization are not part of this contract.
 Unknown fields are rejected everywhere rather than silently changing semantics.
 
+Persistent workspace identity on Linux/macOS is the full lowercase hexadecimal
+SHA-256 of the canonical workspace path's Unix-native bytes
+(`std::os::unix::ffi::OsStrExt::as_bytes()`). Resolution canonicalizes before
+hashing: symlink aliases converge, while separate Git worktrees remain separate.
+No lossy UTF-8 conversion, case folding, Unicode normalization or Rust-internal
+path encoding participates. Moving a workspace changes identity; no automatic
+old-state migration or intermediate-format fallback exists. This byte contract
+does not define identity semantics for unsupported platforms.
+
 Project trust and Tool approval are independent: `approvalMode`, `nativeTools`
 and `mcpToolPolicies` are host-only objects, rejected at the project layer before
 merge. Projects cannot configure execution/concurrency within these objects

@@ -44,9 +44,12 @@ workspace to give different subdirectory launches in a non-Git tree one identity
 
 Workspace canonicalization follows symlinks and requires an existing directory.
 Aliases of the same canonical directory have the same identity. Identity is the
-full lowercase SHA-256 of the canonical path's native OS bytes, with no lossy
-UTF-8 conversion, case folding, Unicode normalization or unstable language hash.
-On supported Unix platforms these are filesystem path bytes. Separate Git
+full lowercase SHA-256 of the canonical path's Unix-native bytes, explicitly
+obtained with `std::os::unix::ffi::OsStrExt::as_bytes()` on Linux/macOS. This is
+the persistent hash-input contract, not `OsStr::as_encoded_bytes()` or a
+Rust-internal encoding. There is no lossy UTF-8 conversion, case folding,
+Unicode normalization, salt, truncation or language/runtime hash. No identity
+encoding is defined for unsupported platforms. Separate Git
 worktrees have separate canonical paths and state, regardless of shared Git
 administrative directories. Moving a workspace changes its identity; rustX does
 not migrate, remove, or adopt old state automatically.

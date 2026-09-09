@@ -2718,6 +2718,14 @@ the launch-boundary policy inheritance.
   The runtime root is disjoint from the workspace and
   remains runtime-owned/generated state and is not a Workflow, Subagent, or
   general project-resource fallback.
+- **Persistent workspace identity has an explicit Unix byte contract.** On
+  Linux/macOS, hash the canonical workspace path's Unix-native bytes
+  (`OsStrExt::as_bytes()`) with SHA-256 and encode the full digest as lowercase
+  hexadecimal. Never use unspecified `OsStr::as_encoded_bytes()`, lossy UTF-8,
+  case folding, Unicode normalization or a language/runtime hash. Symlink
+  aliases converge through canonicalization; different Git worktrees remain
+  separate. Moving a workspace changes identity, without automatic old-state
+  migration or legacy lookup. Unsupported platforms have no implied encoding.
 - **Project trust never grants Tool approval authority.** Project settings
   reject `approvalMode`, `nativeTools`, and `mcpToolPolicies` before merging,
   including empty objects and execution/concurrency-only policies. These are

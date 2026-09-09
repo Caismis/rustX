@@ -495,6 +495,49 @@ fn dangling_optional_files_and_project_redirected_trust_are_errors() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn workspace_identity_has_exact_unix_byte_sha256_format() {
+    use std::os::unix::ffi::OsStrExt;
+    // Fixed canonical-path byte inputs at the pure hashing boundary. Golden
+    // digests were independently calculated with sha256sum, not the helper.
+    // Non-UTF-8 vectors also run on macOS without requiring its filesystem to
+    // create filenames that it may reject.
+    let vectors: &[(&[u8], &str)] = &[
+        (
+            b"/",
+            "8a5edab282632443219e051e4ade2d1d5bbc671c781051bf1437897cbdfea0f1",
+        ),
+        (
+            b"/rustx/workspace",
+            "abe7db53f659b7fae2dfcc44469d33ab6b996505a4a32f09adbaef6d3525c1bd",
+        ),
+        (
+            b"/rustx/project-\xff",
+            "9617e4cce0d8db9dfec2c04014c1fc341a8479ed6812ecc04bc1cc749411cee8",
+        ),
+        (
+            b"/rustx/project-\xfe",
+            "59894cb99c81922900c2c3c7d55ee8fbb0c8e4ddff59a475915a1c597e4a8284",
+        ),
+    ];
+    for (bytes, expected) in vectors {
+        let path = Path::new(std::ffi::OsStr::from_bytes(bytes));
+        assert_eq!(workspace_identity(path), *expected);
+    }
+    // Exercise the real resolution/canonicalization boundary too. Unix root
+    // has known canonical bytes on both supported platforms; no tempdir,
+    // configuration, trust, or state writes participate in this assertion.
+    let host = HostEnvironment::from_paths("/".into(), "/unused-host".into(), None, None).unwrap();
+    let request = LaunchRequest {
+        workspace: Some("/".into()),
+        ..Default::default()
+    };
+    let (locations, identity) = resolve_locations(&request, &host).unwrap();
+    assert_eq!(locations.workspace, Path::new("/"));
+    assert_eq!(identity, vectors[0].1);
+}
+
 // Linux filesystems accept arbitrary non-NUL bytes. macOS filesystem APIs may
 // reject invalid UTF-8; its canonical alias/worktree contract is tested above.
 #[cfg(target_os = "linux")]
