@@ -376,7 +376,7 @@ pub(crate) const MAX_CONTEXT_PACKAGE_BYTES: usize = 64 * 1024;
 /// Principle: the parent receives the child's complete final assistant
 /// report and nothing else. It is owned by the runtime, composed exactly
 /// once at the child instruction boundary, and never repeated in a
-/// user-authored `instructionsFile`, never owned by a provider adapter, and
+/// user-authored role Markdown body, never owned by a provider adapter, and
 /// never rewritten per definition.
 pub(crate) const SUBAGENT_FINAL_REPORT_INSTRUCTION: &str = "Your final response is the complete handoff to the parent agent. Include all findings, \
      conclusions, changes, validation results, and caveats the parent needs to continue the \

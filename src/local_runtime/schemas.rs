@@ -47,6 +47,11 @@ pub fn generate() -> BTreeMap<&'static str, Value> {
     }
     let mut schemas = BTreeMap::from([
         (
+            "subagent.schema.json",
+            serde_json::to_value(schemars::schema_for!(super::config::SubagentDocument))
+                .expect("schema serializes"),
+        ),
+        (
             "models.schema.json",
             serde_json::to_value(schemars::schema_for!(
                 crate::model::catalog::ModelCatalogDocument

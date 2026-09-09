@@ -77,10 +77,10 @@ const SESSION_JSON: &str = r#"{
   "modelTimeoutPolicy": {"responseStartTimeoutMs": 300, "streamIdleTimeoutMs": 300},
   "subagents": {
     "maxConcurrent": 4,
-    "definitions": {
+    "roles": {
       "conformance": {
         "description": "Issue 138 named conformance child.",
-        "instructionsFile": ".agents/subagents/conformance/instructions.md",
+
         "tools": {"builtin": ["read"]},
         "skills": ["conformance"]
       }
@@ -105,7 +105,7 @@ impl Process {
         std::fs::create_dir_all(workspace.join(".agents/subagents/conformance"))
             .expect("subagent resources");
         std::fs::write(
-            workspace.join(".agents/subagents/conformance/instructions.md"),
+            workspace.join(".agents/subagents/conformance.md"),
             "Execute the delegated conformance task exactly as requested.\n",
         )
         .expect("subagent instructions");
@@ -118,9 +118,7 @@ impl Process {
         .expect("skill manifest");
         std::fs::write(root.join("models.jsonc"), models).expect("models.jsonc");
         let mut document: serde_json::Value = serde_json::from_str(session).unwrap();
-        document["subagents"]["definitions"]["conformance"]["instructionsFile"] =
-            serde_json::to_value(workspace.join(".agents/subagents/conformance/instructions.md"))
-                .unwrap();
+        crate::launch_fixture::write_roles(&workspace, &mut document["subagents"]);
         std::fs::write(
             root.join("rustx.jsonc"),
             serde_json::to_vec(&document).unwrap(),

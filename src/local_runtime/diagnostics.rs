@@ -52,7 +52,9 @@ impl LaunchFailure {
         Self::at(
             error.source_file,
             error.field_path.as_deref().unwrap_or("resources"),
-            "local resource loading or static compilation failed",
+            error
+                .diagnostic_reason
+                .unwrap_or("local resource loading or static compilation failed"),
             "correct the referenced file and its native resource contract",
             error.message,
         )
@@ -145,6 +147,8 @@ pub struct SourceProjection {
 
 #[derive(Debug, Serialize)]
 pub struct LaunchProjection {
+    pub roles:
+        BTreeMap<crate::runtime::subagent::SubagentName, super::subagent_resources::RoleSource>,
     pub workspace: PathBuf,
     pub runtime_root: PathBuf,
     pub trusted: bool,
@@ -510,6 +514,7 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
         serde_json::to_value(&*launch.config).expect("configuration serializes");
     redact(&mut configuration);
     report.launch = Some(LaunchProjection {
+        roles: launch.role_sources.clone(),
         local_skills: launch.skill_names.clone(),
         provider: launch.models.providers().find(|provider| &provider.id == launch.config.model.model.provider()).map_or(Value::Null, |provider| json!({"id":provider.id, "endpoint":provider.base_url, "credential":provider.api_key.view(), "verification":"deferred; no credential value or connectivity was checked"})),
         workspace: launch.workspace.clone(),

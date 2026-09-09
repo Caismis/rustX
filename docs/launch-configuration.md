@@ -1,5 +1,10 @@
 # Launch configuration and project trust
 
+See [canonical named Subagent resources](subagent-resources.md) for schema 8
+role files, registration/admission, bounded roots, source provenance, and frozen
+reload/child contracts.
+
+
 The [configuration command contract](configuration-diagnostics.md) defines
 `rustx init`, offline `config check`, prospective `config show --sources`, and
 explicit `doctor --probe`, including output, exit codes and effect guarantees.
@@ -81,7 +86,7 @@ higher layer would override them. Unknown fields fail at every schema boundary.
 | `mcpServers`, `environment` | Yes | Yes | — | Named entries replace whole entries; empty map clears |
 | `nativeTools`, `mcpToolPolicies` | Yes | Forbidden | — | Host-only whole named entries; empty map clears |
 | `subagents.maxConcurrent`, `.main`, `.workflow` | Yes | Yes | — | Scalar/list replacement |
-| `subagents.definitions` | Yes | Yes | — | Same-name definitions replace whole entries; empty map clears |
+| `subagents.definitions` | Yes | Yes | — | Registration lists replace; empty list clears. Canonical role resources replace whole across user/project layers. |
 | `workflows.definitions`, `.main` | Yes | Yes | — | Lists replace; YAML resources belong to workspace `.agents/workflows` |
 | Runtime state root (`runtimeRoot`) | Yes | Forbidden | `--runtime-root` | Path replacement |
 | Workspace identity | No settings authority | Forbidden | `--workspace` | Canonical root selection |
@@ -110,8 +115,9 @@ exists. Explicit null is accepted only by nullable domain fields (for example
 `context.summaryOutputCap`); it is invalid for a list or map.
 
 CLI-relative paths use the original launch directory. Config-relative Skills,
-Subagent instruction files, explicit `agentsMd.files`, MCP cwd and executable
-paths containing `/` use the selecting document's directory. A bare MCP command
+MCP cwd and executable paths containing `/` use the selecting document's directory.
+Role identities resolve from the pinned canonical role roots; supplemental
+`agentsMd.files` resolve from the owning workspace or user Subagent root. A bare MCP command
 is still an executable name. MCP cwd also remains subject to the existing
 workspace constraint. Workflow IDs refer to the explicitly owned resource root
 `<workspace>/.agents/workflows`. Native tool paths retain execution-cwd semantics.
@@ -126,9 +132,9 @@ nor bypasses trust or field authority. There is no legacy explicit-path mode.
 ### Project resource path authority
 
 Every project-origin local resource path must resolve inside the canonical
-trusted workspace. This applies to `skills`, Subagent `instructionsFile` and
-`agentsMd.files`, MCP `cwd`, and MCP `command` when it contains `/`. Relative
-paths still use their document directory, but neither `..`, an absolute path,
+trusted workspace. This applies to `skills`, canonical Subagent resources and
+`agentsMd.files`, MCP `cwd`, and MCP `command` when it contains `/`. Explicit configuration
+paths use their document directory; role supplemental paths use the role resource boundary, but neither `..`, an absolute path,
 nor a symlink can grant access to a different workspace/worktree. An external
 `--config` permits inert parsing of that document, not activation of its
 neighboring files. There are no implicit external-resource grants.
@@ -215,7 +221,7 @@ references fail clearly even if the catalog contains only one model.
 New domain defaults are `agentId: "rustx"` and context
 `reserveTokens: 1024`, `keepRecentTokens: 4096`, `summaryOutputCap: 1024`.
 These do not infer or change the selected model's context window. Existing
-domain defaults remain authoritative: schema 7, approval `policy`, model
+domain defaults remain authoritative: schema 8, approval `policy`, model
 summary policy `session`, model-declared reasoning/output defaults, no request
 parameter overrides, native policies from `NativeToolPoliciesDocument`, the
 native default tool list (`execution`, `ask_user`, `read`, `write`, `edit`,
@@ -268,5 +274,5 @@ established terminal-agent practice; see the
 [workspace trust documentation](https://code.claude.com/docs/en/errors).
 rustX deliberately has only the finite layers and fail-closed policy specified here.
 External-source activation is separate from launch trust and Tool exposure.
-The [source activation contract](source-activation.md) defines schema 7's
+The [source activation contract](source-activation.md) defines schema 8's
 `mcpServers.<name>.enabled`, `pythonSources`, and host-only sensitive references.

@@ -1,0 +1,9 @@
+---
+description: Plan the fixed greeting implementation without tool access.
+tools:
+  builtin: []
+worktree:
+  enabled: true
+  requireCleanParent: true
+---
+Plan the fixed greeting change from explicit inputs. Do not edit source. Use workflow_output for the declared structured plan.

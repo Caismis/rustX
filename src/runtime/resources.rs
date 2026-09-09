@@ -517,6 +517,8 @@ pub struct RuntimeResourceLoadError {
     /// Optional authoritative local document context for offline diagnostics.
     pub source_file: Option<PathBuf>,
     pub field_path: Option<String>,
+    /// Static category authored by the loader, never interpolated resource contents.
+    pub diagnostic_reason: Option<&'static str>,
 }
 
 impl RuntimeResourceLoadError {
@@ -536,6 +538,7 @@ impl RuntimeResourceLoadError {
             message,
             source_file: None,
             field_path: None,
+            diagnostic_reason: None,
         }
     }
     /// Attach context at the resource owner, without parsing diagnostic text.
@@ -543,6 +546,12 @@ impl RuntimeResourceLoadError {
     pub fn at(mut self, file: &Path, field: impl Into<String>) -> Self {
         self.source_file = Some(file.into());
         self.field_path = Some(field.into());
+        self
+    }
+    /// Attach a safe static explanation for offline diagnostics.
+    #[must_use]
+    pub fn because(mut self, reason: &'static str) -> Self {
+        self.diagnostic_reason = Some(reason);
         self
     }
 }
@@ -637,18 +646,21 @@ fn load_context_file_from_directory(
         if !metadata.is_file() {
             continue;
         }
-        validate_project_resource_path(directory, &path)?;
-        let bytes = std::fs::read(&path).map_err(|error| {
+        validate_project_resource_path(directory, &path)
+            .map_err(|error| error.at(&path, "projectInstructions"))?;
+        let bytes = crate::config_format::read_bounded(&path).map_err(|error| {
             RuntimeResourceLoadError::new(format!(
                 "cannot read project context file {}: {error}",
                 path.display()
             ))
+            .at(&path, "projectInstructions")
         })?;
         let mut content = String::from_utf8(bytes).map_err(|error| {
             RuntimeResourceLoadError::new(format!(
                 "project context file {} is not UTF-8: {error}",
                 path.display()
             ))
+            .at(&path, "projectInstructions")
         })?;
         if let Some(without_bom) = content.strip_prefix('\u{feff}') {
             content = without_bom.to_owned();

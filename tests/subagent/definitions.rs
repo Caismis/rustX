@@ -136,10 +136,16 @@ impl Lab {
     }
 
     fn subagent_file(&self, profile: &str, file: &str) -> std::path::PathBuf {
-        self.workspace()
-            .join(".agents/subagents")
-            .join(profile)
-            .join(file)
+        if file == "instructions.md" {
+            self.workspace()
+                .join(".agents/subagents")
+                .join(format!("{profile}.md"))
+        } else {
+            self.workspace()
+                .join(".agents/subagents")
+                .join(profile)
+                .join(file)
+        }
     }
 
     fn write_config(&self, subagents: &serde_json::Value) {
@@ -149,7 +155,7 @@ impl Lab {
     fn write_config_with_tools(&self, subagents: &serde_json::Value, default_tools: &[&str]) {
         let mut subagents = subagents.clone();
         let definition_names = subagents
-            .get("definitions")
+            .get("roles")
             .and_then(serde_json::Value::as_object)
             .map(|definitions| {
                 definitions
@@ -166,8 +172,9 @@ impl Lab {
                 .entry("workflow".to_owned())
                 .or_insert_with(|| serde_json::Value::Array(definition_names));
         }
+        crate::launch_fixture::write_roles(&self.workspace(), &mut subagents);
         let document = serde_json::json!({
-            "schemaVersion": 7,
+            "schemaVersion": 8,
             "agentId": "agent-issue144",
             "model": {"model": "local/model-a"},
             "context": {"reserveTokens": 0, "keepRecentTokens": 0},
@@ -223,7 +230,7 @@ async fn an_empty_named_agent_catalog_exposes_no_subagent_tool() {
     let lab = Lab::new();
     lab.write_config(&serde_json::json!({
         "maxConcurrent": 4,
-        "definitions": {},
+        "roles": {},
     }));
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
@@ -273,7 +280,7 @@ async fn reloading_non_empty_catalog_to_empty_removes_only_the_current_subagent_
 
     lab.write_config(&serde_json::json!({
         "maxConcurrent": 4,
-        "definitions": {},
+        "roles": {},
     }));
     product
         .runtime()
@@ -316,10 +323,10 @@ async fn reloading_non_empty_catalog_to_empty_removes_only_the_current_subagent_
 fn explore(builtin: &[&str]) -> serde_json::Value {
     serde_json::json!({
         "maxConcurrent": 4,
-        "definitions": {
+        "roles": {
             "explore": {
                 "description": "Read-only repository exploration.",
-                "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
+
                 "tools": {"builtin": builtin},
             }
         },
@@ -337,27 +344,107 @@ fn digest_of(resources: &RuntimeResourceSnapshot, name: &str) -> SubagentDefinit
         .clone()
 }
 
+/// Freeze at the native resolver frontier, park before child materialization,
+/// publish R2, then resume the R1 specification across its real serialization contract.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cfg236_gated_frozen_child_retains_r1_after_canonical_role_r2_publication() {
+    let lab = Lab::new();
+    lab.write_skill("old", "Old guidance");
+    lab.write_skill("new", "New guidance");
+    lab.write_config(&serde_json::json!({"roles":{"explore":{
+        "description":"R1", "model":"local/model-a", "timeoutMs":100,
+        "tools":{"builtin":["read"]}, "skills":["old"],
+        "agentsMd":{"inherit":false,"files":[EXPLORE_AGENTS]}
+    }}}));
+    let product = lab.compose().await;
+    let r1 = product.runtime().runtime_resources();
+    let (admitted_tx, admitted_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let child = tokio::spawn(async move {
+        let frozen = SubagentResolver::resolve(
+            &r1,
+            &agent("explore"),
+            &inherited_model(),
+            &model_registry(),
+        )
+        .unwrap();
+        admitted_tx.send(frozen.clone()).unwrap();
+        release_rx.await.unwrap();
+        serde_json::from_slice::<ResolvedSubagentSpec>(&serde_json::to_vec(&frozen).unwrap())
+            .unwrap()
+    });
+    let frozen = admitted_rx.await.unwrap();
+    std::fs::write(
+        lab.workspace().join(".agents/subagents/explore.md"),
+        "R2 body\n",
+    )
+    .unwrap();
+    std::fs::write(lab.workspace().join(EXPLORE_AGENTS), "R2 supplemental").unwrap();
+    lab.write_config(&serde_json::json!({"roles":{"explore":{
+        "description":"R2", "model":"local/model-b", "timeoutMs":200,
+        "tools":{"builtin":["grep"]}, "skills":["new"],
+        "agentsMd":{"inherit":true}, "worktree":{"enabled":true}
+    }}}));
+    product.runtime().reload_resources().await.unwrap();
+    let r2 = product.runtime().runtime_resources();
+    let next = SubagentResolver::resolve(
+        &r2,
+        &agent("explore"),
+        &inherited_model(),
+        &model_registry(),
+    )
+    .unwrap();
+    release_tx.send(()).unwrap();
+    let retained = child.await.unwrap();
+    assert_eq!(retained, frozen);
+    assert_eq!(
+        retained.instructions,
+        "Explore the shared workspace read-only.\n"
+    );
+    assert_eq!(retained.tool_names(), ["read"]);
+    assert_eq!(retained.execution_deadline.unwrap().as_millis(), 100);
+    assert_eq!(
+        retained.project_instructions[0].content,
+        "explicit agent instructions\n"
+    );
+    assert_eq!(
+        retained.workspace_policy,
+        rustx::runtime::workspace::WorkspacePolicy::SharedWorkspace
+    );
+    assert_eq!(next.instructions, "R2 body\n");
+    assert_eq!(next.tool_names(), ["grep"]);
+    assert_eq!(next.execution_deadline.unwrap().as_millis(), 200);
+    assert_ne!(next.model, retained.model);
+    assert_ne!(next.skills, retained.skills);
+    assert_eq!(
+        next.workspace_policy,
+        rustx::runtime::workspace::WorkspacePolicy::GitWorktree {
+            require_clean_parent: true
+        }
+    );
+    product.runtime().shutdown().await.unwrap();
+}
+
 /// Only named catalog definitions are admitted, and the catalog is keyed by
 /// canonical name in deterministic order.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn only_named_catalog_definitions_are_admitted() {
     let lab = Lab::new();
     std::fs::write(
-        lab.workspace()
-            .join(".agents/subagents/research/instructions.md"),
+        lab.workspace().join(".agents/subagents/research.md"),
         "Research broadly.\n",
     )
     .expect("research instructions");
     lab.write_config(&serde_json::json!({
         "maxConcurrent": 2,
-        "definitions": {
+        "roles": {
             "research": {
                 "description": "Deep research.",
-                "instructionsFile": "workspace/.agents/subagents/research/instructions.md",
+
             },
             "explore": {
                 "description": "Read-only repository exploration.",
-                "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
+
                 "tools": {"builtin": ["read", "grep"]},
             }
         }
@@ -418,7 +505,7 @@ async fn only_named_catalog_definitions_are_admitted() {
 async fn an_attempt_frozen_on_r1_resolves_r1_after_r2_becomes_current() {
     let lab = Lab::new();
     let mut r1_config = explore(&["read"]);
-    r1_config["definitions"]["explore"]["timeoutMs"] = serde_json::json!(100);
+    r1_config["roles"]["explore"]["timeoutMs"] = serde_json::json!(100);
     lab.write_config(&r1_config);
     let product = lab.compose().await;
 
@@ -429,29 +516,27 @@ async fn an_attempt_frozen_on_r1_resolves_r1_after_r2_becomes_current() {
 
     // R2 redefines `explore` and adds `research`.
     std::fs::write(
-        lab.workspace()
-            .join(".agents/subagents/research/instructions.md"),
+        lab.workspace().join(".agents/subagents/research.md"),
         "Research broadly.\n",
     )
     .expect("research instructions");
     std::fs::write(
-        lab.workspace()
-            .join(".agents/subagents/explore/instructions.md"),
+        lab.workspace().join(".agents/subagents/explore.md"),
         "Explore the shared workspace read-only, and summarize.\n",
     )
     .expect("revised explore instructions");
     lab.write_config(&serde_json::json!({
         "maxConcurrent": 4,
-        "definitions": {
+        "roles": {
             "explore": {
                 "description": "Read-only repository exploration.",
-                "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
+
                 "tools": {"builtin": ["read"]},
                 "timeoutMs": 200,
             },
             "research": {
                 "description": "Deep research.",
-                "instructionsFile": "workspace/.agents/subagents/research/instructions.md",
+
             }
         }
     }));
@@ -525,10 +610,10 @@ async fn a_failed_reload_leaves_the_previous_generation_completely_authoritative
     lab.write_skill("beta", "the second skill");
     lab.write_config(&serde_json::json!({
         "maxConcurrent": 4,
-        "definitions": {
+        "roles": {
             "explore": {
                 "description": "Read-only repository exploration.",
-                "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
+
                 "tools": {"builtin": ["definitely_not_a_capability"]},
             }
         }
@@ -625,9 +710,9 @@ async fn statically_invalid_references_fail_launch_analysis_closed() {
         (
             serde_json::json!({
                 "maxConcurrent": 4,
-                "definitions": {"explore": {
+                "roles": {"explore": {
                     "description": "d",
-                    "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
+
                     "tools": {"builtin": ["not_a_builtin"]},
                 }}
             }),
@@ -636,9 +721,9 @@ async fn statically_invalid_references_fail_launch_analysis_closed() {
         (
             serde_json::json!({
                 "maxConcurrent": 4,
-                "definitions": {"explore": {
+                "roles": {"explore": {
                     "description": "d",
-                    "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
+
                     "tools": {"mcp": {"unconfigured": ["anything"]}},
                 }}
             }),
@@ -647,9 +732,9 @@ async fn statically_invalid_references_fail_launch_analysis_closed() {
         (
             serde_json::json!({
                 "maxConcurrent": 4,
-                "definitions": {"explore": {
+                "roles": {"explore": {
                     "description": "d",
-                    "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
+
                     // A managed Python package (Issue #174) crosses as its
                     // synthesized MCP server (`python:<folder>`); one that
                     // does not exist is statically invalid.
@@ -661,9 +746,9 @@ async fn statically_invalid_references_fail_launch_analysis_closed() {
         (
             serde_json::json!({
                 "maxConcurrent": 4,
-                "definitions": {"explore": {
+                "roles": {"explore": {
                     "description": "d",
-                    "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
+
                     "model": "local/model-missing",
                 }}
             }),
@@ -672,9 +757,9 @@ async fn statically_invalid_references_fail_launch_analysis_closed() {
         (
             serde_json::json!({
                 "maxConcurrent": 4,
-                "definitions": {"explore": {
+                "roles": {"explore": {
                     "description": "d",
-                    "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
+
                     "skills": ["no-such-skill"],
                 }}
             }),
@@ -724,8 +809,8 @@ async fn an_explicit_ask_user_selection_is_admitted_for_a_child() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_unavailable_source_keeps_the_runtime_healthy_but_blocks_the_agent_that_needs_it() {
     let lab = Lab::new();
-    let document = serde_json::json!({
-        "schemaVersion": 7,
+    let mut document = serde_json::json!({
+        "schemaVersion": 8,
         "agentId": "agent-issue144",
         "model": {"model": "local/model-a"},
         "context": {"reserveTokens": 0, "keepRecentTokens": 0},
@@ -735,10 +820,10 @@ async fn an_unavailable_source_keeps_the_runtime_healthy_but_blocks_the_agent_th
         },
         "subagents": {
             "maxConcurrent": 4,
-            "definitions": {
+            "roles": {
                 "explore": {
                     "description": "Read-only repository exploration.",
-                    "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
+
                     "tools": {"mcp": {"offline": ["get_issue"]}},
                 }
             },
@@ -746,6 +831,7 @@ async fn an_unavailable_source_keeps_the_runtime_healthy_but_blocks_the_agent_th
             "workflow": []
         }
     });
+    crate::launch_fixture::write_roles(&lab.workspace(), &mut document["subagents"]);
     std::fs::write(lab.root().join("rustx.jsonc"), document.to_string()).expect("rustx.jsonc");
 
     // The whole runtime composes: an optional source failure is availability
@@ -787,21 +873,20 @@ async fn an_unavailable_source_keeps_the_runtime_healthy_but_blocks_the_agent_th
 async fn model_semantics_inherit_the_invoking_attempt_or_freeze_the_explicit_selection() {
     let lab = Lab::new();
     std::fs::write(
-        lab.workspace()
-            .join(".agents/subagents/pinned/instructions.md"),
+        lab.workspace().join(".agents/subagents/pinned.md"),
         "Run on the pinned model.\n",
     )
     .expect("pinned instructions");
     lab.write_config(&serde_json::json!({
         "maxConcurrent": 4,
-        "definitions": {
+        "roles": {
             "explore": {
                 "description": "Inherits the invoking attempt's model.",
-                "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
+
             },
             "pinned": {
                 "description": "Runs on its own model.",
-                "instructionsFile": "workspace/.agents/subagents/pinned/instructions.md",
+
                 "model": "local/model-b",
             }
         }
@@ -856,15 +941,15 @@ async fn project_instruction_policy_freezes_a_deterministic_chain() {
     ]);
     lab.write_config(&serde_json::json!({
         "maxConcurrent": 4,
-        "definitions": {
+        "roles": {
             "explore": {
                 "description": "Inherits the parent chain.",
-                "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
+
                 "agentsMd": {"inherit": true, "files": files},
             },
             "isolated": {
                 "description": "Explicit files only.",
-                "instructionsFile": "workspace/.agents/subagents/isolated/instructions.md",
+
                 "agentsMd": {"inherit": false, "files": files},
             }
         }
@@ -916,9 +1001,9 @@ async fn project_instruction_policy_freezes_a_deterministic_chain() {
     ]);
     lab.write_config(&serde_json::json!({
         "maxConcurrent": 4,
-        "definitions": {"isolated": {
+        "roles": {"isolated": {
             "description": "Explicit files only.",
-            "instructionsFile": "workspace/.agents/subagents/isolated/instructions.md",
+
             "agentsMd": {"inherit": false, "files": reversed},
         }}
     }));
@@ -954,9 +1039,9 @@ async fn the_skill_allowlist_is_exact_and_preserves_progressive_disclosure() {
     lab.write_skill("beta", "the second skill");
     lab.write_config(&serde_json::json!({
         "maxConcurrent": 4,
-        "definitions": {"explore": {
+        "roles": {"explore": {
             "description": "Read-only repository exploration.",
-            "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
+
             "skills": ["alpha"],
         }}
     }));
@@ -1004,40 +1089,20 @@ async fn the_definition_digest_ignores_incidental_formatting_and_tracks_semantic
     let lab = Lab::new();
     lab.write_config(&serde_json::json!({
         "maxConcurrent": 4,
-        "definitions": {"explore": {
+        "roles": {"explore": {
             "description": "Read-only repository exploration.",
-            "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
+
             "tools": {"builtin": ["read", "grep"]},
         }}
     }));
     let product = lab.compose().await;
     let baseline = digest_of(&product.runtime().runtime_resources(), "explore");
 
-    // The same semantics, spelled with comments, different whitespace,
-    // different JSON key order, and a different selector listing order.
+    // YAML comments, field order and selector order do not change the native digest.
     std::fs::write(
-        lab.root().join("rustx.jsonc"),
-        r#"{
-  // A comment cannot change the semantic identity of a definition.
-  "schemaVersion": 7, "agentId": "agent-issue144",
-  "context": {"keepRecentTokens": 0, "reserveTokens": 0},
-  "model": {"model": "local/model-a"},
-  "defaultTools": ["read", "subagent"],
-  "subagents": {
-    "definitions": {
-      "explore": {
-        "tools": {"builtin": ["grep", "read"]},
-        "instructionsFile":    "workspace/.agents/subagents/explore/instructions.md",
-        "description": "Read-only repository exploration.",
-      },
-    },
-    "maxConcurrent": 4,
-    "main": ["explore"],
-    "workflow": [],
-  },
-}"#,
-    )
-    .expect("reformatted config");
+        lab.workspace().join(".agents/subagents/explore.md"),
+        "---\n# reordered frontmatter\ntools: {builtin: [grep, read]}\ndescription: Read-only repository exploration.\n---\nExplore the shared workspace read-only.\n",
+    ).unwrap();
     product
         .runtime()
         .reload_resources()
@@ -1052,9 +1117,9 @@ async fn the_definition_digest_ignores_incidental_formatting_and_tracks_semantic
     // A genuine semantic change does move the digest.
     lab.write_config(&serde_json::json!({
         "maxConcurrent": 4,
-        "definitions": {"explore": {
+        "roles": {"explore": {
             "description": "Read-only repository exploration.",
-            "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
+
             "tools": {"builtin": ["read"]},
         }}
     }));
@@ -1077,7 +1142,7 @@ async fn the_definition_digest_ignores_incidental_formatting_and_tracks_semantic
 async fn the_frozen_specification_preserves_exact_builtin_identity_through_serialization() {
     let lab = Lab::new();
     let mut config = explore(&["read", "grep"]);
-    config["definitions"]["explore"]["timeoutMs"] = serde_json::json!(30_000);
+    config["roles"]["explore"]["timeoutMs"] = serde_json::json!(30_000);
     lab.write_config(&config);
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
@@ -1128,9 +1193,9 @@ async fn max_concurrent_is_launch_scoped() {
     let lab = Lab::new();
     lab.write_config(&serde_json::json!({
         "maxConcurrent": 1,
-        "definitions": {"explore": {
+        "roles": {"explore": {
             "description": "Read-only repository exploration.",
-            "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
+
             "tools": {"builtin": ["read"]},
         }}
     }));
@@ -1140,9 +1205,9 @@ async fn max_concurrent_is_launch_scoped() {
     // touching the live registry's capacity: capacity is live-registry state.
     lab.write_config(&serde_json::json!({
         "maxConcurrent": 8,
-        "definitions": {"explore": {
+        "roles": {"explore": {
             "description": "Read-only repository exploration, revised.",
-            "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
+
             "tools": {"builtin": ["read"]},
         }}
     }));
@@ -1164,7 +1229,7 @@ async fn max_concurrent_is_launch_scoped() {
     );
     // A zero or oversized bound is refused at the configuration boundary.
     let lab = Lab::new();
-    lab.write_config(&serde_json::json!({"maxConcurrent": 0, "definitions": {}}));
+    lab.write_config(&serde_json::json!({"maxConcurrent": 0, "roles": {}}));
     let error = lab
         .paths()
         .try_resolve()
@@ -1477,7 +1542,7 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
     let lab = Lab::new();
     // The generation admits `grep` with a non-default policy on every axis.
     let document = serde_json::json!({
-        "schemaVersion": 7,
+        "schemaVersion": 8,
         "agentId": "agent-issue144",
         "model": {"model": "local/model-a"},
         "context": {"reserveTokens": 0, "keepRecentTokens": 0},
@@ -1553,8 +1618,8 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
     let lab = Lab::new();
-    let document = serde_json::json!({
-        "schemaVersion": 7,
+    let mut document = serde_json::json!({
+        "schemaVersion": 8,
         "agentId": "agent-issue144",
         "model": {"model": "local/model-a"},
         "context": {"reserveTokens": 0, "keepRecentTokens": 0},
@@ -1564,10 +1629,10 @@ async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
         },
         "subagents": {
             "maxConcurrent": 4,
-            "definitions": {
+            "roles": {
                 "explore": {
                     "description": "Read-only repository exploration.",
-                    "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
+
                     "tools": {
                         // `offline` sorts before `python:ghost` in canonical
                         // selector order, so the unavailable source is
@@ -1580,6 +1645,7 @@ async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
             "workflow": []
         }
     });
+    crate::launch_fixture::write_roles(&lab.workspace(), &mut document["subagents"]);
     std::fs::write(
         lab.root().join("rustx.jsonc"),
         serde_json::to_string_pretty(&document).expect("config document"),
@@ -1608,9 +1674,9 @@ async fn skill_version_identity_is_frozen_across_the_boundary() {
     lab.write_skill("beta", "the second skill");
     lab.write_config(&serde_json::json!({
         "maxConcurrent": 4,
-        "definitions": {"explore": {
+        "roles": {"explore": {
             "description": "Read-only repository exploration.",
-            "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
+
             "skills": ["alpha"],
         }}
     }));

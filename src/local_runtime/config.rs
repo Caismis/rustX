@@ -13,7 +13,6 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::capabilities::selection::ToolSelector;
@@ -34,7 +33,7 @@ use crate::tools::native::NativeToolPolicies;
 use crate::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocationPolicy};
 
 /// The only current runtime configuration schema version this runtime accepts.
-pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 7;
+pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 8;
 
 /// The explicit current runtime/project configuration.
 ///
@@ -125,12 +124,9 @@ pub struct SubagentsDocument {
     /// under already-committed children would either orphan ownership or
     /// silently lie about the bound.
     pub max_concurrent: usize,
-    /// The one authoritative named definitions map, keyed by canonical
-    /// [`SubagentName`]. Admission is separate in `main` and `workflow`.
-    ///
-    /// The key *is* the name: a definition never repeats it as a field.
-    #[serde(deserialize_with = "deserialize_unique_map")]
-    pub definitions: BTreeMap<SubagentName, SubagentDocument>,
+    /// Explicit canonical role identities. Each resolves to one `{name}.md`
+    /// resource; registration grants neither main nor Workflow admission.
+    pub definitions: Vec<SubagentName>,
     /// Profiles admitted to the main Agent's existing `subagent` capability.
     pub main: Vec<SubagentName>,
     /// Profiles admitted to Workflow Agent and Parallel nodes.
@@ -141,7 +137,7 @@ impl Default for SubagentsDocument {
     fn default() -> Self {
         Self {
             max_concurrent: DEFAULT_MAX_CONCURRENT_SUBAGENTS,
-            definitions: BTreeMap::new(),
+            definitions: Vec::new(),
             main: Vec::new(),
             workflow: Vec::new(),
         }
@@ -165,7 +161,7 @@ pub const DEFAULT_MAX_CONCURRENT_SUBAGENTS: usize = 4;
 /// The hard upper bound of the launch-scoped subagent capacity.
 pub const MAX_MAX_CONCURRENT_SUBAGENTS: usize = 64;
 
-/// One named subagent definition, as configured.
+/// Strict canonical role Markdown frontmatter. The body supplies primary instructions.
 ///
 /// Everything here is *definition* state. None of it is exposed as a
 /// per-call model argument: the model chooses which named agent runs and
@@ -176,9 +172,6 @@ pub const MAX_MAX_CONCURRENT_SUBAGENTS: usize = 64;
 pub struct SubagentDocument {
     /// The bounded model-facing routing description.
     pub description: String,
-    /// The child instruction document. Relative paths resolve against the
-    /// owning configuration document's directory at launch resolution.
-    pub instructions_file: PathBuf,
     /// The explicit model this agent runs on. Omit to inherit the invoking
     /// attempt's frozen effective model configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -202,11 +195,11 @@ pub struct SubagentDocument {
 }
 
 impl SubagentDocument {
-    /// Converts the JSONC millisecond field into the validated runtime type.
+    /// Converts the frontmatter millisecond field into the validated runtime type.
     ///
     /// # Errors
     ///
-    /// Returns the explicit zero/maximum validation detail. Malformed JSON
+    /// Returns the explicit zero/maximum validation detail. Malformed authoring
     /// values are rejected by serde before this boundary is reached.
     pub fn execution_deadline(&self) -> Result<Option<SubagentExecutionDeadline>, String> {
         self.timeout_ms
@@ -589,42 +582,11 @@ impl CurrentRuntimeConfig {
             &self.subagents.workflow,
             &self.subagents.definitions,
         )?;
-        for (name, document) in &self.subagents.definitions {
-            if let Err(error) = document.execution_deadline() {
-                return Err(CurrentRuntimeConfigError::Invalid {
-                    detail: format!("subagents.definitions.{name}.timeoutMs {error}"),
-                });
-            }
-            if document.instructions_file.as_os_str().is_empty() {
-                return Err(CurrentRuntimeConfigError::Invalid {
-                    detail: format!(
-                        "subagents.definitions.{name}.instructionsFile must be non-empty"
-                    ),
-                });
-            }
-            for selector in document.tools.selectors() {
-                let empty = match &selector {
-                    ToolSelector::Builtin { name } => name.trim().is_empty(),
-                    ToolSelector::Mcp { server_id, name } => {
-                        server_id.as_str().is_empty() || name.trim().is_empty()
-                    }
-                };
-                if empty {
-                    return Err(CurrentRuntimeConfigError::Invalid {
-                        detail: format!(
-                            "subagents.definitions.{name}.tools names an empty capability identity"
-                        ),
-                    });
-                }
-            }
-            if document.skills.iter().any(|skill| skill.trim().is_empty()) {
-                return Err(CurrentRuntimeConfigError::Invalid {
-                    detail: format!(
-                        "subagents.definitions.{name}.skills entries must be non-empty"
-                    ),
-                });
-            }
-        }
+        Self::validate_subagent_admission(
+            "subagents.definitions",
+            &self.subagents.definitions,
+            &self.subagents.definitions,
+        )?;
         Ok(())
     }
 
@@ -632,7 +594,7 @@ impl CurrentRuntimeConfig {
     fn validate_subagent_admission(
         label: &str,
         admission: &[SubagentName],
-        definitions: &BTreeMap<SubagentName, SubagentDocument>,
+        definitions: &[SubagentName],
     ) -> Result<(), CurrentRuntimeConfigError> {
         let mut seen = std::collections::BTreeSet::new();
         for name in admission {
@@ -641,7 +603,7 @@ impl CurrentRuntimeConfig {
                     detail: format!("{label} contains duplicate profile {name:?}"),
                 });
             }
-            if !definitions.contains_key(name) {
+            if !definitions.contains(name) {
                 return Err(CurrentRuntimeConfigError::Invalid {
                     detail: format!("{label} references undefined profile {name:?}"),
                 });
@@ -846,45 +808,6 @@ fn validate_unique_workflow_ids(
         }
     }
     Ok(())
-}
-
-/// Deserializes the authoritative definitions map without accepting a
-/// duplicate profile key through a parser-specific last-write-wins rule.
-pub(crate) fn deserialize_unique_map<'de, D, V>(
-    deserializer: D,
-) -> Result<BTreeMap<SubagentName, V>, D::Error>
-where
-    D: Deserializer<'de>,
-    V: Deserialize<'de>,
-{
-    struct UniqueMapVisitor<V>(std::marker::PhantomData<V>);
-
-    impl<'de, V> Visitor<'de> for UniqueMapVisitor<V>
-    where
-        V: Deserialize<'de>,
-    {
-        type Value = BTreeMap<SubagentName, V>;
-
-        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            formatter.write_str("a map with unique subagent definition names")
-        }
-
-        fn visit_map<A: MapAccess<'de>>(self, mut access: A) -> Result<Self::Value, A::Error> {
-            let mut values = BTreeMap::new();
-            while let Some(key) = access.next_key::<SubagentName>()? {
-                if values.contains_key(&key) {
-                    return Err(serde::de::Error::custom(format!(
-                        "duplicate subagent definition {key:?}"
-                    )));
-                }
-                let value = access.next_value::<V>()?;
-                values.insert(key, value);
-            }
-            Ok(values)
-        }
-    }
-
-    deserializer.deserialize_map(UniqueMapVisitor(std::marker::PhantomData))
 }
 
 /// The static current-runtime context policy document.
@@ -1439,31 +1362,17 @@ mod tests {
     fn named_subagent_worktree_policy_is_bounded_and_definition_scoped() {
         use crate::runtime::workspace::WorkspacePolicy as Policy;
 
-        /// Builds a minimal config whose single `worker` definition carries
-        /// exactly the given `worktree` JSONC document (empty when omitted).
-        fn worker_with_worktree(worktree: &str) -> String {
-            let worktree = if worktree.is_empty() {
+        fn policy(worktree: &str) -> Policy {
+            let field = if worktree.is_empty() {
                 String::new()
             } else {
-                format!(r#", "worktree": {worktree}"#)
+                format!(", \"worktree\": {worktree}")
             };
-            MINIMAL.replace(
-                r#""agentId": "agent-a""#,
-                &format!(
-                    r#""agentId": "agent-a", "subagents": {{"definitions": {{"worker": {{"description": "worker", "instructionsFile": "worker.md"{worktree}}}}}, "main": ["worker"], "workflow": []}}"#
-                ),
-            )
-        }
-
-        fn policy(worktree: &str) -> Policy {
-            let config =
-                CurrentRuntimeConfig::from_jsonc_slice(worker_with_worktree(worktree).as_bytes())
-                    .expect("valid");
-            config
-                .subagents
-                .definitions
-                .get(&crate::runtime::subagent::SubagentName::parse("worker").expect("name"))
-                .expect("worker definition")
+            let text =
+                format!("---\n{{\"description\": \"worker\"{field}}}\n---\nWorker instructions\n");
+            crate::local_runtime::subagent_resources::parse(&text)
+                .expect("valid role")
+                .0
                 .worktree
                 .to_policy()
         }
@@ -1523,46 +1432,26 @@ mod tests {
         );
     }
 
-    fn worker_config(timeout: &str) -> String {
-        MINIMAL.replace(
-            r#""agentId": "agent-a""#,
-            &format!(
-                r#""agentId": "agent-a", "subagents": {{"definitions": {{"worker": {{"description": "worker", "instructionsFile": "worker.md", "timeoutMs": {timeout}}}}}, "main": ["worker"], "workflow": []}}"#
-            ),
-        )
+    fn worker_config(timeout: &str) -> Result<super::SubagentDocument, String> {
+        crate::local_runtime::subagent_resources::parse(&format!(
+            "---\ndescription: worker\ntimeoutMs: {timeout}\n---\nWorker\n"
+        ))
+        .map(|(role, _)| role)
     }
 
     #[test]
     fn named_subagent_execution_deadline_is_optional_and_typed_at_admission() {
-        let absent = CurrentRuntimeConfig::from_jsonc_slice(
-            MINIMAL
-                .replace(
-                    r#""agentId": "agent-a""#,
-                    r#""agentId": "agent-a", "subagents": {"definitions": {"worker": {"description": "worker", "instructionsFile": "worker.md"}}, "main": ["worker"], "workflow": []}"#,
-                )
-                .as_bytes(),
+        let (absent, _) = crate::local_runtime::subagent_resources::parse(
+            "---\ndescription: worker\n---\nWorker\n",
         )
-        .expect("deadline is optional");
-        let worker = absent
-            .subagents
-            .definitions
-            .get(&crate::runtime::subagent::SubagentName::parse("worker").expect("name"))
-            .expect("worker");
-        assert_eq!(worker.timeout_ms, None);
-        assert_eq!(worker.execution_deadline().expect("valid absence"), None);
-
-        let config = CurrentRuntimeConfig::from_jsonc_slice(worker_config("30000").as_bytes())
-            .expect("valid deadline");
-        let worker = config
-            .subagents
-            .definitions
-            .get(&crate::runtime::subagent::SubagentName::parse("worker").expect("name"))
-            .expect("worker");
+        .unwrap();
+        assert_eq!(absent.execution_deadline().unwrap(), None);
         assert_eq!(
-            worker
+            worker_config("30000")
+                .unwrap()
                 .execution_deadline()
-                .expect("valid deadline")
-                .expect("present")
+                .unwrap()
+                .unwrap()
                 .as_millis(),
             30_000
         );
@@ -1574,17 +1463,10 @@ mod tests {
             ("0", "must be positive"),
             ("86400001", "must not exceed 86400000 milliseconds"),
         ] {
-            let error = CurrentRuntimeConfig::from_jsonc_slice(worker_config(raw).as_bytes())
-                .expect_err("invalid deadline");
-            assert!(matches!(error, CurrentRuntimeConfigError::Invalid { .. }));
-            assert!(error.to_string().contains(expected), "{error}");
+            let error = worker_config(raw).unwrap_err();
+            assert!(error.contains(expected), "{error}");
         }
-        let malformed = CurrentRuntimeConfig::from_jsonc_slice(worker_config("\"30s\"").as_bytes())
-            .expect_err("malformed deadline");
-        assert!(matches!(
-            malformed,
-            CurrentRuntimeConfigError::Syntax { .. }
-        ));
+        assert!(worker_config("\"30s\"").is_err());
     }
 
     /// A zero deadline is rejected at the current-runtime composition
@@ -1842,7 +1724,7 @@ mod tests {
     fn subagent_definition_and_admission_domains_are_independent() {
         let json = MINIMAL.replace(
             r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "subagents": {"definitions": {"worker": {"description": "worker", "instructionsFile": "worker.md"}}, "main": [], "workflow": ["worker"]}"#,
+            r#""agentId": "agent-a", "subagents": {"definitions": ["worker"], "main": [], "workflow": ["worker"]}"#,
         );
         let config = CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect("valid");
         assert!(config.subagents.main.is_empty());
@@ -1851,7 +1733,7 @@ mod tests {
 
         let defined_but_unadmitted = MINIMAL.replace(
             r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "subagents": {"definitions": {"worker": {"description": "worker", "instructionsFile": "worker.md"}}, "main": [], "workflow": []}"#,
+            r#""agentId": "agent-a", "subagents": {"definitions": ["worker"], "main": [], "workflow": []}"#,
         );
         assert!(CurrentRuntimeConfig::from_jsonc_slice(defined_but_unadmitted.as_bytes()).is_ok());
     }
@@ -1860,7 +1742,7 @@ mod tests {
     fn unknown_or_duplicate_admission_ids_are_rejected() {
         let unknown = MINIMAL.replace(
             r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "subagents": {"definitions": {}, "main": ["missing"], "workflow": []}"#,
+            r#""agentId": "agent-a", "subagents": {"definitions": [], "main": ["missing"], "workflow": []}"#,
         );
         let error =
             CurrentRuntimeConfig::from_jsonc_slice(unknown.as_bytes()).expect_err("unknown");
@@ -1868,7 +1750,7 @@ mod tests {
 
         let duplicate = MINIMAL.replace(
             r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "subagents": {"definitions": {"worker": {"description": "worker", "instructionsFile": "worker.md"}}, "main": ["worker", "worker"], "workflow": []}"#,
+            r#""agentId": "agent-a", "subagents": {"definitions": ["worker"], "main": ["worker", "worker"], "workflow": []}"#,
         );
         let error =
             CurrentRuntimeConfig::from_jsonc_slice(duplicate.as_bytes()).expect_err("duplicate");

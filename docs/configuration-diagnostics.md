@@ -1,5 +1,10 @@
 # Configuration authoring and diagnostics
 
+See [canonical named Subagent resources](subagent-resources.md) for schema 8
+role files, registration/admission, bounded roots, source provenance, and frozen
+reload/child contracts.
+
+
 Rust owns this interface. The TUI forwards arguments and terminal streams; it
 does not discover, merge, validate, trust, or interpret configuration.
 `config show` is the **prospective next launch**, never a running Session or
@@ -222,7 +227,7 @@ capabilities are not claimed. Results are individually `skipped`, `unavailable`,
 
 ## Schema authority and example layers
 
-`schemas/{models,settings,rustx,workflow}.schema.json` are generated from native
+`schemas/{models,settings,rustx,workflow,subagent}.schema.json` are generated from native
 Rust authoring types and metadata with schemars. Partial settings describe omitted
 fields, not fully resolved runtime structs. Project schemas exclude structurally
 host-owned fields. Serde names, enum tags, nullability and unknown-field rejection

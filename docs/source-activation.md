@@ -23,7 +23,7 @@ not prove availability; availability does not grant domain admission; admission
 does not necessarily expose a Tool to the main model. Managed Python remains an
 ordinary MCP origin with the identity `python:<folder>`. There is one Tool Plane.
 
-## JSONC surface (runtime schema 7)
+## JSONC surface (runtime schema 8)
 
 Both configured MCP sources and managed Python are inert by default. An MCP
 entry must declare `enabled: true`. An absent `enabled` means discovered without

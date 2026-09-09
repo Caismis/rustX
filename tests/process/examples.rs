@@ -19,14 +19,14 @@ fn examples_root() -> PathBuf {
 
 const REQUIRED_EXAMPLE_FILES: &[&str] = &[
     "AGENTS.md",
-    ".agents/subagents/planner/instructions.md",
-    ".agents/subagents/implementer/instructions.md",
+    ".agents/subagents/planner.md",
+    ".agents/subagents/implementer.md",
     ".agents/skills/review-guidance/SKILL.md",
     ".agents/tools/echo/server.py",
     ".agents/tools/echo/requirements.txt",
-    ".agents/subagents/navigator/instructions.md",
+    ".agents/subagents/navigator.md",
     ".agents/subagents/navigator/AGENTS.md",
-    ".agents/subagents/reviewer/instructions.md",
+    ".agents/subagents/reviewer.md",
     ".agents/subagents/reviewer/AGENTS.md",
     ".agents/workflows/implement_and_review.yaml",
     ".agents/workflows/parallel_review.yaml",
