@@ -9,6 +9,8 @@ use serde_json::{Value, json};
 use super::launch::{HostEnvironment, LaunchRequest, Origin, ProspectiveLaunch, PythonLocalStatus};
 use crate::capabilities::activation::SourceActivation;
 
+pub(super) const OUTPUT_LIMIT: usize = 256 * 1024;
+
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Validity {
@@ -253,33 +255,119 @@ impl Report {
     }
 
     pub(super) fn render(&self, json_output: bool) -> String {
-        let mut value = serde_json::to_value(self).expect("report serializes");
-        // Bound both renderers by the larger pretty representation. Never cut
-        // JSON bytes or turn a partial projection into apparent complete values.
-        if serde_json::to_vec_pretty(&value)
-            .expect("report serializes")
-            .len()
-            > 256 * 1024
-        {
-            value["launch"] = Value::Null;
-            value["partial"] = Value::Null;
-            value["projection_omitted"] = json!(true);
-            value["diagnostics"] = json!([Diagnostic {
-                classification: "warning", category: "projection_limit", file: None, path: "$".into(),
-                reason: "projection omitted because it exceeds the 256 KiB output bound; validity/readiness are unchanged".into(),
-                correction: "inspect smaller authoring documents; this output is partial".into(), line: None, column: None,
-            }]);
-        }
+        let header = format!(
+            "{}: {:?}; {:?} (prospective next launch; partial if incomplete or projection_omitted)\n",
+            self.operation, self.validity, self.readiness,
+        );
+        let value = self.bounded_value(header.len());
         if json_output {
             serde_json::to_string(&value).expect("report serializes")
         } else {
             format!(
-                "{}: {:?}; {:?} (prospective next launch; partial if incomplete or projection_omitted)\n{}",
-                self.operation,
-                self.validity,
-                self.readiness,
+                "{header}{}",
                 serde_json::to_string_pretty(&value).expect("report serializes")
             )
+        }
+    }
+
+    fn bounded_value(&self, header_bytes: usize) -> Value {
+        let mut value = serde_json::to_value(self).expect("report serializes");
+        // One structured value for both renderers. Reserve the human header and
+        // the command's trailing newline, and measure escaped, pretty JSON.
+        let fits = |value: &Value| {
+            serde_json::to_vec_pretty(value)
+                .expect("report serializes")
+                .len()
+                + header_bytes
+                + 1
+                < OUTPUT_LIMIT
+        };
+        if fits(&value) {
+            return value;
+        }
+        value["launch"] = Value::Null;
+        value["partial"] = Value::Null;
+        value["projection_omitted"] = json!(true);
+        let projection_warning = json!(Diagnostic {
+            classification: "warning", category: "projection_limit", file: None, path: "$".into(),
+            reason: "projection omitted because it exceeds the 256 KiB output bound; validity/readiness are unchanged".into(),
+            correction: "inspect smaller authoring documents; this output is partial".into(), line: None, column: None,
+        });
+        value["diagnostics"]
+            .as_array_mut()
+            .expect("diagnostics array")
+            .push(projection_warning.clone());
+        if fits(&value) {
+            return value;
+        }
+
+        // Classification is supplied by the authoritative owner, not inferred
+        // from error prose. Prioritize the first cause, then retain a prefix of
+        // the remaining diagnostics in their original order.
+        let causal = self
+            .diagnostics
+            .iter()
+            .position(|diagnostic| match self.validity {
+                Validity::Invalid => {
+                    diagnostic.category == "invalid" && diagnostic.classification == "error"
+                }
+                Validity::Incomplete => diagnostic.category == "incomplete",
+                Validity::Valid => false,
+            });
+        let Value::Array(mut original) = value["diagnostics"].take() else {
+            unreachable!("diagnostics array")
+        };
+        original.pop(); // The omission warning is reserved below, not truncated.
+        value["diagnostics"] = json!([projection_warning, Diagnostic {
+            classification: "warning", category: "diagnostics_truncated", file: None, path: "diagnostics".into(),
+            reason: "diagnostic count or text was truncated to preserve the first causal diagnostic within the output bound".into(),
+            correction: "correct the retained cause and check again for subsequent diagnostics".into(), line: None, column: None,
+        }]);
+        let mut retained = 0;
+        if let Some(index) = causal {
+            value["diagnostics"]
+                .as_array_mut()
+                .unwrap()
+                .insert(0, original[index].clone());
+            if !fits(&value) {
+                // A single pathological record must not consume the report.
+                // Summarize only already-redacted text, preserving field names,
+                // classification, location and UTF-8/JSON record integrity.
+                summarize_diagnostic(&mut value["diagnostics"][0]);
+            }
+            retained = 1;
+        }
+        for (index, diagnostic) in original.into_iter().enumerate() {
+            if Some(index) == causal {
+                continue;
+            }
+            value["diagnostics"]
+                .as_array_mut()
+                .unwrap()
+                .insert(retained, diagnostic);
+            if !fits(&value) {
+                value["diagnostics"]
+                    .as_array_mut()
+                    .unwrap()
+                    .remove(retained);
+                break;
+            }
+            retained += 1;
+        }
+        value
+    }
+}
+
+fn summarize_diagnostic(diagnostic: &mut Value) {
+    for field in ["file", "path", "reason", "correction"] {
+        if let Some(text) = diagnostic[field].as_str()
+            && text.len() > 1024
+        {
+            let mut end = 1024;
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            diagnostic[field] = json!(format!("{}… [truncated]", &text[..end]));
         }
     }
 }

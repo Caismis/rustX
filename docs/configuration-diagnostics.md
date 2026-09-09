@@ -63,8 +63,18 @@ reports file publication, not next-launch readiness. Invalidity takes exit-code
 precedence (2) over unresolved readiness (3).
 Absent complete values are null, not guessed. Reports carry
 `projection_omitted: false` normally. If the pretty projection
-would exceed 256 KiB, both renderers omit it with a structured `projection_limit`
-diagnostic and `projection_omitted: true`, retaining validity/readiness. Diagnostics carry
+would exceed 256 KiB, both renderers omit `launch`/`partial`, append a structured
+`projection_limit` diagnostic, and set `projection_omitted: true`. Existing
+diagnostics, validity, readiness, and exit semantics are preserved. If diagnostics
+alone still exceed the bound, the first authoritative invalid/incomplete cause
+is retained first, followed by a fitting prefix of the remaining diagnostics in
+original order. Both omission and `diagnostics_truncated` warnings are reserved.
+An individually oversized causal record keeps its classification/location and
+UTF-8 prefixes of file/path/reason/correction (1024 bytes per text field), with
+explicit truncation markers. Only already-redacted structured values are used;
+JSON records are never byte-cut. The common budget includes the human header
+and trailing newline, so human and JSON output retain identical diagnostics.
+Diagnostics carry
 classification, category, source file, field/reference path, reason, correction, and optional
 parser line/column. Positions are supplied only when the JSONC parser knows them;
 semantic errors do not manufacture positions. Doctor emits two ordered records:
@@ -257,6 +267,9 @@ tests run in CI's `process` target. No race/zero-effect proof uses sleeps.
 
 | Requirement | Concrete test(s) |
 | --- | --- |
+| Oversized invalid projection preserves its real package error and redaction in both renderers | `cfg235_oversized_invalid_projection_preserves_authoritative_diagnostics` |
+| Oversized partial projection preserves the incomplete cause | `cfg235_oversized_incomplete_projection_preserves_incomplete_diagnostic` |
+| Diagnostic-only overflow retains the first cause, deterministic ordering and explicit truncation, including an oversized UTF-8 causal record | `cfg235_diagnostics_only_overflow_preserves_first_cause_deterministically` |
 | Trusted enabled package enters native parser, stays unresolved, no environment store/effects | `cfg235_enabled_python_package_is_locally_validated_without_preparation` |
 | Missing enabled package is a precise static source failure | `cfg235_enabled_missing_python_package_is_a_precise_static_source_failure` |
 | Malformed enabled package is a precise static source failure, redacted | `cfg235_enabled_malformed_python_package_is_a_precise_static_source_failure` |

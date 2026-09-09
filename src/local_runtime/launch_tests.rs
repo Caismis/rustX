@@ -319,6 +319,152 @@ fn cfg235_prospective_values_and_origins_equal_runtime_resolution() {
 }
 
 #[test]
+fn cfg235_oversized_invalid_projection_preserves_authoritative_diagnostics() {
+    let f = Fixture::new();
+    let package = f.host.launch_directory.join(".agents/tools/foo");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("server.py"), "# inert").unwrap();
+    std::fs::write(
+        package.join("requirements.txt"),
+        "--index-url RUSTX_SECRET_SENTINEL_DO_NOT_LEAK",
+    )
+    .unwrap();
+    f.project(json!({
+        "pythonSources":{"python:foo":"enabled"},
+        "environment": (0..4096).map(|index| (format!("FIELD_{index}"), "RUSTX_SECRET_SENTINEL_DO_NOT_LEAK")).collect::<std::collections::BTreeMap<_,_>>()
+    }));
+    let (report, _) = super::diagnostics::inspect("config_show", &f.request, &f.host);
+    assert_eq!(report.exit_code(), 2);
+    assert_bounded_cause(&report, "pythonSources.python:foo", "invalid");
+}
+
+#[test]
+fn cfg235_oversized_incomplete_projection_preserves_incomplete_diagnostic() {
+    let f = Fixture::new();
+    f.user(json!({}));
+    f.project(json!({"defaultTools": (0..12000).map(|index| format!("unresolved_tool_identity_{index}")).collect::<Vec<_>>(), "environment":{"PRIVATE":"RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"}}));
+    let (report, _) = super::diagnostics::inspect("config_show", &f.request, &f.host);
+    assert_eq!(report.exit_code(), 3);
+    assert!(report.partial.is_some());
+    assert_bounded_cause(&report, &report.diagnostics[0].path, "incomplete");
+}
+
+fn assert_bounded_cause(report: &super::diagnostics::Report, path: &str, category: &str) {
+    let original = report
+        .diagnostics
+        .iter()
+        .find(|d| d.path == path && d.category == category)
+        .unwrap();
+    let output = report.render(true);
+    let human = report.render(false);
+    for text in [&output, &human, &format!("{report:?}")] {
+        assert!(!text.contains("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"));
+    }
+    assert!(output.len() + 1 < super::diagnostics::OUTPUT_LIMIT);
+    assert!(human.len() + 1 < super::diagnostics::OUTPUT_LIMIT);
+    let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+    let human_value: serde_json::Value =
+        serde_json::from_str(human.split_once('\n').unwrap().1).unwrap();
+    assert_eq!(value, human_value);
+    assert_eq!(value["validity"], category);
+    assert_eq!(value["readiness"], "unresolved");
+    assert_eq!(value["projection_omitted"], true);
+    assert!(value["launch"].is_null() && value["partial"].is_null());
+    let diagnostics = value["diagnostics"].as_array().unwrap();
+    assert_eq!(diagnostics.len(), report.diagnostics.len() + 1);
+    for (retained, original) in diagnostics.iter().zip(&report.diagnostics) {
+        assert_eq!(*retained, serde_json::to_value(original).unwrap());
+    }
+    let cause = diagnostics
+        .iter()
+        .find(|d| d["path"] == path && d["category"] == category)
+        .unwrap();
+    assert_eq!(*cause, serde_json::to_value(original).unwrap());
+    assert!(!cause["reason"].as_str().unwrap().is_empty());
+    assert!(!cause["correction"].as_str().unwrap().is_empty());
+    if category == "invalid" {
+        assert_eq!(cause["classification"], "error");
+        assert!(cause["file"].is_string());
+    }
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d["category"] == "projection_limit")
+    );
+}
+
+#[test]
+fn cfg235_diagnostics_only_overflow_preserves_first_cause_deterministically() {
+    use super::diagnostics::{Diagnostic, OUTPUT_LIMIT, Report};
+    let mut report = Report::failure(
+        "config_check",
+        Some("rustx.jsonc".into()),
+        "pythonSources.python:foo",
+        "enabled package violates the local package contract",
+        "repair server.py and requirements.txt",
+    );
+    let cause = report.diagnostics.remove(0);
+    report.diagnostics = (0..512)
+        .map(|index| Diagnostic {
+            classification: "info",
+            category: "inert",
+            file: None,
+            path: format!("source.{index}"),
+            reason: "diagnostic detail ".repeat(256),
+            correction: "leave inert".into(),
+            line: None,
+            column: None,
+        })
+        .collect();
+    report.diagnostics.insert(100, cause.clone());
+    for oversized_cause in [false, true] {
+        if oversized_cause {
+            report.diagnostics[100]
+                .reason
+                .push_str(&"\"🦀\n".repeat(100_000));
+        }
+        let output = report.render(true);
+        assert_eq!(output, report.render(true));
+        assert!(output.len() + 1 < OUTPUT_LIMIT);
+        let human = report.render(false);
+        assert!(human.len() + 1 < OUTPUT_LIMIT);
+        let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(
+            value,
+            serde_json::from_str::<serde_json::Value>(human.split_once('\n').unwrap().1).unwrap()
+        );
+        assert_eq!(report.exit_code(), 2);
+        assert_eq!(value["validity"], "invalid");
+        assert_eq!(value["readiness"], "unresolved");
+        let diagnostics = value["diagnostics"].as_array().unwrap();
+        assert_eq!(diagnostics[0]["path"], cause.path);
+        assert_eq!(diagnostics[0]["classification"], "error");
+        assert!(
+            diagnostics[0]["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with(&cause.reason)
+        );
+        assert_eq!(diagnostics[0]["correction"], cause.correction);
+        if !oversized_cause {
+            assert_eq!(diagnostics[0], serde_json::to_value(&cause).unwrap());
+        }
+        for (index, diagnostic) in diagnostics[1..diagnostics.len() - 2].iter().enumerate() {
+            assert_eq!(diagnostic["path"], format!("source.{index}"));
+        }
+        assert_eq!(
+            diagnostics[diagnostics.len() - 2]["category"],
+            "projection_limit"
+        );
+        assert_eq!(
+            diagnostics.last().unwrap()["category"],
+            "diagnostics_truncated"
+        );
+        assert!(!output.contains("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"));
+    }
+}
+
+#[test]
 fn cfg235_projection_has_a_structured_size_bound_without_changing_validity() {
     let f = Fixture::new();
     f.project(json!({"environment":(0..4096).map(|index| (format!("FIELD_{index}"), "RUSTX_SECRET_SENTINEL_DO_NOT_LEAK")).collect::<std::collections::BTreeMap<_,_>>()}));
@@ -329,6 +475,10 @@ fn cfg235_projection_has_a_structured_size_bound_without_changing_validity() {
     let value: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(value["projection_omitted"], true);
     assert_eq!(value["validity"], "valid");
+    assert_eq!(
+        value["diagnostics"][0],
+        serde_json::to_value(&report.diagnostics[0]).unwrap()
+    );
     assert!(value["launch"].is_null());
     assert!(!output.contains("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"));
     assert!(report.render(false).len() < 256 * 1024);
