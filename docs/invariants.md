@@ -3189,6 +3189,23 @@ A package rewrite is observed only at the next quiescent re-discovery.
   never resolve source through the current
   capability pointer and never execute mutable workspace source: the server
   runs the frozen `source/` copy of its state directory.
+- **The managed FastMCP pin is rustX-owned and material.** Exactly one
+  version (`MANAGED_FASTMCP_VERSION`) is prepared, never a range and never a
+  workspace-selectable one, because the pin is the identity of rustX's MCP
+  wire implementation; a package declaring `fastmcp` itself is rejected with
+  a diagnostic naming the managed pin. The pin is a fingerprint input, so
+  moving it is always a new prepared-state identity: an old state is neither
+  reused nor mutated in place. There is no FastMCP mode, compatibility
+  fallback, or dual prepared environment; ownership ends at materialization
+  and launch, and the protocol revision a managed child speaks is negotiated
+  by the generic MCP runtime (FastMCP 4 answers `server/discover`, so it
+  negotiates MCP `2026-07-28`).
+- **A dependency-resolution failure is package-scoped.** uv remains the
+  resolution authority; rustX only attributes the failure. A package whose
+  declared dependencies cannot be satisfied against the managed FastMCP
+  baseline fails its own preparation with a bounded diagnostic naming its
+  synthesized source and the failing phase, and neither sibling managed
+  sources, configured MCP sources, nor native capabilities lose availability.
 - **Python prepared-state publication.** The published shape is
   `packages/<fingerprint>/` — the frozen `source/` copy, the rustX-generated
   `pyproject.toml` and `uv.lock`, the `venv/`, and the rustX-owned

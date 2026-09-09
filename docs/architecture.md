@@ -3997,7 +3997,13 @@ re-resolves dependencies — it names the venv interpreter directly, never
 connect, `tools/list`, the frozen catalog epoch, availability as
 `CapabilitySourceId::Mcp(python:<folder>)`, `tools/call`, commit, leases, and
 the subagent frozen crossing — is the unmodified generic MCP machinery: a
-Python package is not a second runtime protocol. One folder is one server
+Python package is not a second runtime protocol. The revision a managed
+package speaks is therefore a property of that generic connection, not of the
+package: the rustX-owned peer (FastMCP 4, Issue #241) answers the modern
+`server/discover` probe, so a managed child negotiates MCP `2026-07-28`
+exactly like any other modern peer, and rustX's negotiated fallback to
+genuinely older external peers is unchanged and unrelated to this pin. One
+folder is one server
 identity, and multiple tools of one folder arrive through one `tools/list`;
 no uv command and no process spawn happens per `tools/call` — the prepared
 venv interpreter is launched once per committed generation and reused. The
