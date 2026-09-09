@@ -26,6 +26,7 @@
 //! fails: the scenario rejects a request it did not expect, and this driver
 //! rejects a runtime state it did not expect.
 
+use crate::launch_fixture::LaunchFixture;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -33,7 +34,6 @@ use crate::common::provider_emulator::ProviderEmulator;
 use rustx::durable::ConversationStore;
 use rustx::local_runtime::composition::{
     HeadlessConversationRuntime, LocalConversationRuntime, LocalRuntimeDependencies,
-    LocalRuntimePaths,
 };
 use rustx::message::content::TextBlock;
 use rustx::message::types::{MessageBlock, UserContentBlock, UserSource};
@@ -175,7 +175,7 @@ impl Driver {
         .expect("models.jsonc");
         std::fs::write(root.path().join("rustx.jsonc"), session_json(setup)).expect("rustx.jsonc");
 
-        let paths = LocalRuntimePaths {
+        let paths = LaunchFixture {
             models: root.path().join("models.jsonc"),
             config: root.path().join("rustx.jsonc"),
             skill_paths: setup.skill_paths.clone(),
@@ -196,7 +196,7 @@ impl Driver {
             )])),
             ..LocalRuntimeDependencies::default()
         };
-        let runtime = LocalConversationRuntime::compose(&paths, &dependencies)
+        let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies)
             .await
             .expect("the real runtime composes against the emulator catalog");
         let (attachment, result) = runtime
@@ -1258,7 +1258,7 @@ async fn a_crash_after_the_request_start_commit_never_resends_the_request() {
     )
     .expect("models.jsonc");
     std::fs::write(root.path().join("rustx.jsonc"), session_json(&setup)).expect("rustx.jsonc");
-    let paths = LocalRuntimePaths {
+    let paths = LaunchFixture {
         models: root.path().join("models.jsonc"),
         config: root.path().join("rustx.jsonc"),
         skill_paths: setup.skill_paths.clone(),
@@ -1282,9 +1282,10 @@ async fn a_crash_after_the_request_start_commit_never_resends_the_request() {
             .build()
             .expect("the first runtime's execution runtime");
         execution.block_on(async move {
-            let runtime = HeadlessConversationRuntime::compose(&first_paths, &dependencies())
-                .await
-                .expect("the first runtime composes");
+            let runtime =
+                HeadlessConversationRuntime::compose(&(first_paths).resolve(), &dependencies())
+                    .await
+                    .expect("the first runtime composes");
             runtime
                 .runtime()
                 .submit_inbound(vec![UserContentBlock::Text(TextBlock {
@@ -1317,7 +1318,7 @@ async fn a_crash_after_the_request_start_commit_never_resends_the_request() {
     emulator.release_gate("before-remaining-text").await;
 
     // ---- runtime instance #2 over the same durable conversation ----
-    let recovered = HeadlessConversationRuntime::compose(&paths, &dependencies())
+    let recovered = HeadlessConversationRuntime::compose(&(paths).resolve(), &dependencies())
         .await
         .expect("the second runtime recovers the durable conversation");
     let report = recovered.runtime().recovery();

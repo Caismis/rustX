@@ -124,7 +124,7 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
             "definitions": {
                 "explore": {
                     "description": "Read-only exploration of the shared workspace.",
-                    "instructionsFile": ".agents/subagents/explore/instructions.md",
+                    "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
                     "tools": {"builtin": ["read"]}
                 }
             },
@@ -139,8 +139,11 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
 /// Only the Issue #130 process-death scenarios need this extra model-facing
 /// tool; the rest of FND-06 retains its original bounded catalog.
 pub(crate) fn write_runtime_config_with_todo(root: &Path) {
-    std::fs::write(root.join("rustx.jsonc"), runtime_json("never", true))
-        .expect("rustx.jsonc with Todo");
+    crate::launch_fixture::write_documents(
+        &root.join("rustx.jsonc"),
+        &runtime_json("never", true),
+        &["approvalMode", "nativeTools"],
+    );
 }
 
 /// One temporary lab: the complete on-disk world of one conformance case.
@@ -188,11 +191,11 @@ impl Lab {
     }
 
     pub(crate) fn write_runtime_config(&self, read_approval: &str) {
-        std::fs::write(
-            self.root().join("rustx.jsonc"),
-            runtime_json(read_approval, false),
-        )
-        .expect("rustx.jsonc");
+        crate::launch_fixture::write_documents(
+            &self.root().join("rustx.jsonc"),
+            &runtime_json(read_approval, false),
+            &["approvalMode", "nativeTools"],
+        );
     }
 
     /// Replaces the loaded `AGENTS.md` project-instruction file.

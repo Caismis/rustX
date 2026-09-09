@@ -4,13 +4,12 @@
 //! Protocol responses are the synchronization points: no readiness sleeps or
 //! timing assumptions are involved.
 
+use crate::launch_fixture::LaunchFixture;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use rustx::durable::ConversationStore;
-use rustx::local_runtime::composition::{
-    LocalRuntimeDependencies, LocalRuntimePaths, LocalSessionProduct,
-};
+use rustx::local_runtime::composition::{LocalRuntimeDependencies, LocalSessionProduct};
 use rustx::local_runtime::{SessionCatalog, StartupSession};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
@@ -63,12 +62,12 @@ const BOOTSTRAP: &str = r#"{
   "context": {"reserveTokens": 1024, "keepRecentTokens": 4096}
 }"#;
 
-fn paths(root: &std::path::Path) -> LocalRuntimePaths {
+fn paths(root: &std::path::Path) -> LaunchFixture {
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
     std::fs::write(root.join("models.jsonc"), MODELS).expect("models");
     std::fs::write(root.join("rustx.jsonc"), BOOTSTRAP).expect("rustx.jsonc");
-    LocalRuntimePaths {
+    LaunchFixture {
         models: root.join("models.jsonc"),
         config: root.join("rustx.jsonc"),
         skill_paths: Vec::new(),
@@ -86,8 +85,8 @@ fn paths(root: &std::path::Path) -> LocalRuntimePaths {
 
 /// The same startup arguments a client repeats when it replaces the process
 /// to complete a Session switch it has already published.
-fn continuing(paths: &LocalRuntimePaths) -> LocalRuntimePaths {
-    LocalRuntimePaths {
+fn continuing(paths: &LaunchFixture) -> LaunchFixture {
+    LaunchFixture {
         startup_session: StartupSession::ContinueActive,
         ..paths.clone()
     }
@@ -154,7 +153,7 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
     let workspace_before = workspace_snapshot(&workspace);
     let dependencies = dependencies();
 
-    let product = LocalSessionProduct::compose(&paths, &dependencies)
+    let product = LocalSessionProduct::compose(&(paths).resolve(), &dependencies)
         .await
         .expect("compose root product");
     let endpoint = product.endpoint();
@@ -375,7 +374,7 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
 
     // Recomposition resolves the catalog's published active node and runs
     // ordinary ConversationRuntime recovery for that independent lineage.
-    let resumed = LocalSessionProduct::compose(&continuing(&paths), &dependencies)
+    let resumed = LocalSessionProduct::compose(&(continuing(&paths)).resolve(), &dependencies)
         .await
         .expect("compose selected new session");
     assert_eq!(
@@ -420,7 +419,7 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
     drop(resumed_endpoint);
     drop(resumed);
 
-    let restored = LocalSessionProduct::compose(&continuing(&paths), &dependencies)
+    let restored = LocalSessionProduct::compose(&(continuing(&paths)).resolve(), &dependencies)
         .await
         .expect("compose resumed root session");
     assert_eq!(
@@ -459,7 +458,7 @@ async fn startup_begins_on_an_empty_session_unless_continue_is_requested() {
     let dependencies = dependencies();
     let runtime_root = root.path().join("runtime");
 
-    let first = LocalSessionProduct::compose(&paths, &dependencies)
+    let first = LocalSessionProduct::compose(&(paths).resolve(), &dependencies)
         .await
         .expect("first launch");
     let first_conversation = first.runtime().conversation_id().clone();
@@ -467,7 +466,7 @@ async fn startup_begins_on_an_empty_session_unless_continue_is_requested() {
 
     // The first launch left its Session unused, so the second launch is that
     // same empty Session rather than another one beside it.
-    let second = LocalSessionProduct::compose(&paths, &dependencies)
+    let second = LocalSessionProduct::compose(&(paths).resolve(), &dependencies)
         .await
         .expect("second launch");
     assert_eq!(second.runtime().conversation_id(), &first_conversation);
@@ -492,7 +491,7 @@ async fn startup_begins_on_an_empty_session_unless_continue_is_requested() {
         "issue88-startup-user",
     );
 
-    let third = LocalSessionProduct::compose(&paths, &dependencies)
+    let third = LocalSessionProduct::compose(&(paths).resolve(), &dependencies)
         .await
         .expect("third launch");
     let fresh_conversation = third.runtime().conversation_id().clone();
@@ -511,7 +510,7 @@ async fn startup_begins_on_an_empty_session_unless_continue_is_requested() {
 
     // Selecting the used Session publishes it as the active one, and the
     // process replacement that completes the switch asks for it explicitly.
-    let switching = LocalSessionProduct::compose(&continuing(&paths), &dependencies)
+    let switching = LocalSessionProduct::compose(&(continuing(&paths)).resolve(), &dependencies)
         .await
         .expect("continue the active Session");
     let endpoint = switching.endpoint();
@@ -542,7 +541,7 @@ async fn startup_begins_on_an_empty_session_unless_continue_is_requested() {
     drop(endpoint);
     drop(switching);
 
-    let continued = LocalSessionProduct::compose(&continuing(&paths), &dependencies)
+    let continued = LocalSessionProduct::compose(&(continuing(&paths)).resolve(), &dependencies)
         .await
         .expect("compose the selected Session");
     assert_eq!(
@@ -553,7 +552,7 @@ async fn startup_begins_on_an_empty_session_unless_continue_is_requested() {
     drop(continued);
 
     // The next ordinary launch leaves that selection as history again.
-    let relaunched = LocalSessionProduct::compose(&paths, &dependencies)
+    let relaunched = LocalSessionProduct::compose(&(paths).resolve(), &dependencies)
         .await
         .expect("ordinary relaunch");
     assert_ne!(relaunched.runtime().conversation_id(), &first_conversation);
@@ -572,7 +571,7 @@ async fn restart_preserves_resume_visibility_until_a_shell_owns_work() {
 
     // A first launch with no user work publishes the internal root shell and
     // lists nothing.
-    let first = LocalSessionProduct::compose(&paths, &dependencies)
+    let first = LocalSessionProduct::compose(&(paths).resolve(), &dependencies)
         .await
         .expect("first launch");
     let first_conversation = first.runtime().conversation_id().clone();
@@ -613,7 +612,7 @@ async fn restart_preserves_resume_visibility_until_a_shell_owns_work() {
 
     // An ordinary relaunch begins on a new internal shell: the used Session
     // stays the only resume-visible row, and restart changed nothing.
-    let second = LocalSessionProduct::compose(&paths, &dependencies)
+    let second = LocalSessionProduct::compose(&(paths).resolve(), &dependencies)
         .await
         .expect("ordinary relaunch");
     let shell_conversation = second.runtime().conversation_id().clone();
@@ -677,7 +676,7 @@ async fn restart_preserves_resume_visibility_until_a_shell_owns_work() {
 
     // One more ordinary restart: both used Sessions remain visible, the new
     // active shell is hidden, and nothing about the classification moved.
-    let third = LocalSessionProduct::compose(&paths, &dependencies)
+    let third = LocalSessionProduct::compose(&(paths).resolve(), &dependencies)
         .await
         .expect("second relaunch");
     assert_ne!(third.runtime().conversation_id(), &shell_conversation);
@@ -702,7 +701,7 @@ async fn new_after_accepted_submission_never_takes_the_unused_noop() {
     let dependencies = dependencies();
     let runtime_root = root.path().join("runtime");
 
-    let product = LocalSessionProduct::compose(&paths, &dependencies)
+    let product = LocalSessionProduct::compose(&(paths).resolve(), &dependencies)
         .await
         .expect("compose root product");
     let endpoint = product.endpoint();
@@ -784,7 +783,7 @@ async fn naming_a_startup_session_binds_it_and_publishes_the_selection() {
     let runtime_root = root.path().join("runtime");
 
     // One used Session, then an ordinary relaunch that leaves it as history.
-    let first = LocalSessionProduct::compose(&paths, &dependencies)
+    let first = LocalSessionProduct::compose(&(paths).resolve(), &dependencies)
         .await
         .expect("first launch");
     let historical_conversation = first.runtime().conversation_id().clone();
@@ -798,7 +797,7 @@ async fn naming_a_startup_session_binds_it_and_publishes_the_selection() {
         "issue88-named-user",
     );
 
-    let relaunched = LocalSessionProduct::compose(&paths, &dependencies)
+    let relaunched = LocalSessionProduct::compose(&(paths).resolve(), &dependencies)
         .await
         .expect("ordinary relaunch");
     let fresh_conversation = relaunched.runtime().conversation_id().clone();
@@ -808,9 +807,12 @@ async fn naming_a_startup_session_binds_it_and_publishes_the_selection() {
 
     // The named Session is bound directly — no empty Session is published
     // beside it, and the catalog now publishes it as the active selection.
-    let named = LocalSessionProduct::compose(&selecting(&paths, &historical, None), &dependencies)
-        .await
-        .expect("launch on the named Session");
+    let named = LocalSessionProduct::compose(
+        &(selecting(&paths, &historical, None)).resolve(),
+        &dependencies,
+    )
+    .await
+    .expect("launch on the named Session");
     assert_eq!(named.runtime().conversation_id(), &historical_conversation);
     drop(named);
     assert_eq!(active_session_id(&runtime_root), historical);
@@ -822,7 +824,7 @@ async fn naming_a_startup_session_binds_it_and_publishes_the_selection() {
 
     // A replacement spawn completing a switch never names its destination;
     // the selection a named launch published is what it continues.
-    let continued = LocalSessionProduct::compose(&continuing(&paths), &dependencies)
+    let continued = LocalSessionProduct::compose(&(continuing(&paths)).resolve(), &dependencies)
         .await
         .expect("replacement spawn");
     assert_eq!(
@@ -834,7 +836,7 @@ async fn naming_a_startup_session_binds_it_and_publishes_the_selection() {
     // The named node is part of the selection, and both identities are
     // checked against the catalog before anything is composed.
     let node = LocalSessionProduct::compose(
-        &selecting(&paths, &historical, Some(&historical_node)),
+        &(selecting(&paths, &historical, Some(&historical_node))).resolve(),
         &dependencies,
     )
     .await
@@ -844,15 +846,18 @@ async fn naming_a_startup_session_binds_it_and_publishes_the_selection() {
 
     let unknown_session = rustx::local_runtime::SessionId::new("session-absent");
     assert!(
-        LocalSessionProduct::compose(&selecting(&paths, &unknown_session, None), &dependencies)
-            .await
-            .is_err(),
+        LocalSessionProduct::compose(
+            &(selecting(&paths, &unknown_session, None)).resolve(),
+            &dependencies
+        )
+        .await
+        .is_err(),
         "an unknown Session identity fails the launch"
     );
     let unknown_node = rustx::local_runtime::SessionNodeId::new("node-absent");
     assert!(
         LocalSessionProduct::compose(
-            &selecting(&paths, &historical, Some(&unknown_node)),
+            &(selecting(&paths, &historical, Some(&unknown_node))).resolve(),
             &dependencies
         )
         .await
@@ -881,9 +886,10 @@ async fn a_launch_name_labels_the_bound_session_and_never_selects_one() {
     let dependencies = dependencies();
     let runtime_root = root.path().join("runtime");
 
-    let first = LocalSessionProduct::compose(&named(&paths, "auth refactor"), &dependencies)
-        .await
-        .expect("named launch");
+    let first =
+        LocalSessionProduct::compose(&(named(&paths, "auth refactor")).resolve(), &dependencies)
+            .await
+            .expect("named launch");
     let first_conversation = first.runtime().conversation_id().clone();
     drop(first);
     let first_session = active_session_id(&runtime_root);
@@ -905,7 +911,7 @@ async fn a_launch_name_labels_the_bound_session_and_never_selects_one() {
         &first_conversation,
         "issue88-named-launch",
     );
-    let relaunched = LocalSessionProduct::compose(&paths, &dependencies)
+    let relaunched = LocalSessionProduct::compose(&(paths).resolve(), &dependencies)
         .await
         .expect("ordinary relaunch");
     drop(relaunched);
@@ -920,10 +926,12 @@ async fn a_launch_name_labels_the_bound_session_and_never_selects_one() {
 
     // Naming a launch that continues renames exactly that Session, which is
     // what typing `/name` in it would have done.
-    let continued =
-        LocalSessionProduct::compose(&named(&continuing(&paths), "session picker"), &dependencies)
-            .await
-            .expect("named continuation");
+    let continued = LocalSessionProduct::compose(
+        &(named(&continuing(&paths), "session picker")).resolve(),
+        &dependencies,
+    )
+    .await
+    .expect("named continuation");
     drop(continued);
     let active = active_session_id(&runtime_root);
     assert_ne!(active, first_session);
@@ -936,11 +944,12 @@ async fn a_launch_name_labels_the_bound_session_and_never_selects_one() {
     // A name is not an identity, and nothing resolves one.
     assert!(
         LocalSessionProduct::compose(
-            &selecting(
+            &(selecting(
                 &paths,
                 &rustx::local_runtime::SessionId::new("auth refactor"),
                 None
-            ),
+            ))
+            .resolve(),
             &dependencies
         )
         .await
@@ -950,8 +959,8 @@ async fn a_launch_name_labels_the_bound_session_and_never_selects_one() {
 }
 
 /// The startup arguments of a launch that names the Session it binds.
-fn named(paths: &LocalRuntimePaths, name: &str) -> LocalRuntimePaths {
-    LocalRuntimePaths {
+fn named(paths: &LaunchFixture, name: &str) -> LaunchFixture {
+    LaunchFixture {
         session_name: Some(name.to_owned()),
         ..paths.clone()
     }
@@ -991,11 +1000,11 @@ fn session_rows(runtime_root: &std::path::Path) -> Vec<rustx::local_runtime::Ses
 
 /// The startup arguments of a launch that names where it starts.
 fn selecting(
-    paths: &LocalRuntimePaths,
+    paths: &LaunchFixture,
     session: &rustx::local_runtime::SessionId,
     node: Option<&rustx::local_runtime::SessionNodeId>,
-) -> LocalRuntimePaths {
-    LocalRuntimePaths {
+) -> LaunchFixture {
+    LaunchFixture {
         startup_session: StartupSession::Select {
             session: session.clone(),
             node: node.cloned(),
@@ -1053,7 +1062,7 @@ async fn a_failed_launch_leaves_the_catalog_and_the_active_selection_untouched()
     let catalog_path = runtime_root.join("sessions").join("catalog.json");
 
     // A used Session, so a later launch treats it as history.
-    let first = LocalSessionProduct::compose(&paths, &dependencies)
+    let first = LocalSessionProduct::compose(&(paths).resolve(), &dependencies)
         .await
         .expect("first launch");
     let doomed_conversation = first.runtime().conversation_id().clone();
@@ -1067,7 +1076,7 @@ async fn a_failed_launch_leaves_the_catalog_and_the_active_selection_untouched()
     );
 
     // A second Session becomes the active one; the first is history.
-    let second = LocalSessionProduct::compose(&paths, &dependencies)
+    let second = LocalSessionProduct::compose(&(paths).resolve(), &dependencies)
         .await
         .expect("second launch");
     drop(second);
@@ -1091,7 +1100,7 @@ async fn a_failed_launch_leaves_the_catalog_and_the_active_selection_untouched()
 
     // Selecting it, and naming it in the same launch, must both be undone
     // by the composition failure — because neither was ever done.
-    let doomed = LocalRuntimePaths {
+    let doomed = LaunchFixture {
         startup_session: StartupSession::Select {
             session: doomed_session.clone(),
             node: None,
@@ -1099,7 +1108,7 @@ async fn a_failed_launch_leaves_the_catalog_and_the_active_selection_untouched()
         session_name: Some("a name this launch never earned".to_owned()),
         ..paths.clone()
     };
-    let _failure = LocalSessionProduct::compose(&doomed, &dependencies)
+    let _failure = LocalSessionProduct::compose(&(doomed).resolve(), &dependencies)
         .await
         .expect_err("a Session whose model no longer exists cannot be composed");
 
@@ -1126,7 +1135,7 @@ async fn a_failed_launch_leaves_the_catalog_and_the_active_selection_untouched()
 
     // The launch the user can still make is unaffected: the catalog is
     // exactly what it was, so continuing works.
-    let recovered = LocalSessionProduct::compose(&continuing(&paths), &dependencies)
+    let recovered = LocalSessionProduct::compose(&(continuing(&paths)).resolve(), &dependencies)
         .await
         .expect("the untouched active selection still composes");
     assert_eq!(active_session_id(&runtime_root), active_before);
@@ -1143,7 +1152,7 @@ async fn a_failed_empty_launch_publishes_no_session() {
     let dependencies = dependencies();
     let runtime_root = root.path().join("runtime");
 
-    let first = LocalSessionProduct::compose(&paths, &dependencies)
+    let first = LocalSessionProduct::compose(&(paths).resolve(), &dependencies)
         .await
         .expect("first launch");
     let used_conversation = first.runtime().conversation_id().clone();
@@ -1165,13 +1174,13 @@ async fn a_failed_empty_launch_publishes_no_session() {
     // regular file, which only the conversation tool runtime discovers.
     let broken_workspace = root.path().join("workspace-is-a-file");
     std::fs::write(&broken_workspace, b"not a directory").expect("workspace file");
-    let doomed = LocalRuntimePaths {
+    let doomed = LaunchFixture {
         workspace: broken_workspace,
         ..paths.clone()
     };
-    let _failure = LocalSessionProduct::compose(&doomed, &dependencies)
-        .await
-        .expect_err("a Workspace that is not a directory cannot be composed");
+    let _failure = doomed
+        .try_resolve()
+        .expect_err("a Workspace that is not a directory cannot be resolved");
 
     assert_eq!(
         persisted_ids(&runtime_root),
@@ -1212,13 +1221,13 @@ async fn a_failed_first_launch_publishes_no_catalog() {
     assert!(!catalog_path.exists(), "the runtime root starts empty");
     let broken_workspace = root.path().join("workspace-is-a-file");
     std::fs::write(&broken_workspace, b"not a directory").expect("workspace file");
-    let doomed = LocalRuntimePaths {
+    let doomed = LaunchFixture {
         workspace: broken_workspace,
         ..paths.clone()
     };
-    let _failure = LocalSessionProduct::compose(&doomed, &dependencies)
-        .await
-        .expect_err("a Workspace that is not a directory cannot be composed");
+    let _failure = doomed
+        .try_resolve()
+        .expect_err("a Workspace that is not a directory cannot be resolved");
 
     assert!(
         !catalog_path.exists(),
@@ -1233,7 +1242,7 @@ async fn a_failed_first_launch_publishes_no_catalog() {
 
     // The runtime root is still fresh, so the next launch is a first launch
     // and starts on the root Session it publishes itself.
-    let recovered = LocalSessionProduct::compose(&paths, &dependencies)
+    let recovered = LocalSessionProduct::compose(&(paths).resolve(), &dependencies)
         .await
         .expect("the untouched runtime root still composes");
     assert_eq!(

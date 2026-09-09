@@ -41,6 +41,7 @@
 //! - Wall-clock time appears only as an outer anti-hang liveness guard.
 
 use super::super::{common, support};
+use crate::launch_fixture::LaunchFixture;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -4751,7 +4752,7 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
             child.host.clone(),
         )
         .expect("child live inspection endpoint");
-    let inspection_paths = rustx::local_runtime::LocalRuntimePaths {
+    let inspection_paths = LaunchFixture {
         models: dir.path().join("unused-models.jsonc"),
         config: dir.path().join("unused-config.jsonc"),
         skill_paths: Vec::new(),
@@ -4768,7 +4769,7 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
         runtime_root: plane.runtime_root.clone(),
     };
     let inspection = rustx::local_runtime::LocalConversationInspection::compose(
-        &inspection_paths,
+        &(inspection_paths).locations(),
         &child_conversation_id,
     )
     .await
@@ -4963,7 +4964,7 @@ async fn foreground_tool_progress_projects_live_and_returns_to_neutral() {
     // the live endpoint is gone. This is the terminal continuity half of the
     // two-path contract, not a second inspection identity.
     let offline_inspection = rustx::local_runtime::LocalConversationInspection::compose(
-        &inspection_paths,
+        &(inspection_paths).locations(),
         &child_conversation_id,
     )
     .await

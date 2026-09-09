@@ -945,6 +945,7 @@ mod tests {
                 mcp_servers: [(
                     McpServerId::new("github"),
                     crate::tools::mcp::McpServerBinding {
+                        resource_workspace: None,
                         transport: crate::tools::mcp::McpTransportConfig::Stdio {
                             program: "github-mcp".to_owned(),
                             args: vec!["--stdio".to_owned()],

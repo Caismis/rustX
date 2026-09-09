@@ -443,6 +443,7 @@ impl HttpFixture {
             .map(|(name, value)| (name.to_owned(), value.to_owned()))
             .collect();
         crate::tools::mcp::McpServerBinding {
+            resource_workspace: None,
             transport: crate::tools::mcp::McpTransportConfig::StreamableHttp {
                 endpoint: self.endpoint.clone(),
                 headers,

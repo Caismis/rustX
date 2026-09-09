@@ -1,5 +1,32 @@
 # Runtime resources and executable authority
 
+## Launch authority and resource paths
+
+Project trust permits project resources, never Tool approval policy.
+`approvalMode`, `nativeTools`, and `mcpToolPolicies` belong exclusively to host
+settings, including execution/concurrency members of those policy objects.
+
+Project-origin Skills, Subagent `instructionsFile`/`agentsMd.files`, and
+path-valued MCP `command`/`cwd` must resolve inside the canonical trusted
+workspace. Project instructions, Workflow files and automatic `.agents` resource
+roots obey the same containment boundary. Absolute paths, traversal, symlink
+targets and an external `--config` cannot grant another worktree's authority.
+User/CLI explicit resources retain host authority and their domain validation.
+Native file-tool arguments and command argument strings remain execution
+semantics, not sandboxed paths.
+
+Checks run before initial resource loading and again for reload candidates from
+launch-pinned slots. Symlink changes are re-evaluated against physical targets;
+failed candidates leave the previous generation intact. This does not claim
+race-proof syscall isolation against a hostile local OS user. See the complete
+[launch authority policy](launch-configuration.md#project-resource-path-authority).
+
+Frozen project MCP bindings preserve the original resource workspace through
+child admission and reconnect. The shared connect boundary checks local
+command/cwd targets before every process spawn; it does not rediscover settings.
+
+## Resource ownership
+
 `capabilities::selection` owns `ToolSelector` and exact source-qualified Tool
 resolution. Named Subagents and fixed Workflows consume it directly. Selector
 serialization is unchanged; managed Python remains MCP-origin.
@@ -299,14 +326,12 @@ be defined and admitted, and a Workflow id must be listed in
 runtime-owned/generated state and is not the canonical home for these
 project-authored resources.
 
-`.agents/skills/` is the canonical project layout. Skill discovery retains its
-pre-existing automatic roots `~/.rustx/skills/`, `~/.agents/skills/`,
-`<workspace>/.rustx/skills/`, and `<workspace>/.agents/skills/`; retaining the
-`.rustx/skills/` roots does not make them the canonical project layout.
+Native launch resolves automatic Skill roots to the user configuration
+directory's `skills/` and `<workspace>/.agents/skills/`. Explicit Skill paths
+are layered by the Rust resolver. See [launch configuration](launch-configuration.md).
 
-At runtime creation or explicit reload, applicable directories are traversed
-deterministically from filesystem root to the workspace/cwd. At most one file
-is selected per directory with this precedence:
+After the host grants trust, runtime creation and explicit reload load only
+the resolved workspace's instructions. At most one file is selected with this precedence:
 
 1. `AGENTS.override.md`
 2. `AGENTS.md`
@@ -314,9 +339,9 @@ is selected per directory with this precedence:
 4. `CLAUDE.md`
 5. `CLAUDE.MD`
 
-Selected source paths and UTF-8 contents retain that root-to-leaf order and
-are concatenated deterministically. Discovery never runs during ordinary
-request assembly.
+The selected source path and UTF-8 contents are frozen into the resource
+generation. Unrelated ancestors are outside the workspace trust boundary.
+Discovery never runs during ordinary request assembly.
 
 ## Lifecycle and external edits
 

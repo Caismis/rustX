@@ -18,12 +18,12 @@
 //! - the interactive production path still builds and runs over the same
 //!   semantic composition (Test H).
 
+use crate::launch_fixture::LaunchFixture;
 use std::sync::Arc;
 
 use crate::common::provider_emulator::ProviderEmulator;
 use rustx::local_runtime::composition::{
     HeadlessConversationRuntime, LocalConversationRuntime, LocalRuntimeDependencies,
-    LocalRuntimePaths,
 };
 use rustx::message::content::TextBlock;
 use rustx::message::types::UserContentBlock;
@@ -73,14 +73,14 @@ const RUNTIME_CONFIG_JSON: &str = r#"{
 
 /// Writes the startup files into a temporary root and returns the explicit
 /// paths.
-fn startup(root: &std::path::Path, models: &str, config: &str) -> LocalRuntimePaths {
+fn startup(root: &std::path::Path, models: &str, config: &str) -> LaunchFixture {
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
     let models_path = root.join("models.jsonc");
     let config_path = root.join("rustx.jsonc");
     std::fs::write(&models_path, models).expect("models.jsonc");
-    std::fs::write(&config_path, config).expect("rustx.jsonc");
-    LocalRuntimePaths {
+    crate::launch_fixture::write_documents(&config_path, config, &["nativeTools"]);
+    LaunchFixture {
         models: models_path,
         config: config_path,
         skill_paths: Vec::new(),
@@ -163,10 +163,10 @@ async fn interactive_and_headless_share_one_semantic_composition() {
     let paths = startup(root.path(), MODELS_JSON, RUNTIME_CONFIG_JSON);
     let dependencies = dependencies();
 
-    let interactive = LocalConversationRuntime::compose(&paths, &dependencies)
+    let interactive = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies)
         .await
         .expect("the interactive composition succeeds");
-    let headless = HeadlessConversationRuntime::compose(&paths, &dependencies)
+    let headless = HeadlessConversationRuntime::compose(&(paths).resolve(), &dependencies)
         .await
         .expect("the headless composition succeeds");
 
@@ -308,7 +308,7 @@ async fn headless_production_turn_runs_without_any_client_host() {
         &emulator_models_json(&emulator),
         &emulator_session_json(),
     );
-    let runtime = HeadlessConversationRuntime::compose(&paths, &dependencies())
+    let runtime = HeadlessConversationRuntime::compose(&(paths).resolve(), &dependencies())
         .await
         .expect("the headless composition succeeds");
     assert!(
@@ -356,7 +356,7 @@ async fn interactive_production_turn_still_builds_over_the_same_composition() {
         &emulator_models_json(&emulator),
         &emulator_session_json(),
     );
-    let runtime = LocalConversationRuntime::compose(&paths, &dependencies())
+    let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
         .await
         .expect("the interactive composition succeeds");
     assert!(

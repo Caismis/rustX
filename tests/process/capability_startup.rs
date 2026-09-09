@@ -11,10 +11,11 @@
 //! and asserts the runtime contract — alive runtime, usable native tools,
 //! typed unavailable state — never merely an error string.
 
+use crate::launch_fixture::LaunchFixture;
 use std::sync::Arc;
 
 use rustx::local_runtime::composition::{
-    LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimeError, LocalRuntimePaths,
+    LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimeError,
 };
 use rustx::model::catalog::MapCredentialEnvironment;
 use rustx::runtime::identity::ConversationId;
@@ -56,17 +57,17 @@ const SESSION_JSON: &str = r#"{
 /// Writes the startup files into a temporary root and returns the explicit
 /// paths, together with the canonicalized root (the coordinator resolves
 /// its private store through canonicalized paths).
-fn startup(root: &tempfile::TempDir, session: &str) -> (std::path::PathBuf, LocalRuntimePaths) {
+fn startup(root: &tempfile::TempDir, session: &str) -> (std::path::PathBuf, LaunchFixture) {
     let canonical = std::fs::canonicalize(root.path()).expect("canonical root");
     let workspace = canonical.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
     let models_path = canonical.join("models.jsonc");
     let session_path = canonical.join("rustx.jsonc");
     std::fs::write(&models_path, MODELS_JSON).expect("models.jsonc");
-    std::fs::write(&session_path, session).expect("rustx.jsonc");
+    crate::launch_fixture::write_documents(&session_path, session, &["mcpServers"]);
     (
         canonical.clone(),
-        LocalRuntimePaths {
+        LaunchFixture {
             models: models_path,
             config: session_path,
             skill_paths: Vec::new(),
@@ -229,7 +230,7 @@ async fn a_python_capability_failure_is_isolated_from_runtime_startup() {
     // and its `python:broken-tool` source becomes unavailable.
     write_broken_python_package(&paths.workspace, "broken-tool");
 
-    let runtime = LocalConversationRuntime::compose(&paths, &dependencies())
+    let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
         .await
         .expect("a broken Python package must not terminate composition");
     let snapshot = attach_snapshot(&runtime);
@@ -287,7 +288,7 @@ async fn python_store_initialization_failure_is_isolated_from_runtime_startup() 
     )
     .expect("conflicting regular file");
 
-    let runtime = LocalConversationRuntime::compose(&paths, &dependencies())
+    let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
         .await
         .expect("a Python store initialization failure must not terminate composition");
     let snapshot = attach_snapshot(&runtime);
@@ -398,12 +399,12 @@ async fn core_and_base_plane_failures_remain_fatal() {
     let root = tempfile::tempdir().expect("temp root");
     let bad_model = SESSION_JSON.replace("local/composed-model", "local/absent-model");
     let (_canonical, paths) = startup(&root, &bad_model);
-    assert!(matches!(
-        LocalConversationRuntime::compose(&paths, &dependencies())
-            .await
-            .expect_err("an unknown model fails startup"),
-        LocalRuntimeError::Model(_)
-    ));
+    assert!(
+        paths
+            .try_resolve()
+            .unwrap_err()
+            .contains("unknown catalog model")
+    );
 
     // A malformed Skill is a base capability-plane failure (the Skill plane
     // is Workspace content the runtime validated), not an optional external
@@ -414,7 +415,7 @@ async fn core_and_base_plane_failures_remain_fatal() {
     std::fs::create_dir_all(&skill).expect("skill directory");
     std::fs::write(skill.join("SKILL.md"), "not valid frontmatter at all").expect("SKILL.md");
     assert!(matches!(
-        LocalConversationRuntime::compose(&paths, &dependencies())
+        LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
             .await
             .expect_err("a malformed Skill fails the base capability plane"),
         LocalRuntimeError::Capability { .. }
@@ -476,7 +477,7 @@ mod mcp {
         let session = session_with_two_servers(&program, &args);
         let (_canonical, paths) = startup(&root, &session);
 
-        let runtime = super::LocalConversationRuntime::compose(&paths, &dependencies())
+        let runtime = super::LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
             .await
             .expect("one failing MCP server must not terminate composition");
         let snapshot = attach_snapshot(&runtime);
@@ -565,7 +566,7 @@ mod mcp {
         .to_string();
         let (_canonical, paths) = startup(&root, &session);
 
-        let runtime = super::LocalConversationRuntime::compose(&paths, &dependencies())
+        let runtime = super::LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
             .await
             .expect("an incompatible MCP server must not terminate composition");
         let snapshot = attach_snapshot(&runtime);
@@ -632,7 +633,7 @@ mod mcp {
         .to_string();
         let (_canonical, paths) = startup(&root, &session);
 
-        let runtime = super::LocalConversationRuntime::compose(&paths, &dependencies())
+        let runtime = super::LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
             .await
             .expect("a loud MCP peer must not terminate composition");
         let snapshot = attach_snapshot(&runtime);
@@ -761,9 +762,14 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
             },
         },
     });
-    std::fs::write(root.path().join("rustx.jsonc"), session.to_string()).expect("rustx.jsonc");
+    crate::launch_fixture::write_documents(
+        &root.path().join("rustx.jsonc"),
+        &session.to_string(),
+        &["mcpServers"],
+    );
 
     let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_rustx"));
+    let home = super::runtime_process::grant(root.path(), &workspace);
     command
         .arg("--models")
         .arg(root.path().join("models.jsonc"))
@@ -774,6 +780,7 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
         .arg("--runtime-root")
         .arg(root.path().join("private"))
         .env_clear()
+        .env("HOME", home)
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("RUSTX_ISSUE81_KEY", "issue81-secret")
         .stdin(Stdio::piped())

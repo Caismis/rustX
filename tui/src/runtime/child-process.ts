@@ -25,16 +25,18 @@ export const STDERR_TAIL_BYTES = 16 * 1024;
 /** How long a terminated child gets to exit before escalation. */
 export const DEFAULT_TERMINATION_GRACE_MS = 5_000;
 
-/** The explicit startup paths the `rustx` binary requires. */
+/** Optional path intent forwarded to the Rust launch resolver. */
 export interface RuntimePaths {
-  models: string;
-  config: string;
-  workspace: string;
-  runtimeRoot: string;
+  models?: string;
+  config?: string;
+  workspace?: string;
+  runtimeRoot?: string;
 }
 
 /** Startup controls forwarded verbatim to the Rust owner. */
 export interface RuntimeStartupOptions {
+  model?: string;
+  trust?: string;
   /**
    * Attach read-only to this known conversation's Runtime Client projection.
    * Rust resolves the identity to a running child's live endpoint when
@@ -136,10 +138,17 @@ export class ChildRuntimeProcess {
     this.#exited = this.#awaitExit();
   }
 
-  /** Spawns the binary with the explicit startup argument contract. */
+  /** Spawns the binary with user intent; Rust owns launch resolution. */
   static spawn(options: ChildRuntimeProcessOptions): ChildRuntimeProcess {
     const startup = options.startup ?? emptyRuntimeStartupOptions();
     const startupArguments: string[] = [];
+    for (const [flag, value] of [
+      ["--models", options.paths.models], ["--config", options.paths.config],
+      ["--workspace", options.paths.workspace], ["--runtime-root", options.paths.runtimeRoot],
+      ["--model", startup.model], ["--trust", startup.trust],
+    ]) {
+      if (flag !== undefined && value !== undefined) startupArguments.push(flag, value);
+    }
     if (startup.continueActiveSession) {
       startupArguments.push("--continue");
     }
@@ -176,14 +185,6 @@ export class ChildRuntimeProcess {
     const child = spawn(
       options.binary,
       [
-        "--models",
-        options.paths.models,
-        "--config",
-        options.paths.config,
-        "--workspace",
-        options.paths.workspace,
-        "--runtime-root",
-        options.paths.runtimeRoot,
         ...startupArguments,
       ],
       {

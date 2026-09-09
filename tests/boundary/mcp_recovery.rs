@@ -66,6 +66,7 @@ fn recovery_binding(
     script: &recovery::RecoveryScript,
 ) -> rustx::tools::mcp::McpServerBinding {
     rustx::tools::mcp::McpServerBinding {
+        resource_workspace: None,
         transport: rustx::tools::mcp::McpTransportConfig::Stdio {
             program: std::env::current_exe()
                 .expect("test executable")

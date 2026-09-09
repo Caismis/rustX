@@ -28,6 +28,9 @@ pub mod tools;
 /// their fixtures reach into the `cfg(test)`-only `crate::` seams.
 #[cfg(test)]
 extern crate self as rustx;
+#[cfg(test)]
+#[path = "../tests/common/launch.rs"]
+mod launch_fixture;
 
 /// The deterministic scripted contract suites.
 ///

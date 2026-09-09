@@ -1,12 +1,11 @@
 # Copyable local runtime configuration
 
-This is the canonical example for the current explicit local runtime
-contract. Copy this directory, replace the provider placeholder, and pass all
-four paths explicitly. There is no cwd-based configuration discovery,
-global/project precedence, implicit `~/.rustx` configuration, or TUI-side
-configuration parser.
+This is the advanced resource example for the Rust-owned local runtime.
+Ordinary startup uses the [host configuration and trust contract](../../docs/launch-configuration.md).
+Copy this directory and replace the provider placeholder to explore optional
+resources. Rust owns discovery, defaults and trust; the TUI forwards intent.
 
-Both configuration files are commented in place. Read them first: this
+The configuration files are commented in place. Read them first: this
 document explains the contracts around them, while the files themselves
 explain each field where it is set, and carry commented-out entries for the
 options the baseline does not enable.
@@ -17,6 +16,7 @@ The intended layout is:
 examples/local-runtime/
 ├── README.md
 ├── models.jsonc
+├── settings.jsonc
 ├── rustx.jsonc
 ├── workspace/
 │   ├── AGENTS.md
@@ -34,7 +34,7 @@ examples/local-runtime/
 │       └── workflows/
 │           ├── parallel_review.yaml
 │           └── implement_and_review.yaml
-└── .rustx/        # runtime-root; generated state, normally absent initially
+    # Runtime state defaults to the user state directory, outside this tree.
 ```
 
 ## Who owns each path?
@@ -42,13 +42,14 @@ examples/local-runtime/
 | Path | Owner and purpose |
 | --- | --- |
 | `models.jsonc` | The runtime's provider/model authority: endpoint, credential source, model limits, capabilities, opaque request parameters, reasoning profiles, and protocol compatibility. |
-| `rustx.jsonc` | The current runtime/project configuration: default model for new Sessions, context, launch-scoped Agent Status modules/timezone, native-tool policy and activation, MCP sources, Skill roots, and authorized environment. |
+| `settings.jsonc` | Copy to the host configuration directory: user model selection and host-only Tool approval/invocation policies. |
+| `rustx.jsonc` | Project configuration: default model selection, context, Agent Status modules/timezone, tool activation, project MCP sources, contained Skill roots, and tool environment. It cannot set Tool approval/invocation policies. |
 | `workspace/` | The authoritative execution cwd and conventional project/source tree, including Skills and editable custom Python tool packages. Relative native file-tool paths resolve here. This is not a general filesystem sandbox for Read/Write/Edit/Grep/Glob. |
 | `workspace/.agents/skills/*` | Canonical project Skills, automatically discovered through the Skill plane's own semantics; a directory does not register a Workflow or Subagent. |
 | `workspace/.agents/tools/*` | Automatically discovered managed Python tool packages (FastMCP servers); there is no separate registration entry in `rustx.jsonc`. |
 | `workspace/.agents/subagents/*` | Explicitly defined/admitted Subagent instruction and project-guidance sources. The config controls admission; filesystem presence alone does not expose a profile. |
 | `workspace/.agents/workflows/*` | Explicitly registered native Workflow YAML sources. The config controls both registration and model visibility; the directory is never scanned. |
-| `.rustx/` (`runtime-root`) | Runtime-owned generated artifacts, prepared Python tool environments, and Session storage. Keep it disjoint from `workspace/`; it is a separate ownership domain, not a promise that every file under it is unreachable through every filesystem mechanism. |
+| User state `workspaces/<identity>/` | Runtime-owned generated artifacts, prepared Python environments and Session storage, disjoint from `workspace/`. |
 
 Native Read/Write/Edit/Grep/Glob paths may be relative to the execution cwd or
 absolute host filesystem paths. `.` and `..` are resolved lexically before
@@ -59,8 +60,7 @@ The runtime root is not a general filesystem-security boundary. See the
 [architecture](../../docs/architecture.md) and
 [invariants](../../docs/invariants.md) documents for the complete contracts.
 
-The runtime owns generated state under `runtime-root` (the example uses
-`examples/local-runtime/.rustx`) separately from the model's conventional
+The runtime owns generated state under the resolved runtime root separately from the model's conventional
 project tree. Project-authored Agent resources belong to the workspace-owned
 `.agents/` namespace; `.rustx/` is not their canonical home. Native
 file-tool paths are not implicitly confined to either tree.
@@ -142,6 +142,13 @@ must be changed if the real provider uses a different reasoning parameter.
 
 ## `rustx.jsonc`
 
+All project-origin local resource paths must resolve inside the selected
+workspace, including symlink targets. This includes Skills, Subagent instruction
+and `agentsMd.files`, and path-valued MCP command/cwd. `--config` only chooses
+the project document; it grants no authority to its neighboring resources.
+User/CLI resources retain separate host authority. Reload repeats containment
+checks and rejects the whole candidate on failure.
+
 The baseline runtime config selects `example/demo-model` using the canonical
 `provider/model` identity. `models.jsonc` supplies the available model and its
 defaults; `rustx.jsonc.model` supplies the default for a brand-new Session.
@@ -185,6 +192,11 @@ and a deadline is cancellation intent: the loop cancels the call and awaits
 the executor's physical settlement, bounded by a confirmation window —
 committing `TimedOut` only when terminal settlement is proven, and
 `OutcomeUnknown` when the executor cannot prove it.
+
+Host `settings.jsonc` owns `approvalMode`, `nativeTools`, and `mcpToolPolicies`.
+Project `rustx.jsonc` rejects all three objects, including execution/concurrency
+members. Copy the optional policies from the host settings example if desired;
+project trust never grants Tool approval authority.
 
 `approvalMode` is the current runtime-wide HITL mode. It defaults to `policy`;
 `full_access` suppresses only approval prompts for the current runtime and is
@@ -258,12 +270,10 @@ activation remain separate runtime facts. The reference TUI accepts and
 forwards these controls, as well as repeatable `--skill <path>` and
 `--no-skills`; it does not interpret their values.
 
-Skills are discovered from the current user/global and project roots, plus any
-explicit `skills` paths in this file or repeatable `--skill` arguments.
-`.agents/skills/` is the canonical project layout. The Skill plane retains its
-existing automatic roots, including `~/.rustx/skills/`, `~/.agents/skills/`,
-`<workspace>/.rustx/skills/`, and `<workspace>/.agents/skills/`; this example
-deliberately uses only `workspace/.agents/skills/`.
+Native launch discovers Skills under the user configuration directory's
+`skills/` and `<workspace>/.agents/skills/`, plus the resolved `skills` list.
+Repeating `--skill` supplies one list replacing the configured list.
+This example uses only `workspace/.agents/skills/`.
 `disable-model-invocation: true`
 keeps a validated Skill in runtime resource state but omits it from the
 model-visible catalog.
@@ -364,7 +374,8 @@ server's own documentation. Three canonical entries:
 }
 ```
 
-A stdio entry may also set `"cwd"`, which stays workspace-relative.
+A stdio entry may also set `"cwd"`, relative to its configuration document.
+The resolved directory must still satisfy the MCP owner's workspace constraint.
 
 **Accepted shorthand.** Two shorthand forms from the ecosystem's own READMEs
 are accepted and normalize to exactly the canonical entries above:
@@ -381,7 +392,7 @@ alias, no `sse`, and no `ws`. An entry that is ambiguous or contradictory
 `command`, an unknown field) fails startup rather than being guessed at.
 
 **Tool policy.** rustX's own invocation policy for a server's tools lives in
-the separate `mcpToolPolicies` map, keyed by the same identity, so an
+the host settings `mcpToolPolicies` map, keyed by the same identity, so an
 `mcpServers` entry stays ordinary MCP configuration:
 
 ```jsonc
@@ -473,6 +484,15 @@ configuration guide.
 
 ## Run it from the repository root
 
+First configure the host catalog at `$XDG_CONFIG_HOME/rustx/models.jsonc`, or
+`$HOME/.config/rustx/models.jsonc` when XDG_CONFIG_HOME is unset. Use the adjacent
+`models.jsonc` as a manual reference, replacing its endpoint and credentials.
+The adjacent `settings.jsonc` is the minimal host model-selection example.
+Ordinary startup needs no project file or path flags; this advanced example uses
+`--config` to select its resource-rich project document outside `workspace/`.
+That slot remains project authority and requires trust. See the complete
+[launch/defaults/trust contract](../../docs/launch-configuration.md).
+
 The Rust binary speaks the Runtime Client protocol over JSONL on stdout, so a human
 normally uses it through `rustx-tui`. The reference TUI reconstructs pending
 questionnaires from the authoritative snapshot, delegates custom-answer
@@ -485,11 +505,11 @@ export RUSTX_EXAMPLE_API_KEY='replace-me'
 
 cargo build --bin rustx
 
+./target/debug/rustx --workspace ./examples/local-runtime/workspace --trust grant
+
 ./target/debug/rustx \
-  --models ./examples/local-runtime/models.jsonc \
   --config ./examples/local-runtime/rustx.jsonc \
   --workspace ./examples/local-runtime/workspace \
-  --runtime-root ./examples/local-runtime/.rustx \
   --tools parallel_review,implement_and_review
 ```
 
@@ -497,18 +517,16 @@ The endpoint in `models.jsonc` is an example URL, so replace it before making
 a model request. The binary remains a runtime process until its input closes;
 its stdout is reserved for protocol records and diagnostics go to stderr.
 
-For the reference TUI, install its locked dependencies once and use the same
-four runtime paths:
+For the reference TUI, install its locked dependencies once and forward the same
+project intent to Rust:
 
 ```sh
 pnpm --dir tui install --frozen-lockfile
 
 pnpm --dir tui start \
   --binary "$PWD/target/debug/rustx" \
-  --models "$PWD/examples/local-runtime/models.jsonc" \
   --config "$PWD/examples/local-runtime/rustx.jsonc" \
   --workspace "$PWD/examples/local-runtime/workspace" \
-  --runtime-root "$PWD/examples/local-runtime/.rustx" \
   --tools parallel_review,implement_and_review
 ```
 

@@ -7,12 +7,11 @@
 //! the `process` target (whose jobs install Python + uv), not the pure
 //! `contracts` target.
 
+use crate::launch_fixture::LaunchFixture;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use rustx::local_runtime::{
-    HeadlessConversationRuntime, LocalRuntimeDependencies, LocalRuntimePaths, StartupSession,
-};
+use rustx::local_runtime::{HeadlessConversationRuntime, LocalRuntimeDependencies, StartupSession};
 use rustx::model::catalog::MapCredentialEnvironment;
 use rustx::runtime::RuntimeResourceSnapshot;
 use rustx::runtime::workflow::{WorkflowId, WorkflowNodeProgram};
@@ -132,7 +131,7 @@ async fn checked_in_local_runtime_example_composes_its_real_resources() {
     let workspace = examples.join("workspace");
     assert_example_files_exist(&workspace);
     let runtime = HeadlessConversationRuntime::compose(
-        &LocalRuntimePaths {
+        &(LaunchFixture {
             models: examples.join("models.jsonc"),
             config: examples.join("rustx.jsonc"),
             // Keep this test independent of the developer's home directory
@@ -147,7 +146,8 @@ async fn checked_in_local_runtime_example_composes_its_real_resources() {
             exclude_tools: Vec::new(),
             workspace,
             runtime_root: root.path().join("runtime-root"),
-        },
+        })
+        .resolve(),
         &LocalRuntimeDependencies {
             credentials: Arc::new(MapCredentialEnvironment::new([(
                 "RUSTX_EXAMPLE_API_KEY".to_owned(),

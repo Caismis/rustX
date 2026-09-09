@@ -8,6 +8,7 @@
 
 #![allow(clippy::too_many_lines)]
 
+use crate::launch_fixture::LaunchFixture;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
@@ -27,7 +28,6 @@ use rustx::events::interaction::{
 use rustx::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use rustx::local_runtime::composition::{
     HeadlessConversationRuntime, LocalConversationRuntime, LocalRuntimeDependencies,
-    LocalRuntimePaths,
 };
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
@@ -556,14 +556,14 @@ const RUNTIME_CONFIG_JSON: &str = r#"{
   "context": {"reserveTokens": 1024, "keepRecentTokens": 8192}
 }"#;
 
-fn startup(root: &Path) -> LocalRuntimePaths {
+fn startup(root: &Path) -> LaunchFixture {
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
     let models = root.join("models.jsonc");
     let config = root.join("rustx.jsonc");
     std::fs::write(&models, MODELS_JSON).expect("models.jsonc");
     std::fs::write(&config, RUNTIME_CONFIG_JSON).expect("rustx.jsonc");
-    LocalRuntimePaths {
+    LaunchFixture {
         models,
         config,
         skill_paths: Vec::new(),
@@ -589,7 +589,7 @@ fn dependencies() -> LocalRuntimeDependencies {
     }
 }
 
-fn seed_composed_store(paths: &LocalRuntimePaths, messages: &[MessageBlock]) {
+fn seed_composed_store(paths: &LaunchFixture, messages: &[MessageBlock]) {
     let artifacts = paths.artifacts_root();
     std::fs::create_dir_all(&artifacts).expect("artifact root");
     let store = SqliteConversationStore::open(
@@ -616,7 +616,7 @@ async fn requirement_05_detach_and_reattach_reads_the_same_durable_transcript() 
     let root = tempfile::tempdir().expect("root");
     let paths = startup(root.path());
     seed_composed_store(&paths, &[user_message("seed-user", "persisted")]);
-    let runtime = LocalConversationRuntime::compose(&paths, &dependencies())
+    let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
         .await
         .expect("interactive composition");
 
@@ -651,7 +651,7 @@ async fn requirement_06_headless_history_is_available_to_a_later_client() {
     let paths = startup(root.path());
     seed_composed_store(&paths, &[]);
     {
-        let headless = HeadlessConversationRuntime::compose(&paths, &dependencies())
+        let headless = HeadlessConversationRuntime::compose(&(paths).resolve(), &dependencies())
             .await
             .expect("headless composition");
         assert!(!headless.tool_runtime().is_runtime_client_bound());
@@ -668,7 +668,7 @@ async fn requirement_06_headless_history_is_available_to_a_later_client() {
         assert_eq!(page_message_ids(&page), vec![accepted.message_id.as_str()]);
     }
 
-    let interactive = LocalConversationRuntime::compose(&paths, &dependencies())
+    let interactive = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
         .await
         .expect("interactive reopen");
     let (_, result) = interactive
@@ -885,7 +885,7 @@ async fn requirement_11_interaction_audits_page_without_recovering_a_waiter() {
 
     drop(store);
 
-    let runtime = LocalConversationRuntime::compose(&paths, &dependencies())
+    let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
         .await
         .expect("cold reopen");
     let (attachment, result) = runtime
@@ -1051,7 +1051,7 @@ async fn requirement_12_transcript_paging_preserves_runtime_client_cursor_invari
             user_message("cursor-3", "three"),
         ],
     );
-    let runtime = LocalConversationRuntime::compose(&paths, &dependencies())
+    let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
         .await
         .expect("interactive composition");
     let (attachment, _result) = runtime
@@ -1189,7 +1189,7 @@ async fn requirement_13_resource_reload_has_no_transcript_item_or_diff() {
     let root = tempfile::tempdir().expect("root");
     let paths = startup(root.path());
     seed_composed_store(&paths, &[user_message("reload-user", "history")]);
-    let runtime = LocalConversationRuntime::compose(&paths, &dependencies())
+    let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
         .await
         .expect("interactive composition");
     let before = runtime
@@ -1222,7 +1222,7 @@ async fn requirement_14_cold_reopen_keeps_history_and_refreshes_resources() {
     )
     .expect("first skill");
     seed_composed_store(&paths, &[user_message("cold-user", "history")]);
-    let first = LocalConversationRuntime::compose(&paths, &dependencies())
+    let first = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
         .await
         .expect("first composition");
     let first_page = first.host().transcript_page(None, 64).expect("first page");
@@ -1233,7 +1233,7 @@ async fn requirement_14_cold_reopen_keeps_history_and_refreshes_resources() {
         "---\nname: reopened\ndescription: second\n---\nsecond\n",
     )
     .expect("updated skill");
-    let second = LocalConversationRuntime::compose(&paths, &dependencies())
+    let second = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
         .await
         .expect("cold reopen");
     let second_page = second

@@ -1216,6 +1216,8 @@ describe("CLI arguments", () => {
     });
     assert.equal(parsed.openSessionSelector, false);
     assert.deepEqual(parsed.startup, {
+      model: undefined,
+      trust: undefined,
       continueActiveSession: false,
       inspectConversation: undefined,
       session: undefined,
@@ -1228,6 +1230,16 @@ describe("CLI arguments", () => {
       tools: undefined,
       excludeTools: undefined,
     });
+  });
+
+  it("preserves minimal launch, model selection and trust intent without defaults", () => {
+    const minimal = parseArguments(["--binary", "/rustx"]);
+    assert.deepEqual(minimal.paths, { models: undefined, config: undefined, workspace: undefined, runtimeRoot: undefined });
+    assert.equal(minimal.startup.continueActiveSession, false);
+    const trust = parseArguments(["--binary", "/rustx", "--trust", "grant", "--workspace", "../project"]);
+    assert.equal(trust.startup.trust, "grant");
+    assert.equal(trust.paths.workspace, "../project");
+    assert.equal(parseArguments(["--binary", "/rustx", "--model", "host/model"]).startup.model, "host/model");
   });
 
   it("parses repeatable Skills and forwards startup controls without interpretation", () => {
@@ -1247,6 +1259,8 @@ describe("CLI arguments", () => {
       "search",
     ]);
     assert.deepEqual(parsed.startup, {
+      model: undefined,
+      trust: undefined,
       continueActiveSession: true,
       inspectConversation: undefined,
       session: undefined,

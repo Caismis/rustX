@@ -2713,12 +2713,32 @@ the launch-boundary policy inheritance.
 - **Project Agent resources have one ownership namespace.** Project-authored
   Skills, Python tools, Subagent files, and native Workflow files use the
   workspace-owned `.agents/` tree as their canonical layout. Skill discovery
-  intentionally retains its pre-existing automatic roots
-  `~/.rustx/skills/`, `~/.agents/skills/`, `<workspace>/.rustx/skills/`, and
-  `<workspace>/.agents/skills/`; those lookup roots do not change the
-  canonical authoring rule. The configured `.rustx/` or other runtime root
+  receives only the launch-resolved host configuration `skills/` and
+  `<workspace>/.agents/skills/` automatic roots, plus explicit layered paths.
+  The runtime root is disjoint from the workspace and
   remains runtime-owned/generated state and is not a Workflow, Subagent, or
   general project-resource fallback.
+- **Persistent workspace identity has an explicit Unix byte contract.** On
+  Linux/macOS, hash the canonical workspace path's Unix-native bytes
+  (`OsStrExt::as_bytes()`) with SHA-256 and encode the full digest as lowercase
+  hexadecimal. Never use unspecified `OsStr::as_encoded_bytes()`, lossy UTF-8,
+  case folding, Unicode normalization or a language/runtime hash. Symlink
+  aliases converge through canonicalization; different Git worktrees remain
+  separate. Moving a workspace changes identity, without automatic old-state
+  migration or legacy lookup. Unsupported platforms have no implied encoding.
+- **Project trust never grants Tool approval authority.** Project settings
+  reject `approvalMode`, `nativeTools`, and `mcpToolPolicies` before merging,
+  including empty objects and execution/concurrency-only policies. These are
+  host/user-owned complete policy objects.
+- **Project resource authority follows provenance, not absolute spelling.**
+  Project-origin Skills, Subagent instruction/agentsMd files and path-valued
+  MCP command/cwd must resolve within the canonical trusted workspace. Traversal,
+  absolute paths, symlink targets and external `--config` cannot widen that
+  authority. Initial preparation rechecks frozen path authority; reload rechecks
+  its candidate from pinned slots. Failed candidates never replace the current
+  generation. Automatic project roots and instruction/Workflow reads follow the
+  same rule. Host/CLI resources and execution paths remain separate authorities;
+  this is not an OS sandbox.
 - **Workflow registration is path-deterministic.** Each id in
   `workflows.definitions` maps to exactly
   `<workspace>/.agents/workflows/<id>.yaml`; the loader never scans that

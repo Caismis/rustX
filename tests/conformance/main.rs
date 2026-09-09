@@ -19,6 +19,8 @@
 
 #[path = "../common/mod.rs"]
 mod common;
+#[path = "../common/launch.rs"]
+mod launch_fixture;
 
 mod agent_loop;
 mod lifecycle;

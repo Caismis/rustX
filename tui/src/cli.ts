@@ -2,8 +2,9 @@
  * The bounded startup arguments of `rustx-tui`.
  *
  * ```text
- * rustx-tui --binary <path> --models <path> --config <path>
- *           --workspace <dir> --runtime-root <dir>
+ * rustx-tui --binary <path> [--models <path>] [--config <path>]
+ *           [--workspace <dir>] [--runtime-root <dir>] [--model <provider/model>]
+ *           [--trust grant|revoke]
  *           [--inspect-conversation <id> | --continue | --resume | --session <id> [--node <id>]]
  *           [--name <text>] [--skill <path>] [--no-skills]
  *           [--no-builtin-tools] [--no-tools]
@@ -36,11 +37,11 @@
  * of the decision is Rust's — this client neither reads the catalog nor
  * resolves an identity it was given.
  *
- * The four runtime paths are passed straight through to the Rust binary. This
+ * Optional runtime path overrides are passed straight through to the Rust binary. This
  * client never opens, parses, validates, or defaults any of them: `models.jsonc`
  * and the current runtime config are Rust-owned authorities, and
- * reading them here would create a second one. Explicit arguments only — no
- * search path, no precedence, no profile discovery.
+ * reading them here would create a second one. Discovery, trust and defaults
+ * belong exclusively to Rust.
  */
 
 import type {
@@ -48,8 +49,9 @@ import type {
   RuntimeStartupOptions,
 } from "./runtime/child-process.ts";
 
-export const USAGE = `usage: rustx-tui --binary <rustx> --models <models.jsonc> \\
-                 --config <rustx.jsonc> --workspace <dir> --runtime-root <dir> \\
+export const USAGE = `usage: rustx-tui --binary <rustx> [--models <models.jsonc>] \\
+                 [--config <rustx.jsonc>] [--workspace <dir>] [--runtime-root <dir>] \\
+                 [--model <provider/model>] [--trust grant|revoke] \\
                  [--inspect-conversation <conversation-id> | --continue | --resume | --session <id> [--node <id>]] \\
                  [--name <text>] [--skill <path>] [--no-skills] [--no-builtin-tools] [--no-tools] \\
                  [--tools <a,b,c>] [--exclude-tools <a,b,c>]`;
@@ -75,6 +77,8 @@ export class ArgumentError extends Error {
 }
 
 const VALUE_FLAGS = [
+  "--model",
+  "--trust",
   "--binary",
   "--models",
   "--config",
@@ -184,13 +188,15 @@ export function parseArguments(argv: readonly string[]): TuiArguments {
   return {
     binary: required("--binary"),
     paths: {
-      models: required("--models"),
-      config: required("--config"),
-      workspace: required("--workspace"),
-      runtimeRoot: required("--runtime-root"),
+      models: values.get("--models"),
+      config: values.get("--config"),
+      workspace: values.get("--workspace"),
+      runtimeRoot: values.get("--runtime-root"),
     },
     openSessionSelector: resume,
     startup: {
+      model: values.get("--model"),
+      trust: values.get("--trust"),
       // `--resume` draws its picker over the Session the last launch left
       // active, so it publishes nothing of its own: cancelling the selector
       // leaves that Session bound rather than stranding an empty one in the

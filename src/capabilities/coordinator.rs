@@ -2748,6 +2748,7 @@ mod mcp_race_tests {
             mcp_servers: std::collections::BTreeMap::from([(
                 server_id.clone(),
                 crate::tools::mcp::McpServerBinding {
+                    resource_workspace: None,
                     transport: McpTransportConfig::Stdio {
                         program: std::env::current_exe()
                             .expect("test executable")
@@ -2793,6 +2794,7 @@ mod mcp_race_tests {
                 (
                     id.clone(),
                     crate::tools::mcp::McpServerBinding {
+                        resource_workspace: None,
                         transport: McpTransportConfig::Stdio {
                             program: std::env::current_exe()
                                 .expect("test executable")

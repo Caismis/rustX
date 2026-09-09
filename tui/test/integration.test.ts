@@ -26,6 +26,8 @@
  */
 
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import type { ChildRuntimeProcessOptions } from "../src/runtime/child-process.ts";
 import { existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -59,6 +61,17 @@ const SKIP = existsSync(BINARY)
 const PROJECT_INSTRUCTIONS = "# Project\n\nthe workspace instruction file\n";
 const CREDENTIAL_VARIABLE = "RUSTX_TUI_INTEGRATION_KEY";
 const CREDENTIAL_VALUE = "integration-secret";
+
+function spawnTrusted(options: ChildRuntimeProcessOptions, hostSettings: object = {}): ChildRuntimeProcess {
+  assert(options.paths.runtimeRoot && options.paths.workspace);
+  const host = `${options.paths.runtimeRoot}-host`;
+  const env = { ...options.env, HOME: host, XDG_CONFIG_HOME: join(host, "config"), XDG_STATE_HOME: join(host, "state") };
+  mkdirSync(join(host, "config", "rustx"), { recursive: true });
+  writeFileSync(join(host, "config", "rustx", "settings.jsonc"), JSON.stringify(hostSettings));
+  const grant = spawnSync(options.binary, ["--workspace", options.paths.workspace, "--trust", "grant"], { env, encoding: "utf8" });
+  assert.equal(grant.status, 0, grant.stderr);
+  return ChildRuntimeProcess.spawn({ ...options, env });
+}
 
 function modelsJson(baseUrl: string): string {
   return JSON.stringify({
@@ -114,9 +127,6 @@ const BEFORE_START_RUNTIME_CONFIG_JSON = JSON.stringify({
   agentId: "agent-tui-before-start",
   model: { model: "fixture/integration-model" },
   context: { reserveTokens: 1024, keepRecentTokens: 8192 },
-  // Requiring approval gives the test a deterministic pre-tool boundary. The
-  // client cancels while the runtime is waiting there, before Bash can start.
-  nativeTools: { bash: { approval: "always" } },
   defaultTools: ["bash"],
 });
 
@@ -159,7 +169,7 @@ block:
         fields: {files: {type: reference, path: [inspect]}}
   edges: [{from: inspect, to: done}]
 `);
-  const child = ChildRuntimeProcess.spawn({ binary: BINARY,
+  const child = spawnTrusted({ binary: BINARY,
     paths: { models: fixture.path("models.jsonc"), config: fixture.path("rustx.jsonc"), workspace, runtimeRoot: fixture.path("private") },
     env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE },
   });
@@ -231,7 +241,7 @@ block:
     phase = "close first process";
     child.closeStdin();
     await child.waitOrTerminate(10_000);
-    const reopened = ChildRuntimeProcess.spawn({ binary: BINARY,
+    const reopened = spawnTrusted({ binary: BINARY,
       paths: { models: fixture.path("models.jsonc"), config: fixture.path("rustx.jsonc"), workspace, runtimeRoot: fixture.path("private") },
       startup: { continueActiveSession: true, skillPaths: [], noSkills: false, noBuiltinTools: false, noTools: false },
       env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE },
@@ -288,7 +298,7 @@ describe("real rustx child integration", { skip: SKIP }, () => {
     writeFileSync(fixture.path("models.jsonc"), modelsJson(provider.url("/v1")));
     writeFileSync(fixture.path("rustx.jsonc"), RUNTIME_CONFIG_JSON);
 
-    const child = ChildRuntimeProcess.spawn({
+    const child = spawnTrusted({
       binary: BINARY,
       paths: {
         models: fixture.path("models.jsonc"),
@@ -536,7 +546,7 @@ describe("real rustx BeforeStart cancellation projection", { skip: SKIP }, () =>
       BEFORE_START_RUNTIME_CONFIG_JSON,
     );
 
-    const child = ChildRuntimeProcess.spawn({
+    const child = spawnTrusted({
       binary: BINARY,
       paths: {
         models: fixture.path("models.json"),
@@ -545,7 +555,7 @@ describe("real rustx BeforeStart cancellation projection", { skip: SKIP }, () =>
         runtimeRoot: fixture.path("private"),
       },
       env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE },
-    });
+    }, { nativeTools: { bash: { approval: "always" } } });
     const connection = new RuntimeClientConnection({
       input: child.stdout,
       output: child.stdin,
@@ -701,7 +711,7 @@ describe("real rustx structured ask_user questionnaire", { skip: SKIP }, () => {
     writeFileSync(fixture.path("models.json"), modelsJson(provider.url("/v1")));
     writeFileSync(fixture.path("rustx.json"), RUNTIME_CONFIG_JSON);
 
-    const child = ChildRuntimeProcess.spawn({
+    const child = spawnTrusted({
       binary: BINARY,
       paths: {
         models: fixture.path("models.json"),
@@ -942,7 +952,7 @@ describe("real rustx child repeated compaction", { skip: SKIP }, () => {
       COMPACTION_RUNTIME_CONFIG_JSON,
     );
 
-    const child = ChildRuntimeProcess.spawn({
+    const child = spawnTrusted({
       binary: BINARY,
       paths: {
         models: fixture.path("models.jsonc"),

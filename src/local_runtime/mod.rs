@@ -31,6 +31,9 @@ pub mod cli;
 pub mod composition;
 pub mod config;
 pub(crate) mod dispatcher;
+pub mod launch;
+#[cfg(test)]
+mod launch_tests;
 pub(crate) mod live_inspection;
 #[cfg(all(test, unix))]
 mod preparation_e2e;
@@ -42,12 +45,15 @@ pub mod supervisor;
 pub use cli::{ArgumentError, USAGE, parse_arguments};
 pub use composition::{
     HeadlessConversationRuntime, LocalConversationCore, LocalConversationInspection,
-    LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimeError, LocalRuntimePaths,
-    LocalSessionProduct, StartupSession,
+    LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimeError, LocalSessionProduct,
+    StartupSession,
 };
 pub use config::{
     CURRENT_RUNTIME_SCHEMA_VERSION, CurrentRuntimeConfig, CurrentRuntimeConfigError,
     McpServerDocument, McpTransportType, ModelTimeoutPolicyDocument, SubagentWorktreeDocument,
+};
+pub use launch::{
+    HostEnvironment, LaunchLocations, LaunchRequest, ResolvedLaunch, TrustAction, resolve,
 };
 pub use serve::{ProcessOutcome, run_process, serve};
 pub use session::{

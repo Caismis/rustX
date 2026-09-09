@@ -8973,6 +8973,7 @@ mod tests {
                 environment.insert(PAGE_SIZE_ENV.to_owned(), page_size.to_owned());
             }
             crate::tools::mcp::McpServerBinding {
+                resource_workspace: None,
                 transport: crate::tools::mcp::McpTransportConfig::Stdio {
                     program: std::env::current_exe()
                         .expect("test executable")
@@ -9069,6 +9070,7 @@ mod tests {
 
         let test_name = "runtime::conversation_runtime::tests::preactivation_mcp_settlement_failure_is_replayed_and_fences_activation";
         let binding = crate::tools::mcp::McpServerBinding {
+            resource_workspace: None,
             transport: crate::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -9148,6 +9150,7 @@ mod tests {
 
         let test_name = "runtime::conversation_runtime::tests::mcp_settlement_failure_wins_deterministic_activation_race";
         let binding = crate::tools::mcp::McpServerBinding {
+            resource_workspace: None,
             transport: crate::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -9241,6 +9244,7 @@ mod tests {
 
         let test_name = "runtime::conversation_runtime::tests::mcp_settlement_failure_fences_after_activation_wins";
         let binding = crate::tools::mcp::McpServerBinding {
+            resource_workspace: None,
             transport: crate::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -9331,6 +9335,7 @@ mod tests {
                 environment.insert(PAGE_SIZE_ENV.to_owned(), page_size.to_owned());
             }
             crate::tools::mcp::McpServerBinding {
+                resource_workspace: None,
                 transport: crate::tools::mcp::McpTransportConfig::Stdio {
                     program: std::env::current_exe()
                         .expect("test executable")
@@ -9456,6 +9461,7 @@ mod tests {
                 environment.insert(PAGE_SIZE_ENV.to_owned(), page_size.to_owned());
             }
             crate::tools::mcp::McpServerBinding {
+                resource_workspace: None,
                 transport: crate::tools::mcp::McpTransportConfig::Stdio {
                     program: std::env::current_exe()
                         .expect("test executable")
@@ -9575,6 +9581,7 @@ mod tests {
                 environment.insert(PAGE_SIZE_ENV.to_owned(), page_size.to_owned());
             }
             crate::tools::mcp::McpServerBinding {
+                resource_workspace: None,
                 transport: crate::tools::mcp::McpTransportConfig::Stdio {
                     program: std::env::current_exe()
                         .expect("test executable")
@@ -9836,6 +9843,7 @@ mod tests {
                 environment.insert(PAGE_SIZE_ENV.to_owned(), page_size.to_owned());
             }
             crate::tools::mcp::McpServerBinding {
+                resource_workspace: None,
                 transport: crate::tools::mcp::McpTransportConfig::Stdio {
                     program: std::env::current_exe()
                         .expect("test executable")
@@ -9993,6 +10001,7 @@ mod tests {
                 environment.insert(TOOL_PREFIX_ENV.to_owned(), tool_prefix.to_owned());
             }
             crate::tools::mcp::McpServerBinding {
+                resource_workspace: None,
                 transport: crate::tools::mcp::McpTransportConfig::Stdio {
                     program: std::env::current_exe()
                         .expect("test executable")

@@ -59,6 +59,7 @@ async fn capability_projection_carries_mcp_origin_metadata() {
     let mcp_bindings = rustx::tools::mcp::McpServerBindings::from([(
         rustx::runtime::identity::McpServerId::new("fixture"),
         rustx::tools::mcp::McpServerBinding {
+            resource_workspace: None,
             transport: rustx::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")

@@ -6,11 +6,12 @@
 //! through strict provider-emulator sequences and native execution.
 //! Private child transcripts remain outside the single parent `ToolResult`.
 
+use crate::launch_fixture::LaunchFixture;
 use std::sync::Arc;
 
 use crate::common::provider_emulator::ProviderEmulator;
 use rustx::local_runtime::composition::{
-    LocalConversationCore, LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimePaths,
+    LocalConversationCore, LocalConversationRuntime, LocalRuntimeDependencies,
 };
 use rustx::message::content::TextBlock;
 use rustx::message::types::UserContentBlock;
@@ -199,7 +200,7 @@ const CONFIG: &str = r#"{
     "definitions": {
       "reviewer": {
         "description": "The Workflow-only reviewer.",
-        "instructionsFile": ".agents/subagents/reviewer/instructions.md"
+        "instructionsFile": "workspace/.agents/subagents/reviewer/instructions.md"
       }
     },
     "main": [],
@@ -331,7 +332,7 @@ impl Driver {
         )
         .expect("inactive workflow YAML");
 
-        let paths = LocalRuntimePaths {
+        let paths = LaunchFixture {
             models: root.path().join("models.jsonc"),
             config: root.path().join("rustx.jsonc"),
             skill_paths: Vec::new(),
@@ -353,7 +354,7 @@ impl Driver {
             child_program: Some(std::path::PathBuf::from(env!("CARGO_BIN_EXE_rustx"))),
             ..LocalRuntimeDependencies::default()
         };
-        let runtime = LocalConversationRuntime::compose(&paths, &dependencies)
+        let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies)
             .await
             .expect("native Workflow runtime composes");
         let resources = runtime.runtime().runtime_resources();
@@ -460,7 +461,7 @@ async fn a_registered_workflow_rejects_the_obsolete_workspace_rustx_path() {
     std::fs::write(workspace.join(".rustx/workflows/review_pr.yaml"), WORKFLOW)
         .expect("legacy workflow YAML");
 
-    let paths = LocalRuntimePaths {
+    let paths = LaunchFixture {
         models: root.path().join("models.jsonc"),
         config: root.path().join("rustx.jsonc"),
         skill_paths: Vec::new(),
@@ -481,7 +482,7 @@ async fn a_registered_workflow_rejects_the_obsolete_workspace_rustx_path() {
         )])),
         ..LocalRuntimeDependencies::default()
     };
-    let error = LocalConversationCore::compose(&paths, &dependencies)
+    let error = LocalConversationCore::compose(&(paths).resolve(), &dependencies)
         .await
         .expect_err("the obsolete workspace Workflow path is not a fallback");
     let detail = error.to_string();
@@ -520,7 +521,7 @@ async fn registered_workflow_can_remain_out_of_main_model_admission() {
     std::fs::write(workspace.join(".agents/workflows/review_pr.yaml"), WORKFLOW)
         .expect("workflow YAML");
 
-    let paths = LocalRuntimePaths {
+    let paths = LaunchFixture {
         models: root.path().join("models.jsonc"),
         config: root.path().join("rustx.jsonc"),
         skill_paths: Vec::new(),
@@ -534,11 +535,12 @@ async fn registered_workflow_can_remain_out_of_main_model_admission() {
         workspace,
         runtime_root: root.path().join("private"),
     };
-    let resources = LocalConversationCore::compose(&paths, &LocalRuntimeDependencies::default())
-        .await
-        .expect("registered but non-main Workflow composes")
-        .runtime()
-        .runtime_resources();
+    let resources =
+        LocalConversationCore::compose(&(paths).resolve(), &LocalRuntimeDependencies::default())
+            .await
+            .expect("registered but non-main Workflow composes")
+            .runtime()
+            .runtime_resources();
     assert!(
         resources
             .workflows()
@@ -860,7 +862,7 @@ impl Driver {
             .replace("example/demo-model", "emulator/workflow-model")
             .replace("\"reasoningProfile\": \"off\",", "");
         std::fs::write(root.path().join("rustx.jsonc"), config).unwrap();
-        let paths = LocalRuntimePaths {
+        let paths = LaunchFixture {
             models: root.path().join("models.jsonc"),
             config: root.path().join("rustx.jsonc"),
             workspace,
@@ -885,7 +887,7 @@ impl Driver {
             child_program: Some(std::path::PathBuf::from(env!("CARGO_BIN_EXE_rustx"))),
             ..LocalRuntimeDependencies::default()
         };
-        let runtime = LocalConversationRuntime::compose(&paths, &dependencies)
+        let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies)
             .await
             .unwrap();
         let (attachment, initialized) = runtime

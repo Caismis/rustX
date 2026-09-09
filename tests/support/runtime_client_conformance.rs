@@ -1846,6 +1846,7 @@ pub async fn capability_projection_covers_mcp_origins(
     let servers = rustx::tools::mcp::McpServerBindings::from([(
         rustx::runtime::identity::McpServerId::new("fixture"),
         rustx::tools::mcp::McpServerBinding {
+            resource_workspace: None,
             transport: rustx::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
