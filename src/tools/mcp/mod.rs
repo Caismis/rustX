@@ -99,6 +99,7 @@ mod connection;
 mod dispatch;
 mod framing;
 pub mod identity;
+mod mrtr;
 mod streamable_http;
 
 use std::collections::BTreeMap;
@@ -140,6 +141,10 @@ use crate::tools::types::{
 use crate::tools::workspace::Workspace;
 
 pub(crate) use connection::McpConnection;
+/// The fixed rustX-owned multi-round-trip bound, re-exported for the
+/// in-crate boundary suite that proves both sides of it.
+#[cfg(test)]
+pub(crate) use mrtr::MCP_MRTR_MAX_ROUNDS;
 
 /// The MCP protocol revisions rustX offers, most preferred first.
 ///
@@ -1985,6 +1990,116 @@ pub(crate) mod test_sync {
         }
     }
 
+    /// The deterministic MRTR continuation-dispatch barrier (Issue #242).
+    ///
+    /// It holds one invocation at the exact point between "the typed human
+    /// response has been accepted and mapped to `inputResponses`" and "the
+    /// continuation dispatch frontier". A regression parks there, decides the
+    /// cancellation race deliberately, and then asserts on the number of
+    /// physical `tools/call` rounds the server actually saw — no sleeps, and
+    /// no reliance on scheduler timing.
+    pub(crate) struct MrtrContinuationBarrier {
+        tool: String,
+        state: Mutex<MrtrBarrierState>,
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+
+    #[derive(Default)]
+    struct MrtrBarrierState {
+        released: bool,
+        /// How many continuations have reached the barrier, and how many
+        /// input requests each of them answered.
+        arrivals: Vec<usize>,
+    }
+
+    static MRTR_BARRIERS: ProbeRegistry<MrtrContinuationBarrier> = ProbeRegistry::new();
+
+    /// Uninstalls **only** the barrier its own installation created.
+    pub(crate) struct MrtrBarrierGuard {
+        id: u64,
+    }
+
+    impl Drop for MrtrBarrierGuard {
+        fn drop(&mut self) {
+            MRTR_BARRIERS.remove(self.id);
+        }
+    }
+
+    impl MrtrContinuationBarrier {
+        /// Installs a barrier that parks every MRTR continuation of `tool`.
+        pub(crate) fn install(tool: &str) -> (Arc<Self>, MrtrBarrierGuard) {
+            let barrier = Arc::new(Self {
+                tool: tool.to_owned(),
+                state: Mutex::new(MrtrBarrierState::default()),
+                entered: tokio::sync::Notify::new(),
+                release: tokio::sync::Notify::new(),
+            });
+            let id = MRTR_BARRIERS.install(Arc::clone(&barrier));
+            (barrier, MrtrBarrierGuard { id })
+        }
+
+        /// Resolves once at least `count` continuations have arrived.
+        pub(crate) async fn wait_arrived(&self, count: usize) {
+            loop {
+                let entered = self.entered.notified();
+                tokio::pin!(entered);
+                entered.as_mut().enable();
+                if self.arrivals() >= count {
+                    return;
+                }
+                entered.await;
+            }
+        }
+
+        /// How many continuations have reached the barrier.
+        pub(crate) fn arrivals(&self) -> usize {
+            self.state.lock().expect("MRTR barrier lock").arrivals.len()
+        }
+
+        /// How many input requests each arrived continuation answered.
+        pub(crate) fn answered_requests(&self) -> Vec<usize> {
+            self.state
+                .lock()
+                .expect("MRTR barrier lock")
+                .arrivals
+                .clone()
+        }
+
+        /// Releases every parked continuation.
+        pub(crate) fn release(&self) {
+            self.state.lock().expect("MRTR barrier lock").released = true;
+            self.release.notify_waiters();
+        }
+    }
+
+    /// Parks one MRTR continuation before its dispatch frontier, when a
+    /// barrier is installed for its tool.
+    pub(crate) async fn park_before_mrtr_continuation(tool: &str, answered_requests: usize) {
+        let Some(barrier) = MRTR_BARRIERS.find(|barrier| barrier.tool == tool) else {
+            return;
+        };
+        {
+            let mut state = barrier.state.lock().expect("MRTR barrier lock");
+            state.arrivals.push(answered_requests);
+            if state.released {
+                drop(state);
+                barrier.entered.notify_waiters();
+                return;
+            }
+        }
+        barrier.entered.notify_waiters();
+        loop {
+            let released = barrier.release.notified();
+            tokio::pin!(released);
+            released.as_mut().enable();
+            if barrier.state.lock().expect("MRTR barrier lock").released {
+                return;
+            }
+            released.await;
+        }
+    }
+
     /// Parks one dispatched call between its effect frontier and its
     /// progress subscription, when a race is installed for its tool.
     pub(crate) async fn park_before_progress_subscription(
@@ -2809,12 +2924,19 @@ impl McpServerRuntime {
     async fn call(
         &self,
         remote_name: &str,
+        invocation_id: &crate::tools::types::ToolInvocationId,
         arguments: serde_json::Value,
         context: &ToolExecutionContext<'_>,
         generation: u64,
     ) -> ToolExecutionResult {
-        let mut result =
-            Box::pin(self.call_admitted(remote_name, arguments, context, generation)).await;
+        let mut result = Box::pin(self.drive_mrtr_invocation(
+            remote_name,
+            invocation_id,
+            arguments,
+            context,
+            generation,
+        ))
+        .await;
         match &mut result.status {
             ToolExecutionStatus::Failed { error }
             | ToolExecutionStatus::OutcomeUnknown { detail: error } => {
@@ -2825,15 +2947,355 @@ impl McpServerRuntime {
         result
     }
 
-    async fn call_admitted(
+    /// Drives one rustX `ToolInvocation` across its bounded MCP multi-round-trip
+    /// (MRTR) lifetime (Issue #242).
+    ///
+    /// # The finite state machine
+    ///
+    /// ```text
+    ///            +------------------------------------------+
+    ///            |               Calling(round N)           |
+    ///            +------------------------------------------+
+    ///              |            |            |            |
+    ///     final    |   input_   |  protocol  |  cancellation /
+    ///     CallTool |   required |  failure   |  deadline
+    ///     Result   |            |            |
+    ///              v            v            v            v
+    ///        +----------+  +----------+  +--------+  +-------------+
+    ///        | Final    |  | Input    |  | Failed |  | Cancelled / |
+    ///        |          |  | Required |  |        |  | TimedOut /  |
+    ///        +----------+  +----------+  +--------+  | OutcomeUnk. |
+    ///              |            |                    +-------------+
+    ///              |            v                          |
+    ///              |   one runtime-owned Questionnaire      |
+    ///              |            |                           |
+    ///              |            v                           |
+    ///              |   Calling(round N+1)  (N+1 <= bound)   |
+    ///              v                                        v
+    ///        +--------------------------------------------------+
+    ///        |   exactly one terminal `ToolExecutionResult`       |
+    ///        +--------------------------------------------------+
+    /// ```
+    ///
+    /// `InputRequired` is the **only** non-terminal state. It is not a
+    /// `ToolResult`, not a new invocation, not a new `ToolExecutionId`, not a
+    /// canonical message, and not durable state: it is transient
+    /// execution-local protocol state that lives on this stack frame and is
+    /// dropped the moment the invocation settles.
+    ///
+    /// Every round runs on the **same** admitted connection generation — the
+    /// generation was resolved once, before this function — so the whole
+    /// invocation keeps one server binding, one execution lease, one remote
+    /// tool name, and one set of business arguments.
+    async fn drive_mrtr_invocation(
         &self,
         remote_name: &str,
+        invocation_id: &crate::tools::types::ToolInvocationId,
         arguments: serde_json::Value,
         context: &ToolExecutionContext<'_>,
         generation: u64,
     ) -> ToolExecutionResult {
-        let _call_gate = self.call_gate.read().await;
         let started = Instant::now();
+        let serde_json::Value::Object(arguments) = arguments else {
+            return failed_mcp("MCP tool arguments must be a JSON object", context, started);
+        };
+        let mut continuation = mrtr::McpContinuation::default();
+        // The initial call is round 1, so a server may drive at most
+        // `MCP_MRTR_MAX_ROUNDS - 1` continuations.
+        for round in 1..=mrtr::MCP_MRTR_MAX_ROUNDS {
+            let outcome = Box::pin(self.dispatch_one_mcp_round(
+                remote_name,
+                &arguments,
+                &continuation,
+                context,
+                generation,
+                // The invocation's own start instant, not the round's: a
+                // multi-round call reports how long the whole invocation
+                // took, and a one-round call is unchanged.
+                started,
+            ))
+            .await;
+            let input_required = match outcome {
+                McpRoundOutcome::Terminal(result) => return result,
+                McpRoundOutcome::InputRequired(input_required) => input_required,
+            };
+            // The round bound is checked the moment an intermediate result
+            // arrives, *before* any translation or interaction publication:
+            // an unbounded server loop must never be able to create pending
+            // human-interaction state on its way to being refused.
+            if round == mrtr::MCP_MRTR_MAX_ROUNDS {
+                return failed_mcp(
+                    &format!(
+                        "the MCP server asked for more input after {round} tools/call rounds, \
+                         which is the rustX multi-round-trip bound"
+                    ),
+                    context,
+                    started,
+                );
+            }
+            match self
+                .settle_mrtr_round(
+                    remote_name,
+                    invocation_id,
+                    &input_required,
+                    context,
+                    started,
+                )
+                .await
+            {
+                MrtrRoundSettlement::Continue(next) => continuation = next,
+                MrtrRoundSettlement::Terminal(result) => return result,
+            }
+        }
+        // Unreachable: the loop either returns a terminal result or refuses
+        // the round above the bound. Kept total rather than panicking.
+        failed_mcp(
+            "the MCP multi-round-trip loop ended without a terminal result",
+            context,
+            started,
+        )
+    }
+
+    /// Turns one intermediate `InputRequiredResult` into either the
+    /// continuation of the next round or a terminal settlement.
+    ///
+    /// Everything human happens here, and nothing here dispatches: the caller
+    /// owns the continuation dispatch frontier, so a cancellation that wins
+    /// while this function runs can never be followed by another remote round.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one intermediate round's whole settlement contract stays in one place"
+    )]
+    async fn settle_mrtr_round(
+        &self,
+        remote_name: &str,
+        invocation_id: &crate::tools::types::ToolInvocationId,
+        input_required: &rmcp::model::InputRequiredResult,
+        context: &ToolExecutionContext<'_>,
+        started: Instant,
+    ) -> MrtrRoundSettlement {
+        use crate::runtime::interaction::{
+            InteractionFailure, InteractionOutcome, InteractionResponse,
+        };
+
+        // Only the test-only continuation-dispatch barrier reads the remote
+        // name; the production path identifies the round by its context.
+        #[cfg(not(test))]
+        let _ = remote_name;
+
+        let unsupported = |diagnostic: &str| {
+            MrtrRoundSettlement::Terminal(failed_mcp(diagnostic, context, started))
+        };
+        // Cancellation observed before publication: no interaction is created
+        // at all, so there is no pending prompt to settle and no waiter to
+        // race.
+        if context.cancellation.is_cancelled() {
+            return MrtrRoundSettlement::Terminal(mcp_empty_terminal(
+                ToolExecutionStatus::Cancelled {
+                    reason: context.cancellation.reason(),
+                    phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
+                },
+                context,
+                started,
+            ));
+        }
+        if let Err(error) = mrtr::validate_request_state(input_required.request_state.as_deref()) {
+            return unsupported(&error.diagnostic);
+        }
+        // Whole-payload validation before anything is published: a mixed
+        // supported/unsupported request set fails here, never half-way
+        // through a prompt.
+        let plan = match mrtr::plan_round(input_required.input_requests.as_ref()) {
+            Ok(plan) => plan,
+            Err(error) => return unsupported(&error.diagnostic),
+        };
+        let Some(plan) = plan else {
+            // A pure `requestState` continuation: the server asked for no
+            // human input, so the next round carries only the opaque state.
+            let continuation = mrtr::McpContinuation {
+                request_state: input_required.request_state.clone(),
+                input_responses: None,
+            };
+            if continuation.is_empty() {
+                return unsupported(
+                    "the MCP server returned an input_required result carrying neither input \
+                     requests nor request state",
+                );
+            }
+            return MrtrRoundSettlement::Continue(continuation);
+        };
+        // The one runtime-owned human-interaction authority. It is the same
+        // crate-private capability the native `ask_user` tool consumes; the
+        // MCP adapter never sees an `InteractionCoordinator`, never triggers
+        // cancellation, and cannot create any other kind of interaction.
+        let Some(requester) = context.questionnaire_requester() else {
+            return unsupported(
+                "the MCP server asked for user input, but this execution has no runtime-owned \
+                 interaction authority: rustX advertises MCP elicitation only for invocations \
+                 that can settle it",
+            );
+        };
+        let facts = crate::runtime::interaction::QuestionnaireFacts {
+            invocation_id: invocation_id.clone(),
+            // The requester stamps the owning turn it was bound to; the
+            // adapter has no turn of its own, exactly as `ask_user` does not.
+            turn: 0,
+            questionnaire: plan.questionnaire().clone(),
+        };
+        let response = match requester.request_questionnaire(facts).await {
+            Ok(InteractionOutcome::Responded {
+                response: InteractionResponse::Questionnaire { response },
+            }) => response,
+            Ok(InteractionOutcome::Responded { response: _ }) => {
+                return unsupported(
+                    "the MCP elicitation interaction settled with a response of another kind",
+                );
+            }
+            Ok(InteractionOutcome::Cancelled { reason }) => {
+                return MrtrRoundSettlement::Terminal(mcp_empty_terminal(
+                    ToolExecutionStatus::Cancelled {
+                        reason,
+                        phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
+                    },
+                    context,
+                    started,
+                ));
+            }
+            // The deadline expired while the questionnaire was pending, so
+            // no remote request was in flight: the execution is provably
+            // stopped rather than externally ambiguous.
+            Ok(InteractionOutcome::DeadlineExpired { kind: _ }) => {
+                return MrtrRoundSettlement::Terminal(mcp_empty_terminal(
+                    ToolExecutionStatus::TimedOut,
+                    context,
+                    started,
+                ));
+            }
+            Ok(InteractionOutcome::ReviewInvalidated) => {
+                return unsupported(
+                    "the MCP elicitation interaction was invalidated by native source \
+                     interference",
+                );
+            }
+            // The existing coordinator contract, unchanged: provider absence
+            // is never reported as a human decline, and a post-publication
+            // control failure is a runtime failure of this invocation.
+            Err(failure) => {
+                let detail = if failure == InteractionFailure::Unavailable {
+                    format!(
+                        "the MCP server asked for user input and {failure}, so the call cannot \
+                         continue"
+                    )
+                } else {
+                    format!("the MCP elicitation interaction failed: {failure}")
+                };
+                return unsupported(&detail);
+            }
+        };
+        let input_responses = match plan.responses(&response) {
+            Ok(responses) => responses,
+            Err(error) => return unsupported(&error),
+        };
+        // Test-only: the exact point between "the typed human response is
+        // accepted" and "the continuation dispatch frontier is reached". A
+        // regression parks here, wins or loses the cancellation race
+        // deliberately, and asserts on the number of remote rounds.
+        #[cfg(test)]
+        test_sync::park_before_mrtr_continuation(remote_name, plan.request_count()).await;
+        MrtrRoundSettlement::Continue(mrtr::McpContinuation {
+            request_state: input_required.request_state.clone(),
+            input_responses: Some(input_responses),
+        })
+    }
+
+    /// The per-request options of one `tools/call` round.
+    ///
+    /// # Why elicitation is advertised per request, never per connection
+    ///
+    /// MCP `2026-07-28` carries client capabilities in every request's
+    /// `_meta` (SEP-2575), which is exactly the granularity rustX's
+    /// interaction ownership has: a foreground (or Workflow) invocation holds
+    /// a runtime-owned Questionnaire capability, and a detached background
+    /// invocation does not. Advertising elicitation connection-wide would tell
+    /// a server that *every* call on that peer can be answered by a human,
+    /// which is not true — and §4 of Issue #242 forbids exactly that.
+    ///
+    /// So the advertisement is a truthful, per-invocation fact:
+    ///
+    /// ```text
+    /// modern peer + this invocation holds interaction authority
+    ///     -> _meta advertises elicitation { form }
+    /// anything else
+    ///     -> no advertisement, and an input_required answer is refused
+    /// ```
+    ///
+    /// The connection-level handshake keeps `ClientCapabilities::default()`
+    /// on both the legacy `initialize` path and the inline `server/discover`
+    /// probe, so rustX never claims support for the legacy server-initiated
+    /// `elicitation/create` callback it does not implement. Legacy
+    /// connections never receive request `_meta` capabilities at all: rmcp
+    /// populates them only for `2026-07-28`+ peers, and this method adds
+    /// nothing there.
+    fn call_request_options(&self, context: &ToolExecutionContext<'_>) -> PeerRequestOptions {
+        if !uses_inline_lifecycle(&self.protocol_version) {
+            return PeerRequestOptions::no_options();
+        }
+        if context.questionnaire_requester().is_none() {
+            return PeerRequestOptions::no_options();
+        }
+        let mut capabilities = ClientCapabilities::default();
+        // Form mode only. URL-mode elicitation directs a human to an external
+        // site, which is not a bounded rustX Questionnaire.
+        capabilities.elicitation = Some(
+            rmcp::model::ElicitationCapability::new()
+                .with_form(rmcp::model::FormElicitationCapability::new()),
+        );
+        let mut meta = rmcp::model::RequestMetaObject::new();
+        meta.set_client_capabilities(capabilities);
+        // rmcp fills protocol version, client info, and its own default
+        // capabilities first and then extends with these explicit values, so
+        // only the capabilities key is overridden.
+        PeerRequestOptions::no_options().with_meta(meta)
+    }
+
+    /// Dispatches **one** physical MCP `tools/call` round and classifies its
+    /// outcome (Issue #242).
+    ///
+    /// This is the whole of the pre-MRTR call path, unchanged: the
+    /// pre-frontier rejections, the `send_cancellable_request` external-effect
+    /// frontier, request-lifecycle admission, progress ownership, the
+    /// cancellation arbitration, the local release proof, protocol poisoning,
+    /// and `OutcomeUnknown` semantics all live here and nowhere else. The
+    /// MRTR driver above composes rounds; it never re-implements any of this.
+    ///
+    /// `continuation` carries the opaque protocol state of the previous
+    /// round. On the first round it is empty and the request is byte-identical
+    /// to the pre-#242 one. `started` is the **invocation's** start instant,
+    /// shared by every round, so a settled result reports the whole
+    /// invocation's duration rather than its last round's.
+    ///
+    /// The read side of the call gate is taken **per round**, not for the
+    /// whole invocation. The gate's guarantee is "no call or notification that
+    /// began before `close()` is still running when the write barrier is
+    /// crossed", and that stays exactly true: while a round's human
+    /// interaction is pending no request exists, and the next round re-takes
+    /// the gate and observes `closed` before it can dispatch. Holding the gate
+    /// across a human interaction would instead make runtime drain wait for a
+    /// person.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the effect frontier and its ownership seams must stay in one function"
+    )]
+    async fn dispatch_one_mcp_round(
+        &self,
+        remote_name: &str,
+        arguments: &serde_json::Map<String, serde_json::Value>,
+        continuation: &mrtr::McpContinuation,
+        context: &ToolExecutionContext<'_>,
+        generation: u64,
+        started: Instant,
+    ) -> McpRoundOutcome {
+        let _call_gate = self.call_gate.read().await;
         // ---------- before the external-effect frontier ----------
         //
         // Every rejection below happens while no request exists, so each one
@@ -2845,34 +3307,47 @@ impl McpServerRuntime {
         // another call as healthy, whether the violation arrived during an
         // earlier call or while the connection was idle.
         if let Some(failure) = self.protocol_violation_failure(context, started).await {
-            return failure;
+            return McpRoundOutcome::Terminal(failure);
         }
         if self.closed.load(Ordering::Acquire) {
-            return failed_mcp("MCP server runtime is closed", context, started);
+            return McpRoundOutcome::terminal(failed_mcp(
+                "MCP server runtime is closed",
+                context,
+                started,
+            ));
         }
-        let serde_json::Value::Object(arguments) = arguments else {
-            return failed_mcp("MCP tool arguments must be a JSON object", context, started);
-        };
-        // The pre-frontier cancellation checkpoint. Without it an execution
-        // whose cancellation/deadline intent already won arbitration would
-        // still dispatch a fresh remote request and then have to report the
-        // external ambiguity it just created. Observing intent here settles
-        // the call as a proven cancellation instead.
+        // The pre-frontier cancellation checkpoint, and — for every
+        // continuation round — the MRTR **continuation dispatch frontier**
+        // (Issue #242). Cancellation observed here means no new remote round
+        // is started at all, so a human response that lost the cancellation
+        // race can never create fresh remote ambiguity.
         if context.cancellation.is_cancelled() {
-            return mcp_empty_terminal(
+            return McpRoundOutcome::terminal(mcp_empty_terminal(
                 ToolExecutionStatus::Cancelled {
                     reason: context.cancellation.reason(),
                     phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
                 },
                 context,
                 started,
-            );
+            ));
         }
-        let params = CallToolRequestParams::new(remote_name.to_owned()).with_arguments(arguments);
+        // The original business arguments are re-sent unchanged on every
+        // round. MRTR continuation fields are additional *protocol* state and
+        // are never merged into the model-issued arguments.
+        let mut params =
+            CallToolRequestParams::new(remote_name.to_owned()).with_arguments(arguments.clone());
+        if let Some(request_state) = &continuation.request_state {
+            // Echoed exactly as received: rustX never inspects, parses, or
+            // re-encodes the opaque protocol state.
+            params = params.with_request_state(request_state.clone());
+        }
+        if let Some(input_responses) = &continuation.input_responses {
+            params = params.with_input_responses(input_responses.clone());
+        }
         let request = ClientRequest::CallToolRequest(CallToolRequest::new(params));
         let mut handle = match self
             .peer
-            .send_cancellable_request(request, PeerRequestOptions::no_options())
+            .send_cancellable_request(request, self.call_request_options(context))
             .await
         {
             Ok(handle) => handle,
@@ -2886,7 +3361,7 @@ impl McpServerRuntime {
                     "the MCP service of '{}' is gone: {error}",
                     self.server_id
                 ));
-                return failed_mcp(
+                return McpRoundOutcome::terminal(failed_mcp(
                     &format!(
                         "the MCP request was refused before dispatch and never reached the \
                          transport ({}): {}",
@@ -2895,7 +3370,7 @@ impl McpServerRuntime {
                     ),
                     context,
                     started,
-                );
+                ));
             }
         };
         // ---------- the external-effect frontier is crossed ----------
@@ -2957,15 +3432,16 @@ impl McpServerRuntime {
                     // forgettable even if settlement reports OutcomeUnknown;
                     // remote uncertainty does not own local progress.
                     drop(progress_lease);
-                    return self
-                        .settle_post_frontier_cancellation(
+                    return McpRoundOutcome::terminal(
+                        self.settle_post_frontier_cancellation(
                             handle,
                             admission.as_ref(),
                             context,
                             started,
                             generation,
                         )
-                        .await;
+                        .await,
+                    );
                 }
                 progress_item = progress.recv() => {
                     // Genuine remote liveness evidence, forwarded through the
@@ -3127,14 +3603,33 @@ impl McpServerRuntime {
             // authoritative. The generic lifecycle then applies its
             // documented rule to this proven settlement.
             PostFrontierCancellation::Correlated(response) => {
-                self.classify_post_frontier_response(
-                    response,
-                    context,
-                    started,
-                    generation,
-                    termination.terminated_local_request(),
-                )
-                .await
+                match self
+                    .classify_post_frontier_response(
+                        response,
+                        context,
+                        started,
+                        generation,
+                        termination.terminated_local_request(),
+                    )
+                    .await
+                {
+                    McpRoundOutcome::Terminal(result) => result,
+                    // The peer answered this round with an intermediate MRTR
+                    // result while cancellation intent had already won
+                    // locally (Issue #242). Remote terminality *of this
+                    // round* is proven — the server answered — and the
+                    // invocation will not start another one, so the honest
+                    // settlement is a proven cancellation, not an unknown
+                    // outcome and not a failure.
+                    McpRoundOutcome::InputRequired(_) => mcp_empty_terminal(
+                        ToolExecutionStatus::Cancelled {
+                            reason: context.cancellation.reason(),
+                            phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
+                        },
+                        context,
+                        started,
+                    ),
+                }
             }
             // No correlated remote response exists. The request may have
             // executed remotely and its final external outcome cannot be
@@ -3299,7 +3794,7 @@ impl McpServerRuntime {
         started: Instant,
         generation: u64,
         terminated_local_request: bool,
-    ) -> ToolExecutionResult {
+    ) -> McpRoundOutcome {
         let response = match response {
             McpResponseOutcome::Answered(answered) => *answered,
             McpResponseOutcome::ChannelEnded => {
@@ -3313,17 +3808,17 @@ impl McpServerRuntime {
                 // a transport close. It is a protocol failure, not an
                 // anonymous disconnect — and the generation is poisoned.
                 if let Some(diagnostic) = self.poisoned_protocol_violation().await {
-                    return mcp_empty_terminal(
+                    return McpRoundOutcome::terminal(mcp_empty_terminal(
                         ToolExecutionStatus::OutcomeUnknown {
                             detail: bound_error(&diagnostic),
                         },
                         context,
                         started,
-                    );
+                    ));
                 }
                 // The transport closed after dispatch without a response:
                 // the remote operation may have partially or fully completed.
-                return mcp_empty_terminal(
+                return McpRoundOutcome::terminal(mcp_empty_terminal(
                     ToolExecutionStatus::OutcomeUnknown {
                         detail: bound_error(&format!(
                             "MCP transport closed during tools/call without a response ({})",
@@ -3332,23 +3827,30 @@ impl McpServerRuntime {
                     },
                     context,
                     started,
-                );
+                ));
             }
         };
         match response {
-            Ok(ServerResult::CallToolResult(result)) => translate_result(result, context, started),
-            Ok(ServerResult::InputRequiredResult(_)) => failed_mcp(
-                "MCP input_required results are unsupported in M7",
+            Ok(ServerResult::CallToolResult(result)) => {
+                McpRoundOutcome::terminal(translate_result(result, context, started))
+            }
+            // The one intermediate state of the MRTR machine (Issue #242).
+            // Whether it may be served at all is the driver's decision: this
+            // classifier only reports what the peer answered.
+            Ok(ServerResult::InputRequiredResult(result)) => {
+                McpRoundOutcome::InputRequired(Box::new(result))
+            }
+            Ok(_) => McpRoundOutcome::terminal(failed_mcp(
+                "unexpected MCP tools/call response",
                 context,
                 started,
-            ),
-            Ok(_) => failed_mcp("unexpected MCP tools/call response", context, started),
+            )),
             // A JSON-RPC error answering this request id is a correlated
             // remote response: the remote produced a terminal outcome and it
             // is a known failure, not an ambiguity.
-            Err(rmcp::service::ServiceError::McpError(error)) => {
-                failed_mcp(&bound_error(&error.to_string()), context, started)
-            }
+            Err(rmcp::service::ServiceError::McpError(error)) => McpRoundOutcome::terminal(
+                failed_mcp(&bound_error(&error.to_string()), context, started),
+            ),
             Err(error) => {
                 if is_transport_loss(&error) && !terminated_local_request {
                     self.note_transport_loss(&error.to_string());
@@ -3358,15 +3860,15 @@ impl McpServerRuntime {
                 // It is a protocol failure, not an anonymous disconnect —
                 // and the generation is poisoned.
                 if let Some(diagnostic) = self.poisoned_protocol_violation().await {
-                    return mcp_empty_terminal(
+                    return McpRoundOutcome::terminal(mcp_empty_terminal(
                         ToolExecutionStatus::OutcomeUnknown {
                             detail: bound_error(&diagnostic),
                         },
                         context,
                         started,
-                    );
+                    ));
                 }
-                mcp_empty_terminal(
+                McpRoundOutcome::terminal(mcp_empty_terminal(
                     ToolExecutionStatus::OutcomeUnknown {
                         detail: bound_error(&format!(
                             "the dispatched MCP tools/call produced no correlated remote \
@@ -3376,10 +3878,41 @@ impl McpServerRuntime {
                     },
                     context,
                     started,
-                )
+                ))
             }
         }
     }
+}
+
+/// The outcome of **one** physical MCP `tools/call` round (Issue #242).
+///
+/// The distinction is the whole MRTR contract: `Terminal` settles the rustX
+/// invocation, and `InputRequired` does not. There is no third state — a
+/// protocol failure, a cancellation, a deadline, and an unknown outcome are
+/// all already `ToolExecutionResult` values by the time a round returns.
+enum McpRoundOutcome {
+    /// This round produced the invocation's one terminal result.
+    Terminal(ToolExecutionResult),
+    /// The server needs client input before the call can complete. This is
+    /// intermediate execution-local protocol state, never a `ToolResult`.
+    ///
+    /// Boxed because `InputRequiredResult` carries a whole embedded request
+    /// map and this value travels through the round loop by value.
+    InputRequired(Box<rmcp::model::InputRequiredResult>),
+}
+
+impl McpRoundOutcome {
+    fn terminal(result: ToolExecutionResult) -> Self {
+        Self::Terminal(result)
+    }
+}
+
+/// What one intermediate MRTR round settled to.
+enum MrtrRoundSettlement {
+    /// The invocation continues with this opaque protocol continuation.
+    Continue(mrtr::McpContinuation),
+    /// The invocation reached its one terminal result without another round.
+    Terminal(ToolExecutionResult),
 }
 
 /// One post-frontier observation of a dispatched request's response channel.
@@ -4920,6 +5453,7 @@ impl ToolExecutor for McpToolExecutor {
                     .runtime()
                     .call(
                         &self.remote_name,
+                        &invocation.id,
                         invocation.arguments,
                         &context,
                         generation.generation(),

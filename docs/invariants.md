@@ -679,7 +679,7 @@ The ownership contract is:
 | Rendering/input | TUI projection |
 | Attempt cancellation | `AgentCancellation` |
 | Tool cancellation observation | owner-observing `ExecutionCancellation` with one-way child derivation |
-| Native Questionnaire capability | crate-private runtime-bound `QuestionnaireRequester` |
+| Runtime Questionnaire capability | crate-private runtime-bound `QuestionnaireRequester` (native `ask_user` and MCP MRTR only) |
 | Drain/quiescence | `ConversationRuntime` / `ConversationLifecycle` |
 | Crash recovery | M9 recovery authority |
 
@@ -1030,6 +1030,120 @@ one durable requested fact, followed by exactly one submitted, declined, or
 attempt-cancelled settlement. A decline succeeds as
 `{"cancelled":true,"answers":[]}`; attempt cancellation and provider
 unavailability remain distinct runtime/tool outcomes.
+
+### MCP multi-round-trip tool calls (Issue #242)
+
+MCP `2026-07-28` (SEP-2322) lets a server answer `tools/call` with an
+`InputRequiredResult` instead of a `CallToolResult`. In rustX that answer is
+an **intermediate state of the already-admitted ToolInvocation**, never a
+terminal `ToolResult` and never a new invocation:
+
+```text
+1 model ToolCall
+  = 1 rustX ToolInvocation
+  = 1 execution identity (ToolCallId / ToolInvocationId / ToolExecutionId)
+  = N bounded MCP rounds
+  = 0..N runtime-owned Interactions
+  = exactly 1 final ToolExecutionResult
+```
+
+The finite state machine is:
+
+```text
+Calling(round N)
+  -> Final(CallToolResult)       terminal
+  -> Failed                      terminal (protocol/deterministic diagnostic)
+  -> Cancelled / TimedOut /
+     OutcomeUnknown              terminal (existing MCP settlement rules)
+  -> InputRequired(request_state, input_requests)
+         |
+         v
+     one bounded runtime Questionnaire (InteractionCoordinator)
+         |
+         v
+     Calling(round N+1), if N+1 is within the bound
+```
+
+Ownership is unchanged by MRTR: the Agent Loop owns invocation admission,
+cancellation, and terminal settlement; `InteractionCoordinator` owns pending
+human interaction and its settlement; the MCP adapter owns protocol
+translation and the opaque continuation state; provider adapters are
+uninvolved and never see `InputRequiredResult`.
+
+- **One interaction mechanism, not two.** The MRTR path consumes the same
+  crate-private `QuestionnaireRequester` the native `ask_user` tool uses. No
+  `Arc<InteractionCoordinator>` is exposed on `ToolExecutionContext`, no
+  generic public interaction capability exists, and a third-party
+  `ToolExecutor` still observes only `ExecutionCancellation`.
+- **Elicitation is advertised per request, and only where it can be
+  settled.** The connection handshake (legacy `initialize` and inline
+  `server/discover`) keeps `ClientCapabilities::default()`, so rustX never
+  claims support for the legacy server-initiated `elicitation/create`
+  callback it does not implement. A `tools/call` on a `2026-07-28` connection
+  additionally declares `elicitation { form }` in its own `_meta`
+  (SEP-2575) **exactly when that invocation holds the runtime Questionnaire
+  capability**. A detached background execution therefore advertises nothing,
+  and an `input_required` answer to such an execution is refused with a
+  bounded diagnostic rather than served by a fabricated waiter or an
+  interaction attributed to an already-terminal attempt. Legacy connections
+  receive no request `_meta` capabilities at all and behave exactly as before.
+- **Sampling and Roots are never adopted.** A `sampling/createMessage`
+  input request would let a server initiate model execution; a `roots/list`
+  input request would expose host authority through a deprecated surface.
+  Both fail the invocation deterministically, with no model call and no
+  workspace disclosure.
+- **Supported Elicitation subset.** One MCP property becomes one rustX
+  question, and a rustX question is a bounded choice over 2–4 authored
+  options. `boolean` and `enum` (single-select, multi-select, titled,
+  untitled, and the legacy `enumNames` form) are representable; free-form
+  `string`, `number`, and `integer` properties and URL-mode elicitation are
+  not, and are refused rather than coerced into invented options. Answers map
+  back by **server-assigned request key**, never by position. An unanswered
+  required property, or a whole-questionnaire decline, becomes the protocol's
+  own `decline` action; a free-text answer to a bounded schema choice is a
+  deterministic failure, because rustX will not send an `accept` whose
+  content the server's own schema rejects. Provider unavailability keeps the
+  existing coordinator contract and is never reported as a human decline.
+- **Whole-payload validation precedes publication.** A round mixing
+  supported and unsupported input requests, an oversized payload, or a
+  schema rustX cannot represent fails before any prompt is published, so a
+  user is never shown half an interaction that is about to be abandoned.
+- **`requestState` is opaque and execution-local.** It is retained only for
+  the lifetime of the invocation, echoed byte for byte, never parsed,
+  reinterpreted, or re-encoded through a rustX schema, and dropped at
+  terminal settlement. It never enters canonical conversation history, the
+  model-issued `ToolCall` arguments, the Event Journal, or Goal/Workflow/
+  Subagent durable state.
+- **Bounds are fixed and rustX-owned.** `MCP_MRTR_MAX_ROUNDS = 10` counts the
+  initial call as round 1, so a server may drive at most nine `input_required`
+  continuations; the eleventh round is refused before its interaction is
+  published. A round carries at most four input requests, a questionnaire at
+  most four questions (the shared `ask_user` bound), `requestState` at most
+  8 KiB, one round's input-request payload at most 64 KiB, and one
+  continuation's `inputResponses` at most 16 KiB. There is no configuration
+  switch and no generic limits framework.
+- **The continuation dispatch frontier is the pre-dispatch cancellation
+  checkpoint.** Observable cancellation there means no new round is
+  dispatched at all, so a human response that lost the cancellation race can
+  never create fresh remote ambiguity. Past that frontier, MRTR composes the
+  existing MCP semantics unchanged: a correlated remote response wins,
+  everything else is `OutcomeUnknown`, local request ownership is terminated
+  and proven released, and a generation that violated the protocol stays
+  poisoned. A correlated `InputRequiredResult` observed while cancellation
+  has already won settles as a proven `Cancelled`: the round's remote
+  outcome is known, and rustX will not start another.
+- **Canonical history sees only `ToolCall` + final `ToolResult`.**
+  Intermediate `InputRequiredResult`s, request state, input requests, and
+  input responses produce no canonical message, no synthetic `ToolCall`, and
+  no synthetic `ToolResult`. The Event Journal records the ordinary
+  Interaction requested/settled facts of any Questionnaire a round published,
+  because those are runtime execution facts — but they are audit evidence,
+  never MRTR continuation authority. A process restart does not resume an
+  opaque `requestState`.
+- **Approval is evaluated once.** One model `ToolCall` is one
+  `ToolExecutor::start`, and the whole MRTR lifetime lives inside that one
+  call, so the pre-tool policy cannot run per round. Progress from every
+  round reaches the same invocation's one `ProgressReporter`.
 
 ### The conversation task list and `todo`
 

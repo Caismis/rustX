@@ -138,6 +138,20 @@ invariant is a real process boundary.
 - `tool_deadline` — the Issue #204 generic hard deadline bounding a real
   foreground Bash process: the supervisor's process-group kill and reap are
   the physical settlement behind the proven `TimedOut`.
+- `mcp_mrtr` — MCP multi-round-trip (SEP-2322) execution against a real MCP
+  `2026-07-28` stdio child (this test binary re-executed as a guard-tool
+  fixture server): one `ToolCall` stays one invocation across N bounded
+  rounds with 0..N runtime-owned Interactions and exactly one terminal
+  result, the opaque `requestState` round-trips byte for byte, unsupported
+  Sampling/Roots/schemas fail before any prompt is published, and each
+  cancellation frontier — before the first dispatch, while the Interaction
+  is pending, at the continuation dispatch frontier in both directions — is
+  decided through a deterministic barrier rather than a sleep.
+- `mcp_mrtr_managed` — the same contract end to end against a real managed
+  `FastMCP` 4 child built by a real, network-bound `uv`: one model
+  `ToolCall`, a negotiated `2026-07-28` connection, two real `tools/call`
+  rounds, one runtime Interaction, one final `ToolResult`. It follows the
+  repository's uv-availability skip convention.
 - `subagent/conformance` — the child ownership boundary with real staged
   children (`sh`, own process group, real control socket): frozen authority
   crossing, registry lifecycle, exactly one terminal child notice, parent

@@ -1104,7 +1104,8 @@ pub(crate) struct InteractionCoordinator {
     wait_cancellation_gate: Mutex<Option<Arc<InteractionWaitCancellationGate>>>,
 }
 
-/// The bounded native Questionnaire capability bound to one Agent Loop attempt.
+/// The bounded runtime Questionnaire capability bound to one Agent Loop
+/// attempt.
 ///
 /// This is intentionally a concrete crate-private value rather than a public
 /// generic interaction trait. It carries only the attempt identity, a read-only
@@ -1112,6 +1113,28 @@ pub(crate) struct InteractionCoordinator {
 /// Its sole operation is to publish and await a Questionnaire; it cannot request
 /// cancellation, arbitrate model-turn start, settle Approval, or mutate
 /// canonical history.
+///
+/// # Two consumers, one mechanism (Issue #242)
+///
+/// It is no longer exclusive to the native `ask_user` tool. The MCP adapter's
+/// multi-round-trip (SEP-2322) elicitation path consumes the *same* capability
+/// so that a server-driven `input_required` round becomes an ordinary
+/// runtime-owned Questionnaire instead of a second pending-user state machine:
+///
+/// ```text
+///                InteractionCoordinator          (one owner)
+///                        ^
+///                        |
+///              QuestionnaireRequester            (crate-private, bounded)
+///                   |          |
+///              ask_user     MCP MRTR elicitation
+/// ```
+///
+/// Both consumers are rustX-owned code inside this crate. The capability is
+/// reachable only through the crate-private
+/// [`ToolExecutionContext`](crate::tools::executor::ToolExecutionContext)
+/// seam, so a third-party `ToolExecutor` still cannot acquire any interaction
+/// authority.
 #[derive(Clone)]
 pub(crate) struct QuestionnaireRequester {
     coordinator: Arc<InteractionCoordinator>,

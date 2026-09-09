@@ -4011,6 +4011,143 @@ generic MCP connect + `tools/list` that follows preparation is the server
 validation, and the candidate-generation machinery guarantees a failure
 leaves the previously committed generation intact.
 
+#### MCP multi-round-trip tool calls (Issue #242)
+
+MCP `2026-07-28` (SEP-2322) allows a server to answer `tools/call` with an
+`InputRequiredResult` instead of a `CallToolResult`. rustX adopts the subset
+that maps cleanly onto its existing human-interaction ownership —
+**Elicitation** — and treats that answer as an intermediate state of the
+already-admitted invocation:
+
+```text
+model ToolCall A
+    |
+    v
+rustX ToolInvocation A ──── approval evaluated once, before ToolExecutor::start
+    |
+    +--> tools/call round 1 --------------------------+
+    |        |                                        |
+    |        +--> CallToolResult -------------------->-+---> exactly one
+    |        |                                        |      terminal
+    |        +--> InputRequiredResult                 |      ToolExecutionResult
+    |                 |                               |
+    |                 v                               |
+    |        one runtime-owned Questionnaire          |
+    |        (the same InteractionCoordinator that    |
+    |         serves native ask_user)                 |
+    |                 |                               |
+    +--> tools/call round N+1 ----------------------->+
+```
+
+The whole loop lives inside the single operation future of
+`ToolExecutionHandle::settled_by_operation`, on the one connection generation
+resolved before the first round. So one model `ToolCall` remains one
+`ToolExecutor::start`, one `ToolInvocationId`, one `ToolExecutionId` (when
+detached), one server binding, one execution lease, one remote tool name, one
+set of business arguments, one progress stream, and one terminal result — and
+the Agent Loop, the background registry, and the provider adapters see nothing
+new. `src/tools/mcp/mrtr.rs` owns protocol translation only; the round driver
+composes the existing dispatch frontier, cancellation arbitration, progress
+ownership, local release proof, and protocol poisoning rather than replacing
+any of them.
+
+**Interaction authority is one narrow crate-private seam, now shared.** The
+MCP adapter is rustX-owned code and consumes the same
+`QuestionnaireRequester` that native `ask_user` does:
+
+```text
+                InteractionCoordinator        (the only human-interaction owner)
+                        ^
+                        |
+              QuestionnaireRequester          (crate-private, attempt-bound,
+                   |          |                publish-and-await only)
+              ask_user     MCP MRTR
+```
+
+It carries the attempt identity, a read-only cancellation view, and the
+conversation-owned coordinator, and can do exactly one thing: publish one
+bounded Questionnaire and await its typed response. It cannot trigger
+cancellation, run a model, settle Approval, mutate canonical history, or
+create any other kind of interaction. `ToolExecutionContext` still exposes no
+generic interaction capability, so an externally registered `ToolExecutor`
+cannot acquire one.
+
+**The capability is advertised per request, because that is the granularity
+of the authority.** rmcp populates `_meta` client capabilities (SEP-2575) on
+every request of a `2026-07-28` connection, so rustX declares
+`elicitation { form }` on a `tools/call` exactly when that invocation holds
+the Questionnaire capability — foreground Agent Loop dispatch and Workflow
+native invocation do; a detached background execution does not. The
+connection handshake itself is untouched (`ClientCapabilities::default()` on
+both the legacy `initialize` path and the inline `server/discover` probe), so
+rustX never claims the legacy server-initiated `elicitation/create` callback
+it does not implement, and legacy connections see no request `_meta`
+capabilities at all.
+
+That is also the honest answer for background work. rustX has no background
+human-interaction domain: `ask_user` is foreground-only and an interaction is
+owned by a live attempt, whose identity a detached execution does not have.
+Rather than invent a background waiter, attribute an interaction to an
+already-terminal attempt, or widen the interaction protocol for a domain that
+does not exist, a background MCP invocation tells the server the truth and
+refuses an `input_required` answer with a bounded diagnostic — under its own
+`ToolExecutionId`, with exactly one settlement. Background MCP execution
+itself is unchanged; only server-driven elicitation inside it is refused.
+
+**Sampling and Roots are refused, not implemented.** A `sampling/createMessage`
+input request would make an MCP server an initiator of rustX model execution;
+a `roots/list` input request would expose host authority through a deprecated
+surface that duplicates rustX's Workspace ownership. Both produce a bounded
+unsupported-feature diagnostic, with no model call and no workspace
+disclosure. A round mixing supported and unsupported requests fails as a
+whole, before any prompt is published.
+
+**The supported Elicitation schema subset is exactly what rustX can represent
+without coercion.** One MCP property becomes one rustX question, and a rustX
+question is a bounded choice over 2–4 authored options plus the client's own
+custom-answer row. `boolean` and every `enum` shape are representable;
+free-form `string`/`number`/`integer` properties and URL-mode elicitation are
+not, and are refused rather than rendered as invented options. Question order
+is `(input-request key, schema property order)`, both deterministic, and
+answers map back by server-assigned key rather than by position. A
+whole-questionnaire decline, or an unanswered required property, becomes the
+protocol's own `decline` action; a free-text answer to a bounded schema
+choice fails deterministically, because an `accept` carrying content the
+server's schema rejects would be a fabrication. Provider unavailability keeps
+the existing coordinator contract and is never reported as a human decline.
+
+**`requestState` stays protocol-owned.** It is retained on the executor's
+stack for the lifetime of the invocation, returned byte for byte on the next
+round, never parsed or re-encoded through a rustX schema, and dropped at
+terminal settlement. It never reaches canonical history, the model-issued
+`ToolCall` arguments, the Event Journal, or Goal/Workflow/Subagent durable
+state, and a process restart never resumes one. The Event Journal does record
+the ordinary requested/settled facts of any Questionnaire a round published —
+those are runtime execution facts, and they are audit evidence rather than
+continuation authority.
+
+**The bound is fixed and rustX-owned.** `MCP_MRTR_MAX_ROUNDS = 10` counts the
+initial call as round 1, matching the convention rmcp's own
+`DEFAULT_MRTR_MAX_ROUNDS` uses, and is checked the moment an intermediate
+result arrives — before translation and before publication — so a server that
+never terminates cannot even create pending interaction state on its way to
+being refused. Every payload is bounded too: at most four input requests per
+round, at most four derived questions (the shared `ask_user` bound), 8 KiB of
+`requestState`, 64 KiB of input requests, 16 KiB of `inputResponses`. There is
+no configuration switch and no generic limits framework.
+
+**Cancellation composes rather than competes.** The continuation dispatch
+frontier *is* the existing pre-dispatch cancellation checkpoint: observable
+cancellation there means no new round is dispatched, so a human response that
+lost the race can never create fresh remote ambiguity. Everything past the
+frontier keeps its existing meaning — a correlated remote response wins,
+everything else is `OutcomeUnknown`, local request ownership is terminated and
+proven released before anything is reported, and a poisoned generation stays
+poisoned. One case is new and is resolved in the same spirit: a correlated
+`InputRequiredResult` observed after cancellation intent has already won
+settles as a proven `Cancelled`, because that round's remote outcome *is*
+known and rustX will not start another.
+
 ### Layer 5: Skill plane
 
 #### Workspace-owned Agent resources (Issue #172)
