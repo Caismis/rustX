@@ -256,6 +256,15 @@ async fn run_configuration_command(command: super::cli::Command) -> i32 {
             };
             (report, json)
         }
+        Command::Workflow {
+            id,
+            explain,
+            request,
+            json,
+        } => (
+            super::workflow_inspection::inspect(&id, explain, &request, &host),
+            json,
+        ),
         Command::Check { request, json } => (
             super::diagnostics::inspect("config_check", &request, &host).0,
             json,

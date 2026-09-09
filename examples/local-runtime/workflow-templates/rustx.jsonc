@@ -1,0 +1,12 @@
+{
+  "subagents": {
+    "definitions": ["reviewer"],
+    "main": [],
+    "workflow": ["reviewer"],
+    "maxConcurrent": 2
+  },
+  "workflows": {
+    "definitions": ["typed_agent", "parallel_checks", "human_plan"],
+    "main": ["typed_agent", "parallel_checks", "human_plan"]
+  }
+}

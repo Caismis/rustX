@@ -74,7 +74,8 @@ pub(super) fn value_schema(
                 }
                 properties.insert(
                     key.clone(),
-                    value_schema(value, available, node, depth + 1)?,
+                    value_schema(value, available, node, depth + 1)
+                        .map_err(|e| e.at(format!("fields.{key}")))?,
                 );
             }
             Ok(
@@ -85,7 +86,11 @@ pub(super) fn value_schema(
         WorkflowValue::Array { items } => {
             let schemas = items
                 .iter()
-                .map(|item| value_schema(item, available, node, depth + 1))
+                .enumerate()
+                .map(|(index, item)| {
+                    value_schema(item, available, node, depth + 1)
+                        .map_err(|e| e.at(format!("items.{index}")))
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             if schemas.is_empty() {
                 return Ok(serde_json::json!({"type":"array", "const":[]}));

@@ -66,7 +66,7 @@ fn lexical_scope_rejects_parent_and_sibling_reads_with_duplicate_local_names() {
         );
         assert!(matches!(
             compile_block_fixture(wrap(branch, 2)),
-            Err(WorkflowCompileError::InvalidReference(_))
+            Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidReference(_))
         ));
     }
     let program =
@@ -170,7 +170,7 @@ fn nested_program_and_expression_limits_are_aggregate() {
     wide.output = json!({"type":"object"});
     compile_block_fixture(wide.clone()).expect("each private block fits independently");
     assert!(matches!(compile_block_fixture(wrap(wide, 32)),
-        Err(WorkflowCompileError::InvalidField(detail)) if detail.contains("retained-data reservation")));
+        Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidField(detail) if detail.contains("retained-data reservation"))));
     let mut leaf = empty_block();
     for index in 0..8 {
         let id = format!("step_{index}");
@@ -192,7 +192,7 @@ fn nested_program_and_expression_limits_are_aggregate() {
     compile_block_fixture(leaf.clone()).expect("leaf individually valid");
     assert!(matches!(
         compile_block_fixture(wrap(leaf, 32)),
-        Err(WorkflowCompileError::InvalidField(_))
+        Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidField(_))
     ));
     let mut nested = empty_block();
     for _ in 0..MAX_BLOCK_DEPTH {
@@ -233,7 +233,7 @@ fn nested_program_and_expression_limits_are_aggregate() {
         }
     }
     assert!(
-        matches!(compile_test(definition), Err(WorkflowCompileError::InvalidField(detail)) if detail.contains("aggregate program size"))
+        matches!(compile_test(definition), Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidField(detail) if detail.contains("aggregate program size")))
     );
 }
 

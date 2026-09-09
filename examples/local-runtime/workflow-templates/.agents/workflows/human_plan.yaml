@@ -1,0 +1,32 @@
+description: Ask a human to review a bounded plan and return their decision.
+timeout_ms: 120000
+block:
+  input:
+    type: object
+    properties:
+      plan:
+        type: object
+        properties: {summary: {type: string}}
+        required: [summary]
+        additionalProperties: false
+    required: [plan]
+    additionalProperties: false
+  output:
+    type: object
+    properties:
+      accepted: {type: boolean}
+      feedback: {type: string}
+    required: [accepted, feedback]
+    additionalProperties: false
+  entry: review_plan
+  nodes:
+    review_plan:
+      type: review
+      subject:
+        type: plan
+        value: {type: reference, path: [args, plan]}
+      context: []
+    return_decision:
+      type: return
+      output: {type: reference, path: [review_plan]}
+  edges: [{from: review_plan, to: return_decision}]

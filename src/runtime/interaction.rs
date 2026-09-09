@@ -1475,6 +1475,10 @@ impl InteractionCoordinator {
         publication_admitted: bool,
         candidate: Option<Arc<crate::runtime::workspace::CandidateFreeze>>,
     ) -> Result<PublishedInteraction, InteractionFailure> {
+        #[cfg(test)]
+        crate::local_runtime::static_effects::observe(
+            crate::local_runtime::static_effects::Effect::Interaction,
+        );
         let id = request.id.clone();
         let published_request = request.clone();
         let (sender, receiver) = oneshot::channel();

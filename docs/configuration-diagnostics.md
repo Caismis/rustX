@@ -1,5 +1,8 @@
 # Configuration authoring and diagnostics
 
+See [offline Workflow authoring](workflow-authoring.md) for `rustx workflow check <id>`
+and `rustx workflow explain <id>`, compiled explanations and small executable templates.
+
 See [canonical named Subagent resources](subagent-resources.md) for schema 8
 role files, registration/admission, bounded roots, source provenance, and frozen
 reload/child contracts.
@@ -261,9 +264,9 @@ credential presence, live provider compatibility, or future source availability.
 Untrusted resource contents are deliberately not validated. Failed analysis may
 return only the paths and partial declarations established before the failure;
 it does not invent a complete launch. Diagnostics stop at the first authoritative
-failure instead of accumulating speculative follow-on errors. Role authoring
-(CFG-05), future Workflow authoring (CFG-06), and live projections (CFG-07) are
-separate work; none is implemented here.
+failure instead of accumulating speculative follow-on errors. Canonical role
+authoring (CFG-05) and Workflow authoring (CFG-06) build on this same path;
+live configuration projections (CFG-07) remain separate work.
 
 ## Deterministic regression evidence
 

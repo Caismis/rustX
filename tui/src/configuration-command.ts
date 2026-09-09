@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 
 export function configurationCommand(argv: readonly string[]): { binary: string; arguments: string[] } | undefined {
   if (argv[0] !== "--binary" || argv[1] === undefined) return undefined;
-  if (!["init", "config", "doctor", "--help"].includes(argv[2] ?? "")) return undefined;
+  if (!["init", "config", "doctor", "workflow", "--help"].includes(argv[2] ?? "")) return undefined;
   return { binary: argv[1], arguments: argv.slice(2) };
 }
 

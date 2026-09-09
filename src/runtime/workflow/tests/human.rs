@@ -3,6 +3,47 @@ use super::*;
 use crate::events::review::{ReviewDecision, ReviewResponse};
 use crate::runtime::interaction::*;
 
+#[tokio::test]
+async fn cfg237_human_plan_template_uses_native_review_and_settlement() {
+    let plane = workflow_test_plane(1);
+    let (owner, audit, mut published) = owner(&plane);
+    let context = human_context(&plane, owner.clone());
+    let runtime = workflow_runtime(&plane);
+    let observations = runtime.observations.subscribe();
+    let (_, cancellation) = workflow_cancellation();
+    let program = super::super::templates::template("human_plan");
+    let mut task = tokio::spawn(async move {
+        runtime
+            .run_foreground(
+                program,
+                ToolCallId::new("template-review"),
+                context,
+                json!({"plan":{"summary":"Write a short summary."}}),
+                cancellation,
+            )
+            .await
+    });
+    let request = tokio::select! {
+        result = &mut task => panic!("Workflow settled before Review publication: {result:?}"),
+        request = published.recv() => request.unwrap(),
+    };
+    assert!(matches!(request.kind, InteractionKind::Review { .. }));
+    owner
+        .respond_async(&request.id, answer(&request, true))
+        .await
+        .unwrap();
+    let output = task.await.unwrap().unwrap();
+    assert_eq!(output["accepted"], true);
+    assert!(output["feedback"].is_string());
+    assert_eq!(audit.events().len(), 2);
+    assert!(owner.pending_snapshot().is_empty());
+    assert!(plane.registry.all_snapshots().is_empty());
+    assert!(matches!(
+        observations.borrow().last(),
+        Some(RuntimeEvent::WorkflowCompleted { .. })
+    ));
+}
+
 struct Published(tokio::sync::mpsc::UnboundedSender<InteractionRequest>);
 impl InteractionObserver for Published {
     fn on_pending(

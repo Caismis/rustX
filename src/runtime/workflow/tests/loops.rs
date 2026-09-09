@@ -334,7 +334,7 @@ fn aggregate_agent_expansion_is_separate_from_static_nodes_and_steps() {
     definition.block.entry = "before".into();
     definition.block.edges.push(edge("before", "feedback"));
     assert!(
-        matches!(compile_test(definition),Err(WorkflowCompileError::InvalidField(message)) if message.contains("expanded execution"))
+        matches!(compile_test(definition),Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidField(message) if message.contains("expanded execution")))
     );
 }
 
@@ -736,7 +736,7 @@ fn nested_execution_expansion_is_checked_and_private_memory_is_not_multiplied() 
     *carry = reference("result.result");
     definition.block.output = execution::loop_result_schema(&result);
     assert!(
-        matches!(compile_test(definition),Err(WorkflowCompileError::InvalidField(message)) if message.contains("expanded execution"))
+        matches!(compile_test(definition),Err(ref error) if matches!(error.cause(), WorkflowCompileError::InvalidField(message) if message.contains("expanded execution")))
     );
 }
 

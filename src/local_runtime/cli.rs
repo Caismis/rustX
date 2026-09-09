@@ -64,7 +64,14 @@ const LAUNCH_VALUE_FLAGS: &[&str] = &[
     "--inspect-conversation",
 ];
 
-pub const CONFIG_USAGE: &str = "Configuration commands:\n\
+pub const CONFIG_USAGE: &str = "Workflow authoring (offline, no execution or authority changes):\n\
+  rustx workflow check <id> [--workspace <dir>] [--config <path>]\n\
+    [--models <path>] [--model <provider/model>] [--json]\n\
+  rustx workflow explain <id> [--workspace <dir>] [--config <path>]\n\
+    [--models <path>] [--model <provider/model>] [--json]\n\
+  Only configured Workflow ids are inspected. Static validity is not runtime readiness.\n\
+  Exit 2: invalid; exit 3: static valid/incomplete, runtime readiness unresolved.\n\
+Configuration commands:\n\
   rustx init --template openai-chat|openai-responses|anthropic|custom\n\
     --provider <id> --endpoint <url> --credential-env <NAME>\n\
     --model-id <id> --context-window <tokens> --max-output <tokens>\n\
@@ -86,6 +93,12 @@ and never grants project trust. Project rustx.jsonc remains optional.";
 /// The finite Rust-owned command grammar. Runtime flags have one parser.
 #[derive(Debug)]
 pub enum Command {
+    Workflow {
+        id: crate::runtime::workflow::WorkflowId,
+        explain: bool,
+        request: LaunchRequest,
+        json: bool,
+    },
     Launch(LaunchRequest),
     Help,
     Check {
@@ -110,7 +123,8 @@ pub enum Command {
 impl Command {
     pub(super) const fn json_output(&self) -> bool {
         match self {
-            Self::Check { json, .. }
+            Self::Workflow { json, .. }
+            | Self::Check { json, .. }
             | Self::Show { json, .. }
             | Self::Doctor { json, .. }
             | Self::Init { json, .. } => *json,
@@ -122,7 +136,7 @@ impl Command {
 pub(super) fn diagnostic_json_requested(arguments: &[String]) -> bool {
     matches!(
         arguments.first().map(String::as_str),
-        Some("config" | "init" | "doctor")
+        Some("config" | "init" | "doctor" | "workflow")
     ) && remove_switch(&mut arguments.to_vec(), "--json").unwrap_or(true)
 }
 
@@ -140,6 +154,9 @@ pub fn parse_command(
     let Some(first) = arguments.first().cloned() else {
         return Ok(Command::Launch(LaunchRequest::default()));
     };
+    if first == "workflow" {
+        return parse_workflow(arguments);
+    }
     if !matches!(first.as_str(), "init" | "config" | "doctor") {
         return parse_arguments(arguments).map(Command::Launch);
     }
@@ -196,6 +213,49 @@ pub fn parse_command(
         }),
         _ => Err(ArgumentError::UnknownFlag { flag: operation }),
     }
+}
+
+fn parse_workflow(mut arguments: Vec<String>) -> Result<Command, ArgumentError> {
+    if arguments.len() < 3 {
+        return Err(ArgumentError::MissingValue {
+            flag: "workflow check|explain <id>".into(),
+        });
+    }
+    let explain = match arguments[1].as_str() {
+        "check" => false,
+        "explain" => true,
+        _ => {
+            return Err(ArgumentError::UnknownFlag {
+                flag: arguments[1].clone(),
+            });
+        }
+    };
+    let id = crate::runtime::workflow::WorkflowId::parse(&arguments[2]).map_err(|_| {
+        ArgumentError::InvalidValue {
+            flag: "workflow id".into(),
+        }
+    })?;
+    arguments.drain(..3);
+    let json = remove_switch(&mut arguments, "--json")?;
+    let mut index = 0;
+    while index < arguments.len() {
+        if !matches!(
+            arguments[index].as_str(),
+            "--workspace" | "--config" | "--models" | "--model"
+        ) {
+            return Err(ArgumentError::UnknownFlag {
+                flag: arguments[index].clone(),
+            });
+        }
+        index += 2;
+    }
+    let request = parse_arguments(arguments)?;
+    Ok(Command::Workflow {
+        id,
+        explain,
+        request,
+        json,
+    })
 }
 
 fn remove_switch(arguments: &mut Vec<String>, flag: &str) -> Result<bool, ArgumentError> {
@@ -547,6 +607,46 @@ impl std::error::Error for ArgumentError {}
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cfg237_workflow_grammar_is_finite_and_rejects_execution_controls() {
+        use super::*;
+        let parse = |args: &[&str]| parse_command(args.iter().map(ToString::to_string));
+        for operation in ["check", "explain"] {
+            assert!(matches!(
+                parse(&[
+                    "workflow",
+                    operation,
+                    "typed_agent",
+                    "--json",
+                    "--workspace",
+                    "project"
+                ])
+                .unwrap(),
+                Command::Workflow { json: true, .. }
+            ));
+            for flag in [
+                "--trust",
+                "--session",
+                "--continue",
+                "--name",
+                "--runtime-root",
+                "--prepare",
+                "--probe",
+                "--tools",
+                "--no-tools",
+                "--skill",
+            ] {
+                assert!(
+                    parse(&["workflow", operation, "typed_agent", flag, "x"]).is_err(),
+                    "{flag}"
+                );
+            }
+            assert!(parse(&["workflow", operation, "typed_agent", "--json", "--json"]).is_err());
+            assert!(parse(&["workflow", operation, "../arbitrary.yaml"]).is_err());
+        }
+        assert!(parse(&["workflow", "run", "typed_agent"]).is_err());
+        assert!(parse(&["workflow", "check"]).is_err());
+    }
     #[test]
     fn cfg235_finite_command_grammar_and_switch_values() {
         use super::{Command, parse_command};

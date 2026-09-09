@@ -655,6 +655,9 @@ process restart never resumes old nodes or recreates actionable human decisions.
   ordinary native Tools, and a workspace with no project configuration.
 - `workflow-basic/` adds one fixed native Read Workflow using today's YAML
   contract, with no Python, MCP, or Subagent prerequisite.
+- [workflow-templates/](workflow-templates/README.md) adds three small executable
+  starting points and offline `workflow check` / `workflow explain`. All three
+  support non-Git workspaces and use canonical role resources where needed.
 - The existing files in this directory and `workspace/` remain the full
   reference/conformance stack. They demonstrate advanced capabilities and
   preserve executable conformance coverage; they are not a first-run requirement.

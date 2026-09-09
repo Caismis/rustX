@@ -134,10 +134,7 @@ use crate::runtime::subagent::{
     child_conversation_inspection_socket_path, child_conversation_store_path,
     is_safe_child_conversation_component,
 };
-use crate::runtime::workflow::{
-    MAX_WORKFLOW_BYTES, WorkflowCatalog, WorkflowDefinition, WorkflowOutputLatch, WorkflowProgram,
-    WorkflowRuntime,
-};
+use crate::runtime::workflow::{WorkflowCatalog, WorkflowOutputLatch, WorkflowRuntime};
 use crate::runtime::workspace::WorkspaceManager;
 use crate::runtime_client::endpoint::RuntimeClientEndpoint;
 use crate::runtime_client::host::{
@@ -150,19 +147,13 @@ use crate::tools::native::{NativeToolResources, register_native_tools};
 use crate::tools::runtime::ConversationToolRuntime;
 use crate::tools::types::ToolDefinition;
 
-use super::config::{CurrentRuntimeConfig, CurrentRuntimeConfigError, WorkflowsDocument};
+use super::config::{CurrentRuntimeConfig, CurrentRuntimeConfigError};
 use super::launch::{LaunchLocations, ResolvedLaunch};
 use super::session::{
     SessionCatalog, SessionError, SessionId, SessionNodeId, SessionNodeOrigin,
     SessionPersistentState,
 };
 use super::supervisor::{LocalSessionSupervisor, SessionSupervisorError};
-
-/// The one project-owned namespace for Agent resources. Runtime-owned state
-/// remains under the separately configured runtime root.
-const AGENT_RESOURCES_DIRECTORY: &str = ".agents";
-/// The native Workflow source directory inside [`AGENT_RESOURCES_DIRECTORY`].
-const WORKFLOW_RESOURCES_DIRECTORY: &str = "workflows";
 
 /// Which Session a launch binds.
 ///
@@ -306,7 +297,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                 .admitted(&main_admission)
                 .map_err(|error| RuntimeResourceLoadError::new(format!("{error}")))?;
             let workflows =
-                load_workflow_catalog(&workspace, &config.workflows, &workflow_admission)?;
+                super::workflow_resources::load(&workspace, &config.workflows, &config.subagents)?;
             let default_tools = default_tools_with_workflows(&config.default_tools, &workflows);
             let mut registry = ToolRegistry::new();
             register_native_tools(
@@ -846,70 +837,6 @@ impl RuntimeResourceLoader for FrozenSubagentResourceLoader {
     }
 }
 
-/// Loads and compiles exactly the configured Workflow definitions.
-///
-/// The configured id is the only filesystem identity: a registered `id` is
-/// read from `.agents/workflows/{id}.yaml`. Directory contents are never
-/// scanned, so an unregistered YAML file cannot become model-visible by
-/// accident. Compilation happens before the candidate reaches the runtime
-/// resource publication boundary.
-pub(crate) fn load_workflow_catalog(
-    workspace: &Path,
-    document: &WorkflowsDocument,
-    workflow_profiles: &BTreeSet<crate::runtime::subagent::SubagentName>,
-) -> Result<WorkflowCatalog, RuntimeResourceLoadError> {
-    let mut programs = Vec::with_capacity(document.definitions.len());
-    for id in &document.definitions {
-        let path = workspace_workflow_path(workspace, id);
-        crate::runtime::resources::validate_project_resource_path(workspace, &path)
-            .map_err(|error| error.at(&path, format!("workflows.definitions.{id}")))?;
-        let bytes = crate::config_format::read_bounded(&path).map_err(|error| {
-            RuntimeResourceLoadError::new(format!(
-                "cannot read registered workflow {id} at {}: {error}",
-                path.display()
-            ))
-            .at(&path, format!("workflows.definitions.{id}"))
-        })?;
-        if bytes.len() > MAX_WORKFLOW_BYTES {
-            return Err(RuntimeResourceLoadError::new(format!(
-                "workflow {id} at {} exceeds the {MAX_WORKFLOW_BYTES}-byte bound",
-                path.display()
-            ))
-            .at(&path, format!("workflows.definitions.{id}")));
-        }
-        let definition: WorkflowDefinition = serde_yaml::from_slice(&bytes).map_err(|error| {
-            RuntimeResourceLoadError::new(format!(
-                "cannot deserialize registered workflow {id} at {}: {error}",
-                path.display()
-            ))
-            .at(&path, format!("workflows.definitions.{id}"))
-        })?;
-        let program = WorkflowProgram::compile(id.clone(), definition, workflow_profiles).map_err(
-            |error| {
-                RuntimeResourceLoadError::new(format!(
-                    "cannot compile registered workflow {id} at {}: {error}",
-                    path.display()
-                ))
-                .at(&path, format!("workflows.definitions.{id}"))
-            },
-        )?;
-        programs.push(program);
-    }
-    WorkflowCatalog::new(programs, document.main.clone()).map_err(|error| {
-        RuntimeResourceLoadError::new(format!("cannot admit Workflow catalog: {error}"))
-    })
-}
-
-/// Maps one explicitly registered Workflow identity to its one source file.
-/// This is intentionally not a discovery helper: the caller must provide the
-/// id from `workflows.definitions`.
-fn workspace_workflow_path(workspace: &Path, id: &crate::runtime::workflow::WorkflowId) -> PathBuf {
-    workspace
-        .join(AGENT_RESOURCES_DIRECTORY)
-        .join(WORKFLOW_RESOURCES_DIRECTORY)
-        .join(format!("{}.yaml", id.as_str()))
-}
-
 /// Workflow `main` admission is model-facing capability admission. Include
 /// those concrete Tool names in the normal optional built-in default set so
 /// a registered Workflow is available without duplicating its id in the
@@ -1134,7 +1061,7 @@ impl LocalConversationCore {
             .map_err(|error| LocalRuntimeError::Capability {
                 detail: error.to_string(),
             })?;
-        let workflows = paths.workflows.clone();
+        let workflows = paths.workflows.as_ref().clone();
         let default_tools = default_tools_with_workflows(&runtime_config.default_tools, &workflows);
         //
         // The frozen model timeout policy is resolved once here so the

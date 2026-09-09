@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { configurationCommand, forwardConfigurationCommand } from "../src/configuration-command.ts";
 
 test("configuration commands forward opaque Rust arguments without interpreting configuration", () => {
-  for (const args of [["init", "--template", "custom"], ["config", "show", "--sources", "--json"], ["doctor", "--probe", "--prepare"]]) {
+  for (const args of [["init", "--template", "custom"], ["config", "show", "--sources", "--json"], ["doctor", "--probe", "--prepare"], ["workflow", "check", "typed_agent", "--json"], ["workflow", "explain", "parallel_checks"]]) {
     assert.deepEqual(configurationCommand(["--binary", "/rustx", ...args]), { binary: "/rustx", arguments: args });
   }
   assert.equal(configurationCommand(["--binary", "/rustx", "--workspace", "/project"]), undefined);

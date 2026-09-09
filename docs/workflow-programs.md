@@ -1,5 +1,9 @@
 # Fixed scoped Workflow programs
 
+For small executable starting points and offline `workflow check` / `workflow explain`,
+see [Workflow authoring](workflow-authoring.md). The complete reference workflows
+remain native execution and settlement conformance evidence.
+
 The fixed Workflow architecture (#216–#223) extends the native Workflow foundation (#83). A registered
 Workflow remains one foreground Tool. Configuration explicitly registers
 `.agents/workflows/<id>.yaml` and separately exposes it through
