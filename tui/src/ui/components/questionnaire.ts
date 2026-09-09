@@ -9,6 +9,9 @@ import {
 } from "@earendil-works/pi-tui";
 
 import type {
+  AnswerSpecification,
+  InteractionRequester,
+  OptionSpecification,
   QuestionSpecification,
   QuestionnaireAnswer,
   QuestionnaireAnswerEntry,
@@ -19,18 +22,35 @@ import { markdownTheme, role } from "../theme.ts";
 import type { PopupContent } from "./popup-frame.ts";
 
 const MAX_CUSTOM_ANSWER_CHARS = 4096;
+const MAX_TEXT_ANSWER_CHARS = 4096;
 const PREVIEW_CONTENT_LINES = 12;
 
-const POPUP_TITLE = "Ask user · questionnaire";
+const NATIVE_POPUP_TITLE = "Ask user · questionnaire";
 const POPUP_FOOTER =
   "Tab/Shift+Tab tabs · arrows rows · Enter choose/submit · Space toggle · PageUp/PageDown preview · Esc decline · Ctrl+C cancel attempt";
+
+/** The typed rows one question's answer surface presents. */
+type RowKind =
+  | { kind: "option"; optionIndex: number }
+  | { kind: "boolean"; value: boolean }
+  | { kind: "scalar" }
+  | { kind: "custom" };
 
 export interface QuestionnaireOverlayOptions {
   interactionId: string;
   questionnaire: QuestionnaireSpecification;
   /**
+   * The canonical identity of the tool that asked. It is projected by the
+   * runtime, never inferred here, so an MCP-originated prompt can name its
+   * server and a native `ask_user` prompt is never labelled as MCP.
+   */
+  requester: InteractionRequester;
+  /**
    * The routed source label ("Question from reviewer"), when the interaction
    * did not originate in the conversation this client is attached to.
+   *
+   * It is deliberately independent of {@link requester}: this says *where* the
+   * interaction came from, the requester says *who* asked.
    */
   sourceLabel?: string;
   onSubmit: (response: QuestionnaireResponse) => void;
@@ -44,26 +64,205 @@ type RenderedBody = {
   focusLine: number;
 };
 
+/** The declared options of a choice question, or an empty list. */
+export function choiceOptions(question: QuestionSpecification): OptionSpecification[] {
+  const answer = question.answer;
+  return answer.type === "single_choice" || answer.type === "multi_choice"
+    ? answer.options
+    : [];
+}
+
+/** Whether a question accepts a free-text answer outside its options. */
+function allowsCustom(answer: AnswerSpecification): boolean {
+  return (answer.type === "single_choice" || answer.type === "multi_choice") &&
+    answer.allow_custom;
+}
+
+/** The ordered rows one question's answer surface presents. */
+function rowsOf(question: QuestionSpecification): RowKind[] {
+  const answer = question.answer;
+  switch (answer.type) {
+    case "text":
+    case "number":
+    case "integer":
+      return [{ kind: "scalar" }];
+    case "boolean":
+      return [{ kind: "boolean", value: true }, { kind: "boolean", value: false }];
+    default: {
+      const rows: RowKind[] = answer.options.map((_, optionIndex) => ({
+        kind: "option" as const,
+        optionIndex,
+      }));
+      if (answer.allow_custom) rows.push({ kind: "custom" });
+      return rows;
+    }
+  }
+}
+
+/**
+ * The human-readable statement of a multi-choice question's own bounds.
+ *
+ * The bounds come from the request; the client only explains and pre-checks
+ * them. The runtime re-validates every submission against the same facts.
+ */
+export function selectionBoundsLabel(min: number, max: number): string {
+  if (min === max) return `Select exactly ${min}`;
+  if (min === 0) return `Select up to ${max}`;
+  return `Select ${min}–${max}`;
+}
+
+/**
+ * Validates one scalar draft against its declared answer shape.
+ *
+ * Returns `undefined` when the draft is acceptable. This is **UX only**: the
+ * runtime validates the very same facts again and stays authoritative, and an
+ * invalid draft keeps the user inside the interaction rather than failing the
+ * tool invocation.
+ */
+export function scalarValidationError(
+  answer: AnswerSpecification,
+  draft: string,
+): string | undefined {
+  const value = draft.trim();
+  switch (answer.type) {
+    case "text": {
+      const length = [...draft].length;
+      if (answer.min_length !== undefined && length < answer.min_length) {
+        return `Enter at least ${answer.min_length} characters.`;
+      }
+      if (answer.max_length !== undefined && length > answer.max_length) {
+        return `Enter at most ${answer.max_length} characters.`;
+      }
+      if (answer.format === "date" && !isCalendarDate(draft)) {
+        return "Enter a date as YYYY-MM-DD.";
+      }
+      if (answer.format === "date_time" && Number.isNaN(Date.parse(draft))) {
+        return "Enter an RFC 3339 date-time.";
+      }
+      if (answer.format === "uri" && !isAbsoluteUri(draft)) {
+        return "Enter an absolute URI.";
+      }
+      return undefined;
+    }
+    case "number": {
+      if (!/^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(value)) {
+        return "Enter a number.";
+      }
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return "Enter a finite number.";
+      if (answer.minimum !== undefined && parsed < answer.minimum) {
+        return `Enter a number at least ${answer.minimum}.`;
+      }
+      if (answer.maximum !== undefined && parsed > answer.maximum) {
+        return `Enter a number at most ${answer.maximum}.`;
+      }
+      return undefined;
+    }
+    case "integer": {
+      if (!/^[+-]?\d+$/.test(value)) return "Enter a whole number.";
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed)) return "Enter a smaller whole number.";
+      if (answer.minimum !== undefined && parsed < answer.minimum) {
+        return `Enter a whole number at least ${answer.minimum}.`;
+      }
+      if (answer.maximum !== undefined && parsed > answer.maximum) {
+        return `Enter a whole number at most ${answer.maximum}.`;
+      }
+      return undefined;
+    }
+    default:
+      return undefined;
+  }
+}
+
+function isCalendarDate(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (match === null) return false;
+  const [, year, month, day] = match;
+  const date = new Date(`${year}-${month}-${day}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) &&
+    date.getUTCFullYear() === Number(year) &&
+    date.getUTCMonth() + 1 === Number(month) &&
+    date.getUTCDate() === Number(day);
+}
+
+function isAbsoluteUri(value: string): boolean {
+  try {
+    // eslint-disable-next-line no-new
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The presentation label of an MCP or native requester.
+ *
+ * The words come from canonical facts, so a native `ask_user` prompt is never
+ * described as MCP and an MCP prompt always names its server.
+ */
+export function requesterLines(requester: InteractionRequester): string[] {
+  if (requester.origin === "builtin") {
+    return [`Requested by ${requester.tool_name}`];
+  }
+  return [
+    `Requested by MCP server: ${requester.origin.mcp.server_id}`,
+    `Tool: ${requester.tool_name}`,
+  ];
+}
+
+/**
+ * The compact requester name used by queue rows and activity lines.
+ *
+ * It is derived from canonical origin facts, so a native tool is never
+ * presented as MCP and an MCP tool always carries its server identity.
+ */
+export function requesterName(requester: InteractionRequester): string {
+  return requester.origin === "builtin"
+    ? requester.tool_name
+    : `mcp:${requester.origin.mcp.server_id}/${requester.tool_name}`;
+}
+
+/** The popup frame title for one requester. */
+export function requesterTitle(requester: InteractionRequester): string {
+  return requester.origin === "builtin"
+    ? NATIVE_POPUP_TITLE
+    : `MCP elicitation · ${requester.origin.mcp.server_id}`;
+}
+
 /**
  * One ephemeral questionnaire surface.
  *
- * The overlay owns only focus, selections, and unsubmitted custom-answer
- * drafts. Pi's single-line Input owns editing semantics, including bracketed
- * paste, Kitty printable input, grapheme-aware cursor movement, and deletion.
- * The runtime remains authoritative: the surface sends a response once, and
- * disappears when the pending interaction leaves the projection.
+ * The overlay owns only focus, selections, and unsubmitted drafts. Pi's
+ * single-line Input owns editing semantics, including bracketed paste, Kitty
+ * printable input, grapheme-aware cursor movement, and deletion. The runtime
+ * remains authoritative: the surface sends a response once, and disappears
+ * when the pending interaction leaves the projection.
+ *
+ * Every question is rendered **according to its declared answer shape**: a
+ * text/number/integer question shows an input field and no manufactured
+ * option rows, a boolean question shows an explicit true/false choice, and a
+ * choice question shows a custom-answer row only when the request allows one.
  */
 export class QuestionnaireOverlay implements PopupContent {
   readonly interactionId: string;
   readonly questionnaire: QuestionnaireSpecification;
+  readonly requester: InteractionRequester;
   readonly #sourceLabel: string | undefined;
   readonly #onSubmit: (response: QuestionnaireResponse) => void;
   readonly #onDecline: () => void;
   readonly #onInterrupt: () => void;
   readonly #onChange: (() => void) | undefined;
-  readonly #selected: Array<Set<string>>;
-  readonly #custom: Array<string | undefined>;
-  readonly #customInputs: Input[];
+  /** Selected option indices, per question. */
+  readonly #selected: Array<Set<number>>;
+  /** The chosen boolean, per question. */
+  readonly #boolean: Array<boolean | undefined>;
+  /** The scalar or custom-answer draft, per question. */
+  readonly #draft: Array<string | undefined>;
+  readonly #inputs: Input[];
+  /** Whether the user has interacted with a question at all. */
+  readonly #touched: boolean[];
   #tab = 0;
   #row = 0;
   #submitting = false;
@@ -71,18 +270,22 @@ export class QuestionnaireOverlay implements PopupContent {
   #previewOffset = 0;
   #previewLineCount = 0;
   #previewContentViewport = PREVIEW_CONTENT_LINES;
+  #notice: string | undefined;
 
   constructor(options: QuestionnaireOverlayOptions) {
     this.interactionId = options.interactionId;
     this.questionnaire = options.questionnaire;
+    this.requester = options.requester;
     this.#sourceLabel = options.sourceLabel;
     this.#onSubmit = options.onSubmit;
     this.#onDecline = options.onDecline;
     this.#onInterrupt = options.onInterrupt;
     this.#onChange = options.onChange;
-    this.#selected = options.questionnaire.questions.map(() => new Set<string>());
-    this.#custom = options.questionnaire.questions.map(() => undefined);
-    this.#customInputs = options.questionnaire.questions.map(() => new Input());
+    this.#selected = options.questionnaire.questions.map(() => new Set<number>());
+    this.#boolean = options.questionnaire.questions.map(() => undefined);
+    this.#draft = options.questionnaire.questions.map(() => undefined);
+    this.#inputs = options.questionnaire.questions.map(() => new Input());
+    this.#touched = options.questionnaire.questions.map(() => false);
   }
 
   invalidate(): void {
@@ -90,9 +293,9 @@ export class QuestionnaireOverlay implements PopupContent {
     // replacement creates a new instance and therefore discards only drafts.
   }
 
-  /** The popup's frame title. */
+  /** The popup's frame title, which names an MCP requester when there is one. */
   popupTitle(): string {
-    return POPUP_TITLE;
+    return requesterTitle(this.requester);
   }
 
   /** The popup's help line, contained by the frame below the body. */
@@ -115,6 +318,7 @@ export class QuestionnaireOverlay implements PopupContent {
   /** Re-enables the surface when the Runtime Client rejects the response. */
   submissionFailed(): void {
     this.#submitting = false;
+    this.#notice = "The runtime refused that response. Correct it and submit again.";
     this.#changed();
   }
 
@@ -166,45 +370,60 @@ export class QuestionnaireOverlay implements PopupContent {
     }
 
     if (this.#tab < this.questionnaire.questions.length) {
-      const question = this.questionnaire.questions[this.#tab]!;
-      const customRow = question.options.length;
-      if (this.#row === customRow) {
-        if (matchesKey(data, Key.enter)) {
-          if ((this.#custom[this.#tab] ?? "").length > 0) {
-            this.#selected[this.#tab]!.clear();
-            this.#changed();
-          }
-          return;
-        }
-        // Delegate every editing path to Pi's established primitive. This
-        // includes raw bracketed-paste markers, multi-character batches,
-        // Kitty printable sequences, Unicode graphemes, cursor movement, and
-        // backspace/delete. Only the questionnaire's focus/cancellation keys
-        // are intercepted above.
-        this.#handleCustomInput(data);
-        return;
-      }
-      if (matchesKey(data, Key.space) && question.multi_select) {
-        this.#toggleOption(question.options[this.#row]!.label);
-        return;
-      }
-      if (matchesKey(data, Key.enter)) {
-        if (question.multi_select) {
-          this.#toggleOption(question.options[this.#row]!.label);
-        } else {
-          this.#selected[this.#tab]!.clear();
-          this.#selected[this.#tab]!.add(question.options[this.#row]!.label);
-          this.#clearCustom(this.#tab);
-          this.#changed();
-        }
-      }
+      this.#handleQuestionInput(data);
       return;
     }
 
     if (matchesKey(data, Key.enter) && this.#row === 0) {
-      this.#submitting = true;
-      this.#onSubmit(this.#submission());
-      this.#changed();
+      this.#submit();
+    }
+  }
+
+  #handleQuestionInput(data: string): void {
+    const question = this.questionnaire.questions[this.#tab]!;
+    const rows = rowsOf(question);
+    const row = rows[this.#row];
+    if (row === undefined) return;
+    if (row.kind === "scalar" || row.kind === "custom") {
+      if (row.kind === "custom" && matchesKey(data, Key.enter)) {
+        if ((this.#draft[this.#tab] ?? "").length > 0) {
+          this.#selected[this.#tab]!.clear();
+          this.#changed();
+        }
+        return;
+      }
+      // Delegate every editing path to Pi's established primitive. This
+      // includes raw bracketed-paste markers, multi-character batches, Kitty
+      // printable sequences, Unicode graphemes, cursor movement, and
+      // backspace/delete. Only the questionnaire's focus/cancellation keys
+      // are intercepted above.
+      this.#handleDraftInput(data, row.kind === "custom");
+      return;
+    }
+    if (row.kind === "boolean") {
+      if (matchesKey(data, Key.enter) || matchesKey(data, Key.space)) {
+        this.#boolean[this.#tab] = row.value;
+        this.#touched[this.#tab] = true;
+        this.#changed();
+      }
+      return;
+    }
+    const answer = question.answer;
+    const multi = answer.type === "multi_choice";
+    if (matchesKey(data, Key.space) && multi) {
+      this.#toggleOption(row.optionIndex);
+      return;
+    }
+    if (matchesKey(data, Key.enter)) {
+      if (multi) {
+        this.#toggleOption(row.optionIndex);
+      } else {
+        this.#selected[this.#tab]!.clear();
+        this.#selected[this.#tab]!.add(row.optionIndex);
+        this.#clearDraft(this.#tab);
+        this.#touched[this.#tab] = true;
+        this.#changed();
+      }
     }
   }
 
@@ -212,6 +431,9 @@ export class QuestionnaireOverlay implements PopupContent {
     const safeWidth = Math.max(1, Math.floor(width));
     const header = [
       fitLine(role.meta(`interaction ${this.interactionId}`), safeWidth),
+      ...requesterLines(this.requester).map((line) =>
+        fitLine(role.meta(line), safeWidth)
+      ),
       ...(this.#sourceLabel === undefined
         ? []
         : [fitLine(role.meta(this.#sourceLabel), safeWidth)]),
@@ -259,7 +481,12 @@ export class QuestionnaireOverlay implements PopupContent {
   #renderQuestion(width: number, viewportHeight: number): RenderedBody {
     const question = this.questionnaire.questions[this.#tab]!;
     const questionLines = wrapStyled(role.strong(question.question), width);
-    const intro = ["", ...questionLines.map((line) => fitLine(line, width))];
+    const guidance = this.#guidance(question);
+    const intro = [
+      "",
+      ...questionLines.map((line) => fitLine(line, width)),
+      ...(guidance === undefined ? [] : [fitLine(role.meta(guidance), width)]),
+    ];
     const preview = this.#focusedPreview(question);
 
     if (preview !== undefined && width >= 100) {
@@ -334,46 +561,88 @@ export class QuestionnaireOverlay implements PopupContent {
     };
   }
 
+  /** The concise explanation of what a legal answer to this question is. */
+  #guidance(question: QuestionSpecification): string | undefined {
+    const answer = question.answer;
+    switch (answer.type) {
+      case "multi_choice":
+        return selectionBoundsLabel(answer.min_selected, answer.max_selected);
+      case "integer":
+        return boundsSentence("Whole number", answer.minimum, answer.maximum);
+      case "number":
+        return boundsSentence("Number", answer.minimum, answer.maximum);
+      case "text":
+        return textGuidance(answer);
+      default:
+        return undefined;
+    }
+  }
+
   #renderQuestionRows(question: QuestionSpecification, width: number): RenderedBody {
     const lines: string[] = [];
     let focusLine = 0;
-    for (const [index, option] of question.options.entries()) {
+    const rows = rowsOf(question);
+    const options = choiceOptions(question);
+    const multi = question.answer.type === "multi_choice";
+    for (const [index, row] of rows.entries()) {
       if (index === this.#row) focusLine = lines.length;
-      const selected = this.#selected[this.#tab]!.has(option.label);
-      const marker = question.multi_select
-        ? selected ? "[x]" : "[ ]"
-        : selected ? "●" : "○";
+      const marker = index === this.#row ? role.accent("›") : " ";
+      if (row.kind === "option") {
+        const option = options[row.optionIndex]!;
+        const selected = this.#selected[this.#tab]!.has(row.optionIndex);
+        const box = multi
+          ? selected ? "[x]" : "[ ]"
+          : selected ? "●" : "○";
+        lines.push(fitLine(`${marker} ${box} ${role.strong(option.label)}`, width));
+        const descriptionWidth = Math.max(1, width - 2);
+        for (const line of wrapStyled(role.meta(option.description), descriptionWidth)) {
+          lines.push(fitLine(`  ${line}`, width));
+        }
+        continue;
+      }
+      if (row.kind === "boolean") {
+        const chosen = this.#boolean[this.#tab] === row.value;
+        lines.push(
+          fitLine(
+            `${marker} ${chosen ? "●" : "○"} ${role.strong(row.value ? "Yes" : "No")}`,
+            width,
+          ),
+        );
+        lines.push(
+          fitLine(`  ${role.meta(row.value ? "true" : "false")}`, width),
+        );
+        continue;
+      }
+      // A scalar input row, or the custom-answer row of a choice question
+      // that explicitly allows one. No option rows are manufactured for a
+      // free-form question, and no custom row exists for a bounded one.
       lines.push(
         fitLine(
-          `${index === this.#row ? role.accent("›") : " "} ${marker} ${role.strong(option.label)}`,
+          `${marker} ${role.accent(row.kind === "custom" ? "Type something." : scalarPrompt(question.answer))}`,
           width,
         ),
       );
-      const descriptionWidth = Math.max(1, width - 2);
-      for (const line of wrapStyled(role.meta(option.description), descriptionWidth)) {
-        lines.push(fitLine(`  ${line}`, width));
+      const input = this.#inputs[this.#tab]!;
+      input.focused = index === this.#row;
+      const inputLine = input.render(Math.max(1, width - 2))[0] ?? "";
+      input.focused = false;
+      const draft = this.#draft[this.#tab];
+      if (draft !== undefined || index === this.#row) {
+        lines.push(fitLine(`  ${inputLine}`, width));
+      } else {
+        lines.push(
+          fitLine(
+            `  ${role.meta(row.kind === "custom" ? "Enter a custom answer" : "Enter a value")}`,
+            width,
+          ),
+        );
       }
     }
 
-    const customRow = question.options.length;
-    if (this.#row === customRow) focusLine = lines.length;
-    lines.push(
-      fitLine(
-        `${this.#row === customRow ? role.accent("›") : " "} ${role.accent("Type something.")}`,
-        width,
-      ),
-    );
-    const draft = this.#custom[this.#tab];
-    const input = this.#customInputs[this.#tab]!;
-    input.focused = this.#row === customRow;
-    const inputLine = input.render(Math.max(1, width - 2))[0] ?? "";
-    input.focused = false;
-    if (draft !== undefined || this.#row === customRow) {
-      lines.push(fitLine(`  ${inputLine}`, width));
-    } else {
-      lines.push(fitLine(`  ${role.meta("Enter a custom answer")}`, width));
+    const error = this.#answerError(this.#tab);
+    if (error !== undefined) {
+      lines.push(fitLine(role.warning(error), width));
     }
-
     return { lines, focusLine };
   }
 
@@ -416,15 +685,21 @@ export class QuestionnaireOverlay implements PopupContent {
   #renderReview(width: number, viewportHeight: number): RenderedBody {
     const lines: string[] = ["", fitLine(role.strong("Review your answers"), width)];
     for (const [index, question] of this.questionnaire.questions.entries()) {
+      const error = this.#answerError(index);
       const answer = this.#answerFor(index);
       lines.push(
         fitLine(
-          answer === undefined
-            ? role.warning(`${question.header}: unanswered`)
-            : role.success(`${question.header}: ${answer}`),
+          error !== undefined
+            ? role.warning(`${question.header}: ${error}`)
+            : answer === undefined
+              ? role.warning(`${question.header}: unanswered`)
+              : role.success(`${question.header}: ${answer}`),
           width,
         ),
       );
+    }
+    if (this.#notice !== undefined) {
+      lines.push(fitLine(role.warning(this.#notice), width));
     }
     lines.push(
       "",
@@ -443,73 +718,183 @@ export class QuestionnaireOverlay implements PopupContent {
   }
 
   #focusedPreview(question: QuestionSpecification): string | undefined {
-    if (this.#row >= question.options.length) return undefined;
-    return question.options[this.#row]?.preview;
+    const row = rowsOf(question)[this.#row];
+    if (row === undefined || row.kind !== "option") return undefined;
+    return choiceOptions(question)[row.optionIndex]?.preview;
+  }
+
+  /**
+   * The concise reason this question's current draft is not submittable, or
+   * `undefined` when it is. An unanswered question is not an error: a partial
+   * questionnaire is a legal submission.
+   */
+  #answerError(index: number): string | undefined {
+    const question = this.questionnaire.questions[index]!;
+    const answer = question.answer;
+    const draft = this.#draft[index];
+    if (answer.type === "text" || answer.type === "number" || answer.type === "integer") {
+      if (draft === undefined || draft.length === 0) return undefined;
+      return scalarValidationError(answer, draft);
+    }
+    if (draft !== undefined && draft.length > 0) {
+      return [...draft].length > MAX_CUSTOM_ANSWER_CHARS
+        ? `Enter at most ${MAX_CUSTOM_ANSWER_CHARS} characters.`
+        : undefined;
+    }
+    if (answer.type === "multi_choice") {
+      const count = this.#selected[index]!.size;
+      if (count === 0 && !this.#touched[index]) return undefined;
+      if (count < answer.min_selected) {
+        return selectionBoundsLabel(answer.min_selected, answer.max_selected);
+      }
+      if (count > answer.max_selected) {
+        return selectionBoundsLabel(answer.min_selected, answer.max_selected);
+      }
+    }
+    return undefined;
   }
 
   #answerFor(index: number): string | undefined {
-    const custom = this.#custom[index];
-    if (custom !== undefined && custom.length > 0) return `custom: ${custom}`;
     const question = this.questionnaire.questions[index]!;
-    const labels = question.options
-      .filter((option) => this.#selected[index]!.has(option.label))
-      .map((option) => option.label);
-    return labels.length === 0 ? undefined : labels.join(", ");
+    const answer = question.answer;
+    const draft = this.#draft[index];
+    if (answer.type === "text" || answer.type === "number" || answer.type === "integer") {
+      return draft !== undefined && draft.length > 0 ? draft : undefined;
+    }
+    if (answer.type === "boolean") {
+      const value = this.#boolean[index];
+      return value === undefined ? undefined : value ? "Yes (true)" : "No (false)";
+    }
+    if (draft !== undefined && draft.length > 0) return `custom: ${draft}`;
+    const selected = this.#selected[index]!;
+    if (selected.size === 0) {
+      return answer.type === "multi_choice" && answer.min_selected === 0 &&
+          this.#touched[index]
+        ? "(none)"
+        : undefined;
+    }
+    return answer.options
+      .filter((_, optionIndex) => selected.has(optionIndex))
+      .map((option) => option.label)
+      .join(", ");
   }
 
   #hasAnswers(): boolean {
     return this.questionnaire.questions.some((_, index) => this.#answerFor(index) !== undefined);
   }
 
+  /** Submits, unless a draft is invalid — an invalid draft keeps the user here. */
+  #submit(): void {
+    const invalid = this.questionnaire.questions.findIndex(
+      (_, index) => this.#answerError(index) !== undefined,
+    );
+    if (invalid >= 0) {
+      this.#notice = `Correct ${this.questionnaire.questions[invalid]!.header} before submitting.`;
+      this.#tab = invalid;
+      this.#row = 0;
+      this.#changed();
+      return;
+    }
+    this.#notice = undefined;
+    this.#submitting = true;
+    this.#onSubmit(this.#submission());
+    this.#changed();
+  }
+
   #submission(): QuestionnaireResponse {
     const answers: QuestionnaireAnswerEntry[] = [];
     for (const [questionIndex, question] of this.questionnaire.questions.entries()) {
-      const custom = this.#custom[questionIndex];
-      let answer: QuestionnaireAnswer | undefined;
-      if (custom !== undefined && custom.length > 0) {
-        answer = { type: "custom", value: { answer: custom } };
-      } else {
-        const selected = question.options
-          .filter((option) => this.#selected[questionIndex]!.has(option.label))
-          .map((option) => option.label);
-        if (selected.length > 0) {
-          answer = question.multi_select
-            ? { type: "multiple_option", value: { selected } }
-            : { type: "single_option", value: { label: selected[0]! } };
-        }
-      }
+      const answer = this.#typedAnswer(questionIndex, question);
       if (answer !== undefined) answers.push({ question_index: questionIndex, answer });
     }
     return { type: "submitted", value: { answers } };
   }
 
-  #handleCustomInput(data: string): void {
+  #typedAnswer(
+    index: number,
+    question: QuestionSpecification,
+  ): QuestionnaireAnswer | undefined {
+    const answer = question.answer;
+    const draft = this.#draft[index];
+    const filled = draft !== undefined && draft.length > 0;
+    switch (answer.type) {
+      case "text":
+        return filled ? { type: "text", value: { value: draft } } : undefined;
+      case "number":
+        return filled ? { type: "number", value: { value: Number(draft.trim()) } } : undefined;
+      case "integer":
+        return filled ? { type: "integer", value: { value: Number(draft.trim()) } } : undefined;
+      case "boolean": {
+        const value = this.#boolean[index];
+        return value === undefined ? undefined : { type: "boolean", value: { value } };
+      }
+      default: {
+        // A custom answer exists only where the request allows one, so this
+        // branch cannot fabricate a response shape the runtime would refuse.
+        if (filled && allowsCustom(answer)) {
+          return { type: "custom", value: { answer: draft } };
+        }
+        const selected = [...this.#selected[index]!].sort((a, b) => a - b);
+        if (answer.type === "single_choice") {
+          return selected.length === 0
+            ? undefined
+            : { type: "option", value: { option_index: selected[0]! } };
+        }
+        if (selected.length === 0 && !(answer.min_selected === 0 && this.#touched[index])) {
+          return undefined;
+        }
+        return { type: "options", value: { option_indices: selected } };
+      }
+    }
+  }
+
+  #handleDraftInput(data: string, custom: boolean): void {
     const index = this.#tab;
-    const input = this.#customInputs[index]!;
+    const input = this.#inputs[index]!;
     const before = input.getValue();
     input.handleInput(data);
     const value = input.getValue();
-    const bounded = scalarPrefix(value, MAX_CUSTOM_ANSWER_CHARS);
+    const bounded = scalarPrefix(
+      value,
+      custom ? MAX_CUSTOM_ANSWER_CHARS : MAX_TEXT_ANSWER_CHARS,
+    );
     if (bounded !== value) input.setValue(bounded);
     const next = bounded.length > 0 ? bounded : undefined;
-    if (next !== this.#custom[index]) {
-      this.#custom[index] = next;
-      if (next !== undefined) this.#selected[index]!.clear();
+    if (next !== this.#draft[index]) {
+      this.#draft[index] = next;
+      this.#touched[index] = true;
+      if (next !== undefined && custom) this.#selected[index]!.clear();
     }
     // Cursor-only edits do not change the draft but still need a redraw.
     if (before !== input.getValue() || data.length > 0) this.#changed();
   }
 
-  #clearCustom(index: number): void {
-    this.#custom[index] = undefined;
-    this.#customInputs[index]!.setValue("");
+  #clearDraft(index: number): void {
+    this.#draft[index] = undefined;
+    this.#inputs[index]!.setValue("");
   }
 
-  #toggleOption(label: string): void {
+  /**
+   * Toggles one multi-choice option, refusing to select above the request's
+   * own `max_selected`. Preventing the obviously invalid selection is UX; the
+   * runtime enforces the same bound authoritatively.
+   */
+  #toggleOption(optionIndex: number): void {
+    const question = this.questionnaire.questions[this.#tab]!;
     const selected = this.#selected[this.#tab]!;
-    if (selected.has(label)) selected.delete(label);
-    else selected.add(label);
-    this.#clearCustom(this.#tab);
+    this.#touched[this.#tab] = true;
+    if (selected.has(optionIndex)) {
+      selected.delete(optionIndex);
+    } else {
+      const answer = question.answer;
+      if (answer.type === "multi_choice" && selected.size >= answer.max_selected) {
+        this.#notice = selectionBoundsLabel(answer.min_selected, answer.max_selected);
+        this.#changed();
+        return;
+      }
+      selected.add(optionIndex);
+    }
+    this.#clearDraft(this.#tab);
     this.#changed();
   }
 
@@ -526,7 +911,7 @@ export class QuestionnaireOverlay implements PopupContent {
   #moveRow(delta: number): void {
     const max = this.#tab === this.questionnaire.questions.length
       ? 0
-      : this.questionnaire.questions[this.#tab]!.options.length;
+      : Math.max(0, rowsOf(this.questionnaire.questions[this.#tab]!).length - 1);
     const next = Math.max(0, Math.min(max, this.#row + delta));
     if (next === this.#row) return;
     this.#row = next;
@@ -554,6 +939,47 @@ export class QuestionnaireOverlay implements PopupContent {
   #changed(): void {
     this.#onChange?.();
   }
+}
+
+function scalarPrompt(answer: AnswerSpecification): string {
+  switch (answer.type) {
+    case "number":
+      return "Enter a number.";
+    case "integer":
+      return "Enter a whole number.";
+    default:
+      return "Type your answer.";
+  }
+}
+
+function boundsSentence(
+  noun: string,
+  minimum: number | undefined,
+  maximum: number | undefined,
+): string | undefined {
+  if (minimum !== undefined && maximum !== undefined) {
+    return `${noun} between ${minimum} and ${maximum}`;
+  }
+  if (minimum !== undefined) return `${noun} at least ${minimum}`;
+  if (maximum !== undefined) return `${noun} at most ${maximum}`;
+  return undefined;
+}
+
+function textGuidance(
+  answer: Extract<AnswerSpecification, { type: "text" }>,
+): string | undefined {
+  const parts: string[] = [];
+  if (answer.min_length !== undefined && answer.max_length !== undefined) {
+    parts.push(`${answer.min_length}–${answer.max_length} characters`);
+  } else if (answer.min_length !== undefined) {
+    parts.push(`at least ${answer.min_length} characters`);
+  } else if (answer.max_length !== undefined) {
+    parts.push(`at most ${answer.max_length} characters`);
+  }
+  if (answer.format === "date") parts.push("as YYYY-MM-DD");
+  if (answer.format === "date_time") parts.push("as an RFC 3339 date-time");
+  if (answer.format === "uri") parts.push("as an absolute URI");
+  return parts.length === 0 ? undefined : `Text ${parts.join(", ")}`;
 }
 
 function scalarPrefix(value: string, maximum: number): string {

@@ -1020,16 +1020,25 @@ mod tests {
                 invocation_id: crate::tools::types::ToolInvocationId::Agent {
                     call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
                 },
+                requester: crate::events::InteractionRequester {
+                    tool_id: crate::runtime::identity::ToolId::new("tool-ask-user"),
+                    tool_name: "ask_user".to_owned(),
+                    origin: crate::tools::types::ToolOrigin::Builtin,
+                },
                 questionnaire: crate::events::interaction::QuestionnaireSpecification {
                     questions: vec![crate::events::interaction::QuestionSpecification {
                         question: "Which?".to_owned(),
                         header: "Pick".to_owned(),
-                        options: vec![crate::events::interaction::OptionSpecification {
-                            label: "a".to_owned(),
-                            description: "first".to_owned(),
-                            preview: None,
-                        }],
-                        multi_select: false,
+                        answer: crate::events::interaction::AnswerSpecification::SingleChoice(
+                            crate::events::interaction::SingleChoiceSpecification {
+                                options: vec![crate::events::interaction::OptionSpecification {
+                                    label: "a".to_owned(),
+                                    description: "first".to_owned(),
+                                    preview: None,
+                                }],
+                                allow_custom: true,
+                            },
+                        ),
                     }],
                 },
             },

@@ -10,10 +10,11 @@ use super::super::support;
 
 use rustx::runtime::identity::{AttemptId, ConversationId, InteractionId};
 use rustx::runtime::interaction::{
-    InteractionKind, InteractionOutcome, InteractionRef, InteractionRequest, InteractionResponse,
-    InteractionSource, OptionSpecification, QuestionSpecification, QuestionnaireAnswer,
-    QuestionnaireAnswerEntry, QuestionnaireResponse, QuestionnaireSpecification,
-    QuestionnaireSubmission, RoutedInteraction, SingleOptionAnswer,
+    AnswerSpecification, InteractionKind, InteractionOutcome, InteractionRef, InteractionRequest,
+    InteractionRequester, InteractionResponse, InteractionSource, OptionAnswer,
+    OptionSpecification, QuestionSpecification, QuestionnaireAnswer, QuestionnaireAnswerEntry,
+    QuestionnaireResponse, QuestionnaireSpecification, QuestionnaireSubmission, RoutedInteraction,
+    SingleChoiceSpecification,
 };
 use rustx::runtime_client::RuntimeClientHost;
 use rustx::runtime_client::{
@@ -141,19 +142,21 @@ fn questionnaire() -> QuestionnaireSpecification {
         questions: vec![QuestionSpecification {
             question: "Which direction?".to_owned(),
             header: "Direction".to_owned(),
-            options: vec![
-                OptionSpecification {
-                    label: "First".to_owned(),
-                    description: "The first authored option.".to_owned(),
-                    preview: Some("# First".to_owned()),
-                },
-                OptionSpecification {
-                    label: "Second".to_owned(),
-                    description: "The second authored option.".to_owned(),
-                    preview: None,
-                },
-            ],
-            multi_select: false,
+            answer: AnswerSpecification::SingleChoice(SingleChoiceSpecification {
+                options: vec![
+                    OptionSpecification {
+                        label: "First".to_owned(),
+                        description: "The first authored option.".to_owned(),
+                        preview: Some("# First".to_owned()),
+                    },
+                    OptionSpecification {
+                        label: "Second".to_owned(),
+                        description: "The second authored option.".to_owned(),
+                        preview: None,
+                    },
+                ],
+                allow_custom: true,
+            }),
         }],
     }
 }
@@ -161,6 +164,16 @@ fn questionnaire() -> QuestionnaireSpecification {
 #[test]
 fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
     let questionnaire = questionnaire();
+    // An MCP-served tool asked, so the projection must carry the canonical
+    // server identity rather than a display string the client would have to
+    // infer.
+    let requester = InteractionRequester {
+        tool_id: crate::runtime::identity::ToolId::new("mcp:github:create_issue"),
+        tool_name: "create_issue".to_owned(),
+        origin: crate::tools::types::ToolOrigin::Mcp {
+            server_id: crate::runtime::identity::McpServerId::new("github"),
+        },
+    };
     let interaction_id = InteractionId::new("interaction-questionnaire-v3");
     let request = InteractionRequest {
         id: interaction_id.clone(),
@@ -171,15 +184,14 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
             invocation_id: crate::tools::types::ToolInvocationId::Agent {
                 call_id: crate::runtime::identity::ToolCallId::new("questionnaire-call"),
             },
+            requester: requester.clone(),
             questionnaire: questionnaire.clone(),
         },
     };
     let submitted = QuestionnaireResponse::Submitted(QuestionnaireSubmission {
         answers: vec![QuestionnaireAnswerEntry {
             question_index: 0,
-            answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
-                label: "First".to_owned(),
-            }),
+            answer: QuestionnaireAnswer::Option(OptionAnswer { option_index: 0 }),
         }],
     });
     let submitted_request = RuntimeClientRequest::InteractionRespond {
@@ -253,6 +265,22 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
     assert_eq!(
         pending_json["event"]["interaction"]["request"]["kind"]["questionnaire"],
         serde_json::to_value(&questionnaire).expect("questionnaire JSON")
+    );
+    // Finding 1: the requester identity is projected as canonical facts, so a
+    // Runtime Client can name the MCP server without inferring anything.
+    assert_eq!(
+        pending_json["event"]["interaction"]["request"]["kind"]["requester"],
+        serde_json::json!({
+            "tool_id": "mcp:github:create_issue",
+            "tool_name": "create_issue",
+            "origin": {"mcp": {"server_id": "github"}},
+        })
+    );
+    // The two dimensions stay independent: the routed source says where the
+    // interaction came from, the requester says who asked.
+    assert_eq!(
+        pending_json["event"]["interaction"]["source"]["type"],
+        "primary"
     );
     assert_eq!(
         serde_json::from_value::<RuntimeClientProtocolEvent>(pending_json)
@@ -364,7 +392,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
         matches!(
             host.attach(16),
             Err(RuntimeClientError::UnsupportedProtocolVersion {
-                supported: 23,
+                supported: 24,
                 requested: 16,
             })
         ),
@@ -374,15 +402,15 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         incompatible,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 23,
-            requested: 24,
+            supported: 24,
+            requested: 25,
         })
     ));
     let old_protocol = host.attach(7);
     assert!(matches!(
         old_protocol,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 23,
+            supported: 24,
             requested: 7,
         })
     ));
@@ -396,7 +424,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         interrupted_status,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 23,
+            supported: 24,
             requested: 15,
         })
     ));
@@ -409,7 +437,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_disposal,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 23,
+            supported: 24,
             requested: 14,
         })
     ));
@@ -422,7 +450,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         latest_only_status,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 23,
+            supported: 24,
             requested: 13,
         })
     ));
@@ -432,7 +460,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         profile_shaped,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 23,
+            supported: 24,
             requested: 6,
         })
     ));
@@ -444,7 +472,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_workspace_boundary,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 23,
+            supported: 24,
             requested: 12,
         })
     ));

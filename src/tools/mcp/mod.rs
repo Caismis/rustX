@@ -2924,14 +2924,14 @@ impl McpServerRuntime {
     async fn call(
         &self,
         remote_name: &str,
-        invocation_id: &crate::tools::types::ToolInvocationId,
+        identity: &McpCallIdentity<'_>,
         arguments: serde_json::Value,
         context: &ToolExecutionContext<'_>,
         generation: u64,
     ) -> ToolExecutionResult {
         let mut result = Box::pin(self.drive_mrtr_invocation(
             remote_name,
-            invocation_id,
+            identity,
             arguments,
             context,
             generation,
@@ -2990,7 +2990,7 @@ impl McpServerRuntime {
     async fn drive_mrtr_invocation(
         &self,
         remote_name: &str,
-        invocation_id: &crate::tools::types::ToolInvocationId,
+        identity: &McpCallIdentity<'_>,
         arguments: serde_json::Value,
         context: &ToolExecutionContext<'_>,
         generation: u64,
@@ -3034,13 +3034,7 @@ impl McpServerRuntime {
                 );
             }
             match self
-                .settle_mrtr_round(
-                    remote_name,
-                    invocation_id,
-                    &input_required,
-                    context,
-                    started,
-                )
+                .settle_mrtr_round(remote_name, identity, &input_required, context, started)
                 .await
             {
                 MrtrRoundSettlement::Continue(next) => continuation = next,
@@ -3069,7 +3063,7 @@ impl McpServerRuntime {
     async fn settle_mrtr_round(
         &self,
         remote_name: &str,
-        invocation_id: &crate::tools::types::ToolInvocationId,
+        identity: &McpCallIdentity<'_>,
         input_required: &rmcp::model::InputRequiredResult,
         context: &ToolExecutionContext<'_>,
         started: Instant,
@@ -3136,7 +3130,13 @@ impl McpServerRuntime {
             );
         };
         let facts = crate::runtime::interaction::QuestionnaireFacts {
-            invocation_id: invocation_id.clone(),
+            invocation_id: identity.invocation_id.clone(),
+            // The canonical, provider-independent identity of the MCP tool
+            // that asked. It is built from the registry-resolved invocation
+            // and this runtime's own server identity — never from an rmcp
+            // value and never from a display string — so every Runtime Client
+            // can tell the human exactly which MCP server is asking.
+            requester: identity.requester(&self.server_id),
             // The requester stamps the owning turn it was bound to; the
             // adapter has no turn of its own, exactly as `ask_user` does not.
             turn: 0,
@@ -3904,6 +3904,35 @@ enum McpRoundOutcome {
 impl McpRoundOutcome {
     fn terminal(result: ToolExecutionResult) -> Self {
         Self::Terminal(result)
+    }
+}
+
+/// The canonical rustX identity of the invocation one MCP call serves.
+///
+/// It is deliberately the **registry-resolved** identity, borrowed from the
+/// admitted [`ToolInvocation`], rather than anything the adapter derives for
+/// itself. Combined with this runtime's own `McpServerId` it produces the
+/// provider-independent [`InteractionRequester`](crate::events::InteractionRequester)
+/// that an MCP-originated Questionnaire carries all the way to the human.
+pub(crate) struct McpCallIdentity<'a> {
+    /// Caller-neutral invocation correlation.
+    invocation_id: &'a crate::tools::types::ToolInvocationId,
+    /// The canonical registry-resolved tool identity.
+    tool_id: &'a crate::runtime::identity::ToolId,
+    /// The safe model-facing tool name.
+    tool_name: &'a str,
+}
+
+impl McpCallIdentity<'_> {
+    /// The canonical requester facts of an MCP-originated interaction.
+    fn requester(&self, server_id: &McpServerId) -> crate::events::InteractionRequester {
+        crate::events::InteractionRequester {
+            tool_id: self.tool_id.clone(),
+            tool_name: self.tool_name.to_owned(),
+            origin: crate::tools::types::ToolOrigin::Mcp {
+                server_id: server_id.clone(),
+            },
+        }
     }
 }
 
@@ -5453,7 +5482,11 @@ impl ToolExecutor for McpToolExecutor {
                     .runtime()
                     .call(
                         &self.remote_name,
-                        &invocation.id,
+                        &McpCallIdentity {
+                            invocation_id: &invocation.id,
+                            tool_id: &invocation.tool_id,
+                            tool_name: &invocation.tool_name,
+                        },
                         invocation.arguments,
                         &context,
                         generation.generation(),

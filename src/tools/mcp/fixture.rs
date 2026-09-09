@@ -142,7 +142,19 @@ pub const MRTR_MIXED_TOOL: &str = "mrtr_mixed";
 /// The MRTR guard tool whose `requestState` exceeds the rustX retention bound.
 pub const MRTR_OVERSIZED_STATE_TOOL: &str = "mrtr_oversized_state";
 /// The MRTR guard tool whose elicitation schema rustX cannot represent.
+///
+/// It asks for a `string` with `format: "email"`. The **type** is supported —
+/// free-form strings became a typed Text question in Issue #242 — but rustX
+/// has no deterministic, faithful email validator, so it refuses that schema
+/// form rather than accepting the field and silently discarding its
+/// constraint.
 pub const MRTR_UNSUPPORTED_SCHEMA_TOOL: &str = "mrtr_unsupported_schema";
+/// The MRTR guard tool that asks one **mixed typed form**: a bounded `enum`,
+/// a free-form `string`, an `integer`, and a `boolean` in one schema.
+pub const MRTR_TYPED_TOOL: &str = "mrtr_typed";
+/// The MRTR guard tool that asks one multi-select `enum` with explicit
+/// `minItems`/`maxItems`.
+pub const MRTR_MULTI_SELECT_TOOL: &str = "mrtr_multi_select";
 /// The MRTR guard tool that emits one progress notification on every round
 /// before it asks or completes.
 pub const MRTR_PROGRESS_TOOL: &str = "mrtr_progress";
@@ -421,9 +433,10 @@ impl ConformanceTools {
 
 /// Every SEP-2322 guard tool the fixture publishes when
 /// [`FixtureServer::mrtr_tools`] is set.
-pub const MRTR_TOOLS: [&str; 10] = [
+pub const MRTR_TOOLS: [&str; 12] = [
     MRTR_CONFIRM_TOOL,
     MRTR_MIXED_TOOL,
+    MRTR_MULTI_SELECT_TOOL,
     MRTR_MULTI_TOOL,
     MRTR_OVERSIZED_STATE_TOOL,
     MRTR_PROGRESS_TOOL,
@@ -431,6 +444,7 @@ pub const MRTR_TOOLS: [&str; 10] = [
     MRTR_SAMPLING_TOOL,
     MRTR_SLOW_CONTINUATION_TOOL,
     MRTR_STATE_ONLY_TOOL,
+    MRTR_TYPED_TOOL,
     MRTR_UNSUPPORTED_SCHEMA_TOOL,
 ];
 
@@ -443,7 +457,9 @@ pub const MRTR_TOOLS: [&str; 10] = [
 struct MrtrTools {
     confirm: String,
     mixed: String,
+    multi_select: String,
     multi: String,
+    typed: String,
     oversized_state: String,
     progress: String,
     roots: String,
@@ -458,7 +474,9 @@ impl MrtrTools {
         Self {
             confirm: fixture.tool_name(MRTR_CONFIRM_TOOL),
             mixed: fixture.tool_name(MRTR_MIXED_TOOL),
+            multi_select: fixture.tool_name(MRTR_MULTI_SELECT_TOOL),
             multi: fixture.tool_name(MRTR_MULTI_TOOL),
+            typed: fixture.tool_name(MRTR_TYPED_TOOL),
             oversized_state: fixture.tool_name(MRTR_OVERSIZED_STATE_TOOL),
             progress: fixture.tool_name(MRTR_PROGRESS_TOOL),
             roots: fixture.tool_name(MRTR_ROOTS_TOOL),
@@ -473,7 +491,9 @@ impl MrtrTools {
         [
             &self.confirm,
             &self.mixed,
+            &self.multi_select,
             &self.multi,
+            &self.typed,
             &self.oversized_state,
             &self.progress,
             &self.roots,
@@ -498,6 +518,68 @@ pub fn mrtr_choice_request(message: &str, property: &str) -> serde_json::Value {
                 "type": "object",
                 "properties": {property: {"type": "string", "enum": MRTR_CHOICES}},
                 "required": [property],
+            },
+        },
+    })
+}
+
+/// The bounded multi-select choices the MRTR fixture asks about.
+pub const MRTR_MULTI_SELECT_CHOICES: [&str; 3] = ["eu", "us", "ap"];
+
+/// One **mixed typed form**: a bounded `enum`, a free-form `string` with its
+/// own length bounds, an `integer` with a range, and a `boolean`.
+///
+/// This is the shape the repaired typed interaction vocabulary exists for: it
+/// becomes one questionnaire carrying one `SingleChoice`, one `Text`, one
+/// `Integer`, and one `Boolean` question.
+#[must_use]
+pub fn mrtr_typed_form_request(message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "method": "elicitation/create",
+        "params": {
+            "message": message,
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "channel": {"type": "string", "enum": MRTR_CHOICES},
+                    "operator": {
+                        "type": "string",
+                        "title": "Operator",
+                        "description": "What is your GitHub username?",
+                        "minLength": 1,
+                        "maxLength": 39,
+                    },
+                    "attempts": {"type": "integer", "minimum": 1, "maximum": 5},
+                    "notify": {"type": "boolean"},
+                },
+                "required": ["channel", "operator", "attempts", "notify"],
+            },
+        },
+    })
+}
+
+/// One multi-select `enum` request with explicit `minItems`/`maxItems`.
+#[must_use]
+pub fn mrtr_multi_select_request(
+    message: &str,
+    min_items: u64,
+    max_items: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "method": "elicitation/create",
+        "params": {
+            "message": message,
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "regions": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": MRTR_MULTI_SELECT_CHOICES},
+                        "minItems": min_items,
+                        "maxItems": max_items,
+                    },
+                },
+                "required": ["regions"],
             },
         },
     })
@@ -989,17 +1071,77 @@ async fn mrtr_call(
                 "ask": {
                     "method": "elicitation/create",
                     "params": {
-                        "message": "Your name?",
+                        "message": "Your contact address?",
                         "requestedSchema": {
                             "type": "object",
-                            "properties": {"name": {"type": "string"}},
-                            "required": ["name"],
+                            // The type is supported; the `email` format is the
+                            // one constraint rustX cannot faithfully enforce,
+                            // so it refuses this schema instead of accepting
+                            // the field and dropping the constraint.
+                            "properties": {
+                                "contact": {"type": "string", "format": "email"},
+                            },
+                            "required": ["contact"],
                         },
                     },
                 },
             }))?),
             Some(fixture_round_state(round)),
         )
+        .into());
+    }
+    if name == tools.typed {
+        if round == 1 {
+            return Ok(rmcp::model::InputRequiredResult::new(
+                Some(input_requests(serde_json::json!({
+                    "form": mrtr_typed_form_request("Configure the release"),
+                }))?),
+                Some(fixture_round_state(round)),
+            )
+            .into());
+        }
+        let accepted = request
+            .input_responses
+            .as_ref()
+            .and_then(|responses| responses.get("form"))
+            .and_then(|answer| answer.get("content"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        // The final result is the exact JSON the client sent, so a test can
+        // prove the types on the wire, not merely their rendered text.
+        return Ok(CallToolResult::success(vec![ContentBlock::text(
+            serde_json::to_string(&accepted).unwrap_or_default(),
+        )])
+        .into());
+    }
+    if name == tools.multi_select {
+        if round == 1 {
+            let min = arguments
+                .get("min_items")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(2);
+            let max = arguments
+                .get("max_items")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(2);
+            return Ok(rmcp::model::InputRequiredResult::new(
+                Some(input_requests(serde_json::json!({
+                    "regions": mrtr_multi_select_request("Which regions?", min, max),
+                }))?),
+                Some(fixture_round_state(round)),
+            )
+            .into());
+        }
+        let accepted = request
+            .input_responses
+            .as_ref()
+            .and_then(|responses| responses.get("regions"))
+            .and_then(|answer| answer.get("content"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        return Ok(CallToolResult::success(vec![ContentBlock::text(
+            serde_json::to_string(&accepted).unwrap_or_default(),
+        )])
         .into());
     }
     if name == tools.oversized_state {

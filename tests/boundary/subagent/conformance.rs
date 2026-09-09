@@ -2214,10 +2214,8 @@ async fn child_questionnaire_routes_through_root_without_parent_mediation() {
             rustx::runtime::QuestionnaireSubmission {
                 answers: vec![rustx::runtime::QuestionnaireAnswerEntry {
                     question_index: 0,
-                    answer: rustx::runtime::QuestionnaireAnswer::SingleOption(
-                        rustx::runtime::SingleOptionAnswer {
-                            label: "staging".to_owned(),
-                        },
+                    answer: rustx::runtime::QuestionnaireAnswer::Option(
+                        rustx::runtime::OptionAnswer { option_index: 0 },
                     ),
                 }],
             },
@@ -2707,10 +2705,8 @@ async fn routed_interaction_survives_root_detach_and_reconnect() {
                         rustx::runtime::QuestionnaireSubmission {
                             answers: vec![rustx::runtime::QuestionnaireAnswerEntry {
                                 question_index: 0,
-                                answer: rustx::runtime::QuestionnaireAnswer::SingleOption(
-                                    rustx::runtime::SingleOptionAnswer {
-                                        label: "staging".to_owned(),
-                                    },
+                                answer: rustx::runtime::QuestionnaireAnswer::Option(
+                                    rustx::runtime::OptionAnswer { option_index: 0 },
                                 ),
                             }],
                         },
@@ -2896,10 +2892,8 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
                         rustx::runtime::QuestionnaireSubmission {
                             answers: vec![rustx::runtime::QuestionnaireAnswerEntry {
                                 question_index: 0,
-                                answer: rustx::runtime::QuestionnaireAnswer::SingleOption(
-                                    rustx::runtime::SingleOptionAnswer {
-                                        label: "staging".to_owned(),
-                                    },
+                                answer: rustx::runtime::QuestionnaireAnswer::Option(
+                                    rustx::runtime::OptionAnswer { option_index: 0 },
                                 ),
                             }],
                         },
@@ -3191,10 +3185,8 @@ async fn child_death_removes_only_its_routed_interactions() {
                         rustx::runtime::QuestionnaireSubmission {
                             answers: vec![rustx::runtime::QuestionnaireAnswerEntry {
                                 question_index: 0,
-                                answer: rustx::runtime::QuestionnaireAnswer::SingleOption(
-                                    rustx::runtime::SingleOptionAnswer {
-                                        label: "staging".to_owned(),
-                                    },
+                                answer: rustx::runtime::QuestionnaireAnswer::Option(
+                                    rustx::runtime::OptionAnswer { option_index: 0 },
                                 ),
                             }],
                         },

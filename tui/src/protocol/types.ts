@@ -48,8 +48,16 @@
  * `physical_worktree_root`); version 12's routed live interactions;
  * version 11's subagent activity projection; and version 9's closed
  * `interrupted` lifecycle vocabulary. Older schemas are not decoded.
+ *
+ * Version 24 replaces the choice-only Questionnaire with the typed question
+ * vocabulary — `text`, `number`, `integer`, `boolean`, `single_choice`,
+ * `multi_choice` — where each question declares the exact shape of a legal
+ * answer, addresses choices by option index rather than display label, and
+ * carries the canonical `requester` identity (including MCP server origin) on
+ * every Questionnaire request and durable subject. There is no compatibility
+ * decoding of version 23.
  */
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 23;
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 24;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -375,31 +383,97 @@ export type ApprovalDecision =
   | { type: "allow" }
   | { type: "deny"; reason: string };
 
+/**
+ * One authored option in a choice question.
+ *
+ * The label is presentation only. A response addresses an option by its
+ * zero-based index in the question's own `options`, so a duplicated,
+ * reserved, or forged display string can never select a different value.
+ */
 export type OptionSpecification = {
   label: string;
   description: string;
   preview?: string;
 };
 
+/** The bounded set of text shapes the runtime validates deterministically. */
+export type TextFormat = "date" | "date_time" | "uri";
+
+export type TextAnswerSpecification = {
+  min_length?: number;
+  max_length?: number;
+  format?: TextFormat;
+};
+
+export type NumberAnswerSpecification = { minimum?: number; maximum?: number };
+export type IntegerAnswerSpecification = { minimum?: number; maximum?: number };
+
+export type SingleChoiceSpecification = {
+  options: OptionSpecification[];
+  allow_custom: boolean;
+};
+
+export type MultiChoiceSpecification = {
+  options: OptionSpecification[];
+  min_selected: number;
+  max_selected: number;
+  allow_custom: boolean;
+};
+
+/**
+ * The exact shape of a legal answer to one question.
+ *
+ * The client renders and pre-validates according to this declaration; the
+ * runtime re-validates every response against the very same immutable facts
+ * and remains the authority. Client-side validation is UX only.
+ */
+export type AnswerSpecification =
+  | ({ type: "text" } & TextAnswerSpecification)
+  | ({ type: "number" } & NumberAnswerSpecification)
+  | ({ type: "integer" } & IntegerAnswerSpecification)
+  | { type: "boolean" }
+  | ({ type: "single_choice" } & SingleChoiceSpecification)
+  | ({ type: "multi_choice" } & MultiChoiceSpecification);
+
 export type QuestionSpecification = {
   question: string;
   header: string;
-  options: OptionSpecification[];
-  multi_select: boolean;
+  answer: AnswerSpecification;
 };
 
 export type QuestionnaireSpecification = {
   questions: QuestionSpecification[];
 };
 
-export type SingleOptionAnswer = { label: string };
+/**
+ * The canonical, provider-independent identity of whoever asked the human.
+ *
+ * This is what lets a client say "Requested by MCP server: github" without
+ * inferring anything from the prompt text, and it is independent of
+ * `InteractionSource`, which says where the interaction came from.
+ */
+export type InteractionRequester = {
+  tool_id: ToolId;
+  tool_name: string;
+  origin: ToolOrigin;
+};
+
+export type TextAnswer = { value: string };
+export type NumberAnswer = { value: number };
+export type IntegerAnswer = { value: number };
+export type BooleanAnswer = { value: boolean };
+export type OptionAnswer = { option_index: number };
+export type OptionsAnswer = { option_indices: number[] };
 export type CustomAnswer = { answer: string };
-export type MultipleOptionAnswer = { selected: string[] };
 
 export type QuestionnaireAnswer =
-  | { type: "single_option"; value: SingleOptionAnswer }
-  | { type: "custom"; value: CustomAnswer }
-  | { type: "multiple_option"; value: MultipleOptionAnswer };
+  | { type: "text"; value: TextAnswer }
+  | { type: "number"; value: NumberAnswer }
+  | { type: "integer"; value: IntegerAnswer }
+  | { type: "boolean"; value: BooleanAnswer }
+  | { type: "option"; value: OptionAnswer }
+  | { type: "options"; value: OptionsAnswer }
+  | { type: "custom"; value: CustomAnswer };
 
 export type QuestionnaireAnswerEntry = {
   question_index: number;
@@ -475,6 +549,7 @@ export type InteractionRequest = {
     | {
         type: "questionnaire";
         questionnaire: QuestionnaireSpecification;
+        requester: InteractionRequester;
         invocation_id: ToolInvocationId;
       };
 };
@@ -516,6 +591,7 @@ export type InteractionSubject =
   | {
       type: "questionnaire";
       questionnaire: QuestionnaireSpecification;
+      requester: InteractionRequester;
       invocation_id: ToolInvocationId;
     };
 

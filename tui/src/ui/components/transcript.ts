@@ -60,6 +60,7 @@ import type {
 } from "../../presentation/state.ts";
 import type {
   AgentStatusView,
+  AnswerSpecification,
   RuntimeClientOutcome,
 } from "../../protocol/types.ts";
 import {
@@ -80,6 +81,7 @@ import {
   type PresentationPreferences,
   isToolCallExpanded,
 } from "../preferences.ts";
+import { requesterLines } from "./questionnaire.ts";
 import { type BackgroundRole, role, style } from "../theme.ts";
 import {
   type ToolCardPart,
@@ -358,14 +360,12 @@ function renderInteractionRequested(
     lines.push(role.warning(`Review · ${entry.subject.review.instance.node} · ${entry.subject.review.subject.type}`));
   } else {
     lines.push(role.warning("questionnaire"));
+    for (const line of requesterLines(entry.subject.requester)) {
+      lines.push(...bar(line, style.dim));
+    }
     for (const question of entry.subject.questionnaire.questions) {
       lines.push(...bar(`${question.header}: ${question.question}`, style.dim));
-      lines.push(
-        ...bar(
-          `options: ${question.options.map((option) => option.label).join(", ")}`,
-          style.dim,
-        ),
-      );
+      lines.push(...bar(`answer: ${answerShape(question.answer)}`, style.dim));
     }
   }
   return [{ kind: "text", key: entry.key, text: lines.join("\n") }];
@@ -687,4 +687,26 @@ function sourceLabel(source: unknown): string {
     return `agent ${(source as { agent: { agent_id: string } }).agent.agent_id}`;
   }
   return String(source);
+}
+
+/** The historical, non-actionable description of one declared answer shape. */
+function answerShape(answer: AnswerSpecification): string {
+  switch (answer.type) {
+    case "text":
+      return "text";
+    case "number":
+      return "number";
+    case "integer":
+      return "integer";
+    case "boolean":
+      return "boolean";
+    case "single_choice":
+      return `one of: ${answer.options.map((option) => option.label).join(", ")}${
+        answer.allow_custom ? " (or a custom answer)" : ""
+      }`;
+    default:
+      return `${answer.min_selected}–${answer.max_selected} of: ${
+        answer.options.map((option) => option.label).join(", ")
+      }${answer.allow_custom ? " (or a custom answer)" : ""}`;
+  }
 }

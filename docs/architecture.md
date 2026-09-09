@@ -501,16 +501,75 @@ values, descriptions to 1024, previews to 8192, and custom answers to 4096:
 }
 ```
 
-Custom text is always available as a client-owned row; the model never sends
-`allow_free_text` and never authors an `Other` sentinel. Related blocking
+Custom text is always available as a client-owned row **for `ask_user`**,
+because every question it authors declares `allow_custom` (see the typed
+vocabulary below); the model never sends `allow_free_text` and never authors an
+`Other` sentinel. Related blocking
 questions belong in one call. A client response carries only question indices
-and typed option/custom decisions. Submitted answers may be partial; accepted
-answers are normalized into question order and authored option order. Previews
-are rendered for single-select questions. With no interaction-capable client,
+and typed decisions. Submitted answers may be partial; accepted answers are
+normalized into question order and canonical option order. Previews are
+rendered for single-select questions. With no interaction-capable client,
 `ask_user` returns an explicit failed ToolResult. A user decline is a successful
 result `{ "cancelled": true, "answers": [] }`, while attempt cancellation
 remains `ToolExecutionStatus::Cancelled`; neither response can replace the
 original Tool arguments.
+
+##### The typed question vocabulary (Issue #242)
+
+Those model-facing arguments are **`ask_user`'s** authoring surface, not the
+interaction contract. The runtime-owned contract is a small, finite,
+provider-independent vocabulary in which every question declares the exact
+shape of a legal answer, and `ask_user` is one point in it:
+
+```text
+QuestionSpecification { question, header, answer }
+                                           |
+       +----------+----------+-------------+-----------+--------------+
+       |          |          |             |           |              |
+     Text      Number     Integer       Boolean   SingleChoice   MultiChoice
+   bounded    bounded     bounded        true/     options +      options +
+   length,    range       range          false     allow_custom   bounds +
+   format                                                        allow_custom
+
+native ask_user, multi_select: false -> SingleChoice { options,
+                                          allow_custom: true }
+native ask_user, multi_select: true  -> MultiChoice  { options,
+                                          1..=options.len(),
+                                          allow_custom: true }
+```
+
+Two properties follow, and both are load-bearing:
+
+- **the request declares the legal answer shape.** A Runtime Client never has
+  to guess which answers are legal, and a free-text row exists only where a
+  question sets `allow_custom`. A bounded MCP `enum` sets it to `false`, so
+  the client offers no custom row and the protocol cannot express one — the
+  old "type a custom answer to an enum and the whole tool call fails" outcome
+  is gone by construction rather than by a special case.
+- **response validation derives from those immutable request facts**, in
+  `events::interaction`, which is the one authority the live coordinator, the
+  durable store, and every producer share. A Runtime Client may reject
+  obviously invalid input earlier for the user's benefit, but client-side
+  validation is UX and runtime-side validation is authoritative. An invalid
+  answer is refused while the interaction stays pending; it never fails the
+  enclosing tool invocation.
+
+A response addresses a choice by its **zero-based option index**, never by its
+display label. A label is presentation: it can repeat, collide with a
+client-reserved row, or be forged, and none of that can change which value the
+runtime settles on. (Two options a *human* could not tell apart are still
+refused deterministically, because that ambiguity is real even when the wire
+is not.)
+
+Every Questionnaire also carries an `InteractionRequester` — the
+registry-resolved `{ tool_id, tool_name, origin }` of the tool that asked. It
+is canonical, provider-independent identity, never a display string and never
+an MCP SDK value, and it flows unchanged through the live request, the Event
+Journal subject, the Runtime Client projection, and the TUI. It is
+deliberately orthogonal to `InteractionSource`: *where* an interaction came
+from (primary or subagent) and *who* asked (a native tool, or an MCP server
+named by `ToolOrigin::Mcp`) are two independent facts and are never collapsed
+into one field.
 
 The runtime control plane exposes `effective_approval_mode` and a pending
 desired mode. A busy attempt freezes the effective mode it admitted; later
@@ -4102,19 +4161,72 @@ unsupported-feature diagnostic, with no model call and no workspace
 disclosure. A round mixing supported and unsupported requests fails as a
 whole, before any prompt is published.
 
-**The supported Elicitation schema subset is exactly what rustX can represent
-without coercion.** One MCP property becomes one rustX question, and a rustX
-question is a bounded choice over 2–4 authored options plus the client's own
-custom-answer row. `boolean` and every `enum` shape are representable;
-free-form `string`/`number`/`integer` properties and URL-mode elicitation are
-not, and are refused rather than rendered as invented options. Question order
-is `(input-request key, schema property order)`, both deterministic, and
-answers map back by server-assigned key rather than by position. A
-whole-questionnaire decline, or an unanswered required property, becomes the
-protocol's own `decline` action; a free-text answer to a bounded schema
-choice fails deterministically, because an `accept` carrying content the
-server's schema rejects would be a fabrication. Provider unavailability keeps
-the existing coordinator contract and is never reported as a human decline.
+**The Elicitation form maps onto the typed question vocabulary, constraint by
+constraint.** One MCP property becomes one rustX question, and the core
+invariant of `src/tools/mcp/mrtr.rs` is:
+
+> rustX never emits an MCP `accept` whose `content` has not been validated
+> against every constraint of the original requested schema that rustX claims
+> to support — and it never claims to support a schema shape whose
+> constraints it would then discard.
+
+So every supported field of every rmcp schema type is either **preserved and
+validated**, or its presence **refuses that schema instance**:
+
+```text
+StringSchema   title -> question header, description -> prompt,
+               minLength / maxLength     -> Text { min_length, max_length }
+               format date|date-time|uri -> Text { format }        validated
+               format email              -> REFUSED (no faithful validator)
+NumberSchema   minimum / maximum         -> Number { minimum, maximum }
+IntegerSchema  minimum / maximum         -> Integer { minimum, maximum }
+BooleanSchema  (no constraints)          -> Boolean
+enum single    enum | oneOf | enumNames  -> SingleChoice { options,
+                                              allow_custom: false }
+enum multi     enum | anyOf,
+               minItems / maxItems       -> MultiChoice { options,
+                                              min_selected, max_selected,
+                                              allow_custom: false }
+URL elicitation                          -> REFUSED (not a questionnaire)
+```
+
+`default` is deliberately **not** a constraint: it is an authoring hint, and
+rustX does not pre-fill an answer on a human's behalf, so ignoring it can
+never produce schema-invalid content. That decision is documented rather than
+silent. `maxLength` above rustX's own 4096-scalar answer bound is narrowed to
+that bound, which is strictly stricter than the server's constraint and
+therefore still schema-valid; a `minLength` above it is impossible to satisfy
+and refuses the schema.
+
+Because the bounds live in the **provider-independent** question
+specification, the authoritative validator is the shared one: a multi-select
+with `minItems: 2, maxItems: 2` rejects one and three selections and accepts
+two, and a fractional value is not even a spellable answer to an `integer`
+question. No response that violates a declared bound can reach an MCP
+continuation.
+
+Question order is `(input-request key, schema property order)`, both
+deterministic, and answers map back by server-assigned key rather than by
+position. A whole-questionnaire decline, or an unanswered required property,
+becomes the protocol's own `decline` action. Provider unavailability keeps the
+existing coordinator contract and is never reported as a human decline.
+
+Two failure classes stay strictly separate, which is what makes the human
+experience recoverable:
+
+```text
+the server requested a schema rustX cannot represent
+    -> deterministic unsupported-feature failure of the invocation
+a human typed something the declared answer shape refuses
+    -> the interaction response is refused, the interaction stays pending
+```
+
+**MCP-originated prompts name their server.** The Questionnaire's
+`InteractionRequester` is built from the registry-resolved invocation and this
+runtime's own `McpServerId`, so a Runtime Client renders
+`Requested by MCP server: <id>` / `Tool: <name>` from canonical facts. A
+native `ask_user` prompt carries `ToolOrigin::Builtin` and is never labelled
+as MCP. The routed source (primary or subagent) remains a separate field.
 
 **`requestState` stays protocol-owned.** It is retained on the executor's
 stack for the lifetime of the invocation, returned byte for byte on the next
@@ -4417,7 +4529,9 @@ is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
-The current Runtime Client protocol is version 23, adding distinct source
+The current Runtime Client protocol is version 24, adding the typed question
+vocabulary and canonical Questionnaire requester identity (Issue #242) on top
+of version 23, which added distinct source
 activation/unprepared projections. Version 22 added the
 [native Workflow projection and cursor handoff](workflow-run-projection.md).
 Version 21 adds Review and

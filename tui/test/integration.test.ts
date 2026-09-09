@@ -766,11 +766,16 @@ describe("real rustx structured ask_user questionnaire", { skip: SKIP }, () => {
     assert.equal(pending.request.kind.type, "questionnaire");
     if (pending.request.kind.type !== "questionnaire") throw new Error("not a questionnaire");
     assert.equal(pending.request.kind.questionnaire.questions.length, 2);
-    assert.equal(pending.request.kind.questionnaire.questions[1]?.multi_select, true);
     assert.equal(
-      pending.request.kind.questionnaire.questions[0]?.options[0]?.label,
-      "Swiss / Klein blue",
+      pending.request.kind.questionnaire.questions[1]?.answer.type,
+      "multi_choice",
     );
+    const firstAnswer = pending.request.kind.questionnaire.questions[0]?.answer;
+    assert.equal(firstAnswer?.type, "single_choice");
+    if (firstAnswer?.type !== "single_choice") throw new Error("not a single choice");
+    assert.equal(firstAnswer.options[0]?.label, "Swiss / Klein blue");
+    // A native `ask_user` prompt is never labelled as MCP.
+    assert.equal(pending.request.kind.requester.origin, "builtin");
 
     // The authoritative snapshot reconstructs the same request facts; no
     // client-side draft or echoed prose is needed to restore the overlay.
@@ -792,6 +797,7 @@ describe("real rustx structured ask_user questionnaire", { skip: SKIP }, () => {
     const overlay = new QuestionnaireOverlay({
       interactionId: `${reconstructed.interaction.conversation_id}::${reconstructed.interaction.interaction_id}`,
       questionnaire: reconstructed.request.kind.questionnaire,
+      requester: reconstructed.request.kind.requester,
       onSubmit: (response) => {
         submitted = response;
       },
@@ -813,10 +819,7 @@ describe("real rustx structured ask_user questionnaire", { skip: SKIP }, () => {
         answers: [
           {
             question_index: 0,
-            answer: {
-              type: "single_option",
-              value: { label: "Swiss / Klein blue" },
-            },
+            answer: { type: "option", value: { option_index: 0 } },
           },
         ],
       },

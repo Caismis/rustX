@@ -934,10 +934,42 @@ must still be refused.
   before publishing and the store validates before committing, so a future
   non-SQLite backend enforces the same contract by calling the same functions.
 - **A Questionnaire settlement must satisfy the exact requested contract.**
-  Indices are unique and in range; single-select answers name one authored
-  option or bounded custom text; multi-select answers name a non-empty unique
-  authored set; and empty submission is the distinct decline settlement. A
-  settlement no live coordinator could have produced is refused.
+  Question indices are unique and in range; every answer matches the shape its
+  question declared — text within its length bounds and declared format, a
+  number within its range, an integer that is genuinely integral and within
+  its range, a boolean, one in-range option index, or a unique in-range option
+  index set within `min_selected..=max_selected`; a custom free-text answer is
+  legal only where the question set `allow_custom`; and empty submission is
+  the distinct decline settlement. A settlement no live coordinator could have
+  produced is refused.
+- **The typed question vocabulary is the interaction contract (Issue #242).**
+  A question is `{ question, header, answer }`, where `answer` is one of
+  `Text` (bounded length, optional `date`/`date-time`/`uri` format), `Number`
+  (bounded range), `Integer` (bounded range), `Boolean`, `SingleChoice`
+  (options + `allow_custom`), or `MultiChoice` (options +
+  `min_selected`/`max_selected` + `allow_custom`). The **request declares the
+  legal answer shape**, and response validation derives from those immutable
+  request facts in `events::interaction`. Client-side validation is UX;
+  runtime-side validation is authoritative, and an answer the runtime refuses
+  leaves the interaction pending rather than failing the enclosing tool
+  invocation. Native `ask_user` maps onto `SingleChoice`/`MultiChoice` with
+  `allow_custom: true`; a bounded MCP `enum` maps onto the same shapes with
+  `allow_custom: false`, so a custom answer to an MCP choice is not a legal
+  response shape at all.
+- **A choice answer names an option index, never a display label.** A label is
+  presentation and may be duplicated, reserved, or forged; the canonical
+  identity on the wire and in the Event Journal is the zero-based index into
+  the question's own options. Two options a human could not tell apart are
+  still refused deterministically, because that ambiguity is real even when
+  the wire is not.
+- **Every Questionnaire carries canonical requester identity.** The requested
+  fact, the live request, the Runtime Client projection, and the durable
+  subject all carry `InteractionRequester { tool_id, tool_name, origin }` —
+  registry-resolved facts, never a display string and never an MCP SDK value.
+  A Runtime Client therefore names the MCP server that asked without inferring
+  anything, and a native `ask_user` prompt (`ToolOrigin::Builtin`) is never
+  labelled as MCP. It is orthogonal to `InteractionSource`: where an
+  interaction came from and who requested it are two independent facts.
 
 Two ordering rules hold:
 
@@ -1020,14 +1052,24 @@ Each option has a non-empty `label` (at most 60 scalar values) and
 single-select questions. Related blocking questions are grouped into one
 invocation.
 
-The client always adds the custom-answer row `Type something.`. The model does
-not send `allow_free_text` and may not author `Other` or the `Next` sentinel.
-The client sends one typed whole-questionnaire response containing only question
-indices and authored labels or bounded custom text. Answers may be partial and
-are normalized into question order and authored option order. One invocation
-publishes exactly one `InteractionCoordinator` questionnaire interaction and
-one durable requested fact, followed by exactly one submitted, declined, or
-attempt-cancelled settlement. A decline succeeds as
+Those are the **tool's** authoring bounds. The runtime-owned contract is the
+typed question vocabulary: `ask_user` maps `multi_select: false` onto
+`SingleChoice { options, allow_custom: true }` and `multi_select: true` onto
+`MultiChoice { options, 1..=options.len(), allow_custom: true }`, so the
+custom-answer row is a declared property of the request rather than an
+unconditional client behaviour. Because those questions declare
+`allow_custom: true`, the client still always adds the `Type something.` row,
+and `Other`/`Next` remain reserved for exactly those questions. The model does
+not send `allow_free_text`.
+
+The client sends one typed whole-questionnaire response containing only
+question indices and typed decisions, and a choice decision names an **option
+index**, never a display label. Answers may be partial and are normalized into
+question order and canonical option order. One invocation publishes exactly
+one `InteractionCoordinator` questionnaire interaction and one durable
+requested fact — carrying the built-in `InteractionRequester` of `ask_user`,
+which no client can mistake for MCP — followed by exactly one submitted,
+declined, or attempt-cancelled settlement. A decline succeeds as
 `{"cancelled":true,"answers":[]}`; attempt cancellation and provider
 unavailability remain distinct runtime/tool outcomes.
 
@@ -1092,18 +1134,36 @@ uninvolved and never see `InputRequiredResult`.
   input request would expose host authority through a deprecated surface.
   Both fail the invocation deterministically, with no model call and no
   workspace disclosure.
-- **Supported Elicitation subset.** One MCP property becomes one rustX
-  question, and a rustX question is a bounded choice over 2–4 authored
-  options. `boolean` and `enum` (single-select, multi-select, titled,
-  untitled, and the legacy `enumNames` form) are representable; free-form
-  `string`, `number`, and `integer` properties and URL-mode elicitation are
-  not, and are refused rather than coerced into invented options. Answers map
-  back by **server-assigned request key**, never by position. An unanswered
-  required property, or a whole-questionnaire decline, becomes the protocol's
-  own `decline` action; a free-text answer to a bounded schema choice is a
-  deterministic failure, because rustX will not send an `accept` whose
-  content the server's own schema rejects. Provider unavailability keeps the
-  existing coordinator contract and is never reported as a human decline.
+- **The Elicitation form maps onto the typed question vocabulary, constraint
+  by constraint.** rustX never emits an `accept` whose `content` has not been
+  validated against every constraint of the requested schema it claims to
+  support, and never claims to support a schema shape whose constraints it
+  would then discard. So each supported rmcp schema field is either preserved
+  and validated or refuses that schema instance: `string` becomes `Text` with
+  its `minLength`/`maxLength` and a `date`/`date-time`/`uri` `format`
+  (`format: "email"` is refused, because rustX has no faithful validator for
+  it); `number` and `integer` become `Number`/`Integer` with their
+  `minimum`/`maximum`, and an `integer` never accepts a fractional value;
+  `boolean` becomes `Boolean`, whose canonical value is `true`/`false` and
+  never a `Yes`/`No` display string; every `enum` shape (single-select,
+  multi-select, titled, untitled, and the legacy `enumNames` form) becomes
+  `SingleChoice`/`MultiChoice` with `allow_custom: false`, and a multi-select
+  carries its `minItems`/`maxItems` into `min_selected`/`max_selected` where
+  the shared runtime validator enforces them. `default` is an authoring hint
+  rather than a constraint and is deliberately not pre-filled. URL-mode
+  elicitation is refused: it is not a questionnaire. Impossible constraints —
+  `minItems` above the member count, `minLength` above the rustX answer bound,
+  an inverted range — refuse the schema *before* any interaction is published.
+  Answers map back by **server-assigned request key**, never by position. An
+  unanswered required property, or a whole-questionnaire decline, becomes the
+  protocol's own `decline` action. Provider unavailability keeps the existing
+  coordinator contract and is never reported as a human decline.
+- **An unsupported schema and an invalid human answer are different
+  failures.** "The server requested a schema rustX cannot represent" is a
+  deterministic unsupported-feature failure of the invocation. "A human typed
+  something the declared answer shape refuses" is an interaction-response
+  refusal: the interaction stays pending until it is corrected or declined,
+  and the MCP invocation is untouched.
 - **Whole-payload validation precedes publication.** A round mixing
   supported and unsupported input requests, an oversized payload, or a
   schema rustX cannot represent fails before any prompt is published, so a

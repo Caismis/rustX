@@ -4,7 +4,11 @@ import { describe, it } from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 
 import { QuestionnaireOverlay } from "../src/ui/components/questionnaire.ts";
-import type { QuestionnaireResponse, QuestionnaireSpecification } from "../src/protocol/types.ts";
+import type {
+  InteractionRequester,
+  QuestionnaireResponse,
+  QuestionnaireSpecification,
+} from "../src/protocol/types.ts";
 import { plainText } from "../src/ui/theme.ts";
 
 function questionnaire(): QuestionnaireSpecification {
@@ -13,7 +17,9 @@ function questionnaire(): QuestionnaireSpecification {
       {
         question: "Which visual direction should I use?",
         header: "Visual style",
-        options: [
+        answer: {
+          type: "single_choice",
+          options: [
           {
             label: "Swiss / Klein blue",
             description: "Information-first typography with strong hierarchy.",
@@ -24,20 +30,40 @@ function questionnaire(): QuestionnaireSpecification {
             description: "A warmer editorial composition with serif typography.",
           },
         ],
-        multi_select: false,
+          allow_custom: true,
+        },
       },
       {
         question: "Which elements should be enabled?",
         header: "Elements",
-        options: [
+        answer: {
+          type: "multi_choice",
+          options: [
           { label: "Charts", description: "Show quantitative charts." },
           { label: "Comments", description: "Show reviewer comments." },
         ],
-        multi_select: true,
+          min_selected: 1,
+          max_selected: 2,
+          allow_custom: true,
+        },
       },
     ],
   };
 }
+
+/** The native `ask_user` requester: built-in, never labelled as MCP. */
+const NATIVE_REQUESTER: InteractionRequester = {
+  tool_id: "tool-ask-user",
+  tool_name: "ask_user",
+  origin: "builtin",
+};
+
+/** An MCP-served tool's requester, carrying its canonical server identity. */
+const MCP_REQUESTER: InteractionRequester = {
+  tool_id: "mcp:github:create_issue",
+  tool_name: "create_issue",
+  origin: { mcp: { server_id: "github" } },
+};
 
 function overlay(
   onSubmit: (response: QuestionnaireResponse) => void,
@@ -47,6 +73,7 @@ function overlay(
   return new QuestionnaireOverlay({
     interactionId: "attempt-1-interaction-questionnaire-1",
     questionnaire: questionnaire(),
+    requester: NATIVE_REQUESTER,
     onSubmit,
     onDecline,
     onInterrupt,
@@ -66,6 +93,7 @@ function singleOverlay(
   return new QuestionnaireOverlay({
     interactionId: "interaction-single",
     questionnaire: specification,
+    requester: NATIVE_REQUESTER,
     onSubmit,
     onDecline: () => {},
     onInterrupt: () => {},
@@ -133,6 +161,7 @@ describe("QuestionnaireOverlay", () => {
     const view = new QuestionnaireOverlay({
       interactionId: "interaction-1",
       questionnaire: questionnaire(),
+      requester: NATIVE_REQUESTER,
       onSubmit: (response) => {
         submitted = response;
       },
@@ -156,7 +185,7 @@ describe("QuestionnaireOverlay", () => {
       value: {
         answers: [{
           question_index: 0,
-          answer: { type: "single_option", value: { label: "Swiss / Klein blue" } },
+          answer: { type: "option", value: { option_index: 0 } },
         }],
       },
     });
@@ -182,8 +211,8 @@ describe("QuestionnaireOverlay", () => {
         answers: [{
           question_index: 1,
           answer: {
-            type: "multiple_option",
-            value: { selected: ["Charts", "Comments"] },
+            type: "options",
+            value: { option_indices: [0, 1] },
           },
         }],
       },
@@ -354,12 +383,15 @@ describe("QuestionnaireOverlay", () => {
     const specification = singleQuestionnaire({
       question: "q".repeat(4096),
       header: "Maximum",
-      options: labels.map((label, index) => ({
-        label,
-        description: `${index}${"d".repeat(1023)}`,
-        ...(index === 0 ? { preview: "preview-000 " + "p".repeat(8192) } : {}),
-      })),
-      multi_select: false,
+      answer: {
+        type: "single_choice",
+        options: labels.map((label, index) => ({
+          label,
+          description: `${index}${"d".repeat(1023)}`,
+          ...(index === 0 ? { preview: "preview-000 " + "p".repeat(8192) } : {}),
+        })),
+        allow_custom: true,
+      },
     });
     const view = singleOverlay(specification, () => {});
     view.setBodyHeight(16);
@@ -391,11 +423,14 @@ describe("QuestionnaireOverlay", () => {
     const specification = singleQuestionnaire({
       question: "Which preview?",
       header: "Preview",
-      options: [
+      answer: {
+        type: "single_choice",
+        options: [
         { label: "First", description: "First option.", preview },
         { label: "Second", description: "Second option." },
       ],
-      multi_select: false,
+        allow_custom: true,
+      },
     });
     const view = singleOverlay(specification, () => {});
     view.setBodyHeight(14);
@@ -425,11 +460,14 @@ describe("QuestionnaireOverlay", () => {
         singleQuestionnaire({
           question: "Which preview should be inspected?",
           header: "Preview",
-          options: [
+          answer: {
+            type: "single_choice",
+            options: [
             { label: "First option", description: "The initially focused option.", preview },
             { label: "Second option", description: "Another option with its own preview.", preview },
           ],
-          multi_select: false,
+            allow_custom: true,
+          },
         }),
         () => {},
       );
@@ -496,11 +534,14 @@ describe("QuestionnaireOverlay", () => {
         singleQuestionnaire({
           question: "Which numbered preview should be inspected?",
           header: "Preview",
-          options: [
+          answer: {
+            type: "single_choice",
+            options: [
             { label: "First option", description: "The initially focused option.", preview },
             { label: "Second option", description: "Another preview-bearing option.", preview },
           ],
-          multi_select: false,
+            allow_custom: true,
+          },
         }),
         () => {},
       );
@@ -567,11 +608,14 @@ describe("QuestionnaireOverlay", () => {
       singleQuestionnaire({
         question: ("A long wrapped question intro ".repeat(200)).slice(0, 4096),
         header: "Preview",
-        options: [
+        answer: {
+          type: "single_choice",
+          options: [
           { label: "First option", description: "The initially focused option.", preview },
           { label: "Second option", description: "Another preview-bearing option.", preview },
         ],
-        multi_select: false,
+          allow_custom: true,
+        },
       }),
       () => {},
     );
@@ -605,5 +649,227 @@ describe("QuestionnaireOverlay", () => {
     const review = view.render(120).map(plainText);
     assertBounded(review, 120, 14);
     assert.ok(review.some((line) => line.includes("›") && line.includes("Submit")));
+  });
+  // -------------------------------------------------------------------------
+  // The typed question vocabulary (Issue #242)
+  // -------------------------------------------------------------------------
+
+  function typedOverlay(
+    specification: QuestionnaireSpecification,
+    requester: InteractionRequester = NATIVE_REQUESTER,
+    onSubmit: (response: QuestionnaireResponse) => void = () => {},
+  ): QuestionnaireOverlay {
+    return new QuestionnaireOverlay({
+      interactionId: "interaction-typed",
+      questionnaire: specification,
+      requester,
+      onSubmit,
+      onDecline: () => {},
+      onInterrupt: () => {},
+    });
+  }
+
+  function type(view: QuestionnaireOverlay, value: string): void {
+    for (const scalar of value) view.handleInput(scalar);
+  }
+
+  it("names the MCP server that asked, and never labels a native prompt as MCP", () => {
+    const mcp = typedOverlay(
+      { questions: [{ question: "Which channel?", header: "Channel", answer: { type: "boolean" } }] },
+      MCP_REQUESTER,
+    );
+    const rendered = plainText(mcp.render(80).join("\n"));
+    assert.match(rendered, /Requested by MCP server: github/);
+    assert.match(rendered, /Tool: create_issue/);
+    assert.equal(mcp.popupTitle(), "MCP elicitation · github");
+
+    const native = typedOverlay(
+      { questions: [{ question: "Which channel?", header: "Channel", answer: { type: "boolean" } }] },
+    );
+    const nativeRendered = plainText(native.render(80).join("\n"));
+    assert.doesNotMatch(nativeRendered, /MCP/);
+    assert.match(nativeRendered, /Requested by ask_user/);
+    assert.equal(native.popupTitle(), "Ask user · questionnaire");
+  });
+
+  it("renders a text question as an input field with no manufactured options", () => {
+    let submitted: QuestionnaireResponse | undefined;
+    const view = typedOverlay(
+      {
+        questions: [{
+          question: "What is your GitHub username?",
+          header: "Operator",
+          answer: { type: "text", min_length: 1, max_length: 39 },
+        }],
+      },
+      MCP_REQUESTER,
+      (response) => {
+        submitted = response;
+      },
+    );
+    const rendered = plainText(view.render(80).join("\n"));
+    assert.doesNotMatch(rendered, /Type something\./);
+    assert.match(rendered, /Type your answer\./);
+    assert.match(rendered, /1–39 characters/);
+
+    type(view, "octocat");
+    submitSingle(view);
+    assert.deepEqual(submitted, {
+      type: "submitted",
+      value: {
+        answers: [{ question_index: 0, answer: { type: "text", value: { value: "octocat" } } }],
+      },
+    });
+  });
+
+  it("keeps an invalid numeric edit inside the interaction and submits a typed value", () => {
+    const integerQuestionnaire: QuestionnaireSpecification = {
+      questions: [{
+        question: "How many attempts?",
+        header: "Attempts",
+        answer: { type: "integer", minimum: 1, maximum: 5 },
+      }],
+    };
+    // A fractional value is not an integer: the surface says so concisely and
+    // refuses to submit, keeping the user inside the interaction. Nothing here
+    // can fail the enclosing MCP invocation.
+    let submitted: QuestionnaireResponse | undefined;
+    const fractional = typedOverlay(integerQuestionnaire, MCP_REQUESTER, (response) => {
+      submitted = response;
+    });
+    type(fractional, "1.5");
+    assert.match(plainText(fractional.render(80).join("\n")), /Enter a whole number\./);
+    submitSingle(fractional);
+    assert.equal(submitted, undefined, "an invalid draft never submits");
+    // The blocked submission returns focus to the offending question and names
+    // it on the review surface.
+    fractional.handleInput("\t");
+    assert.match(
+      plainText(fractional.render(80).join("\n")),
+      /Correct Attempts before submitting\./,
+    );
+
+    // Out of range is refused too, with the request's own bound explained.
+    const outOfRange = typedOverlay(integerQuestionnaire, MCP_REQUESTER, () => {
+      assert.fail("an out-of-range draft never submits");
+    });
+    type(outOfRange, "9");
+    assert.match(plainText(outOfRange.render(80).join("\n")), /at most 5/);
+    submitSingle(outOfRange);
+
+    let valid: QuestionnaireResponse | undefined;
+    const view = typedOverlay(integerQuestionnaire, MCP_REQUESTER, (response) => {
+      valid = response;
+    });
+    type(view, "3");
+    submitSingle(view);
+    assert.deepEqual(valid, {
+      type: "submitted",
+      value: {
+        answers: [{ question_index: 0, answer: { type: "integer", value: { value: 3 } } }],
+      },
+    });
+  });
+
+  it("submits a boolean as true/false while displaying Yes/No", () => {
+    for (const [row, value] of [[0, true], [1, false]] as const) {
+      let submitted: QuestionnaireResponse | undefined;
+      const view = typedOverlay(
+        { questions: [{ question: "Notify?", header: "Notify", answer: { type: "boolean" } }] },
+        MCP_REQUESTER,
+        (response) => {
+          submitted = response;
+        },
+      );
+      const rendered = plainText(view.render(80).join("\n"));
+      assert.match(rendered, /Yes/);
+      assert.match(rendered, /No/);
+      for (let index = 0; index < row; index += 1) view.handleInput("\u001b[B");
+      view.handleInput("\r");
+      submitSingle(view);
+      assert.deepEqual(submitted, {
+        type: "submitted",
+        value: {
+          answers: [{ question_index: 0, answer: { type: "boolean", value: { value } } }],
+        },
+      });
+    }
+  });
+
+  it("offers no custom-answer row for a bounded MCP choice", () => {
+    const view = typedOverlay(
+      {
+        questions: [{
+          question: "Which channel?",
+          header: "Channel",
+          answer: {
+            type: "single_choice",
+            options: [
+              { label: "stable", description: "MCP value: \"stable\"" },
+              { label: "beta", description: "MCP value: \"beta\"" },
+            ],
+            allow_custom: false,
+          },
+        }],
+      },
+      MCP_REQUESTER,
+    );
+    const rendered = plainText(view.render(80).join("\n"));
+    assert.doesNotMatch(rendered, /Type something\./);
+    // Only the two declared rows exist: moving down twice cannot leave them.
+    view.handleInput("\u001b[B");
+    view.handleInput("\u001b[B");
+    const focused = view.render(80).filter((line) => plainText(line).includes("›"));
+    assert.equal(focused.length, 1);
+    assert.match(plainText(focused[0]!), /beta/);
+  });
+
+  it("shows multi-select bounds, refuses to exceed them, and blocks a short submission", () => {
+    let submitted: QuestionnaireResponse | undefined;
+    const view = typedOverlay(
+      {
+        questions: [{
+          question: "Which regions?",
+          header: "Regions",
+          answer: {
+            type: "multi_choice",
+            options: [
+              { label: "eu", description: "Europe." },
+              { label: "us", description: "Americas." },
+              { label: "ap", description: "Asia-Pacific." },
+            ],
+            min_selected: 2,
+            max_selected: 2,
+            allow_custom: false,
+          },
+        }],
+      },
+      MCP_REQUESTER,
+      (response) => {
+        submitted = response;
+      },
+    );
+    assert.match(plainText(view.render(80).join("\n")), /Select exactly 2/);
+
+    // One selection is below the declared minimum: submission is blocked.
+    view.handleInput(" ");
+    submitSingle(view);
+    assert.equal(submitted, undefined);
+
+    // A third selection is refused client-side rather than silently sent.
+    view.handleInput("\u001b[B");
+    view.handleInput(" ");
+    view.handleInput("\u001b[B");
+    view.handleInput(" ");
+    submitSingle(view);
+    assert.deepEqual(submitted, {
+      type: "submitted",
+      value: {
+        answers: [{
+          question_index: 0,
+          answer: { type: "options", value: { option_indices: [0, 1] } },
+        }],
+      },
+    });
   });
 });

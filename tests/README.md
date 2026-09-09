@@ -146,12 +146,19 @@ invariant is a real process boundary.
   Sampling/Roots/schemas fail before any prompt is published, and each
   cancellation frontier — before the first dispatch, while the Interaction
   is pending, at the continuation dispatch frontier in both directions — is
-  decided through a deterministic barrier rather than a sleep.
+  decided through a deterministic barrier rather than a sleep. It also proves
+  the typed interaction contract end to end: a mixed `enum`/`string`/
+  `integer`/`boolean` form round-trips each answer as its own JSON type, a
+  multi-select `enum`'s `minItems`/`maxItems` are enforced by the runtime
+  before any continuation is dispatched, and an out-of-bound human answer is
+  refused while the Interaction stays pending rather than failing the call.
 - `mcp_mrtr_managed` — the same contract end to end against a real managed
   `FastMCP` 4 child built by a real, network-bound `uv`: one model
   `ToolCall`, a negotiated `2026-07-28` connection, two real `tools/call`
-  rounds, one runtime Interaction, one final `ToolResult`. It follows the
-  repository's uv-availability skip convention.
+  rounds, one runtime Interaction, one final `ToolResult`. Its form mixes a
+  bounded `enum` with a free-form `string` in one schema, so the acceptance
+  also proves the repaired typed schema mapping against a real server. It
+  follows the repository's uv-availability skip convention.
 - `subagent/conformance` — the child ownership boundary with real staged
   children (`sh`, own process group, real control socket): frozen authority
   crossing, registry lifecycle, exactly one terminal child notice, parent

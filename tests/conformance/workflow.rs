@@ -982,10 +982,31 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
             match event.event {
                 RuntimeClientEvent::InteractionPending { interaction } => {
                     let response = match interaction.request.kind {
-                        InteractionKind::Questionnaire { .. } => {
+                        InteractionKind::Questionnaire {
+                            ref questionnaire, ..
+                        } => {
                             questions += 1;
-                            // A typed response uses the existing questionnaire schema below.
-                            InteractionResponse::Questionnaire { response: serde_json::from_value::<QuestionnaireResponse>(serde_json::json!({"type":"submitted","value":{"answers":[{"question_index":0,"answer":{"type":"single_option","value":{"label":"Minimal change"}}}]}})).unwrap() }
+                            // The answer names the option by its index in the
+                            // published request, exactly as a Runtime Client
+                            // resolves a display label locally.
+                            let option_index = questionnaire.questions[0]
+                                .answer
+                                .options()
+                                .iter()
+                                .position(|option| option.label == "Minimal change")
+                                .expect("the questionnaire offers the minimal change option");
+                            InteractionResponse::Questionnaire {
+                                response: QuestionnaireResponse::Submitted(
+                                    rustx::events::QuestionnaireSubmission {
+                                        answers: vec![rustx::events::QuestionnaireAnswerEntry {
+                                            question_index: 0,
+                                            answer: rustx::events::QuestionnaireAnswer::Option(
+                                                rustx::events::OptionAnswer { option_index },
+                                            ),
+                                        }],
+                                    },
+                                ),
+                            }
                         }
                         InteractionKind::Review {
                             review,

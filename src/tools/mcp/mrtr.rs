@@ -4,10 +4,10 @@
 //! # One invocation, N rounds, one settlement
 //!
 //! MCP `2026-07-28` lets a server answer `tools/call` with an
-//! [`InputRequiredResult`] instead of a `CallToolResult`. That answer is an
-//! **intermediate state of the already-admitted rustX `ToolInvocation`**, never
-//! a terminal `ToolResult`, never a new invocation, and never a new
-//! `ToolExecutionId`:
+//! [`InputRequiredResult`](rmcp::model::InputRequiredResult) instead of a
+//! `CallToolResult`. That answer is an **intermediate state of the
+//! already-admitted rustX `ToolInvocation`**, never a terminal `ToolResult`,
+//! never a new invocation, and never a new `ToolExecutionId`:
 //!
 //! ```text
 //! model `ToolCall` A
@@ -29,14 +29,49 @@
 //! ```
 //!
 //! This module owns **only the translation**: what an `InputRequiredResult`
-//! means, which MCP input requests rustX can faithfully represent as a
-//! bounded runtime Questionnaire, and how a typed Questionnaire response
-//! becomes the exact `inputResponses` map the next round must carry. The
-//! round driver, the dispatch frontier, cancellation arbitration, and
-//! terminal settlement stay in [`super`], where the existing MCP execution
-//! semantics already live.
+//! means, how an MCP elicitation schema becomes rustX's provider-independent
+//! typed question vocabulary, and how a typed Questionnaire response becomes
+//! the exact `inputResponses` map the next round must carry. The round driver,
+//! the dispatch frontier, cancellation arbitration, and terminal settlement
+//! stay in [`super`], where the existing MCP execution semantics already live.
 //!
-//! # What rustX supports, and why the rest is refused
+//! # A strict translation layer, not a schema interpreter
+//!
+//! The core invariant of this module is:
+//!
+//! > rustX never emits an MCP `accept` whose `content` has not been validated
+//! > against every constraint of the original requested schema that rustX
+//! > claims to support — and it never claims to support a schema shape whose
+//! > constraints it would then discard.
+//!
+//! So each supported field of each rmcp schema type is either **preserved and
+//! validated**, or its presence **refuses that schema instance**:
+//!
+//! ```text
+//! StringSchema   type, title(header), description(prompt),
+//!                minLength / maxLength      -> Text { min_length, max_length }
+//!                format date|date-time|uri  -> Text { format }
+//!                format email               -> REFUSED (no faithful validator)
+//! NumberSchema   minimum / maximum          -> Number { minimum, maximum }
+//! IntegerSchema  minimum / maximum          -> Integer { minimum, maximum }
+//! BooleanSchema  (no constraints)           -> Boolean
+//! enum (single)  enum | oneOf | enumNames   -> SingleChoice { options,
+//!                                                allow_custom: false }
+//! enum (multi)   enum | anyOf,
+//!                minItems / maxItems        -> MultiChoice { options,
+//!                                                min_selected, max_selected,
+//!                                                allow_custom: false }
+//! ```
+//!
+//! `default` is deliberately **not** a constraint: it is an authoring hint,
+//! and rustX does not pre-fill an answer on a human's behalf, so ignoring it
+//! can never produce schema-invalid content. That decision is documented
+//! rather than silent.
+//!
+//! A `title` becomes the question's tab header and a `description` is shown
+//! with the prompt, so nothing the server wrote is thrown away unseen.
+//!
+//! # What is still refused, and why
 //!
 //! An `InputRequiredResult` may embed three request kinds (rmcp's
 //! [`InputRequest`]): `sampling/createMessage`, `elicitation/create`, and
@@ -47,37 +82,35 @@
 //! - **Roots** would expose host/workspace authority through a deprecated MCP
 //!   surface that duplicates rustX's explicit Workspace ownership.
 //!
-//! Both are refused with a bounded unsupported-feature diagnostic. Nothing is
-//! fabricated, no model call is made, and no workspace root is disclosed.
+//! URL-mode elicitation is likewise refused — it directs a human to an
+//! external site, which is not a bounded rustX Questionnaire.
 //!
-//! Within elicitation, rustX accepts exactly the schema subset its
-//! [`QuestionnaireSpecification`] vocabulary can represent **without
-//! coercion**: one MCP property becomes one rustX question, and a question is
-//! a bounded choice over 2–4 authored options. So `boolean` properties and
-//! `enum` properties (single- and multi-select, titled or untitled) are
-//! supported, and free-form `string`/`number`/`integer` properties are not:
-//! rustX has no faithful bounded representation for them and will not invent
-//! two fake options to manufacture one. URL-mode elicitation is likewise
-//! refused — it directs a human to an external URL, which is not a
-//! questionnaire.
+//! A round whose requests mix supported and unsupported kinds fails **before**
+//! anything is published, so a user is never shown half a prompt that is about
+//! to be abandoned.
 //!
-//! A round whose requests mix supported and unsupported kinds fails
-//! **before** anything is published, so a user is never shown half a prompt
-//! that is about to be abandoned.
+//! # Invalid human input is not an unsupported feature
+//!
+//! Those refusals are *invocation-level* deterministic failures: the server
+//! asked for something rustX cannot represent. They are strictly separate from
+//! a human typing `1.5` into an `integer` field, which is an interaction
+//! response the runtime refuses while the interaction stays pending. Nothing
+//! in this module can turn the second into the first.
 
 use std::collections::BTreeSet;
 
 use rmcp::model::{
     ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationSchema, EnumSchema,
     InputRequest, InputRequests, InputResponses, MultiSelectEnumSchema, PrimitiveSchemaDefinition,
-    SingleSelectEnumSchema,
+    SingleSelectEnumSchema, StringFormat,
 };
 
 use crate::events::interaction::{
-    MAX_OPTION_LABEL_CHARS, MAX_QUESTION_HEADER_CHARS, MAX_QUESTION_TEXT_CHARS,
-    MAX_QUESTIONNAIRE_OPTIONS, MAX_QUESTIONNAIRE_QUESTIONS, MIN_QUESTIONNAIRE_OPTIONS,
-    OptionSpecification, QuestionSpecification, QuestionnaireAnswer, QuestionnaireResponse,
-    QuestionnaireSpecification,
+    AnswerSpecification, MAX_CHOICE_OPTIONS, MAX_OPTION_LABEL_CHARS, MAX_QUESTION_HEADER_CHARS,
+    MAX_QUESTION_TEXT_CHARS, MAX_QUESTIONNAIRE_QUESTIONS, MAX_TEXT_ANSWER_CHARS,
+    MIN_CHOICE_OPTIONS, MultiChoiceSpecification, NumberAnswerSpecification, OptionSpecification,
+    QuestionSpecification, QuestionnaireAnswer, QuestionnaireResponse, QuestionnaireSpecification,
+    SingleChoiceSpecification, TextAnswerSpecification, TextFormat,
 };
 
 /// The fixed rustX-owned bound on how many physical `tools/call` rounds one
@@ -137,16 +170,28 @@ impl McpContinuation {
     }
 }
 
-/// How rustX will render one MCP property as one rustX question, and how the
-/// answer maps back to a schema-valid JSON value.
+/// How one typed rustX answer becomes the exact JSON value the server's own
+/// schema declared.
+///
+/// The choice variants hold the underlying protocol values **positionally**,
+/// indexed exactly like the question's declared options. That is what makes a
+/// display label pure presentation: a duplicated title, a client-reserved
+/// word, or a forged string cannot select a different value, because the
+/// response never carries one.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum PropertyKind {
-    /// A `boolean` property: exactly the two values the schema defines.
+enum PropertyValues {
+    /// A JSON string.
+    Text,
+    /// A JSON number, integral or fractional.
+    Number,
+    /// A JSON number with no fractional part.
+    Integer,
+    /// A JSON boolean.
     Boolean,
-    /// A single-select `enum`: one authored option per enum member.
-    SingleSelect,
-    /// A multi-select `enum` array: any non-empty subset of the members.
-    MultiSelect,
+    /// One of these values, addressed by option index.
+    SingleSelect(Vec<serde_json::Value>),
+    /// A JSON array of these values, addressed by option index.
+    MultiSelect(Vec<serde_json::Value>),
 }
 
 /// One question rustX derived from one MCP elicitation property.
@@ -158,9 +203,8 @@ struct PropertySlot {
     property: String,
     /// Whether the elicitation schema marks the property required.
     required: bool,
-    kind: PropertyKind,
-    /// Authored option label -> the exact JSON value sent to the server.
-    values: Vec<(String, serde_json::Value)>,
+    /// How a typed answer becomes this property's schema-valid JSON value.
+    values: PropertyValues,
 }
 
 /// One `elicitation/create` request inside the round, in deterministic key
@@ -202,6 +246,15 @@ impl ElicitationPlan {
     /// Builds the exact `inputResponses` map for one typed Questionnaire
     /// settlement.
     ///
+    /// The response reaching this function has **already** been validated by
+    /// [`normalize_questionnaire_submission`](crate::events::interaction::normalize_questionnaire_submission)
+    /// against the very question specifications this plan published, which is
+    /// the authoritative validation point for every declared bound: text
+    /// length and format, numeric range, integrality, option membership, and
+    /// multi-select cardinality. This function performs the remaining
+    /// *mapping*, and treats a shape the runtime should already have refused
+    /// as a bounded internal error rather than fabricating content.
+    ///
     /// The mapping is total over the plan's requests: every key the server
     /// sent gets exactly one `ElicitResult`, because a server that asked N
     /// questions must be answered for all N or none of them is meaningful.
@@ -212,12 +265,7 @@ impl ElicitationPlan {
     /// - a request whose required properties were all answered is `accept`
     ///   with schema-conforming `content`;
     /// - a request with an unanswered required property is `decline`: rustX
-    ///   will not send `accept` with content the server's own schema rejects;
-    /// - a **custom** (free-text) answer to a derived bounded question is a
-    ///   deterministic failure. rustX cannot prove an arbitrary string
-    ///   satisfies the server's `enum`/`boolean` schema, and fabricating an
-    ///   out-of-schema `accept` is exactly the coercion this translation
-    ///   layer exists to prevent.
+    ///   will not send `accept` with content the server's own schema rejects.
     ///
     /// # Errors
     ///
@@ -281,46 +329,50 @@ impl ElicitationPlan {
 impl PropertySlot {
     /// The schema-valid MCP value for one typed answer to this question.
     fn value_of(&self, answer: &QuestionnaireAnswer) -> Result<serde_json::Value, String> {
-        match (&self.kind, answer) {
-            (PropertyKind::Boolean | PropertyKind::SingleSelect, QuestionnaireAnswer::SingleOption(single)) => self
-                .values
-                .iter()
-                .find(|(label, _)| *label == single.label)
-                .map(|(_, value)| value.clone())
-                .ok_or_else(|| {
-                    format!(
-                        "the answer to MCP elicitation property {:?} is not one of its schema values",
-                        self.property
-                    )
-                }),
-            (PropertyKind::MultiSelect, QuestionnaireAnswer::MultipleOption(multiple)) => {
-                let mut selected = Vec::with_capacity(multiple.selected.len());
-                for label in &multiple.selected {
-                    let value = self
-                        .values
-                        .iter()
-                        .find(|(candidate, _)| candidate == label)
-                        .map(|(_, value)| value.clone())
-                        .ok_or_else(|| {
-                            format!(
-                                "the answer to MCP elicitation property {:?} is not one of its \
-                                 schema values",
-                                self.property
-                            )
-                        })?;
-                    selected.push(value);
+        let mismatch = || {
+            format!(
+                "the answer kind does not match MCP elicitation property {:?}",
+                self.property
+            )
+        };
+        let out_of_range = || {
+            format!(
+                "the answer to MCP elicitation property {:?} is not one of its schema values",
+                self.property
+            )
+        };
+        match (&self.values, answer) {
+            (PropertyValues::Text, QuestionnaireAnswer::Text(text)) => {
+                Ok(serde_json::Value::String(text.value.clone()))
+            }
+            (PropertyValues::Number, QuestionnaireAnswer::Number(number)) => {
+                Ok(serde_json::Value::Number(number.value.clone()))
+            }
+            (PropertyValues::Integer, QuestionnaireAnswer::Integer(integer)) => {
+                Ok(serde_json::Value::Number(integer.value.into()))
+            }
+            (PropertyValues::Boolean, QuestionnaireAnswer::Boolean(boolean)) => {
+                Ok(serde_json::Value::Bool(boolean.value))
+            }
+            (PropertyValues::SingleSelect(values), QuestionnaireAnswer::Option(option)) => values
+                .get(option.option_index)
+                .cloned()
+                .ok_or_else(out_of_range),
+            (PropertyValues::MultiSelect(values), QuestionnaireAnswer::Options(options)) => {
+                let mut selected = Vec::with_capacity(options.option_indices.len());
+                for index in &options.option_indices {
+                    selected.push(values.get(*index).cloned().ok_or_else(out_of_range)?);
                 }
                 Ok(serde_json::Value::Array(selected))
             }
+            // A custom answer has no legal spelling for an MCP question: every
+            // question this module publishes declares `allow_custom: false`,
+            // so the runtime refuses one before it ever reaches this mapping.
             (_, QuestionnaireAnswer::Custom(_)) => Err(format!(
-                "MCP elicitation property {:?} accepts only its declared schema values, so the \
-                 free-text answer cannot be sent without violating the server's schema",
+                "MCP elicitation property {:?} accepts only its declared schema values",
                 self.property
             )),
-            (_, _) => Err(format!(
-                "the answer kind does not match MCP elicitation property {:?}",
-                self.property
-            )),
+            (_, _) => Err(mismatch()),
         }
     }
 }
@@ -342,6 +394,18 @@ impl McpMrtrUnsupported {
             diagnostic: diagnostic.into(),
         }
     }
+}
+
+/// One MCP property translated into the provider-independent vocabulary.
+struct TranslatedProperty {
+    /// The declared legal answer shape.
+    answer: AnswerSpecification,
+    /// How a typed answer to that shape becomes a schema-valid JSON value.
+    values: PropertyValues,
+    /// The schema's own `title`, used as the question's tab header.
+    title: Option<String>,
+    /// The schema's own `description`, shown with the prompt.
+    description: Option<String>,
 }
 
 /// Validates and translates one round's `inputRequests`.
@@ -448,35 +512,32 @@ pub(super) fn plan_round(
         }
         let single_property = !qualify && properties.len() == 1;
         for (property, definition) in properties {
-            let (kind, values) = translate_property(key, property, definition)?;
-            let question = question_text(message, key, property, qualify, single_property);
+            let translated = translate_property(key, property, definition)?;
+            let question = question_text(
+                message,
+                key,
+                property,
+                translated.description.as_deref(),
+                qualify,
+                single_property,
+            );
             if question.chars().count() > MAX_QUESTION_TEXT_CHARS {
                 return Err(McpMrtrUnsupported::new(format!(
                     "MCP elicitation request {key:?} property {property:?} produces a prompt \
                      above the {MAX_QUESTION_TEXT_CHARS}-character bound"
                 )));
             }
-            let header = bounded_header(property);
-            let options = values
-                .iter()
-                .map(|(label, value)| OptionSpecification {
-                    label: label.clone(),
-                    description: format!("MCP value: {value}"),
-                    preview: None,
-                })
-                .collect();
+            let header = bounded_header(translated.title.as_deref().unwrap_or(property));
             questions.push(QuestionSpecification {
                 question,
                 header,
-                options,
-                multi_select: kind == PropertyKind::MultiSelect,
+                answer: translated.answer,
             });
             slots.push(PropertySlot {
                 request_index,
                 property: property.to_owned(),
                 required: required.contains(property),
-                kind,
-                values,
+                values: translated.values,
             });
             if questions.len() > MAX_QUESTIONNAIRE_QUESTIONS {
                 return Err(McpMrtrUnsupported::new(format!(
@@ -490,7 +551,9 @@ pub(super) fn plan_round(
     let questionnaire = QuestionnaireSpecification { questions };
     // The one shared bounded-questionnaire contract, applied here so an
     // unrepresentable schema becomes an MCP diagnostic rather than an opaque
-    // interaction-publication failure.
+    // interaction-publication failure. It is the same validator the
+    // coordinator and the durable store apply, so a plan that survives it is
+    // publishable and settleable by construction.
     crate::events::interaction::validate_questionnaire(&questionnaire).map_err(|error| {
         McpMrtrUnsupported::new(format!(
             "the MCP elicitation requests do not form a valid rustX questionnaire: {error}"
@@ -549,26 +612,36 @@ fn ordered_properties(schema: &ElicitationSchema) -> Vec<(&str, &PrimitiveSchema
 /// other shape appends the property path, which is what keeps question texts
 /// unique inside one questionnaire — `(input-request key, property name)` is
 /// unique by construction, and `validate_questionnaire` requires uniqueness.
+/// The schema's own `description`, when it has one, is shown between the two.
 fn question_text(
     message: &str,
     key: &str,
     property: &str,
+    description: Option<&str>,
     qualify: bool,
     single_property: bool,
 ) -> String {
+    use std::fmt::Write as _;
+
+    let mut text = message.to_owned();
+    if let Some(description) = description.map(str::trim).filter(|value| !value.is_empty()) {
+        text.push_str("\n\n");
+        text.push_str(description);
+    }
     if single_property {
-        return message.to_owned();
+        return text;
     }
     if qualify {
-        format!("{message}\n\n[{key}.{property}]")
+        let _ = write!(text, "\n\n[{key}.{property}]");
     } else {
-        format!("{message}\n\n[{property}]")
+        let _ = write!(text, "\n\n[{property}]");
     }
+    text
 }
 
-/// The bounded question tab label derived from the MCP property name.
-fn bounded_header(property: &str) -> String {
-    let header: String = property.chars().take(MAX_QUESTION_HEADER_CHARS).collect();
+/// The bounded question tab label derived from the schema title or property.
+fn bounded_header(source: &str) -> String {
+    let header: String = source.chars().take(MAX_QUESTION_HEADER_CHARS).collect();
     if header.trim().is_empty() {
         "field".to_owned()
     } else {
@@ -576,92 +649,287 @@ fn bounded_header(property: &str) -> String {
     }
 }
 
-/// Translates one primitive elicitation property into the bounded rustX
-/// question vocabulary.
+/// Translates one primitive elicitation property into the provider-independent
+/// typed question vocabulary.
+///
+/// Every branch either carries each supported constraint of the rmcp schema
+/// type into the [`AnswerSpecification`] — where the shared runtime validator
+/// enforces it — or refuses that schema instance. No supported constraint is
+/// accepted and then dropped.
+#[allow(
+    clippy::too_many_lines,
+    reason = "the whole schema-to-vocabulary mapping is one auditable contract"
+)]
 fn translate_property(
     key: &str,
     property: &str,
     definition: &PrimitiveSchemaDefinition,
-) -> Result<(PropertyKind, Vec<(String, serde_json::Value)>), McpMrtrUnsupported> {
+) -> Result<TranslatedProperty, McpMrtrUnsupported> {
     let unsupported = |detail: &str| {
         McpMrtrUnsupported::new(format!(
             "MCP elicitation request {key:?} property {property:?} is unsupported: {detail}"
         ))
     };
-    let (kind, values) = match definition {
-        PrimitiveSchemaDefinition::Boolean(_) => (
-            PropertyKind::Boolean,
-            vec![
-                ("Yes".to_owned(), serde_json::Value::Bool(true)),
-                ("No".to_owned(), serde_json::Value::Bool(false)),
-            ],
-        ),
-        PrimitiveSchemaDefinition::Enum(schema) => match schema {
-            EnumSchema::Single(SingleSelectEnumSchema::Untitled(single)) => {
-                (PropertyKind::SingleSelect, untitled_options(&single.enum_))
+    match definition {
+        PrimitiveSchemaDefinition::Boolean(schema) => Ok(TranslatedProperty {
+            answer: AnswerSpecification::Boolean,
+            values: PropertyValues::Boolean,
+            title: schema.title.as_deref().map(str::to_owned),
+            description: schema.description.as_deref().map(str::to_owned),
+        }),
+        PrimitiveSchemaDefinition::String(schema) => {
+            let format = match schema.format {
+                None => None,
+                Some(StringFormat::Date) => Some(TextFormat::Date),
+                Some(StringFormat::DateTime) => Some(TextFormat::DateTime),
+                Some(StringFormat::Uri) => Some(TextFormat::Uri),
+                // rustX has no deterministic, faithful email validator, and
+                // will not claim to support a constraint it cannot enforce.
+                Some(StringFormat::Email) => {
+                    return Err(unsupported(
+                        "rustX cannot faithfully validate the \"email\" string format",
+                    ));
+                }
+                Some(_) => {
+                    return Err(unsupported("it declares an unknown string format"));
+                }
+            };
+            let min_length = schema.min_length;
+            if let Some(min) = min_length
+                && min as usize > MAX_TEXT_ANSWER_CHARS
+            {
+                return Err(unsupported(&format!(
+                    "its minLength is {min}, above the {MAX_TEXT_ANSWER_CHARS}-character rustX \
+                     text-answer bound, so no answer rustX can carry would satisfy it"
+                )));
             }
-            EnumSchema::Single(SingleSelectEnumSchema::Titled(single)) => {
-                (PropertyKind::SingleSelect, titled_options(&single.one_of))
+            // rustX's own answer bound is *stricter* than an oversized
+            // maxLength, so narrowing it keeps every answer schema-valid; the
+            // server's constraint is still enforced, never discarded.
+            let max_length = Some(match schema.max_length {
+                Some(max) => max.min(u32::try_from(MAX_TEXT_ANSWER_CHARS).unwrap_or(u32::MAX)),
+                None => u32::try_from(MAX_TEXT_ANSWER_CHARS).unwrap_or(u32::MAX),
+            });
+            if let (Some(min), Some(max)) = (min_length, max_length)
+                && min > max
+            {
+                return Err(unsupported(
+                    "its minLength exceeds its maxLength, so no answer could satisfy it",
+                ));
             }
-            EnumSchema::Multi(MultiSelectEnumSchema::Untitled(multi)) => (
-                PropertyKind::MultiSelect,
-                untitled_options(&multi.items.enum_),
-            ),
-            EnumSchema::Multi(MultiSelectEnumSchema::Titled(multi)) => (
-                PropertyKind::MultiSelect,
-                titled_options(&multi.items.any_of),
-            ),
-            EnumSchema::Legacy(legacy) => match &legacy.enum_names {
-                Some(names) if names.len() == legacy.enum_.len() => (
-                    PropertyKind::SingleSelect,
-                    legacy
-                        .enum_
-                        .iter()
-                        .zip(names)
-                        .map(|(value, name)| {
-                            (name.clone(), serde_json::Value::String(value.clone()))
-                        })
-                        .collect(),
+            Ok(TranslatedProperty {
+                answer: AnswerSpecification::Text(TextAnswerSpecification {
+                    min_length,
+                    max_length,
+                    format,
+                }),
+                values: PropertyValues::Text,
+                title: schema.title.as_deref().map(str::to_owned),
+                description: schema.description.as_deref().map(str::to_owned),
+            })
+        }
+        PrimitiveSchemaDefinition::Number(schema) => {
+            let bound = |value: Option<f64>, name: &str| match value {
+                None => Ok(None),
+                Some(value) => serde_json::Number::from_f64(value)
+                    .map(Some)
+                    .ok_or_else(|| unsupported(&format!("its {name} is not a finite JSON number"))),
+            };
+            let minimum = bound(schema.minimum, "minimum")?;
+            let maximum = bound(schema.maximum, "maximum")?;
+            if let (Some(min), Some(max)) = (schema.minimum, schema.maximum)
+                && min > max
+            {
+                return Err(unsupported(
+                    "its minimum exceeds its maximum, so no answer could satisfy it",
+                ));
+            }
+            Ok(TranslatedProperty {
+                answer: AnswerSpecification::Number(NumberAnswerSpecification { minimum, maximum }),
+                values: PropertyValues::Number,
+                title: schema.title.as_deref().map(str::to_owned),
+                description: schema.description.as_deref().map(str::to_owned),
+            })
+        }
+        PrimitiveSchemaDefinition::Integer(schema) => {
+            if let (Some(min), Some(max)) = (schema.minimum, schema.maximum)
+                && min > max
+            {
+                return Err(unsupported(
+                    "its minimum exceeds its maximum, so no answer could satisfy it",
+                ));
+            }
+            Ok(TranslatedProperty {
+                answer: AnswerSpecification::Integer(
+                    crate::events::interaction::IntegerAnswerSpecification {
+                        minimum: schema.minimum,
+                        maximum: schema.maximum,
+                    },
                 ),
+                values: PropertyValues::Integer,
+                title: schema.title.as_deref().map(str::to_owned),
+                description: schema.description.as_deref().map(str::to_owned),
+            })
+        }
+        PrimitiveSchemaDefinition::Enum(schema) => translate_enum(schema, &unsupported),
+        _ => Err(unsupported("it declares an unknown primitive schema kind")),
+    }
+}
+
+/// Translates one `enum` property, single- or multi-select, into a bounded
+/// choice question whose options are addressed by index.
+#[allow(
+    clippy::too_many_lines,
+    reason = "every enum shape and its cardinality contract belong in one place"
+)]
+fn translate_enum(
+    schema: &EnumSchema,
+    unsupported: &impl Fn(&str) -> McpMrtrUnsupported,
+) -> Result<TranslatedProperty, McpMrtrUnsupported> {
+    // (label, protocol value) pairs in the schema's own declared order.
+    let (choices, multi, min_items, max_items, title, description) = match schema {
+        EnumSchema::Single(SingleSelectEnumSchema::Untitled(single)) => (
+            untitled_options(&single.enum_),
+            false,
+            None,
+            None,
+            single.title.as_deref().map(str::to_owned),
+            single.description.as_deref().map(str::to_owned),
+        ),
+        EnumSchema::Single(SingleSelectEnumSchema::Titled(single)) => (
+            titled_options(&single.one_of),
+            false,
+            None,
+            None,
+            single.title.as_deref().map(str::to_owned),
+            single.description.as_deref().map(str::to_owned),
+        ),
+        EnumSchema::Multi(MultiSelectEnumSchema::Untitled(multi)) => (
+            untitled_options(&multi.items.enum_),
+            true,
+            multi.min_items,
+            multi.max_items,
+            multi.title.as_deref().map(str::to_owned),
+            multi.description.as_deref().map(str::to_owned),
+        ),
+        EnumSchema::Multi(MultiSelectEnumSchema::Titled(multi)) => (
+            titled_options(&multi.items.any_of),
+            true,
+            multi.min_items,
+            multi.max_items,
+            multi.title.as_deref().map(str::to_owned),
+            multi.description.as_deref().map(str::to_owned),
+        ),
+        EnumSchema::Legacy(legacy) => {
+            let choices = match &legacy.enum_names {
+                Some(names) if names.len() == legacy.enum_.len() => legacy
+                    .enum_
+                    .iter()
+                    .zip(names)
+                    .map(|(value, name)| (name.clone(), serde_json::Value::String(value.clone())))
+                    .collect(),
                 Some(_) => {
                     return Err(unsupported(
                         "its enumNames do not correspond one-to-one with its enum values",
                     ));
                 }
-                None => (PropertyKind::SingleSelect, untitled_options(&legacy.enum_)),
-            },
-            _ => return Err(unsupported("it declares an unknown enum schema shape")),
-        },
-        PrimitiveSchemaDefinition::String(_) => {
-            return Err(unsupported(
-                "rustX questions are bounded choices, and a free-form string has no faithful \
-                 bounded representation",
-            ));
+                None => untitled_options(&legacy.enum_),
+            };
+            (
+                choices,
+                false,
+                None,
+                None,
+                legacy.title.as_deref().map(str::to_owned),
+                legacy.description.as_deref().map(str::to_owned),
+            )
         }
-        PrimitiveSchemaDefinition::Number(_) | PrimitiveSchemaDefinition::Integer(_) => {
-            return Err(unsupported(
-                "rustX questions are bounded choices, and a free-form number has no faithful \
-                 bounded representation",
-            ));
-        }
-        _ => return Err(unsupported("it declares an unknown primitive schema kind")),
+        _ => return Err(unsupported("it declares an unknown enum schema shape")),
     };
-    if !(MIN_QUESTIONNAIRE_OPTIONS..=MAX_QUESTIONNAIRE_OPTIONS).contains(&values.len()) {
+
+    if !(MIN_CHOICE_OPTIONS..=MAX_CHOICE_OPTIONS).contains(&choices.len()) {
         return Err(unsupported(&format!(
             "it declares {} choices, and rustX presents \
-             {MIN_QUESTIONNAIRE_OPTIONS}–{MAX_QUESTIONNAIRE_OPTIONS}",
-            values.len()
+             {MIN_CHOICE_OPTIONS}–{MAX_CHOICE_OPTIONS}",
+            choices.len()
         )));
     }
-    for (label, _) in &values {
+    let mut labels = BTreeSet::new();
+    for (label, _) in &choices {
         if label.trim().is_empty() || label.chars().count() > MAX_OPTION_LABEL_CHARS {
             return Err(unsupported(&format!(
                 "the choice label {label:?} is empty or above the \
                  {MAX_OPTION_LABEL_CHARS}-character bound"
             )));
         }
+        // Two rows a human cannot tell apart are refused deterministically
+        // rather than resolved arbitrarily, even though the *response*
+        // addresses an option by index and is never ambiguous to the runtime.
+        if !labels.insert(label.clone()) {
+            return Err(unsupported(&format!(
+                "two of its choices are both presented as {label:?}, which a human could not \
+                 distinguish"
+            )));
+        }
     }
-    Ok((kind, values))
+
+    let options: Vec<OptionSpecification> = choices
+        .iter()
+        .map(|(label, value)| OptionSpecification {
+            label: label.clone(),
+            description: format!("MCP value: {value}"),
+            preview: None,
+        })
+        .collect();
+    let values: Vec<serde_json::Value> = choices.into_iter().map(|(_, value)| value).collect();
+    let count = u32::try_from(values.len()).unwrap_or(u32::MAX);
+
+    let answer = if multi {
+        let bound = |value: Option<u64>, name: &str| match value {
+            None => Ok(None),
+            Some(value) => u32::try_from(value)
+                .map(Some)
+                .map_err(|_| unsupported(&format!("its {name} is above any answerable count"))),
+        };
+        let min_selected = bound(min_items, "minItems")?.unwrap_or(0);
+        if min_selected > count {
+            return Err(unsupported(&format!(
+                "its minItems is {min_selected} but it declares only {count} choices, so no \
+                 selection could satisfy it"
+            )));
+        }
+        // A maxItems above the member count is vacuous; clamping it keeps the
+        // published bound answerable while enforcing the server's constraint.
+        let max_selected = bound(max_items, "maxItems")?.map_or(count, |value| value.min(count));
+        if min_selected > max_selected {
+            return Err(unsupported(
+                "its minItems exceeds its maxItems, so no selection could satisfy it",
+            ));
+        }
+        AnswerSpecification::MultiChoice(MultiChoiceSpecification {
+            options,
+            min_selected,
+            max_selected,
+            // An MCP `enum` accepts only its declared members, so a free-text
+            // answer is not a legal response shape and is not offered at all.
+            allow_custom: false,
+        })
+    } else {
+        AnswerSpecification::SingleChoice(SingleChoiceSpecification {
+            options,
+            allow_custom: false,
+        })
+    };
+    Ok(TranslatedProperty {
+        answer,
+        values: if multi {
+            PropertyValues::MultiSelect(values)
+        } else {
+            PropertyValues::SingleSelect(values)
+        },
+        title,
+        description,
+    })
 }
 
 fn untitled_options(values: &[String]) -> Vec<(String, serde_json::Value)> {
@@ -718,8 +986,9 @@ pub(super) fn input_requests_from_json(
 mod tests {
     use super::*;
     use crate::events::interaction::{
-        CustomAnswer, MultipleOptionAnswer, QuestionnaireAnswerEntry, QuestionnaireSubmission,
-        SingleOptionAnswer,
+        BooleanAnswer, CustomAnswer, IntegerAnswer, NumberAnswer, OptionAnswer, OptionsAnswer,
+        QuestionnaireAnswerEntry, QuestionnaireSubmission, TextAnswer,
+        normalize_questionnaire_response,
     };
 
     fn elicitation(message: &str, schema: &serde_json::Value) -> serde_json::Value {
@@ -743,45 +1012,77 @@ mod tests {
         input_requests_from_json(value).expect("input requests")
     }
 
+    fn plan_of(schema: &serde_json::Value) -> ElicitationPlan {
+        plan_round(Some(&requests(serde_json::json!({
+            "ask": elicitation("Tell me", schema),
+        }))))
+        .expect("supported")
+        .expect("a questionnaire")
+    }
+
+    fn refusal(schema: &serde_json::Value) -> String {
+        plan_round(Some(&requests(serde_json::json!({
+            "ask": elicitation("Tell me", schema),
+        }))))
+        .expect_err("unsupported")
+        .diagnostic
+    }
+
     fn submitted(entries: Vec<QuestionnaireAnswerEntry>) -> QuestionnaireResponse {
         QuestionnaireResponse::Submitted(QuestionnaireSubmission { answers: entries })
     }
 
-    fn single(index: usize, label: &str) -> QuestionnaireAnswerEntry {
+    fn entry(index: usize, answer: QuestionnaireAnswer) -> QuestionnaireAnswerEntry {
         QuestionnaireAnswerEntry {
             question_index: index,
-            answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
-                label: label.to_owned(),
-            }),
+            answer,
         }
     }
 
+    fn single(index: usize, option_index: usize) -> QuestionnaireAnswerEntry {
+        entry(
+            index,
+            QuestionnaireAnswer::Option(OptionAnswer { option_index }),
+        )
+    }
+
+    /// The one authoritative validation point, applied exactly as the runtime
+    /// applies it, so a test can never accept a response the runtime would
+    /// refuse.
+    fn accepted(
+        plan: &ElicitationPlan,
+        response: &QuestionnaireResponse,
+    ) -> Result<InputResponses, String> {
+        let normalized = normalize_questionnaire_response(plan.questionnaire(), response)?;
+        plan.responses(&normalized)
+    }
+
     /// A single-property elicitation keeps the server's own message verbatim
-    /// and maps the answer onto the exact enum value.
+    /// and maps the answer onto the exact enum value by index.
     #[test]
     fn one_supported_elicitation_becomes_one_question_and_one_accept() {
-        let plan = plan_round(Some(&requests(serde_json::json!({
-            "release": elicitation("Which channel?", &enum_schema()),
-        }))))
-        .expect("supported")
-        .expect("a questionnaire");
+        let plan = plan_of(&enum_schema());
         assert_eq!(plan.questionnaire().questions.len(), 1);
-        assert_eq!(plan.questionnaire().questions[0].question, "Which channel?");
+        assert_eq!(plan.questionnaire().questions[0].question, "Tell me");
+        let AnswerSpecification::SingleChoice(single_choice) =
+            &plan.questionnaire().questions[0].answer
+        else {
+            panic!("an enum is a single choice")
+        };
+        assert!(!single_choice.allow_custom);
         assert_eq!(
-            plan.questionnaire().questions[0]
+            single_choice
                 .options
                 .iter()
                 .map(|option| option.label.as_str())
                 .collect::<Vec<_>>(),
             vec!["stable", "beta"]
         );
-        let responses = plan
-            .responses(&submitted(vec![single(0, "beta")]))
-            .expect("responses");
+        let responses = accepted(&plan, &submitted(vec![single(0, 1)])).expect("responses");
         assert_eq!(
             responses,
             InputResponses::from([(
-                "release".to_owned(),
+                "ask".to_owned(),
                 serde_json::json!({"action": "accept", "content": {"channel": "beta"}}),
             )])
         );
@@ -804,9 +1105,8 @@ mod tests {
             vec![("alpha", "channel"), ("zeta", "channel")]
         );
         assert_eq!(plan.questionnaire().questions.len(), 2);
-        let responses = plan
-            .responses(&submitted(vec![single(0, "stable"), single(1, "beta")]))
-            .expect("responses");
+        let responses =
+            accepted(&plan, &submitted(vec![single(0, 0), single(1, 1)])).expect("responses");
         assert_eq!(
             responses["alpha"],
             serde_json::json!({"action": "accept", "content": {"channel": "stable"}})
@@ -821,98 +1121,404 @@ mod tests {
     /// never a fabricated answer and never a cancellation.
     #[test]
     fn an_explicit_decline_becomes_the_protocol_decline_action() {
-        let plan = plan_round(Some(&requests(serde_json::json!({
-            "release": elicitation("Which channel?", &enum_schema()),
-        }))))
-        .expect("supported")
-        .expect("a questionnaire");
-        let responses = plan
-            .responses(&QuestionnaireResponse::Declined)
-            .expect("responses");
-        assert_eq!(
-            responses["release"],
-            serde_json::json!({"action": "decline"})
-        );
+        let plan = plan_of(&enum_schema());
+        let responses = accepted(&plan, &QuestionnaireResponse::Declined).expect("responses");
+        assert_eq!(responses["ask"], serde_json::json!({"action": "decline"}));
     }
 
     /// An unanswered required property cannot produce a schema-valid accept,
     /// so the request declines rather than sending partial content.
     #[test]
     fn an_unanswered_required_property_declines_instead_of_sending_partial_content() {
-        let plan = plan_round(Some(&requests(serde_json::json!({
-            "release": elicitation("Which channel?", &enum_schema()),
-        }))))
-        .expect("supported")
-        .expect("a questionnaire");
+        let plan = plan_of(&enum_schema());
         let responses = plan.responses(&submitted(Vec::new())).expect("responses");
-        assert_eq!(
-            responses["release"],
-            serde_json::json!({"action": "decline"})
-        );
+        assert_eq!(responses["ask"], serde_json::json!({"action": "decline"}));
     }
 
-    /// A free-text answer to a bounded schema choice is refused rather than
-    /// coerced into an out-of-schema `accept`.
+    /// An MCP choice has no custom-answer shape at all: the specification
+    /// forbids it, the runtime refuses it, and the mapping refuses it too.
     #[test]
-    fn a_custom_answer_to_a_bounded_choice_is_refused() {
-        let plan = plan_round(Some(&requests(serde_json::json!({
-            "release": elicitation("Which channel?", &enum_schema()),
-        }))))
-        .expect("supported")
-        .expect("a questionnaire");
+    fn an_mcp_choice_has_no_custom_answer_path() {
+        let plan = plan_of(&enum_schema());
+        let custom = submitted(vec![entry(
+            0,
+            QuestionnaireAnswer::Custom(CustomAnswer {
+                answer: "nightly".to_owned(),
+            }),
+        )]);
+        let error = accepted(&plan, &custom).expect_err("a bounded choice takes no free text");
+        assert!(error.contains("free-text"), "{error}");
+        // Even bypassing the runtime validator, the mapping refuses it.
         let error = plan
-            .responses(&submitted(vec![QuestionnaireAnswerEntry {
-                question_index: 0,
-                answer: QuestionnaireAnswer::Custom(CustomAnswer {
-                    answer: "nightly".to_owned(),
-                }),
-            }]))
-            .expect_err("a free-text answer is not a schema value");
+            .responses(&custom)
+            .expect_err("the mapping refuses it too");
         assert!(error.contains("declared schema values"), "{error}");
     }
 
-    /// Booleans and multi-select enums round-trip to their exact JSON shapes.
+    /// A free-form string form completes end to end, with the schema's own
+    /// title and description carried into the prompt.
     #[test]
-    fn booleans_and_multi_select_enums_map_to_their_schema_values() {
-        let plan = plan_round(Some(&requests(serde_json::json!({
-            "options": elicitation(
-                "Configure",
-                &serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "notify": {"type": "boolean"},
-                        "regions": {
-                            "type": "array",
-                            "items": {"type": "string", "enum": ["eu", "us"]},
-                        },
-                    },
-                    "required": ["notify", "regions"],
-                }),
-            ),
-        }))))
-        .expect("supported")
-        .expect("a questionnaire");
-        assert_eq!(plan.questionnaire().questions.len(), 2);
-        assert!(!plan.questionnaire().questions[0].multi_select);
-        assert!(plan.questionnaire().questions[1].multi_select);
-        let responses = plan
-            .responses(&submitted(vec![
-                single(0, "Yes"),
-                QuestionnaireAnswerEntry {
-                    question_index: 1,
-                    answer: QuestionnaireAnswer::MultipleOption(MultipleOptionAnswer {
-                        selected: vec!["eu".to_owned(), "us".to_owned()],
-                    }),
+    fn a_free_form_string_becomes_a_typed_text_question() {
+        let plan = plan_of(&serde_json::json!({
+            "type": "object",
+            "properties": {
+                "operator": {
+                    "type": "string",
+                    "title": "GitHub user",
+                    "description": "What is your GitHub username?",
+                    "minLength": 1,
+                    "maxLength": 39,
                 },
-            ]))
-            .expect("responses");
+            },
+            "required": ["operator"],
+        }));
+        let question = &plan.questionnaire().questions[0];
+        assert_eq!(question.header, "GitHub user");
+        assert!(
+            question.question.contains("What is your GitHub username?"),
+            "{}",
+            question.question
+        );
         assert_eq!(
-            responses["options"],
-            serde_json::json!({
-                "action": "accept",
-                "content": {"notify": true, "regions": ["eu", "us"]},
+            question.answer,
+            AnswerSpecification::Text(TextAnswerSpecification {
+                min_length: Some(1),
+                max_length: Some(39),
+                format: None,
             })
         );
+        let responses = accepted(
+            &plan,
+            &submitted(vec![entry(
+                0,
+                QuestionnaireAnswer::Text(TextAnswer {
+                    value: "octocat".to_owned(),
+                }),
+            )]),
+        )
+        .expect("responses");
+        assert_eq!(
+            responses["ask"],
+            serde_json::json!({"action": "accept", "content": {"operator": "octocat"}})
+        );
+
+        // Every declared bound is enforced by the runtime validator, and an
+        // out-of-bound answer never reaches an MCP continuation.
+        for invalid in ["", &"x".repeat(40)] {
+            assert!(
+                accepted(
+                    &plan,
+                    &submitted(vec![entry(
+                        0,
+                        QuestionnaireAnswer::Text(TextAnswer {
+                            value: invalid.to_owned()
+                        }),
+                    )]),
+                )
+                .is_err(),
+                "{invalid:?}"
+            );
+        }
+    }
+
+    /// Numbers and integers stay semantically distinct, and both round-trip
+    /// as JSON numbers rather than strings.
+    #[test]
+    fn numbers_and_integers_are_typed_and_range_checked() {
+        let plan = plan_of(&serde_json::json!({
+            "type": "object",
+            "properties": {"age": {"type": "integer", "minimum": 0, "maximum": 150}},
+            "required": ["age"],
+        }));
+        assert_eq!(
+            plan.questionnaire().questions[0].answer,
+            AnswerSpecification::Integer(crate::events::interaction::IntegerAnswerSpecification {
+                minimum: Some(0),
+                maximum: Some(150),
+            })
+        );
+        let responses = accepted(
+            &plan,
+            &submitted(vec![entry(
+                0,
+                QuestionnaireAnswer::Integer(IntegerAnswer { value: 42 }),
+            )]),
+        )
+        .expect("responses");
+        assert_eq!(
+            responses["ask"],
+            serde_json::json!({"action": "accept", "content": {"age": 42}})
+        );
+        // A fractional value is not an integer answer at all.
+        assert!(
+            accepted(
+                &plan,
+                &submitted(vec![entry(
+                    0,
+                    QuestionnaireAnswer::Number(NumberAnswer {
+                        value: serde_json::Number::from_f64(1.5).expect("finite")
+                    }),
+                )]),
+            )
+            .is_err()
+        );
+        // The declared range is authoritative.
+        assert!(
+            accepted(
+                &plan,
+                &submitted(vec![entry(
+                    0,
+                    QuestionnaireAnswer::Integer(IntegerAnswer { value: 151 }),
+                )]),
+            )
+            .is_err()
+        );
+
+        let plan = plan_of(&serde_json::json!({
+            "type": "object",
+            "properties": {"ratio": {"type": "number", "minimum": 0.0, "maximum": 1.0}},
+            "required": ["ratio"],
+        }));
+        let responses = accepted(
+            &plan,
+            &submitted(vec![entry(
+                0,
+                QuestionnaireAnswer::Number(NumberAnswer {
+                    value: serde_json::Number::from_f64(0.25).expect("finite"),
+                }),
+            )]),
+        )
+        .expect("responses");
+        assert_eq!(
+            responses["ask"],
+            serde_json::json!({"action": "accept", "content": {"ratio": 0.25}})
+        );
+        assert!(
+            accepted(
+                &plan,
+                &submitted(vec![entry(
+                    0,
+                    QuestionnaireAnswer::Number(NumberAnswer {
+                        value: serde_json::Number::from_f64(1.25).expect("finite")
+                    }),
+                )]),
+            )
+            .is_err()
+        );
+    }
+
+    /// Booleans round-trip as JSON booleans in both directions; `Yes`/`No` is
+    /// never the business value.
+    #[test]
+    fn booleans_round_trip_as_json_booleans() {
+        let plan = plan_of(&serde_json::json!({
+            "type": "object",
+            "properties": {"notify": {"type": "boolean"}},
+            "required": ["notify"],
+        }));
+        assert_eq!(
+            plan.questionnaire().questions[0].answer,
+            AnswerSpecification::Boolean
+        );
+        for value in [true, false] {
+            let responses = accepted(
+                &plan,
+                &submitted(vec![entry(
+                    0,
+                    QuestionnaireAnswer::Boolean(BooleanAnswer { value }),
+                )]),
+            )
+            .expect("responses");
+            assert_eq!(
+                responses["ask"],
+                serde_json::json!({"action": "accept", "content": {"notify": value}})
+            );
+        }
+    }
+
+    /// A titled enum presents its titles and sends the exact `const` values.
+    #[test]
+    fn titled_enums_present_titles_and_send_their_const_values() {
+        let plan = plan_of(&serde_json::json!({
+            "type": "object",
+            "properties": {
+                "channel": {
+                    "type": "string",
+                    "oneOf": [
+                        {"const": "ga", "title": "General availability"},
+                        {"const": "rc", "title": "Release candidate"},
+                    ],
+                },
+            },
+            "required": ["channel"],
+        }));
+        let AnswerSpecification::SingleChoice(choice) = &plan.questionnaire().questions[0].answer
+        else {
+            panic!("a titled enum is a single choice")
+        };
+        assert_eq!(choice.options[1].label, "Release candidate");
+        let responses = accepted(&plan, &submitted(vec![single(0, 1)])).expect("responses");
+        assert_eq!(
+            responses["ask"],
+            serde_json::json!({"action": "accept", "content": {"channel": "rc"}})
+        );
+    }
+
+    /// Two choices a human cannot tell apart are refused deterministically.
+    #[test]
+    fn ambiguous_duplicate_titles_are_refused_rather_than_resolved() {
+        let error = refusal(&serde_json::json!({
+            "type": "object",
+            "properties": {
+                "channel": {
+                    "type": "string",
+                    "oneOf": [
+                        {"const": "ga", "title": "Stable"},
+                        {"const": "lts", "title": "Stable"},
+                    ],
+                },
+            },
+        }));
+        assert!(error.contains("could not distinguish"), "{error}");
+    }
+
+    /// The legacy `enumNames` form maps names to their exact enum values.
+    #[test]
+    fn the_legacy_enum_names_form_maps_names_to_values() {
+        let plan = plan_of(&serde_json::json!({
+            "type": "object",
+            "properties": {
+                "channel": {
+                    "type": "string",
+                    "enum": ["ga", "rc"],
+                    "enumNames": ["General availability", "Release candidate"],
+                },
+            },
+            "required": ["channel"],
+        }));
+        let responses = accepted(&plan, &submitted(vec![single(0, 0)])).expect("responses");
+        assert_eq!(
+            responses["ask"],
+            serde_json::json!({"action": "accept", "content": {"channel": "ga"}})
+        );
+        let error = refusal(&serde_json::json!({
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "enum": ["ga", "rc"], "enumNames": ["Only one"]},
+            },
+        }));
+        assert!(error.contains("one-to-one"), "{error}");
+    }
+
+    /// A multi-select enum without explicit bounds accepts any non-empty
+    /// subset up to its member count, in canonical order.
+    #[test]
+    fn multi_select_without_bounds_accepts_any_subset() {
+        let plan = plan_of(&serde_json::json!({
+            "type": "object",
+            "properties": {
+                "regions": {"type": "array", "items": {"type": "string", "enum": ["eu", "us"]}},
+            },
+            "required": ["regions"],
+        }));
+        let AnswerSpecification::MultiChoice(multi) = &plan.questionnaire().questions[0].answer
+        else {
+            panic!("an array enum is a multi choice")
+        };
+        assert_eq!((multi.min_selected, multi.max_selected), (0, 2));
+        assert!(!multi.allow_custom);
+        let responses = accepted(
+            &plan,
+            &submitted(vec![entry(
+                0,
+                QuestionnaireAnswer::Options(OptionsAnswer {
+                    option_indices: vec![1, 0],
+                }),
+            )]),
+        )
+        .expect("responses");
+        assert_eq!(
+            responses["ask"],
+            serde_json::json!({
+                "action": "accept",
+                "content": {"regions": ["eu", "us"]},
+            })
+        );
+    }
+
+    /// `minItems` and `maxItems` are preserved into the typed question and
+    /// enforced by the authoritative runtime validator.
+    #[test]
+    fn multi_select_cardinality_bounds_are_preserved_and_enforced() {
+        let bounded = |min: serde_json::Value, max: serde_json::Value| {
+            let mut items = serde_json::json!({
+                "type": "array",
+                "items": {"type": "string", "enum": ["a", "b", "c"]},
+            });
+            if !min.is_null() {
+                items["minItems"] = min;
+            }
+            if !max.is_null() {
+                items["maxItems"] = max;
+            }
+            plan_of(&serde_json::json!({
+                "type": "object",
+                "properties": {"pick": items},
+                "required": ["pick"],
+            }))
+        };
+        let selection = |indices: Vec<usize>| {
+            submitted(vec![entry(
+                0,
+                QuestionnaireAnswer::Options(OptionsAnswer {
+                    option_indices: indices,
+                }),
+            )])
+        };
+
+        let at_least_two = bounded(serde_json::json!(2), serde_json::Value::Null);
+        let AnswerSpecification::MultiChoice(multi) =
+            &at_least_two.questionnaire().questions[0].answer
+        else {
+            panic!("multi choice")
+        };
+        assert_eq!((multi.min_selected, multi.max_selected), (2, 3));
+        assert!(accepted(&at_least_two, &selection(vec![0])).is_err());
+        assert!(accepted(&at_least_two, &selection(vec![0, 1])).is_ok());
+
+        let at_most_two = bounded(serde_json::Value::Null, serde_json::json!(2));
+        assert!(accepted(&at_most_two, &selection(vec![0, 1])).is_ok());
+        assert!(accepted(&at_most_two, &selection(vec![0, 1, 2])).is_err());
+
+        let exactly_two = bounded(serde_json::json!(2), serde_json::json!(2));
+        assert!(accepted(&exactly_two, &selection(vec![0])).is_err());
+        let responses = accepted(&exactly_two, &selection(vec![0, 1])).expect("responses");
+        assert_eq!(
+            responses["ask"],
+            serde_json::json!({"action": "accept", "content": {"pick": ["a", "b"]}})
+        );
+        assert!(accepted(&exactly_two, &selection(vec![0, 1, 2])).is_err());
+    }
+
+    /// Impossible or inconsistent cardinality is refused before any
+    /// interaction is published.
+    #[test]
+    fn impossible_cardinality_is_refused_before_publication() {
+        let schema = |min: u64, max: serde_json::Value| {
+            let mut items = serde_json::json!({
+                "type": "array",
+                "items": {"type": "string", "enum": ["a", "b"]},
+                "minItems": min,
+            });
+            if !max.is_null() {
+                items["maxItems"] = max;
+            }
+            serde_json::json!({"type": "object", "properties": {"pick": items}})
+        };
+        let error = refusal(&schema(3, serde_json::Value::Null));
+        assert!(error.contains("minItems is 3"), "{error}");
+        let error = refusal(&schema(2, serde_json::json!(1)));
+        assert!(error.contains("exceeds its maxItems"), "{error}");
     }
 
     /// Sampling and roots are refused deterministically, and a mixed set is
@@ -943,19 +1549,52 @@ mod tests {
         assert!(error.diagnostic.contains("sampling"), "{error:?}");
     }
 
-    /// Free-form strings and numbers have no faithful bounded rustX
-    /// representation and are refused instead of coerced.
+    /// A constraint rustX cannot faithfully enforce refuses only that schema
+    /// form, never every free-form string.
     #[test]
-    fn free_form_scalar_properties_are_refused_rather_than_coerced() {
-        for schema in [
-            serde_json::json!({"type": "object", "properties": {"name": {"type": "string"}}}),
-            serde_json::json!({"type": "object", "properties": {"age": {"type": "integer"}}}),
+    fn only_the_unvalidatable_string_format_is_refused() {
+        let error = refusal(&serde_json::json!({
+            "type": "object",
+            "properties": {"contact": {"type": "string", "format": "email"}},
+        }));
+        assert!(error.contains("email"), "{error}");
+
+        for (format, valid, invalid) in [
+            ("date", "2026-09-09", "09/09/2026"),
+            ("date-time", "2026-09-09T10:11:12Z", "yesterday"),
+            ("uri", "https://example.test/x", "not a uri"),
         ] {
-            let error = plan_round(Some(&requests(serde_json::json!({
-                "ask": elicitation("Tell me", &schema),
-            }))))
-            .expect_err("free-form scalars are unsupported");
-            assert!(error.diagnostic.contains("bounded"), "{error:?}");
+            let plan = plan_of(&serde_json::json!({
+                "type": "object",
+                "properties": {"value": {"type": "string", "format": format}},
+                "required": ["value"],
+            }));
+            assert!(
+                accepted(
+                    &plan,
+                    &submitted(vec![entry(
+                        0,
+                        QuestionnaireAnswer::Text(TextAnswer {
+                            value: valid.to_owned()
+                        }),
+                    )]),
+                )
+                .is_ok(),
+                "{format} accepts {valid}"
+            );
+            assert!(
+                accepted(
+                    &plan,
+                    &submitted(vec![entry(
+                        0,
+                        QuestionnaireAnswer::Text(TextAnswer {
+                            value: invalid.to_owned()
+                        }),
+                    )]),
+                )
+                .is_err(),
+                "{format} refuses {invalid}"
+            );
         }
     }
 
@@ -1002,33 +1641,38 @@ mod tests {
                 serde_json::json!({"type": "string", "enum": ["a", "b"]}),
             );
         }
-        let error = plan_round(Some(&requests(serde_json::json!({
-            "ask": elicitation(
-                "Many",
-                &serde_json::json!({"type": "object", "properties": properties}),
-            ),
-        }))))
-        .expect_err("above the question bound");
-        assert!(
-            error.diagnostic.contains("bounded questionnaire"),
-            "{error:?}"
+        let error = refusal(&serde_json::json!({
+            "type": "object",
+            "properties": properties,
+        }));
+        assert!(error.contains("bounded questionnaire"), "{error}");
+    }
+
+    /// A bounded MCP choice offers no client-reserved row, so a schema value
+    /// such as `Other` is an ordinary choice rather than a collision.
+    #[test]
+    fn client_reserved_words_are_ordinary_values_for_a_bounded_choice() {
+        let plan = plan_of(&serde_json::json!({
+            "type": "object",
+            "properties": {"pick": {"type": "string", "enum": ["Other", "keep"]}},
+            "required": ["pick"],
+        }));
+        let responses = accepted(&plan, &submitted(vec![single(0, 0)])).expect("responses");
+        assert_eq!(
+            responses["ask"],
+            serde_json::json!({"action": "accept", "content": {"pick": "Other"}})
         );
     }
 
-    /// A schema whose choices collide with the client's own reserved rows is
-    /// refused through the one shared questionnaire contract.
+    /// An enum above the bounded choice count is refused with its own
+    /// diagnostic rather than an opaque questionnaire failure.
     #[test]
-    fn schema_values_reserved_by_the_client_are_refused() {
-        let error = plan_round(Some(&requests(serde_json::json!({
-            "ask": elicitation(
-                "Pick",
-                &serde_json::json!({
-                    "type": "object",
-                    "properties": {"pick": {"type": "string", "enum": ["Other", "keep"]}},
-                }),
-            ),
-        }))))
-        .expect_err("reserved labels are refused");
-        assert!(error.diagnostic.contains("reserved"), "{error:?}");
+    fn an_enum_above_the_choice_bound_is_refused() {
+        let values: Vec<String> = (0..=MAX_CHOICE_OPTIONS).map(|i| format!("v{i}")).collect();
+        let error = refusal(&serde_json::json!({
+            "type": "object",
+            "properties": {"pick": {"type": "string", "enum": values}},
+        }));
+        assert!(error.contains("choices"), "{error}");
     }
 }

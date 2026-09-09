@@ -81,16 +81,24 @@ export function questionnaireInteraction(
     kind: {
       type: "questionnaire",
       invocation_id: { caller: "agent", call_id: "questionnaire-call" },
+      requester: {
+        tool_id: "tool-ask-user",
+        tool_name: "ask_user",
+        origin: "builtin",
+      },
       questionnaire: {
         questions: [
           {
             question: "Which environment should I use?",
             header: "Environment",
-            options: [
-              { label: "staging", description: "A safe test environment." },
-              { label: "production", description: "The live environment." },
-            ],
-            multi_select: false,
+            answer: {
+              type: "single_choice",
+              options: [
+                { label: "staging", description: "A safe test environment." },
+                { label: "production", description: "The live environment." },
+              ],
+              allow_custom: true,
+            },
           },
         ],
       },

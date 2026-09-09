@@ -158,8 +158,16 @@ invocation, never a terminal result: the executor may perform up to
 `ToolExecutor::start`; the opaque `requestState` lives on the executor stack
 and never becomes canonical or durable state; and the continuation dispatch
 frontier is the existing pre-dispatch cancellation checkpoint, so cancellation
-that wins there dispatches no further round. See `docs/invariants.md` for the
-full contract.
+that wins there dispatches no further round.
+
+Each requested schema is translated into the provider-independent typed
+question vocabulary (`Text`, `Number`, `Integer`, `Boolean`, `SingleChoice`,
+`MultiChoice`) with every supported constraint preserved, and each published
+Questionnaire carries the canonical `InteractionRequester` of the MCP tool
+that asked. A schema rustX cannot faithfully represent fails the invocation
+deterministically; a human answer the declared shape refuses is an interaction
+response refusal that leaves the interaction pending and the invocation
+running. See `docs/invariants.md` for the full contract.
 
 ## Detached ownership
 

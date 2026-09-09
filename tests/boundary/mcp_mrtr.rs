@@ -17,8 +17,8 @@ use std::sync::{Arc, Mutex};
 use crate::durable::TranscriptCursor;
 use crate::events::RuntimeEventEnvelope;
 use crate::events::interaction::{
+    AnswerSpecification, OptionAnswer, OptionSpecification, QuestionSpecification,
     QuestionnaireAnswer, QuestionnaireAnswerEntry, QuestionnaireResponse, QuestionnaireSubmission,
-    SingleOptionAnswer,
 };
 use crate::runtime::identity::{AttemptId, ConversationId, InteractionId, McpServerId, ToolCallId};
 use crate::runtime::interaction::{
@@ -29,11 +29,12 @@ use crate::runtime::types::{CancellationReason, ConversationLifecycle};
 use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolExecutor};
 use crate::tools::mcp::MCP_MRTR_MAX_ROUNDS;
 use crate::tools::mcp::fixture::{
-    FIXTURE_MODE_ENV, FixtureServer, MRTR_CONFIRM_TOOL, MRTR_MIXED_TOOL, MRTR_MULTI_TOOL,
-    MRTR_OBSERVATION_FILE_ENV, MRTR_OVERSIZED_STATE_TOOL, MRTR_PROGRESS_TOOL, MRTR_ROOTS_TOOL,
-    MRTR_ROUNDS_ENV, MRTR_SAMPLING_TOOL, MRTR_SLOW_CONTINUATION_TOOL, MRTR_STATE_ONLY_TOOL,
-    MRTR_TOOLS_ENV, MRTR_UNSUPPORTED_SCHEMA_TOOL, MrtrObservation, TOOL_PREFIX_ENV,
-    fixture_round_state, fixture_spawn_args, mrtr_observations, serve_if_fixture_mode,
+    FIXTURE_MODE_ENV, FixtureServer, MRTR_CONFIRM_TOOL, MRTR_MIXED_TOOL, MRTR_MULTI_SELECT_TOOL,
+    MRTR_MULTI_TOOL, MRTR_OBSERVATION_FILE_ENV, MRTR_OVERSIZED_STATE_TOOL, MRTR_PROGRESS_TOOL,
+    MRTR_ROOTS_TOOL, MRTR_ROUNDS_ENV, MRTR_SAMPLING_TOOL, MRTR_SLOW_CONTINUATION_TOOL,
+    MRTR_STATE_ONLY_TOOL, MRTR_TOOLS_ENV, MRTR_TYPED_TOOL, MRTR_UNSUPPORTED_SCHEMA_TOOL,
+    MrtrObservation, TOOL_PREFIX_ENV, fixture_round_state, fixture_spawn_args, mrtr_observations,
+    serve_if_fixture_mode,
 };
 use crate::tools::mcp::{
     McpInvalidationState, McpServerBinding, McpServerRuntime, McpTransportConfig,
@@ -84,11 +85,17 @@ impl ToolExecutor for CountingExecutor {
 #[derive(Default)]
 struct RecordingRoute {
     events: Mutex<Vec<String>>,
+    /// Every routed request exactly as the root surface receives it.
+    routed: Mutex<Vec<InteractionRequest>>,
 }
 
 impl RecordingRoute {
     fn kinds(&self) -> Vec<String> {
         self.events.lock().expect("route lock").clone()
+    }
+
+    fn routed(&self) -> Vec<InteractionRequest> {
+        self.routed.lock().expect("route lock").clone()
     }
 }
 
@@ -111,8 +118,11 @@ impl InteractionRoute for RecordingRoute {
         &self,
         event: InteractionRouteEvent,
     ) -> futures_util::future::BoxFuture<'static, Result<(), InteractionRouteError>> {
-        self.events.lock().expect("route lock").push(match event {
-            InteractionRouteEvent::Requested(_) => "requested".to_owned(),
+        self.events.lock().expect("route lock").push(match &event {
+            InteractionRouteEvent::Requested(routed) => {
+                self.routed.lock().expect("route lock").push(routed.clone());
+                "requested".to_owned()
+            }
             InteractionRouteEvent::Settled { .. } => "settled".to_owned(),
         });
         Box::pin(async { Ok(()) })
@@ -341,6 +351,24 @@ impl Harness {
         progress: &'a RecordingProgress,
         interaction: bool,
     ) -> impl std::future::Future<Output = ToolExecutionResult> + 'a {
+        self.invoke_with(
+            tool,
+            call_id,
+            serde_json::json!({"subject": "release"}),
+            progress,
+            interaction,
+        )
+    }
+
+    /// The same invocation with explicit business arguments.
+    fn invoke_with<'a>(
+        &'a self,
+        tool: &str,
+        call_id: &str,
+        arguments: serde_json::Value,
+        progress: &'a RecordingProgress,
+        interaction: bool,
+    ) -> impl std::future::Future<Output = ToolExecutionResult> + 'a {
         let executor =
             crate::tools::mcp::McpToolExecutor::new(Arc::clone(&self.runtime), self.tool(tool));
         let invocation = ToolInvocation {
@@ -350,7 +378,7 @@ impl Harness {
             tool_id: crate::runtime::identity::ToolId::new("mcp:mrtr"),
             tool_name: tool.to_owned(),
             mode: ToolInvocationMode::Foreground,
-            arguments: serde_json::json!({"subject": "release"}),
+            arguments,
         };
         let context = ToolExecutionContext::new(
             self.tool_runtime.conversation_id(),
@@ -385,17 +413,21 @@ impl Harness {
     }
 
     /// Answers a published questionnaire by choosing `label` for question 0.
-    async fn answer(&self, id: &InteractionId, label: &str) {
+    ///
+    /// The label is resolved to its **option index** here, exactly as a
+    /// Runtime Client does: the wire response carries the index, never the
+    /// display string, so no display text can select a protocol value.
+    async fn answer(&self, request: &InteractionRequest, label: &str) {
+        let questionnaire = questionnaire_of(request);
+        let option_index = option_index(&questionnaire.questions[0], label);
         self.coordinator
             .respond_async(
-                id,
+                &request.id,
                 InteractionResponse::Questionnaire {
                     response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
                         answers: vec![QuestionnaireAnswerEntry {
                             question_index: 0,
-                            answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
-                                label: label.to_owned(),
-                            }),
+                            answer: QuestionnaireAnswer::Option(OptionAnswer { option_index }),
                         }],
                     }),
                 },
@@ -416,6 +448,45 @@ impl Harness {
     async fn shutdown(&self) {
         let _ = self.runtime.close().await;
     }
+}
+
+/// The published questionnaire of one pending interaction.
+fn questionnaire_of(
+    request: &InteractionRequest,
+) -> crate::events::interaction::QuestionnaireSpecification {
+    match &request.kind {
+        crate::runtime::interaction::InteractionKind::Questionnaire { questionnaire, .. } => {
+            questionnaire.clone()
+        }
+        other => panic!("MRTR publishes a Questionnaire, got {other:?}"),
+    }
+}
+
+/// The canonical requester facts of one pending interaction.
+fn requester_of(request: &InteractionRequest) -> crate::events::interaction::InteractionRequester {
+    match &request.kind {
+        crate::runtime::interaction::InteractionKind::Questionnaire { requester, .. } => {
+            requester.clone()
+        }
+        other => panic!("MRTR publishes a Questionnaire, got {other:?}"),
+    }
+}
+
+/// The declared options of one typed choice question.
+fn choice_options(question: &QuestionSpecification) -> &[OptionSpecification] {
+    match &question.answer {
+        AnswerSpecification::SingleChoice(single) => &single.options,
+        AnswerSpecification::MultiChoice(multi) => &multi.options,
+        other => panic!("the question is not a choice question: {other:?}"),
+    }
+}
+
+/// The zero-based index of the option a client is displaying as `label`.
+fn option_index(question: &QuestionSpecification, label: &str) -> usize {
+    choice_options(question)
+        .iter()
+        .position(|option| option.label == label)
+        .unwrap_or_else(|| panic!("the questionnaire offers {label:?}"))
 }
 
 fn failure(result: &ToolExecutionResult) -> &str {
@@ -487,6 +558,7 @@ async fn one_supported_elicitation_drives_exactly_one_interaction_and_one_result
     assert_eq!(harness.coordinator.pending_count(), 1);
     let crate::runtime::interaction::InteractionKind::Questionnaire {
         invocation_id,
+        requester,
         questionnaire,
     } = &result.kind
     else {
@@ -499,16 +571,35 @@ async fn one_supported_elicitation_drives_exactly_one_interaction_and_one_result
         },
         "the interaction names the one invocation that is running"
     );
-    assert_eq!(questionnaire.questions.len(), 1);
+    // Finding 1: the prompt carries canonical, provider-independent requester
+    // identity, so the human is told which MCP server is asking.
+    assert_eq!(requester.tool_name, MRTR_CONFIRM_TOOL);
+    assert_eq!(requester.tool_id.as_str(), "mcp:mrtr");
     assert_eq!(
-        questionnaire.questions[0]
+        requester.origin,
+        crate::tools::types::ToolOrigin::Mcp {
+            server_id: McpServerId::new("mrtr-fixture"),
+        }
+    );
+    assert_eq!(
+        requester.mcp_server().map(ToString::to_string),
+        Some("mrtr-fixture".to_owned())
+    );
+    assert_eq!(questionnaire.questions.len(), 1);
+    // An MCP `enum` is a bounded choice with **no** custom-answer path.
+    let AnswerSpecification::SingleChoice(choice) = &questionnaire.questions[0].answer else {
+        panic!("an MCP enum is a single choice");
+    };
+    assert!(!choice.allow_custom);
+    assert_eq!(
+        choice
             .options
             .iter()
             .map(|option| option.label.as_str())
             .collect::<Vec<_>>(),
         vec!["stable", "beta"]
     );
-    harness.answer(&result.id, "beta").await;
+    harness.answer(&result, "beta").await;
     let settled = call.await;
     assert!(matches!(settled.status, ToolExecutionStatus::Success));
     assert_eq!(text(&settled), "rounds=2 choice=beta");
@@ -575,14 +666,14 @@ async fn several_input_requests_in_one_round_stay_one_questionnaire() {
                     answers: vec![
                         QuestionnaireAnswerEntry {
                             question_index: 0,
-                            answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
-                                label: "stable".to_owned(),
+                            answer: QuestionnaireAnswer::Option(OptionAnswer {
+                                option_index: option_index(&questionnaire.questions[0], "stable"),
                             }),
                         },
                         QuestionnaireAnswerEntry {
                             question_index: 1,
-                            answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
-                                label: "beta".to_owned(),
+                            answer: QuestionnaireAnswer::Option(OptionAnswer {
+                                option_index: option_index(&questionnaire.questions[1], "beta"),
                             }),
                         },
                     ],
@@ -665,7 +756,7 @@ async fn the_round_bound_admits_the_maximum_and_refuses_one_more() {
             result = &mut call => break result,
             request = harness.next_pending() => {
                 answered += 1;
-                harness.answer(&request.id, "stable").await;
+                harness.answer(&request, "stable").await;
             }
         }
     };
@@ -698,7 +789,7 @@ async fn one_round_past_the_bound_fails_before_publishing_an_interaction() {
             result = &mut call => break result,
             request = harness.next_pending() => {
                 answered += 1;
-                harness.answer(&request.id, "stable").await;
+                harness.answer(&request, "stable").await;
             }
         }
     };
@@ -714,6 +805,228 @@ async fn one_round_past_the_bound_fails_before_publishing_an_interaction() {
     );
     assert_eq!(harness.rounds().len(), MCP_MRTR_MAX_ROUNDS);
     assert_eq!(harness.coordinator.pending_count(), 0);
+    harness.shutdown().await;
+}
+
+/// One MCP form carrying a bounded `enum`, a free-form `string`, an
+/// `integer`, and a `boolean` becomes **one** typed questionnaire, and each
+/// answer reaches the server as its own JSON type.
+///
+/// This is the whole point of the repaired vocabulary: before Issue #242's
+/// review repair, three of these four properties were refused outright.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_mixed_typed_form_round_trips_every_supported_scalar_kind() {
+    if serve_if_fixture_mode(FixtureServer::from_env()).await {
+        return;
+    }
+    let harness = Harness::connect(
+        "boundary_suites::mcp_mrtr::a_mixed_typed_form_round_trips_every_supported_scalar_kind",
+        FixtureOptions::default(),
+    )
+    .await;
+    let progress = RecordingProgress::default();
+    let call = harness.invoke(MRTR_TYPED_TOOL, "typed-1", &progress, true);
+    tokio::pin!(call);
+    let request = tokio::select! {
+        result = &mut call => panic!("the call settled before asking: {result:?}"),
+        request = harness.next_pending() => request,
+    };
+    let questionnaire = questionnaire_of(&request);
+    assert_eq!(questionnaire.questions.len(), 4);
+    // Schema property order is the question order, and each property became
+    // the typed question its schema declared.
+    let AnswerSpecification::SingleChoice(channel) = &questionnaire.questions[0].answer else {
+        panic!("the enum property is a single choice");
+    };
+    assert!(!channel.allow_custom, "an MCP enum offers no custom answer");
+    assert_eq!(
+        questionnaire.questions[1].answer,
+        AnswerSpecification::Text(crate::events::interaction::TextAnswerSpecification {
+            min_length: Some(1),
+            max_length: Some(39),
+            format: None,
+        }),
+        "the string schema's own length bounds are preserved"
+    );
+    assert_eq!(questionnaire.questions[1].header, "Operator");
+    assert_eq!(
+        questionnaire.questions[2].answer,
+        AnswerSpecification::Integer(crate::events::interaction::IntegerAnswerSpecification {
+            minimum: Some(1),
+            maximum: Some(5),
+        }),
+    );
+    assert_eq!(
+        questionnaire.questions[3].answer,
+        AnswerSpecification::Boolean
+    );
+
+    // Every declared bound is enforced by the runtime, and a refused response
+    // leaves the interaction pending rather than failing the invocation.
+    for invalid in [
+        typed_answers(&questionnaire, "", 3),
+        typed_answers(&questionnaire, &"x".repeat(40), 3),
+        typed_answers(&questionnaire, "octocat", 6),
+        typed_answers(&questionnaire, "octocat", 0),
+    ] {
+        assert!(
+            harness
+                .coordinator
+                .respond_async(&request.id, invalid)
+                .await
+                .is_err(),
+            "an out-of-bound answer is refused"
+        );
+        assert_eq!(
+            harness.coordinator.pending_count(),
+            1,
+            "a refused response is an interaction problem, not a terminal failure"
+        );
+    }
+
+    harness
+        .coordinator
+        .respond_async(&request.id, typed_answers(&questionnaire, "octocat", 3))
+        .await
+        .expect("the typed response is accepted");
+    let settled = call.await;
+    assert!(
+        matches!(settled.status, ToolExecutionStatus::Success),
+        "{settled:?}"
+    );
+    // The server echoes the exact `accept.content` it received, so the types
+    // on the wire are proven — never stringified.
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&text(&settled)).expect("content JSON"),
+        serde_json::json!({
+            "channel": "beta",
+            "operator": "octocat",
+            "attempts": 3,
+            "notify": true,
+        })
+    );
+    assert_eq!(harness.rounds().len(), 2);
+    assert_eq!(harness.coordinator.pending_count(), 0);
+    harness.shutdown().await;
+}
+
+/// The typed answer set of the mixed form, parameterized by the two fields a
+/// test varies. The enum answer addresses `beta` by **index**, resolved from
+/// the published options exactly as a Runtime Client resolves it.
+fn typed_answers(
+    questionnaire: &crate::events::interaction::QuestionnaireSpecification,
+    operator: &str,
+    attempts: i64,
+) -> InteractionResponse {
+    InteractionResponse::Questionnaire {
+        response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
+            answers: vec![
+                QuestionnaireAnswerEntry {
+                    question_index: 0,
+                    answer: QuestionnaireAnswer::Option(OptionAnswer {
+                        option_index: option_index(&questionnaire.questions[0], "beta"),
+                    }),
+                },
+                QuestionnaireAnswerEntry {
+                    question_index: 1,
+                    answer: QuestionnaireAnswer::Text(crate::events::interaction::TextAnswer {
+                        value: operator.to_owned(),
+                    }),
+                },
+                QuestionnaireAnswerEntry {
+                    question_index: 2,
+                    answer: QuestionnaireAnswer::Integer(
+                        crate::events::interaction::IntegerAnswer { value: attempts },
+                    ),
+                },
+                QuestionnaireAnswerEntry {
+                    question_index: 3,
+                    answer: QuestionnaireAnswer::Boolean(
+                        crate::events::interaction::BooleanAnswer { value: true },
+                    ),
+                },
+            ],
+        }),
+    }
+}
+
+/// A multi-select `enum` carries its own `minItems`/`maxItems` into the typed
+/// question, and the **runtime** enforces them before any continuation is
+/// dispatched.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn multi_select_cardinality_is_enforced_before_any_continuation() {
+    if serve_if_fixture_mode(FixtureServer::from_env()).await {
+        return;
+    }
+    let harness = Harness::connect(
+        "boundary_suites::mcp_mrtr::multi_select_cardinality_is_enforced_before_any_continuation",
+        FixtureOptions::default(),
+    )
+    .await;
+    let progress = RecordingProgress::default();
+    let call = harness.invoke_with(
+        MRTR_MULTI_SELECT_TOOL,
+        "multi-select-1",
+        serde_json::json!({"min_items": 2, "max_items": 2}),
+        &progress,
+        true,
+    );
+    tokio::pin!(call);
+    let request = tokio::select! {
+        result = &mut call => panic!("the call settled before asking: {result:?}"),
+        request = harness.next_pending() => request,
+    };
+    let questionnaire = questionnaire_of(&request);
+    let AnswerSpecification::MultiChoice(multi) = &questionnaire.questions[0].answer else {
+        panic!("an array enum is a multi choice");
+    };
+    assert_eq!((multi.min_selected, multi.max_selected), (2, 2));
+    assert!(!multi.allow_custom);
+
+    let selection = |indices: Vec<usize>| InteractionResponse::Questionnaire {
+        response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
+            answers: vec![QuestionnaireAnswerEntry {
+                question_index: 0,
+                answer: QuestionnaireAnswer::Options(crate::events::interaction::OptionsAnswer {
+                    option_indices: indices,
+                }),
+            }],
+        }),
+    };
+    // 1 selected -> invalid, 3 selected -> invalid, 2 selected -> valid.
+    for invalid in [vec![0], vec![0, 1, 2]] {
+        assert!(
+            harness
+                .coordinator
+                .respond_async(&request.id, selection(invalid.clone()))
+                .await
+                .is_err(),
+            "selecting {} options violates the schema's own bounds",
+            invalid.len()
+        );
+        assert_eq!(harness.coordinator.pending_count(), 1);
+    }
+    assert_eq!(
+        harness.rounds().len(),
+        1,
+        "no refused response ever reaches an MCP continuation"
+    );
+    harness
+        .coordinator
+        .respond_async(&request.id, selection(vec![1, 0]))
+        .await
+        .expect("exactly two selections are valid");
+    let settled = call.await;
+    assert!(
+        matches!(settled.status, ToolExecutionStatus::Success),
+        "{settled:?}"
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&text(&settled)).expect("content JSON"),
+        serde_json::json!({"regions": ["eu", "us"]}),
+        "selections reach the server in canonical schema order, by value"
+    );
+    assert_eq!(harness.rounds().len(), 2);
     harness.shutdown().await;
 }
 
@@ -734,7 +1047,7 @@ async fn unsupported_input_requests_fail_without_publishing_anything() {
         (MRTR_SAMPLING_TOOL, "sampling-1", "sampling"),
         (MRTR_ROOTS_TOOL, "roots-1", "roots"),
         (MRTR_MIXED_TOOL, "mixed-1", "sampling"),
-        (MRTR_UNSUPPORTED_SCHEMA_TOOL, "schema-1", "bounded"),
+        (MRTR_UNSUPPORTED_SCHEMA_TOOL, "schema-1", "email"),
         (MRTR_OVERSIZED_STATE_TOOL, "state-1", "retention bound"),
     ] {
         let progress = RecordingProgress::default();
@@ -903,7 +1216,7 @@ async fn cancellation_winning_the_continuation_frontier_dispatches_nothing() {
         result = &mut call => panic!("the call settled before asking: {result:?}"),
         request = harness.next_pending() => request,
     };
-    harness.answer(&request.id, "stable").await;
+    harness.answer(&request, "stable").await;
     // The response has been accepted and mapped; the continuation has not
     // been dispatched.
     tokio::select! {
@@ -964,7 +1277,7 @@ async fn a_continuation_that_wins_the_frontier_keeps_ordinary_mcp_semantics() {
         result = &mut call => panic!("the call settled before asking: {result:?}"),
         request = harness.next_pending() => request,
     };
-    harness.answer(&request.id, "stable").await;
+    harness.answer(&request, "stable").await;
     // The continuation round is genuinely in flight: the *server* says so,
     // through its own progress notification on the continuation round.
     tokio::select! {
@@ -1086,7 +1399,7 @@ async fn progress_from_every_round_belongs_to_one_invocation() {
             result = &mut call => break result,
             request = harness.next_pending() => {
                 answered += 1;
-                harness.answer(&request.id, "stable").await;
+                harness.answer(&request, "stable").await;
             }
         }
     };
@@ -1126,7 +1439,7 @@ async fn no_mrtr_protocol_state_escapes_into_any_published_fact() {
     let settled = loop {
         tokio::select! {
             result = &mut call => break result,
-            request = harness.next_pending() => harness.answer(&request.id, "stable").await,
+            request = harness.next_pending() => harness.answer(&request, "stable").await,
         }
     };
     assert!(matches!(settled.status, ToolExecutionStatus::Success));
@@ -1231,7 +1544,7 @@ async fn several_rounds_are_still_exactly_one_executor_start() {
             result = &mut completion => break result,
             request = harness.next_pending() => {
                 answered += 1;
-                harness.answer(&request.id, "stable").await;
+                harness.answer(&request, "stable").await;
             }
         }
     };
@@ -1271,7 +1584,7 @@ async fn a_routed_child_coordinator_still_owns_the_mrtr_questionnaire() {
         result = &mut call => panic!("the call settled before asking: {result:?}"),
         request = harness.next_pending() => request,
     };
-    harness.answer(&request.id, "beta").await;
+    harness.answer(&request, "beta").await;
     let settled = call.await;
     assert!(matches!(settled.status, ToolExecutionStatus::Success));
     assert_eq!(text(&settled), "rounds=2 choice=beta");
@@ -1279,6 +1592,20 @@ async fn a_routed_child_coordinator_still_owns_the_mrtr_questionnaire() {
         route.kinds(),
         vec!["admit", "requested", "settled"],
         "MRTR uses the existing routed publication/settlement path unchanged"
+    );
+    // Finding 1, routed case: the two dimensions stay independent. The routed
+    // *source* says where the interaction came from, and the *requester* says
+    // who asked — an MCP server, named canonically.
+    let routed = route.routed();
+    assert_eq!(routed.len(), 1);
+    let routed_requester = requester_of(&routed[0]);
+    assert_eq!(routed_requester.tool_name, MRTR_CONFIRM_TOOL);
+    assert_eq!(
+        routed_requester.origin,
+        crate::tools::types::ToolOrigin::Mcp {
+            server_id: McpServerId::new("mrtr-fixture"),
+        },
+        "a routed child interaction still names the MCP server that asked"
     );
     harness.shutdown().await;
 }

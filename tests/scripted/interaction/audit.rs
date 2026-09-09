@@ -39,9 +39,10 @@ use rustx::context::{
 use rustx::conversation::ConversationState;
 use rustx::durable::{ConversationStore, SqliteConversationStore};
 use rustx::events::interaction::{
-    CustomAnswer, InteractionSettlement, InteractionSubject, OptionSpecification,
-    QuestionSpecification, QuestionnaireAnswer, QuestionnaireAnswerEntry, QuestionnaireResponse,
-    QuestionnaireSpecification, QuestionnaireSubmission, SingleOptionAnswer,
+    AnswerSpecification, CustomAnswer, InteractionRequester, InteractionSettlement,
+    InteractionSubject, OptionAnswer, OptionSpecification, QuestionSpecification,
+    QuestionnaireAnswer, QuestionnaireAnswerEntry, QuestionnaireResponse,
+    QuestionnaireSpecification, QuestionnaireSubmission, SingleChoiceSpecification,
     interaction_arguments_digest,
 };
 use rustx::events::types::{RuntimeEvent, RuntimeEventEnvelope};
@@ -859,24 +860,33 @@ async fn interaction_audit_survives_client_detach_and_reattach() {
                                 "questionnaire-call",
                             ),
                         },
+                        requester: InteractionRequester {
+                            tool_id: crate::runtime::identity::ToolId::new("tool-ask-user"),
+                            tool_name: "ask_user".to_owned(),
+                            origin: crate::tools::types::ToolOrigin::Builtin,
+                        },
                         turn: 1,
                         questionnaire: QuestionnaireSpecification {
                             questions: vec![QuestionSpecification {
                                 question: "Which target?".to_owned(),
                                 header: "Target".to_owned(),
-                                options: vec![
-                                    OptionSpecification {
-                                        label: "staging".to_owned(),
-                                        description: "A safe test environment.".to_owned(),
-                                        preview: None,
+                                answer: AnswerSpecification::SingleChoice(
+                                    SingleChoiceSpecification {
+                                        options: vec![
+                                            OptionSpecification {
+                                                label: "staging".to_owned(),
+                                                description: "A safe test environment.".to_owned(),
+                                                preview: None,
+                                            },
+                                            OptionSpecification {
+                                                label: "production".to_owned(),
+                                                description: "The live environment.".to_owned(),
+                                                preview: None,
+                                            },
+                                        ],
+                                        allow_custom: true,
                                     },
-                                    OptionSpecification {
-                                        label: "production".to_owned(),
-                                        description: "The live environment.".to_owned(),
-                                        preview: None,
-                                    },
-                                ],
-                                multi_select: false,
+                                ),
                             }],
                         },
                     },
@@ -910,9 +920,7 @@ async fn interaction_audit_survives_client_detach_and_reattach() {
                 response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
                     answers: vec![QuestionnaireAnswerEntry {
                         question_index: 0,
-                        answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
-                            label: "staging".to_owned(),
-                        }),
+                        answer: QuestionnaireAnswer::Option(OptionAnswer { option_index: 0 }),
                     }],
                 }),
             },
@@ -925,9 +933,7 @@ async fn interaction_audit_survives_client_detach_and_reattach() {
                 response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
                     answers: vec![QuestionnaireAnswerEntry {
                         question_index: 0,
-                        answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
-                            label: "staging".to_owned(),
-                        }),
+                        answer: QuestionnaireAnswer::Option(OptionAnswer { option_index: 0 }),
                     }],
                 }),
             },
@@ -949,8 +955,8 @@ async fn interaction_audit_survives_client_detach_and_reattach() {
         ] if questionnaire.questions[0].question == "Which target?"
             && matches!(
                 &submission.answers[0].answer,
-                QuestionnaireAnswer::SingleOption(SingleOptionAnswer { label })
-                    if label == "staging"
+                QuestionnaireAnswer::Option(OptionAnswer { option_index })
+                    if *option_index == 0
             )
     ));
     assert_eq!(

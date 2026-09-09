@@ -18,6 +18,12 @@
 //!   -> exactly one rustX `ToolResult`
 //! ```
 //!
+//! The form deliberately mixes a bounded `enum` with a **free-form string** in
+//! one schema, which is exactly the shape the repaired typed interaction
+//! vocabulary exists to represent: one typed Questionnaire carrying one
+//! `SingleChoice` question and one `Text` question, one typed response, one
+//! continuation, one final result.
+//!
 //! The fixture is written in the **modern guard style**, not with imperative
 //! `ctx.elicit()`: `FastMCP` 4 refuses imperative elicitation on a `2026-07-28`
 //! connection, and the guard form is what the protocol actually defines. The
@@ -41,8 +47,8 @@ use std::sync::Arc;
 use crate::durable::TranscriptCursor;
 use crate::events::RuntimeEventEnvelope;
 use crate::events::interaction::{
-    QuestionnaireAnswer, QuestionnaireAnswerEntry, QuestionnaireResponse, QuestionnaireSubmission,
-    SingleOptionAnswer,
+    AnswerSpecification, OptionAnswer, QuestionnaireAnswer, QuestionnaireAnswerEntry,
+    QuestionnaireResponse, QuestionnaireSubmission, TextAnswer, TextAnswerSpecification,
 };
 use crate::runtime::identity::{AttemptId, ConversationId, InteractionId, ToolCallId};
 use crate::runtime::interaction::{
@@ -86,9 +92,16 @@ def confirm_release(component: str, ctx: Context) -> str:
                                 "channel": {
                                     "type": "string",
                                     "enum": ["stable", "beta"],
-                                }
+                                },
+                                "operator": {
+                                    "type": "string",
+                                    "title": "Operator",
+                                    "description": "What is your GitHub username?",
+                                    "minLength": 1,
+                                    "maxLength": 39,
+                                },
                             },
-                            "required": ["channel"],
+                            "required": ["channel", "operator"],
                         },
                     )
                 )
@@ -97,7 +110,10 @@ def confirm_release(component: str, ctx: Context) -> str:
         )
     answer = responses["release"]
     content = getattr(answer, "content", None) or {}
-    return f"{component}|{ctx.request_state}|{content.get('channel')}"
+    return (
+        f"{component}|{ctx.request_state}"
+        f"|{content.get('channel')}|{content.get('operator')}"
+    )
 "#;
 
 struct NoProgress;
@@ -261,35 +277,114 @@ async fn a_real_managed_fastmcp_tool_completes_through_one_runtime_interaction()
         result = &mut call => panic!("the call settled before asking: {result:?}"),
         request = pending.recv() => request.expect("one pending interaction"),
     };
-    let crate::runtime::interaction::InteractionKind::Questionnaire { questionnaire, .. } =
-        &request.kind
+    let crate::runtime::interaction::InteractionKind::Questionnaire {
+        requester,
+        questionnaire,
+        ..
+    } = &request.kind
     else {
         panic!("the managed MRTR round publishes a Questionnaire");
     };
-    assert_eq!(questionnaire.questions.len(), 1);
+    // The human is told which MCP server is asking, from canonical facts.
+    assert_eq!(requester.tool_name, "confirm_release");
     assert_eq!(
-        questionnaire.questions[0].question,
-        "Which release channel?"
+        requester.origin,
+        crate::tools::types::ToolOrigin::Mcp {
+            server_id: server_id.clone(),
+        }
+    );
+    // One form, two typed questions: a bounded enum and a free-form string.
+    assert_eq!(questionnaire.questions.len(), 2);
+    assert!(
+        questionnaire.questions[0]
+            .question
+            .starts_with("Which release channel?"),
+        "{}",
+        questionnaire.questions[0].question
+    );
+    let AnswerSpecification::SingleChoice(choice) = &questionnaire.questions[0].answer else {
+        panic!("the enum property is a bounded single choice");
+    };
+    assert!(
+        !choice.allow_custom,
+        "an MCP enum offers no free-text answer at all"
     );
     assert_eq!(
-        questionnaire.questions[0]
+        choice
             .options
             .iter()
             .map(|option| option.label.as_str())
             .collect::<Vec<_>>(),
         vec!["stable", "beta"]
     );
+    let beta = choice
+        .options
+        .iter()
+        .position(|option| option.label == "beta")
+        .expect("the schema offers beta");
+    assert_eq!(questionnaire.questions[1].header, "Operator");
+    assert!(
+        questionnaire.questions[1]
+            .question
+            .contains("What is your GitHub username?"),
+        "{}",
+        questionnaire.questions[1].question
+    );
+    assert_eq!(
+        questionnaire.questions[1].answer,
+        AnswerSpecification::Text(TextAnswerSpecification {
+            min_length: Some(1),
+            max_length: Some(39),
+            format: None,
+        }),
+        "the string schema's own bounds are preserved, not discarded"
+    );
+    // An answer that violates the server's own declared bound is refused by
+    // the runtime while the interaction stays pending — it is an interaction
+    // validation problem, never a terminal failure of the tool call.
+    assert!(
+        coordinator
+            .respond_async(
+                &request.id,
+                InteractionResponse::Questionnaire {
+                    response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
+                        answers: vec![QuestionnaireAnswerEntry {
+                            question_index: 1,
+                            answer: QuestionnaireAnswer::Text(TextAnswer {
+                                value: "x".repeat(40),
+                            }),
+                        }],
+                    }),
+                },
+            )
+            .await
+            .is_err(),
+        "an over-long text answer is refused by the runtime"
+    );
+    assert_eq!(
+        coordinator.pending_count(),
+        1,
+        "the interaction is still open"
+    );
     coordinator
         .respond_async(
             &request.id,
             InteractionResponse::Questionnaire {
                 response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
-                    answers: vec![QuestionnaireAnswerEntry {
-                        question_index: 0,
-                        answer: QuestionnaireAnswer::SingleOption(SingleOptionAnswer {
-                            label: "beta".to_owned(),
-                        }),
-                    }],
+                    answers: vec![
+                        QuestionnaireAnswerEntry {
+                            question_index: 0,
+                            answer: QuestionnaireAnswer::Option(OptionAnswer {
+                                option_index: beta,
+                            }),
+                        },
+                        QuestionnaireAnswerEntry {
+                            question_index: 1,
+                            answer: QuestionnaireAnswer::Text(TextAnswer {
+                                value: "octocat".to_owned(),
+                            }),
+                        },
+                    ],
                 }),
             },
         )
@@ -313,7 +408,7 @@ async fn a_real_managed_fastmcp_tool_completes_through_one_runtime_interaction()
     // The final result proves all three halves at once: the business argument
     // survived unchanged, FastMCP unsealed exactly the `requestState` rustX
     // echoed, and the human answer reached the tool body.
-    assert_eq!(text, "api|component=api|beta");
+    assert_eq!(text, "api|component=api|beta|octocat");
     // Exactly two physical tools/call rounds reached the real child.
     let log = std::fs::read_to_string(workspace_root.join("mrtr-rounds.log"))
         .expect("the guard tool recorded its rounds");

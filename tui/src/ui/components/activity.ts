@@ -38,6 +38,7 @@ import { invocationLabel } from "../../presentation/invocation.ts";
  */
 
 import type {
+  AnswerSpecification,
   InteractionRef,
   RoutedInteraction,
   RuntimeClientBackgroundExecution,
@@ -64,6 +65,7 @@ import {
 } from "../preferences.ts";
 import { role, style } from "../theme.ts";
 import { renderToolCard, describeProgress, statusLabel } from "./tool-card.ts";
+import { requesterLines, selectionBoundsLabel } from "./questionnaire.ts";
 import {
   type ToolRenderContext,
   clipText,
@@ -389,13 +391,13 @@ function renderInteraction(
   if (interaction.kind.type === "questionnaire") {
     const questions = interaction.kind.questionnaire.questions.flatMap((question, index) => [
       `${index + 1}. ${question.header}: ${clipText(question.question, HEADER_BUDGET.maxChars)}`,
-      ...question.options.map((option) => `   • ${option.label}`),
+      ...answerSummary(question.answer).map((line) => `   ${line}`),
     ]);
     return [
       `${focused ? role.accent("→") : role.pending("?")} ${role.toolTitle(style.bold("Questionnaire"))} ${role.meta(identity)}`,
       `  ${role.meta(source)}`,
+      ...requesterLines(interaction.kind.requester).map((line) => `  ${role.meta(line)}`),
       ...questions.map((question) => `  ${role.meta(question)}`),
-      `  ${role.meta("custom answer is always available in the questionnaire")}`,
     ].join("\n");
   }
   const kind = interaction.kind;
@@ -430,4 +432,35 @@ function sourceLabel(interaction: RoutedInteraction): string {
     return "source · primary conversation";
   }
   return `source · subagent ${bounded(interaction.source.agent_name)} · ${bounded(interaction.source.child_conversation_id)}`;
+}
+
+/**
+ * A bounded summary of one question's declared answer shape.
+ *
+ * The activity line describes what a legal answer is — the declared options,
+ * the selection bounds, or the scalar kind — rather than assuming every
+ * question is a choice with an always-available custom answer.
+ */
+function answerSummary(answer: AnswerSpecification): string[] {
+  switch (answer.type) {
+    case "text":
+      return ["• free-form text"];
+    case "number":
+      return ["• a number"];
+    case "integer":
+      return ["• a whole number"];
+    case "boolean":
+      return ["• true / false"];
+    case "single_choice":
+      return [
+        ...answer.options.map((option) => `• ${option.label}`),
+        ...(answer.allow_custom ? ["• a custom answer"] : []),
+      ];
+    default:
+      return [
+        ...answer.options.map((option) => `• ${option.label}`),
+        `• ${selectionBoundsLabel(answer.min_selected, answer.max_selected)}`,
+        ...(answer.allow_custom ? ["• a custom answer"] : []),
+      ];
+  }
 }

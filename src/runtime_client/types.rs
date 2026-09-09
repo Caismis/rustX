@@ -289,7 +289,14 @@ pub enum RuntimeClientSessionRequest {
 /// Version 21 carries Review and required Questionnaire invocation correlation.
 /// Version 22 adds authoritative bounded Workflow snapshots and replacement events.
 /// Version 23 distinguishes inactive source decisions and enabled/unprepared sources.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 23;
+/// Version 24 replaces the choice-only Questionnaire with the typed question
+/// vocabulary (`text` / `number` / `integer` / `boolean` / `single_choice` /
+/// `multi_choice`), addresses choices by option index instead of display
+/// label, and carries the canonical `requester` identity — including MCP
+/// server origin — on every Questionnaire request and subject (Issue #242).
+/// The change is deliberately breaking: rustX is pre-1.0, so there is no
+/// compatibility shim, no dual questionnaire mode, and no fallback parser.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 24;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1249,7 +1256,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 23);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 24);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
