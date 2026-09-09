@@ -56,6 +56,14 @@ snapshot or publication handle. There is no alternative parser/compiler/executor
 Compiler context preserves nested paths such as
 `block.nodes.check_text.branches.clarity.block.nodes.assess_clarity.input.text`.
 Loop bodies use `.body`; schema recursion uses `.properties.<name>` and `.items`.
+Edges retain their zero-based authored index: dangling sources/destinations use
+`.edges.<index>.from` / `.to`, and invalid or duplicate ports use `.port`.
+Duplicate ports identify the later conflicting authored edge and name its source
+node and port. Cycles identify `.nodes.<id>` using the lexicographically smallest
+node whose indegree remains positive after Kahn processing (which can be downstream
+of the cycle). Node/edge declaration order does not change that selection.
+Description failures use `description`; aggregate program/block limits retain
+aggregate context. These paths compose through every Loop body and Parallel branch.
 Parser failures retain typed container paths and YAML line/column when available;
 unknown failing field names are redacted using the generated structural vocabulary.
 Semantic
@@ -108,6 +116,8 @@ runtime-state write, registration/exposure mutation or resource publication.
 | Keyed parallel native execution, gated opposite completion orders | `cfg237_parallel_template_preserves_keys_under_reverse_completion`, same file |
 | Native Review, exact response, no remaining waiter, terminal last | `cfg237_human_plan_template_uses_native_review_and_settlement`, `src/runtime/workflow/tests/human.rs` |
 | Missing/non-admitted roles, invalid binding/type/budget, zero effects, no authority | `cfg237_check_explain_zero_effects_precise_errors_and_authority`, `src/local_runtime/launch_tests.rs` |
+| Exact root/nested graph paths through final Diagnostic, zero effects for check/explain | `cfg237_graph_paths_reach_diagnostics_with_zero_side_effects`, same file |
+| Edge endpoints/ports, later duplicates, deterministic cycle residual, description and structural node paths | `authored_paths` tests, `src/runtime/workflow/tests/authored_paths.rs` |
 | Online schema unresolved versus disabled source | `cfg237_online_schema_unresolved_and_disabled_source_are_distinct`, same file |
 | Nested branch schema/scope failures, parser coordinates, compiler agreement | `cfg237_nested_paths_parser_locations_and_compiler_agreement`, same file |
 | Output bound and honest omission | `cfg237_workflow_projection_omission_preserves_validity_and_size_bound`, same file |

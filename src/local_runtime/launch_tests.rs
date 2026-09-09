@@ -128,6 +128,64 @@ fn cfg237_check_explain_zero_effects_precise_errors_and_authority() {
 }
 
 #[test]
+fn cfg237_graph_paths_reach_diagnostics_with_zero_side_effects() {
+    let f = Fixture::new();
+    f.role(
+        false,
+        "reviewer",
+        json!({"description":"Review","tools":{"builtin":[]}}),
+        "Review.",
+    );
+    f.project(json!({"subagents":{"definitions":["reviewer"],"workflow":["reviewer"]},"workflows":{"definitions":["example"]}}));
+    let original: serde_json::Value = serde_json::to_value(
+        serde_yaml::from_str::<crate::runtime::workflow::WorkflowDefinition>(&template_source(
+            "parallel_checks",
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    for (pointer, value, expected) in [
+        ("/description", json!(""), "description"),
+        ("/description", json!("x".repeat(4097)), "description"),
+        (
+            "/block/edges/0/from",
+            json!("missing"),
+            "block.edges.0.from",
+        ),
+        ("/block/edges/0/to", json!("missing"), "block.edges.0.to"),
+        ("/block/edges/0/port", json!("true"), "block.edges.0.port"),
+        (
+            "/block/nodes/check_text/branches/clarity/block/edges/0/to",
+            json!("missing"),
+            "block.nodes.check_text.branches.clarity.block.edges.0.to",
+        ),
+    ] {
+        let mut shape = original.clone();
+        *shape.pointer_mut(pointer).unwrap() = value;
+        let source = serde_yaml::to_string(&shape).unwrap();
+        let file = install_workflow(&f, &source);
+        for explain in [false, true] {
+            let (report, effects) = super::static_effects::measure(|| {
+                super::workflow_inspection::inspect(
+                    &crate::runtime::workflow::WorkflowId::parse("example").unwrap(),
+                    explain,
+                    &f.request,
+                    &f.host,
+                )
+            });
+            assert_eq!(effects, [0; 13]);
+            assert_eq!(report.validity, super::diagnostics::Validity::Invalid);
+            assert_eq!(report.exit_code(), 2);
+            assert_eq!(report.diagnostics[0].path, expected);
+            assert_eq!(report.diagnostics[0].file.as_ref(), Some(&file));
+            assert!(report.render(true).contains(expected));
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), source);
+            assert!(!f.resolve_locations_only().runtime_root.exists());
+        }
+    }
+}
+
+#[test]
 fn cfg237_online_schema_unresolved_and_disabled_source_are_distinct() {
     use crate::runtime::workflow::inspection::DependencyState;
     let f = Fixture::new();

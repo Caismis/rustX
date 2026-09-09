@@ -795,8 +795,8 @@ pub enum WorkflowCompileError {
     DanglingReference(String),
     /// The graph has no single explicit entry.
     InvalidEntry(String),
-    /// The graph contains a cycle.
-    Cycle,
+    /// The graph contains a cycle; node is the smallest positive-indegree Kahn residual.
+    Cycle { node: String },
     /// A node is unreachable from the explicit entry.
     Unreachable(String),
     /// A path can leave a node without a deterministic successor/terminal.
@@ -823,7 +823,10 @@ impl fmt::Display for WorkflowCompileError {
             | Self::InvalidBranch(detail)
             | Self::InvalidReference(detail)
             | Self::IncompatibleReference(detail) => formatter.write_str(detail),
-            Self::Cycle => formatter.write_str("workflow graph contains a cycle"),
+            Self::Cycle { node } => write!(
+                formatter,
+                "workflow graph contains a cycle; residual node {node:?}"
+            ),
             Self::Unreachable(node) => write!(formatter, "workflow node {node:?} is unreachable"),
             Self::ProfileNotAdmitted { node, profile } => write!(
                 formatter,
@@ -883,12 +886,14 @@ fn compile_program(
     if definition.description.trim().is_empty() {
         return Err(WorkflowCompileError::InvalidField(format!(
             "workflow {id} has an empty description"
-        )));
+        ))
+        .at("description"));
     }
     if definition.description.len() > 4096 {
         return Err(WorkflowCompileError::InvalidField(format!(
             "workflow {id} description is too large"
-        )));
+        ))
+        .at("description"));
     }
     if serde_json::to_vec(&definition).map_or(true, |bytes| bytes.len() > MAX_WORKFLOW_BYTES) {
         return Err(WorkflowCompileError::InvalidField(
@@ -962,7 +967,7 @@ fn compile_block(
         if node_id == "args" || !valid_local_key(node_id) {
             return Err(WorkflowCompileError::InvalidField(format!(
                 "workflow node id {node_id:?} must be non-empty, at most 64 bytes, and contain no dots"
-            )));
+            )).at(format!("nodes.{node_id}")));
         }
     }
     if !definition.nodes.contains_key(&definition.entry) {
@@ -985,18 +990,20 @@ fn compile_block(
         .cloned()
         .map(|node| (node, 0))
         .collect();
-    for edge in &definition.edges {
+    for (edge_index, edge) in definition.edges.iter().enumerate() {
         if !definition.nodes.contains_key(&edge.from) {
             return Err(WorkflowCompileError::DanglingReference(format!(
                 "edge source {:?} is not a workflow node",
                 edge.from
-            )));
+            ))
+            .at(format!("edges.{edge_index}.from")));
         }
         if !definition.nodes.contains_key(&edge.to) {
             return Err(WorkflowCompileError::DanglingReference(format!(
                 "edge destination {:?} is not a workflow node",
                 edge.to
-            )));
+            ))
+            .at(format!("edges.{edge_index}.to")));
         }
         let node = definition.nodes.get(&edge.from).expect("checked above");
         let port = match (node, edge.port) {
@@ -1008,7 +1015,8 @@ fn compile_block(
                 return Err(WorkflowCompileError::InvalidBranch(format!(
                     "Branch node {:?} must use true and false ports",
                     edge.from
-                )));
+                ))
+                .at(format!("edges.{edge_index}.port")));
             }
             (
                 WorkflowNodeDefinition::Loop { .. },
@@ -1018,32 +1026,36 @@ fn compile_block(
                 return Err(WorkflowCompileError::InvalidField(format!(
                     "Loop node {:?} must use satisfied and exhausted ports",
                     edge.from
-                )));
+                ))
+                .at(format!("edges.{edge_index}.port")));
             }
             (_, None) => WorkflowPort::Next,
             (_, Some(port)) => {
                 return Err(WorkflowCompileError::InvalidField(format!(
                     "ordinary node {:?} cannot have port {port:?}",
                     edge.from
-                )));
+                ))
+                .at(format!("edges.{edge_index}.port")));
             }
         };
-        outgoing
-            .get_mut(&edge.from)
-            .expect("node exists")
-            .push(WorkflowEdgeProgram {
-                to: edge.to.clone(),
-                port,
-            });
+        let successors = outgoing.get_mut(&edge.from).expect("node exists");
+        // Validate in authored order before sorting the immutable runtime edges.
+        // The later conflicting edge owns the duplicate-port diagnostic.
+        if successors.iter().any(|successor| successor.port == port) {
+            return Err(WorkflowCompileError::InvalidBranch(format!(
+                "node {:?} already has a {port:?} successor; this edge duplicates that control port",
+                edge.from
+            ))
+            .at(format!("edges.{edge_index}.port")));
+        }
+        successors.push(WorkflowEdgeProgram {
+            to: edge.to.clone(),
+            port,
+        });
         *incoming.get_mut(&edge.to).expect("node exists") += 1;
     }
     for edges in outgoing.values_mut() {
         edges.sort_by(|left, right| left.port.cmp(&right.port).then(left.to.cmp(&right.to)));
-        if edges.windows(2).any(|pair| pair[0].port == pair[1].port) {
-            return Err(WorkflowCompileError::InvalidBranch(
-                "a node has duplicate control-flow ports".to_owned(),
-            ));
-        }
     }
     if incoming[&definition.entry] != 0 {
         return Err(WorkflowCompileError::InvalidEntry(format!(
@@ -1155,7 +1167,7 @@ fn compile_block(
                 if !matches!(subject.value(), WorkflowValue::Reference { .. }) {
                     return Err(WorkflowCompileError::InvalidField(
                         "Review subject must reference a committed value".into(),
-                    ));
+                    ).at("subject"));
                 }
                 let schema = value_schema(subject.value(), &available_before, &node_id, 0).map_err(|e| e.at("subject"))?;
                 if matches!(subject, WorkflowReviewSubject::Plan { .. })
@@ -1163,12 +1175,12 @@ fn compile_block(
                 {
                     return Err(WorkflowCompileError::InvalidField(
                         "Review plan must be structured".into(),
-                    ));
+                    ).at("subject"));
                 }
                 if context.len() > 8 {
                     return Err(WorkflowCompileError::InvalidField(
                         "Review context exceeds eight entries".into(),
-                    ));
+                    ).at("context"));
                 }
                 for (index, value) in context.iter().enumerate() {
                     value_schema(value, &available_before, &node_id, 0).map_err(|e| e.at(format!("context.{index}")))?;
@@ -1196,7 +1208,7 @@ fn compile_block(
                 if schema_type(&input) != Some("object") {
                     return Err(WorkflowCompileError::InvalidField(
                         "Tool arguments must construct an object".into(),
-                    ));
+                    ).at("arguments"));
                 }
                 let output = result.schema();
                 validate_workflow_schema(&output, "Tool result").map_err(|e| e.at("result.schema"))?;
@@ -1260,7 +1272,7 @@ fn compile_block(
                 if branches.is_empty() || branches.len() > MAX_PARALLEL_BRANCHES {
                     return Err(WorkflowCompileError::InvalidField(format!(
                         "Parallel {node_id:?} must contain between one and {MAX_PARALLEL_BRANCHES} branches"
-                    )));
+                    )).at("branches"));
                 }
                 let mut compiled_branches = BTreeMap::new();
                 let mut output_properties = serde_json::Map::new();
@@ -1268,7 +1280,7 @@ fn compile_block(
                     if !valid_local_key(key) {
                         return Err(WorkflowCompileError::InvalidField(format!(
                             "Parallel {node_id:?} branch key {key:?} must be non-empty, at most 64 bytes, and contain no dots"
-                        )));
+                        )).at(format!("branches.{key}")));
                     }
                     let actual = value_schema(&branch.input, &available_before, &node_id, 0).map_err(|e| e.at(format!("branches.{key}.input")))?;
                     if !schemas_compatible(&actual, &branch.block.input) {
@@ -1329,14 +1341,10 @@ fn compile_block(
         }) })().map_err(|e: WorkflowCompileError| e.at(format!("nodes.{node_id}")))?;
         let edges = &outgoing[&node_id];
         match &compiled {
-            // Return and both Loop ports were validated above.
-            WorkflowNodeProgram::Return { .. } | WorkflowNodeProgram::Loop { .. } => {}
-            WorkflowNodeProgram::Branch { .. } if edges.len() == 2 => {}
-            WorkflowNodeProgram::Branch { .. } => {
-                return Err(WorkflowCompileError::InvalidBranch(format!(
-                    "Branch {node_id:?} must have exactly two successors"
-                )));
-            }
+            // Return, Branch and both Loop ports were validated above.
+            WorkflowNodeProgram::Return { .. }
+            | WorkflowNodeProgram::Loop { .. }
+            | WorkflowNodeProgram::Branch { .. } => {}
             _ if edges.len() != 1 => {
                 return Err(WorkflowCompileError::Unterminated(format!(
                     "node {node_id:?} must have exactly one successor"
@@ -1639,24 +1647,27 @@ fn validate_agent(
     if task.trim().is_empty() || task.len() > 32 * 1024 {
         return Err(WorkflowCompileError::InvalidField(format!(
             "Agent {node:?} task must be a fixed non-empty string within its bound"
-        )));
+        ))
+        .at("task"));
     }
     if task.contains("${") || task.contains("{{") {
         return Err(WorkflowCompileError::InvalidField(format!(
             "Agent {node:?} task cannot contain interpolation syntax"
-        )));
+        ))
+        .at("task"));
     }
     validate_root_schema(output, &format!("Agent {node} output")).map_err(|e| e.at("output"))?;
     for (name, binding) in input {
         if name.trim().is_empty() {
             return Err(WorkflowCompileError::InvalidField(format!(
                 "Agent {node:?} has an empty input binding name"
-            )));
+            ))
+            .at(format!("input.{name}")));
         }
         if name.len() > 64 || name.contains('.') {
             return Err(WorkflowCompileError::InvalidField(format!(
                 "Agent {node:?} input binding name {name:?} must be at most 64 bytes and contain no dots"
-            )));
+            )).at(format!("input.{name}")));
         }
         value_schema(binding, available, node, 0).map_err(|e| e.at(format!("input.{name}")))?;
     }
@@ -1684,7 +1695,13 @@ fn topological_order(
         }
     }
     if order.len() != outgoing.len() {
-        return Err(WorkflowCompileError::Cycle);
+        // BTreeMap order selects the lexicographically smallest Kahn residual,
+        // independent of authored edge order. It may be downstream of a cycle.
+        let node = counts
+            .iter()
+            .find_map(|(node, count)| (*count > 0).then_some(node.clone()))
+            .expect("incomplete topological order has residual nodes");
+        return Err(WorkflowCompileError::Cycle { node: node.clone() }.at(format!("nodes.{node}")));
     }
     Ok(order)
 }
@@ -2958,6 +2975,7 @@ fn single_successor(
 
 #[cfg(test)]
 mod tests {
+    mod authored_paths;
     mod scoped;
     mod templates;
     mod tools;
@@ -4133,7 +4151,7 @@ block:
         );
         assert!(matches!(
             compile_test(cyclic),
-            Err(ref error) if matches!(error.cause(), WorkflowCompileError::Cycle)
+            Err(ref error) if matches!(error.cause(), WorkflowCompileError::Cycle { .. })
         ));
 
         let unterminated = base_definition(
