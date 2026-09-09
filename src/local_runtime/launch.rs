@@ -101,6 +101,8 @@ pub enum TrustAction {
 /// Captured once; tests supply isolated snapshots without changing process globals.
 #[derive(Debug, Clone)]
 pub struct HostEnvironment {
+    /// Captured host credential authority, never projected or serialized.
+    pub credentials: crate::credentials::CredentialSnapshot,
     pub launch_directory: PathBuf,
     pub config_directory: PathBuf,
     pub state_directory: PathBuf,
@@ -117,12 +119,14 @@ impl HostEnvironment {
             .ok_or("HOME is required to locate user configuration and trust")?;
         let config = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
         let state = std::env::var_os("XDG_STATE_HOME").map(PathBuf::from);
-        Self::from_paths(
+        let mut captured = Self::from_paths(
             std::env::current_dir().map_err(|e| e.to_string())?,
             home,
             config,
             state,
-        )
+        )?;
+        captured.credentials = crate::credentials::CredentialSnapshot::capture();
+        Ok(captured)
     }
 
     /// Build an isolated host snapshot from explicit paths.
@@ -144,6 +148,7 @@ impl HostEnvironment {
         }
         // Use the same XDG convention on Linux and macOS; no platform-dependent fallback chain.
         Ok(Self {
+            credentials: crate::credentials::CredentialSnapshot::default(),
             launch_directory,
             config_directory: config.unwrap_or_else(|| home.join(".config")).join("rustx"),
             state_directory: state
@@ -165,6 +170,7 @@ pub enum Origin {
 /// Validated launch authority consumed by the existing native composition owner.
 #[derive(Debug, Clone)]
 pub struct ResolvedLaunch {
+    pub(crate) credentials: crate::credentials::CredentialSnapshot,
     pub(crate) locations: LaunchLocations,
     pub(crate) config: std::sync::Arc<CurrentRuntimeConfig>,
     pub(crate) models: ModelCatalog,
@@ -592,6 +598,7 @@ pub fn resolve(request: &LaunchRequest, host: &HostEnvironment) -> Result<Resolv
         ]
     };
     Ok(ResolvedLaunch {
+        credentials: host.credentials.clone(),
         locations,
         config: std::sync::Arc::new(config),
         models,
@@ -688,7 +695,12 @@ fn record(path: &str) -> bool {
 fn named_map(path: &str) -> bool {
     matches!(
         path,
-        "mcpServers" | "mcpToolPolicies" | "environment" | "nativeTools" | "subagents.definitions"
+        "mcpServers"
+            | "pythonSources"
+            | "mcpToolPolicies"
+            | "environment"
+            | "nativeTools"
+            | "subagents.definitions"
     )
 }
 
@@ -803,6 +815,16 @@ fn read_layer(path: &Path, required: bool, project: bool) -> Result<Map<String, 
     // Approval-bearing objects are host-only, including empty objects and
     // non-approval members. Reject before merging: precedence cannot hide this.
     if project {
+        if let Some(servers) = object.get("mcpServers").and_then(Value::as_object) {
+            for (name, server) in servers {
+                if server.get("sensitiveEnv").is_some() || server.get("sensitiveHeaders").is_some()
+                {
+                    return Err(format!(
+                        "mcpServers.{name}: credential references are host-owned; bind the whole source in user settings"
+                    ));
+                }
+            }
+        }
         for name in ["approvalMode", "nativeTools", "mcpToolPolicies"] {
             if object.contains_key(name) {
                 return Err(format!(
@@ -904,6 +926,7 @@ partial!(PartialRuntime {
     agent_status: crate::context::AgentStatusConfig, context: PartialContext,
     model_timeout_policy: PartialTimeout, tool_deadline_policy: PartialToolDeadline,
     mcp_servers: BTreeMap<crate::runtime::identity::McpServerId, super::config::McpServerDocument>,
+    python_sources: BTreeMap<crate::runtime::identity::McpServerId, crate::capabilities::activation::SourceEnablement>,
     mcp_tool_policies: BTreeMap<crate::runtime::identity::McpServerId, super::config::InvocationPolicyDocument>,
     native_tools: super::config::NativeToolPoliciesDocument, environment: BTreeMap<String, String>,
     default_tools: Vec<String>, skills: Vec<PathBuf>, subagents: PartialSubagents, workflows: PartialWorkflows,

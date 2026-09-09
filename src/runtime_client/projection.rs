@@ -1912,6 +1912,14 @@ pub(crate) fn capability_view(
                 }
             },
             state: match state {
+                crate::capabilities::CapabilitySourceState::Inactive { activation } => {
+                    super::snapshot::CapabilitySourceStateView::Inactive {
+                        activation: *activation,
+                    }
+                }
+                crate::capabilities::CapabilitySourceState::Unprepared => {
+                    super::snapshot::CapabilitySourceStateView::Unprepared
+                }
                 crate::capabilities::CapabilitySourceState::Ready => {
                     super::snapshot::CapabilitySourceStateView::Ready
                 }

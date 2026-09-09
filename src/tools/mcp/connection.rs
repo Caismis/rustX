@@ -186,6 +186,10 @@ struct ConnectionState {
 
 /// The stable connection owner of one configured MCP server.
 pub(crate) struct McpConnection {
+    #[cfg(test)]
+    admission_pause: Mutex<Option<(bool, Arc<super::test_sync::ConnectOwnershipPause>)>>,
+    /// Retirement closes future reconnect admission without cancelling leased calls.
+    reconnect_retired: std::sync::atomic::AtomicBool,
     server_id: McpServerId,
     reconnect: Option<McpReconnectAuthority>,
     /// One asynchronous mutex serializes health arbitration, retirement,
@@ -246,6 +250,9 @@ impl McpConnection {
 
     fn empty(server_id: McpServerId, reconnect: Option<McpReconnectAuthority>) -> Arc<Self> {
         Arc::new(Self {
+            #[cfg(test)]
+            admission_pause: Mutex::new(None),
+            reconnect_retired: std::sync::atomic::AtomicBool::new(false),
             server_id,
             reconnect,
             state: tokio::sync::Mutex::new(ConnectionState {
@@ -300,6 +307,7 @@ impl McpConnection {
     /// Returns an error when the connection is closed, when the current
     /// generation is unusable and this connection cannot reconnect, or when
     /// the single bounded connect attempt failed.
+    #[allow(clippy::too_many_lines)] // one serialized connection admission/retirement boundary
     pub(crate) async fn acquire(&self) -> Result<Arc<McpConnectionGeneration>, McpError> {
         let mut state = self.state.lock().await;
         if state.closed {
@@ -337,6 +345,28 @@ impl McpConnection {
             });
             return Err(McpError::Execution(reason));
         };
+        #[cfg(test)]
+        let pause = self.admission_pause.lock().unwrap().take();
+        #[cfg(test)]
+        if let Some((true, pause)) = &pause {
+            pause.park().await;
+        }
+        if self
+            .reconnect_retired
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(McpError::Configuration(format!(
+                "source {} is retired; reconnect is disabled",
+                self.server_id
+            )));
+        }
+        reconnect.binding.activation.admit().map_err(|reason| {
+            McpError::Configuration(format!("source {}: {reason}", self.server_id))
+        })?;
+        #[cfg(test)]
+        if let Some((false, pause)) = &pause {
+            pause.park().await;
+        }
         // Every generation this connection retired is driven to its physical
         // settlement proof before a replacement exists, so at most one
         // server process of this connection is alive at any time and drain
@@ -437,6 +467,26 @@ impl McpConnection {
             }
         }
         failures
+    }
+
+    /// Linearization point for refusing future activation by this frozen connection.
+    pub(crate) fn retire_activation(&self) {
+        self.reconnect_retired
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pause_reconnect_admission(
+        &self,
+        before: bool,
+        pause: Arc<super::test_sync::ConnectOwnershipPause>,
+    ) {
+        *self.admission_pause.lock().unwrap() = Some((before, pause));
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn established_count(&self) -> u64 {
+        self.state.lock().await.next_generation - 1
     }
 
     /// Closes every retired generation while the state lock is held.

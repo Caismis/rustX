@@ -49,6 +49,7 @@ const MODELS_JSON: &str = r#"{
 }"#;
 
 const SESSION_JSON: &str = r#"{
+  "pythonSources": {"python:broken-tool":"enabled", "python:fixture-tool":"enabled"},
   "agentId": "agent-81",
   "model": {"model": "local/composed-model"},
   "context": {"reserveTokens": 1024, "keepRecentTokens": 8192}
@@ -86,10 +87,10 @@ fn startup(root: &tempfile::TempDir, session: &str) -> (std::path::PathBuf, Laun
 
 fn dependencies() -> LocalRuntimeDependencies {
     LocalRuntimeDependencies {
-        credentials: Arc::new(MapCredentialEnvironment::new([(
+        credentials: Some(Arc::new(MapCredentialEnvironment::new([(
             "RUSTX_ISSUE81_KEY".to_owned(),
             "issue81-secret".to_owned(),
-        )])),
+        )]))),
         ..LocalRuntimeDependencies::default()
     }
 }
@@ -355,6 +356,7 @@ fn base_only_capability_setup_is_structurally_independent_of_python_storage() {
 
     let coordinator = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
+            python_sources: std::collections::BTreeMap::new(),
             conversation_id: rustx::runtime::identity::ConversationId::new("conv-81-base-only"),
             workspace: rustx::tools::Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
@@ -442,12 +444,14 @@ mod mcp {
             "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
             "mcpServers": {
                 "good": {
+                    "enabled": true,
                     "type": "stdio",
                     "command": program,
                     "args": args,
                     "env": {fixture::FIXTURE_MODE_ENV: "1"},
                 },
                 "bad": {
+                    "enabled": true,
                     "type": "stdio",
                     "command": "/nonexistent/rustx-issue81-absent-server",
                     "args": [],
@@ -553,6 +557,7 @@ mod mcp {
             "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
             "mcpServers": {
                 "alien": {
+                    "enabled": true,
                     "type": "stdio",
                     "command": program,
                     "args": args,
@@ -620,6 +625,7 @@ mod mcp {
             "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
             "mcpServers": {
                 "loud": {
+                    "enabled": true,
                     "type": "stdio",
                     "command": program,
                     "args": args,
@@ -752,11 +758,13 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
     // ... and an MCP server whose program does not exist.
     let session = serde_json::json!({
         "agentId": "agent-81",
+        "pythonSources": {"python:broken-tool": "enabled"},
         "model": {"model": "local/composed-model"},
         "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
         "mcpServers": {
             "exa": {
-                "type": "stdio",
+                "enabled": true,
+                    "type": "stdio",
                 "command": "/nonexistent/rustx-issue81-absent-server",
                 "args": [],
             },

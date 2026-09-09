@@ -15,4 +15,17 @@
     "bash": {"execution": "model_selectable", "concurrency": "sequential", "approval": "always"},
   },
   "mcpToolPolicies": {},
+  // Whole-source definitions containing secrets belong in host settings.
+  "mcpServers": {
+    // "private-http": {
+    //   "enabled": true,
+    //   "url": "https://example.invalid/mcp",
+    //   "sensitiveHeaders": {"Authorization": "$RUSTX_SERVICE_AUTHORIZATION"}
+    // },
+    // "private-process": {
+    //   "enabled": true,
+    //   "command": "service-mcp",
+    //   "sensitiveEnv": {"SERVICE_TOKEN": "$RUSTX_SERVICE_TOKEN"}
+    // }
+  },
 }

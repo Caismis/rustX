@@ -66,6 +66,8 @@ fn recovery_binding(
     script: &recovery::RecoveryScript,
 ) -> rustx::tools::mcp::McpServerBinding {
     rustx::tools::mcp::McpServerBinding {
+        credentials: rustx::credentials::SourceCredentials::default(),
+        activation: rustx::capabilities::activation::SourceActivation::Enabled,
         resource_workspace: None,
         transport: rustx::tools::mcp::McpTransportConfig::Stdio {
             program: std::env::current_exe()
@@ -98,6 +100,7 @@ async fn recovery_capability(
     let dir = tempfile::tempdir().expect("capability temp dir");
     let server_id = McpServerId::new("recovery");
     let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+        python_sources: std::collections::BTreeMap::new(),
         conversation_id: tool_runtime.conversation_id().clone(),
         workspace: tool_runtime.workspace().clone(),
         base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
@@ -1892,6 +1895,7 @@ async fn http_capability(
 ) -> McpCapability {
     let dir = tempfile::tempdir().expect("capability temp dir");
     let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+        python_sources: std::collections::BTreeMap::new(),
         conversation_id: tool_runtime.conversation_id().clone(),
         workspace: tool_runtime.workspace().clone(),
         base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
@@ -2223,6 +2227,7 @@ fn reload_inputs(
     binding: rustx::tools::mcp::McpServerBinding,
 ) -> rustx::capabilities::CapabilityResourceInputs {
     rustx::capabilities::CapabilityResourceInputs {
+        python_sources: std::collections::BTreeMap::new(),
         base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
         tool_activation: rustx::capabilities::ToolActivationPolicy::default(),
         skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),

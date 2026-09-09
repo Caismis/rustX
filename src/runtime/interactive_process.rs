@@ -222,7 +222,7 @@ fn record_no_ownership(_control: &InteractiveTestControl, _reaped_child: Option<
 /// belongs to the child protocol; supervisor control uses a private Unix
 /// socket.
 #[cfg(unix)]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct InteractiveProcessSpec {
     /// The executable to run inside the owned process group.
     pub program: PathBuf,
@@ -232,6 +232,27 @@ pub(crate) struct InteractiveProcessSpec {
     pub cwd: PathBuf,
     /// Explicit environment, never inherited.
     pub environment: Vec<(String, String)>,
+}
+
+#[cfg(unix)]
+impl std::fmt::Debug for InteractiveProcessSpec {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Values may contain resolved credentials at this physical boundary.
+        // Borrow and sort only keys; debugging never copies or renders values.
+        let mut environment_keys: Vec<&str> = self
+            .environment
+            .iter()
+            .map(|(key, _)| key.as_str())
+            .collect();
+        environment_keys.sort_unstable();
+        formatter
+            .debug_struct("InteractiveProcessSpec")
+            .field("program", &self.program)
+            .field("args", &self.args)
+            .field("cwd", &self.cwd)
+            .field("environment_keys", &environment_keys)
+            .finish()
+    }
 }
 
 /// A rustX-owned interactive process handle.
@@ -815,7 +836,7 @@ fn unproven_reason(reason: &str, control_failure: Option<&str>) -> String {
 #[cfg(all(test, unix))]
 mod interactive_tests {
     //! Deterministic regressions of the interactive supervisor unit's
-    //! M5-equivalent physical ownership. Every test runs the real supervisor
+    //! M5-equivalent physical ownership. Process tests run the real supervisor
     //! binary through [`SupervisedInteractiveProcess::spawn`] and uses
     //! marker/pid files with strict deadlock guards — never timing-based
     //! correctness assertions.
@@ -834,6 +855,41 @@ mod interactive_tests {
     use std::sync::Arc;
 
     const DEADLINE: Duration = Duration::from_secs(20);
+
+    #[test]
+    fn cfg233_interactive_process_spec_debug_redacts_environment_values() {
+        const SENTINEL: &str = "CFG233_INTERACTIVE_PROCESS_SECRET_SENTINEL";
+        let mut spec = InteractiveProcessSpec {
+            program: PathBuf::from("/fixture/mcp-server"),
+            args: vec!["--stdio".into()],
+            cwd: PathBuf::from("/fixture/workspace"),
+            environment: vec![
+                ("SOURCE_TOKEN".into(), SENTINEL.into()),
+                ("PATH".into(), "ordinary_environment_value".into()),
+            ],
+        };
+        for debug in [format!("{spec:?}"), format!("{spec:#?}")] {
+            assert!(!debug.contains(SENTINEL));
+            assert!(!debug.contains("ordinary_environment_value"));
+            for visible in [
+                "/fixture/mcp-server",
+                "--stdio",
+                "/fixture/workspace",
+                "SOURCE_TOKEN",
+                "PATH",
+            ] {
+                assert!(debug.contains(visible));
+            }
+        }
+        let debug = format!("{spec:?}");
+        assert!(debug.contains("environment_keys: [\"PATH\", \"SOURCE_TOKEN\"]"));
+        assert_eq!(
+            spec.environment[0].1, SENTINEL,
+            "debug does not alter physical delivery"
+        );
+        spec.environment.reverse();
+        assert_eq!(format!("{spec:?}"), debug, "key order is deterministic");
+    }
 
     struct Fixture {
         dir: tempfile::TempDir,

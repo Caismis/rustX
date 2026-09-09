@@ -945,6 +945,8 @@ mod tests {
                 mcp_servers: [(
                     McpServerId::new("github"),
                     crate::tools::mcp::McpServerBinding {
+                        credentials: crate::credentials::SourceCredentials::default(),
+                        activation: crate::capabilities::activation::SourceActivation::Enabled,
                         resource_workspace: None,
                         transport: crate::tools::mcp::McpTransportConfig::Stdio {
                             program: "github-mcp".to_owned(),

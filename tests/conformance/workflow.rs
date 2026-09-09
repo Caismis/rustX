@@ -190,7 +190,7 @@ fn models_json(emulator: &ProviderEmulator) -> String {
 }
 
 const CONFIG: &str = r#"{
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "agentId": "agent-issue83",
   "model": {"model": "emulator/workflow-model"},
   "context": {"reserveTokens": 0, "keepRecentTokens": 0},
@@ -347,10 +347,10 @@ impl Driver {
             runtime_root: root.path().join("private"),
         };
         let dependencies = LocalRuntimeDependencies {
-            credentials: Arc::new(MapCredentialEnvironment::new([(
+            credentials: Some(Arc::new(MapCredentialEnvironment::new([(
                 KEY.to_owned(),
                 "issue83-secret".to_owned(),
-            )])),
+            )]))),
             child_program: Some(std::path::PathBuf::from(env!("CARGO_BIN_EXE_rustx"))),
             ..LocalRuntimeDependencies::default()
         };
@@ -476,10 +476,10 @@ async fn a_registered_workflow_rejects_the_obsolete_workspace_rustx_path() {
         runtime_root: root.path().join("private"),
     };
     let dependencies = LocalRuntimeDependencies {
-        credentials: Arc::new(MapCredentialEnvironment::new([(
+        credentials: Some(Arc::new(MapCredentialEnvironment::new([(
             KEY.to_owned(),
             "issue83-secret".to_owned(),
-        )])),
+        )]))),
         ..LocalRuntimeDependencies::default()
     };
     let error = LocalConversationCore::compose(&(paths).resolve(), &dependencies)
@@ -880,10 +880,10 @@ impl Driver {
             exclude_tools: vec![],
         };
         let dependencies = LocalRuntimeDependencies {
-            credentials: Arc::new(MapCredentialEnvironment::new([(
+            credentials: Some(Arc::new(MapCredentialEnvironment::new([(
                 KEY.to_owned(),
                 "fixture".to_owned(),
-            )])),
+            )]))),
             child_program: Some(std::path::PathBuf::from(env!("CARGO_BIN_EXE_rustx"))),
             ..LocalRuntimeDependencies::default()
         };

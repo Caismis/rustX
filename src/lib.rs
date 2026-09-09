@@ -61,3 +61,4 @@ mod scripted_suites;
 #[cfg(test)]
 #[path = "../tests/boundary/mod.rs"]
 mod boundary_suites;
+pub mod credentials;

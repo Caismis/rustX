@@ -28,12 +28,14 @@ use crate::tools::mcp::{
     McpInvalidationState, McpRuntimeGeneration, McpRuntimeLeaseAuthority, McpRuntimeLeaseSet,
     McpRuntimeRetirementRegistry, McpServerBindings, McpServerRuntime,
 };
-use crate::tools::python::{PythonToolStore, discover_python_packages};
+use crate::tools::python::PythonToolStore;
 use crate::tools::workspace::Workspace;
 
 /// The coordinator configuration of one conversation/capability owner.
 #[derive(Clone)]
 pub struct CapabilityCoordinatorConfig {
+    /// Managed Python activation decisions; absent identities remain inert.
+    pub python_sources: BTreeMap<McpServerId, super::activation::SourceActivation>,
     /// The conversation that owns this coordinator and every lease it emits.
     pub conversation_id: ConversationId,
     /// The canonical conversation Workspace (the Skill root anchor).
@@ -90,6 +92,8 @@ struct CoordinatorState {
 
 /// The conversation/capability-owner coordination state.
 struct CoordinatorInner {
+    #[cfg(test)]
+    capture_pause: Mutex<Option<Arc<crate::tools::mcp::test_sync::ConnectOwnershipPause>>>,
     conversation_id: ConversationId,
     workspace: Workspace,
     resource_inputs: Mutex<CapabilityResourceInputs>,
@@ -271,6 +275,8 @@ pub(crate) struct RuntimeCapabilityPublication {
 /// snapshot derived from them.
 #[derive(Debug, Clone)]
 pub struct CapabilityResourceInputs {
+    /// Frozen managed Python activation for this resource generation.
+    pub python_sources: BTreeMap<McpServerId, super::activation::SourceActivation>,
     /// Native/extension Tool registrations.
     pub base_tool_registry: Arc<ToolRegistry>,
     /// Effective Tool activation policy.
@@ -459,6 +465,7 @@ impl CapabilityCoordinator {
     /// # Errors
     ///
     /// See [`CapabilityCoordinator::new`].
+    #[allow(clippy::too_many_lines)] // one constructor initializes the existing owners and immutable inputs
     pub fn with_backend(
         config: CapabilityCoordinatorConfig,
         backend: Arc<dyn SkillEnvironmentBackend>,
@@ -500,6 +507,22 @@ impl CapabilityCoordinator {
             ));
         }
         let mcp_servers = config.mcp_servers;
+        let initial_availability = mcp_servers
+            .iter()
+            .map(|(id, binding)| (id, binding.activation))
+            .chain(
+                config
+                    .python_sources
+                    .iter()
+                    .map(|(id, activation)| (id, *activation)),
+            )
+            .map(|(id, activation)| {
+                (
+                    CapabilitySourceId::Mcp(id.clone()),
+                    CapabilitySourceState::before_preparation(activation),
+                )
+            })
+            .collect();
         let tool_activation = config.tool_activation;
         let skill_discovery = config.skill_discovery;
         // Only the Python store *location* is computed here; the store
@@ -524,9 +547,12 @@ impl CapabilityCoordinator {
         ));
         Ok(Self {
             inner: Arc::new(CoordinatorInner {
+                #[cfg(test)]
+                capture_pause: Mutex::new(None),
                 conversation_id: config.conversation_id,
                 workspace: config.workspace,
                 resource_inputs: Mutex::new(CapabilityResourceInputs {
+                    python_sources: config.python_sources,
                     base_tool_registry: config.base_tool_registry,
                     tool_activation,
                     skill_discovery,
@@ -543,7 +569,7 @@ impl CapabilityCoordinator {
                 state: Mutex::new(CoordinatorState {
                     revision: CapabilityRevision::default(),
                     snapshot: initial_snapshot,
-                    availability: CapabilityAvailability::new(),
+                    availability: initial_availability,
                     mcp_runtimes: Vec::new(),
                     active_attempts: 0,
                     _next_staging: AtomicU64::new(0),
@@ -706,13 +732,31 @@ impl CapabilityCoordinator {
     pub async fn prepare_candidate(
         &self,
     ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
-        let inputs = self
-            .inner
-            .resource_inputs
-            .lock()
-            .expect("capability resource-input lock poisoned")
-            .clone();
-        self.prepare_candidate_from_inputs(inputs, false).await
+        // Match publication's lock order: activation inputs and their base
+        // revision are one admission cut. A stale worker cannot attach old
+        // enabled inputs to a newly published disabled revision.
+        let (inputs, base_revision) = {
+            let state = self
+                .inner
+                .state
+                .lock()
+                .expect("capability state lock poisoned");
+            let inputs = self
+                .inner
+                .resource_inputs
+                .lock()
+                .expect("capability resource-input lock poisoned")
+                .clone();
+            (inputs, state.revision)
+        };
+        #[cfg(test)]
+        let pause = self.inner.capture_pause.lock().unwrap().take();
+        #[cfg(test)]
+        if let Some(pause) = pause {
+            pause.park().await;
+        }
+        self.prepare_candidate_from_inputs(inputs, false, base_revision)
+            .await
     }
 
     /// Prepares a complete candidate from explicit reload-time inputs.
@@ -720,7 +764,14 @@ impl CapabilityCoordinator {
         &self,
         inputs: CapabilityResourceInputs,
     ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
-        self.prepare_candidate_from_inputs(inputs, true).await
+        let base_revision = self
+            .inner
+            .state
+            .lock()
+            .expect("capability state lock poisoned")
+            .revision;
+        self.prepare_candidate_from_inputs(inputs, true, base_revision)
+            .await
     }
 
     #[allow(clippy::too_many_lines)]
@@ -728,6 +779,7 @@ impl CapabilityCoordinator {
         &self,
         inputs: CapabilityResourceInputs,
         force_publish: bool,
+        base_revision: CapabilityRevision,
     ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
         // Shared EnvironmentStore work is not cancelled by one conversation,
         // but a claimed conversation still counts the preparation owner
@@ -751,12 +803,6 @@ impl CapabilityCoordinator {
         } else {
             None
         };
-        let base_revision = self
-            .inner
-            .state
-            .lock()
-            .expect("capability state lock poisoned")
-            .revision;
         let packages =
             SkillDiscovery::with_config(&self.inner.workspace, inputs.skill_discovery.clone())
                 .discover()?;
@@ -808,7 +854,10 @@ impl CapabilityCoordinator {
         // synthesis.
         let mut effective_mcp_servers = inputs.mcp_servers.clone();
         let mut rejected_sources: Vec<(McpServerId, String)> = Vec::new();
-        for (server_id, outcome) in self.prepare_python_packages().await? {
+        for (server_id, outcome) in self
+            .prepare_python_packages(&inputs.python_sources, &mut availability)
+            .await?
+        {
             match outcome {
                 Ok(binding) => match effective_mcp_servers.entry(server_id.clone()) {
                     std::collections::btree_map::Entry::Vacant(slot) => {
@@ -841,6 +890,15 @@ impl CapabilityCoordinator {
         let mut mcp_carried_forward = std::collections::BTreeSet::new();
         // `BTreeMap` iteration is the deterministic identity order.
         for (server_id, binding) in &effective_mcp_servers {
+            if binding.activation.admit().is_err() {
+                availability.insert(
+                    CapabilitySourceId::Mcp(server_id.clone()),
+                    CapabilitySourceState::Inactive {
+                        activation: binding.activation,
+                    },
+                );
+                continue;
+            }
             match self.prepare_mcp_server(server_id, binding, None).await {
                 Ok((epoch, generation, tools)) => {
                     mcp_epochs.insert(server_id.clone(), epoch);
@@ -924,6 +982,8 @@ impl CapabilityCoordinator {
     /// layering Skill discovery already has.
     async fn prepare_python_packages(
         &self,
+        activation: &BTreeMap<McpServerId, super::activation::SourceActivation>,
+        availability: &mut CapabilityAvailability,
     ) -> Result<
         Vec<(
             McpServerId,
@@ -931,11 +991,45 @@ impl CapabilityCoordinator {
         )>,
         CapabilityPreparationError,
     > {
-        let discovered = discover_python_packages(&self.inner.workspace).map_err(|error| {
-            CapabilityPreparationError::Mcp(format!(
-                "Python tool package discovery failed: {error}"
-            ))
-        })?;
+        // Establish every declaration before walking directories. Discovery
+        // replaces the prospective missing state only for identities it finds;
+        // absent declarations therefore cannot silently vanish from status.
+        for (id, decision) in activation {
+            let state = if decision.admit().is_ok() {
+                CapabilitySourceState::unavailable(format!(
+                    "{id}: configured managed Python source was not discovered; create .agents/tools/<folder> or disable this source"
+                ))
+            } else {
+                CapabilitySourceState::Inactive {
+                    activation: *decision,
+                }
+            };
+            availability.insert(CapabilitySourceId::Mcp(id.clone()), state);
+        }
+        let discovered =
+            crate::tools::python::discover_admitted_python_packages(&self.inner.workspace, |id| {
+                let decision = activation.get(id).copied().unwrap_or_default();
+                if decision.admit().is_err() {
+                    availability.insert(
+                        CapabilitySourceId::Mcp(id.clone()),
+                        CapabilitySourceState::Inactive {
+                            activation: decision,
+                        },
+                    );
+                    false
+                } else {
+                    availability.insert(
+                        CapabilitySourceId::Mcp(id.clone()),
+                        CapabilitySourceState::Unprepared,
+                    );
+                    true
+                }
+            })
+            .map_err(|error| {
+                CapabilityPreparationError::Mcp(format!(
+                    "Python tool package discovery failed: {error}"
+                ))
+            })?;
         if discovered.is_empty() {
             return Ok(Vec::new());
         }
@@ -1028,6 +1122,10 @@ impl CapabilityCoordinator {
         ),
         String,
     > {
+        binding
+            .activation
+            .admit()
+            .map_err(|reason| format!("source {server_id}: {reason}"))?;
         let generation = self
             .connect_conversation_owned(server_id, binding, preparation_cancellation)
             .await
@@ -2361,6 +2459,7 @@ body
         .expect("SKILL.md");
         let workspace = Workspace::new(&workspace_root).expect("workspace");
         let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+            python_sources: std::collections::BTreeMap::new(),
             conversation_id: crate::runtime::identity::ConversationId::new("conv-test"),
             workspace: workspace.clone(),
             base_tool_registry: Arc::new(ToolRegistry::new()),
@@ -2616,6 +2715,11 @@ body
         std::fs::write(&conflict, b"not a directory").expect("conflicting regular file");
         let source_id = CapabilitySourceId::Mcp(python_server_id("demo"));
         let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+            python_sources: [(
+                python_server_id("demo"),
+                crate::capabilities::activation::SourceActivation::Enabled,
+            )]
+            .into(),
             conversation_id: crate::runtime::identity::ConversationId::new("conv-lazy-store"),
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(ToolRegistry::new()),
@@ -2730,6 +2834,253 @@ mod mcp_race_tests {
     use crate::tools::mcp::{McpInvalidationState, McpRuntimeGeneration, McpTransportConfig};
     use crate::tools::workspace::Workspace;
 
+    /// Input capture and the base revision share publication's state lock.
+    /// A notify hook parks the real preparation after that admission cut.
+    /// A later disable publishes first; old admitted staging may finish but
+    /// cannot publish against the new revision or retire the old leased work.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cfg233_stale_preparation_cannot_publish_old_enablement_over_disable() {
+        if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (coordinator, id) = coordinator_with_fixture(
+            &dir,
+            "fixture",
+            "capabilities::coordinator::mcp_race_tests::cfg233_stale_preparation_cannot_publish_old_enablement_over_disable",
+        );
+        let initial = coordinator.prepare_candidate().await.unwrap();
+        let old_runtime = initial.mcp_runtimes[0]
+            .connection()
+            .published_runtime()
+            .unwrap();
+        let initial = coordinator.commit(initial).unwrap();
+        let leases = initial.acquire_mcp_leases().unwrap();
+        let pause = Arc::new(crate::tools::mcp::test_sync::ConnectOwnershipPause::default());
+        *coordinator.inner.capture_pause.lock().unwrap() = Some(pause.clone());
+        let preparing = coordinator.clone();
+        let worker = tokio::spawn(async move { preparing.prepare_candidate().await });
+        pause.wait_entered().await;
+        let mut inputs = coordinator.inner.resource_inputs.lock().unwrap().clone();
+        inputs.mcp_servers.get_mut(&id).unwrap().activation =
+            crate::capabilities::activation::SourceActivation::Disabled;
+        let disabled = coordinator
+            .prepare_candidate_with_inputs(inputs)
+            .await
+            .unwrap();
+        let disabled_snapshot = coordinator.commit(disabled).unwrap();
+        assert_eq!(coordinator.pending_mcp_retirements(), 1);
+        pause.release();
+        let stale = worker.await.unwrap().unwrap();
+        assert_eq!(
+            stale.mcp_runtimes.len(),
+            1,
+            "earlier admitted staging owns exactly one process"
+        );
+        assert!(matches!(
+            coordinator.commit(stale),
+            Err(CapabilityCommitError::StaleCandidate { .. })
+        ));
+        coordinator.settle_ready_mcp_runtimes().await.unwrap();
+        assert_eq!(
+            coordinator.pending_mcp_retirements(),
+            1,
+            "only the earlier admitted lease remains"
+        );
+        assert!(old_runtime.list_tools().await.is_ok());
+        assert_eq!(
+            coordinator.current_snapshot().revision(),
+            disabled_snapshot.revision()
+        );
+        assert!(
+            coordinator
+                .current_snapshot()
+                .available_tools()
+                .registrations()
+                .is_empty()
+        );
+        drop(leases);
+        coordinator.settle_ready_mcp_runtimes().await.unwrap();
+        assert_eq!(coordinator.pending_mcp_retirements(), 0);
+        coordinator.drain_conversation_owned().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cfg233_admitted_stdio_credentials_reach_only_the_process_boundary() {
+        const SENTINEL: &str = "CFG233_STDIO_SECRET_daf862";
+        if std::env::var(crate::tools::mcp::fixture::FIXTURE_MODE_ENV).as_deref() == Ok("1") {
+            assert_eq!(std::env::var("SOURCE_TOKEN").unwrap(), SENTINEL);
+            std::fs::write(std::env::var("CREDENTIAL_MARKER").unwrap(), "matched").unwrap();
+        }
+        if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("credential-boundary");
+        let (coordinator, id) = coordinator_with_fixture(
+            &dir,
+            "fixture",
+            "capabilities::coordinator::mcp_race_tests::cfg233_admitted_stdio_credentials_reach_only_the_process_boundary",
+        );
+        {
+            let mut inputs = coordinator.inner.resource_inputs.lock().unwrap();
+            let binding = inputs.mcp_servers.get_mut(&id).unwrap();
+            binding.credentials = serde_json::from_value(
+                serde_json::json!({"environment":{"SOURCE_TOKEN":"$SOURCE_KEY"}}),
+            )
+            .unwrap();
+            binding
+                .credentials
+                .capture(crate::credentials::CredentialSnapshot::new([(
+                    "SOURCE_KEY".into(),
+                    SENTINEL.into(),
+                )]));
+            let McpTransportConfig::Stdio { environment, .. } = &mut binding.transport else {
+                unreachable!()
+            };
+            environment.insert("CREDENTIAL_MARKER".into(), marker.display().to_string());
+        }
+        let candidate = coordinator.prepare_candidate().await.unwrap();
+        assert_eq!(candidate.mcp_runtimes.len(), 1);
+        assert_eq!(std::fs::read_to_string(marker).unwrap(), "matched");
+        let snapshot = coordinator.commit(candidate).unwrap();
+        assert!(!format!("{:?}", snapshot.mcp_servers()).contains(SENTINEL));
+        assert!(
+            !serde_json::to_string(snapshot.mcp_servers())
+                .unwrap()
+                .contains(SENTINEL)
+        );
+        assert!(!format!("{:?}", coordinator.availability()).contains(SENTINEL));
+        coordinator.drain_conversation_owned().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cfg233_exposure_and_domain_references_never_grant_source_activation() {
+        if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
+            return;
+        }
+        for enabled in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let (coordinator, id) = coordinator_with_fixture(
+                &dir,
+                "fixture",
+                "capabilities::coordinator::mcp_race_tests::cfg233_exposure_and_domain_references_never_grant_source_activation",
+            );
+            let mut inputs = coordinator.inner.resource_inputs.lock().unwrap().clone();
+            inputs.tool_activation.no_tools = true;
+            if !enabled {
+                inputs.mcp_servers.get_mut(&id).unwrap().activation =
+                    crate::capabilities::activation::SourceActivation::Disabled;
+            }
+            let candidate = coordinator
+                .prepare_candidate_with_inputs(inputs)
+                .await
+                .unwrap();
+            assert_eq!(
+                candidate.mcp_runtimes.len(),
+                usize::from(enabled),
+                "--no-tools does not suppress authorized preparation"
+            );
+            let snapshot = coordinator.commit(candidate).unwrap();
+            assert!(snapshot.tool_registry().definitions().is_empty());
+            let selector = crate::capabilities::selection::ToolSelector::Mcp {
+                server_id: id.clone(),
+                name: "echo".into(),
+            };
+            // Both Subagent and Workflow admission use this exact shared selector.
+            assert_eq!(
+                crate::capabilities::selection::resolve_selector(
+                    &selector,
+                    snapshot.available_tools(),
+                    &coordinator.availability()
+                )
+                .is_ok(),
+                enabled
+            );
+            if !enabled {
+                let plan = crate::capabilities::selected::SelectedCapabilityPlan {
+                    mcp_tools: vec![crate::capabilities::selected::SelectedMcpTool {
+                        server_id: id,
+                        name: "echo".into(),
+                        identity: crate::runtime::identity::McpToolIdentity::new("irrelevant"),
+                    }],
+                };
+                assert!(
+                    coordinator
+                        .prepare_selected_candidate(
+                            &plan,
+                            &crate::runtime::cancellation::CancellationSignal::new()
+                        )
+                        .await
+                        .unwrap_err()
+                        .to_string()
+                        .contains("disabled")
+                );
+            }
+            coordinator.drain_conversation_owned().await.unwrap();
+        }
+    }
+
+    /// Retirement's `SeqCst` store and reconnect's `SeqCst` admission load are
+    /// the linearization points. The notify-backed hook forces both orders.
+    /// A pre-retirement admission may finish; a stale post-retirement worker
+    /// establishes exactly zero replacement processes. Old leases own draining.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cfg233_disable_publication_races_reconnect_at_one_admission_frontier() {
+        if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
+            return;
+        }
+        for retirement_wins in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let (coordinator, id) = coordinator_with_fixture(
+                &dir,
+                "fixture",
+                "capabilities::coordinator::mcp_race_tests::cfg233_disable_publication_races_reconnect_at_one_admission_frontier",
+            );
+            let candidate = coordinator.prepare_candidate().await.unwrap();
+            let connection = candidate.mcp_runtimes[0].connection().clone();
+            let runtime = connection.published_runtime().unwrap();
+            let old = coordinator.commit(candidate).unwrap();
+            let leases = old.acquire_mcp_leases().unwrap();
+            assert_eq!(connection.established_count().await, 1);
+            runtime.close().await.unwrap();
+            let pause = Arc::new(crate::tools::mcp::test_sync::ConnectOwnershipPause::default());
+            connection.pause_reconnect_admission(retirement_wins, pause.clone());
+            let reconnecting = connection.clone();
+            let worker = tokio::spawn(async move { reconnecting.acquire().await });
+            pause.wait_entered().await;
+            let mut inputs = coordinator.inner.resource_inputs.lock().unwrap().clone();
+            inputs.mcp_servers.get_mut(&id).unwrap().activation =
+                crate::capabilities::activation::SourceActivation::Disabled;
+            let disabled = coordinator
+                .prepare_candidate_with_inputs(inputs)
+                .await
+                .unwrap();
+            assert!(disabled.mcp_runtimes.is_empty());
+            let published = coordinator.commit(disabled).unwrap();
+            assert!(published.available_tools().registrations().is_empty());
+            assert_eq!(
+                coordinator.pending_mcp_retirements(),
+                1,
+                "old admitted ownership remains held"
+            );
+            pause.release();
+            let result = worker.await.unwrap();
+            if retirement_wins {
+                assert!(result.unwrap_err().to_string().contains("retired"));
+                assert_eq!(connection.established_count().await, 1);
+            } else {
+                result.unwrap();
+                assert_eq!(connection.established_count().await, 2);
+            }
+            drop(leases);
+            coordinator.settle_ready_mcp_runtimes().await.unwrap();
+            assert_eq!(coordinator.pending_mcp_retirements(), 0);
+            assert!(connection.acquire().await.is_err());
+            coordinator.drain_conversation_owned().await.unwrap();
+        }
+    }
+
     fn coordinator_with_fixture(
         dir: &tempfile::TempDir,
         server_id: &str,
@@ -2740,6 +3091,7 @@ mod mcp_race_tests {
         let workspace = Workspace::new(&workspace_root).expect("workspace");
         let server_id = McpServerId::new(server_id);
         let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+            python_sources: std::collections::BTreeMap::new(),
             conversation_id: ConversationId::new("mcp-race"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
@@ -2748,6 +3100,8 @@ mod mcp_race_tests {
             mcp_servers: std::collections::BTreeMap::from([(
                 server_id.clone(),
                 crate::tools::mcp::McpServerBinding {
+                    credentials: crate::credentials::SourceCredentials::default(),
+                    activation: crate::capabilities::activation::SourceActivation::Enabled,
                     resource_workspace: None,
                     transport: McpTransportConfig::Stdio {
                         program: std::env::current_exe()
@@ -2794,6 +3148,8 @@ mod mcp_race_tests {
                 (
                     id.clone(),
                     crate::tools::mcp::McpServerBinding {
+                        credentials: crate::credentials::SourceCredentials::default(),
+                        activation: crate::capabilities::activation::SourceActivation::Enabled,
                         resource_workspace: None,
                         transport: McpTransportConfig::Stdio {
                             program: std::env::current_exe()
@@ -2813,6 +3169,7 @@ mod mcp_race_tests {
             })
             .collect();
         let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+            python_sources: std::collections::BTreeMap::new(),
             conversation_id: ConversationId::new("mcp-drain"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),

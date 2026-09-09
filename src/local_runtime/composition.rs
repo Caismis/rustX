@@ -115,9 +115,7 @@ use crate::capabilities::{
 };
 use crate::context::{AgentStatusEngine, DefaultTokenEstimator, TokenEstimator};
 use crate::durable::{ConversationStoreBinding, SqliteConversationStore};
-use crate::model::catalog::{
-    CredentialEnvironment, ModelCatalogError, ProcessCredentialEnvironment,
-};
+use crate::model::catalog::{CredentialEnvironment, ModelCatalogError};
 use crate::model::invocation::{ModelBindingRegistry, ModelInvocationError};
 use crate::model::session::SessionModelState;
 use crate::runtime::RuntimeResourceRevision;
@@ -212,8 +210,9 @@ pub enum StartupSession {
 /// need provider synchronization use an explicit catalog endpoint aimed at a
 /// local HTTP fixture.
 pub struct LocalRuntimeDependencies {
-    /// The credential environment used to resolve `$ENV_VAR` sources.
-    pub credentials: Arc<dyn CredentialEnvironment>,
+    /// Optional test/embedding provider environment. Production uses the
+    /// resolver's captured host snapshot, never a second launch-time read.
+    pub credentials: Option<Arc<dyn CredentialEnvironment>>,
     /// The deterministic token estimator.
     pub estimator: Arc<dyn TokenEstimator>,
     /// Optional executable override for the native child process. Production
@@ -226,7 +225,7 @@ pub struct LocalRuntimeDependencies {
 impl Default for LocalRuntimeDependencies {
     fn default() -> Self {
         Self {
-            credentials: Arc::new(ProcessCredentialEnvironment),
+            credentials: None,
             estimator: Arc::new(DefaultTokenEstimator),
             child_program: None,
         }
@@ -344,10 +343,16 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                     .iter()
                     .map(|path| resolve_workspace_path(&workspace, path)),
             );
-            let mcp_servers = mcp_bindings_with_authority(&config, &workspace, &provenance)
-                .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
+            let mcp_servers = mcp_bindings_with_authority(
+                &config,
+                &workspace,
+                &provenance,
+                &self.paths.credentials,
+            )
+            .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
             let candidate = capability
                 .prepare_candidate_with_inputs(CapabilityResourceInputs {
+                    python_sources: config.python_activations(),
                     base_tool_registry: Arc::new(registry),
                     tool_activation: ToolActivationPolicy {
                         default_tools: Some(default_tools),
@@ -964,9 +969,11 @@ pub(crate) fn mcp_bindings_with_authority(
     config: &CurrentRuntimeConfig,
     workspace: &Path,
     provenance: &std::collections::BTreeMap<String, super::launch::Origin>,
+    credentials: &crate::credentials::CredentialSnapshot,
 ) -> Result<crate::tools::mcp::McpServerBindings, CurrentRuntimeConfigError> {
     let mut bindings = config.mcp_bindings()?;
     for (name, binding) in &mut bindings {
+        binding.credentials.capture(credentials.clone());
         if matches!(
             provenance.get(&format!("mcpServers.{name}")),
             Some(super::launch::Origin::Project { .. })
@@ -1293,6 +1300,7 @@ impl LocalConversationCore {
         // coordinator receives the activation policy
         // and applies it to the available capability registrations.
         let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+            python_sources: runtime_config.python_activations(),
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: Arc::new(base_registry),
@@ -1308,6 +1316,7 @@ impl LocalConversationCore {
                 &runtime_config,
                 &paths.workspace,
                 &paths.provenance,
+                &paths.credentials,
             )?,
             base_environment,
             environment_store_root: paths.environment_store_root_for(&conversation_id),
@@ -1480,8 +1489,12 @@ impl LocalConversationCore {
         // authorized. The only work done here is physical: adapter
         // construction and credential resolution through this process's own
         // ordinary credential boundary.
-        let model =
-            SessionModelState::frozen(&spec.resolved.model, dependencies.credentials.as_ref())?;
+        let captured_credentials = crate::credentials::CredentialSnapshot::capture();
+        let credentials = dependencies
+            .credentials
+            .as_deref()
+            .unwrap_or(&captured_credentials);
+        let model = SessionModelState::frozen(&spec.resolved.model, credentials)?;
 
         // 5-6. The child conversation tool runtime over the authoritative
         // project workspace selected by the parent and the exact
@@ -1544,13 +1557,18 @@ impl LocalConversationCore {
         // Managed Python packages cross as ordinary frozen MCP bindings
         // (Issue #174); the child never opens Python store state itself.
         let plan = selected_capability_plan(spec);
+        let mut mcp_servers = spec.resolved.materialization.mcp_servers.clone();
+        for binding in mcp_servers.values_mut() {
+            binding.credentials.capture_from(credentials);
+        }
         let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+            python_sources: std::collections::BTreeMap::new(),
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: Arc::new(base_registry),
             tool_activation: ToolActivationPolicy::default(),
             skill_discovery: SkillDiscoveryConfig::default(),
-            mcp_servers: spec.resolved.materialization.mcp_servers.clone(),
+            mcp_servers,
             base_environment,
             environment_store_root: spec.runtime_root.join("environments"),
         })
@@ -2368,7 +2386,12 @@ fn load_model_registry(
     paths: &ResolvedLaunch,
     dependencies: &LocalRuntimeDependencies,
 ) -> Result<ModelBindingRegistry, LocalRuntimeError> {
-    let resolved = paths.models.resolve(dependencies.credentials.as_ref())?;
+    let resolved = paths.models.resolve(
+        dependencies
+            .credentials
+            .as_deref()
+            .unwrap_or(&paths.credentials),
+    )?;
     Ok(ModelBindingRegistry::new(resolved)?)
 }
 
@@ -2582,10 +2605,10 @@ mod subagent_child_tests {
 
     fn dependencies() -> LocalRuntimeDependencies {
         LocalRuntimeDependencies {
-            credentials: Arc::new(MapCredentialEnvironment::new([(
+            credentials: Some(Arc::new(MapCredentialEnvironment::new([(
                 "RUSTX_CHILD_KEY".to_owned(),
                 "test-only-secret".to_owned(),
-            )])),
+            )]))),
             ..LocalRuntimeDependencies::default()
         }
     }
@@ -3189,6 +3212,8 @@ mod subagent_child_tests {
     #[cfg(feature = "mcp-fixture")]
     fn fixture_binding(test_name: &str, prefix: &str) -> crate::tools::mcp::McpServerBinding {
         crate::tools::mcp::McpServerBinding {
+            credentials: crate::credentials::SourceCredentials::default(),
+            activation: crate::capabilities::activation::SourceActivation::Enabled,
             resource_workspace: None,
             transport: crate::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
@@ -3478,6 +3503,8 @@ mod subagent_child_tests {
         child_spec.resolved.materialization.mcp_servers.insert(
             server_id,
             crate::tools::mcp::McpServerBinding {
+                credentials: crate::credentials::SourceCredentials::default(),
+                activation: crate::capabilities::activation::SourceActivation::Enabled,
                 resource_workspace: None,
                 transport: crate::tools::mcp::McpTransportConfig::Stdio {
                     program: "rustx-no-such-mcp-server".to_owned(),
@@ -3804,25 +3831,35 @@ mod composition_tests {
             FixtureModel::text("scripted/scripted", ModelProtocol::OpenAiChatCompletions);
         let factory = ScriptedAdapterFactory::new(adapter);
         let registry = fixture_registry(std::slice::from_ref(&fixture_model), &factory);
+        let mut catalog_document = serde_json::to_value(fixture_catalog_document(
+            std::slice::from_ref(&fixture_model),
+        ))
+        .unwrap();
+        // Author an explicit test credential; production projections intentionally redact literals.
+        for provider in catalog_document["providers"]
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+        {
+            provider["apiKey"] = serde_json::json!("test-only-secret");
+        }
         std::fs::write(
             root.path().join("models.jsonc"),
-            serde_json::to_vec_pretty(&fixture_catalog_document(std::slice::from_ref(
-                &fixture_model,
-            )))
-            .expect("model catalog"),
+            serde_json::to_vec_pretty(&catalog_document).expect("model catalog"),
         )
         .expect("models.jsonc");
 
         let echo_call_count_file = root.path().join("echo-call-count");
         let executable = std::env::current_exe().expect("test executable");
         let config_document = serde_json::json!({
-            "schemaVersion": 6,
+            "schemaVersion": 7,
             "agentId": "agent-parent",
             "model": {"model": "scripted/scripted"},
             "context": {"reserveTokens": 0, "keepRecentTokens": 0},
             "defaultTools": ["read", "subagent", TOOL_NAME],
             "mcpServers": {
                 SERVER_NAME: {
+                    "enabled": true,
                     "type": "stdio",
                     "command": executable,
                     "args": fixture_spawn_args(test_name),

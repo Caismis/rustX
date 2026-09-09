@@ -34,7 +34,7 @@ use crate::tools::native::NativeToolPolicies;
 use crate::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocationPolicy};
 
 /// The only current runtime configuration schema version this runtime accepts.
-pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 6;
+pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 7;
 
 /// The explicit current runtime/project configuration.
 ///
@@ -79,6 +79,9 @@ pub struct CurrentRuntimeConfig {
     /// identity exactly as mainstream MCP clients spell it.
     #[serde(default)]
     pub mcp_servers: BTreeMap<McpServerId, McpServerDocument>,
+    /// Explicit managed Python source decisions keyed by `python:<folder>`.
+    #[serde(default)]
+    pub python_sources: BTreeMap<McpServerId, crate::capabilities::activation::SourceEnablement>,
     /// The host-owned per-server tool invocation policy overlay; forbidden in project layers.
     ///
     /// Deliberately not part of `mcpServers`: an `mcpServers` entry must stay
@@ -460,6 +463,25 @@ fn default_agent_id() -> AgentId {
 }
 
 impl CurrentRuntimeConfig {
+    /// Normalize source intent after the launch resolver has accepted project
+    /// trust and resource authority. No configuration can author host-only states.
+    #[must_use]
+    pub fn python_activations(
+        &self,
+    ) -> BTreeMap<McpServerId, crate::capabilities::activation::SourceActivation> {
+        self.python_sources
+            .iter()
+            .map(|(id, intent)| {
+                (
+                    id.clone(),
+                    crate::capabilities::activation::SourceActivation::evaluate(
+                        Some(*intent),
+                        true,
+                    ),
+                )
+            })
+            .collect()
+    }
     /// Parses and validates current runtime configuration from JSONC bytes.
     ///
     /// The document is [JSONC](crate::config_format): JSON plus comments and
@@ -716,6 +738,18 @@ impl CurrentRuntimeConfig {
     /// ambiguous, contradictory, or incomplete, or when the policy overlay
     /// names a server that `mcpServers` does not declare.
     pub fn mcp_bindings(&self) -> Result<McpServerBindings, CurrentRuntimeConfigError> {
+        for id in self.python_sources.keys() {
+            if !id.as_str().strip_prefix("python:").is_some_and(|name| {
+                !name.is_empty()
+                    && name
+                        .bytes()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+            }) {
+                return Err(CurrentRuntimeConfigError::Invalid {
+                    detail: "pythonSources keys must be python:<folder> identities".into(),
+                });
+            }
+        }
         for server_id in self.mcp_tool_policies.keys() {
             if !self.mcp_servers.contains_key(server_id) {
                 return Err(CurrentRuntimeConfigError::Invalid {
@@ -761,6 +795,12 @@ impl CurrentRuntimeConfig {
                 Ok((
                     server_id.clone(),
                     McpServerBinding {
+                        credentials: crate::credentials::SourceCredentials {
+                            environment: document.sensitive_env.clone(),
+                            headers: document.sensitive_headers.clone(),
+                            ..Default::default()
+                        },
+                        activation: document.activation(),
                         resource_workspace: None,
                         transport,
                         policy: self
@@ -1009,6 +1049,15 @@ impl ConcurrencyPolicyDocument {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpServerDocument {
+    /// Host-only explicit secret references; ordinary `env` is literal.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sensitive_env: BTreeMap<String, crate::credentials::EnvironmentReference>,
+    /// Host-only explicit secret references; ordinary `headers` is literal.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sensitive_headers: BTreeMap<String, crate::credentials::EnvironmentReference>,
+    /// Omission is discovery only; true explicitly admits preparation under host trust.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
     /// The explicit transport selector, when the entry declares one.
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub transport_type: Option<McpTransportType>,
@@ -1045,6 +1094,21 @@ pub enum McpTransportType {
 }
 
 impl McpServerDocument {
+    /// Normalize explicit presence without treating discovery as enablement.
+    #[must_use]
+    pub fn activation(&self) -> crate::capabilities::activation::SourceActivation {
+        use crate::capabilities::activation::{SourceActivation, SourceEnablement};
+        SourceActivation::evaluate(
+            self.enabled.map(|enabled| {
+                if enabled {
+                    SourceEnablement::Enabled
+                } else {
+                    SourceEnablement::Disabled
+                }
+            }),
+            true,
+        )
+    }
     /// The runtime transport this entry normalizes to.
     ///
     /// # Errors
@@ -1052,8 +1116,32 @@ impl McpServerDocument {
     /// Returns a human-readable detail when the entry is ambiguous,
     /// contradictory, or incomplete.
     pub fn to_transport(&self) -> Result<McpTransportConfig, String> {
-        let has_http_fields = self.url.is_some() || !self.headers.is_empty();
+        for key in self.sensitive_env.keys() {
+            if !crate::credentials::valid_environment_name(key) || self.env.contains_key(key) {
+                return Err(
+                    "sensitiveEnv requires valid environment names disjoint from env".into(),
+                );
+            }
+        }
+        let mut header_names = std::collections::BTreeSet::new();
+        for key in self.sensitive_headers.keys() {
+            if http::HeaderName::try_from(key).is_err()
+                || !header_names.insert(key.to_ascii_lowercase())
+                || self
+                    .headers
+                    .keys()
+                    .any(|name| name.eq_ignore_ascii_case(key))
+            {
+                return Err(
+                    "sensitiveHeaders requires unique valid header names disjoint from headers"
+                        .into(),
+                );
+            }
+        }
+        let has_http_fields =
+            self.url.is_some() || !self.headers.is_empty() || !self.sensitive_headers.is_empty();
         let has_stdio_fields = self.command.is_some()
+            || !self.sensitive_env.is_empty()
             || !self.args.is_empty()
             || !self.env.is_empty()
             || self.cwd.is_some();

@@ -1,11 +1,8 @@
 //! The committed `examples/local-runtime/` configuration composes its real
 //! resources through the production composition path.
 //!
-//! This is a local-composition boundary test: composing the example
-//! registers its managed Python `echo` package (Issue #174) through the real
-//! tool pipeline, which requires the `uv` toolchain. It therefore lives in
-//! the `process` target (whose jobs install Python + uv), not the pure
-//! `contracts` target.
+//! This local-composition boundary proves the example's managed Python demo
+//! stays inert without Python/uv preparation while native resources compose.
 
 use crate::launch_fixture::LaunchFixture;
 use std::path::{Path, PathBuf};
@@ -121,7 +118,7 @@ fn assert_example_resource_snapshot(resources: &RuntimeResourceSnapshot) {
     assert!(tool_names.contains(&"implement_and_review"));
     assert!(tool_names.contains(&"parallel_review"));
     assert!(tool_names.contains(&"subagent"));
-    assert!(tool_names.contains(&"echo"));
+    assert!(!tool_names.contains(&"echo"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -149,10 +146,10 @@ async fn checked_in_local_runtime_example_composes_its_real_resources() {
         })
         .resolve(),
         &LocalRuntimeDependencies {
-            credentials: Arc::new(MapCredentialEnvironment::new([(
+            credentials: Some(Arc::new(MapCredentialEnvironment::new([(
                 "RUSTX_EXAMPLE_API_KEY".to_owned(),
                 "smoke-test-secret".to_owned(),
-            )])),
+            )]))),
             ..LocalRuntimeDependencies::default()
         },
     )

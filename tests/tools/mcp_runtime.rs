@@ -76,6 +76,8 @@ mod unix_tests {
         let mut environment = environment;
         environment.insert(fixture::FIXTURE_MODE_ENV.to_owned(), "1".to_owned());
         McpServerBinding {
+            credentials: rustx::credentials::SourceCredentials::default(),
+            activation: rustx::capabilities::activation::SourceActivation::Enabled,
             resource_workspace: None,
             transport: McpTransportConfig::Stdio {
                 program: std::env::current_exe()
@@ -331,6 +333,8 @@ mod unix_tests {
         let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
         let server_id = McpServerId::new("legacy-fixture");
         let binding = McpServerBinding {
+            credentials: rustx::credentials::SourceCredentials::default(),
+            activation: rustx::capabilities::activation::SourceActivation::Enabled,
             resource_workspace: None,
             transport: McpTransportConfig::Stdio {
                 program: std::env::current_exe()
@@ -505,6 +509,8 @@ mod unix_tests {
         let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
         let server_id = McpServerId::new("legacy-invalid-request");
         let binding = McpServerBinding {
+            credentials: rustx::credentials::SourceCredentials::default(),
+            activation: rustx::capabilities::activation::SourceActivation::Enabled,
             resource_workspace: None,
             transport: McpTransportConfig::Stdio {
                 program: std::env::current_exe()
@@ -596,6 +602,8 @@ mod unix_tests {
         let workspace_dir = tempfile::tempdir().expect("workspace");
         let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
         let binding = McpServerBinding {
+            credentials: rustx::credentials::SourceCredentials::default(),
+            activation: rustx::capabilities::activation::SourceActivation::Enabled,
             resource_workspace: None,
             transport: McpTransportConfig::Stdio {
                 program: std::env::current_exe()
@@ -700,6 +708,7 @@ mod unix_tests {
             "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
             "mcpServers": {
                 "exa-local": {
+                    "enabled": true,
                     "type": "stdio",
                     "command": program,
                     "args": args,
@@ -736,10 +745,12 @@ mod unix_tests {
             })
             .resolve(),
             &rustx::local_runtime::composition::LocalRuntimeDependencies {
-                credentials: Arc::new(rustx::model::catalog::MapCredentialEnvironment::new([(
-                    "RUSTX_ISSUE46_KEY".to_owned(),
-                    "issue46-secret".to_owned(),
-                )])),
+                credentials: Some(Arc::new(
+                    rustx::model::catalog::MapCredentialEnvironment::new([(
+                        "RUSTX_ISSUE46_KEY".to_owned(),
+                        "issue46-secret".to_owned(),
+                    )]),
+                )),
                 ..Default::default()
             },
         )
@@ -816,6 +827,8 @@ mod unix_tests {
         let runtime = McpServerRuntime::connect(
             &McpServerId::new("http-fixture"),
             &McpServerBinding {
+                credentials: rustx::credentials::SourceCredentials::default(),
+                activation: rustx::capabilities::activation::SourceActivation::Enabled,
                 resource_workspace: None,
                 transport: McpTransportConfig::StreamableHttp {
                     endpoint: format!("http://{address}/mcp"),
@@ -868,6 +881,8 @@ mod unix_tests {
         journal: &std::path::Path,
     ) -> McpServerBinding {
         McpServerBinding {
+            credentials: rustx::credentials::SourceCredentials::default(),
+            activation: rustx::capabilities::activation::SourceActivation::Enabled,
             resource_workspace: None,
             transport: McpTransportConfig::Stdio {
                 program: std::env::current_exe()
@@ -1116,6 +1131,7 @@ mod unix_tests {
         let server_id = McpServerId::new("raw-fixture");
         let coordinator = rustx::capabilities::CapabilityCoordinator::new(
             rustx::capabilities::CapabilityCoordinatorConfig {
+                python_sources: std::collections::BTreeMap::new(),
                 conversation_id: rustx::runtime::identity::ConversationId::new("conv-raw-attribution"),
                 workspace: rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace"),
                 base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
@@ -1341,6 +1357,8 @@ mod unix_tests {
 
         fn binding(&self) -> McpServerBinding {
             McpServerBinding {
+                credentials: rustx::credentials::SourceCredentials::default(),
+                activation: rustx::capabilities::activation::SourceActivation::Enabled,
                 resource_workspace: None,
                 transport: McpTransportConfig::StreamableHttp {
                     endpoint: self.endpoint.clone(),

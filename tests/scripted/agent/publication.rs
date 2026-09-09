@@ -1001,6 +1001,7 @@ async fn runtime_fixture(conversation: &str, model: Arc<FakeModel>) -> RuntimeFi
     )
     .expect("tool runtime");
     let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+        python_sources: std::collections::BTreeMap::new(),
         conversation_id: tool_runtime.conversation_id().clone(),
         workspace: tool_runtime.workspace().clone(),
         base_tool_registry: Arc::new(ToolRegistry::new()),

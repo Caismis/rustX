@@ -98,10 +98,10 @@ fn startup(root: &std::path::Path, models: &str, config: &str) -> LaunchFixture 
 
 fn dependencies() -> LocalRuntimeDependencies {
     LocalRuntimeDependencies {
-        credentials: Arc::new(MapCredentialEnvironment::new([(
+        credentials: Some(Arc::new(MapCredentialEnvironment::new([(
             CREDENTIAL_VARIABLE.to_owned(),
             CREDENTIAL_VALUE.to_owned(),
-        )])),
+        )]))),
         ..LocalRuntimeDependencies::default()
     }
 }

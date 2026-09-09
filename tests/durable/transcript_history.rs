@@ -581,10 +581,10 @@ fn startup(root: &Path) -> LaunchFixture {
 
 fn dependencies() -> LocalRuntimeDependencies {
     LocalRuntimeDependencies {
-        credentials: Arc::new(MapCredentialEnvironment::new([(
+        credentials: Some(Arc::new(MapCredentialEnvironment::new([(
             "RUSTX_ISSUE110_KEY".to_owned(),
             "issue110-secret".to_owned(),
-        )])),
+        )]))),
         ..LocalRuntimeDependencies::default()
     }
 }

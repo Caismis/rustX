@@ -329,6 +329,11 @@ impl std::fmt::Debug for McpTransportConfig {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpServerBinding {
+    /// Host-authorized references and private resolved instance state.
+    #[serde(default)]
+    pub credentials: crate::credentials::SourceCredentials,
+    /// Frozen source admission, independent of execution-domain Tool admission.
+    pub activation: crate::capabilities::activation::SourceActivation,
     /// Project-origin local resources remain constrained on every connection,
     /// including reconnection and frozen child materialization. Host bindings
     /// carry no project restriction. This is not a project-configurable field.
@@ -344,6 +349,8 @@ impl std::fmt::Debug for McpServerBinding {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("McpServerBinding")
+            .field("activation", &self.activation)
+            .field("credentials", &self.credentials)
             .field("resource_workspace", &self.resource_workspace)
             .field("transport", &self.transport)
             .field("policy", &self.policy)
@@ -402,8 +409,24 @@ impl std::fmt::Display for McpError {
 
 impl std::error::Error for McpError {}
 
+impl McpError {
+    fn redacted(mut self, credentials: &crate::credentials::SourceCredentials) -> Self {
+        let message = match &mut self {
+            Self::Configuration(message)
+            | Self::Discovery(message)
+            | Self::ProtocolCompatibility(message)
+            | Self::ProtocolViolation(message)
+            | Self::Execution(message)
+            | Self::PhysicalSettlement(message) => message,
+        };
+        *message = credentials.redact(message);
+        self
+    }
+}
+
 /// One shared runtime for every tool exposed by a configured server.
 pub struct McpServerRuntime {
+    credentials: crate::credentials::SourceCredentials,
     server_id: McpServerId,
     protocol_version: ProtocolVersion,
     peer: rmcp::Peer<RoleClient>,
@@ -770,6 +793,7 @@ impl McpRuntimeGeneration {
     }
 
     pub(crate) fn retire(&self) {
+        self.inner.connection.retire_activation();
         let first_retirement = {
             let mut state = self
                 .inner
@@ -2032,6 +2056,14 @@ impl McpServerRuntime {
     /// when the owner was cancelled before the handshake completed.
     #[allow(clippy::too_many_lines)]
     pub(crate) async fn connect_owned(request: OwnedConnect<'_>) -> Result<Arc<Self>, McpError> {
+        let credentials = request.binding.credentials.clone();
+        Self::connect_admitted(request)
+            .await
+            .map_err(|error| error.redacted(&credentials))
+    }
+
+    #[allow(clippy::too_many_lines)] // one existing transport ownership and settlement boundary
+    async fn connect_admitted(request: OwnedConnect<'_>) -> Result<Arc<Self>, McpError> {
         let OwnedConnect {
             server_id,
             binding,
@@ -2041,6 +2073,14 @@ impl McpServerRuntime {
             #[cfg(test)]
             ownership_pause,
         } = request;
+        binding
+            .activation
+            .admit()
+            .map_err(|reason| McpError::Configuration(format!("source {server_id}: {reason}")))?;
+        let credentials = binding
+            .credentials
+            .resolve()
+            .map_err(|reason| McpError::Configuration(format!("source {server_id}: {reason}")))?;
         // Defensive: `McpServerBindings` keys come from validated session
         // configuration, but `connect` is reachable without that parser.
         if server_id.as_str().is_empty() {
@@ -2097,6 +2137,12 @@ impl McpServerRuntime {
                     environment
                         .iter()
                         .map(|(key, value)| (key.clone(), value.clone())),
+                );
+                explicit_environment.extend(
+                    credentials
+                        .environment
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.expose().to_owned())),
                 );
                 let process = SupervisedInteractiveProcess::spawn(InteractiveProcessSpec {
                     program: PathBuf::from(program),
@@ -2215,6 +2261,16 @@ impl McpServerRuntime {
                         Ok((name, value))
                     })
                     .collect::<Result<_, McpError>>()?;
+                for (name, value) in &credentials.headers {
+                    let name = http::HeaderName::try_from(name).map_err(|_| {
+                        McpError::Configuration("invalid sensitive HTTP header name".into())
+                    })?;
+                    let mut value = http::HeaderValue::try_from(value.expose()).map_err(|_| {
+                        McpError::Configuration("invalid sensitive HTTP header value".into())
+                    })?;
+                    value.set_sensitive(true);
+                    transport_config.custom_headers.insert(name, value);
+                }
                 transport_config.reinit_on_expired_session = false;
                 transport_config.allow_stateless = true;
                 // rustX supplies the HTTP client rather than taking rmcp's
@@ -2285,6 +2341,7 @@ impl McpServerRuntime {
             .await);
         }
         let runtime = Arc::new(Self {
+            credentials: binding.credentials.clone(),
             server_id: server_id.clone(),
             protocol_version: info.protocol_version.clone(),
             peer,
@@ -2443,7 +2500,7 @@ impl McpServerRuntime {
             .lock()
             .expect("MCP transport failure lock poisoned");
         if failure.is_none() {
-            *failure = Some(bound_error(reason));
+            *failure = Some(bound_error(&self.credentials.redact(reason)));
         }
     }
 
@@ -2476,6 +2533,12 @@ impl McpServerRuntime {
     /// Returns an error when the remote catalog cannot be fetched or a tool
     /// cannot be translated into rustX's canonical schema contract.
     pub async fn list_tools(&self) -> Result<Vec<CanonicalMcpTool>, McpError> {
+        self.list_tools_admitted()
+            .await
+            .map_err(|error| error.redacted(&self.credentials))
+    }
+
+    async fn list_tools_admitted(&self) -> Result<Vec<CanonicalMcpTool>, McpError> {
         let _call_gate = self.call_gate.read().await;
         // A generation that already violated the protocol never serves a
         // healthy catalog, and the precise violation diagnostic outranks
@@ -2724,6 +2787,25 @@ impl McpServerRuntime {
     /// remote response exists is the outcome unknown; dropping the response
     /// future is never used as evidence of anything.
     async fn call(
+        &self,
+        remote_name: &str,
+        arguments: serde_json::Value,
+        context: &ToolExecutionContext<'_>,
+        generation: u64,
+    ) -> ToolExecutionResult {
+        let mut result =
+            Box::pin(self.call_admitted(remote_name, arguments, context, generation)).await;
+        match &mut result.status {
+            ToolExecutionStatus::Failed { error }
+            | ToolExecutionStatus::OutcomeUnknown { detail: error } => {
+                *error = self.credentials.redact(error);
+            }
+            _ => {}
+        }
+        result
+    }
+
+    async fn call_admitted(
         &self,
         remote_name: &str,
         arguments: serde_json::Value,

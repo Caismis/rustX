@@ -194,19 +194,36 @@ pub fn python_server_id(folder_name: &str) -> McpServerId {
 pub fn discover_python_packages(
     workspace: &Workspace,
 ) -> Result<Vec<DiscoveredPythonPackage>, PythonToolError> {
+    discover_admitted_python_packages(workspace, |_| true)
+}
+
+/// Bounded inert directory discovery. Package bytes are read only after admission.
+pub(crate) fn discover_admitted_python_packages(
+    workspace: &Workspace,
+    mut admitted: impl FnMut(&McpServerId) -> bool,
+) -> Result<Vec<DiscoveredPythonPackage>, PythonToolError> {
     let tools_root = workspace.root().join(TOOLS_DIRECTORY).join(TOOLS_ROOT);
     if !tools_root.exists() {
         return Ok(Vec::new());
     }
     let mut entries = std::fs::read_dir(&tools_root)
         .map_err(io_error)?
+        .take(1025)
         .collect::<Result<Vec<_>, _>>()
         .map_err(io_error)?;
+    if entries.len() > 1024 {
+        return Err(PythonToolError::Storage(
+            "managed Python discovery exceeds 1024 entries".into(),
+        ));
+    }
     entries.sort_by_key(std::fs::DirEntry::file_name);
     let mut discovered = Vec::with_capacity(entries.len());
     for entry in entries {
         let folder_name = entry.file_name().to_string_lossy().into_owned();
         let server_id = python_server_id(&folder_name);
+        if !admitted(&server_id) {
+            continue;
+        }
         discovered.push(DiscoveredPythonPackage {
             server_id,
             outcome: discover_package(&entry.path(), &folder_name),
@@ -799,6 +816,8 @@ impl PreparedPythonPackage {
         environment.insert("FASTMCP_CHECK_FOR_UPDATES".to_owned(), "off".to_owned());
         environment.insert("PYTHONDONTWRITEBYTECODE".to_owned(), "1".to_owned());
         McpServerBinding {
+            credentials: crate::credentials::SourceCredentials::default(),
+            activation: crate::capabilities::activation::SourceActivation::Enabled,
             resource_workspace: None,
             transport: McpTransportConfig::Stdio {
                 program: program.display().to_string(),

@@ -217,6 +217,7 @@ async fn child_fixture_at(
     .expect("child tool runtime");
     let capability = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
+            python_sources: std::collections::BTreeMap::new(),
             conversation_id: conversation_id.clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: Arc::new(tools),
@@ -481,6 +482,7 @@ async fn compose_parent_runtime_plane(
     .expect("parent tool runtime");
     let capability = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
+            python_sources: std::collections::BTreeMap::new(),
             conversation_id: conversation_id.clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: Arc::new(ToolRegistry::new()),

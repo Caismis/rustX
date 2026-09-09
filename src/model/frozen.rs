@@ -28,20 +28,18 @@
 //! [`FrozenModelSpec`] closes that race by carrying the already-resolved
 //! semantics across the process boundary. The child performs only
 //! **physical materialization**: it constructs the provider adapter from
-//! the frozen provider binding and resolves the declared credential source
-//! against its own process environment — exactly the credential boundary
-//! rustX already has — and never opens `models.jsonc` again.
+//! the frozen provider binding and the parent's privately transferred admitted
+//! credential. It never opens `models.jsonc` again or rebinds a changing host
+//! environment to the parent's frozen destination.
 //!
 //! # What deliberately does not cross
 //!
 //! - `Arc<dyn ModelAdapter>` — an adapter is a live HTTP client, not data.
 //!   It is rebuilt on the child side from the frozen provider binding.
-//! - A resolved credential *value*. The frozen binding carries the
-//!   declared [`CredentialSource`] (the same bounded two-form syntax the
-//!   catalog declares), and the child resolves it through the ordinary
-//!   [`CredentialEnvironment`] seam. A literal source is literal in the
-//!   catalog too; an `$ENV_VAR` source is read from the child's own
-//!   environment, never captured from the parent's.
+//! - A resolved credential *value* in serialized control data. In-process
+//!   bindings retain a nonserializable cache. The child process owner exports
+//!   admitted values through private environment entries and rewrites the wire
+//!   references to those entries. Ordinary serialization redacts literals.
 //! - The rest of the catalog. A frozen spec authorizes exactly one primary
 //!   model and at most one explicit summary model — nothing else is
 //!   selectable in the child, because a child has no mutable model
@@ -66,18 +64,30 @@ use crate::model::types::ModelProtocol;
 /// each supported protocol adapter from an endpoint and a credential, so a
 /// frozen endpoint plus a frozen credential source reproduces the exact
 /// binding the parent resolved without any catalog lookup.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FrozenProviderBinding {
+    /// Admitted in-process credential. Never part of serialized configuration.
+    #[serde(skip)]
+    pub resolved_credential: Option<ResolvedCredential>,
     /// The provider identity of the binding.
     pub provider: ProviderId,
     /// The explicit provider endpoint frozen with the binding.
     pub base_url: String,
-    /// The declared credential source, resolved by the consuming process
-    /// against its own [`CredentialEnvironment`].
-    #[serde(with = "credential_source_wire")]
+    /// The declared credential source; the process owner rewrites this to a
+    /// private transfer reference before serializing a child specification.
     pub credential: CredentialSource,
 }
+
+impl PartialEq for FrozenProviderBinding {
+    fn eq(&self, other: &Self) -> bool {
+        // The in-process credential cache is not serialized binding identity.
+        self.provider == other.provider
+            && self.base_url == other.base_url
+            && self.credential == other.credential
+    }
+}
+impl Eq for FrozenProviderBinding {}
 
 impl core::fmt::Debug for FrozenProviderBinding {
     /// Redacted: a literal credential never appears in debug output, which
@@ -88,44 +98,8 @@ impl core::fmt::Debug for FrozenProviderBinding {
             .field("provider", &self.provider)
             .field("base_url", &self.base_url)
             .field("credential", &self.credential)
+            .field("resolved_credential", &self.resolved_credential)
             .finish()
-    }
-}
-
-/// The one serialization of the bounded credential-source syntax.
-///
-/// [`CredentialSource`] is deliberately not `Serialize` in general: making
-/// it so would let a credential leak into any view, event, or snapshot that
-/// happens to embed it. This module is the single audited place where a
-/// declared source crosses a process boundary, and it emits exactly the
-/// catalog's own two-form spelling (`"$ENV_VAR"` or a literal), which
-/// [`CredentialSource::parse`] reads back. The round trip is total because
-/// the parser is the only constructor: a literal can never begin with `$`,
-/// so the two spellings never collide.
-mod credential_source_wire {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    use crate::model::catalog::{CredentialSource, ProviderId};
-
-    pub(super) fn serialize<S: Serializer>(
-        value: &CredentialSource,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        let declared = match value {
-            CredentialSource::Literal(literal) => literal.clone(),
-            CredentialSource::Environment(variable) => format!("${variable}"),
-        };
-        declared.serialize(serializer)
-    }
-
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<CredentialSource, D::Error> {
-        let declared = String::deserialize(deserializer)?;
-        // The provider identity only shapes the rejection diagnostic; the
-        // frozen value was already validated by catalog admission.
-        let provider = ProviderId::parse("frozen").map_err(serde::de::Error::custom)?;
-        CredentialSource::parse(&declared, &provider).map_err(serde::de::Error::custom)
     }
 }
 
@@ -169,9 +143,8 @@ pub struct FrozenModelInvocation {
 impl FrozenModelInvocation {
     /// Physically materializes this frozen invocation.
     ///
-    /// The only work done here is adapter construction: the credential
-    /// source is resolved against `credentials` — the consuming process's
-    /// ordinary credential boundary — and the protocol adapter is built
+    /// The only work done here is adapter construction: the admitted cached
+    /// credential (or private child transfer reference) is used, and the adapter is built
     /// from the frozen endpoint. No catalog is opened, no model is chosen,
     /// and no semantic field is recomputed.
     ///
@@ -250,6 +223,30 @@ pub struct FrozenModelSpec {
 }
 
 impl FrozenModelSpec {
+    /// Transfer the admitted provider instance through private child environment,
+    /// leaving only references on the serialized control channel.
+    pub(crate) fn export_process_credentials(&mut self, output: &mut Vec<(String, String)>) {
+        let mut export = |binding: &mut FrozenProviderBinding, slot: &str| {
+            let value = binding
+                .resolved_credential
+                .take()
+                .or_else(|| match &binding.credential {
+                    CredentialSource::Literal(value) => {
+                        Some(ResolvedCredential::new(value.clone()))
+                    }
+                    CredentialSource::Environment(_) => None,
+                });
+            if let Some(value) = value {
+                let name = format!("RUSTX_ADMITTED_PROVIDER_{slot}");
+                output.push((name.clone(), value.expose().to_owned()));
+                binding.credential = CredentialSource::Environment(name);
+            }
+        };
+        export(&mut self.primary.binding, "PRIMARY");
+        if let FrozenSummaryModel::Explicit(invocation) = &mut self.summary {
+            export(&mut invocation.binding, "SUMMARY");
+        }
+    }
     /// Freezes one desired configuration against an already-admitted
     /// binding registry.
     ///
@@ -326,9 +323,10 @@ pub(crate) fn test_frozen_model_spec(model: ModelRef) -> FrozenModelSpec {
         configured: SessionModelConfig::of(model.clone()),
         primary: FrozenModelInvocation {
             binding: FrozenProviderBinding {
+                resolved_credential: Some(ResolvedCredential::new("test-only-secret")),
                 provider: model.provider().clone(),
                 base_url: "http://127.0.0.1:9/v1".to_owned(),
-                credential: CredentialSource::Literal("test-only-secret".to_owned()),
+                credential: CredentialSource::Environment("RUSTX_TEST_FROZEN_KEY".to_owned()),
             },
             model,
             protocol: ModelProtocol::OpenAiChatCompletions,
@@ -351,6 +349,9 @@ fn resolve_frozen_credential(
     binding: &FrozenProviderBinding,
     credentials: &dyn CredentialEnvironment,
 ) -> Result<ResolvedCredential, ModelInvocationError> {
+    if let Some(value) = &binding.resolved_credential {
+        return Ok(value.clone());
+    }
     match &binding.credential {
         CredentialSource::Literal(value) => Ok(ResolvedCredential::new(value.clone())),
         CredentialSource::Environment(name) => credentials
@@ -443,7 +444,7 @@ mod tests {
     /// process, so a different environment is a materialization failure
     /// rather than a silent parent-credential capture.
     #[test]
-    fn an_environment_credential_is_resolved_by_the_consumer() {
+    fn an_admitted_credential_is_frozen_without_serializing_its_value() {
         let frozen = FrozenModelSpec::freeze(&registry(M1), &config()).expect("freeze");
         assert!(
             !serde_json::to_string(&frozen)
@@ -454,8 +455,8 @@ mod tests {
         assert!(
             frozen
                 .materialize(&MapCredentialEnvironment::default())
-                .is_err(),
-            "the consumer resolves the declared source in its own environment"
+                .is_ok(),
+            "admitted in-process use keeps its frozen credential"
         );
     }
 
@@ -463,7 +464,7 @@ mod tests {
     /// unchanged, so a frozen binding names the same source the catalog
     /// declared.
     #[test]
-    fn both_credential_source_spellings_round_trip() {
+    fn references_round_trip_and_literal_projections_are_not_replayable() {
         use crate::model::catalog::{CredentialSource, CredentialSourceView};
 
         for (declared, expected) in [
@@ -479,14 +480,14 @@ mod tests {
             frozen.primary.binding.credential =
                 CredentialSource::parse(declared, &frozen.primary.binding.provider)
                     .expect("declared source parses");
-            let decoded: FrozenModelSpec =
-                serde_json::from_slice(&serde_json::to_vec(&frozen).expect("encode"))
-                    .expect("decode");
-            assert_eq!(
-                decoded.primary.binding.credential,
-                frozen.primary.binding.credential
-            );
-            assert_eq!(decoded.primary.binding.credential.view(), expected);
+            let encoded = serde_json::to_string(&frozen).expect("encode");
+            assert!(!encoded.contains("a-literal-value"));
+            let decoded = serde_json::from_str::<FrozenModelSpec>(&encoded);
+            if matches!(expected, CredentialSourceView::Literal) {
+                assert!(decoded.is_err());
+            } else {
+                assert_eq!(decoded.unwrap().primary.binding.credential.view(), expected);
+            }
         }
     }
 

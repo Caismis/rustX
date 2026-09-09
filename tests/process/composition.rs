@@ -81,10 +81,10 @@ fn startup(root: &std::path::Path, models: &str, config: &str) -> LaunchFixture 
 /// endpoint; this test exercises startup without invoking a model turn.
 fn dependencies() -> LocalRuntimeDependencies {
     LocalRuntimeDependencies {
-        credentials: Arc::new(MapCredentialEnvironment::new([(
+        credentials: Some(Arc::new(MapCredentialEnvironment::new([(
             "RUSTX_TEST_MODEL_KEY".to_owned(),
             "composed-secret".to_owned(),
-        )])),
+        )]))),
         ..LocalRuntimeDependencies::default()
     }
 }
@@ -261,7 +261,7 @@ async fn startup_configuration_failures_are_explicit() {
     let error = LocalConversationRuntime::compose(
         &(paths).resolve(),
         &LocalRuntimeDependencies {
-            credentials: Arc::new(MapCredentialEnvironment::default()),
+            credentials: Some(Arc::new(MapCredentialEnvironment::default())),
             ..LocalRuntimeDependencies::default()
         },
     )

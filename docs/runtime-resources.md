@@ -1,5 +1,11 @@
 # Runtime resources and executable authority
 
+External discovery is inert until host trust and explicit source activation
+admit preparation. See [source activation and credentials](source-activation.md)
+for JSONC settings, whole-source replacement, secret authority, and the exact
+publication/retirement/reconnect frontiers. `--no-tools` is model exposure
+control and does not disable external preparation.
+
 ## Launch authority and resource paths
 
 Project trust permits project resources, never Tool approval policy.
@@ -166,9 +172,9 @@ nominal:
   profile and its semantic enabled state, effective request parameters,
   effective capabilities, and compat metadata — not as a
   `SessionModelConfig` plus a catalog path. The child builds the provider
-  adapter from the frozen binding and resolves the declared credential
-  source against its own process environment, which is rustX's existing
-  credential boundary; it never re-resolves a model against a mutable
+  adapter from the frozen binding. Admitted credential values transfer through
+  the private child environment, with references on the control channel;
+  normal serialization redacts literals. It never re-resolves a model against a mutable
   catalog file that may have changed since the parent froze it;
 - each Builtin capability crosses as its exact admitted `ToolDefinition`, so
   a generation's non-default execution, concurrency, or approval policy is

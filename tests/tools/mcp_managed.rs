@@ -636,6 +636,14 @@ async fn a_server_failing_at_startup_is_isolated_and_diagnosed() {
 
     let coordinator = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
+            python_sources: ["crasher", "exportless"]
+                .map(|name| {
+                    (
+                        python_server_id(name),
+                        rustx::capabilities::activation::SourceActivation::Enabled,
+                    )
+                })
+                .into(),
             conversation_id: ConversationId::new("conv-managed-startup"),
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
@@ -781,6 +789,11 @@ def add(a: int, b: int) -> str:
 
     let coordinator = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
+            python_sources: [(
+                python_server_id("calc"),
+                rustx::capabilities::activation::SourceActivation::Enabled,
+            )]
+            .into(),
             conversation_id: ConversationId::new("conv-managed-freeze"),
             workspace: Workspace::new(&workspace_root).expect("workspace"),
             base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),

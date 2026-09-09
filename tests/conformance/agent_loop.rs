@@ -190,10 +190,10 @@ impl Driver {
             runtime_root: root.path().join("private"),
         };
         let dependencies = LocalRuntimeDependencies {
-            credentials: Arc::new(MapCredentialEnvironment::new([(
+            credentials: Some(Arc::new(MapCredentialEnvironment::new([(
                 CREDENTIAL_VARIABLE.to_owned(),
                 CREDENTIAL_VALUE.to_owned(),
-            )])),
+            )]))),
             ..LocalRuntimeDependencies::default()
         };
         let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies)
@@ -1438,10 +1438,10 @@ async fn a_crash_after_the_request_start_commit_never_resends_the_request() {
 /// The composition dependencies shared by both runtime instances above.
 fn dependencies() -> LocalRuntimeDependencies {
     LocalRuntimeDependencies {
-        credentials: Arc::new(MapCredentialEnvironment::new([(
+        credentials: Some(Arc::new(MapCredentialEnvironment::new([(
             CREDENTIAL_VARIABLE.to_owned(),
             CREDENTIAL_VALUE.to_owned(),
-        )])),
+        )]))),
         ..LocalRuntimeDependencies::default()
     }
 }

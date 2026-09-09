@@ -1288,6 +1288,7 @@ pub async fn capability_lease(
     let dir = tempfile::tempdir().expect("capability temp dir");
     let coordinator = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
+            python_sources: std::collections::BTreeMap::new(),
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: std::sync::Arc::new(tools),
