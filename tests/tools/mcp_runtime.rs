@@ -115,6 +115,28 @@ mod unix_tests {
         workspace_dir: &tempfile::TempDir,
         conversation: &str,
     ) -> rustx::tools::types::ToolExecutionResult {
+        call_canonical_tool_with(
+            runtime,
+            server_id,
+            tools,
+            name,
+            serde_json::json!({}),
+            workspace_dir,
+            conversation,
+        )
+        .await
+    }
+
+    /// The same canonical executor boundary with explicit tool arguments.
+    async fn call_canonical_tool_with(
+        runtime: &Arc<McpServerRuntime>,
+        server_id: &McpServerId,
+        tools: Vec<rustx::tools::mcp::CanonicalMcpTool>,
+        name: &str,
+        arguments: serde_json::Value,
+        workspace_dir: &tempfile::TempDir,
+        conversation: &str,
+    ) -> rustx::tools::types::ToolExecutionResult {
         let definitions = rustx::tools::mcp::definitions(
             server_id,
             ToolInvocationPolicy::default(),
@@ -141,7 +163,7 @@ mod unix_tests {
                 tool_id: definition.id.clone(),
                 tool_name: name.to_owned(),
                 mode: rustx::tools::types::ToolInvocationMode::Foreground,
-                arguments: serde_json::json!({}),
+                arguments,
             },
             rustx::tools::executor::ToolExecutionContext::new(
                 bundle.conversation_id(),
@@ -1223,5 +1245,522 @@ mod unix_tests {
                 .any(|entry| entry == rustx::tools::mcp::fixture::raw::JOURNAL_ECHO),
             "the call reached the peer: {journal:?}"
         );
+    }
+    // -----------------------------------------------------------------
+    // MCP-01 (Issue #240): modern client semantics and SDK cache policy
+    // -----------------------------------------------------------------
+
+    /// One HTTP exchange as the wire actually carried it.
+    #[derive(Clone)]
+    struct HttpExchange {
+        request: http::HeaderMap,
+        response: http::HeaderMap,
+    }
+
+    impl HttpExchange {
+        fn request_header(&self, name: &str) -> Option<String> {
+            self.request
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned)
+        }
+    }
+
+    /// One in-process Streamable HTTP host serving the official-rmcp fixture,
+    /// recording every inbound request header and every outbound response
+    /// header.
+    ///
+    /// The recorder is a passive observer around rmcp's own server service:
+    /// it never adds, removes, or rewrites a header, so what it reports is
+    /// exactly what the SDK generated on one side and what rustX's request
+    /// ownership wrapper forwarded on the other.
+    struct HttpFixtureHost {
+        endpoint: String,
+        exchanges: Arc<std::sync::Mutex<Vec<HttpExchange>>>,
+        cancellation: tokio_util::sync::CancellationToken,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    async fn record_exchange(
+        axum::extract::State(exchanges): axum::extract::State<
+            Arc<std::sync::Mutex<Vec<HttpExchange>>>,
+        >,
+        request: axum::extract::Request,
+        next: axum::middleware::Next,
+    ) -> axum::response::Response {
+        let recorded = request.headers().clone();
+        let response = next.run(request).await;
+        exchanges
+            .lock()
+            .expect("HTTP exchange recorder lock")
+            .push(HttpExchange {
+                request: recorded,
+                response: response.headers().clone(),
+            });
+        response
+    }
+
+    impl HttpFixtureHost {
+        async fn start(fixture: FixtureServer) -> Self {
+            use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+            use rmcp::transport::streamable_http_server::{
+                StreamableHttpServerConfig, StreamableHttpService,
+            };
+
+            let cancellation = tokio_util::sync::CancellationToken::new();
+            // Defaults, deliberately: `legacy_session_mode` stays on, so this
+            // server *is* session-capable. A modern connection that carries no
+            // session id therefore proves a negotiated protocol property, not
+            // a server that never had sessions to give.
+            let mut config = StreamableHttpServerConfig::default();
+            config.cancellation_token = cancellation.child_token();
+            config.sse_keep_alive = None;
+            let service = StreamableHttpService::<FixtureServer, LocalSessionManager>::new(
+                move || Ok(fixture.clone()),
+                Arc::default(),
+                config,
+            );
+            let exchanges = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let router = axum::Router::new().nest_service("/mcp", service).layer(
+                axum::middleware::from_fn_with_state(Arc::clone(&exchanges), record_exchange),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("HTTP listener");
+            let address = listener.local_addr().expect("HTTP address");
+            let task = tokio::spawn(async move {
+                let _ = axum::serve(listener, router).await;
+            });
+            Self {
+                endpoint: format!("http://{address}/mcp"),
+                exchanges,
+                cancellation,
+                task,
+            }
+        }
+
+        fn binding(&self) -> McpServerBinding {
+            McpServerBinding {
+                resource_workspace: None,
+                transport: McpTransportConfig::StreamableHttp {
+                    endpoint: self.endpoint.clone(),
+                    headers: BTreeMap::new(),
+                },
+                policy: ToolInvocationPolicy::default(),
+            }
+        }
+
+        async fn connect(&self, workspace_dir: &tempfile::TempDir) -> Arc<McpServerRuntime> {
+            let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
+            McpServerRuntime::connect(
+                &McpServerId::new("http-fixture"),
+                &self.binding(),
+                &workspace,
+                Arc::new(McpInvalidationState::new()),
+            )
+            .await
+            .expect("the HTTP fixture must connect")
+        }
+
+        fn exchanges(&self) -> Vec<HttpExchange> {
+            self.exchanges
+                .lock()
+                .expect("HTTP exchange recorder lock")
+                .clone()
+        }
+
+        async fn shutdown(self) {
+            self.cancellation.cancel();
+            self.task.abort();
+            let _ = self.task.await;
+        }
+    }
+
+    /// **The MCP 2026-07-28 negotiation contract.** A peer that advertises
+    /// only `2026-07-28` is reached through `server/discover` and negotiates
+    /// exactly that revision.
+    ///
+    /// The proof is wire behavior, not a helper predicate:
+    ///
+    /// - the fixture counts the `server/discover` probes it answered, and
+    ///   exactly one arrived;
+    /// - the fixture serves *only* `2026-07-28`, and rmcp's `Auto` legacy
+    ///   fallback offers `legacy_handshake_version()` — a pre-inline
+    ///   revision this server does not speak. A legacy handshake could
+    ///   therefore not have produced a live connection at all, so the
+    ///   established connection is necessarily the inline one.
+    ///
+    /// rustX stays unpinned: it keeps offering the SDK's complete revision
+    /// set, which is what lets the same code negotiate down elsewhere in
+    /// this suite.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_modern_peer_negotiates_2026_07_28_through_server_discover() {
+        let fixture = FixtureServer {
+            list_changed_supported: true,
+            supported_versions: Some(vec![ProtocolVersion::V_2026_07_28]),
+            ..FixtureServer::default()
+        };
+        let discover_calls = fixture.discover_calls.clone();
+        let host = HttpFixtureHost::start(fixture).await;
+        let workspace_dir = tempfile::tempdir().expect("workspace");
+        let runtime = host.connect(&workspace_dir).await;
+
+        assert_eq!(
+            runtime.protocol_version(),
+            &ProtocolVersion::V_2026_07_28,
+            "the modern revision is what the connection actually negotiated"
+        );
+        assert_eq!(
+            discover_calls.load(std::sync::atomic::Ordering::Acquire),
+            1,
+            "the inline lifecycle probed `server/discover` exactly once"
+        );
+        assert!(
+            rustx::tools::mcp::supported_protocol_versions().len() > 1,
+            "rustX is not pinned to one wire revision: it offers the SDK's whole set"
+        );
+        assert_eq!(
+            runtime
+                .list_tools()
+                .await
+                .expect("tools/list")
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            ["echo", "mutate", "slow"],
+            "the modern connection serves the catalog over the negotiated revision"
+        );
+        runtime.close().await.expect("physical settlement");
+        host.shutdown().await;
+    }
+
+    /// **The modern invalidation contract.** A negotiated `2026-07-28`
+    /// connection installs `subscriptions/listen` exactly once, and one
+    /// received `tools/list_changed` advances the shared invalidation epoch
+    /// exactly once.
+    ///
+    /// Ordering is proven by the fixture's own acknowledgements — the
+    /// subscription-installed notify and the epoch's change notify — never
+    /// by elapsed time. The legacy callback path is not installed here: the
+    /// server emits the change *through the subscription sink*, so an epoch
+    /// advance is evidence the modern mechanism carried it, and the
+    /// unchanged listen counter is evidence no second mechanism exists.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_modern_change_notification_advances_the_epoch_exactly_once() {
+        let fixture = FixtureServer {
+            list_changed_supported: true,
+            supported_versions: Some(vec![ProtocolVersion::V_2026_07_28]),
+            ..FixtureServer::default()
+        };
+        let listen_calls = fixture.listen_calls.clone();
+        let listen_ready = fixture.listen_ready.clone();
+        let host = HttpFixtureHost::start(fixture).await;
+        let workspace_dir = tempfile::tempdir().expect("workspace");
+        let runtime = host.connect(&workspace_dir).await;
+        listen_ready.notified().await;
+
+        assert_eq!(runtime.protocol_version(), &ProtocolVersion::V_2026_07_28);
+        assert_eq!(
+            listen_calls.load(std::sync::atomic::Ordering::Acquire),
+            1,
+            "exactly one revision-appropriate invalidation mechanism is installed"
+        );
+
+        let server_id = McpServerId::new("http-fixture");
+        let tools = runtime.list_tools().await.expect("tools/list");
+        let epoch_before = runtime.change_epoch();
+        let result = call_canonical_tool(
+            &runtime,
+            &server_id,
+            tools,
+            "mutate",
+            &workspace_dir,
+            "issue240-modern-invalidation",
+        )
+        .await;
+        assert!(matches!(
+            result.status,
+            rustx::tools::types::ToolExecutionStatus::Success
+        ));
+        runtime.wait_for_change(epoch_before).await;
+        assert_eq!(
+            runtime.change_epoch(),
+            epoch_before + 1,
+            "one modern change notification advances the epoch exactly once"
+        );
+        assert_eq!(
+            listen_calls.load(std::sync::atomic::Ordering::Acquire),
+            1,
+            "the modern path never additionally installs the legacy callback"
+        );
+        assert_eq!(
+            runtime
+                .list_tools()
+                .await
+                .expect("refreshed tools/list")
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            ["echo", "new_tool"],
+            "the refresh that follows invalidation observes the new catalog"
+        );
+        // The refresh above is a full round trip on the same ordered stream
+        // the notification travelled, so any duplicate delivery of that one
+        // change would already have been processed by now. The epoch is
+        // still exactly one advance ahead: one event, one advance.
+        assert_eq!(
+            runtime.change_epoch(),
+            epoch_before + 1,
+            "no second invalidation mechanism replayed the same change"
+        );
+        runtime.close().await.expect("physical settlement");
+        host.shutdown().await;
+    }
+
+    /// **The positive-`ttlMs` regression.** A server that declares its
+    /// catalog fresh for ten minutes cannot make the next rustX refresh skip
+    /// the peer.
+    ///
+    /// The observation is behavioral: the fixture counts the `tools/list`
+    /// requests that actually reached it. With rmcp's response cache live,
+    /// the second refresh would be answered from the SDK's own store and the
+    /// counter would stay at one, which is exactly the second semantic
+    /// capability cache rustX must not have.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_positive_ttl_never_answers_the_next_catalog_refresh_from_the_sdk_cache() {
+        let fixture = FixtureServer {
+            list_changed_supported: true,
+            list_tools_ttl_ms: Some(600_000),
+            ..FixtureServer::default()
+        };
+        let list_calls = fixture.list_tools_calls.clone();
+        let host = HttpFixtureHost::start(fixture).await;
+        let workspace_dir = tempfile::tempdir().expect("workspace");
+        let runtime = host.connect(&workspace_dir).await;
+
+        let first = runtime.list_tools().await.expect("first tools/list");
+        assert_eq!(
+            list_calls.load(std::sync::atomic::Ordering::Acquire),
+            1,
+            "the first refresh contacted the peer"
+        );
+        let second = runtime.list_tools().await.expect("second tools/list");
+        assert_eq!(
+            list_calls.load(std::sync::atomic::Ordering::Acquire),
+            2,
+            "the second refresh contacted the peer again despite the positive ttlMs"
+        );
+        assert_eq!(first, second, "the peer answered both refreshes itself");
+        runtime.close().await.expect("physical settlement");
+        host.shutdown().await;
+    }
+
+    /// **The failed-refresh observability regression.** After a successful
+    /// catalog carrying a positive `ttlMs`, a refresh that really fails is
+    /// observed as the failure it is.
+    ///
+    /// This is the external contract, stated without reference to which SDK
+    /// cache branch could violate it: no cached success may ever stand in
+    /// for a failed refresh. Handing the capability coordinator a fabricated
+    /// success would rob it of the one fact its last-known-good contract is
+    /// built on — that *this* refresh failed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_failed_catalog_refresh_is_never_answered_by_a_stale_cached_success() {
+        let fixture = FixtureServer {
+            list_changed_supported: true,
+            list_tools_ttl_ms: Some(600_000),
+            list_tools_fail_from: Some(2),
+            ..FixtureServer::default()
+        };
+        let list_calls = fixture.list_tools_calls.clone();
+        let host = HttpFixtureHost::start(fixture).await;
+        let workspace_dir = tempfile::tempdir().expect("workspace");
+        let runtime = host.connect(&workspace_dir).await;
+
+        runtime
+            .list_tools()
+            .await
+            .expect("the first refresh succeeds and declares a positive ttlMs");
+        let failure = runtime
+            .list_tools()
+            .await
+            .expect_err("the second refresh must surface the real server failure");
+        assert!(
+            matches!(failure, McpError::Discovery(_)),
+            "a correlated remote catalog failure stays a discovery failure: {failure:?}"
+        );
+        assert_eq!(
+            list_calls.load(std::sync::atomic::Ordering::Acquire),
+            2,
+            "the failing refresh reached the peer instead of a cached entry"
+        );
+        // The transport is healthy: only the catalog request failed, so the
+        // generation is still usable and the failure is not transport loss.
+        runtime.close().await.expect("physical settlement");
+        host.shutdown().await;
+    }
+
+    /// **The Streamable HTTP transparency contract.** For a negotiated
+    /// `2026-07-28` connection, rustX's request-ownership wrapper is
+    /// protocol-transparent: the SDK's SEP-2243 routing metadata arrives at
+    /// the server unchanged, and no session identity exists on either side.
+    ///
+    /// Both halves are proven from the recorded wire, and both are facts
+    /// rustX does not manufacture: `Mcp-Method`, `Mcp-Name`, the
+    /// `Mcp-Param-*` promoted from the called tool's `x-mcp-header`
+    /// annotation, and `Mcp-Protocol-Version` are all generated inside rmcp
+    /// and merely forwarded. The statelessness half is a negotiated property
+    /// rather than a server that never had sessions to give: the host runs
+    /// with rmcp's default `legacy_session_mode`, so it is session-capable by
+    /// construction, and the test asserts that default holds alongside the
+    /// absence of any session id on the wire.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn modern_streamable_http_is_stateless_and_forwards_sdk_routing_headers() {
+        let fixture = FixtureServer {
+            list_changed_supported: true,
+            supported_versions: Some(vec![ProtocolVersion::V_2026_07_28]),
+            modern_conformance_tools: true,
+            ..FixtureServer::default()
+        };
+        let host = HttpFixtureHost::start(fixture).await;
+        let workspace_dir = tempfile::tempdir().expect("workspace");
+        let runtime = host.connect(&workspace_dir).await;
+        assert_eq!(runtime.protocol_version(), &ProtocolVersion::V_2026_07_28);
+
+        let server_id = McpServerId::new("http-fixture");
+        let tools = runtime.list_tools().await.expect("tools/list");
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == rustx::tools::mcp::fixture::ROUTED_TOOL),
+            "the routing conformance tool is published: {tools:?}"
+        );
+        let result = call_canonical_tool_with(
+            &runtime,
+            &server_id,
+            tools,
+            rustx::tools::mcp::fixture::ROUTED_TOOL,
+            serde_json::json!({"region": "us-west1"}),
+            &workspace_dir,
+            "issue240-routing-headers",
+        )
+        .await;
+        assert!(
+            matches!(
+                result.status,
+                rustx::tools::types::ToolExecutionStatus::Success
+            ),
+            "the routed call succeeded: {result:?}"
+        );
+        assert!(
+            result
+                .model_facing_projection()
+                .as_text()
+                .contains("us-west1"),
+            "the request body still carried the argument the header was promoted from: {result:?}"
+        );
+
+        let exchanges = host.exchanges();
+        let call = exchanges
+            .iter()
+            .find(|exchange| exchange.request_header("mcp-method").as_deref() == Some("tools/call"))
+            .expect("the tools/call POST was recorded");
+        assert_eq!(
+            call.request_header("mcp-name").as_deref(),
+            Some(rustx::tools::mcp::fixture::ROUTED_TOOL),
+            "rmcp's `Mcp-Name` reached the server unchanged"
+        );
+        assert_eq!(
+            call.request_header("mcp-protocol-version").as_deref(),
+            Some(ProtocolVersion::V_2026_07_28.as_str()),
+            "the negotiated revision travels with every modern request"
+        );
+        assert_eq!(
+            call.request_header(&format!(
+                "mcp-param-{}",
+                rustx::tools::mcp::fixture::ROUTED_TOOL_HEADER
+            ))
+            .as_deref(),
+            Some("us-west1"),
+            "the SDK-promoted `Mcp-Param-*` routing header survived the ownership wrapper"
+        );
+        assert!(
+            exchanges.iter().all(|exchange| {
+                exchange.request.get("mcp-session-id").is_none()
+                    && exchange.response.get("mcp-session-id").is_none()
+            }),
+            "a modern peer issues no MCP session id, and rustX invents none"
+        );
+        assert!(
+            rmcp::transport::streamable_http_server::StreamableHttpServerConfig::default()
+                .legacy_session_mode,
+            "the host under test is session-capable by construction, so the absence of a \
+             session id above is a negotiated 2026-07-28 property (SEP-2567) rather than a \
+             server that never had sessions to issue"
+        );
+        runtime.close().await.expect("physical settlement");
+        host.shutdown().await;
+    }
+
+    /// **The modern result-framing contract.** MCP 2026 complete results
+    /// whose `structuredContent` is a scalar or an array are accepted and
+    /// projected deterministically into rustX's existing canonical tool
+    /// result representation.
+    ///
+    /// `structuredContent` is arbitrary JSON at the adapter boundary and
+    /// stays arbitrary JSON in the canonical projection: rustX narrows it to
+    /// neither an object nor a typed output schema, and no new typed-output
+    /// framework exists to make that true.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn modern_result_framing_accepts_non_object_structured_content() {
+        let fixture = FixtureServer {
+            list_changed_supported: true,
+            supported_versions: Some(vec![ProtocolVersion::V_2026_07_28]),
+            modern_conformance_tools: true,
+            ..FixtureServer::default()
+        };
+        let host = HttpFixtureHost::start(fixture).await;
+        let workspace_dir = tempfile::tempdir().expect("workspace");
+        let runtime = host.connect(&workspace_dir).await;
+        let server_id = McpServerId::new("http-fixture");
+        let tools = runtime.list_tools().await.expect("tools/list");
+
+        for (tool, expected) in [
+            (
+                rustx::tools::mcp::fixture::STRUCTURED_SCALAR_TOOL,
+                serde_json::json!(rustx::tools::mcp::fixture::STRUCTURED_SCALAR_VALUE),
+            ),
+            (
+                rustx::tools::mcp::fixture::STRUCTURED_ARRAY_TOOL,
+                serde_json::json!([1, 2, 3]),
+            ),
+        ] {
+            let result = call_canonical_tool(
+                &runtime,
+                &server_id,
+                tools.clone(),
+                tool,
+                &workspace_dir,
+                "issue240-structured-content",
+            )
+            .await;
+            assert!(
+                matches!(
+                    result.status,
+                    rustx::tools::types::ToolExecutionStatus::Success
+                ),
+                "{tool} must succeed: {result:?}"
+            );
+            assert!(
+                result.content.iter().any(|content| matches!(
+                    content,
+                    rustx::tools::types::ToolResultContent::Json { value } if *value == expected
+                )),
+                "{tool} projects its structured content verbatim: {:?}",
+                result.content
+            );
+        }
+        runtime.close().await.expect("physical settlement");
+        host.shutdown().await;
     }
 }

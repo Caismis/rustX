@@ -13,7 +13,22 @@
 //!   context (proving the client's cancellation notification reached the
 //!   server), records the observation, and returns;
 //! - when pagination is enabled, a multi-page `tools/list` catalog of
-//!   `[alpha, beta, gamma, delta, echo]` served two tools per page.
+//!   `[alpha, beta, gamma, delta, echo]` served two tools per page;
+//! - when [`FixtureServer::modern_conformance_tools`] is set, the MCP 2026
+//!   conformance tools: [`STRUCTURED_SCALAR_TOOL`] and
+//!   [`STRUCTURED_ARRAY_TOOL`] (non-object `structuredContent`) and
+//!   [`ROUTED_TOOL`] (an `x-mcp-header`-annotated argument the SDK promotes
+//!   to a SEP-2243 `Mcp-Param-*` routing header).
+//!
+//! # Observation seams
+//!
+//! Beyond the notification channels, the fixture counts what actually
+//! reached it: `server/discover` probes, `subscriptions/listen` streams, and
+//! `tools/list` requests. The last one is the client-cache seam — a refresh
+//! answered from an SDK response cache never arrives here — and pairs with
+//! [`FixtureServer::list_tools_ttl_ms`] (a positive SEP-2549 freshness
+//! window) and [`FixtureServer::list_tools_fail_from`] (a refresh that fails
+//! after a successful one).
 //!
 //! [`legacy`] is the one deliberate exception to the official-rmcp rule: a
 //! hand-written pre-2026 wire fixture for the one peer shape an rmcp server
@@ -160,7 +175,7 @@ impl FixtureServer {
                 self.fixture_tool_named("gamma"),
             ];
         }
-        if self.changed.load(Ordering::Acquire) {
+        let mut tools = if self.changed.load(Ordering::Acquire) {
             vec![
                 self.fixture_tool_named("echo"),
                 self.fixture_tool_named("new_tool"),
@@ -171,7 +186,13 @@ impl FixtureServer {
                 self.fixture_tool_named("mutate"),
                 self.fixture_tool_named("slow"),
             ]
+        };
+        if self.modern_conformance_tools {
+            tools.push(routed_tool_named(&self.tool_name(ROUTED_TOOL)));
+            tools.push(self.fixture_tool_named(STRUCTURED_ARRAY_TOOL));
+            tools.push(self.fixture_tool_named(STRUCTURED_SCALAR_TOOL));
         }
+        tools
     }
 
     fn fixture_tool_named(&self, name: &str) -> Tool {
@@ -232,6 +253,120 @@ pub struct FixtureServer {
     /// When set, each successful `echo` invocation appends one line to this
     /// file for deterministic cross-process exactly-once assertions.
     pub echo_call_count_file: Option<PathBuf>,
+    /// The number of `server/discover` probes this server answered.
+    ///
+    /// This is the inline-lifecycle wire evidence: rmcp's `Auto` lifecycle
+    /// only ever falls back to the legacy `initialize` handshake *after* a
+    /// probe, so a connection that negotiated 2026-07-28 against a server
+    /// which advertises nothing else is provably a discover negotiation —
+    /// the legacy fallback offers a pre-inline revision such a server does
+    /// not speak and could not have succeeded.
+    pub discover_calls: Arc<std::sync::atomic::AtomicUsize>,
+    /// The number of remote `tools/list` requests this server answered.
+    ///
+    /// This is the cache observation seam: a client that answered a refresh
+    /// from an SDK response cache never reaches the server, so this counter
+    /// distinguishes "the peer was contacted again" from "something replayed
+    /// the previous response".
+    pub list_tools_calls: Arc<std::sync::atomic::AtomicUsize>,
+    /// When set, every successful `tools/list` response declares this
+    /// positive SEP-2549 `ttlMs`, inviting a client-side response cache to
+    /// treat the catalog as fresh.
+    pub list_tools_ttl_ms: Option<u64>,
+    /// When set, the `tools/list` request with this 1-based number — and
+    /// every later one — fails with a correlated server error.
+    ///
+    /// A client that serves a stale cached success on re-fetch failure hides
+    /// exactly this fact from the capability coordinator.
+    pub list_tools_fail_from: Option<usize>,
+    /// Whether the catalog additionally publishes the MCP 2026 conformance
+    /// tools ([`STRUCTURED_SCALAR_TOOL`], [`STRUCTURED_ARRAY_TOOL`],
+    /// [`ROUTED_TOOL`]).
+    pub modern_conformance_tools: bool,
+}
+
+/// The conformance tool whose result carries a **scalar** `structuredContent`.
+pub const STRUCTURED_SCALAR_TOOL: &str = "structured_scalar";
+/// The conformance tool whose result carries an **array** `structuredContent`.
+pub const STRUCTURED_ARRAY_TOOL: &str = "structured_array";
+/// The conformance tool whose input schema annotates one argument with
+/// `x-mcp-header`, so a SEP-2243 `Mcp-Param-*` routing header is generated
+/// by the SDK for its `tools/call`.
+pub const ROUTED_TOOL: &str = "routed";
+/// The `x-mcp-header` name annotated on [`ROUTED_TOOL`]'s `region` argument.
+pub const ROUTED_TOOL_HEADER: &str = "Region";
+/// The scalar value [`STRUCTURED_SCALAR_TOOL`] returns as `structuredContent`.
+pub const STRUCTURED_SCALAR_VALUE: i64 = 42;
+
+/// The prefixed names of one fixture's MCP 2026 conformance tools, together
+/// with the results they answer.
+///
+/// Kept beside `call_tool` rather than inside it: the conformance tools are
+/// one bounded family with one shape (a fixed result per name), and the
+/// fixture's own catalog behaviour stays readable when they are not inlined
+/// into the general dispatch chain.
+struct ConformanceTools {
+    routed: String,
+    structured_scalar: String,
+    structured_array: String,
+}
+
+impl ConformanceTools {
+    fn of(fixture: &FixtureServer) -> Self {
+        Self {
+            routed: fixture.tool_name(ROUTED_TOOL),
+            structured_scalar: fixture.tool_name(STRUCTURED_SCALAR_TOOL),
+            structured_array: fixture.tool_name(STRUCTURED_ARRAY_TOOL),
+        }
+    }
+
+    /// The conformance result for `request`, when it names one of these
+    /// tools; `None` leaves the request to the fixture's ordinary dispatch.
+    fn result(&self, request: &CallToolRequestParams) -> Option<CallToolResult> {
+        if request.name == self.structured_scalar {
+            // MCP 2026 complete result framing carrying a *scalar*
+            // `structuredContent`: the field is arbitrary JSON, not an
+            // object.
+            return Some(CallToolResult::structured(serde_json::json!(
+                STRUCTURED_SCALAR_VALUE
+            )));
+        }
+        if request.name == self.structured_array {
+            return Some(CallToolResult::structured(serde_json::json!([1, 2, 3])));
+        }
+        if request.name == self.routed {
+            // Echoes the argument the SDK promoted to a `Mcp-Param-*`
+            // routing header, so a successful call is also evidence the
+            // body still carried it.
+            let region = request
+                .arguments
+                .as_ref()
+                .and_then(|arguments| arguments.get("region"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            return Some(CallToolResult::success(vec![ContentBlock::text(region)]));
+        }
+        None
+    }
+}
+
+/// The routing-conformance tool definition: one primitive argument carrying
+/// the SEP-2243 `x-mcp-header` annotation the SDK promotes to a header.
+#[must_use]
+fn routed_tool_named(name: &str) -> Tool {
+    let mut tool = fixture_tool_named(name);
+    let mut schema = JsonObject::new();
+    schema.insert("type".to_owned(), serde_json::json!("object"));
+    schema.insert(
+        "properties".to_owned(),
+        serde_json::json!({
+            "region": {"type": "string", "x-mcp-header": ROUTED_TOOL_HEADER},
+        }),
+    );
+    schema.insert("additionalProperties".to_owned(), serde_json::json!(false));
+    tool.input_schema = Arc::new(schema);
+    tool
 }
 
 impl FixtureServer {
@@ -289,7 +424,9 @@ impl ServerHandler for FixtureServer {
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<DiscoverResult, rmcp::ErrorData>> + Send {
         // Overridden only so the advertised set matches `versions()` even
-        // when the fixture narrows it.
+        // when the fixture narrows it, and so the probe itself is countable
+        // wire evidence of the inline lifecycle.
+        self.discover_calls.fetch_add(1, Ordering::Release);
         std::future::ready(Ok(DiscoverResult::from_server_info(
             self.versions(),
             self.get_info(),
@@ -297,6 +434,9 @@ impl ServerHandler for FixtureServer {
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
+        if self.modern_conformance_tools && name == self.tool_name(ROUTED_TOOL) {
+            return Some(routed_tool_named(name));
+        }
         Some(fixture_tool_named(name))
     }
 
@@ -306,16 +446,31 @@ impl ServerHandler for FixtureServer {
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<rmcp::model::ListToolsResult, rmcp::ErrorData>> + Send
     {
+        // Counted before any early return: the seam answers "did this
+        // request reach the server", which is exactly as true for a failed
+        // catalog as for a successful one.
+        let request_number = self.list_tools_calls.fetch_add(1, Ordering::Release) + 1;
         if let Some(bytes) = self.list_tools_error_bytes {
             let message = format!("catalog unavailable: {}", "x".repeat(bytes));
             return std::future::ready(Err(rmcp::ErrorData::internal_error(message, None)));
         }
+        if self
+            .list_tools_fail_from
+            .is_some_and(|first| request_number >= first)
+        {
+            return std::future::ready(Err(rmcp::ErrorData::internal_error(
+                format!("the fixture catalog is unavailable from request {request_number}"),
+                None,
+            )));
+        }
+        let ttl_ms = self.list_tools_ttl_ms;
         let tools = self.catalog();
         let Some(page_size) = self.page_size else {
-            let result = rmcp::model::ListToolsResult {
+            let mut result = rmcp::model::ListToolsResult {
                 tools,
                 ..Default::default()
             };
+            result.ttl_ms = ttl_ms;
             return std::future::ready(Ok(result));
         };
         // Cursor-based pagination: the cursor is the index of the first tool
@@ -335,11 +490,13 @@ impl ServerHandler for FixtureServer {
         } else {
             None
         };
-        std::future::ready(Ok(rmcp::model::ListToolsResult {
+        let mut result = rmcp::model::ListToolsResult {
             tools: page,
             next_cursor,
             ..Default::default()
-        }))
+        };
+        result.ttl_ms = ttl_ms;
+        std::future::ready(Ok(result))
     }
 
     fn accepted_subscription_filter(
@@ -374,7 +531,11 @@ impl ServerHandler for FixtureServer {
         let echo_name = self.tool_name("echo");
         let mutate_name = self.tool_name("mutate");
         let slow_name = self.tool_name("slow");
+        let conformance = ConformanceTools::of(self);
         async move {
+            if let Some(result) = conformance.result(&request) {
+                return Ok(result.into());
+            }
             if request.name == echo_name {
                 record_echo_call(echo_call_count_file.as_deref())?;
                 let blocks = result_block_bytes.map_or_else(

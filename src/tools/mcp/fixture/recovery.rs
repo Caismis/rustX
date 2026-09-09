@@ -67,6 +67,13 @@ pub const RECOVERY_CORRUPT_GENERATIONS_ENV: &str = "RUSTX_MCP_RECOVERY_CORRUPT_G
 /// The comma-separated generation numbers that publish the extra tool in
 /// their catalog, so a successful refresh has an observable catalog change.
 pub const RECOVERY_EXTRA_TOOL_GENERATIONS_ENV: &str = "RUSTX_MCP_RECOVERY_EXTRA_TOOL_GENERATIONS";
+/// The positive SEP-2549 `ttlMs` every generation declares on its
+/// `tools/list` response, when set.
+///
+/// A client whose SDK response cache is live would treat the catalog as
+/// fresh for that long and answer the next refresh without contacting the
+/// server, which the journal's `list:` lines make observable.
+pub const RECOVERY_LIST_TTL_MS_ENV: &str = "RUSTX_MCP_RECOVERY_LIST_TTL_MS";
 /// How many additional gated progress notifications the `hang` tool emits
 /// after its dispatch notification. Pulse `i` is emitted once the parent
 /// creates the `hang.<i>` release marker, so the parent controls exactly
@@ -88,6 +95,10 @@ pub const JOURNAL_CANCELLED_PREFIX: &str = "cancelled:";
 pub const JOURNAL_REFUSED_PREFIX: &str = "refused:";
 /// The journal line written when a generation emits its corrupt line.
 pub const JOURNAL_CORRUPTED: &str = "emitted-invalid-message";
+/// The journal prefix of one answered `tools/list`, followed by the
+/// generation number. Counting these lines proves how many catalog refreshes
+/// actually reached the server, per transport generation.
+pub const JOURNAL_LIST_PREFIX: &str = "list:";
 
 /// The tool that answers immediately.
 pub const TOOL_ECHO: &str = "echo";
@@ -159,6 +170,9 @@ pub struct RecoveryScript {
     pub extra_tool_generations: Vec<u64>,
     /// How many gated progress pulses [`TOOL_HANG`] emits.
     pub hang_pulses: u32,
+    /// When set, every generation declares this positive `ttlMs` on its
+    /// `tools/list` response.
+    pub list_ttl_ms: Option<u64>,
 }
 
 fn joined(values: &[u64]) -> String {
@@ -241,6 +255,13 @@ impl RecoveryControl {
                 RECOVERY_HANG_PULSES_ENV.to_owned(),
                 script.hang_pulses.to_string(),
             ),
+            (
+                RECOVERY_LIST_TTL_MS_ENV.to_owned(),
+                script
+                    .list_ttl_ms
+                    .map(|ttl| ttl.to_string())
+                    .unwrap_or_default(),
+            ),
         ])
     }
 
@@ -259,6 +280,16 @@ impl RecoveryControl {
     #[must_use]
     pub fn accepted_calls(&self, tool: &str) -> usize {
         let entry = format!("{JOURNAL_CALL_PREFIX}{tool}");
+        self.journal_entries()
+            .into_iter()
+            .filter(|line| *line == entry)
+            .count()
+    }
+
+    /// Counts the `tools/list` requests one transport generation answered.
+    #[must_use]
+    pub fn catalog_requests(&self, generation: u64) -> usize {
+        let entry = format!("{JOURNAL_LIST_PREFIX}{generation}");
         self.journal_entries()
             .into_iter()
             .filter(|line| *line == entry)
@@ -451,7 +482,9 @@ async fn serve() {
                 )
                 .await;
             }
-            other => serve_lifecycle(&mut output, other, id, &generation).await,
+            other => {
+                serve_lifecycle(&mut output, other, id, &generation, journal.as_ref()).await;
+            }
         }
     }
 }
@@ -463,6 +496,7 @@ async fn serve_lifecycle(
     request: ClientRequest,
     id: RequestId,
     generation: &Generation,
+    journal: Option<&PathBuf>,
 ) {
     match request {
         ClientRequest::DiscoverRequest(_) => {
@@ -481,10 +515,18 @@ async fn serve_lifecycle(
             write_message(output, ServerResult::InitializeResult(result), id).await;
         }
         ClientRequest::ListToolsRequest(_) => {
-            let result = ListToolsResult {
+            // Journaled before the answer: the line proves the refresh
+            // reached this generation's process, which is what distinguishes
+            // a real refresh from an SDK cache hit.
+            record(
+                journal,
+                &format!("{JOURNAL_LIST_PREFIX}{}", generation.number),
+            );
+            let mut result = ListToolsResult {
                 tools: catalog(generation.publishes_extra_tool),
                 ..Default::default()
             };
+            result.ttl_ms = generation.list_ttl_ms;
             write_message(output, ServerResult::ListToolsResult(result), id).await;
         }
         ClientRequest::PingRequest(_) => {
@@ -519,6 +561,7 @@ struct Generation {
     refuses: bool,
     publishes_extra_tool: bool,
     hang_pulses: u32,
+    list_ttl_ms: Option<u64>,
 }
 
 impl Generation {
@@ -544,6 +587,9 @@ impl Generation {
                 .ok()
                 .and_then(|value| value.trim().parse().ok())
                 .unwrap_or(0),
+            list_ttl_ms: std::env::var(RECOVERY_LIST_TTL_MS_ENV)
+                .ok()
+                .and_then(|value| value.trim().parse().ok()),
         }
     }
 }
