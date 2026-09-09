@@ -1781,6 +1781,9 @@ async fn review_dirty_candidate_accept_reject_mutation_and_cancel_gate_exact_dow
         Arc::make_mut(context.native.as_mut().unwrap()).lifecycle =
             crate::agent::AttemptLifecycle::default().with_native_interaction(owner.clone());
         let mut definition = program_definition();
+        // This exercises physical Git/child/review gates, not deadline expiry.
+        // Keep the small pure-tool fixture's 100 ms deadline out of this test.
+        definition.timeout_ms = 600_000;
         definition.workspace = Some(WorkflowWorkspace {
             require_clean_parent: true,
         });
@@ -1850,7 +1853,7 @@ async fn review_dirty_candidate_accept_reject_mutation_and_cancel_gate_exact_dow
                 });
         }
         let (trigger, cancellation) = workflow_cancellation();
-        let task = tokio::spawn(async move {
+        let mut task = tokio::spawn(async move {
             runtime
                 .run_foreground(
                     program,
@@ -1861,7 +1864,10 @@ async fn review_dirty_candidate_accept_reject_mutation_and_cancel_gate_exact_dow
                 )
                 .await
         });
-        child.expect_delegate().await;
+        tokio::select! {
+            () = child.expect_delegate() => {},
+            result = &mut task => panic!("mode {mode}: run stopped before child admission: {result:?}"),
+        }
         let path = plane
             .registry
             .all_snapshots()
@@ -1877,7 +1883,10 @@ async fn review_dirty_candidate_accept_reject_mutation_and_cancel_gate_exact_dow
                 Some("{}"),
             )
             .await;
-        let request = published.recv().await.unwrap();
+        let request = tokio::select! {
+            request = published.recv() => request.expect("review publisher remains live"),
+            result = &mut task => panic!("mode {mode}: run stopped before review publication: {result:?}"),
+        };
         let crate::runtime::interaction::InteractionKind::Review { review, .. } = &request.kind
         else {
             panic!("Review")
@@ -1902,7 +1911,12 @@ async fn review_dirty_candidate_accept_reject_mutation_and_cancel_gate_exact_dow
             accepted.unwrap();
         }
         if mode >= 3 {
-            entered_rx.await.unwrap(); // accepted local data, before downstream borrow/admission
+            // Accepted local data, before downstream borrow/admission. Also observe
+            // terminal failure so an absent event cannot leave the test waiting.
+            tokio::select! {
+                entered = entered_rx => entered.expect("downstream frontier entered"),
+                result = &mut task => panic!("mode {mode}: run stopped before downstream frontier: {result:?}"),
+            }
             if mode == 3 {
                 std::fs::write(path.join("candidate"), b"candidate B dirty bytes").unwrap();
             } else {
