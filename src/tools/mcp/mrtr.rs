@@ -1338,6 +1338,37 @@ mod tests {
         );
     }
 
+    /// The `2^53 + 1` failure class: the value cannot even be spelled as an
+    /// answer, so it can never be validated against the `2^53` maximum and
+    /// then emitted as something else.
+    ///
+    /// The Runtime Client `Number` wire is the canonical binary64 text, whose
+    /// alphabet *is* the domain, so a decimal binary64 cannot hold has no
+    /// representation to arrive in — and a raw JSON number is not a `Number`
+    /// answer at all.
+    fn assert_the_frontier_has_one_spelling() {
+        for json_number in [
+            r#"{"type":"number","value":{"value":9007199254740993}}"#,
+            r#"{"type":"number","value":{"value":9007199254740992}}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<QuestionnaireAnswer>(json_number).is_err(),
+                "{json_number}: a JSON number is not a Number answer"
+            );
+        }
+        // The exact value has exactly one spelling, and it decodes to the very
+        // bits the runtime validates and emits.
+        let frontier = FiniteNumber::try_new(9_007_199_254_740_992.0).expect("finite");
+        assert_eq!(
+            serde_json::from_str::<QuestionnaireAnswer>(&format!(
+                r#"{{"type":"number","value":{{"value":"{}"}}}}"#,
+                frontier.to_wire()
+            ))
+            .expect("the canonical spelling decodes"),
+            QuestionnaireAnswer::Number(NumberAnswer { value: frontier })
+        );
+    }
+
     /// The emitted `accept.content` value is the very value the runtime
     /// range-checked — for every scalar shape, including the values that used
     /// to slip through the old `serde_json::Number` / `f64` split.
@@ -1392,15 +1423,7 @@ mod tests {
             }
         }
 
-        // The `2^53 + 1` failure class: the value cannot even be spelled as an
-        // answer, so it can never be validated against the `2^53` maximum and
-        // then emitted as something else.
-        assert!(
-            serde_json::from_str::<QuestionnaireAnswer>(
-                r#"{"type":"number","value":{"value":9007199254740993}}"#
-            )
-            .is_err()
-        );
+        assert_the_frontier_has_one_spelling();
 
         // An Integer question whose entire legal answer set lies above the
         // JavaScript safe-integer range is publishable *and* answerable,

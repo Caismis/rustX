@@ -55,7 +55,10 @@
  * answer, addresses choices by option index rather than display label, and
  * carries the canonical `requester` identity (including MCP server origin) on
  * every Questionnaire request and durable subject. There is no compatibility
- * decoding of version 23.
+ * decoding of version 23. Within version 24 the `Number` domain carries its
+ * bounds and answers as the canonical binary64 text of `src/protocol/number.ts`
+ * rather than as JSON numbers, because `JSON.stringify` cannot preserve
+ * binary64 identity.
  */
 export const RUNTIME_CLIENT_PROTOCOL_VERSION = 24;
 
@@ -406,15 +409,34 @@ export type TextAnswerSpecification = {
 };
 
 /**
- * A finite-binary64 numeric question.
+ * The canonical wire spelling of one `Number` value: the finite binary64's own
+ * IEEE-754 bit pattern, as exactly 16 lowercase hexadecimal digits.
+ *
+ * It is a `string`, and this alias exists so a reader never mistakes it for a
+ * human decimal. `src/protocol/number.ts` owns the only conversion between
+ * this spelling and a JavaScript `number`, and documents why a JSON number
+ * cannot carry binary64 identity across this protocol.
+ */
+export type FiniteNumberWire = string;
+
+/**
+ * A finite-binary64 numeric question, carried as canonical binary64 **text**.
  *
  * The runtime's canonical `Number` domain is the finite IEEE-754 binary64, the
- * very domain a JavaScript `number` holds, so these bounds are exact here and
- * a parsed answer loses nothing on the way back. A decimal the runtime cannot
- * hold exactly — a whole number above `2^53`, say — is refused by the runtime
- * rather than rounded into range, so a client must not offer one.
+ * very domain a JavaScript `number` holds — but `JSON.stringify` renders a
+ * `number` as the shortest decimal that round-trips it, not as the exact value
+ * it denotes, so a JSON number cannot carry binary64 *identity* across this
+ * protocol. The bounds therefore cross as the value's own bit pattern and are
+ * decoded exactly once, through {@link finiteNumberFromWire}; see
+ * `src/protocol/number.ts` for the full contract.
+ *
+ * A client must never compare these lexically. Decode both sides to `number`
+ * and compare in the domain they belong to.
  */
-export type NumberAnswerSpecification = { minimum?: number; maximum?: number };
+export type NumberAnswerSpecification = {
+  minimum?: FiniteNumberWire;
+  maximum?: FiniteNumberWire;
+};
 
 /**
  * A whole-number question, carried as canonical decimal **strings**.
@@ -488,7 +510,12 @@ export type InteractionRequester = {
  * must therefore track answer presence separately from draft length.
  */
 export type TextAnswer = { value: string };
-export type NumberAnswer = { value: number };
+/**
+ * A finite numeric answer, as the canonical spelling of the binary64 value the
+ * client selected — never as the human's original decimal, which is
+ * client-local presentation, and never as a JSON number.
+ */
+export type NumberAnswer = { value: FiniteNumberWire };
 /** A whole-number answer, as its canonical decimal spelling. */
 export type IntegerAnswer = { value: string };
 export type BooleanAnswer = { value: boolean };

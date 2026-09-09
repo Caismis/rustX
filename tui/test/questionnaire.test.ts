@@ -4,6 +4,10 @@ import { describe, it } from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 
 import { QuestionnaireOverlay, readNumberDraft } from "../src/ui/components/questionnaire.ts";
+import {
+  finiteNumberFromWire,
+  finiteNumberToWire,
+} from "../src/protocol/number.ts";
 import type {
   InteractionRequester,
   QuestionnaireResponse,
@@ -986,9 +990,17 @@ describe("QuestionnaireOverlay", () => {
       assert.deepEqual(submitted, {
         type: "submitted",
         value: {
-          answers: [{ question_index: 0, answer: { type: "number", value: { value } } }],
+          answers: [{
+            question_index: 0,
+            answer: { type: "number", value: { value: finiteNumberToWire(value) } },
+          }],
         },
       }, `${draft} must submit exactly ${value}`);
+      // And the wire spelling reconstructs the very same binary64: the value
+      // the gate admitted is the value the runtime will read.
+      const wire = (submitted as { value: { answers: Array<{ answer: { value: { value: string } } }> } })
+        .value.answers[0]!.answer.value.value;
+      assert.equal(finiteNumberFromWire(wire), value, `${draft} must survive its own wire form`);
     }
   });
 
@@ -997,7 +1009,11 @@ describe("QuestionnaireOverlay", () => {
       questions: [{
         question: "How much?",
         header: "Amount",
-        answer: { type: "number", minimum: 0, maximum: 9007199254740992 },
+        answer: {
+          type: "number",
+          minimum: finiteNumberToWire(0),
+          maximum: finiteNumberToWire(9007199254740992),
+        },
       }],
     };
     // 2^53 + 1 rounds *down* into range, so a client that compared the rounded
@@ -1020,6 +1036,86 @@ describe("QuestionnaireOverlay", () => {
     type(high, "9.007199254740994e15");
     assert.match(plainText(high.render(80).join("\n")), /at most/);
     submitSingle(high);
+  });
+
+  it("answers a Number question pinned to 2^63, the value JSON.stringify cannot spell", () => {
+    // `2^63` is exactly representable in binary64 — it is a power of two — but
+    // `JSON.stringify(2 ** 63)` prints `9223372036854776000`, a *different*
+    // mathematical integer. The bound and the answer therefore cross this
+    // protocol as canonical binary64 text, and the client never has to hope
+    // that JavaScript's decimal rendering of a `number` preserved its
+    // identity.
+    const two63 = 2 ** 63;
+    assert.equal(JSON.stringify(two63), "9223372036854776000");
+    assert.notEqual(JSON.stringify(two63), "9223372036854775808");
+    assert.equal(finiteNumberToWire(two63), "43e0000000000000");
+
+    const pinned: QuestionnaireSpecification = {
+      questions: [{
+        question: "How much?",
+        header: "Amount",
+        answer: {
+          type: "number",
+          minimum: finiteNumberToWire(two63),
+          maximum: finiteNumberToWire(two63),
+        },
+      }],
+    };
+    // The bound reaches the human as an ordinary decimal, never as the bits —
+    // and as the decimal they can actually type: `String(2 ** 63)` is the
+    // shortest *round-tripping* spelling, which this client refuses as a whole
+    // number binary64 cannot hold.
+    const shown = plainText(typedOverlay(pinned, MCP_REQUESTER).render(80).join("\n"));
+    assert.match(shown, /Number between 9223372036854775808 and 9223372036854775808/);
+    assert.doesNotMatch(shown, /43e0000000000000/);
+    assert.equal(readNumberDraft(String(two63)).kind, "inexact");
+    assert.deepEqual(readNumberDraft("9223372036854775808"), { kind: "value", value: two63 });
+
+    // The one admissible answer submits, as the exact bits of 2^63.
+    let submitted: QuestionnaireResponse | undefined;
+    const exact = typedOverlay(pinned, MCP_REQUESTER, (response) => {
+      submitted = response;
+    });
+    type(exact, "9223372036854775808");
+    submitSingle(exact);
+    assert.deepEqual(submitted, {
+      type: "submitted",
+      value: {
+        answers: [{
+          question_index: 0,
+          answer: { type: "number", value: { value: "43e0000000000000" } },
+        }],
+      },
+    });
+    assert.equal(finiteNumberFromWire("43e0000000000000"), two63);
+
+    // The next binary64 below the bound is an exact value that is simply out
+    // of range. In this binade consecutive binary64 values are 1024 apart, so
+    // it is `2^63 - 1024`, and the message is about the range.
+    const below = typedOverlay(pinned, MCP_REQUESTER, () => {
+      assert.fail("a value below the minimum never submits");
+    });
+    type(below, "9223372036854774784");
+    assert.match(plainText(below.render(80).join("\n")), /at least/);
+    submitSingle(below);
+
+    // Neighbouring integers are not members of the domain at all, and the
+    // domain question is answered first: `2^63 - 1` and `2^63 + 1` are odd
+    // integers far past `2^53`, so no binary64 holds either. Reporting them as
+    // out-of-range would be the wrong fact about the wrong value — each rounds
+    // *to* `2^63`, so a client that converted before checking would have found
+    // them perfectly in range.
+    for (const inadmissible of ["9223372036854775807", "9223372036854775809"]) {
+      const view = typedOverlay(pinned, MCP_REQUESTER, () => {
+        assert.fail(`${inadmissible} is outside the Number domain and never submits`);
+      });
+      type(view, inadmissible);
+      const rejected = plainText(view.render(80).join("\n"));
+      assert.match(rejected, /represent exactly/, inadmissible);
+      assert.doesNotMatch(rejected, /at most|at least/, inadmissible);
+      assert.equal(Number(inadmissible), two63, `${inadmissible} rounds into range`);
+      submitSingle(view);
+    }
   });
 
   it("distinguishes an untouched text field from an explicitly empty one", () => {

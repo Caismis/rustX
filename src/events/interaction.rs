@@ -47,8 +47,12 @@
 //! ```text
 //! Number   finite IEEE-754 binary64      [`FiniteNumber`]
 //!          bound, wire, comparison, emitted value: all binary64.
-//!          A JSON number binary64 cannot hold exactly (`2^53 + 1`) is
-//!          refused at the wire, never rounded into range.
+//!          Carried over the Runtime Client protocol as the value's own
+//!          IEEE-754 bit pattern in canonical hexadecimal text, because a
+//!          JSON number cannot carry binary64 identity: a JavaScript client
+//!          stringifies the exact binary64 `2^63` as `9223372036854776000`,
+//!          a different integer. One authoritative parse:
+//!          [`FiniteNumber::from_wire`].
 //!
 //! Integer  exact i64                     [`ExactInteger`]
 //!          carried over the Runtime Client protocol as canonical decimal
@@ -265,15 +269,15 @@ pub struct TextAnswerSpecification {
 ///
 /// MCP types an elicitation `number` bound as a binary64 —
 /// [`rmcp::model::NumberSchema`]'s `minimum` and `maximum` are `Option<f64>` —
-/// and a Runtime Client's JSON number is a binary64 as well. Binary64 is
-/// therefore not a convenience: it is the widest value *every* stage of the
-/// pipeline can hold without rounding, so it is the one domain all of them
-/// share.
+/// and a JavaScript `number` is a binary64 as well. Binary64 is therefore not
+/// a convenience: it is the widest value *every* stage of the pipeline can
+/// hold without rounding, so it is the one domain all of them share.
 ///
 /// ```text
 /// MCP NumberSchema bound (f64)
 ///   -> NumberAnswerSpecification bound (FiniteNumber)
-///   -> Runtime Client JSON number (binary64)
+///   -> Runtime Client wire: canonical binary64 text  "43e0000000000000"
+///   -> client `number`, reconstructed exactly        (binary64)
 ///   -> NumberAnswer value          (FiniteNumber)
 ///   -> authoritative range comparison (FiniteNumber)
 ///   -> MCP accept.content JSON number (the same FiniteNumber)
@@ -282,32 +286,88 @@ pub struct TextAnswerSpecification {
 /// No stage holds a wider value than the next one, so there is no widening or
 /// narrowing to hide a mismatch in.
 ///
-/// # The precision failure this type exists to make impossible
+/// # Why the wire is not a JSON number
 ///
-/// Storing an answer as an arbitrary [`serde_json::Number`] and *comparing* it
-/// as an `f64` is two domains, not one, and it is unsound above `2^53`:
-/// `9007199254740992` and `9007199254740993` are distinct JSON numbers with
-/// the same `f64`, so an answer could pass a `maximum = 9007199254740992`
-/// check and then be emitted to the server unchanged as `9007199254740993`.
+/// The three things this pipeline keeps apart are easy to conflate:
 ///
-/// [`FiniteNumber`] closes that by refusing, at the wire boundary, any JSON
-/// number binary64 cannot hold **exactly**: `9007199254740993` is rejected as
-/// unrepresentable rather than silently rounded down into range. What is
-/// validated is thus always bit-identical to what is emitted.
+/// ```text
+/// human decimal spelling      client-local presentation ("1.5e3")
+///   -> finite binary64        the semantic value        (1500.0)
+///   -> canonical wire text    an exact encoding of the *value*
+/// ```
 ///
-/// The rule is stated on the **value**, not on the spelling, so it cannot be
-/// evaded by writing the same whole number as `9007199254740993.0`: a whole
-/// number at or past `2^53` that a JSON integer could spell is refused
-/// whichever way it is written, and this type always *writes* such a number as
-/// a JSON integer — the one spelling whose exactness a reader can check. Past
-/// the range a JSON integer can spell there is no exact integer form at all,
-/// so the nearest binary64 is the only meaning such a literal can carry and it
-/// is admitted; that keeps serialization and parsing exact inverses, so a
-/// value this type can hold can always be read back.
+/// The wire carries the **value**, never the spelling. A JSON number cannot
+/// do that job, because a JavaScript client serializes a `number` through
+/// `JSON.stringify`, which prints the shortest decimal that round-trips —
+/// not the exact integer the binary64 denotes. The exact binary64 `2^63` is
+/// the mathematical integer
 ///
-/// Below the frontier every whole number is exact, and a fractional value is
-/// the nearest binary64 — which is what JSON numbers mean everywhere, and the
-/// domain the MCP server's own parse lands in too.
+/// ```text
+/// 9223372036854775808
+/// ```
+///
+/// and `JSON.stringify` emits
+///
+/// ```text
+/// 9223372036854776000
+/// ```
+///
+/// Those are different integers. They happen to parse back to the same
+/// binary64, but any reader that treats a JSON integer as an exact decimal
+/// integer — as an earlier revision of this type did — sees a value it must
+/// refuse, and a question whose only legal answer is `2^63` becomes
+/// publishable and unanswerable. Binary64 identity must therefore not depend
+/// on a JSON number's decimal spelling at all.
+///
+/// # The canonical wire form
+///
+/// A [`FiniteNumber`] crosses the Runtime Client protocol, and is stored in
+/// the Event Journal, as its IEEE-754 binary64 bit pattern written as exactly
+/// [`FINITE_NUMBER_WIRE_CHARS`] lowercase hexadecimal digits, most significant
+/// first:
+///
+/// ```text
+/// 2^63   -> "43e0000000000000"
+/// -2^63  -> "c3e0000000000000"
+/// 0.1    -> "3fb999999999999a"
+/// ```
+///
+/// The properties that matters are that this is *exact* and *canonical*:
+///
+/// - **exact** — the encoding is the value's own bits, so
+///   `from_wire(to_wire(x)) == x` for every finite binary64 with no decimal
+///   parser anywhere in the trust path, and no rounding step to disagree
+///   about;
+/// - **canonical** — one semantic value has exactly one legal spelling, in
+///   both languages, byte for byte. A shortest-round-trip *decimal* string is
+///   deterministic within one language but Rust and JavaScript do not format
+///   it identically, so it could not carry the "one settled spelling per
+///   value" property [`ExactInteger`] already holds rustX to;
+/// - **bounded** — always 16 bytes, with no 700-digit expansion for a
+///   subnormal and no locale, grouping, or exponent-notation variation;
+/// - **closed over the domain** — the wire alphabet *is* the domain. A
+///   decimal a binary64 cannot hold, `9007199254740993`, has no wire
+///   representation at all rather than one the runtime must detect and
+///   refuse. A client's own refusal of such a spelling is a statement of the
+///   same fact for the human, not the enforcement of it.
+///
+/// The representation is internal to the Runtime Client protocol and the
+/// durable audit. It is never shown to a human — a client edits and displays
+/// ordinary decimals — and it is never what reaches an MCP server, which
+/// receives the ordinary JSON number built from the same bits by
+/// [`FiniteNumber::to_json_number`].
+///
+/// # Negative zero
+///
+/// rustX **canonicalizes** `-0.0` to `+0.0`. IEEE-754 gives the two distinct
+/// bit patterns, but every comparison this type takes part in — [`Eq`],
+/// [`PartialOrd`], and the authoritative range check — already treats them as
+/// one value, so admitting two bit patterns would give one semantic value two
+/// canonical wire spellings and make the encoding non-injective. The
+/// normalization happens at construction, in [`FiniteNumber::try_new`], so
+/// there is no stage at which a `-0.0` exists to be serialized, and
+/// `"8000000000000000"` is refused on the wire as a non-canonical spelling of
+/// `0.0` exactly as [`ExactInteger`] would refuse `"-0"`.
 ///
 /// NaN and infinity are unrepresentable by construction, which is what makes
 /// [`Eq`] sound here: every value this type can hold is reflexive.
@@ -316,18 +376,33 @@ pub struct FiniteNumber(f64);
 
 impl Eq for FiniteNumber {}
 
+/// The exact width of the canonical [`FiniteNumber`] wire spelling.
+///
+/// A binary64 is 64 bits, which is 16 hexadecimal digits. The width is fixed
+/// rather than minimal so that one value has one spelling: a leading zero is
+/// significant here, not decoration.
+pub const FINITE_NUMBER_WIRE_CHARS: usize = 16;
+
+/// The bit pattern of `-0.0`, which no [`FiniteNumber`] ever holds.
+const NEGATIVE_ZERO_BITS: u64 = 0x8000_0000_0000_0000;
+
 impl FiniteNumber {
-    /// The finite binary64 value.
+    /// The finite binary64 value, with `-0.0` canonicalized to `+0.0`.
     ///
     /// # Errors
     ///
     /// Returns an error when the value is NaN or infinite.
     pub fn try_new(value: f64) -> Result<Self, String> {
-        if value.is_finite() {
-            Ok(Self(value))
-        } else {
-            Err("the numeric value is not finite".to_owned())
+        if !value.is_finite() {
+            return Err("the numeric value is not finite".to_owned());
         }
+        // Decided on the bits rather than with `value == 0.0`, because the
+        // float comparison this type exists to discipline is exactly the one
+        // that cannot tell the two zeros apart.
+        if value.to_bits() == NEGATIVE_ZERO_BITS {
+            return Ok(Self(0.0));
+        }
+        Ok(Self(value))
     }
 
     /// The underlying binary64 value, which is the comparison domain.
@@ -336,7 +411,69 @@ impl FiniteNumber {
         self.0
     }
 
+    /// The canonical Runtime Client spelling of this value.
+    ///
+    /// Exactly [`FINITE_NUMBER_WIRE_CHARS`] lowercase hexadecimal digits of
+    /// the IEEE-754 bit pattern. See the type documentation for why the wire
+    /// is not a JSON number.
+    #[must_use]
+    pub fn to_wire(self) -> String {
+        format!(
+            "{:0width$x}",
+            self.0.to_bits(),
+            width = FINITE_NUMBER_WIRE_CHARS
+        )
+    }
+
+    /// Parses the canonical Runtime Client spelling of a finite binary64.
+    ///
+    /// This is the **one authoritative parse point** for a `Number` value:
+    /// every bound and every answer arrives through it. The accepted syntax is
+    /// exactly [`FINITE_NUMBER_WIRE_CHARS`] lowercase hexadecimal digits and
+    /// nothing else — no `0x` prefix, no uppercase, no shortened form — so one
+    /// value has one spelling and a re-encoded value is byte-identical.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the text is not the canonical width or alphabet,
+    /// when the bits name NaN or an infinity, or when they name the
+    /// non-canonical `-0.0` this domain normalizes away.
+    pub fn from_wire(text: &str) -> Result<Self, String> {
+        let malformed = || {
+            format!(
+                "{text:?} is not a canonical binary64 value: write exactly \
+                 {FINITE_NUMBER_WIRE_CHARS} lowercase hexadecimal digits of its \
+                 IEEE-754 bit pattern"
+            )
+        };
+        if text.len() != FINITE_NUMBER_WIRE_CHARS
+            || !text
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(malformed());
+        }
+        let bits = u64::from_str_radix(text, 16).map_err(|_| malformed())?;
+        if bits == NEGATIVE_ZERO_BITS {
+            return Err(format!(
+                "{text:?} spells negative zero, which this domain canonicalizes to \
+                 {:?}",
+                Self(0.0).to_wire()
+            ));
+        }
+        let value = f64::from_bits(bits);
+        if !value.is_finite() {
+            return Err(format!(
+                "{text:?} does not name a finite 64-bit binary floating-point number"
+            ));
+        }
+        Ok(Self(value))
+    }
+
     /// The exact JSON number for this value.
+    ///
+    /// This is the **provider-facing** conversion — an MCP `accept.content`
+    /// value is an ordinary JSON number — and never the Runtime Client wire.
     ///
     /// [`serde_json::Number::from_f64`] returns `None` only for NaN and
     /// infinity, neither of which this type can hold, so the conversion is
@@ -346,138 +483,40 @@ impl FiniteNumber {
     pub fn to_json_number(self) -> Option<serde_json::Number> {
         serde_json::Number::from_f64(self.0)
     }
+}
 
-    /// The exactly representable binary64 value of one JSON number.
+impl std::fmt::Display for FiniteNumber {
+    /// The ordinary decimal presentation of the value, which is what a human
+    /// reads. This is never the wire form: see [`FiniteNumber::to_wire`].
     ///
-    /// A JSON integer above `2^53` that binary64 cannot hold exactly is an
-    /// error, never a rounded value: see the type documentation.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the JSON number is not finite or is not exactly
-    /// representable in binary64.
+    /// A **whole** number prints as its exact integer. The default `f64`
+    /// display prints the shortest decimal that *round-trips*, which for a
+    /// large whole number is a different integer — `2^63` prints as
+    /// `9223372036854776000` — and a reader told that a bound is
+    /// `9223372036854776000` would be told a value binary64 does not hold.
+    /// A fractional value keeps the shortest round-tripping spelling, which
+    /// denotes the same binary64 and is what a reader expects to see.
     #[allow(
-        clippy::cast_precision_loss,
         clippy::float_cmp,
-        reason = "each widening is guarded by an exactness proof taken on the integer \
-                  bits first, and the whole-number test is an exact comparison by \
-                  intent — an approximate one would be the very defect being fixed"
+        reason = "an exact whole-number test is the intent here, not a tolerance"
     )]
-    pub fn from_json_number(number: &serde_json::Number) -> Result<Self, String> {
-        let inexact = || {
-            format!(
-                "{number} is not exactly representable as a finite 64-bit binary \
-                 floating-point number"
-            )
-        };
-        if let Some(value) = number.as_u64() {
-            if !is_exact_binary64_whole(value) {
-                return Err(inexact());
-            }
-            return Self::try_new(value as f64);
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0.fract() == 0.0 {
+            return write!(formatter, "{:.0}", self.0);
         }
-        if let Some(value) = number.as_i64() {
-            if !is_exact_binary64_whole(value.unsigned_abs()) {
-                return Err(inexact());
-            }
-            return Self::try_new(value as f64);
-        }
-        let value = number.as_f64().ok_or_else(inexact)?;
-        // A fractional JSON spelling *is* the nearest binary64 — that is the
-        // declared contract, and the server's own parse lands on the same
-        // value. But the JSON parser has already rounded it, so a spelling
-        // that denotes a **whole** number at or past the precision frontier
-        // can no longer be proven to be the decimal the client wrote:
-        // `9007199254740993.0` and `9007199254740992.0` are the same bits by
-        // the time they arrive. rustX refuses that class rather than assume,
-        // so the failing value has no admitting spelling here either.
-        //
-        // The refusal is scoped to values that *have* a JSON integer spelling,
-        // which is exactly the form this type serializes them in and the form
-        // whose exactness the paths above can check. Beyond that range no
-        // exact integer spelling exists at all, so the nearest binary64 is the
-        // only meaning such a literal can carry, and refusing it would make a
-        // value this type can hold impossible to read back.
-        if integer_spelled(value) && value.abs() >= EXACT_WHOLE_FRONTIER {
-            return Err(inexact());
-        }
-        Self::try_new(value)
+        write!(formatter, "{}", self.0)
     }
 }
 
-/// `2^53`, the magnitude at which consecutive whole numbers stop being
-/// distinguishable in binary64.
-const EXACT_WHOLE_FRONTIER: f64 = 9_007_199_254_740_992.0;
-/// `-2^63`, the least value a JSON integer can spell.
-const LEAST_SPELLED_INTEGER: f64 = -9_223_372_036_854_775_808.0;
-/// `2^64`, one past the greatest value a JSON integer can spell.
-const PAST_GREATEST_SPELLED_INTEGER: f64 = 18_446_744_073_709_551_616.0;
-
-/// Whether this value has a canonical JSON **integer** spelling.
-///
-/// [`serde_json::Number`] holds a whole number exactly when it fits `i64` or
-/// `u64`, so this predicate is the exact boundary between the two wire forms
-/// [`FiniteNumber`] uses — and it is what makes serialization and
-/// deserialization inverses: a whole number inside this range always crosses
-/// the wire as a JSON integer and always returns through the exact integer
-/// path, while everything else crosses as a JSON float and is never refused
-/// by the frontier rule.
-#[allow(
-    clippy::float_cmp,
-    reason = "an exact whole-number test is the intent; a tolerance would be the defect"
-)]
-fn integer_spelled(value: f64) -> bool {
-    value.fract() == 0.0 && (LEAST_SPELLED_INTEGER..PAST_GREATEST_SPELLED_INTEGER).contains(&value)
-}
-
 impl Serialize for FiniteNumber {
-    /// A whole number serializes as a JSON **integer** whenever one can spell
-    /// it, because that is the only spelling whose exactness a reader can
-    /// check — and this type's own reader refuses a whole number at or past
-    /// the `2^53` frontier written any other way. Everything else serializes
-    /// as a JSON float.
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "the cast is guarded by `integer_spelled`, which proves the value is a \
-                  whole number inside the target's exact range"
-    )]
+    /// Serializes the canonical binary64 text, never a JSON number: a JSON
+    /// number would reintroduce the decimal-spelling ambiguity documented on
+    /// the type.
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        if integer_spelled(self.0) {
-            if self.0 < 0.0 {
-                return serializer.serialize_i64(self.0 as i64);
-            }
-            return serializer.serialize_u64(self.0 as u64);
-        }
-        serializer.serialize_f64(self.0)
-    }
-}
-
-/// Whether binary64 holds this whole magnitude exactly.
-///
-/// A whole number is exactly representable iff its significand fits the 53
-/// bits binary64 has — iff the span from its highest set bit down to its
-/// lowest is at most 53 bits wide.
-///
-/// Deciding this on the integer bits is deliberate. The obvious
-/// `value as f64 as u64 == value` round trip is **wrong**, because a narrowing
-/// `as` cast saturates: `u64::MAX` widens to `2^64` and narrows back to
-/// `u64::MAX`, so the inexact value proves itself exact. That is the same
-/// class of silent numeric agreement this whole type exists to prevent.
-const fn is_exact_binary64_whole(magnitude: u64) -> bool {
-    if magnitude == 0 {
-        return true;
-    }
-    let significant = u64::BITS - magnitude.leading_zeros() - magnitude.trailing_zeros();
-    significant <= f64::MANTISSA_DIGITS
-}
-
-impl std::fmt::Display for FiniteNumber {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{}", self.0)
+        serializer.serialize_str(&self.to_wire())
     }
 }
 
@@ -486,8 +525,8 @@ impl<'de> Deserialize<'de> for FiniteNumber {
     where
         D: Deserializer<'de>,
     {
-        let number = serde_json::Number::deserialize(deserializer)?;
-        Self::from_json_number(&number).map_err(serde::de::Error::custom)
+        let text = String::deserialize(deserializer)?;
+        Self::from_wire(&text).map_err(serde::de::Error::custom)
     }
 }
 
@@ -597,6 +636,11 @@ impl<'de> Deserialize<'de> for ExactInteger {
 }
 
 /// A finite numeric question over the canonical [`FiniteNumber`] domain.
+///
+/// The bounds are [`FiniteNumber`]s, so they cross the Runtime Client protocol
+/// in the same canonical binary64 text an answer does. Bound domain, answer
+/// domain, and comparison domain are one domain with one wire encoding: a
+/// client that can hold a bound can always spell an answer at it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NumberAnswerSpecification {
@@ -720,11 +764,13 @@ pub struct TextAnswer {
     pub value: String,
 }
 
-/// A finite numeric answer, carried as a JSON number rather than a string.
+/// A finite numeric answer, carried as canonical binary64 **text**.
 ///
 /// The value is a [`FiniteNumber`], the same domain the question's bounds and
 /// the emitted MCP content use, so what the runtime validates is bit-identical
-/// to what it sends.
+/// to what it sends — and the wire encoding is the value's own bits, so it is
+/// bit-identical to what the client selected too. See [`FiniteNumber`] for why
+/// a JSON number could not carry that identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NumberAnswer {
@@ -1897,142 +1943,237 @@ mod tests {
     ///
     /// With an arbitrary-precision answer and an `f64` comparison,
     /// `9007199254740993` would pass a `maximum` of `9007199254740992` and
-    /// then be emitted unchanged. Here it is refused at the wire, so there is
-    /// no value that rustX can validate and then emit differently.
+    /// then be emitted unchanged. The canonical wire closes that class by
+    /// construction: the wire alphabet **is** the domain, so a decimal
+    /// binary64 cannot hold has no wire representation to arrive in.
     #[test]
-    fn a_number_binary64_cannot_hold_exactly_is_refused_not_rounded() {
+    fn a_number_binary64_cannot_hold_exactly_has_no_wire_representation() {
         let decode = |json: &str| -> Result<QuestionnaireAnswer, String> {
             serde_json::from_str::<QuestionnaireAnswer>(json).map_err(|error| error.to_string())
         };
-        let answer = |number: &str| format!(r#"{{"type":"number","value":{{"value":{number}}}}}"#);
+        let answer = |wire: &str| format!(r#"{{"type":"number","value":{{"value":"{wire}"}}}}"#);
+        let wire_of = |decimal: &str| {
+            FiniteNumber::try_new(decimal.parse::<f64>().expect("a decimal")).expect("finite")
+        };
 
-        // `2^53 - 1` and `2^53` are exact binary64 integers, so they decode.
+        // `2^53 - 1` and `2^53` are exact binary64 integers, so they decode to
+        // themselves and present as the very decimals they were written as.
         for exact in [TWO_POW_53_MINUS_1, TWO_POW_53] {
-            let decoded = decode(&answer(exact)).unwrap_or_else(|error| panic!("{exact}: {error}"));
+            let decoded = decode(&answer(&wire_of(exact).to_wire()))
+                .unwrap_or_else(|error| panic!("{exact}: {error}"));
             let QuestionnaireAnswer::Number(number) = decoded else {
                 panic!("expected a number answer");
             };
-            assert_eq!(number.value.get().to_string(), exact);
+            assert_eq!(number.value.to_string(), exact);
         }
-        // `2^53 + 1` is not, and is refused rather than silently becoming `2^53`.
-        let refused = decode(&answer(TWO_POW_53_PLUS_1)).expect_err("must be refused");
-        assert!(refused.contains("exactly representable"), "{refused}");
-        // The same holds at the negative frontier and at the i64/u64 extremes,
-        // whose exactness is decided by the value itself and not by its width:
-        // `-2^63` is a power of two and survives, `2^63 - 1` and `2^64 - 1` do
-        // not.
-        for inexact in [
-            "-9007199254740993",
-            "9223372036854775807",
-            "18446744073709551615",
-        ] {
-            assert!(
-                decode(&answer(inexact)).is_err(),
-                "{inexact} is not an exact binary64"
-            );
-        }
-        assert!(
-            decode(&answer("-9223372036854775808")).is_ok(),
-            "-2^63 is an exact binary64 and is admitted on its own merit"
-        );
 
-        // A whole number cannot smuggle itself past the frontier by wearing a
-        // fractional spelling either: the JSON parser has already rounded it,
-        // so rustX cannot prove which decimal was written and refuses the
-        // whole class rather than assume one.
-        for spelled_as_fraction in [
-            "9007199254740993.0",
-            "9007199254740992.0",
-            "-9007199254740993.0",
-            "9.007199254740993e15",
+        // `2^53 + 1` is not an exact binary64. There is no wire spelling that
+        // names it: the nearest binary64 is `2^53`, whose canonical spelling
+        // is `2^53`'s and not this one, so the value cannot arrive at all —
+        // neither rounded into range nor as an integer to be refused.
+        let plus_one = wire_of(TWO_POW_53_PLUS_1);
+        assert_eq!(plus_one.to_wire(), wire_of(TWO_POW_53).to_wire());
+        assert_eq!(plus_one.to_string(), TWO_POW_53);
+
+        // The wire is not a JSON number, and a JSON number is not accepted as
+        // one: the ambiguity has no way back in through a lenient reader.
+        for json_number in [
+            r#"{"type":"number","value":{"value":9007199254740992}}"#,
+            r#"{"type":"number","value":{"value":9007199254740993}}"#,
+            r#"{"type":"number","value":{"value":1.5}}"#,
         ] {
-            assert!(
-                decode(&answer(spelled_as_fraction)).is_err(),
-                "{spelled_as_fraction} is a whole number at or past the frontier"
-            );
-        }
-        // The rule is scoped to whole numbers a JSON integer can spell, which
-        // is the form this domain serializes them in. Past that range no exact
-        // integer spelling exists at all, so refusing these would make values
-        // the domain can legitimately hold — an MCP `maximum` of `1e300`, say —
-        // impossible to read back from the wire they were written to.
-        for beyond_any_integer_spelling in ["1e300", "-1e300", "-1e19"] {
-            assert!(
-                decode(&answer(beyond_any_integer_spelling)).is_ok(),
-                "{beyond_any_integer_spelling} has no exact integer spelling to check"
-            );
-        }
-        // Whole numbers below the frontier and ordinary fractions are
-        // unaffected, whichever way they are spelled.
-        for ordinary in [
-            "0",
-            "0.0",
-            "-1.5",
-            "9007199254740991",
-            "9007199254740991.0",
-            "1.5e3",
-        ] {
-            assert!(decode(&answer(ordinary)).is_ok(), "{ordinary}");
+            assert!(decode(json_number).is_err(), "{json_number}");
         }
 
         // And the end-to-end statement: no answer passes a `2^53` maximum and
         // then settles as a numerically different value.
         let capped = scalar(AnswerSpecification::Number(NumberAnswerSpecification {
             minimum: None,
-            maximum: Some(
-                FiniteNumber::from_json_number(
-                    &TWO_POW_53.parse::<serde_json::Number>().expect("number"),
-                )
-                .expect("exact"),
-            ),
+            maximum: Some(wire_of(TWO_POW_53)),
         }));
-        let at_cap = decode(&answer(TWO_POW_53)).expect("exact");
+        let at_cap = decode(&answer(&wire_of(TWO_POW_53).to_wire())).expect("exact");
         let accepted = normalize_questionnaire_response(&capped, &only(at_cap.clone()))
             .expect("2^53 is at the declared maximum");
         assert_eq!(settled(&accepted), at_cap);
-        // The value that used to slip through cannot even be spelled as an
-        // answer, so it cannot reach the range check at all.
-        assert!(decode(&answer(TWO_POW_53_PLUS_1)).is_err());
     }
 
-    /// Every value the canonical `Number` domain can hold must survive its own
-    /// wire form. Serialization and parsing are inverses, so an accepted
-    /// answer or a declared bound can always be read back — from the Event
-    /// Journal, from a reconnecting client, from anywhere.
+    /// The invariant the Runtime Client transport rests on:
+    ///
+    /// ```text
+    /// decode(encode(x)) == x
+    /// ```
+    ///
+    /// for every supported `FiniteNumber`, with no dependence on any language
+    /// choosing a particular decimal spelling for the value. Serialization and
+    /// parsing are inverses, so an accepted answer or a declared bound can
+    /// always be read back — from the Event Journal, from a reconnecting
+    /// client, from anywhere.
     #[test]
     fn every_representable_number_survives_its_own_wire_form() {
-        for value in [
-            0.0_f64,
-            -0.0,
-            1.0,
-            -1.0,
-            0.1,
-            -2.5,
-            1.0e-300,
-            // Whole numbers a JSON integer can spell, on both sides of the
-            // precision frontier and at the spellable extremes.
-            9_007_199_254_740_991.0,
-            9_007_199_254_740_992.0,
-            -9_007_199_254_740_992.0,
-            9_223_372_036_854_775_808.0,
-            -9_223_372_036_854_775_808.0,
-            // Whole numbers no JSON integer can spell: the frontier rule must
-            // not make these unreadable, or a legal schema bound could be
-            // stored and never loaded again.
-            1.0e300,
-            -1.0e300,
-            -1.0e19,
-            f64::MAX,
-            f64::MIN,
+        // The table below spells its values as decimals, which is convenient
+        // to read and is exactly the kind of thing this domain refuses to
+        // trust. Pin the ones whose identity the decimal cannot make obvious,
+        // so a mistyped literal is a failure rather than a weaker test.
+        for (label, expected) in [
+            ("2^53", "4340000000000000"),
+            ("2^53 + 2", "4340000000000001"),
+            ("2^54", "4350000000000000"),
+            ("2^63", "43e0000000000000"),
+            ("-2^63", "c3e0000000000000"),
+            ("2^1000", "7e70000000000000"),
+            ("f64::MAX", "7fefffffffffffff"),
+            ("f64::MIN_POSITIVE subnormal", "0000000000000001"),
         ] {
+            let (_, value) = REPRESENTATIVE_NUMBERS
+                .into_iter()
+                .find(|(name, _)| *name == label)
+                .unwrap_or_else(|| panic!("{label} is a representative value"));
+            assert_eq!(
+                FiniteNumber::try_new(value).expect("finite").to_wire(),
+                expected,
+                "{label} is not the value its decimal spelling claims"
+            );
+        }
+
+        for (label, value) in REPRESENTATIVE_NUMBERS {
             let subject = FiniteNumber::try_new(value).expect("finite");
             let encoded = serde_json::to_string(&subject).expect("encodes");
             let decoded: FiniteNumber = serde_json::from_str(&encoded)
-                .unwrap_or_else(|error| panic!("{value} encoded as {encoded}: {error}"));
-            assert_eq!(decoded, subject, "{value} encoded as {encoded}");
-            // And the wire form is stable, so a re-encoded value is byte-equal.
+                .unwrap_or_else(|error| panic!("{label} encoded as {encoded}: {error}"));
+            assert_eq!(decoded, subject, "{label} encoded as {encoded}");
+            // Bit equality, not just `==`: the two zeros compare equal, so a
+            // canonicalization failure has to be caught on the bits.
+            assert_eq!(
+                decoded.get().to_bits(),
+                subject.get().to_bits(),
+                "{label} must round-trip bit for bit"
+            );
+            // The spelling is settled, so a re-encoded value is byte-equal...
             assert_eq!(serde_json::to_string(&decoded).expect("encodes"), encoded);
+            // ...and it is the canonical text form, never a JSON number.
+            assert_eq!(encoded, format!("\"{}\"", subject.to_wire()), "{label}");
+            assert_eq!(subject.to_wire().len(), FINITE_NUMBER_WIRE_CHARS, "{label}");
         }
+    }
+
+    /// The representative `FiniteNumber` values every layer is proven against:
+    /// the zeros, small magnitudes, ordinary fractions, both sides of the
+    /// `2^53` precision frontier, `±2^63`, and the extremes of the finite
+    /// range. The TypeScript client asserts the same property over the same
+    /// values in `tui/test/number-wire.test.ts`.
+    const REPRESENTATIVE_NUMBERS: [(&str, f64); 18] = [
+        ("0", 0.0),
+        ("-0", -0.0),
+        ("1", 1.0),
+        ("-1", -1.0),
+        ("0.1", 0.1),
+        ("1.5", 1.5),
+        ("-2.75", -2.75),
+        ("1e-300", 1.0e-300),
+        ("2^53 - 1", 9_007_199_254_740_991.0),
+        ("2^53", 9_007_199_254_740_992.0),
+        ("2^53 + 2", 9_007_199_254_740_994.0),
+        ("2^54", 18_014_398_509_481_984.0),
+        ("2^63", 9_223_372_036_854_775_808.0),
+        ("-2^63", -9_223_372_036_854_775_808.0),
+        ("2^1000", 1.071_508_607_186_267_3e301),
+        ("f64::MAX", f64::MAX),
+        ("-f64::MAX", f64::MIN),
+        ("f64::MIN_POSITIVE subnormal", 5.0e-324),
+    ];
+
+    /// The concrete cross-language failure the canonical wire exists to close.
+    ///
+    /// `2^63` is an exact binary64 — it is a power of two — but a JavaScript
+    /// client's `JSON.stringify` prints the shortest decimal that *round-trips*
+    /// it, which is a different mathematical integer. Binary64 identity must
+    /// therefore not travel as a JSON number.
+    #[test]
+    fn the_canonical_wire_pins_the_value_a_json_number_could_not_carry() {
+        let two_pow_63 = FiniteNumber::try_new(9_223_372_036_854_775_808.0).expect("finite");
+        assert_eq!(two_pow_63.to_wire(), "43e0000000000000");
+        assert_eq!(FiniteNumber::from_wire("43e0000000000000"), Ok(two_pow_63));
+        // Stated as the reviewer's invariant, on the value itself:
+        assert_eq!(
+            FiniteNumber::from_wire(&two_pow_63.to_wire()).expect("round trip"),
+            two_pow_63
+        );
+
+        let negative = FiniteNumber::try_new(-9_223_372_036_854_775_808.0).expect("finite");
+        assert_eq!(negative.to_wire(), "c3e0000000000000");
+        assert_eq!(FiniteNumber::from_wire("c3e0000000000000"), Ok(negative));
+
+        // The two decimals a reader could see for that one value. rustX shows
+        // the exact one and never depends on either.
+        assert_eq!(two_pow_63.to_string(), "9223372036854775808");
+        let shortest_round_trip: f64 = "9223372036854776000".parse().expect("a decimal");
+        #[allow(
+            clippy::float_cmp,
+            reason = "the point is that two different decimals name the same binary64"
+        )]
+        {
+            assert_eq!(shortest_round_trip, two_pow_63.get());
+        }
+        assert_ne!("9223372036854776000", two_pow_63.to_string());
+    }
+
+    /// One semantic value, one legal spelling. A canonical wire that admitted
+    /// a second spelling would not be canonical, and the durable audit would
+    /// hold two byte forms of one fact.
+    #[test]
+    fn the_one_authoritative_number_parse_refuses_every_non_canonical_spelling() {
+        for malformed in [
+            "",
+            "0",
+            "43E0000000000000",   // uppercase is a second spelling of one value
+            "0x43e0000000000000", // no prefix
+            "43e000000000000",    // 15 digits
+            "43e00000000000000",  // 17 digits
+            " 43e0000000000000",
+            "43e000000000000g",
+            "9223372036854775808", // the decimal, not the wire form
+        ] {
+            let error = FiniteNumber::from_wire(malformed).expect_err(malformed);
+            assert!(error.contains("canonical binary64 value"), "{error}");
+        }
+        for non_finite in [
+            "7ff0000000000000", // +Infinity
+            "fff0000000000000", // -Infinity
+            "7ff8000000000000", // NaN
+            "7fffffffffffffff", // a signalling NaN payload
+        ] {
+            let error = FiniteNumber::from_wire(non_finite).expect_err(non_finite);
+            assert!(error.contains("finite"), "{error}");
+        }
+        assert!(FiniteNumber::try_new(f64::NAN).is_err());
+        assert!(FiniteNumber::try_new(f64::INFINITY).is_err());
+        assert!(FiniteNumber::try_new(f64::NEG_INFINITY).is_err());
+    }
+
+    /// rustX has one semantic zero.
+    ///
+    /// IEEE-754 gives `-0.0` its own bit pattern, but every comparison this
+    /// domain takes part in already treats it as `0.0`, so admitting both
+    /// patterns would give one value two canonical spellings. The
+    /// normalization happens at construction, and the `-0.0` spelling is
+    /// refused on the wire the way `ExactInteger` refuses `"-0"`.
+    #[test]
+    fn negative_zero_is_canonicalized_rather_than_carried_as_a_second_spelling() {
+        let negative = FiniteNumber::try_new(-0.0).expect("finite");
+        let positive = FiniteNumber::try_new(0.0).expect("finite");
+        assert_eq!(negative, positive);
+        assert_eq!(negative.get().to_bits(), positive.get().to_bits());
+        assert!(!negative.get().is_sign_negative());
+        assert_eq!(negative.to_wire(), "0000000000000000");
+        assert_eq!(FiniteNumber::from_wire("0000000000000000"), Ok(positive));
+        let error = FiniteNumber::from_wire("8000000000000000").expect_err("non-canonical");
+        assert!(error.contains("negative zero"), "{error}");
+        // And the provider-facing conversion agrees: the emitted JSON number
+        // is `0.0`, so the MCP server never sees a sign this domain dropped.
+        assert_eq!(
+            negative.to_json_number().expect("finite"),
+            positive.to_json_number().expect("finite")
+        );
     }
 
     #[test]

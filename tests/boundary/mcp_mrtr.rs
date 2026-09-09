@@ -1000,6 +1000,22 @@ async fn exact_scalars_reach_a_real_server_without_rounding() {
         projected["questions"][0]["answer"]["minimum"],
         serde_json::json!(MRTR_EXACT_LEDGER_RANGE.0.to_string())
     );
+    // The server's `number` bounds cross that protocol in the `Number`
+    // domain's own representation — canonical binary64 text — so the bound a
+    // client compares against is the bound the server declared, bit for bit,
+    // with no JSON number for a JavaScript serializer to re-spell.
+    assert_eq!(
+        projected["questions"][1]["answer"],
+        serde_json::json!({
+            "type": "number",
+            // -1e18
+            "minimum": crate::events::interaction::FiniteNumber::try_new(-1.0e18)
+                .expect("finite")
+                .to_wire(),
+            // 2^53
+            "maximum": "4340000000000000",
+        })
+    );
 
     // A whole number two above the frontier — the value binary64 cannot hold.
     let ledger = 9_007_199_254_740_993_i64;

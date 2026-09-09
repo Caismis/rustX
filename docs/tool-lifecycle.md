@@ -164,10 +164,12 @@ Each requested schema is translated into the provider-independent typed
 question vocabulary (`Text`, `Number`, `Integer`, `Boolean`, `SingleChoice`,
 `MultiChoice`) with every supported constraint preserved. Each scalar shape
 names exactly one domain across the whole path — `Number` is the finite
-binary64 rmcp's own `NumberSchema` bounds already are, `Integer` is the exact
-`i64` rmcp's `IntegerSchema` bounds already are, carried over the Runtime
-Client protocol as canonical decimal text — so the value the runtime validated
-is the value the server receives. Each published
+binary64 rmcp's own `NumberSchema` bounds already are, carried over the Runtime
+Client protocol as canonical binary64 text (the value's own bit pattern,
+because `JSON.stringify` cannot preserve binary64 identity), and `Integer` is
+the exact `i64` rmcp's `IntegerSchema` bounds already are, carried over that
+protocol as canonical decimal text — so the value the runtime validated is the
+value the server receives. Each published
 Questionnaire carries the canonical `InteractionRequester` of the MCP tool
 that asked. A schema rustX cannot faithfully represent fails the invocation
 deterministically; a human answer the declared shape refuses is an interaction

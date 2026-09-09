@@ -1,0 +1,35 @@
+{
+  "id": "interaction-number-v24",
+  "conversation_id": "conv-number-v24",
+  "attempt_id": "attempt-number-v24",
+  "turn": 1,
+  "kind": {
+    "type": "questionnaire",
+    "invocation_id": {
+      "caller": "agent",
+      "call_id": "number-call"
+    },
+    "requester": {
+      "tool_id": "mcp:ledger:post_entry",
+      "tool_name": "post_entry",
+      "origin": {
+        "mcp": {
+          "server_id": "ledger"
+        }
+      }
+    },
+    "questionnaire": {
+      "questions": [
+        {
+          "question": "How much?",
+          "header": "Amount",
+          "answer": {
+            "type": "number",
+            "minimum": "43e0000000000000",
+            "maximum": "43e0000000000000"
+          }
+        }
+      ]
+    }
+  }
+}

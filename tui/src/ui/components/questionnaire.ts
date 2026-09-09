@@ -10,6 +10,7 @@ import {
 
 import type {
   AnswerSpecification,
+  FiniteNumberWire,
   InteractionRequester,
   OptionSpecification,
   QuestionSpecification,
@@ -18,6 +19,11 @@ import type {
   QuestionnaireResponse,
   QuestionnaireSpecification,
 } from "../../protocol/types.ts";
+import {
+  finiteNumberDecimal,
+  finiteNumberFromWire,
+  finiteNumberToWire,
+} from "../../protocol/number.ts";
 import { markdownTheme, role } from "../theme.ts";
 import type { PopupContent } from "./popup-frame.ts";
 
@@ -278,11 +284,18 @@ export function scalarValidationError(
         return "Enter a number this runtime can represent exactly.";
       }
       const parsed = reading.value;
-      if (answer.minimum !== undefined && parsed < answer.minimum) {
-        return `Enter a number at least ${answer.minimum}.`;
+      // The bounds are canonical binary64 text, so they are decoded through
+      // the one seam that reconstructs a `number` exactly and then compared in
+      // the domain both sides belong to. Comparing the wire spellings as
+      // strings would be a lexical comparison of bit patterns, which is not
+      // the numeric order.
+      const minimum = numberBound(answer.minimum);
+      const maximum = numberBound(answer.maximum);
+      if (minimum !== undefined && parsed < minimum) {
+        return `Enter a number at least ${minimum}.`;
       }
-      if (answer.maximum !== undefined && parsed > answer.maximum) {
-        return `Enter a number at most ${answer.maximum}.`;
+      if (maximum !== undefined && parsed > maximum) {
+        return `Enter a number at most ${maximum}.`;
       }
       return undefined;
     }
@@ -308,6 +321,25 @@ export function scalarValidationError(
     default:
       return undefined;
   }
+}
+
+/**
+ * One declared `Number` bound as a JavaScript `number`.
+ *
+ * Every `Number` bound in this client is decoded here, so no second parser can
+ * disagree with the one the answer is encoded through.
+ */
+function numberBound(bound: FiniteNumberWire | undefined): number | undefined {
+  return bound === undefined ? undefined : finiteNumberFromWire(bound);
+}
+
+/**
+ * One declared `Number` bound as the decimal a human reads — and can type
+ * back, which `String(value)` would not guarantee for a large whole number.
+ */
+function numberBoundLabel(bound: FiniteNumberWire | undefined): string | undefined {
+  const value = numberBound(bound);
+  return value === undefined ? undefined : finiteNumberDecimal(value);
 }
 
 function isCalendarDate(value: string): boolean {
@@ -733,7 +765,12 @@ export class QuestionnaireOverlay implements PopupContent {
       case "integer":
         return boundsSentence("Whole number", answer.minimum, answer.maximum);
       case "number":
-        return boundsSentence("Number", answer.minimum, answer.maximum);
+        // A human reads decimals, never the protocol's bit pattern.
+        return boundsSentence(
+          "Number",
+          numberBoundLabel(answer.minimum),
+          numberBoundLabel(answer.maximum),
+        );
       case "text":
         return textGuidance(answer);
       default:
@@ -1006,8 +1043,13 @@ export class QuestionnaireOverlay implements PopupContent {
         // gate refuses it first, and this cannot invent a value behind it.
         if (!filled) return undefined;
         const reading = readNumberDraft(draft);
+        // The accepted binary64 — not the human's spelling — is what crosses
+        // the wire, encoded through the one seam that preserves it exactly.
+        // `JSON.stringify` of the same `number` would print the shortest
+        // decimal that round-trips it, which is a different integer for a
+        // value like `2^63` and is the failure this encoding exists to close.
         return reading.kind === "value"
-          ? { type: "number", value: { value: reading.value } }
+          ? { type: "number", value: { value: finiteNumberToWire(reading.value) } }
           : undefined;
       }
       case "integer":
@@ -1146,10 +1188,18 @@ function scalarPrompt(answer: AnswerSpecification): string {
   }
 }
 
+/**
+ * The human-facing statement of a scalar question's declared bounds.
+ *
+ * Both scalar domains hand it decimal *text*: `Integer` bounds are already the
+ * canonical decimal the runtime published, and `Number` bounds have been
+ * decoded from their canonical binary64 spelling into the decimal a human
+ * reads. Neither domain's wire form is ever shown.
+ */
 function boundsSentence(
   noun: string,
-  minimum: number | string | undefined,
-  maximum: number | string | undefined,
+  minimum: string | undefined,
+  maximum: string | undefined,
 ): string | undefined {
   if (minimum !== undefined && maximum !== undefined) {
     return `${noun} between ${minimum} and ${maximum}`;

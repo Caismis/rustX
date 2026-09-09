@@ -961,14 +961,30 @@ must still be refused.
   and the value emitted to a provider are all the *same* domain, so a value
   rustX validates is always the value rustX emits. `Number` is the finite
   IEEE-754 binary64 — the domain rmcp's `NumberSchema` bounds (`f64`) and a
-  JSON number already share — and a JSON number binary64 cannot hold exactly
-  is **refused at the wire rather than rounded into range**, whichever way it
-  is spelled — a whole number a JSON integer can spell always crosses the wire
-  as one, so serialization and parsing stay exact inverses and a value the
-  domain can hold can always be read back. That is what makes
-  `9007199254740993` unable to pass a
-  `maximum` of `9007199254740992` and then be emitted unchanged: an
-  arbitrary-precision value compared as an `f64` is two domains, not one.
+  JavaScript `number` already share — carried across the Runtime Client
+  protocol as **canonical binary64 text**: the value's own IEEE-754 bit
+  pattern as exactly 16 lowercase hexadecimal digits (`2^63` is
+  `"43e0000000000000"`). A JSON number cannot carry binary64 identity here,
+  because `JSON.stringify` prints the shortest decimal that *round-trips* a
+  `number` rather than the value it denotes — the exact binary64 `2^63` is the
+  integer `9223372036854775808` and stringifies as `9223372036854776000`, a
+  different integer — so semantic identity must not depend on any language's
+  decimal rendering. The wire alphabet **is** the domain, so a decimal
+  binary64 cannot hold, `9007199254740993`, has no wire representation at all:
+  it cannot pass a `maximum` of `9007199254740992` and then be emitted
+  unchanged, because it can never arrive. `decode(encode(x)) == x` holds for
+  every value the domain can hold, so an answer or a bound can always be read
+  back from the Event Journal or by a reconnecting client;
+  `FiniteNumber::from_wire` is the one authoritative parse, and
+  `tui/src/protocol/number.ts` is the client's one conversion seam. `-0.0` is
+  **canonicalized to `+0.0`** at construction, so one semantic value has one
+  bit pattern and one spelling, and `"8000000000000000"` is refused as
+  non-canonical the way `ExactInteger` refuses `"-0"`. The client's own
+  refusal of an inexact decimal spelling — decided on the spelling, before any
+  bound is consulted — is a statement of the domain for the human, never the
+  enforcement of it. The bit-level form is internal to the protocol and the
+  durable audit: a human always reads and types decimals, and an MCP server
+  always receives an ordinary JSON number.
   `Integer` is the exact `i64` — the domain rmcp's `IntegerSchema` bounds
   already are — carried across the Runtime Client protocol as canonical
   decimal **text**, because a JavaScript number would round every value above

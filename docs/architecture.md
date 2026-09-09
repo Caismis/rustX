@@ -561,45 +561,101 @@ the request bound, the Runtime Client wire, the authoritative comparison, and
 the value finally emitted to a provider. No stage widens or narrows, so there
 is nowhere for a validated value and an emitted value to disagree.
 
-**`Number` — the finite IEEE-754 binary64 (`FiniteNumber`).**
+**`Number` — the finite IEEE-754 binary64 (`FiniteNumber`), canonical binary64
+text on the wire.**
 
 MCP types an elicitation `number` bound as a binary64: rmcp's
-`NumberSchema::minimum` and `maximum` are `Option<f64>`. A Runtime Client's
-JSON number is a binary64 too. Binary64 is therefore not a convenience — it is
-the widest value every stage can hold without rounding, which is what makes it
-the one domain all of them can share:
+`NumberSchema::minimum` and `maximum` are `Option<f64>`. A JavaScript `number`
+is a binary64 too. Binary64 is therefore not a convenience — it is the widest
+value every stage can hold without rounding, which is what makes it the one
+domain all of them can share:
 
 ```text
 MCP NumberSchema bound (f64)
   -> NumberAnswerSpecification bound (FiniteNumber)
-  -> Runtime Client JSON number      (binary64)
+  -> Runtime Client wire              "43e0000000000000"   (canonical binary64 text)
+  -> client `number`, reconstructed exactly                (binary64)
   -> NumberAnswer value              (FiniteNumber)
   -> authoritative range comparison  (FiniteNumber)
   -> MCP accept.content JSON number  (the same FiniteNumber)
 ```
 
-The rule that makes this faithful rather than merely convenient: **a JSON
-number binary64 cannot hold exactly is refused at the wire, never rounded into
-range.** Storing the answer as an arbitrary-precision `serde_json::Number` and
-comparing it as an `f64` is two domains, not one, and it is unsound above
-`2^53`: `9007199254740992` and `9007199254740993` are distinct JSON numbers
-with the same `f64`, so an answer could pass a `maximum` of `9007199254740992`
-and then be emitted to the server unchanged as `9007199254740993`. Refusing
-`9007199254740993` outright removes the value that made that possible.
+Three things are kept strictly apart, and conflating any two of them is the
+whole failure class:
 
-The refusal is stated on the **value**, not on the spelling, so it cannot be
-evaded by writing the same whole number as `9007199254740993.0`. A whole number
-a JSON integer can spell always crosses the wire *as* a JSON integer — the one
-spelling whose exactness a reader can check — and is refused at or past the
-frontier however it is written. Past the range a JSON integer can spell there
-is no exact integer form at all, so the nearest binary64 is the only meaning
-such a literal can carry and it is admitted; that keeps serialization and
-parsing exact inverses, so a value the domain can hold can always be read back
-from the Event Journal or a reconnecting client. Below the frontier every whole
-number is exact; a fractional value is the nearest binary64, which is what a
-JSON number means everywhere and is the same value the MCP server's own parse
-lands on. Non-finite values are unrepresentable by construction rather than
-merely rejected.
+```text
+human decimal spelling      client-local presentation ("1.5e3")
+  -> finite binary64        the semantic value        (1500.0)
+  -> canonical wire text    an exact encoding of the *value*
+```
+
+The wire carries the **value**, never the spelling. The protocol does not
+preserve `1.5e3`, because lexical spelling is client-local presentation state;
+it preserves the exact binary64 the client selected.
+
+*Why the wire is not a JSON number.* A JSON number cannot carry binary64
+identity across this protocol, because a JavaScript client serializes a
+`number` through `JSON.stringify`, which prints the shortest decimal that
+*round-trips* — not the exact value it denotes. The exact binary64 `2^63` is
+the mathematical integer `9223372036854775808`, and `JSON.stringify` emits
+`9223372036854776000`. Those are different integers. They happen to parse back
+to the same binary64, but a reader that treats a JSON integer as an exact
+decimal integer — which it must, to refuse a decimal binary64 cannot hold — has
+to reject the second, and a question whose only legal answer is `2^63` becomes
+publishable and unanswerable. **Binary64 identity must therefore not depend on
+any language's decimal rendering of a `number`.**
+
+*The canonical wire form.* A `FiniteNumber` crosses the Runtime Client protocol
+— and is stored in the Event Journal — as its IEEE-754 bit pattern written as
+exactly 16 lowercase hexadecimal digits, most significant first:
+
+```text
+2^63   -> "43e0000000000000"
+-2^63  -> "c3e0000000000000"
+0.1    -> "3fb999999999999a"
+```
+
+It is **exact** (the value's own bits, so `decode(encode(x)) == x` for every
+finite binary64, with no decimal parser in the trust path); **canonical** (one
+value has one spelling, byte for byte, in both languages — a shortest
+round-tripping *decimal* is deterministic within one language but Rust and
+JavaScript do not format it identically, so it could not carry the one-settled-
+spelling property `ExactInteger` already holds rustX to); **bounded** (always
+16 bytes, with no 700-digit subnormal expansion and no locale, grouping, or
+exponent-notation variation); and **closed over the domain** — the wire
+alphabet *is* the domain, so a decimal binary64 cannot hold, `9007199254740993`,
+has no wire representation at all rather than one the runtime must detect and
+refuse. `FiniteNumber::from_wire` is the one authoritative parse, and
+`tui/src/protocol/number.ts` is the client's single conversion seam; every
+bound and every answer on both sides goes through them.
+
+The representation is internal to the Runtime Client protocol and the durable
+audit. A human never sees it — the TUI reads a decimal draft, validates it with
+`readNumberDraft`, and renders bounds as ordinary decimals — and an MCP server
+never sees it either: `accept.content` carries the ordinary JSON number built
+from the same bits.
+
+*Admissibility is the client's statement, not its authority.* A whole decimal
+binary64 cannot hold is refused by `readNumberDraft` before any bound is
+consulted, on the *spelling* rather than on the rounded value:
+`9007199254740993`, `9007199254740993.0` and `9.007199254740993e15` all denote
+one refused integer, and `Number(...)` collapses all three onto `2^53` before
+anything could tell them apart. That refusal is a statement of the domain for
+the human's benefit. The enforcement is structural: such a value has no
+canonical wire spelling to arrive in, so it can never reach the runtime's range
+check at all — which is stronger than detecting it there.
+
+*Negative zero.* rustX **canonicalizes** `-0.0` to `+0.0`. IEEE-754 gives the
+two distinct bit patterns, but every comparison the domain takes part in — Rust
+`Eq`, `PartialOrd`, and the authoritative range check — already treats them as
+one value, so admitting two bit patterns would give one semantic value two
+canonical wire spellings. The normalization happens at construction, in
+`FiniteNumber::try_new` and in `finiteNumberToWire`, so no `-0.0` ever exists to
+be serialized, and `"8000000000000000"` is refused on the wire as a
+non-canonical spelling of `0.0` exactly as `ExactInteger` would refuse `"-0"`.
+NaN and infinity are unrepresentable by construction rather than merely
+rejected, which is what makes `Eq` sound: every value the domain holds is
+reflexive.
 
 **`Integer` — the exact `i64` (`ExactInteger`), decimal text on the wire.**
 
@@ -4634,9 +4690,10 @@ events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
 The current Runtime Client protocol is version 24, adding the typed question
-vocabulary, its canonical scalar domains — a finite-binary64 `Number` and an
-`Integer` carried as canonical decimal text — and canonical Questionnaire
-requester identity (Issue #242) on top of version 23, which added distinct
+vocabulary, its canonical scalar domains — a finite-binary64 `Number` carried
+as canonical binary64 text and an `Integer` carried as canonical decimal text,
+neither of them as a JSON number a JavaScript client would re-spell — and
+canonical Questionnaire requester identity (Issue #242) on top of version 23, which added distinct
 source activation/unprepared projections. Version 22 added the
 [native Workflow projection and cursor handoff](workflow-run-projection.md).
 Version 21 adds Review and
