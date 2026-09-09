@@ -1,5 +1,10 @@
 # Runtime resources and executable authority
 
+See [canonical named Subagent resources](subagent-resources.md) for schema 8
+role files, registration/admission, bounded roots, source provenance, and frozen
+reload/child contracts.
+
+
 The shared launch analysis loads authorized local resources and invokes the same
 Workflow static compiler without executors, Sessions, or online schemas. Initial
 composition consumes its compiled catalogs; runtime resource reload retains its
@@ -88,7 +93,7 @@ Project trust permits project resources, never Tool approval policy.
 `approvalMode`, `nativeTools`, and `mcpToolPolicies` belong exclusively to host
 settings, including execution/concurrency members of those policy objects.
 
-Project-origin Skills, Subagent `instructionsFile`/`agentsMd.files`, and
+Project-origin Skills, canonical Subagent Markdown/`agentsMd.files`, and
 path-valued MCP `command`/`cwd` must resolve inside the canonical trusted
 workspace. Project instructions, Workflow files and automatic `.agents` resource
 roots obey the same containment boundary. Absolute paths, traversal, symlink
@@ -191,7 +196,7 @@ past evidence, but the summary is never current runtime authority.
 
 A generation's `SubagentCatalog` is configuration/resource-generation state,
 never live execution state. A loader builds it off-side — reading each
-definition's instruction document and explicit project-instruction files —
+canonical role Markdown resource and explicit project-instruction files —
 validates every definition against the very capability candidate it is about
 to publish, and only then does the candidate commit. A definition that names
 an unknown capability, model, or Skill therefore rejects the whole candidate,

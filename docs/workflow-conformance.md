@@ -1,5 +1,10 @@
 # Fixed Workflow product conformance
 
+See [canonical named Subagent resources](subagent-resources.md) for schema 8
+role files, registration/admission, bounded roots, source provenance, and frozen
+reload/child contracts.
+
+
 The shipped programs are `parallel_review` and `implement_and_review` in
 [`examples/local-runtime`](../examples/local-runtime/README.md). Both enter through
 an explicitly registered foreground Tool. The reference set covers Agent, Tool,

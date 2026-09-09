@@ -184,6 +184,9 @@ pub struct ProspectiveLaunch {
     pub(crate) workflows: crate::runtime::workflow::WorkflowCatalog,
     pub(crate) subagents: crate::runtime::subagent::SubagentCatalog,
     pub(crate) skill_names: Vec<String>,
+    pub(crate) role_root: PathBuf,
+    pub(crate) role_sources:
+        BTreeMap<crate::runtime::subagent::SubagentName, super::subagent_resources::RoleSource>,
     pub(crate) source_activations: BTreeMap<
         crate::runtime::identity::McpServerId,
         crate::capabilities::activation::SourceActivation,
@@ -236,6 +239,15 @@ impl ProspectiveLaunch {
     /// Recheck physical targets immediately before resource preparation. This
     /// never rereads launch documents and is not an execution filesystem sandbox.
     pub(crate) fn validate_resource_authority(&self) -> Result<(), String> {
+        for role in self.role_sources.values() {
+            let boundary = if role.layer == "project" {
+                &self.workspace
+            } else {
+                &self.role_root
+            };
+            crate::runtime::resources::validate_project_resource_path(boundary, &role.selected)
+                .map_err(|e| e.to_string())?;
+        }
         for path in &self.project_resources {
             crate::runtime::resources::validate_project_resource_path(&self.workspace, path)
                 .map_err(|e| e.to_string())?;
@@ -741,11 +753,19 @@ pub fn analyze(
     } else {
         crate::runtime::workflow::WorkflowCatalog::empty()
     };
-    let subagents = if trusted {
-        super::composition::load_subagent_catalog(&locations.workspace, &config.subagents)
+    let role_root = host.config_directory.join("subagents");
+    if trusted {
+        crate::runtime::load_project_context_files(&locations.workspace)
+            .map_err(LaunchFailure::resource)?;
+    }
+    let (subagents, role_sources) = if trusted {
+        super::subagent_resources::load(&locations.workspace, &role_root, &config.subagents)
             .map_err(LaunchFailure::resource)?
     } else {
-        crate::runtime::subagent::SubagentCatalog::empty()
+        (
+            crate::runtime::subagent::SubagentCatalog::empty(),
+            BTreeMap::new(),
+        )
     };
     let workspace =
         crate::tools::workspace::Workspace::new(&locations.workspace).map_err(|e| e.to_string())?;
@@ -959,6 +979,8 @@ pub fn analyze(
         trusted,
         workflows,
         subagents,
+        role_root,
+        role_sources,
         skill_names,
         source_activations,
         selected_tools,
@@ -1062,12 +1084,7 @@ fn record(path: &str) -> bool {
 fn named_map(path: &str) -> bool {
     matches!(
         path,
-        "mcpServers"
-            | "pythonSources"
-            | "mcpToolPolicies"
-            | "environment"
-            | "nativeTools"
-            | "subagents.definitions"
+        "mcpServers" | "pythonSources" | "mcpToolPolicies" | "environment" | "nativeTools"
     )
 }
 
@@ -1252,8 +1269,36 @@ fn read_layer(
             format!("{}: unknown field {unknown:?}", path.display()),
         ));
     }
-    let _: PartialRuntime =
+    let parsed: PartialRuntime =
         crate::config_format::parse_detailed(&bytes).map_err(|e| LaunchFailure::parse(path, e))?;
+    if let Some(version) = parsed.schema_version
+        && version != super::config::CURRENT_RUNTIME_SCHEMA_VERSION
+    {
+        return Err(LaunchFailure::at(
+            Some(path.into()),
+            "schemaVersion",
+            "unsupported runtime schema version",
+            "use the current canonical authoring schema",
+            format!(
+                "unsupported runtime schemaVersion {version}; this runtime speaks {}",
+                super::config::CURRENT_RUNTIME_SCHEMA_VERSION
+            ),
+        ));
+    }
+    if let Some(subagents) = parsed.subagents
+        && let Some(names) = subagents.definitions
+    {
+        let unique: std::collections::BTreeSet<_> = names.iter().collect();
+        if unique.len() != names.len() {
+            return Err(LaunchFailure::at(
+                Some(path.into()),
+                "subagents.definitions",
+                "duplicate role registration",
+                "register each canonical identity once per layer",
+                "duplicate role registration".into(),
+            ));
+        }
+    }
     Ok(std::mem::take(&mut object))
 }
 
@@ -1300,24 +1345,6 @@ fn rebase_paths(
             }
         }
     }
-    if let Some(Value::Object(definitions)) = layer
-        .get_mut("subagents")
-        .and_then(|s| s.get_mut("definitions"))
-    {
-        for definition in definitions.values_mut() {
-            if let Some(instructions) = definition.get_mut("instructionsFile") {
-                path(instructions, base)?;
-            }
-            if let Some(Value::Array(files)) = definition
-                .get_mut("agentsMd")
-                .and_then(|a| a.get_mut("files"))
-            {
-                for file in files {
-                    path(file, base)?;
-                }
-            }
-        }
-    }
     Ok(resources)
 }
 
@@ -1357,12 +1384,7 @@ partial!(PartialTimeout {
 });
 partial!(PartialToolDeadline { hard_deadline_ms: u64, idle_liveness_ms: Option<u64> });
 partial!(PartialModel { model: crate::model::catalog::ModelRef, reasoning_profile: Option<crate::model::catalog::ReasoningProfileId>, request_params: crate::model::invocation::RequestParams, max_output_tokens: Option<u32>, summary_model: crate::model::session::SummaryModelPolicy });
-#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
-struct UniqueDefinitions(
-    #[serde(deserialize_with = "super::config::deserialize_unique_map")]
-    BTreeMap<crate::runtime::subagent::SubagentName, super::config::SubagentDocument>,
-);
-partial!(PartialSubagents { max_concurrent: usize, definitions: UniqueDefinitions, main: Vec<crate::runtime::subagent::SubagentName>, workflow: Vec<crate::runtime::subagent::SubagentName> });
+partial!(PartialSubagents { max_concurrent: usize, definitions: Vec<crate::runtime::subagent::SubagentName>, main: Vec<crate::runtime::subagent::SubagentName>, workflow: Vec<crate::runtime::subagent::SubagentName> });
 partial!(PartialWorkflows { definitions: Vec<crate::runtime::workflow::WorkflowId>, main: Vec<crate::runtime::workflow::WorkflowId> });
 
 pub(super) fn authoring_schema() -> Value {

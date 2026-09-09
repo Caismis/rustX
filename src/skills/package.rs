@@ -2,17 +2,9 @@
 //!
 //! # Skill root contract
 //!
-//! Current discovery retains the existing automatic roots `~/.rustx/skills`,
-//! `~/.agents/skills`, `<workspace>/.rustx/skills`, and
-//! `<workspace>/.agents/skills`, plus explicit configuration and CLI paths.
-//! `.agents/skills/` is the canonical project authoring location; the
-//! retained `.rustx/skills` roots are Skill discovery behavior, not the
-//! canonical project-resource layout. An accepted package is an ordinary host
-//! directory: the model receives the host path of its `SKILL.md` and
-//! reaches the package's own scripts, references, and assets by resolving the
-//! relative spellings in `SKILL.md` against that directory. No virtual
-//! namespace exists, so every native tool — Read, Bash, Grep, Glob — sees the
-//! same paths.
+//! Automatic discovery uses only user and workspace `.agents/skills` roots.
+//! Local launch pins its user root to the known configuration directory.
+//! Explicit paths remain supported under their launch authority.
 //!
 //! # Package root invariant
 //!
@@ -84,8 +76,7 @@ use crate::tools::workspace::Workspace;
 
 /// The canonical Skill root directory name below the Workspace root.
 pub const SKILLS_DIRECTORY: &str = ".agents";
-/// The retained rustX project-local Skill root directory.
-pub const RUSTX_SKILLS_DIRECTORY: &str = ".rustx";
+/// The Skill package collection directory name.
 pub const SKILLS_ROOT: &str = "skills";
 /// The canonical primary instructions file name of a Skill package.
 pub const SKILL_MARKDOWN_FILE: &str = "SKILL.md";
@@ -454,17 +445,10 @@ fn default_discovery_config(workspace: &Workspace) -> SkillDiscoveryConfig {
 }
 
 fn automatic_skill_roots(home: Option<&Path>, workspace: &Workspace) -> Vec<PathBuf> {
-    let mut automatic_roots = Vec::with_capacity(4);
+    let mut automatic_roots = Vec::with_capacity(2);
     if let Some(home) = home {
-        automatic_roots.push(home.join(RUSTX_SKILLS_DIRECTORY).join(SKILLS_ROOT));
         automatic_roots.push(home.join(SKILLS_DIRECTORY).join(SKILLS_ROOT));
     }
-    automatic_roots.push(
-        workspace
-            .root()
-            .join(RUSTX_SKILLS_DIRECTORY)
-            .join(SKILLS_ROOT),
-    );
     automatic_roots.push(workspace.root().join(SKILLS_DIRECTORY).join(SKILLS_ROOT));
     automatic_roots
 }
@@ -959,17 +943,17 @@ mod frontmatter_tests {
         let workspace_root = directory.path().join("workspace");
         std::fs::create_dir_all(&workspace_root).expect("workspace");
         let workspace = Workspace::new(&workspace_root).expect("workspace");
-        let project_rustx = workspace.root().join(".rustx/skills");
+        let user_agents = directory.path().join("user/.agents/skills");
         let project_agents = workspace.root().join(".agents/skills");
         let explicit = directory.path().join("explicit/skills");
         write_skill(&project_agents, "zeta", "Zeta", "");
-        write_skill(&project_rustx, "alpha", "Alpha", "");
+        write_skill(&user_agents, "alpha", "Alpha", "");
         write_skill(&explicit, "middle", "Middle", "");
 
         let packages = SkillDiscovery::with_config(
             &workspace,
             SkillDiscoveryConfig {
-                automatic_roots: vec![project_agents, project_rustx],
+                automatic_roots: vec![project_agents, user_agents],
                 explicit_paths: vec![explicit],
             },
         )
@@ -992,7 +976,7 @@ mod frontmatter_tests {
     }
 
     #[test]
-    fn default_skill_roots_preserve_legacy_and_agents_locations() {
+    fn default_skill_roots_are_canonical_and_exclude_legacy_locations() {
         let directory = tempfile::tempdir().expect("temporary root");
         let workspace_root = directory.path().join("workspace");
         std::fs::create_dir_all(&workspace_root).expect("workspace");
@@ -1002,11 +986,30 @@ mod frontmatter_tests {
         assert_eq!(
             super::automatic_skill_roots(Some(&home), &workspace),
             vec![
-                home.join(".rustx/skills"),
                 home.join(".agents/skills"),
-                workspace.root().join(".rustx/skills"),
                 workspace.root().join(".agents/skills"),
             ]
+        );
+        let legacy = workspace.root().join(".rustx/skills/ignored/SKILL.md");
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(
+            &legacy,
+            "unrelated legacy user bytes; not valid frontmatter",
+        )
+        .unwrap();
+        let packages = SkillDiscovery::with_config(
+            &workspace,
+            SkillDiscoveryConfig {
+                automatic_roots: super::automatic_skill_roots(Some(&home), &workspace),
+                explicit_paths: Vec::new(),
+            },
+        )
+        .discover()
+        .unwrap();
+        assert!(packages.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(legacy).unwrap(),
+            "unrelated legacy user bytes; not valid frontmatter"
         );
     }
 

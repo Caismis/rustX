@@ -47,6 +47,7 @@ pub mod session;
 #[cfg(test)]
 pub(crate) mod static_effects;
 pub mod subagent_child;
+mod subagent_resources;
 pub mod supervisor;
 
 pub use cli::{ArgumentError, USAGE, parse_arguments};

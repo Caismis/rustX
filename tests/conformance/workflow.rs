@@ -190,19 +190,14 @@ fn models_json(emulator: &ProviderEmulator) -> String {
 }
 
 const CONFIG: &str = r#"{
-  "schemaVersion": 7,
+  "schemaVersion": 8,
   "agentId": "agent-issue83",
   "model": {"model": "emulator/workflow-model"},
   "context": {"reserveTokens": 0, "keepRecentTokens": 0},
   "defaultTools": ["read"],
   "subagents": {
     "maxConcurrent": 4,
-    "definitions": {
-      "reviewer": {
-        "description": "The Workflow-only reviewer.",
-        "instructionsFile": "workspace/.agents/subagents/reviewer/instructions.md"
-      }
-    },
+    "definitions": ["reviewer"],
     "main": [],
     "workflow": ["reviewer"]
   },
@@ -317,8 +312,8 @@ impl Driver {
             .expect("models.jsonc");
         std::fs::write(root.path().join("rustx.jsonc"), CONFIG).expect("rustx.jsonc");
         std::fs::write(
-            workspace.join(".agents/subagents/reviewer/instructions.md"),
-            "Review requests carefully.\n",
+            workspace.join(".agents/subagents/reviewer.md"),
+            "---\ndescription: The Workflow-only reviewer.\n---\nReview requests carefully.\n",
         )
         .expect("reviewer instructions");
         std::fs::write(workspace.join(".agents/workflows/review_pr.yaml"), workflow)
@@ -454,8 +449,8 @@ async fn a_registered_workflow_rejects_the_obsolete_workspace_rustx_path() {
     .expect("models.jsonc");
     std::fs::write(root.path().join("rustx.jsonc"), CONFIG).expect("rustx.jsonc");
     std::fs::write(
-        workspace.join(".agents/subagents/reviewer/instructions.md"),
-        "Review requests carefully.\n",
+        workspace.join(".agents/subagents/reviewer.md"),
+        "---\ndescription: The Workflow-only reviewer.\n---\nReview requests carefully.\n",
     )
     .expect("reviewer instructions");
     std::fs::write(workspace.join(".rustx/workflows/review_pr.yaml"), WORKFLOW)
@@ -506,8 +501,8 @@ async fn registered_workflow_can_remain_out_of_main_model_admission() {
     )
     .expect("rustx.jsonc");
     std::fs::write(
-        workspace.join(".agents/subagents/reviewer/instructions.md"),
-        "Review requests carefully.\n",
+        workspace.join(".agents/subagents/reviewer.md"),
+        "---\ndescription: The Workflow-only reviewer.\n---\nReview requests carefully.\n",
     )
     .expect("reviewer instructions");
     std::fs::write(workspace.join(".agents/workflows/review_pr.yaml"), WORKFLOW)
@@ -578,8 +573,8 @@ block:
     )
     .expect("replace future program");
     std::fs::write(
-        workspace.join(".agents/subagents/reviewer/instructions.md"),
-        "CHANGED FUTURE PROFILE\n",
+        workspace.join(".agents/subagents/reviewer.md"),
+        "---\ndescription: Future reviewer.\n---\nCHANGED FUTURE PROFILE\n",
     )
     .expect("replace future profile");
     std::fs::write(
@@ -839,6 +834,11 @@ impl Driver {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/local-runtime");
         copy_reference(&source, root.path());
         let workspace = root.path().join("workspace");
+        let reviewer = workspace.join(".agents/subagents/reviewer.md");
+        let role = std::fs::read_to_string(&reviewer)
+            .unwrap()
+            .replace("example/demo-model", "emulator/workflow-model");
+        std::fs::write(reviewer, role).unwrap();
         if git {
             reference_git(&workspace, &["init"]);
             reference_git(&workspace, &["add", "."]);

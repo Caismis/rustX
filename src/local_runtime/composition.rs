@@ -126,12 +126,11 @@ use crate::runtime::conversation_runtime::{
 use crate::runtime::identity::ConversationId;
 use crate::runtime::interaction::InteractionRoute;
 use crate::runtime::resources::{
-    PreparedRuntimeResources, ProjectContextFile, RuntimeResourceLoadError, RuntimeResourceLoader,
+    PreparedRuntimeResources, RuntimeResourceLoadError, RuntimeResourceLoader,
     RuntimeResourceSnapshot, load_project_context_files,
 };
 use crate::runtime::subagent::{
-    ResolvedSubagentTool, SubagentCatalog, SubagentDefinition, SubagentProjectInstructionPolicy,
-    SubagentResolver, child_conversation_inspection_liveness_path,
+    ResolvedSubagentTool, SubagentResolver, child_conversation_inspection_liveness_path,
     child_conversation_inspection_socket_path, child_conversation_store_path,
     is_safe_child_conversation_component,
 };
@@ -151,9 +150,7 @@ use crate::tools::native::{NativeToolResources, register_native_tools};
 use crate::tools::runtime::ConversationToolRuntime;
 use crate::tools::types::ToolDefinition;
 
-use super::config::{
-    CurrentRuntimeConfig, CurrentRuntimeConfigError, SubagentsDocument, WorkflowsDocument,
-};
+use super::config::{CurrentRuntimeConfig, CurrentRuntimeConfigError, WorkflowsDocument};
 use super::launch::{LaunchLocations, ResolvedLaunch};
 use super::session::{
     SessionCatalog, SessionError, SessionId, SessionNodeId, SessionNodeOrigin,
@@ -287,7 +284,12 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             // The catalog is built before the base registry, because the
             // `subagent` intrinsic's model-facing description is generated
             // from exactly the catalog this candidate generation admits.
-            let subagents = load_subagent_catalog(&workspace, &config.subagents)?;
+            let subagents = super::subagent_resources::load(
+                &workspace,
+                &self.paths.role_root,
+                &config.subagents,
+            )?
+            .0;
             let main_admission = config
                 .subagents
                 .main
@@ -389,6 +391,8 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             // selection, or the active generation — has been published yet,
             // so the previous complete generation stays authoritative.
             validate_subagent_catalog(&prepared, &self.models)?;
+            #[cfg(test)]
+            super::subagent_resources::test_support::before_publication(&workspace).await;
             Ok(prepared)
         })
     }
@@ -842,51 +846,6 @@ impl RuntimeResourceLoader for FrozenSubagentResourceLoader {
     }
 }
 
-/// Loads one named-subagent catalog from the current configuration document.
-///
-/// Parent-side resource composition owns every filesystem read here: the
-/// instruction document and each explicit project-instruction file are read
-/// and frozen into the definition, so the child never resolves a path or
-/// walks an ancestor of its own.
-pub(crate) fn load_subagent_catalog(
-    workspace: &Path,
-    document: &SubagentsDocument,
-) -> Result<SubagentCatalog, RuntimeResourceLoadError> {
-    let mut definitions = Vec::with_capacity(document.definitions.len());
-    for (name, agent) in &document.definitions {
-        let instructions_source = resolve_workspace_path(workspace, &agent.instructions_file);
-        let instructions = read_resource(&instructions_source, name.as_str(), "instructionsFile")?;
-        let mut files = Vec::with_capacity(agent.agents_md.files.len());
-        for file in &agent.agents_md.files {
-            let path = resolve_workspace_path(workspace, file);
-            let content = read_resource(&path, name.as_str(), "agentsMd.files")?;
-            files.push(ProjectContextFile { path, content });
-        }
-        definitions.push(
-            SubagentDefinition::new(
-                name.clone(),
-                agent.description.clone(),
-                instructions,
-                instructions_source,
-                agent.model.clone(),
-                agent
-                    .execution_deadline()
-                    .map_err(RuntimeResourceLoadError::new)?,
-                agent.tools.selectors(),
-                agent.skills.clone(),
-                SubagentProjectInstructionPolicy {
-                    inherit: agent.agents_md.inherit,
-                    files,
-                },
-                agent.worktree.to_policy(),
-            )
-            .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?,
-        );
-    }
-    SubagentCatalog::new(definitions)
-        .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))
-}
-
 /// Loads and compiles exactly the configured Workflow definitions.
 ///
 /// The configured id is the only filesystem identity: a registered `id` is
@@ -987,31 +946,6 @@ pub(crate) fn mcp_bindings_with_authority(
         }
     }
     Ok(bindings)
-}
-
-fn read_resource(
-    path: &Path,
-    agent: &str,
-    field: &str,
-) -> Result<String, RuntimeResourceLoadError> {
-    let bytes = crate::config_format::read_bounded(path).map_err(|error| {
-        RuntimeResourceLoadError::new(format!(
-            "cannot read subagents.definitions.{agent}.{field} {}: {error}",
-            path.display()
-        ))
-        .at(path, format!("subagents.definitions.{agent}.{field}"))
-    })?;
-    let content = String::from_utf8(bytes).map_err(|error| {
-        RuntimeResourceLoadError::new(format!(
-            "subagents.definitions.{agent}.{field} {} is not UTF-8: {error}",
-            path.display()
-        ))
-        .at(path, format!("subagents.definitions.{agent}.{field}"))
-    })?;
-    Ok(match content.strip_prefix('\u{feff}') {
-        Some(without_bom) => without_bom.to_owned(),
-        None => content,
-    })
 }
 
 /// Admits the prepared catalog against the very capability/Skill/model
@@ -3845,7 +3779,7 @@ mod composition_tests {
         let workspace = root.path().join("workspace");
         std::fs::create_dir_all(workspace.join(".agents/subagents/explore")).expect("workspace");
         std::fs::write(
-            workspace.join(".agents/subagents/explore/instructions.md"),
+            workspace.join(".agents/subagents/explore.md"),
             "Read-only fixture subagent instructions.\n",
         )
         .expect("subagent instructions");
@@ -3882,7 +3816,7 @@ mod composition_tests {
         let echo_call_count_file = root.path().join("echo-call-count");
         let executable = std::env::current_exe().expect("test executable");
         let config_document = serde_json::json!({
-            "schemaVersion": 7,
+            "schemaVersion": 8,
             "agentId": "agent-parent",
             "model": {"model": "scripted/scripted"},
             "context": {"reserveTokens": 0, "keepRecentTokens": 0},
@@ -3902,10 +3836,10 @@ mod composition_tests {
             },
             "subagents": {
                 "maxConcurrent": 4,
-                "definitions": {
+                "roles": {
                     TEST_AGENT: {
                         "description": "Read the workspace",
-                        "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
+
                         "tools": {"builtin": ["read"]},
                     },
                 },

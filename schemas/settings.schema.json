@@ -347,7 +347,10 @@
       "additionalProperties": false,
       "properties": {
         "definitions": {
-          "$ref": "#/$defs/UniqueDefinitions"
+          "items": {
+            "$ref": "#/$defs/SubagentName"
+          },
+          "type": "array"
         },
         "main": {
           "items": {
@@ -441,143 +444,9 @@
         }
       ]
     },
-    "SubagentAgentsMdDocument": {
-      "additionalProperties": false,
-      "description": "The project-instruction policy of one named definition.",
-      "properties": {
-        "files": {
-          "default": [],
-          "description": "Explicit agent-owned project instruction files, in deterministic\nconfigured order. Relative paths resolve against the owning\nconfiguration document's directory at launch resolution.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "inherit": {
-          "default": true,
-          "description": "Whether the invoking generation's normal project instruction chain is\nprepended to the explicit files.",
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
-    "SubagentDocument": {
-      "additionalProperties": false,
-      "description": "One named subagent definition, as configured.\n\nEverything here is *definition* state. None of it is exposed as a\nper-call model argument: the model chooses which named agent runs and\nnothing else.",
-      "properties": {
-        "agentsMd": {
-          "$ref": "#/$defs/SubagentAgentsMdDocument",
-          "default": {
-            "files": [],
-            "inherit": true
-          },
-          "description": "The project-instruction policy of this agent."
-        },
-        "description": {
-          "description": "The bounded model-facing routing description.",
-          "type": "string"
-        },
-        "instructionsFile": {
-          "description": "The child instruction document. Relative paths resolve against the\nowning configuration document's directory at launch resolution.",
-          "type": "string"
-        },
-        "model": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ModelRef"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "The explicit model this agent runs on. Omit to inherit the invoking\nattempt's frozen effective model configuration."
-        },
-        "skills": {
-          "default": [],
-          "description": "The exact Skill allowlist over the admitted Skill catalog.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "timeoutMs": {
-          "description": "The optional maximum wall-clock duration of the complete child\nlifecycle, in milliseconds. The model cannot override or extend it.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "tools": {
-          "$ref": "#/$defs/SubagentToolsDocument",
-          "default": {
-            "builtin": [],
-            "mcp": {}
-          },
-          "description": "The exact source-qualified capability selection."
-        },
-        "worktree": {
-          "$ref": "#/$defs/SubagentWorktreeDocument",
-          "default": {
-            "enabled": false,
-            "requireCleanParent": true
-          },
-          "description": "The bounded project-workspace policy of this agent."
-        }
-      },
-      "required": [
-        "description",
-        "instructionsFile"
-      ],
-      "type": "object"
-    },
     "SubagentName": {
       "description": "The canonical typed name of one admitted subagent definition.\n\nThe keyspace is deliberately narrow: lowercase ASCII letters, digits,\n`-`, and `_`, starting with a letter. A name is the model-facing routing\ntoken, the durable ownership identity, and the Runtime Client projection\nidentity, so an ambiguous or shell-shaped spelling is rejected at the\nconfiguration boundary rather than normalized later.",
       "type": "string"
-    },
-    "SubagentToolsDocument": {
-      "additionalProperties": false,
-      "description": "The source-qualified capability selection of one named definition.\n\nOrigins are named explicitly rather than collapsed into bare strings, so\na Builtin `read` and an MCP server's `read` are never interchangeable and\nresolution keeps exact source identity. Wildcards are deliberately\nabsent: a selection is an exact list. Managed Python tool packages are\nselected through the `mcp` map under their synthesized server identity\n(`python:<folder>`, Issue #174).\n\nThe `python:` namespace is reserved for those synthesized identities:\n`mcpServers` configuration may never declare a server under it (rejected\nduring validation), so a subagent selection naming `python:<folder>`\nalways resolves to the managed package, never to a configured server.",
-      "properties": {
-        "builtin": {
-          "default": [],
-          "description": "Built-in/native capabilities, by canonical model-facing name.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "mcp": {
-          "additionalProperties": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "default": {},
-          "description": "MCP capabilities, keyed by server identity.",
-          "type": "object"
-        }
-      },
-      "type": "object"
-    },
-    "SubagentWorktreeDocument": {
-      "additionalProperties": false,
-      "description": "The JSONC representation of a named subagent's optional Git worktree\nisolation. An omitted or disabled value is the existing shared-workspace\nbehavior; there is no model-facing per-call override.\n\nIssue #188: when enabled, isolation runs the child from the committed\nparent `HEAD` snapshot. `require_clean_parent` defaults to `true`\n(strict): the parent source workspace must be clean, otherwise the child\nis rejected rather than silently dropping parent-local changes. Only an\nexplicit `\"requireCleanParent\": false` permits a dirty parent while the\nchild still receives exactly the committed snapshot.",
-      "properties": {
-        "enabled": {
-          "default": false,
-          "description": "Whether this named definition uses an isolated Git worktree.",
-          "type": "boolean"
-        },
-        "requireCleanParent": {
-          "default": true,
-          "description": "Whether acquisition rejects a dirty parent workspace/index.\n\nThis is the one authoritative strictness switch, normalized at the\nconfiguration boundary: it defaults to `true` whenever isolation is\nenabled, and an explicit `false` is the intentional opt-out that runs\nfrom the captured committed `HEAD` while excluding dirty parent bytes.",
-          "type": "boolean"
-        }
-      },
-      "type": "object"
     },
     "SummaryModelPolicy": {
       "description": "The compaction summary model policy of a session.",
@@ -659,12 +528,6 @@
             "null"
           ]
         }
-      },
-      "type": "object"
-    },
-    "UniqueDefinitions": {
-      "additionalProperties": {
-        "$ref": "#/$defs/SubagentDocument"
       },
       "type": "object"
     },

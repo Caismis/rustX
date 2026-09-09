@@ -1564,7 +1564,7 @@ before restart.
   every normal one-shot child's `AgentProfile` System authority is the
   definition's user-authored instruction document composed with the
   runtime-owned final-report handoff instruction at the child composition
-  boundary, so no user-authored `instructionsFile` has to repeat it and no
+  boundary, so no user-authored role Markdown body has to repeat it and no
   provider adapter learns it. Workflow-owned children are exempt: their
   terminal protocol is the structured schema-validated `workflow_output`
   commit, which a free-form final-report instruction would contradict.
@@ -2767,7 +2767,9 @@ the launch-boundary policy inheritance.
   directory, and filesystem presence cannot grant registration or model
   visibility.
 - **Definitions and admissions are independent.** `subagents.definitions`
-  is the one named-profile source of truth. `subagents.main` and
+  registers canonical role filename identities, each backed by one Markdown
+  resource and one native definition. Whole project resources replace user
+  resources without merging bodies or permissions. `subagents.main` and
   `subagents.workflow` are independent subsets, and
   `workflows.definitions` and `workflows.main` are independent registration
   and model-exposure sets. Unknown ids fail the candidate; a defined but

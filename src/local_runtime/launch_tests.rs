@@ -13,6 +13,113 @@ struct Fixture {
     request: LaunchRequest,
 }
 
+#[test]
+fn cfg236_offline_role_provenance_rejections_and_trust_have_zero_effects() {
+    let f = Fixture::new();
+    let user = f.role(
+        true,
+        "reviewer",
+        json!({"description":"User","tools":{"builtin":["write"]}}),
+        "User body",
+    );
+    let project = f.role(
+        false,
+        "reviewer",
+        json!({"description":"Project","tools":{"builtin":["read"]}}),
+        "Project body",
+    );
+    f.project(json!({"subagents":{"definitions":["reviewer"],"main":[],"workflow":["reviewer"]}}));
+    for operation in ["config_check", "config_show"] {
+        let ((report, launch), effects) = super::static_effects::measure(|| {
+            super::diagnostics::inspect(operation, &f.request, &f.host)
+        });
+        assert_eq!(effects, [0; 8]);
+        let roles = &report.launch.unwrap().roles;
+        let role = roles.values().next().unwrap();
+        assert_eq!(role.identity.as_str(), "reviewer");
+        assert_eq!(role.selected, project);
+        assert_eq!(role.overridden, Some(user.clone()));
+        assert!(!launch.unwrap().runtime_root.exists());
+    }
+    std::fs::write(
+        &project,
+        "---\ndescription: x\nsecretUnsupportedField: SENTINEL\n---\nbody",
+    )
+    .unwrap();
+    let ((report, _), effects) = super::static_effects::measure(|| {
+        super::diagnostics::inspect("config_check", &f.request, &f.host)
+    });
+    assert_eq!(effects, [0; 8]);
+    assert_eq!(report.validity, super::diagnostics::Validity::Invalid);
+    assert_eq!(report.diagnostics[0].file, Some(project));
+    assert_eq!(report.diagnostics[0].path, "subagents.definitions.reviewer");
+    assert!(!report.render(true).contains("SENTINEL"));
+    f.trust(TrustAction::Revoke);
+    let ((report, launch), effects) = super::static_effects::measure(|| {
+        super::diagnostics::inspect("config_check", &f.request, &f.host)
+    });
+    assert_eq!(effects, [0; 8]);
+    assert!(report.launch.unwrap().roles.is_empty());
+    assert!(launch.unwrap().subagents.definitions().next().is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cfg236_gated_role_reload_cancels_or_publishes_one_complete_generation() {
+    let f = Fixture::new();
+    f.role(
+        false,
+        "role",
+        json!({"description":"R1", "tools":{"builtin":["read"]}}),
+        "R1 body",
+    );
+    f.project(json!({"subagents":{"definitions":["role"],"main":["role"],"workflow":[]}}));
+    let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+        .await
+        .unwrap();
+    let r1 = product.runtime().runtime_resources();
+    f.role(
+        false,
+        "role",
+        json!({"description":"R2", "tools":{"builtin":["grep"]}}),
+        "R2 body",
+    );
+    f.project(json!({"subagents":{"definitions":["role"],"main":[],"workflow":["role"]}}));
+    let gate = super::subagent_resources::test_support::arm(&f.host.launch_directory);
+    let runtime = product.runtime().clone();
+    let reload = tokio::spawn(async move { runtime.reload_resources().await });
+    gate.entered().await; // complete parsed/validated R2, before publication
+    assert!(std::sync::Arc::ptr_eq(
+        &r1,
+        &product.runtime().runtime_resources()
+    ));
+    reload.abort();
+    assert!(reload.await.unwrap_err().is_cancelled());
+    assert!(std::sync::Arc::ptr_eq(
+        &r1,
+        &product.runtime().runtime_resources()
+    ));
+    drop(gate);
+    let gate = super::subagent_resources::test_support::arm(&f.host.launch_directory);
+    let runtime = product.runtime().clone();
+    let reload = tokio::spawn(async move { runtime.reload_resources().await });
+    gate.entered().await;
+    assert!(std::sync::Arc::ptr_eq(
+        &r1,
+        &product.runtime().runtime_resources()
+    ));
+    gate.release();
+    reload.await.unwrap().unwrap();
+    let r2 = product.runtime().runtime_resources();
+    let role = crate::runtime::subagent::SubagentName::parse("role").unwrap();
+    assert_eq!(r2.subagents().get(&role).unwrap().instructions(), "R2 body");
+    assert!(r2.subagent_main_admission().is_empty());
+    assert!(r2.subagent_workflow_admission().contains(&role));
+    assert_eq!(r1.subagents().get(&role).unwrap().instructions(), "R1 body");
+    assert!(r1.subagent_main_admission().contains(&role));
+    assert!(r1.subagent_workflow_admission().is_empty());
+    product.runtime().shutdown().await.unwrap();
+}
+
 fn check_python_package(
     intent: Option<&str>,
     trusted: bool,
@@ -584,8 +691,8 @@ fn cfg235_diagnostics_keep_source_field_classification_and_correction() {
         (json!({"unknownField":true}), "unknownField"),
         (json!({"approvalMode":"full_access"}), "approvalMode"),
         (
-            json!({"subagents":{"definitions":{"missing":{"description":"missing","instructionsFile":"missing.md"}}}}),
-            "subagents.definitions.missing.instructionsFile",
+            json!({"subagents":{"definitions":["missing"]}}),
+            "subagents.definitions.missing",
         ),
     ] {
         f.project(configuration);
@@ -931,6 +1038,23 @@ impl Fixture {
             serde_json::to_vec(&value).unwrap(),
         )
         .unwrap();
+    }
+    fn role(
+        &self,
+        user: bool,
+        name: &str,
+        metadata: serde_json::Value,
+        body: &str,
+    ) -> std::path::PathBuf {
+        let root = if user {
+            self.host.config_directory.join("subagents")
+        } else {
+            self.host.launch_directory.join(".agents/subagents")
+        };
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join(format!("{name}.md"));
+        std::fs::write(&path, format!("---\n{metadata}\n---\n{body}")).unwrap();
+        path
     }
     fn project(&self, value: serde_json::Value) {
         std::fs::write(
@@ -1310,7 +1434,13 @@ async fn cfg233_http_credential_failure_redacts_peer_echo_and_configuration() {
 #[test]
 fn precedence_absence_empty_and_whole_entries_keep_provenance() {
     let mut f = Fixture::new();
-    std::fs::write(f.host.launch_directory.join("new.md"), "Project role").unwrap();
+    f.role(
+        true,
+        "role",
+        json!({"description":"old","skills":["old"]}),
+        "User body",
+    );
+    f.role(false, "role", json!({"description":"new"}), "Project body");
     let builtin = f.resolve();
     assert_eq!(builtin.config.agent_id.as_str(), "rustx");
     assert_eq!(builtin.config.context.reserve_tokens, 1024);
@@ -1322,12 +1452,12 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
     f.user(json!({"model":{"model":"host/one"}, "agentId":"user", "context":{"reserveTokens":2000,"keepRecentTokens":6000},
         "defaultTools":["read","bash"],"environment":{"USER_ENTRY":"one","REPLACED":"old"},
         "mcpServers":{"service":{"command":"old-command","args":["old"]},"retained":{"command":"retained"}},
-        "subagents":{"definitions":{"role":{"description":"old","instructionsFile":"old.md","skills":["old"]}}}
+        "subagents":{"definitions":["role"]}
     }));
     f.project(
         json!({"model":{"model":"host/two"},"context":{"reserveTokens":3000},"defaultTools":[],
             "environment":{"REPLACED":"new"}, "mcpServers":{"service":{"command":"new-command"}},
-            "subagents":{"definitions":{"role":{"description":"new","instructionsFile":"new.md"}}}
+            "subagents":{"definitions":["role"]}
         }),
     );
     let resolved = f.resolve();
@@ -1340,14 +1470,16 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
     let service =
         &resolved.config.mcp_servers[&crate::runtime::identity::McpServerId::new("service")];
     assert!(service.args.is_empty(), "whole service replacement");
-    let role = resolved
-        .config
-        .subagents
-        .definitions
-        .values()
-        .next()
-        .unwrap();
-    assert!(role.skills.is_empty(), "whole role replacement");
+    let role = resolved.subagents.definitions().next().unwrap();
+    assert!(role.skills().is_empty(), "whole role replacement");
+    assert_eq!(role.instructions(), "Project body");
+    let source =
+        &resolved.role_sources[&crate::runtime::subagent::SubagentName::parse("role").unwrap()];
+    assert_eq!(source.layer, "project");
+    assert_eq!(
+        source.overridden.as_ref().unwrap(),
+        &f.host.config_directory.join("subagents/role.md")
+    );
     assert!(matches!(
         resolved.provenance["context.keepRecentTokens"],
         Origin::User { .. }
@@ -1364,7 +1496,7 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
     assert!(matches!(cli.provenance["model.model"], Origin::Cli { .. }));
     assert!(matches!(cli.provenance["excludeTools"], Origin::Cli { .. }));
     assert_eq!(cli.tools, Some(vec!["read".into(), "bash".into()]));
-    f.project(json!({"environment":{},"mcpServers":{},"subagents":{"definitions":{}}}));
+    f.project(json!({"environment":{},"mcpServers":{},"subagents":{"definitions":[]}}));
     let empty = f.resolve();
     assert!(empty.config.environment.is_empty());
     assert!(empty.config.mcp_servers.is_empty());
@@ -1454,8 +1586,15 @@ fn relative_paths_keep_their_document_and_cli_bases() {
         )
         .unwrap();
     }
-    f.user(json!({"model":{"model":"host/one"}, "skills":["user-skills"], "subagents":{"definitions":{"user":{"description":"user","instructionsFile":"user.md"}}}}));
-    f.project(json!({"subagents":{"definitions":{"project":{"description":"project","instructionsFile":"project.md","agentsMd":{"files":["instructions.md"]}}}}}));
+    f.role(true, "user", json!({"description":"user"}), "User role");
+    f.role(
+        false,
+        "project",
+        json!({"description":"project","agentsMd":{"files":["instructions.md"]}}),
+        "Project role",
+    );
+    f.user(json!({"model":{"model":"host/one"}, "skills":["user-skills"], "subagents":{"definitions":["user"]}}));
+    f.project(json!({"subagents":{"definitions":["user","project"]}}));
     let resolved = f.resolve();
     assert_eq!(
         resolved.config.skills,
@@ -1466,16 +1605,13 @@ fn relative_paths_keep_their_document_and_cli_bases() {
         f.resolve().config.skills,
         [f.host.launch_directory.join("cli-skill")]
     );
-    for (name, role) in &resolved.config.subagents.definitions {
+    for (name, source) in &resolved.role_sources {
         let base = if name.as_str() == "user" {
-            &f.host.config_directory
+            f.host.config_directory.join("subagents")
         } else {
-            &f.host.launch_directory
+            f.host.launch_directory.join(".agents/subagents")
         };
-        assert_eq!(
-            role.instructions_file,
-            base.join(format!("{}.md", name.as_str()))
-        );
+        assert_eq!(source.selected, base.join(format!("{name}.md")));
     }
     f.request.config = Some("replacement.jsonc".into());
     std::fs::write(f.host.launch_directory.join("replacement.jsonc"), "{}").unwrap();
@@ -1583,7 +1719,13 @@ fn canonical_symlink_and_real_git_worktree_identities_are_stable_and_separate() 
     assert!(resolve(&f.request, &f.host).is_ok(), "revocation is scoped");
     let outside = host.launch_directory.join("untrusted.md");
     std::fs::write(&outside, "other worktree").unwrap();
-    f.project(json!({"subagents":{"definitions":{"other":{"description":"other","instructionsFile":outside}}}}));
+    f.role(
+        false,
+        "other",
+        json!({"description":"other","agentsMd":{"files":[outside]}}),
+        "role",
+    );
+    f.project(json!({"subagents":{"definitions":["other"]}}));
     assert!(
         resolve(&f.request, &f.host)
             .unwrap_err()
@@ -1829,7 +1971,11 @@ fn non_utf8_workspace_identity_is_not_lossy() {
 #[test]
 fn duplicate_role_definitions_and_invalid_lower_layer_cannot_be_hidden() {
     let f = Fixture::new();
-    std::fs::write(f.host.launch_directory.join("rustx.jsonc"), r#"{"subagents":{"definitions":{"role":{"description":"one","instructionsFile":"one.md"},"role":{"description":"two","instructionsFile":"two.md"}}}}"#).unwrap();
+    std::fs::write(
+        f.host.launch_directory.join("rustx.jsonc"),
+        r#"{"subagents":{"definitions":["role","role"]}}"#,
+    )
+    .unwrap();
     assert!(
         resolve(&f.request, &f.host)
             .unwrap_err()
@@ -1842,6 +1988,25 @@ fn duplicate_role_definitions_and_invalid_lower_layer_cannot_be_hidden() {
             .unwrap_err()
             .contains("unknown field")
     );
+    f.user(json!({"model":{"model":"host/one"},"subagents":{"definitions":["role","role"]}}));
+    f.project(json!({"subagents":{"definitions":[]}}));
+    assert!(
+        resolve(&f.request, &f.host)
+            .unwrap_err()
+            .contains("duplicate")
+    );
+    f.user(json!({"model":{"model":"host/one"},"schemaVersion":7}));
+    f.project(json!({"schemaVersion":8}));
+    assert!(
+        resolve(&f.request, &f.host)
+            .unwrap_err()
+            .contains("schemaVersion 7")
+    );
+    f.user(json!({"model":{"model":"host/one"}}));
+    f.project(
+        json!({"subagents":{"definitions":{"role":{"description":"obsolete inline payload"}}}}),
+    );
+    assert!(resolve(&f.request, &f.host).is_err());
 }
 
 #[test]
@@ -1891,12 +2056,19 @@ async fn project_resource_authority_rejects_every_declared_escape_but_preserves_
     std::fs::create_dir(&other).unwrap();
     let resource = other.join("resource");
     std::fs::write(&resource, "untrusted B bytes").unwrap();
-    let role = |path: serde_json::Value| json!({"subagents":{"definitions":{"x":{"description":"x","instructionsFile":path}}}});
+    let role = |path: serde_json::Value| {
+        f.role(
+            false,
+            "x",
+            json!({"description":"x","agentsMd":{"files":[path]}}),
+            "role",
+        );
+        json!({"subagents":{"definitions":["x"]}})
+    };
     for document in [
-        role(json!("../B/resource")),
         role(json!(&resource)),
         json!({"skills":[&other]}),
-        json!({"subagents":{"definitions":{"x":{"description":"x","instructionsFile":"inside.md","agentsMd":{"files":[&resource]}}}}}),
+        role(json!(&resource)),
         json!({"mcpServers":{"x":{"command":&resource}}}),
         json!({"mcpServers":{"x":{"command":"fixture","cwd":&other}}}),
     ] {
@@ -1907,7 +2079,7 @@ async fn project_resource_authority_rejects_every_declared_escape_but_preserves_
     // An external --config is inert input, not a grant for its neighboring files.
     std::fs::write(
         other.join("config.jsonc"),
-        role(json!("resource")).to_string(),
+        role(json!("../B/resource")).to_string(),
     )
     .unwrap();
     f.request.config = Some(other.join("config.jsonc"));
@@ -1918,12 +2090,11 @@ async fn project_resource_authority_rejects_every_declared_escape_but_preserves_
     );
     f.request.config = None;
     f.project(json!({}));
-    f.user(json!({"model":{"model":"host/one"},"subagents":{"definitions":{"x":{"description":"host","instructionsFile":&resource}}}}));
+    std::fs::remove_file(f.host.launch_directory.join(".agents/subagents/x.md")).unwrap();
+    f.role(true, "x", json!({"description":"host"}), "user-owned bytes");
+    f.user(json!({"model":{"model":"host/one"},"subagents":{"definitions":["x"]}}));
     let host = f.resolve();
-    assert!(matches!(
-        host.provenance["subagents.definitions.x"],
-        Origin::User { .. }
-    ));
+    assert_eq!(host.role_sources.values().next().unwrap().layer, "user");
     let skill = other.join("outside");
     std::fs::create_dir(&skill).unwrap();
     f.request.skill_paths = vec![skill];
@@ -1946,7 +2117,7 @@ async fn project_resource_authority_rejects_every_declared_escape_but_preserves_
             .get(&crate::runtime::subagent::SubagentName::parse("x").unwrap())
             .unwrap()
             .instructions(),
-        "untrusted B bytes"
+        "user-owned bytes"
     );
     assert!(resources.skill_catalog().unwrap().contains("outside"));
     product.runtime().shutdown().await.unwrap();
@@ -1959,9 +2130,8 @@ async fn project_symlink_escape_is_rechecked_before_composition_and_reload() {
     let other = f.root.path().join("B");
     std::fs::create_dir(&other).unwrap();
     std::fs::write(other.join("instructions.md"), "B MUST NEVER BE ADMITTED").unwrap();
-    let source = f.host.launch_directory.join("instructions.md");
-    std::fs::write(&source, "trusted A").unwrap();
-    f.project(json!({"subagents":{"definitions":{"x":{"description":"x","instructionsFile":"instructions.md"}}}}));
+    let source = f.role(false, "x", json!({"description":"x"}), "trusted A");
+    f.project(json!({"subagents":{"definitions":["x"]}}));
     let launch = f.resolve();
     std::fs::remove_file(&source).unwrap();
     std::os::unix::fs::symlink(other.join("instructions.md"), &source).unwrap();
@@ -1978,7 +2148,7 @@ async fn project_symlink_escape_is_rechecked_before_composition_and_reload() {
             .contains("outside trusted workspace")
     );
     std::fs::remove_file(&source).unwrap();
-    std::fs::write(&source, "trusted A").unwrap();
+    f.role(false, "x", json!({"description":"x"}), "trusted A");
     let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
         .await
         .unwrap();
@@ -2006,7 +2176,7 @@ async fn project_symlink_escape_is_rechecked_before_composition_and_reload() {
             .instructions(),
         "trusted A"
     );
-    f.project(json!({"subagents":{"definitions":{"x":{"description":"escape","instructionsFile":other.join("instructions.md")}}}}));
+    f.project(json!({"subagents":{"definitions":["x"]}}));
     assert!(
         product
             .runtime()
@@ -2022,7 +2192,7 @@ async fn project_symlink_escape_is_rechecked_before_composition_and_reload() {
     );
     // Removing the offending declaration permits a new candidate: stale launch
     // paths must not become a second resource-generation authority.
-    f.project(json!({"subagents":{"definitions":{}}}));
+    f.project(json!({"subagents":{"definitions":[]}}));
     product.runtime().reload_resources().await.unwrap();
     product.runtime().shutdown().await.unwrap();
 }
@@ -2037,7 +2207,6 @@ fn project_directory_symlinks_cannot_authorize_builtin_or_declared_resources() {
     std::os::unix::fs::symlink(&other, f.host.launch_directory.join("link")).unwrap();
     for document in [
         json!({"skills":["link"]}),
-        json!({"subagents":{"definitions":{"x":{"description":"x","instructionsFile":"link/file"}}}}),
         json!({"mcpServers":{"x":{"command":"link/file"}}}),
         json!({"mcpServers":{"x":{"command":"fixture","cwd":"link"}}}),
     ] {

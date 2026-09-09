@@ -112,11 +112,16 @@ fn untrusted_real_process_never_activates_project_content_or_publishes_a_session
         r#"{"model":{"model":"fixture/process-model"}}"#,
     )
     .unwrap();
-    std::fs::write(workspace.join("rustx.jsonc"), serde_json::to_vec(&serde_json::json!({
-        "mcpServers":{"project":{"command":"touch","args":[sentinel]}},
-        "subagents":{"definitions":{"child":{"description":"must not load","instructionsFile":"missing.md"}},"main":["child"]},
-        "workflows":{"definitions":["must_not_load"],"main":["must_not_load"]}
-    })).unwrap()).unwrap();
+    std::fs::write(
+        workspace.join("rustx.jsonc"),
+        serde_json::to_vec(&serde_json::json!({
+            "mcpServers":{"project":{"command":"touch","args":[sentinel]}},
+            "subagents":{"definitions":["child"],"main":["child"]},
+            "workflows":{"definitions":["must_not_load"],"main":["must_not_load"]}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     let output = std::process::Command::new(binary())
         .current_dir(&workspace)
         .env_clear()

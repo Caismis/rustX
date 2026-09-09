@@ -4,7 +4,7 @@
 // `models.jsonc` is the provider/model catalog; this file selects the model
 // and defines the current runtime's policies and admitted resources.
 {
-  "schemaVersion": 7,
+  "schemaVersion": 8,
   "agentId": "default-agent",
 
   // The default model/session policy. The model catalog supplies the provider
@@ -107,48 +107,7 @@
   // while ignoring parent-local uncommitted changes — they are never copied.
   "subagents": {
     "maxConcurrent": 4,
-    "definitions": {
-      "navigator": {
-        "description": "Read-only repository navigation and evidence gathering.",
-        "instructionsFile": "workspace/.agents/subagents/navigator/instructions.md",
-        // Optional whole-child wall-clock limit, in milliseconds. It covers
-        // the complete owned lifecycle (model, tools, and settlement).
-        "timeoutMs": 3600000,
-        "tools": {
-          "builtin": ["read", "glob", "grep"],
-        },
-        "skills": ["review-guidance"],
-        "agentsMd": {
-          "inherit": true,
-          "files": ["workspace/.agents/subagents/navigator/AGENTS.md"],
-        },
-      },
-      "planner": {
-        "description": "Plan the fixed greeting implementation without tool access.",
-        "instructionsFile": "workspace/.agents/subagents/planner/instructions.md",
-        "tools": {"builtin": []},
-        "worktree": {"enabled": true, "requireCleanParent": true},
-      },
-      "implementer": {
-        "description": "Implement greeting.py in the run candidate.",
-        "instructionsFile": "workspace/.agents/subagents/implementer/instructions.md",
-        "tools": {"builtin": ["read", "write", "edit", "ask_user"]},
-        "worktree": {"enabled": true, "requireCleanParent": true},
-      },
-      "reviewer": {
-        "description": "Review one bounded request and return a concise result.",
-        "instructionsFile": "workspace/.agents/subagents/reviewer/instructions.md",
-        "model": "example/demo-model",
-        "tools": {
-          "builtin": ["read"],
-        },
-        "skills": ["review-guidance"],
-        "agentsMd": {
-          "inherit": false,
-          "files": ["workspace/.agents/subagents/reviewer/AGENTS.md"],
-        },
-      },
-    },
+    "definitions": ["navigator", "planner", "implementer", "reviewer"],
     // Main exposure and Workflow admission are deliberately independent:
     // navigator is directly callable; reviewer/planner/implementer are Workflow-only.
     "main": ["navigator"],

@@ -224,8 +224,12 @@ fn every_shipped_workflow_is_registered_and_compiles() {
         WorkflowProgram::compile(id.clone(), definition, &profiles)
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     }
-    for profile in config.subagents.definitions.values() {
-        assert!(examples_root().join(&profile.instructions_file).is_file());
+    for profile in &config.subagents.definitions {
+        assert!(
+            examples_root()
+                .join(format!("workspace/.agents/subagents/{profile}.md"))
+                .is_file()
+        );
     }
 }
 

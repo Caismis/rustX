@@ -7040,7 +7040,7 @@ Representative current runtime/project configuration:
 
 ```jsonc
 {
-  "schemaVersion": 7,
+  "schemaVersion": 8,
   "agentId": "agent-default",
   "model": {
     "model": "gateway/reasoner",
@@ -7449,9 +7449,11 @@ Tool Plane, Subagent runtime, Workflow scheduler, or approval authority.
 
 ### Configuration and identity
 
-`subagents.definitions` is the one source of named profile definitions.
+`subagents.definitions` explicitly registers canonical role filename identities.
+Each identity loads one typed-frontmatter Markdown resource; see
+[canonical Subagent resources](subagent-resources.md).
 `subagents.main` and `subagents.workflow` are independent admission domains;
-each is a subset of the definitions map. A profile may be main-only,
+each is a subset of the registration list. A profile may be main-only,
 Workflow-only, both, or defined but admitted to neither. Main visibility does
 not make a profile valid for a Workflow Agent, and Workflow admission does not
 make it callable by the main Agent. `workflows.definitions` registers exact

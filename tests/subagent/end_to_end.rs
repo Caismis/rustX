@@ -67,10 +67,10 @@ const SESSION_JSON: &str = r#"{
   "context": {"reserveTokens": 1024, "keepRecentTokens": 8192},
     "subagents": {
     "maxConcurrent": 4,
-    "definitions": {
+    "roles": {
       "explore": {
         "description": "Read-only repository exploration.",
-        "instructionsFile": ".agents/subagents/explore/instructions.md",
+
         "tools": {"builtin": ["read", "glob", "grep"]}
       }
     },
@@ -86,10 +86,10 @@ const ISOLATED_SUBDIRECTORY_SESSION_JSON: &str = r#"{
   "defaultTools": ["read", "subagent"],
   "subagents": {
     "maxConcurrent": 4,
-    "definitions": {
+    "roles": {
       "explore": {
         "description": "Read the preserved logical project scope.",
-        "instructionsFile": ".agents/subagents/explore/instructions.md",
+
         "tools": {"builtin": ["read"]},
         "worktree": {"enabled": true}
       }
@@ -103,7 +103,7 @@ const ISOLATED_SUBDIRECTORY_SESSION_JSON: &str = r#"{
 /// the parent generation can freeze it. It deliberately says nothing about
 /// the final handoff: that rule is runtime-owned subagent execution
 /// semantics (Issue #192), composed by the runtime rather than repeated by
-/// every user-authored `instructionsFile`.
+/// every user-authored role Markdown body.
 const EXPLORE_INSTRUCTIONS: &str = "You are a read-only exploration subagent of the rustX \
 runtime. Answer the delegated task by inspecting the shared workspace with the capabilities \
 your definition authorized.";
@@ -210,17 +210,13 @@ impl Process {
     ) -> Self {
         std::fs::create_dir_all(workspace.join(".agents/subagents/explore")).expect("workspace");
         std::fs::write(
-            workspace
-                .join(".agents/subagents/explore")
-                .join("instructions.md"),
+            workspace.join(".agents/subagents/explore.md"),
             EXPLORE_INSTRUCTIONS,
         )
         .expect("explore instructions");
         std::fs::write(root.join("models.jsonc"), models).expect("models.jsonc");
         let mut document: serde_json::Value = serde_json::from_str(session).unwrap();
-        document["subagents"]["definitions"]["explore"]["instructionsFile"] =
-            serde_json::to_value(workspace.join(".agents/subagents/explore/instructions.md"))
-                .unwrap();
+        crate::launch_fixture::write_roles(workspace, &mut document["subagents"]);
         std::fs::write(
             root.join("rustx.jsonc"),
             serde_json::to_vec(&document).unwrap(),
@@ -511,7 +507,7 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
     std::fs::create_dir_all(logical_parent.join(".agents/subagents/explore"))
         .expect("logical workspace");
     std::fs::write(
-        logical_parent.join(".agents/subagents/explore/instructions.md"),
+        logical_parent.join(".agents/subagents/explore.md"),
         EXPLORE_INSTRUCTIONS,
     )
     .expect("instructions");
@@ -530,6 +526,29 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
         "/backend/local/runtime.env\n",
     )
     .expect("overlay ignore rule");
+    // The physical worktree contains wider repository resources. Neither main
+    // project guidance nor child workspace acquisition may discover them.
+    std::fs::write(
+        repository.join("AGENTS.md"),
+        "CFG236_WIDER_INSTRUCTIONS_MUST_NOT_APPEAR",
+    )
+    .unwrap();
+    let wider = repository.join(".agents");
+    std::fs::create_dir_all(wider.join("subagents")).unwrap();
+    std::fs::create_dir_all(wider.join("skills/wider")).unwrap();
+    std::fs::write(
+        wider.join("subagents/explore.md"),
+        "CFG236_INVALID_WIDER_ROLE",
+    )
+    .unwrap();
+    std::fs::write(
+        wider.join("skills/wider/SKILL.md"),
+        "---\nname: wider\ndescription: CFG236_WIDER_SKILL_MUST_NOT_APPEAR\n---\nWider guidance",
+    )
+    .unwrap();
+    let mut session: serde_json::Value =
+        serde_json::from_str(ISOLATED_SUBDIRECTORY_SESSION_JSON).unwrap();
+    crate::launch_fixture::write_roles(&logical_parent, &mut session["subagents"]);
     git(&repository, &["init"]);
     git(&repository, &["add", "--all"]);
     git(
@@ -684,6 +703,13 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
             && body.contains("read the local overlay from local/runtime.env")
             && !body.contains("please delegate isolated scope")
     }));
+    assert!(
+        server
+            .request_bodies()
+            .iter()
+            .all(|body| !body.contains("CFG236_")),
+        "wider physical-worktree role, Skill, and project guidance stay undiscovered"
+    );
 
     let response = process
         .request(|id| RuntimeClientRequest::Shutdown {

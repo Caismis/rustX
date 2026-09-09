@@ -106,7 +106,7 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
         default_tools.push("todo");
     }
     serde_json::json!({
-        "schemaVersion": 7,
+        "schemaVersion": 8,
         "agentId": "agent-fnd06",
         "model": {"model": MODEL},
         "approvalMode": "policy",
@@ -122,10 +122,10 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
         // the child never reads this configuration.
         "subagents": {
             "maxConcurrent": 4,
-            "definitions": {
+            "roles": {
                 "explore": {
                     "description": "Read-only exploration of the shared workspace.",
-                    "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
+
                     "tools": {"builtin": ["read"]}
                 }
             },
@@ -163,8 +163,7 @@ impl Lab {
         std::fs::create_dir_all(lab.workspace().join(".agents/subagents/explore"))
             .expect("subagent resources");
         std::fs::write(
-            lab.workspace()
-                .join(".agents/subagents/explore/instructions.md"),
+            lab.workspace().join(".agents/subagents/explore.md"),
             "You are a read-only exploration subagent. Answer the delegated task with the \
              capabilities your definition authorized.\n",
         )

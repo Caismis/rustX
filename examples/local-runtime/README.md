@@ -171,7 +171,7 @@ primary provider requests and compaction summary requests:
 admitted request and is not part of Session history or the provider model
 input.
 
-Each named `subagents.definitions.<name>` may instead set an optional
+Each canonical `workspace/.agents/subagents/<name>.md` frontmatter may set an optional
 `timeoutMs` execution deadline. It is a positive integer number of
 milliseconds, bounded at 86,400,000 (24 hours); when omitted, no
 definition-level deadline is installed. This limit covers the whole owned
@@ -658,3 +658,14 @@ process restart never resumes old nodes or recreates actionable human decisions.
 - The existing files in this directory and `workspace/` remain the full
   reference/conformance stack. They demonstrate advanced capabilities and
   preserve executable conformance coverage; they are not a first-run requirement.
+
+## Canonical role files
+
+`rustx.jsonc` registers `navigator`, `planner`, `implementer`, and `reviewer`
+by identity and independently admits the main and Workflow subsets. Their
+metadata and primary instructions live together in
+`workspace/.agents/subagents/{navigator,planner,implementer,reviewer}.md`.
+Supplemental `AGENTS.md` files remain explicit project guidance. See the
+[authoring contract](../../docs/subagent-resources.md) and generated
+[frontmatter schema](../../schemas/subagent.schema.json). All fixed reference
+Workflows retain these canonical role identities.
