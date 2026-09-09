@@ -753,7 +753,9 @@ pub fn analyze(
     } else {
         crate::runtime::workflow::WorkflowCatalog::empty()
     };
-    let role_root = host.config_directory.join("subagents");
+    // Capture authority once, including host path aliases and missing leaves.
+    // Reload reuses this physical identity; validators must not rebind it.
+    let role_root = normalize_missing(&host.config_directory.join("subagents"))?;
     if trusted {
         crate::runtime::load_project_context_files(&locations.workspace)
             .map_err(LaunchFailure::resource)?;

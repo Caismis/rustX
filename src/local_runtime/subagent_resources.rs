@@ -127,6 +127,7 @@ fn validate_yaml(value: &serde_yaml::Value) -> Result<(), String> {
 }
 
 /// Resolve only explicitly registered identities against two pinned roots.
+/// Callers supply launch-resolved canonical authority roots, never display aliases.
 /// Project replacement is whole-resource: no field, body, or permission merge.
 pub(crate) fn load(
     workspace: &Path,
@@ -278,6 +279,18 @@ pub(crate) mod test_support {
 mod tests {
     use super::*;
 
+    fn canonical_authority_roots(dir: &Path) -> (PathBuf, PathBuf) {
+        let workspace = dir.join("project");
+        let user = dir.join("user/subagents");
+        std::fs::create_dir_all(workspace.join(".agents/subagents")).unwrap();
+        std::fs::create_dir_all(&user).unwrap();
+        // Match launch resolution before passing frozen authority to the loader.
+        (
+            workspace.canonicalize().unwrap(),
+            user.canonicalize().unwrap(),
+        )
+    }
+
     #[test]
     fn cfg236_strict_frontmatter_rejects_unsupported_and_ambiguous_resources() {
         for text in [
@@ -323,10 +336,8 @@ mod tests {
     #[test]
     fn cfg236_registered_resource_io_and_native_bounds_fail_with_source_context() {
         let dir = tempfile::tempdir().unwrap();
-        let workspace = dir.path().join("project");
-        let user = dir.path().join("user/subagents");
+        let (workspace, user) = canonical_authority_roots(dir.path());
         let roles = workspace.join(".agents/subagents");
-        std::fs::create_dir_all(&roles).unwrap();
         let document = SubagentsDocument {
             definitions: vec![SubagentName::parse("reviewer").unwrap()],
             ..Default::default()
@@ -353,10 +364,8 @@ mod tests {
     #[test]
     fn cfg236_canonical_resource_maps_every_native_field_and_freezes_body() {
         let dir = tempfile::tempdir().unwrap();
-        let workspace = dir.path().join("project");
-        let user = dir.path().join("user/subagents");
+        let (workspace, user) = canonical_authority_roots(dir.path());
         let roles = workspace.join(".agents/subagents");
-        std::fs::create_dir_all(&roles).unwrap();
         std::fs::write(workspace.join("guidance.md"), "Supplemental").unwrap();
         let path = roles.join("reviewer.md");
         std::fs::write(&path, "---\ndescription: Review one request\nmodel: example/demo-model\ntimeoutMs: 3600000\ntools:\n  builtin: [read]\n  mcp:\n    service: [lookup]\nskills: [review-guidance]\nagentsMd:\n  inherit: false\n  files: [guidance.md]\nworktree:\n  enabled: true\n  requireCleanParent: true\n---\nYou are the reviewer.\n").unwrap();
@@ -390,11 +399,8 @@ mod tests {
     #[test]
     fn cfg236_whole_resource_replacement_registration_and_independent_admissions() {
         let dir = tempfile::tempdir().unwrap();
-        let workspace = dir.path().join("project");
-        let user = dir.path().join("user/subagents");
+        let (workspace, user) = canonical_authority_roots(dir.path());
         let project = workspace.join(".agents/subagents");
-        std::fs::create_dir_all(&user).unwrap();
-        std::fs::create_dir_all(&project).unwrap();
         let name = SubagentName::parse("reviewer").unwrap();
         std::fs::write(user.join("reviewer.md"), "---\ndescription: User\ntools: {builtin: [write]}\nskills: [user-skill]\n---\nUser body").unwrap();
         std::fs::write(
@@ -447,6 +453,12 @@ mod tests {
                 .get(&name)
                 .is_none()
         );
+        std::fs::remove_file(project.join("reviewer.md")).unwrap();
+        let (catalog, sources) = load(&workspace, &user, &document).unwrap();
+        assert_eq!(catalog.get(&name).unwrap().instructions(), "User body");
+        assert_eq!(sources[&name].selected, user.join("reviewer.md"));
+        assert_eq!(sources[&name].layer, "user");
+        assert_eq!(sources[&name].overridden, None);
         document.definitions.push(name);
         assert!(
             load(&workspace, &user, &document)
@@ -460,10 +472,8 @@ mod tests {
     #[test]
     fn cfg236_role_and_supplemental_paths_cannot_escape_resource_authority() {
         let dir = tempfile::tempdir().unwrap();
-        let workspace = dir.path().join("project");
-        let user = dir.path().join("user/subagents");
+        let (workspace, user) = canonical_authority_roots(dir.path());
         let project = workspace.join(".agents/subagents");
-        std::fs::create_dir_all(&project).unwrap();
         let outside = dir.path().join("outside.md");
         std::fs::write(&outside, "---\ndescription: outside\n---\nOutside").unwrap();
         let document = SubagentsDocument {
@@ -498,8 +508,84 @@ mod tests {
                 .contains("outside trusted workspace")
         );
         assert_eq!(
-            std::fs::read_to_string(outside).unwrap(),
+            std::fs::read_to_string(&outside).unwrap(),
             "---\ndescription: outside\n---\nOutside"
+        );
+
+        // Guidance may resolve through an in-boundary alias, unlike role identity.
+        let guidance = workspace.join("guidance.md");
+        std::os::unix::fs::symlink(&other_role, &guidance).unwrap();
+        std::fs::write(
+            &path,
+            "---\ndescription: reviewer\nagentsMd: {files: [guidance.md]}\n---\nRole",
+        )
+        .unwrap();
+        load(&workspace, &user, &document).unwrap();
+        std::fs::remove_file(&guidance).unwrap();
+        std::os::unix::fs::symlink(&outside, &guidance).unwrap();
+        assert!(
+            load(&workspace, &user, &document)
+                .unwrap_err()
+                .to_string()
+                .contains("outside trusted workspace")
+        );
+
+        // A project replacement cannot read guidance from the user's authority.
+        std::fs::write(user.join("guidance.md"), "User guidance").unwrap();
+        std::fs::write(
+            &path,
+            format!(
+                "---\ndescription: reviewer\nagentsMd: {{files: ['{}']}}\n---\nRole",
+                user.join("guidance.md").display()
+            ),
+        )
+        .unwrap();
+        assert!(
+            load(&workspace, &user, &document)
+                .unwrap_err()
+                .to_string()
+                .contains("outside trusted workspace")
+        );
+        std::fs::remove_file(&path).unwrap();
+        let user_role = user.join("reviewer.md");
+        std::fs::write(
+            &user_role,
+            "---\ndescription: reviewer\nagentsMd: {files: [guidance.md]}\n---\nUser role",
+        )
+        .unwrap();
+        load(&workspace, &user, &document).unwrap();
+        std::fs::remove_file(user.join("guidance.md")).unwrap();
+        std::os::unix::fs::symlink(&outside, user.join("guidance.md")).unwrap();
+        assert!(
+            load(&workspace, &user, &document)
+                .unwrap_err()
+                .to_string()
+                .contains("outside trusted workspace")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cfg236_missing_leaf_and_replaced_root_cannot_rebind_authority() {
+        let dir = tempfile::tempdir().unwrap();
+        let (workspace, user) = canonical_authority_roots(dir.path());
+        std::fs::write(user.join("reviewer.md"), "Outside workspace").unwrap();
+        // Resolving a missing leaf must still detect its escaped existing ancestor.
+        std::os::unix::fs::symlink(&user, workspace.join("escape")).unwrap();
+        assert!(
+            validate_project_resource_path(&workspace, &workspace.join("escape/missing.md"))
+                .unwrap_err()
+                .to_string()
+                .contains("outside trusted workspace")
+        );
+        // Capture precedes replacement: the validator must not follow a new root.
+        std::fs::rename(&workspace, dir.path().join("retired-project")).unwrap();
+        std::os::unix::fs::symlink(&user, &workspace).unwrap();
+        assert!(
+            validate_project_resource_path(&workspace, &workspace.join("reviewer.md"))
+                .unwrap_err()
+                .to_string()
+                .contains("outside trusted workspace")
         );
     }
 }

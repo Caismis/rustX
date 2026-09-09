@@ -63,6 +63,71 @@ fn cfg236_offline_role_provenance_rejections_and_trust_have_zero_effects() {
     assert!(launch.unwrap().subagents.definitions().next().is_none());
 }
 
+#[cfg(unix)]
+#[test]
+fn cfg236_user_role_authority_resolves_alias_once_for_launch_and_diagnostics() {
+    let mut f = Fixture::new();
+    let selected = f.role(true, "reviewer", json!({"description":"User"}), "User body");
+    f.project(json!({"subagents":{"definitions":["reviewer"]}}));
+    let physical_config = f.host.config_directory.clone();
+    let alias = f.root.path().join("config-alias");
+    std::os::unix::fs::symlink(&physical_config, &alias).unwrap();
+    f.host.config_directory = alias.clone();
+    let launch = f.resolve();
+    assert_eq!(launch.role_root, physical_config.join("subagents"));
+    for operation in ["config_check", "config_show"] {
+        let ((report, prospective), effects) = super::static_effects::measure(|| {
+            super::diagnostics::inspect(operation, &f.request, &f.host)
+        });
+        assert_eq!(effects, [0; 8]);
+        assert_eq!(prospective.unwrap().role_root, launch.role_root);
+        assert_eq!(
+            report
+                .launch
+                .unwrap()
+                .roles
+                .values()
+                .next()
+                .unwrap()
+                .selected,
+            selected
+        );
+    }
+    // Retargeting the display alias cannot change the pinned source used by reload.
+    let replacement = f.root.path().join("replacement");
+    std::fs::create_dir(&replacement).unwrap();
+    std::fs::remove_file(&alias).unwrap();
+    std::os::unix::fs::symlink(&replacement, &alias).unwrap();
+    let (catalog, _) = super::subagent_resources::load(
+        &launch.workspace,
+        &launch.role_root,
+        &launch.config.subagents,
+    )
+    .unwrap();
+    assert_eq!(
+        catalog.definitions().next().unwrap().instructions(),
+        "User body"
+    );
+    // Replacing the physical authority itself must fail, not capture its new target.
+    std::fs::rename(&launch.role_root, f.root.path().join("retired-roles")).unwrap();
+    std::fs::write(
+        replacement.join("reviewer.md"),
+        "---\ndescription: outside\n---\nOutside",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(&replacement, &launch.role_root).unwrap();
+    assert!(
+        super::subagent_resources::load(
+            &launch.workspace,
+            &launch.role_root,
+            &launch.config.subagents
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("outside trusted workspace")
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cfg236_gated_role_reload_cancels_or_publishes_one_complete_generation() {
     let f = Fixture::new();
