@@ -92,6 +92,9 @@ pub enum DependencyState {
 /// Static program facts. Literals and task text are deliberately not exported.
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkflowInspection {
+    /// Projected once at the local report surface, including selected role policies.
+    #[serde(skip)]
+    pub runtime_requirements: BTreeSet<&'static str>,
     pub identity: WorkflowToolIdentity,
     pub stage: &'static str,
     pub input_schema: Value,
@@ -137,6 +140,7 @@ impl WorkflowProgram {
     #[must_use]
     pub fn inspect(&self) -> WorkflowInspection {
         let mut result = WorkflowInspection {
+            runtime_requirements: BTreeSet::from(["invoking_attempt_frozen_admission"]),
             identity: self.tool_identity(),
             stage: "statically_compiled_online_admission_unresolved",
             input_schema: schema(&self.block.input_schema),
@@ -168,6 +172,11 @@ impl WorkflowProgram {
             tools: self.tools.clone(),
             profiles: BTreeSet::new(),
         };
+        if self.workspace.is_some() {
+            result
+                .runtime_requirements
+                .insert("workspace_candidate_acquisition_and_identity");
+        }
         block(&self.block, "block", &mut result);
         result
     }
@@ -270,6 +279,7 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
         };
         match node {
             WorkflowNodeProgram::Agent(agent) => {
+                result.runtime_requirements.insert("provider_execution");
                 view.kind = "agent";
                 view.profile = Some(agent.profile.clone());
                 result.profiles.insert(agent.profile.clone());
@@ -284,13 +294,18 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
             WorkflowNodeProgram::Tool {
                 selector,
                 arguments,
-                result,
+                result: tool_result,
             } => {
+                result.runtime_requirements.extend([
+                    "native_argument_normalization_and_validation",
+                    "capability_availability_at_admission",
+                    "native_interaction_if_requested",
+                ]);
                 view.kind = "tool";
                 view.selector = Some(selector.clone());
                 view.bindings.insert("arguments".into(), binding(arguments));
-                view.output_schema = Some(schema(&result.schema()));
-                let (part, kind) = match result {
+                view.output_schema = Some(schema(&tool_result.schema()));
+                let (part, kind) = match tool_result {
                     super::WorkflowToolResult::Json { part, .. } => (*part, "json"),
                     super::WorkflowToolResult::Text { part } => (*part, "text"),
                 };
@@ -301,6 +316,7 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 view.bindings.insert("output".into(), binding(output));
             }
             WorkflowNodeProgram::Branch { condition } => {
+                result.runtime_requirements.insert("branch_outcome");
                 view.kind = "branch";
                 view.bindings
                     .insert("condition".into(), predicate(condition));
@@ -313,6 +329,7 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 max_iterations,
                 output_schema,
             } => {
+                result.runtime_requirements.insert("actual_loop_iterations");
                 view.kind = "loop";
                 view.max_iterations = Some(*max_iterations);
                 view.output_schema = Some(schema(output_schema));
@@ -341,6 +358,9 @@ fn block(program: &WorkflowBlockProgram, path: &str, result: &mut WorkflowInspec
                 }
             }
             WorkflowNodeProgram::Review { subject, context } => {
+                result
+                    .runtime_requirements
+                    .insert("human_review_decision_and_interaction_availability");
                 view.kind = "review";
                 view.review_subject = Some(match subject {
                     WorkflowReviewSubject::Plan { .. } => "plan",

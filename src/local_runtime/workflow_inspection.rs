@@ -149,6 +149,15 @@ pub(super) fn inspect(
             });
         }
     }
+    let mut runtime_requirements = inspection.runtime_requirements.clone();
+    for role in roles.values() {
+        if role.workspace_policy.is_isolated() {
+            runtime_requirements.insert("named_role_workspace_policy_at_admission");
+        }
+        if !role.tools.is_empty() {
+            runtime_requirements.insert("named_role_tool_invocation_and_source_availability");
+        }
+    }
     report.workflow = Some(WorkflowProjection {
         id: id.clone(),
         source,
@@ -165,14 +174,7 @@ pub(super) fn inspect(
         dependencies,
         configured_agent_parallel_limit: launch.config.subagents.max_concurrent,
         program: explain.then_some(inspection),
-        unresolved_runtime_facts: vec![
-            "provider_execution",
-            "native_argument_normalization_and_validation",
-            "source_availability_at_admission",
-            "interaction_availability_and_human_decisions",
-            "workspace_candidate_acquisition_and_identity",
-            "branch_outcomes_and_actual_loop_iterations",
-        ],
+        unresolved_runtime_facts: runtime_requirements.into_iter().collect(),
     });
     report
 }

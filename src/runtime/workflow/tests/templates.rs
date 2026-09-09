@@ -47,6 +47,17 @@ fn cfg237_templates_use_native_loader_compiler_and_editor_schema() {
         assert_eq!(view.conservative_steps, program.execution_bound);
         assert_eq!(view.conservative_retained_bytes, program.retained_bound);
         assert!(view.workspace.is_none());
+        assert!(
+            !view
+                .runtime_requirements
+                .contains("workspace_candidate_acquisition_and_identity")
+        );
+        assert!(!view.runtime_requirements.contains("actual_loop_iterations"));
+        assert_eq!(
+            view.runtime_requirements
+                .contains("human_review_decision_and_interaction_availability"),
+            id == "human_plan"
+        );
     }
 }
 
