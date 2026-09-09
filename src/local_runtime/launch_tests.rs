@@ -64,6 +64,51 @@ impl Fixture {
 }
 
 #[test]
+fn exact_selection_validates_non_cli_launch_requests_before_resolution() {
+    let f = Fixture::new();
+    for request in [
+        LaunchRequest {
+            tools: Some(vec![]),
+            ..Default::default()
+        },
+        LaunchRequest {
+            exclude_tools: Some(vec![]),
+            ..Default::default()
+        },
+        LaunchRequest {
+            tools: Some(vec!["read".into(), "read".into()]),
+            ..Default::default()
+        },
+        LaunchRequest {
+            exclude_tools: Some(vec!["read".into(), "read".into()]),
+            ..Default::default()
+        },
+        LaunchRequest {
+            no_tools: true,
+            tools: Some(vec!["read".into()]),
+            ..Default::default()
+        },
+        LaunchRequest {
+            no_tools: true,
+            exclude_tools: Some(vec!["read".into()]),
+            ..Default::default()
+        },
+        LaunchRequest {
+            no_tools: true,
+            no_builtin_tools: true,
+            ..Default::default()
+        },
+        LaunchRequest {
+            no_builtin_tools: true,
+            tools: Some(vec!["read".into()]),
+            ..Default::default()
+        },
+    ] {
+        assert!(resolve(&request, &f.host).is_err(), "{request:?}");
+    }
+}
+
+#[test]
 fn cfg233_configuration_accepts_only_declarative_python_enablement() {
     for project_layer in [false, true] {
         for value in ["enabled", "disabled", "untrusted", "unconfigured"] {
@@ -379,6 +424,10 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
     let builtin = f.resolve();
     assert_eq!(builtin.config.agent_id.as_str(), "rustx");
     assert_eq!(builtin.config.context.reserve_tokens, 1024);
+    assert_eq!(
+        builtin.config.native_tools.to_policies(),
+        crate::tools::NativeToolPolicies::default()
+    );
     assert_eq!(builtin.provenance["agentId"], Origin::Builtin);
     f.user(json!({"model":{"model":"host/one"}, "agentId":"user", "context":{"reserveTokens":2000,"keepRecentTokens":6000},
         "defaultTools":["read","bash"],"environment":{"USER_ENTRY":"one","REPLACED":"old"},
@@ -418,13 +467,13 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
         Origin::Project { .. }
     ));
     f.request.model = Some("host/one".into());
-    f.request.tools = Some(Vec::new());
-    f.request.exclude_tools = Some(Vec::new());
+    f.request.tools = Some(vec!["read".into(), "bash".into()]);
+    f.request.exclude_tools = Some(vec!["read".into()]);
     let cli = f.resolve();
     assert_eq!(cli.config.model.model.to_string(), "host/one");
     assert!(matches!(cli.provenance["model.model"], Origin::Cli { .. }));
     assert!(matches!(cli.provenance["excludeTools"], Origin::Cli { .. }));
-    assert_eq!(cli.tools, Some(Vec::new()));
+    assert_eq!(cli.tools, Some(vec!["read".into(), "bash".into()]));
     f.project(json!({"environment":{},"mcpServers":{},"subagents":{"definitions":{}}}));
     let empty = f.resolve();
     assert!(empty.config.environment.is_empty());

@@ -239,12 +239,10 @@ async fn hidden_skills_keep_attempt_provenance_but_not_model_visibility() {
     assert_eq!(client_view.skills[0].location, visible_location);
 }
 
-/// Normal rustX agent composition keeps canonical native Read active while
-/// optional Tool activation changes. Skill visibility therefore remains a
-/// Skill-level decision, and the same immutable visible catalog feeds both
-/// the Effective System Prompt and Runtime Client projection.
+/// Main filters suppress lazy guidance without erasing discovered packages
+/// from the independent child-admission authority.
 #[tokio::test]
-async fn mandatory_native_read_survives_optional_activation_filters() {
+async fn lazy_skills_follow_frozen_read_authority_without_changing_discovery() {
     let policies = [
         rustx::capabilities::ToolActivationPolicy {
             no_tools: true,
@@ -280,14 +278,12 @@ async fn mandatory_native_read_survives_optional_activation_filters() {
         let location = skill_location(conversation.workspace.root(), "visible");
         assert_eq!(snapshot.skills().bindings().len(), 1);
         assert_eq!(snapshot.skills().locations(), vec![location.clone()]);
-        assert!(snapshot.tool_registry().names().contains(&"read"));
+        assert!(!snapshot.tool_registry().names().contains(&"read"));
         assert_eq!(snapshot.skills().catalog_entries().len(), 1);
         assert_eq!(snapshot.skills().catalog_entries()[0].location, location);
-        let catalog = snapshot.skill_catalog().expect("visible Skill catalog");
-        assert!(catalog.contains(&format!("<location>{location}</location>")));
+        assert!(snapshot.skill_catalog().is_none());
         let view = crate::runtime_client::projection::capability_view(&snapshot, &BTreeMap::new());
-        assert_eq!(view.skills.len(), 1);
-        assert_eq!(view.skills[0].location, location);
+        assert!(view.skills.is_empty());
     }
 }
 

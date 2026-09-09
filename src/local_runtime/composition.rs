@@ -2945,6 +2945,39 @@ mod subagent_child_tests {
             !catalog.contains("secret body"),
             "only catalog metadata crosses the boundary: {catalog}"
         );
+        // The same independently frozen Skill admission cannot advertise
+        // lazy reads in a child whose own Tool authority omits native Read.
+        let mut without_read = child_spec;
+        without_read.runtime_root = dir.path().join("child-without-read");
+        without_read.resolved.tools = vec![builtin("grep")];
+        let core_without_read = LocalConversationCore::compose_subagent_child(
+            &without_read,
+            &dependencies(),
+            &ChildPreparation::detached(),
+        )
+        .await
+        .expect("child without Read still materializes admitted packages");
+        assert!(
+            core_without_read
+                .runtime()
+                .runtime_resources()
+                .skill_catalog()
+                .is_none()
+        );
+        assert_eq!(
+            core_without_read
+                .capability
+                .current_snapshot()
+                .tool_registry()
+                .names(),
+            ["grep"]
+        );
+        assert!(
+            without_read
+                .runtime_root
+                .join("skills/selected/SKILL.md")
+                .is_file()
+        );
     }
 
     /// Skill bytes that changed after the parent froze them fail child

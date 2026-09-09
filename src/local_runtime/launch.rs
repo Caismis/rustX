@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use super::composition::StartupSession;
-use super::config::CurrentRuntimeConfig;
+use super::config::{CurrentRuntimeConfig, present};
 use crate::model::catalog::ModelCatalog;
 
 /// Filesystem locations and controls produced by the launch resolver.
@@ -20,11 +20,9 @@ pub struct LaunchLocations {
     pub skill_paths: Vec<PathBuf>,
     /// Disable automatic/default Skill roots while retaining explicit paths.
     pub no_skills: bool,
-    /// Disable optional native/built-in tools from startup activation;
-    /// mandatory native Read remains active.
+    /// Remove built-ins, including Read and generated Tools, from default selection.
     pub no_builtin_tools: bool,
-    /// Disable every optional Tool while retaining available metadata;
-    /// mandatory native Read remains active.
+    /// Expose zero ordinary main-model Tools; source activation stays independent.
     pub no_tools: bool,
     /// The Session this launch binds. Startup never resumes on its own;
     /// `--continue` is the explicit request behind
@@ -274,6 +272,17 @@ pub fn resolve_locations(
     request: &LaunchRequest,
     host: &HostEnvironment,
 ) -> Result<(LaunchLocations, String), String> {
+    if let Some(names) = &request.exclude_tools {
+        crate::capabilities::validate_tool_names(names, "exclusion")?;
+    }
+    crate::capabilities::ToolActivationPolicy {
+        no_tools: request.no_tools,
+        no_builtin_tools: request.no_builtin_tools,
+        tools: request.tools.clone(),
+        exclude_tools: request.exclude_tools.clone().unwrap_or_default(),
+        ..Default::default()
+    }
+    .validate()?;
     let launch = canonical_directory(&host.launch_directory)?;
     let workspace = match &request.workspace {
         Some(path) => canonical_directory(&absolute(&launch, path))?,
@@ -905,13 +914,6 @@ fn rebase_paths(
     Ok(resources)
 }
 
-// Option + deserialize_with rejects explicit null for nonnullable fields while
-// leaving missing fields absent. Whole declared entries retain domain serde schemas.
-fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
-    d: D,
-) -> Result<Option<T>, D::Error> {
-    T::deserialize(d).map(Some)
-}
 macro_rules! partial {
     ($name:ident { $($field:ident: $ty:ty),* $(,)? }) => {
         #[derive(Debug, Deserialize, Serialize)]

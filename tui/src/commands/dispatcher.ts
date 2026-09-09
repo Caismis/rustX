@@ -820,7 +820,11 @@ export function renderTools(state: PresentationState): string {
   if (activeGroups.length === 0 && inactiveGroups.length === 0) {
     return "No available tools in the capability set.";
   }
-  const lines = [`### Tools (capability revision ${state.capabilities.revision})`];
+  const lines = [
+    `### Tools (capability revision ${state.capabilities.revision})`,
+    "Active tools are the exact model authority. Available but inactive tools cannot be invoked by this model.",
+    "Exposure filters do not disable source preparation; source activation is controlled separately.",
+  ];
   appendToolGroups(lines, "Active tools", activeGroups);
   appendToolGroups(lines, "Available but inactive", inactiveGroups);
   return lines.join("\n");

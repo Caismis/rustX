@@ -151,7 +151,7 @@ def tui_ask_user_questionnaire() -> Scenario:
 
 BEFORE_START_PROMPT = "cancel before executor start"
 BEFORE_START_ARGUMENTS = json.dumps(
-    {"command": "printf never-started"},
+    {"command": "printf never-started", "execution_mode": "foreground"},
     separators=(",", ":"),
 )
 

@@ -6,6 +6,75 @@ for JSONC settings, whole-source replacement, secret authority, and the exact
 publication/retirement/reconnect frontiers. `--no-tools` is model exposure
 control and does not disable external preparation.
 
+## Exact Tool authority and native defaults
+
+An ordinary main Agent sees and can invoke exactly its frozen selected registry.
+Revision zero has no executable Tool authority; a prepared candidate publishes
+the selection. Default selection includes available built-ins named by
+`defaultTools` (Read is an ordinary member), admitted main Workflow tools, and
+eligible external tools. `--no-builtin-tools` removes all built-ins from this
+default selection, including generated Subagent/Workflow tools.
+`--tools a,b` instead selects exactly those applicable registered names.
+`--exclude-tools a,b` subtracts last, without reinsertion. Exclusions resolve
+against applicable availability, so excluding an already unselected available
+identity is valid, while unknown/ineligible or ambiguous names fail.
+`--no-tools` selects zero ordinary tools, including generated dispatchers.
+
+`--no-tools` conflicts with `--tools`, `--exclude-tools`, and
+`--no-builtin-tools`; `--tools` conflicts with `--no-builtin-tools`.
+All explicit lists reject empty values/entries, duplicates, unknown or
+unavailable identities, and names shared by multiple applicable origins.
+There is no registration-order precedence. Use `--no-tools`, not an empty
+`--tools` list. The Rust selection boundary validates resolved intent too.
+These filters do not grant source activation or alter independently admitted
+child/Workflow capabilities. An invisible dispatcher cannot initiate execution.
+
+Native product defaults are independent typed axes:
+
+| Tool | Execution | Concurrency | Approval |
+| --- | --- | --- | --- |
+| Read | foreground_only | parallel | never |
+| Write | foreground_only | sequential | always |
+| Edit | foreground_only | sequential | always |
+| Glob | foreground_only | parallel | never |
+| Grep | foreground_only | parallel | never |
+| Bash | model_selectable | sequential | always |
+
+Read owns its bytes, decoder and projection per invocation; document caching
+is disabled. Glob/Grep own their traversal, matcher, searcher and collector per
+invocation. They share no mutable cursor or cache requiring sequential
+scheduling. Write/Edit remain exclusive batch barriers around file mutations.
+Parallel scheduling does not promise a filesystem snapshot against outside
+writers. Bash's required `execution_mode` chooses foreground/background
+ownership independently of concurrency and approval.
+
+Missing `nativeTools`, missing entries and missing axes all retain each
+tool's product default. For example, `"read": {"approval": "always"}`
+retains foreground/parallel, and a partial Bash override retains
+model-selectable execution. `execution`, `ask_user`, `todo` and Workflow
+terminal protocols retain their fixed domain owners.
+
+A lazy model-visible Skill catalog requires native Read in that domain's
+frozen Tool authority. Otherwise the catalog is omitted, without enabling
+Read or injecting Skill bodies. Discovery, package snapshots and child Skill
+admission remain independent. A child admitting Read can use its frozen
+Skills even when the main Agent excludes Read.
+
+Native policy is sampled into canonical definitions at registry construction,
+published in the capability generation and pinned at attempt lease acquisition.
+Request compilation and call preflight use that same immutable registry;
+model capability flags never silently remove its definitions. Existing request
+validation rejects Tools for a model without Tool-call support; select
+`--no-tools` to use such a model without ordinary Tools.
+Preflight freezes mode, concurrency and approval in the prepared invocation.
+The approval rendezvous settles before the executor-start frontier. FullAccess
+bypasses only this Tool permission gate: it grants no tool, changes no
+execution axis, answers no Questionnaire/Workflow Review, and bypasses no
+project trust. Later configuration cannot mutate a pinned invocation.
+`workflow_output` is added only by an admitted Workflow Agent's terminal
+owner, never by ordinary main selection; its exactly-once settlement and
+cancellation linearization remain unchanged.
+
 ## Launch authority and resource paths
 
 Project trust permits project resources, never Tool approval policy.

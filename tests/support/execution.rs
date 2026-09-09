@@ -139,11 +139,10 @@ pub(crate) fn execution_fixture(subagents: Option<SubagentRegistry>) -> Executio
         crate::tools::native::execution::registration(runtime.background().clone(), subagents);
     let mut registry = ToolRegistry::new();
     registry
-        .register_with_activation_metadata(
+        .register_with_execution_metadata(
             registration.definition,
             registration.executor,
             registration.normalizer,
-            false,
             registration.foreground,
         )
         .expect("execution registers");

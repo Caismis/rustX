@@ -58,6 +58,7 @@ pub(crate) use crate::scripted_suites::support;
 
 mod background;
 mod durable;
+mod managed_selection;
 mod mcp_recovery;
 mod runtime_client;
 mod subagent;

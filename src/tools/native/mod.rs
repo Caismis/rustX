@@ -14,10 +14,10 @@
 //! Questionnaire capability itself, and the other mutates conversation-owned
 //! task state that two concurrent calls would race on.
 //!
-//! The default is foreground-only sequential for every ordinary native
-//! tool: the model-facing surface of the native tool plane is conservative
-//! by default, and `ModelSelectable`/`BackgroundOnly` are explicit
-//! per-tool configuration choices.
+//! Read/Glob/Grep default to foreground, parallel, approval-never.
+//! Write/Edit default to foreground, sequential, approval-always.
+//! Bash defaults to model-selectable, sequential, approval-always.
+//! Missing override axes retain each Tool's product default.
 //!
 //! # Module ownership
 //!
@@ -48,6 +48,7 @@ mod glob;
 mod grep;
 mod input;
 mod read;
+pub(crate) use read::TOOL_ID as READ_TOOL_ID;
 mod registration;
 // The private native-search substrate shared by Glob and Grep. It is not a
 // tool: it is never registered, never reaches the model, and exists only
@@ -181,7 +182,21 @@ pub struct NativeToolPolicies {
 
 impl Default for NativeToolPolicies {
     fn default() -> Self {
-        Self::uniform(ToolInvocationPolicy::default())
+        use crate::tools::types::{
+            ToolApprovalPolicy::{Always, Never},
+            ToolConcurrencyPolicy::{Parallel, Sequential},
+            ToolExecutionPolicy::{ForegroundOnly, ModelSelectable},
+        };
+        // Read/search executors own their buffers, decoders, matchers and
+        // collectors per invocation; no shared mutation requires a barrier.
+        Self {
+            read: ToolInvocationPolicy::new(ForegroundOnly, Parallel, Never),
+            write: ToolInvocationPolicy::new(ForegroundOnly, Sequential, Always),
+            edit: ToolInvocationPolicy::new(ForegroundOnly, Sequential, Always),
+            glob: ToolInvocationPolicy::new(ForegroundOnly, Parallel, Never),
+            grep: ToolInvocationPolicy::new(ForegroundOnly, Parallel, Never),
+            bash: ToolInvocationPolicy::new(ModelSelectable, Sequential, Always),
+        }
     }
 }
 
@@ -229,12 +244,9 @@ pub fn register_native_tools(
             definition,
             executor,
             normalizer,
-            mandatory,
             foreground,
         } = registration;
-        registry.register_with_activation_metadata(
-            definition, executor, normalizer, mandatory, foreground,
-        )?;
+        registry.register_with_execution_metadata(definition, executor, normalizer, foreground)?;
     }
     Ok(())
 }
@@ -257,12 +269,9 @@ pub(crate) fn register_workflow_tools(
             definition,
             executor,
             normalizer,
-            mandatory,
             foreground,
         } = registration;
-        registry.register_with_activation_metadata(
-            definition, executor, normalizer, mandatory, foreground,
-        )?;
+        registry.register_with_execution_metadata(definition, executor, normalizer, foreground)?;
     }
     Ok(())
 }
@@ -379,8 +388,7 @@ pub(crate) fn subagent_child_definition(
 ///   it (definition admission already rejects that selector);
 /// - `ask_user` is available only when the frozen child definition selects it;
 ///   the child interaction route does not add it implicitly;
-/// - no registration is marked mandatory, so the child's active set equals
-///   its authorized set exactly rather than gaining an implicit Read.
+/// - the child's active set equals its frozen authorized set exactly.
 ///
 /// # Errors
 ///
@@ -420,14 +428,11 @@ pub fn register_subagent_child_tools(
             )));
         }
         // The exact frozen definition is what the child registers. The
-        // child's active set is exactly its authorized set: nothing is
-        // mandatory, so no capability is force-activated beside the ones the
-        // definition selected.
-        registry.register_with_activation_metadata(
+        // child's active set is exactly its authorized set.
+        registry.register_with_execution_metadata(
             definition.clone(),
             executor,
             normalizer,
-            false,
             crate::tools::deadline::ForegroundPolicy::Leaf,
         )?;
     }
@@ -481,13 +486,7 @@ mod tests {
         .expect("selected tools register");
         assert_eq!(registry.names(), vec!["read", "glob", "grep"]);
         assert_eq!(registry.len(), 3);
-        assert!(
-            registry
-                .registrations()
-                .iter()
-                .all(|registration| !registration.mandatory),
-            "a child activates exactly its authorized set, with nothing forced in"
-        );
+
         assert!(
             registry
                 .definitions()

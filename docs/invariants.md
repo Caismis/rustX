@@ -2881,22 +2881,19 @@ the launch-boundary policy inheritance.
   `ToolRegistry`. Inactive definitions remain available for truthful
   inspection but their schemas never enter provider requests.
 - **Startup Tool selection is deterministic.** The base selection applies
-  `defaultTools` to optional built-ins, `--no-builtin-tools` removes optional
-  built-ins while retaining mandatory native Read, `--no-tools` disables
-  optional tools while retaining Read, strict `--tools` cannot remove Read,
-  and `--exclude-tools` is applied last without removing Read. Unknown,
-  ambiguous, or duplicate allowlist entries fail explicitly; no registry
-  insertion order or last-wins rule resolves identity. Normal rustX agent
-  composition always supplies canonical native Read; bare lower-level
-  registries are not normal agent compositions.
+  `defaultTools` to built-ins, `--no-builtin-tools` removes all built-ins,
+  `--no-tools` selects zero ordinary Tools, `--tools` selects exactly its
+  names, and exclusions subtract last. Read has no activation exception.
+  Empty, unknown/ineligible, ambiguous or duplicate explicit entries fail.
+  Contradictory flags fail; no insertion order resolves identity collisions.
 - **Skill visibility is separate from discovery.** Current user/global,
   project, configured, and explicit CLI roots are collected in deterministic
   order. Duplicate logical identities fail explicitly. A validated Skill
   with `disable-model-invocation: true` remains in the immutable Skill
   snapshot but is omitted from the model-visible catalog. A discovered Skill
-  is model-visible from the Skill-level snapshot projection because normal
-  rustX agent composition always contains canonical native Read; no
-  downstream optional-Read predicate participates. The catalog and Runtime
+  is model-visible only when that domain's frozen registry also admits native
+  Read. Missing Read hides lazy guidance without changing discovery or child
+  admission and without eagerly injecting bodies. The catalog and Runtime
   Client projection expose the same host `SKILL.md` path. The model reads
   that path and resolves a Skill's own relative references against its parent
   directory; no virtual Skill namespace exists, so Bash, Grep, and Glob see
@@ -3445,7 +3442,8 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   independently selects its execution and concurrency policy through the
   concrete bounded `NativeToolPolicies` configuration and may use any legal
   execution policy (`ForegroundOnly`, `BackgroundOnly`, `ModelSelectable`);
-  the default is foreground-only sequential for every ordinary tool. Only
+  defaults are intentional per-tool values in the
+  [native policy table](runtime-resources.md#exact-tool-authority-and-native-defaults). Only
   the runtime intrinsic `execution` is intentionally fixed
   (foreground-only, sequential) and is outside the configurable set.
 - Invocation order is frozen: resolve tool, extract/resolve invocation

@@ -204,7 +204,7 @@ never restored from Session history. The runtime applies it at attempt
 boundaries, so a busy attempt keeps its admitted mode while the latest request
 waits as `pending`.
 
-`nativeTools` shows the three independent policy axes for `read`, `write`,
+`nativeTools` can override three independent policy axes for `read`, `write`,
 `edit`, `glob`, `grep`, and `bash`: `execution` is one of
 `foreground_only`, `background_only`, or `model_selectable`; `concurrency` is
 one of `sequential` or `parallel`; and `approval` is `never` or `always`.
@@ -260,15 +260,28 @@ The harmless `RUSTX_EXAMPLE_MODE` entry demonstrates the authorized runtime
 environment. Keep provider credentials in `models.jsonc`'s `apiKey` reference,
 not in this table.
 
-`defaultTools` controls optional native/built-in Tool activation.
-`defaultTools: []` leaves optional built-ins available but inactive; canonical
-native Read remains active. `--no-builtin-tools` disables optional built-ins,
-and `--no-tools` disables every optional Tool, while both retain Read. Strict
-`--tools` cannot remove Read by omitting it, and `--exclude-tools read` cannot
-remove mandatory Read. These controls apply after discovery; availability and
-activation remain separate runtime facts. The reference TUI accepts and
-forwards these controls, as well as repeatable `--skill <path>` and
-`--no-skills`; it does not interpret their values.
+`defaultTools` selects ordinary built-ins; Read is default-enabled.
+`defaultTools: []` selects no ordinary built-ins, while explicitly admitted
+main Workflows remain default-eligible. `--no-builtin-tools` removes all
+built-ins, including generated dispatchers, from default selection.
+`--tools a,b` is an exact allowlist; `--exclude-tools a,b` subtracts last.
+`--no-tools` exposes zero ordinary main-model tools, including Read,
+Subagent and Workflow tools. It conflicts with the other three selection
+flags; `--tools` also conflicts with `--no-builtin-tools`.
+Allowlist plus exclusions and default selection plus exclusions are supported.
+Explicit lists reject empty entries/lists, duplicates, unknown/unavailable
+names and ambiguous origins. Exclusions must resolve against applicable
+availability, even if the identity was already omitted from selection.
+Exposure controls do not disable enabled source preparation; use the source's
+`enabled: false` for that. The TUI forwards these controls to Rust.
+
+The product policy table is published in
+[`settings.jsonc`](settings.jsonc) and
+[runtime resources](../../docs/runtime-resources.md#exact-tool-authority-and-native-defaults).
+The example inherits those defaults rather than demonstrating unusual overrides.
+Partial native policy objects override only explicitly supplied axes over
+that tool's own defaults. `full_access` bypasses only Tool approval, without
+changing exposure, execution mode or concurrency.
 
 Native launch discovers Skills under the user configuration directory's
 `skills/` and `<workspace>/.agents/skills/`, plus the resolved `skills` list.
@@ -277,6 +290,11 @@ This example uses only `workspace/.agents/skills/`.
 `disable-model-invocation: true`
 keeps a validated Skill in runtime resource state but omits it from the
 model-visible catalog.
+
+Lazy Skills are advertised only when native Read is admitted to that model's
+frozen tool set. Removing Read hides the catalog, without discarding discovered
+packages or eagerly inserting their bodies. Child Skill visibility follows
+the child's independently frozen tool admission.
 
 ## Native YAML Workflows
 
@@ -600,7 +618,7 @@ frozen program generation. A candidate-side fake checker is only candidate data.
 Tool Approval permits one exact invocation; it does not certify verifier trust. This
 is not filesystem sandboxing against arbitrary external host processes.
 
-Policy mode asks approval for each exact Bash invocation and native write. `full_access` bypasses that
+Policy mode asks approval for each exact Bash, Write and Edit invocation. `full_access` bypasses that
 permission only, never the fixed question or either human Review. An implementer's
 explicitly allowed `ask_user` also routes to the root interaction surface, without a
 parent relay. Questionnaire answers/decline, Review acceptance/rejection and Tool

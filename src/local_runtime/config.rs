@@ -95,9 +95,8 @@ pub struct CurrentRuntimeConfig {
     /// The current base authorized tool environment.
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
-    /// Optional native/built-in tool names active by default. An empty list
-    /// disables optional built-in activation while mandatory native Read
-    /// remains active and available.
+    /// Native/built-in names active by default. An empty list selects no
+    /// built-ins; Read has no activation exception.
     #[serde(default = "default_tools")]
     pub default_tools: Vec<String>,
     /// Explicit Skill roots/packages; launch provenance retains host/project/CLI authority.
@@ -909,30 +908,133 @@ impl Default for ContextPolicyDocument {
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct NativeToolPoliciesDocument {
     /// The policy of the native Read tool.
-    pub read: InvocationPolicyDocument,
+    pub read: NativePolicyOverrideDocument,
     /// The policy of the native Write tool.
-    pub write: InvocationPolicyDocument,
+    pub write: NativePolicyOverrideDocument,
     /// The policy of the native Edit tool.
-    pub edit: InvocationPolicyDocument,
+    pub edit: NativePolicyOverrideDocument,
     /// The policy of the native Glob tool.
-    pub glob: InvocationPolicyDocument,
+    pub glob: NativePolicyOverrideDocument,
     /// The policy of the native Grep tool.
-    pub grep: InvocationPolicyDocument,
+    pub grep: NativePolicyOverrideDocument,
     /// The policy of the native Bash tool.
-    pub bash: InvocationPolicyDocument,
+    pub bash: NativePolicyOverrideDocument,
 }
 
 impl NativeToolPoliciesDocument {
     /// The native tool policy table this document expresses.
     #[must_use]
-    pub const fn to_policies(self) -> NativeToolPolicies {
+    pub fn to_policies(self) -> NativeToolPolicies {
+        let base = NativeToolPolicies::default();
         NativeToolPolicies {
-            read: self.read.to_policy(),
-            write: self.write.to_policy(),
-            edit: self.edit.to_policy(),
-            glob: self.glob.to_policy(),
-            grep: self.grep.to_policy(),
-            bash: self.bash.to_policy(),
+            read: self.read.resolve(base.read),
+            write: self.write.resolve(base.write),
+            edit: self.edit.resolve(base.edit),
+            glob: self.glob.resolve(base.glob),
+            grep: self.grep.resolve(base.grep),
+            bash: self.bash.resolve(base.bash),
+        }
+    }
+}
+
+/// Explicit native policy axes, resolved over that tool's product default.
+/// Absence never applies the generic external-tool policy to a native tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+pub struct NativePolicyOverrideDocument {
+    /// Foreground/background ownership override.
+    #[serde(deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    pub execution: Option<ExecutionPolicyDocument>,
+    /// In-batch scheduling override.
+    #[serde(deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    pub concurrency: Option<ConcurrencyPolicyDocument>,
+    /// Tool approval override.
+    #[serde(deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    pub approval: Option<ApprovalPolicyDocument>,
+}
+
+// Shared with launch documents: omission preserves absence, while an explicit
+// value (including null) must satisfy the concrete field's serde contract.
+pub(super) fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+    d: D,
+) -> Result<Option<T>, D::Error> {
+    T::deserialize(d).map(Some)
+}
+
+impl NativePolicyOverrideDocument {
+    fn resolve(self, base: ToolInvocationPolicy) -> ToolInvocationPolicy {
+        ToolInvocationPolicy::new(
+            self.execution
+                .map_or(base.execution, ExecutionPolicyDocument::to_policy),
+            self.concurrency
+                .map_or(base.concurrency, ConcurrencyPolicyDocument::to_policy),
+            self.approval
+                .map_or(base.approval, ApprovalPolicyDocument::to_policy),
+        )
+    }
+}
+
+#[cfg(test)]
+mod native_policy_defaults_tests {
+    use super::*;
+
+    #[test]
+    fn partial_native_documents_resolve_each_axis_over_its_own_product_default() {
+        let base = NativeToolPolicies::default();
+        let empty: NativeToolPoliciesDocument = serde_json::from_str("{}").unwrap();
+        assert_eq!(empty.to_policies(), base);
+        for axis in ["execution", "concurrency", "approval"] {
+            assert!(
+                serde_json::from_value::<NativeToolPoliciesDocument>(
+                    serde_json::json!({"read":{axis:null}})
+                )
+                .is_err(),
+                "an explicit null must not silently select a default"
+            );
+        }
+        for name in ["read", "write", "edit", "glob", "grep", "bash"] {
+            for mask in 0..8 {
+                let mut axes = serde_json::Map::new();
+                if mask & 1 != 0 {
+                    axes.insert("execution".into(), serde_json::json!("background_only"));
+                }
+                if mask & 2 != 0 {
+                    axes.insert("concurrency".into(), serde_json::json!("sequential"));
+                }
+                if mask & 4 != 0 {
+                    axes.insert("approval".into(), serde_json::json!("always"));
+                }
+                let document: NativeToolPoliciesDocument =
+                    serde_json::from_value(serde_json::json!({name: axes})).unwrap();
+                let resolved = document.to_policies();
+                for (tool, original, actual) in [
+                    ("read", base.read, resolved.read),
+                    ("write", base.write, resolved.write),
+                    ("edit", base.edit, resolved.edit),
+                    ("glob", base.glob, resolved.glob),
+                    ("grep", base.grep, resolved.grep),
+                    ("bash", base.bash, resolved.bash),
+                ] {
+                    let mut expected = original;
+                    if tool == name {
+                        if mask & 1 != 0 {
+                            expected.execution =
+                                crate::tools::types::ToolExecutionPolicy::BackgroundOnly;
+                        }
+                        if mask & 2 != 0 {
+                            expected.concurrency =
+                                crate::tools::types::ToolConcurrencyPolicy::Sequential;
+                        }
+                        if mask & 4 != 0 {
+                            expected.approval = crate::tools::types::ToolApprovalPolicy::Always;
+                        }
+                    }
+                    assert_eq!(actual, expected, "{name} axes {mask}: {tool}");
+                }
+                let roundtrip: NativeToolPoliciesDocument =
+                    serde_json::from_value(serde_json::to_value(document).unwrap()).unwrap();
+                assert_eq!(roundtrip, document);
+            }
         }
     }
 }

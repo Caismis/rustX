@@ -37,6 +37,7 @@ pub(crate) mod identity;
 pub mod materialization;
 pub(crate) mod package;
 
+pub(crate) use catalog::admitted_skill_entries;
 pub use catalog::{SkillCatalogEntry, SkillSnapshot, render_skill_catalog};
 pub use dependencies::{
     DependencyConflict, DependencyError, DependencyManifest, Ecosystem, merge_dependency_manifests,

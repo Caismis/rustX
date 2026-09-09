@@ -166,6 +166,36 @@ async fn disabled_untrusted_and_unconfigured_python_have_exactly_zero_preparatio
                 activation: decision
             })
         );
+        let inputs = rustx::capabilities::CapabilityResourceInputs {
+            python_sources: [(python_server_id("demo"), decision)].into(),
+            base_tool_registry: Arc::new(ToolRegistry::new()),
+            tool_activation: rustx::capabilities::ToolActivationPolicy {
+                tools: Some(vec!["hidden_python_tool".into()]),
+                ..Default::default()
+            },
+            skill_discovery: rustx::skills::SkillDiscoveryConfig {
+                automatic_roots: vec![],
+                explicit_paths: vec![],
+            },
+            mcp_servers: std::collections::BTreeMap::new(),
+            base_environment: ToolEnvironment::new(),
+        };
+        assert!(matches!(
+            fixture
+                .coordinator
+                .prepare_candidate_with_inputs(inputs)
+                .await,
+            Err(rustx::capabilities::CapabilityPreparationError::ToolActivation(_))
+        ));
+        assert!(fixture.runner.commands.lock().unwrap().is_empty());
+        assert!(state_dirs(&fixture.store_root).is_empty());
+        assert!(
+            fixture
+                .coordinator
+                .current_snapshot()
+                .tool_registry()
+                .is_empty()
+        );
     }
 }
 

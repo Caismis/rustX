@@ -15,23 +15,85 @@ use crate::tools::types::{ToolDefinition, ToolOrigin};
 /// and CLI options. They are never Session-persisted.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolActivationPolicy {
-    /// Optional built-in names active by default. `None` means every
-    /// available optional built-in tool; external capabilities remain
-    /// eligible. Canonical native Read is always active when it is present in
-    /// the native base registry.
+    /// Built-in names selected by default. None selects all applicable
+    /// built-ins; external Tools remain default-eligible.
     pub default_tools: Option<Vec<String>>,
-    /// Remove optional built-in tools from the default/allowlist eligibility
-    /// set. Canonical native Read remains active.
+    /// Remove all built-ins from default selection, including generated Tools.
     pub no_builtin_tools: bool,
-    /// Disable every optional Tool while retaining availability. Canonical
-    /// native Read remains active.
+    /// Expose and authorize zero ordinary main-model Tools.
     pub no_tools: bool,
-    /// A strict model-facing allowlist across all eligible origins. Canonical
-    /// native Read is added even when it is not named.
+    /// Exact model-facing allowlist across applicable origins.
     pub tools: Option<Vec<String>>,
-    /// Final model-facing name exclusions. Canonical native Read cannot be
-    /// excluded.
+    /// Final subtraction from selection, resolved against applicable identities.
     pub exclude_tools: Vec<String>,
+}
+
+impl ToolActivationPolicy {
+    pub(crate) fn conflict(&self) -> Option<(&'static str, &'static str)> {
+        if self.no_tools {
+            for (present, flag) in [
+                (self.tools.is_some(), "--tools"),
+                (!self.exclude_tools.is_empty(), "--exclude-tools"),
+                (self.no_builtin_tools, "--no-builtin-tools"),
+            ] {
+                if present {
+                    return Some(("--no-tools", flag));
+                }
+            }
+        }
+        (self.tools.is_some() && self.no_builtin_tools).then_some(("--tools", "--no-builtin-tools"))
+    }
+
+    /// Validates selection intent independently of capability discovery.
+    /// The same boundary is used by CLI parsing and resolved composition.
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if let Some((first, second)) = self.conflict() {
+            return Err(format!("{first} conflicts with {second}"));
+        }
+        if let Some(names) = &self.tools {
+            validate_names(names, "allowlist")?;
+        }
+        if !self.exclude_tools.is_empty() {
+            validate_names(&self.exclude_tools, "exclusion")?;
+        }
+        Ok(())
+    }
+}
+
+/// Explicit lists never discard empty entries or silently deduplicate.
+pub(crate) fn validate_names(names: &[String], label: &str) -> Result<(), String> {
+    if names.is_empty() || names.iter().any(|name| name.trim().is_empty()) {
+        return Err(format!(
+            "Tool {label} must contain non-empty names; use --no-tools for zero Tools"
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    for name in names {
+        if !seen.insert(name) {
+            return Err(format!("Tool {label} entry {name:?} is repeated"));
+        }
+    }
+    Ok(())
+}
+
+fn resolve_name<'a>(
+    eligible: &[&'a ToolRegistration],
+    name: &str,
+    label: &str,
+) -> Result<&'a ToolRegistration, String> {
+    let mut matches = eligible
+        .iter()
+        .copied()
+        .filter(|entry| entry.definition.name == name);
+    let first = matches
+        .next()
+        .ok_or_else(|| format!("Tool {label} entry {name:?} is unknown or ineligible"))?;
+    if matches.next().is_some() {
+        return Err(format!(
+            "Tool {label} entry {name:?} is ambiguous across available origins"
+        ));
+    }
+    Ok(first)
 }
 
 /// One available validated Tool, including inactive tools.
@@ -128,11 +190,11 @@ pub(crate) fn select_tools(
             .map_err(|error| format!("available Tool selection is invalid: {error}"))?;
     }
     let available_catalog = AvailableToolCatalog::new(available.to_vec());
+    policy.validate()?;
     let eligible = available
         .iter()
         .filter(|registration| {
             !policy.no_builtin_tools
-                || registration.mandatory
                 || !matches!(registration.definition.origin, ToolOrigin::Builtin)
         })
         .collect::<Vec<_>>();
@@ -140,37 +202,14 @@ pub(crate) fn select_tools(
     let mut selected = if policy.no_tools {
         Vec::new()
     } else if let Some(names) = &policy.tools {
-        let mut selected = Vec::with_capacity(names.len());
-        for name in names {
-            let matches = eligible
-                .iter()
-                .filter(|registration| registration.definition.name == *name)
-                .collect::<Vec<_>>();
-            match matches.as_slice() {
-                [] => {
-                    return Err(format!(
-                        "Tool allowlist entry {name:?} is unknown or ineligible"
-                    ));
-                }
-                [registration] => {
-                    if selected.iter().any(|item: &&ToolRegistration| {
-                        item.definition.id == registration.definition.id
-                    }) {
-                        return Err(format!("Tool allowlist entry {name:?} is repeated"));
-                    }
-                    selected.push(*registration);
-                }
-                _ => {
-                    return Err(format!(
-                        "Tool allowlist entry {name:?} is ambiguous across available origins"
-                    ));
-                }
-            }
-        }
-        selected
+        names
+            .iter()
+            .map(|name| resolve_name(&eligible, name, "allowlist"))
+            .collect::<Result<Vec<_>, _>>()?
     } else {
         eligible
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|registration| {
                 !matches!(registration.definition.origin, ToolOrigin::Builtin)
                     || policy
@@ -181,24 +220,15 @@ pub(crate) fn select_tools(
             .collect::<Vec<_>>()
     };
 
-    let excluded = policy.exclude_tools.iter().collect::<BTreeSet<_>>();
-    selected.retain(|registration| {
-        registration.mandatory || !excluded.contains(&registration.definition.name)
-    });
-
-    // The normal native runtime composition always supplies Read in the base
-    // registry. Keep that capability active regardless of optional-tool
-    // selection. Bare lower-level registries without native Read remain valid
-    // for tests and specialized composition paths; they simply have no
-    // mandatory registration to activate here.
-    if let Some(mandatory) = available.iter().find(|registration| {
-        registration.mandatory
-            && !selected
-                .iter()
-                .any(|item: &&ToolRegistration| item.definition.id == registration.definition.id)
-    }) {
-        selected.insert(0, mandatory);
-    }
+    // Resolve exclusions against applicable availability, even if a default
+    // or an allowlist has already omitted the identity. Ambiguity never
+    // chooses an origin, and a typo never becomes a successful no-op.
+    let excluded = policy
+        .exclude_tools
+        .iter()
+        .map(|name| resolve_name(&eligible, name, "exclusion").map(|entry| &entry.definition.id))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    selected.retain(|registration| !excluded.contains(&registration.definition.id));
 
     let active = ToolRegistry::from_registrations(selected.into_iter().cloned())
         .map_err(|error| format!("active Tool selection is invalid: {error}"))?;
@@ -291,12 +321,7 @@ mod tests {
     }
 
     fn registrations() -> Vec<ToolRegistration> {
-        let mut registrations = registry().registrations();
-        // The production native Read registration carries this activation
-        // marker from `read::registration`; the fixture supplies the same
-        // internal metadata without needing native runtime resources.
-        registrations[0].mandatory = true;
-        registrations
+        registry().registrations()
     }
 
     #[test]
@@ -330,7 +355,7 @@ mod tests {
             },
         )
         .expect("empty native defaults");
-        assert_eq!(names(&active), vec!["read", "search"]);
+        assert_eq!(names(&active), vec!["search"]);
         assert_eq!(available.tools().len(), 3);
 
         let (available, active) = select_tools(
@@ -341,7 +366,7 @@ mod tests {
             },
         )
         .expect("native disable");
-        assert_eq!(names(&active), vec!["read", "search"]);
+        assert_eq!(names(&active), vec!["search"]);
         assert_eq!(available.tools().len(), 3);
 
         let (available, active) = select_tools(
@@ -352,7 +377,7 @@ mod tests {
             },
         )
         .expect("all tools disable");
-        assert_eq!(names(&active), vec!["read"]);
+        assert!(names(&active).is_empty());
         assert_eq!(available.tools().len(), 3);
     }
 
@@ -367,7 +392,7 @@ mod tests {
             },
         )
         .expect("cross-origin allowlist");
-        assert_eq!(names(&active), vec!["read", "search"]);
+        assert_eq!(names(&active), vec!["search"]);
         assert_eq!(available.tools().len(), 3);
 
         let error = select_tools(
@@ -418,6 +443,118 @@ mod tests {
         )
         .expect_err("ambiguous identity");
         assert!(error.contains("ambiguous"));
+        let error = select_tools(
+            &registrations,
+            &ToolActivationPolicy {
+                exclude_tools: vec!["duplicate".to_owned()],
+                ..ToolActivationPolicy::default()
+            },
+        )
+        .expect_err("exclusion may not silently choose or remove multiple origins");
+        assert!(error.contains("ambiguous"));
+    }
+
+    #[test]
+    fn explicit_selection_fails_closed_and_exclusions_are_final() {
+        for policy in [
+            ToolActivationPolicy {
+                tools: Some(vec![]),
+                ..Default::default()
+            },
+            ToolActivationPolicy {
+                tools: Some(vec![String::new()]),
+                ..Default::default()
+            },
+            ToolActivationPolicy {
+                tools: Some(vec!["read".into(), "read".into()]),
+                ..Default::default()
+            },
+            ToolActivationPolicy {
+                exclude_tools: vec![String::new()],
+                ..Default::default()
+            },
+            ToolActivationPolicy {
+                exclude_tools: vec!["read".into(), "read".into()],
+                ..Default::default()
+            },
+            ToolActivationPolicy {
+                exclude_tools: vec!["typo".into()],
+                ..Default::default()
+            },
+            ToolActivationPolicy {
+                tools: Some(vec!["subagent".into()]),
+                ..Default::default()
+            },
+            ToolActivationPolicy {
+                no_builtin_tools: true,
+                exclude_tools: vec!["read".into()],
+                ..Default::default()
+            },
+            ToolActivationPolicy {
+                no_tools: true,
+                tools: Some(vec!["read".into()]),
+                ..Default::default()
+            },
+            ToolActivationPolicy {
+                no_tools: true,
+                exclude_tools: vec!["read".into()],
+                ..Default::default()
+            },
+            ToolActivationPolicy {
+                no_tools: true,
+                no_builtin_tools: true,
+                ..Default::default()
+            },
+            ToolActivationPolicy {
+                tools: Some(vec!["read".into()]),
+                no_builtin_tools: true,
+                ..Default::default()
+            },
+        ] {
+            assert!(
+                select_tools(&registrations(), &policy).is_err(),
+                "{policy:?}"
+            );
+        }
+        for (policy, expected) in [
+            (
+                ToolActivationPolicy::default(),
+                vec!["read", "bash", "search"],
+            ),
+            (
+                ToolActivationPolicy {
+                    tools: Some(vec!["bash".into()]),
+                    ..Default::default()
+                },
+                vec!["bash"],
+            ),
+            (
+                ToolActivationPolicy {
+                    exclude_tools: vec!["read".into()],
+                    ..Default::default()
+                },
+                vec!["bash", "search"],
+            ),
+            (
+                ToolActivationPolicy {
+                    tools: Some(vec!["read".into()]),
+                    exclude_tools: vec!["read".into()],
+                    ..Default::default()
+                },
+                vec![],
+            ),
+            (
+                ToolActivationPolicy {
+                    no_builtin_tools: true,
+                    exclude_tools: vec!["search".into()],
+                    ..Default::default()
+                },
+                vec![],
+            ),
+        ] {
+            let (_, active) = select_tools(&registrations(), &policy).unwrap();
+            assert_eq!(names(&active), expected, "{policy:?}");
+        }
     }
 
     /// Candidate availability is validated before activation filtering, so a

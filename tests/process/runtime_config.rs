@@ -249,7 +249,8 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
             .collect::<Vec<_>>(),
         vec!["new-skill"]
     );
-    assert_eq!(snapshot.tool_registry().names(), vec!["read"]);
+    assert!(snapshot.tool_registry().is_empty());
+    assert!(snapshot.skill_catalog().is_none());
     assert!(!snapshot.available_tools().tools().is_empty());
 
     let resumed_endpoint = resumed.endpoint();
@@ -275,14 +276,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         Some(RuntimeClientResult::Capability { capabilities }) => capabilities,
         other => panic!("capability_get returned an unexpected result: {other:?}"),
     };
-    assert_eq!(
-        capabilities
-            .tools
-            .iter()
-            .map(|tool| tool.name.as_str())
-            .collect::<Vec<_>>(),
-        vec!["read"]
-    );
+    assert!(capabilities.tools.is_empty());
     assert!(!capabilities.available_tools.is_empty());
     // `/new` over an untouched empty Session is a semantic no-op, so the
     // switch this test fences needs the active Session to own durable user

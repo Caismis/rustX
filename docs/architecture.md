@@ -5495,22 +5495,20 @@ available definitions
   -> immutable active ToolRegistry
 ```
 
-`--no-builtin-tools` removes optional built-ins from eligibility while
-retaining mandatory native Read, `--no-tools` disables optional tools while
-retaining Read, and `defaultTools: []` leaves optional built-ins available but
-inactive. Strict `--tools` and `--exclude-tools` likewise cannot remove
-mandatory Read. Unknown or ambiguous strict allowlist names fail
-deterministically. Execution ownership, approval, concurrency, and active
-selection remain separate policy dimensions. #100 will add approval/HITL,
-#98 will add Execution Modes, and #99 will change capability lease
-granularity; this #96 boundary implements none of those later behaviors.
+`--no-builtin-tools` removes built-ins from default eligibility;
+`--no-tools` selects zero ordinary main-model Tools. Read has no exception.
+`--tools` is exact and exclusions subtract last. Invalid or ambiguous
+explicit names fail deterministically. Execution ownership, approval,
+concurrency, source activation and model selection remain separate authorities.
+See [exact selection and native defaults](runtime-resources.md#exact-tool-authority-and-native-defaults)
+for the conflict and validation contract.
 
 Skills are discovered from the current bounded roots and explicit paths,
 validated as packages, and stored in an immutable Skill snapshot. A Skill
 with `disable-model-invocation: true` remains discovered and validated but is
-omitted from the model-visible catalog. Normal rustX agent composition always
-contains canonical native Read, so no downstream optional-Read predicate is
-needed for Skill visibility. Skills are trusted instruction packages in the
+omitted from the model-visible catalog. Lazy catalogs additionally require
+native Read in that execution domain's frozen registry; no Tool is inserted
+to satisfy this dependency. Skills are trusted instruction packages in the
 current rustX threat model; structural catalog escaping remains, without a
 semantic trust tier or hostile-package sanitization.
 The catalog exposes compact name/description metadata and the host

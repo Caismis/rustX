@@ -212,8 +212,10 @@ summary policy `session`, model-declared reasoning/output defaults, no request
 parameter overrides, native policies from `NativeToolPoliciesDocument`, the
 native default tool list (`execution`, `ask_user`, `read`, `write`, `edit`,
 `glob`, `grep`, `bash`, `subagent`, `todo`), empty Skills/MCP/environment and
-Subagent/Workflow admission, and Subagent capacity 4. Existing mandatory Read
-semantics remain until CFG-03. Native-only startup requires no Python or MCP;
+Subagent/Workflow admission, and Subagent capacity 4. Read is an ordinary
+default-enabled Tool and all main selection filters are exact; see
+[selection and native defaults](runtime-resources.md#exact-tool-authority-and-native-defaults).
+Native-only startup requires no Python or MCP;
 project `.agents/tools` packages remain optional discovered resources.
 
 Model response-start/stream-idle deadlines remain 30,000/15,000 ms. Foreground

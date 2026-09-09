@@ -724,11 +724,10 @@ impl Clone for ToolRegistry {
         let mut clone = Self::new();
         for entry in &self.entries {
             clone
-                .register_with_activation_metadata(
+                .register_with_execution_metadata(
                     entry.definition.clone(),
                     entry.executor.clone(),
                     entry.normalizer,
-                    entry.mandatory,
                     entry.foreground,
                 )
                 .expect("a validated registry clones without registration errors");
@@ -752,10 +751,6 @@ pub(crate) struct ToolRegistration {
     pub(crate) definition: ToolDefinition,
     pub(crate) executor: Arc<dyn ToolExecutor>,
     pub(crate) normalizer: BusinessArgumentNormalizer,
-    /// Whether the native composition owns this registration as a mandatory
-    /// agent capability. This is activation metadata, not a model-visible
-    /// tool identity check.
-    pub(crate) mandatory: bool,
 }
 
 impl std::fmt::Debug for ToolRegistration {
@@ -817,7 +812,6 @@ impl ToolRegistration {
             definition,
             executor,
             normalizer: identity_arguments,
-            mandatory: false,
         }
     }
 }
@@ -886,26 +880,21 @@ impl ToolRegistry {
         executor: Arc<dyn ToolExecutor>,
         normalizer: BusinessArgumentNormalizer,
     ) -> Result<(), ToolRegistryError> {
-        self.register_with_activation_metadata(
+        self.register_with_execution_metadata(
             definition,
             executor,
             normalizer,
-            false,
             crate::tools::deadline::ForegroundPolicy::Leaf,
         )
     }
 
-    /// Registers one validated Tool with internal activation metadata.
-    ///
-    /// The native composition uses the metadata to keep mandatory agent
-    /// capabilities active while optional startup filters are applied. It
-    /// never changes the public `ToolDefinition` or model-facing schema.
-    pub(crate) fn register_with_activation_metadata(
+    /// Registers one validated Tool with its argument normalizer and
+    /// foreground deadline ownership.
+    pub(crate) fn register_with_execution_metadata(
         &mut self,
         definition: ToolDefinition,
         executor: Arc<dyn ToolExecutor>,
         normalizer: BusinessArgumentNormalizer,
-        mandatory: bool,
         foreground: crate::tools::deadline::ForegroundPolicy,
     ) -> Result<(), ToolRegistryError> {
         if definition.id.as_str().is_empty() {
@@ -986,7 +975,6 @@ impl ToolRegistry {
             definition,
             executor,
             normalizer,
-            mandatory,
         });
         Ok(())
     }
@@ -1019,11 +1007,10 @@ impl ToolRegistry {
     ) -> Result<Self, ToolRegistryError> {
         let mut registry = Self::new();
         for registration in registrations {
-            registry.register_with_activation_metadata(
+            registry.register_with_execution_metadata(
                 registration.definition,
                 registration.executor,
                 registration.normalizer,
-                registration.mandatory,
                 registration.foreground,
             )?;
         }

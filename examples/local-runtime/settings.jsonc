@@ -6,14 +6,18 @@
   // Optional host policies; the model selection above alone is sufficient
   // for minimal startup. Projects cannot declare these policy objects.
   "approvalMode": "policy",
-  "nativeTools": {
-    "read": {"execution": "foreground_only", "concurrency": "parallel"},
-    "write": {"approval": "always", "execution": "foreground_only", "concurrency": "sequential"},
-    "edit": {"execution": "foreground_only", "concurrency": "sequential"},
-    "glob": {"execution": "foreground_only", "concurrency": "parallel"},
-    "grep": {"execution": "background_only", "concurrency": "parallel"},
-    "bash": {"execution": "model_selectable", "concurrency": "sequential", "approval": "always"},
-  },
+  // Product defaults (no nativeTools object is needed):
+  // Tool   execution          concurrency  approval
+  // read   foreground_only    parallel     never
+  // write  foreground_only    sequential   always
+  // edit   foreground_only    sequential   always
+  // glob   foreground_only    parallel     never
+  // grep   foreground_only    parallel     never
+  // bash   model_selectable   sequential   always
+  // Explicit axes override only that axis of the tool's own default:
+  // "nativeTools": {"read": {"approval": "always"}},
+  // Read would still be foreground_only + parallel. Partial Bash overrides
+  // preserve model_selectable unless execution is explicitly changed.
   "mcpToolPolicies": {},
   // Whole-source definitions containing secrets belong in host settings.
   "mcpServers": {

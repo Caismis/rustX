@@ -604,7 +604,11 @@ async fn large_write_progress_crosses_idle_timeout_without_retry_or_duplicate_ex
     const GENERATION_GAP_MS: u64 = 6;
     const STREAM_IDLE_MS: u64 = 10;
 
-    let fixture = common::native_fixture();
+    // This regression isolates provider progress and Write execution;
+    // approval ordering is covered by the native policy boundary suite.
+    let mut policies = rustx::tools::NativeToolPolicies::default();
+    policies.write.approval = rustx::tools::ToolApprovalPolicy::Never;
+    let fixture = common::native_fixture_with(Vec::new(), policies);
     let content = "0123456789abcdef".repeat(4096);
     let arguments = serde_json::json!({
         "path": "large.txt",
