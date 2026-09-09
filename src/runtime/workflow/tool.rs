@@ -71,45 +71,82 @@ impl WorkflowCatalog {
         available: &crate::capabilities::AvailableToolCatalog,
         availability: &crate::capabilities::CapabilityAvailability,
     ) -> Result<(), String> {
-        self.validate_metadata(&available.definitions(), availability, |definition| {
+        self.inspect_metadata(&available.definitions(), availability, |definition| {
             available.registration(definition).map(|registration| {
                 registration.foreground() == crate::tools::deadline::ForegroundPolicy::Leaf
             })
         })
+        .map(|_| ())
+        .map_err(|e| e.to_string())
     }
 
-    pub(crate) fn validate_metadata(
+    pub(crate) fn inspect_metadata(
         &self,
         available: &[ToolDefinition],
         availability: &crate::capabilities::CapabilityAvailability,
         leaf: impl Fn(&ToolDefinition) -> Result<bool, String>,
-    ) -> Result<(), String> {
+    ) -> Result<
+        BTreeMap<super::WorkflowId, Vec<super::inspection::ToolDependency>>,
+        super::inspection::CapabilityError,
+    > {
+        let mut dependencies = BTreeMap::new();
         for program in self.definitions().values() {
+            let mut selected_dependencies = Vec::new();
             for selector in &program.tools {
-                match crate::capabilities::selection::resolve_metadata(
+                let paths = program.selector_paths(selector);
+                let failure = |reason| super::inspection::CapabilityError {
+                    workflow: program.id().clone(),
+                    path: paths[0].clone(),
+                    reason,
+                };
+                let state = match crate::capabilities::selection::resolve_metadata(
                     selector,
                     available,
                     availability,
                 ) {
                     Ok(selected) => {
                         let definition = selected;
-                        if !eligible(definition) || !leaf(definition)? {
-                            return Err(format!(
+                        if !eligible(definition) || !leaf(definition).map_err(failure)? {
+                            return Err(failure(format!(
                                 "Workflow {} selects ineligible leaf {selector}",
                                 program.id()
-                            ));
+                            )));
                         }
+                        super::inspection::DependencyState::Known
                     }
                     Err(
                         crate::capabilities::selection::ToolSelectionError::SourceUnavailable {
                             ..
                         },
-                    ) => {}
-                    Err(error) => return Err(error.to_string()),
-                }
+                    ) => match selector {
+                        ToolSelector::Mcp { server_id, .. } => match availability.get(
+                            &crate::capabilities::CapabilitySourceId::Mcp(server_id.clone()),
+                        ) {
+                            Some(crate::capabilities::CapabilitySourceState::Inactive {
+                                activation,
+                            }) => super::inspection::DependencyState::Inert {
+                                activation: *activation,
+                            },
+                            Some(crate::capabilities::CapabilitySourceState::Unavailable {
+                                ..
+                            }) => super::inspection::DependencyState::Unavailable,
+                            _ => super::inspection::DependencyState::Unresolved,
+                        },
+                        ToolSelector::Builtin { .. } => {
+                            unreachable!("builtin has no external source")
+                        }
+                    },
+                    Err(error) => return Err(failure(error.to_string())),
+                };
+                selected_dependencies.push(super::inspection::ToolDependency {
+                    selector: selector.clone(),
+                    paths,
+                    state,
+                });
             }
+            dependencies.insert(program.id().clone(), selected_dependencies);
         }
-        Ok(())
+        Ok(dependencies)
     }
 }
 

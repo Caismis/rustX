@@ -27,6 +27,103 @@ fn report(output: &Output, exit: i32) -> serde_json::Value {
 }
 
 #[test]
+fn cfg237_binary_workflow_commands_share_json_exit_and_read_only_contract() {
+    fn state_tree(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>> {
+        let mut tree = std::collections::BTreeMap::new();
+        for entry in std::fs::read_dir(root).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                tree.insert(path.clone(), None);
+                tree.extend(state_tree(&path));
+            } else {
+                tree.insert(path.clone(), Some(std::fs::read(path).unwrap()));
+            }
+        }
+        tree
+    }
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    let user = root.path().join("home/.config/rustx");
+    let workflows = workspace.join(".agents/workflows");
+    std::fs::create_dir_all(&workflows).unwrap();
+    std::fs::create_dir_all(&user).unwrap();
+    std::fs::write(
+        user.join("models.jsonc"),
+        include_bytes!("../../examples/local-runtime/minimal/models.jsonc"),
+    )
+    .unwrap();
+    std::fs::write(
+        user.join("settings.jsonc"),
+        include_bytes!("../../examples/local-runtime/minimal/settings.jsonc"),
+    )
+    .unwrap();
+    std::fs::write(
+        workspace.join("rustx.jsonc"),
+        r#"{"workflows":{"definitions":["human_plan"],"main":[]}}"#,
+    )
+    .unwrap();
+    let file = workflows.join("human_plan.yaml");
+    let valid = include_bytes!(
+        "../../examples/local-runtime/workflow-templates/.agents/workflows/human_plan.yaml"
+    );
+    std::fs::write(&file, valid).unwrap();
+    assert!(run(root.path(), &["--trust", "grant"]).status.success());
+    let state = root.path().join("home/.local/state");
+    let before = state_tree(&state); // The explicit trust setup already wrote its membership directory.
+    for operation in ["check", "explain"] {
+        let value = report(
+            &run(
+                root.path(),
+                &["workflow", operation, "human_plan", "--json"],
+            ),
+            3,
+        );
+        assert_eq!(value["validity"], "valid");
+        assert_eq!(value["readiness"], "unresolved");
+        assert_eq!(value["workflow"]["registered"], true);
+        assert_eq!(value["workflow"]["configured_main_admission"], false);
+        assert_eq!(
+            value["workflow"]["program"].is_object(),
+            operation == "explain"
+        );
+        assert!(
+            run(root.path(), &["workflow", operation, "human_plan"])
+                .stdout
+                .starts_with(format!("workflow_{operation}:").as_bytes())
+        );
+        report(
+            &run(
+                root.path(),
+                &[
+                    "workflow",
+                    operation,
+                    "human_plan",
+                    "--trust",
+                    "grant",
+                    "--json",
+                ],
+            ),
+            2,
+        );
+        assert_eq!(std::fs::read(&file).unwrap(), valid);
+    }
+    std::fs::write(&file, "description: [\n").unwrap();
+    for operation in ["check", "explain"] {
+        let invalid = report(
+            &run(
+                root.path(),
+                &["workflow", operation, "human_plan", "--json"],
+            ),
+            2,
+        );
+        assert_eq!(invalid["validity"], "invalid");
+        assert!(invalid["diagnostics"][0]["line"].is_number());
+    }
+    assert_eq!(state_tree(&state), before);
+    assert!(!workspace.join(".git").exists());
+}
+
+#[test]
 fn cfg235_binary_init_check_show_exit_and_machine_contract() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("workspace")).unwrap();

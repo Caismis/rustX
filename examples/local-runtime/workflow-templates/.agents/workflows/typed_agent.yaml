@@ -1,0 +1,26 @@
+description: Summarize a topic with one typed Agent result.
+timeout_ms: 60000
+block:
+  input:
+    type: object
+    properties: {topic: {type: string}}
+    required: [topic]
+    additionalProperties: false
+  output: &summary_contract
+    type: object
+    properties: {summary: {type: string}}
+    required: [summary]
+    additionalProperties: false
+  entry: summarize
+  nodes:
+    summarize:
+      type: agent
+      profile: reviewer
+      task: Summarize the supplied topic in one short sentence.
+      input:
+        topic: {type: reference, path: [args, topic]}
+      output: *summary_contract
+    return_summary:
+      type: return
+      output: {type: reference, path: [summarize]}
+  edges: [{from: summarize, to: return_summary}]

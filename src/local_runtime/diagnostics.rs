@@ -49,7 +49,7 @@ pub struct LaunchFailure {
 
 impl LaunchFailure {
     pub(super) fn resource(error: crate::runtime::resources::RuntimeResourceLoadError) -> Self {
-        Self::at(
+        let mut failure = Self::at(
             error.source_file,
             error.field_path.as_deref().unwrap_or("resources"),
             error
@@ -57,7 +57,19 @@ impl LaunchFailure {
                 .unwrap_or("local resource loading or static compilation failed"),
             "correct the referenced file and its native resource contract",
             error.message,
-        )
+        );
+        failure.diagnostic.line = error.inspection.line;
+        failure.diagnostic.column = error.inspection.column;
+        if let Some(category) = error.inspection.category {
+            failure.diagnostic.category = category;
+        }
+        if let Some(detail) = error.inspection.detail {
+            failure.diagnostic.reason = detail.chars().take(1024).collect();
+        }
+        if let Some(correction) = error.inspection.correction {
+            failure.diagnostic.correction = correction.into();
+        }
+        failure
     }
     pub(super) fn at(
         file: Option<PathBuf>,
@@ -71,7 +83,7 @@ impl LaunchFailure {
                 classification: "error",
                 category: "invalid",
                 file,
-                path: path.chars().take(256).collect(),
+                path: path.chars().take(2048).collect(),
                 reason: reason.into(),
                 correction: correction.into(),
                 line: None,
@@ -196,6 +208,7 @@ impl PartialProjection {
 
 #[derive(Debug, Serialize)]
 pub struct Report {
+    pub workflow: Option<super::workflow_inspection::WorkflowProjection>,
     pub version: u32,
     pub operation: &'static str,
     pub scope: &'static str,
@@ -212,6 +225,7 @@ impl Report {
     pub(super) fn new(operation: &'static str) -> Self {
         Self {
             version: 1,
+            workflow: None,
             operation,
             scope: "prospective_next_launch",
             validity: Validity::Valid,
@@ -290,6 +304,7 @@ impl Report {
             return value;
         }
         value["launch"] = Value::Null;
+        value["workflow"] = Value::Null;
         value["partial"] = Value::Null;
         value["projection_omitted"] = json!(true);
         let projection_warning = json!(Diagnostic {
@@ -312,10 +327,13 @@ impl Report {
             .diagnostics
             .iter()
             .position(|diagnostic| match self.validity {
-                Validity::Invalid => {
-                    diagnostic.category == "invalid" && diagnostic.classification == "error"
+                Validity::Invalid => diagnostic.classification == "error",
+                Validity::Incomplete => {
+                    matches!(
+                        diagnostic.category,
+                        "incomplete" | "dependency_inert" | "dependency_unavailable"
+                    ) || (diagnostic.category == "unresolved" && diagnostic.file.is_some())
                 }
-                Validity::Incomplete => diagnostic.category == "incomplete",
                 Validity::Valid => false,
             });
         let Value::Array(mut original) = value["diagnostics"].take() else {

@@ -181,7 +181,13 @@ pub struct ProspectiveLaunch {
     pub(crate) python_local_status:
         BTreeMap<crate::runtime::identity::McpServerId, PythonLocalStatus>,
     pub(crate) trusted: bool,
-    pub(crate) workflows: crate::runtime::workflow::WorkflowCatalog,
+    pub(crate) workflows: std::sync::Arc<crate::runtime::workflow::WorkflowCatalog>,
+    pub(crate) workflow_dependencies: std::sync::Arc<
+        BTreeMap<
+            crate::runtime::workflow::WorkflowId,
+            Vec<crate::runtime::workflow::inspection::ToolDependency>,
+        >,
+    >,
     pub(crate) subagents: crate::runtime::subagent::SubagentCatalog,
     pub(crate) skill_names: Vec<String>,
     pub(crate) role_root: PathBuf,
@@ -744,12 +750,8 @@ pub fn analyze(
         ]
     };
     let workflows = if trusted {
-        super::composition::load_workflow_catalog(
-            &locations.workspace,
-            &config.workflows,
-            &config.subagents.workflow.iter().cloned().collect(),
-        )
-        .map_err(LaunchFailure::resource)?
+        super::workflow_resources::load(&locations.workspace, &config.workflows, &config.subagents)
+            .map_err(LaunchFailure::resource)?
     } else {
         crate::runtime::workflow::WorkflowCatalog::empty()
     };
@@ -933,17 +935,23 @@ pub fn analyze(
             )
         })?;
     }
-    workflows
-        .validate_metadata(&definitions, &availability, |definition| {
+    let workflow_dependencies = workflows
+        .inspect_metadata(&definitions, &availability, |definition| {
             Ok(native_leaves.contains(&definition.id))
         })
         .map_err(|e| {
+            let reason: String = e.reason.chars().take(1024).collect();
             LaunchFailure::at(
-                None,
-                "workflows.tools",
-                "invalid Workflow Tool admission",
+                Some(
+                    locations
+                        .workspace
+                        .join(".agents/workflows")
+                        .join(format!("{}.yaml", e.workflow)),
+                ),
+                &e.path,
+                &reason,
                 "select a known eligible native leaf or a declared external source",
-                e,
+                e.to_string(),
             )
         })?;
     let mut defaults = config.default_tools.clone();
@@ -977,9 +985,10 @@ pub fn analyze(
         )
     };
     Ok(ProspectiveLaunch {
+        workflow_dependencies: std::sync::Arc::new(workflow_dependencies),
         python_local_status,
         trusted,
-        workflows,
+        workflows: std::sync::Arc::new(workflows),
         subagents,
         role_root,
         role_sources,

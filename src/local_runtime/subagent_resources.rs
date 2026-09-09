@@ -155,6 +155,12 @@ pub(crate) fn load(
             (&user, user_root, "user")
         };
         let error = |message: String| RuntimeResourceLoadError::new(message).at(path, &field);
+        if !project_exists && !user_exists {
+            let mut failure = error("registered named role has no canonical source file".into())
+                .because("registered named role has no canonical project or user source file");
+            failure.inspection.category = Some("resource_missing");
+            return Err(failure);
+        }
         // A user root is explicitly pinned, and must not redirect to project or
         // arbitrary filesystem authority through symlinks.
         if layer == "user" {

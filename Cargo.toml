@@ -61,6 +61,7 @@ grep-searcher = "0.1.17"
 nix = { version = "0.31.3", features = ["signal", "process", "fs", "dir", "inotify", "event"] }
 libc = "0.2"
 serde_yaml = "0.9"
+serde_path_to_error = "0.1"
 yaml-rust2 = { version = "0.11", default-features = false }
 toml = "0.8"
 url = "2"

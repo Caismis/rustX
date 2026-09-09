@@ -47,8 +47,10 @@ pub mod session;
 #[cfg(test)]
 pub(crate) mod static_effects;
 pub mod subagent_child;
-mod subagent_resources;
+pub(crate) mod subagent_resources;
 pub mod supervisor;
+mod workflow_inspection;
+pub(crate) mod workflow_resources;
 
 pub use cli::{ArgumentError, USAGE, parse_arguments};
 pub use composition::{

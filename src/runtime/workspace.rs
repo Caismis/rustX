@@ -1764,6 +1764,10 @@ impl WorkspaceManager {
         owner_id: impl Into<WorkspaceOwner>,
         cancellation: &CancellationSignal,
     ) -> Result<WorkspaceLease, WorkspaceAcquireError> {
+        #[cfg(test)]
+        crate::local_runtime::static_effects::observe(
+            crate::local_runtime::static_effects::Effect::Workspace,
+        );
         let owner = owner_id.into();
         let owner_id = &owner;
         if cancellation.is_cancelled() {

@@ -897,6 +897,10 @@ impl ToolRegistry {
         normalizer: BusinessArgumentNormalizer,
         foreground: crate::tools::deadline::ForegroundPolicy,
     ) -> Result<(), ToolRegistryError> {
+        #[cfg(test)]
+        crate::local_runtime::static_effects::observe(
+            crate::local_runtime::static_effects::Effect::AuthorityMutation,
+        );
         if definition.id.as_str().is_empty() {
             return Err(ToolRegistryError::InvalidIdentity(format!(
                 "tool {:?} must carry a non-empty ToolId",

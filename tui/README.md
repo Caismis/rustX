@@ -7,6 +7,8 @@ Configuration commands can also be forwarded without starting the interactive UI
 
 ```sh
 pnpm start --binary /absolute/path/to/rustx config check --json
+pnpm start --binary /absolute/path/to/rustx workflow check typed_agent --json
+pnpm start --binary /absolute/path/to/rustx workflow explain parallel_checks
 pnpm start --binary /absolute/path/to/rustx config show --sources
 pnpm start --binary /absolute/path/to/rustx doctor --probe
 pnpm start --binary /absolute/path/to/rustx --help

@@ -1,0 +1,74 @@
+description: Run two fixed keyed text checks and return both results.
+timeout_ms: 60000
+block:
+  input: &text_contract
+    type: object
+    properties: {text: {type: string}}
+    required: [text]
+    additionalProperties: false
+  output:
+    type: object
+    properties:
+      clarity: &check_contract
+        type: object
+        properties: {passed: {type: boolean}}
+        required: [passed]
+        additionalProperties: false
+      brevity: *check_contract
+    required: [clarity, brevity]
+    additionalProperties: false
+  entry: check_text
+  nodes:
+    check_text:
+      type: parallel
+      branches:
+        clarity:
+          input:
+            type: object
+            fields:
+              text: {type: reference, path: [args, text]}
+          block:
+            input: *text_contract
+            output: *check_contract
+            entry: assess_clarity
+            nodes:
+              assess_clarity:
+                type: agent
+                profile: reviewer
+                task: Is the supplied text understandable without unexplained jargon?
+                input:
+                  text: {type: reference, path: [args, text]}
+                output: *check_contract
+              return_clarity:
+                type: return
+                output: {type: reference, path: [assess_clarity]}
+            edges: [{from: assess_clarity, to: return_clarity}]
+        brevity:
+          input:
+            type: object
+            fields:
+              text: {type: reference, path: [args, text]}
+          block:
+            input: *text_contract
+            output: *check_contract
+            entry: assess_brevity
+            nodes:
+              assess_brevity:
+                type: agent
+                profile: reviewer
+                task: Does the supplied text avoid unnecessary repetition?
+                input:
+                  text: {type: reference, path: [args, text]}
+                output: *check_contract
+              return_brevity:
+                type: return
+                output: {type: reference, path: [assess_brevity]}
+            edges: [{from: assess_brevity, to: return_brevity}]
+    return_checks:
+      type: return
+      output:
+        type: object
+        fields:
+          clarity: {type: reference, path: [check_text, clarity]}
+          brevity: {type: reference, path: [check_text, brevity]}
+  edges: [{from: check_text, to: return_checks}]

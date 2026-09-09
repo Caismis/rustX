@@ -13,6 +13,332 @@ struct Fixture {
     request: LaunchRequest,
 }
 
+fn template_source(id: &str) -> String {
+    std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "examples/local-runtime/workflow-templates/.agents/workflows/{id}.yaml"
+    )))
+    .unwrap()
+}
+
+fn install_workflow(f: &Fixture, text: &str) -> std::path::PathBuf {
+    let root = f.host.launch_directory.join(".agents/workflows");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("example.yaml");
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+#[test]
+fn cfg237_check_explain_zero_effects_precise_errors_and_authority() {
+    use super::diagnostics::Validity;
+    let f = Fixture::new();
+    f.role(
+        false,
+        "reviewer",
+        json!({"description":"Review","tools":{"builtin":[]},"worktree":{"enabled":false}}),
+        "SECRET_ROLE_PROMPT",
+    );
+    let config = json!({"subagents":{"definitions":["reviewer"],"workflow":["reviewer"]},"workflows":{"definitions":["example"],"main":[]}});
+    let original = template_source("typed_agent");
+    let scenarios = [
+        (original.clone(), config.clone(), Validity::Valid, None),
+        (
+            original.clone(),
+            json!({"workflows":{"definitions":["example"]}}),
+            Validity::Invalid,
+            Some("block.nodes.summarize.profile"),
+        ),
+        (
+            original.clone(),
+            json!({"subagents":{"definitions":["reviewer"]},"workflows":{"definitions":["example"]}}),
+            Validity::Invalid,
+            Some("block.nodes.summarize.profile"),
+        ),
+        (
+            original.replace("[args, topic]", "[args, missing]"),
+            config.clone(),
+            Validity::Invalid,
+            Some("block.nodes.summarize.input.topic"),
+        ),
+        (
+            original.replace("timeout_ms: 60000", "timeout_ms: 0"),
+            config.clone(),
+            Validity::Invalid,
+            Some("timeout_ms"),
+        ),
+        (
+            original.replace("type: agent", "type: imaginary"),
+            config.clone(),
+            Validity::Invalid,
+            Some("block.nodes.summarize.type"),
+        ),
+    ];
+    for (source, configuration, validity, expected_path) in scenarios {
+        f.project(configuration);
+        let file = install_workflow(&f, &source);
+        for explain in [false, true] {
+            let (report, effects) = super::static_effects::measure(|| {
+                super::workflow_inspection::inspect(
+                    &crate::runtime::workflow::WorkflowId::parse("example").unwrap(),
+                    explain,
+                    &f.request,
+                    &f.host,
+                )
+            });
+            assert_eq!(effects, [0; 13]);
+            assert_eq!(report.validity, validity, "{:?}", report.diagnostics);
+            assert_eq!(
+                report.exit_code(),
+                if validity == Validity::Invalid { 2 } else { 3 }
+            );
+            if let Some(path) = expected_path {
+                assert_eq!(report.diagnostics[0].file.as_ref(), Some(&file));
+                assert_eq!(report.diagnostics[0].path, path);
+            } else {
+                let projection = report.workflow.as_ref().unwrap();
+                assert!(projection.registered);
+                assert!(!projection.configured_main_admission);
+                assert_eq!(projection.prospective_main_exposure, Some(false));
+                assert_eq!(projection.program.is_some(), explain);
+                assert!(projection.execution_admission.starts_with("not_performed"));
+            }
+            assert!(!report.render(true).contains("SECRET_ROLE_PROMPT"));
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), source);
+            assert!(!f.resolve_locations_only().runtime_root.exists());
+        }
+    }
+    // Unregistered files never become registrations; untrusted files are not parsed.
+    f.project(json!({}));
+    install_workflow(&f, "invalid: [");
+    let id = crate::runtime::workflow::WorkflowId::parse("example").unwrap();
+    assert_eq!(
+        super::workflow_inspection::inspect(&id, true, &f.request, &f.host).diagnostics[0].path,
+        "workflows.definitions"
+    );
+    f.project(config);
+    f.trust(TrustAction::Revoke);
+    for explain in [false, true] {
+        let (report, effects) = super::static_effects::measure(|| {
+            super::workflow_inspection::inspect(&id, explain, &f.request, &f.host)
+        });
+        assert_eq!(effects, [0; 13]);
+        assert_eq!(report.validity, Validity::Incomplete);
+        assert!(report.workflow.is_none());
+    }
+}
+
+#[test]
+fn cfg237_graph_paths_reach_diagnostics_with_zero_side_effects() {
+    let f = Fixture::new();
+    f.role(
+        false,
+        "reviewer",
+        json!({"description":"Review","tools":{"builtin":[]}}),
+        "Review.",
+    );
+    f.project(json!({"subagents":{"definitions":["reviewer"],"workflow":["reviewer"]},"workflows":{"definitions":["example"]}}));
+    let original: serde_json::Value = serde_json::to_value(
+        serde_yaml::from_str::<crate::runtime::workflow::WorkflowDefinition>(&template_source(
+            "parallel_checks",
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    for (pointer, value, expected) in [
+        ("/description", json!(""), "description"),
+        ("/description", json!("x".repeat(4097)), "description"),
+        (
+            "/block/edges/0/from",
+            json!("missing"),
+            "block.edges.0.from",
+        ),
+        ("/block/edges/0/to", json!("missing"), "block.edges.0.to"),
+        ("/block/edges/0/port", json!("true"), "block.edges.0.port"),
+        (
+            "/block/nodes/check_text/branches/clarity/block/edges/0/to",
+            json!("missing"),
+            "block.nodes.check_text.branches.clarity.block.edges.0.to",
+        ),
+    ] {
+        let mut shape = original.clone();
+        *shape.pointer_mut(pointer).unwrap() = value;
+        let source = serde_yaml::to_string(&shape).unwrap();
+        let file = install_workflow(&f, &source);
+        for explain in [false, true] {
+            let (report, effects) = super::static_effects::measure(|| {
+                super::workflow_inspection::inspect(
+                    &crate::runtime::workflow::WorkflowId::parse("example").unwrap(),
+                    explain,
+                    &f.request,
+                    &f.host,
+                )
+            });
+            assert_eq!(effects, [0; 13]);
+            assert_eq!(report.validity, super::diagnostics::Validity::Invalid);
+            assert_eq!(report.exit_code(), 2);
+            assert_eq!(report.diagnostics[0].path, expected);
+            assert_eq!(report.diagnostics[0].file.as_ref(), Some(&file));
+            assert!(report.render(true).contains(expected));
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), source);
+            assert!(!f.resolve_locations_only().runtime_root.exists());
+        }
+    }
+}
+
+#[test]
+fn cfg237_online_schema_unresolved_and_disabled_source_are_distinct() {
+    use crate::runtime::workflow::inspection::DependencyState;
+    let f = Fixture::new();
+    let text = r"description: Inspect a declared external capability.
+tools: [{origin: mcp, server_id: external, name: inspect}]
+block:
+  input: {type: object, properties: {}, additionalProperties: false}
+  output: {type: object, properties: {text: {type: string}}, required: [text], additionalProperties: false}
+  entry: inspect
+  nodes:
+    inspect:
+      type: tool
+      selector: {origin: mcp, server_id: external, name: inspect}
+      arguments: {type: literal, value: {secret: SECRET_LITERAL}}
+      result: {type: text, part: 0}
+    done:
+      type: return
+      output: {type: object, fields: {text: {type: reference, path: [inspect]}}}
+  edges: [{from: inspect, to: done}]
+";
+    install_workflow(&f, text);
+    for enabled in [true, false] {
+        f.project(json!({"mcpServers":{"external":{"enabled":enabled,"command":"must-never-spawn"}},"workflows":{"definitions":["example"]}}));
+        for explain in [false, true] {
+            let (report, effects) = super::static_effects::measure(|| {
+                super::workflow_inspection::inspect(
+                    &crate::runtime::workflow::WorkflowId::parse("example").unwrap(),
+                    explain,
+                    &f.request,
+                    &f.host,
+                )
+            });
+            assert_eq!(effects, [0; 13]);
+            assert_eq!(report.validity, super::diagnostics::Validity::Incomplete);
+            let state = &report.workflow.as_ref().unwrap().dependencies[0].state;
+            if enabled {
+                assert!(matches!(state, DependencyState::Unresolved));
+            } else {
+                assert!(matches!(
+                    state,
+                    DependencyState::Inert {
+                        activation: crate::capabilities::activation::SourceActivation::Disabled
+                    }
+                ));
+            }
+            assert!(
+                report
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.path == "block.nodes.inspect.selector")
+            );
+            assert!(!report.render(true).contains("SECRET_LITERAL"));
+            assert_eq!(report.exit_code(), 3);
+        }
+    }
+}
+
+#[test]
+fn cfg237_nested_paths_parser_locations_and_compiler_agreement() {
+    let f = Fixture::new();
+    f.role(
+        false,
+        "reviewer",
+        json!({"description":"Review","tools":{"builtin":[]}}),
+        "Review.",
+    );
+    f.project(json!({"subagents":{"definitions":["reviewer"],"workflow":["reviewer"]},"workflows":{"definitions":["example"]}}));
+    let definition: crate::runtime::workflow::WorkflowDefinition =
+        serde_yaml::from_str(&template_source("parallel_checks")).unwrap();
+    let original = serde_json::to_value(definition).unwrap();
+    for (pointer, value, expected) in [
+        (
+            "/block/nodes/check_text/branches/clarity/block/nodes/assess_clarity/input/text/path",
+            json!(["assess_brevity", "passed"]),
+            "block.nodes.check_text.branches.clarity.block.nodes.assess_clarity.input.text",
+        ),
+        (
+            "/block/nodes/check_text/branches/clarity/block/nodes/assess_clarity/output/properties/passed",
+            json!({"type":"boolean","pattern":"SECRET_SCHEMA"}),
+            "block.nodes.check_text.branches.clarity.block.nodes.assess_clarity.output.properties.passed",
+        ),
+        (
+            "/block/nodes/check_text/branches/clarity/block/nodes/return_clarity/output/path",
+            json!(["args"]),
+            "block.nodes.check_text.branches.clarity.block.nodes.return_clarity.output",
+        ),
+    ] {
+        let mut shape = original.clone();
+        *shape.pointer_mut(pointer).unwrap() = value;
+        install_workflow(&f, &serde_yaml::to_string(&shape).unwrap());
+        let report = super::workflow_inspection::inspect(
+            &crate::runtime::workflow::WorkflowId::parse("example").unwrap(),
+            true,
+            &f.request,
+            &f.host,
+        );
+        assert_eq!(report.validity, super::diagnostics::Validity::Invalid);
+        assert_eq!(report.diagnostics[0].path, expected);
+        assert!(!report.render(true).contains("SECRET_SCHEMA"));
+    }
+    install_workflow(&f, "description: [\n");
+    let report = super::workflow_inspection::inspect(
+        &crate::runtime::workflow::WorkflowId::parse("example").unwrap(),
+        true,
+        &f.request,
+        &f.host,
+    );
+    assert!(report.diagnostics[0].line.is_some());
+    assert!(report.diagnostics[0].column.is_some());
+    install_workflow(&f, &serde_yaml::to_string(&original).unwrap());
+    let launch = analyze(&f.request, &f.host).unwrap();
+    let id = crate::runtime::workflow::WorkflowId::parse("example").unwrap();
+    let report = super::workflow_inspection::inspect(&id, true, &f.request, &f.host);
+    let view = report.workflow.unwrap().program.unwrap();
+    assert_eq!(
+        serde_json::to_value(view).unwrap(),
+        serde_json::to_value(launch.workflows.get(&id).unwrap().inspect()).unwrap()
+    );
+}
+
+#[test]
+fn cfg237_workflow_projection_omission_preserves_validity_and_size_bound() {
+    let f = Fixture::new();
+    f.project(json!({"workflows":{"definitions":["example"]}}));
+    install_workflow(&f, &template_source("human_plan"));
+    let mut report = super::workflow_inspection::inspect(
+        &crate::runtime::workflow::WorkflowId::parse("example").unwrap(),
+        true,
+        &f.request,
+        &f.host,
+    );
+    assert_eq!(report.validity, super::diagnostics::Validity::Valid);
+    // Presentation-only pressure on a real compiled projection, not semantic evidence.
+    report
+        .workflow
+        .as_mut()
+        .unwrap()
+        .program
+        .as_mut()
+        .unwrap()
+        .input_schema = json!({"padding":"x".repeat(super::diagnostics::OUTPUT_LIMIT)});
+    for json in [false, true] {
+        let output = report.render(json);
+        assert!(output.len() < super::diagnostics::OUTPUT_LIMIT);
+        assert!(output.contains("projection_omitted"));
+    }
+    assert_eq!(report.exit_code(), 3);
+    let projection: serde_json::Value = serde_json::from_str(&report.render(true)).unwrap();
+    assert!(projection["workflow"].is_null());
+    assert_eq!(projection["projection_omitted"], true);
+    assert_eq!(projection["validity"], "valid");
+}
+
 #[test]
 fn cfg236_offline_role_provenance_rejections_and_trust_have_zero_effects() {
     let f = Fixture::new();
@@ -33,7 +359,7 @@ fn cfg236_offline_role_provenance_rejections_and_trust_have_zero_effects() {
         let ((report, launch), effects) = super::static_effects::measure(|| {
             super::diagnostics::inspect(operation, &f.request, &f.host)
         });
-        assert_eq!(effects, [0; 8]);
+        assert_eq!(effects, [0; 13]);
         let roles = &report.launch.unwrap().roles;
         let role = roles.values().next().unwrap();
         assert_eq!(role.identity.as_str(), "reviewer");
@@ -49,7 +375,7 @@ fn cfg236_offline_role_provenance_rejections_and_trust_have_zero_effects() {
     let ((report, _), effects) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_check", &f.request, &f.host)
     });
-    assert_eq!(effects, [0; 8]);
+    assert_eq!(effects, [0; 13]);
     assert_eq!(report.validity, super::diagnostics::Validity::Invalid);
     assert_eq!(report.diagnostics[0].file, Some(project));
     assert_eq!(report.diagnostics[0].path, "subagents.definitions.reviewer");
@@ -58,7 +384,7 @@ fn cfg236_offline_role_provenance_rejections_and_trust_have_zero_effects() {
     let ((report, launch), effects) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_check", &f.request, &f.host)
     });
-    assert_eq!(effects, [0; 8]);
+    assert_eq!(effects, [0; 13]);
     assert!(report.launch.unwrap().roles.is_empty());
     assert!(launch.unwrap().subagents.definitions().next().is_none());
 }
@@ -79,7 +405,7 @@ fn cfg236_user_role_authority_resolves_alias_once_for_launch_and_diagnostics() {
         let ((report, prospective), effects) = super::static_effects::measure(|| {
             super::diagnostics::inspect(operation, &f.request, &f.host)
         });
-        assert_eq!(effects, [0; 8]);
+        assert_eq!(effects, [0; 13]);
         assert_eq!(prospective.unwrap().role_root, launch.role_root);
         assert_eq!(
             report
@@ -212,7 +538,7 @@ fn check_python_package(
         let ((report, launch), effects) = super::static_effects::measure(|| {
             super::diagnostics::inspect(operation, &f.request, &f.host)
         });
-        assert_eq!(effects, [0; 8]);
+        assert_eq!(effects, [0; 13]);
         for output in [
             report.render(false),
             report.render(true),
@@ -339,7 +665,7 @@ fn cfg235_provider_readiness_is_unresolved_without_credential_lookup() {
                 let ((report, _), counts) = super::static_effects::measure(|| {
                     super::diagnostics::inspect(operation, &f.request, &f.host)
                 });
-                assert_eq!(counts, [0; 8]);
+                assert_eq!(counts, [0; 13]);
                 assert_eq!(report.validity, super::diagnostics::Validity::Valid);
                 assert_eq!(
                     report.readiness,
@@ -398,7 +724,7 @@ fn cfg235_python_local_contract_reuses_name_file_and_symlink_validation() {
         let ((report, launch), effects) = super::static_effects::measure(|| {
             super::diagnostics::inspect("config_check", &f.request, &f.host)
         });
-        assert_eq!(effects, [0; 8]);
+        assert_eq!(effects, [0; 13]);
         assert_eq!(report.exit_code(), 2, "{case}");
         assert_eq!(
             report
@@ -430,7 +756,7 @@ fn cfg235_static_check_show_have_zero_effects_and_redacted_outputs() {
             let ((report, _), counts) = super::static_effects::measure(|| {
                 super::diagnostics::inspect(operation, &f.request, &f.host)
             });
-            assert_eq!(counts, [0; 8]);
+            assert_eq!(counts, [0; 13]);
             if let Some(projection) = &report.launch {
                 for name in projection.sources.keys() {
                     let diagnostic = report
@@ -459,7 +785,7 @@ fn cfg235_static_check_show_have_zero_effects_and_redacted_outputs() {
     let ((report, launch), counts) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_show", &f.request, &f.host)
     });
-    assert_eq!(counts, [0; 8]);
+    assert_eq!(counts, [0; 13]);
     assert_eq!(report.exit_code(), 3);
     assert!(
         launch
@@ -767,7 +1093,14 @@ fn cfg235_diagnostics_keep_source_field_classification_and_correction() {
         assert_eq!(diagnostic.path, field);
         assert!(diagnostic.file.is_some());
         assert_eq!(diagnostic.classification, "error");
-        assert_eq!(diagnostic.category, "invalid");
+        assert_eq!(
+            diagnostic.category,
+            if field == "subagents.definitions.missing" {
+                "resource_missing"
+            } else {
+                "invalid"
+            }
+        );
         assert!(!diagnostic.reason.is_empty());
         assert!(!diagnostic.correction.is_empty());
     }
@@ -892,7 +1225,7 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
     let ((report, _), counts) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_check", &f.request, &f.host)
     });
-    assert_eq!(counts, [0; 8]);
+    assert_eq!(counts, [0; 13]);
     assert_eq!(
         report.exit_code(),
         3,
@@ -916,7 +1249,7 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
     let ((report, _), counts) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_check", &f.request, &f.host)
     });
-    assert_eq!(counts, [0; 8]);
+    assert_eq!(counts, [0; 13]);
     assert_eq!(report.exit_code(), 2);
     assert_eq!(report.diagnostics[0].file, Some(workflow));
     assert!(
@@ -941,13 +1274,13 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
     let ((report, _), counts) = super::static_effects::measure(|| {
         super::diagnostics::inspect("config_check", &f.request, &f.host)
     });
-    assert_eq!(counts, [0; 8]);
+    assert_eq!(counts, [0; 13]);
     assert_eq!(
         report.exit_code(),
         2,
         "native compiler rejects the missing entry node"
     );
-    assert_eq!(report.diagnostics[0].path, "workflows.definitions.broken");
+    assert_eq!(report.diagnostics[0].path, "block.entry");
     f.project(json!({}));
     f.user(json!({}));
     let (report, _) = super::diagnostics::inspect("config_show", &f.request, &f.host);

@@ -104,6 +104,10 @@ impl RuntimeResourceSnapshot {
         context_assembly: ContextAssembly,
         capability: Arc<CapabilitySnapshot>,
     ) -> Self {
+        #[cfg(test)]
+        crate::local_runtime::static_effects::observe(
+            crate::local_runtime::static_effects::Effect::ResourcePublication,
+        );
         let project_instructions =
             concatenate_project_instructions(&project_context_files).map(Arc::<str>::from);
         let skill_catalog = capability.skill_catalog().map(Arc::<str>::from);
@@ -144,6 +148,10 @@ impl RuntimeResourceSnapshot {
         main: BTreeSet<SubagentName>,
         workflow: BTreeSet<SubagentName>,
     ) -> Self {
+        #[cfg(test)]
+        crate::local_runtime::static_effects::observe(
+            crate::local_runtime::static_effects::Effect::AuthorityMutation,
+        );
         self.subagent_main = main;
         self.subagent_workflow = workflow;
         self
@@ -519,6 +527,17 @@ pub struct RuntimeResourceLoadError {
     pub field_path: Option<String>,
     /// Static category authored by the loader, never interpolated resource contents.
     pub diagnostic_reason: Option<&'static str>,
+    pub inspection: Box<ResourceDiagnosticContext>,
+}
+
+/// Optional source context. Kept compact at the ordinary resource error boundary.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ResourceDiagnosticContext {
+    pub category: Option<&'static str>,
+    pub correction: Option<&'static str>,
+    pub detail: Option<String>,
+    pub line: Option<usize>,
+    pub column: Option<usize>,
 }
 
 impl RuntimeResourceLoadError {
@@ -539,6 +558,7 @@ impl RuntimeResourceLoadError {
             source_file: None,
             field_path: None,
             diagnostic_reason: None,
+            inspection: Box::default(),
         }
     }
     /// Attach context at the resource owner, without parsing diagnostic text.
