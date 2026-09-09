@@ -85,22 +85,20 @@ dependency graph and lockfile are owned by pnpm.
 ## Running
 
 The TUI owns the lifecycle of the `rustx` child process and nothing else. Build
-the binary first, then point the client at it and at the runtime's own
-configuration paths:
+the binary first, configure the host model as described in the
+[launch contract](../docs/launch-configuration.md), and grant project trust:
 
 ```sh
 cargo build --bin rustx
+./target/debug/rustx --workspace /path/to/project --trust grant
 
 pnpm --dir tui start \
   --binary "$PWD/target/debug/rustx" \
-  --models "$PWD/examples/local-runtime/models.jsonc" \
-  --config "$PWD/examples/local-runtime/rustx.jsonc" \
-  --workspace "$PWD/examples/local-runtime/workspace" \
-  --runtime-root "$PWD/examples/local-runtime/.rustx"
+  --workspace /path/to/project
 ```
 
-The four startup paths are passed straight through. The `--config` path is
-the current runtime/project configuration; after startup the native
+All path flags are optional overrides passed straight through. `--config`
+replaces the project-config slot without bypassing trust. After startup the native
 SessionCatalog/SessionGraph under `--runtime-root` owns durable user sessions
 and lineages. **The client never opens,
 parses, or interprets any of them** — `models.jsonc` is a runtime-owned model
@@ -108,6 +106,10 @@ authority, and reading it here would create a second one. Provider credentials
 are resolved by the Rust process from the environment it inherits. For the
 complete copyable configuration and Python-tool example, see
 [`examples/local-runtime/README.md`](../examples/local-runtime/README.md).
+
+`--model provider/model` forwards explicit model selection. `--trust grant` and
+`--trust revoke` run the host-owned operation in Rust and exit before TUI/runtime
+composition. From a resolved project directory, no path flags are necessary.
 
 Starting the client is not resuming a Session. Every launch begins on an
 empty Session, and the Sessions of earlier launches stay reachable through

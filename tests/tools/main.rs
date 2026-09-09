@@ -14,6 +14,8 @@
 
 #[path = "../common/mod.rs"]
 mod common;
+#[path = "../common/launch.rs"]
+mod launch_fixture;
 
 mod bash;
 mod mcp;

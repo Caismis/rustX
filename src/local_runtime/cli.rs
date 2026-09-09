@@ -1,11 +1,11 @@
 //! The bounded startup argument contract of the `rustx` binary.
 //!
-//! Arguments are explicit and required. This is deliberately not M10
-//! configuration discovery: there is no search path, no precedence, no
-//! profile selection, and no interactive editor.
+//! Parsing preserves user intent. The Rust launch resolver owns discovery,
+//! field authority, trust, layering, defaults, paths and semantic validation.
 //!
 //! ```text
-//! rustx --models <path> --config <rustx.jsonc> --workspace <dir> --runtime-root <dir>
+//! rustx [--models <path>] [--config <path>] [--workspace <dir>] [--runtime-root <dir>]
+//!       [--model <provider/model>] [--trust grant|revoke]
 //!       [--inspect-conversation <conversation-id>]
 //!       [--continue | --session <session-id> [--node <node-id>]] [--name <text>]
 //! ```
@@ -44,12 +44,14 @@
 
 use std::path::PathBuf;
 
-use super::composition::{LocalRuntimePaths, StartupSession};
+use super::composition::StartupSession;
+use super::launch::{LaunchRequest, TrustAction};
 use super::session::{SessionId, SessionNodeId};
 
 /// The usage text printed to **stderr** for an argument failure.
-pub const USAGE: &str = "usage: rustx --models <models.jsonc> --config <rustx.jsonc> \
-                         --workspace <dir> --runtime-root <dir> \
+pub const USAGE: &str = "usage: rustx [--models <models.jsonc>] [--config <rustx.jsonc>] \
+                         [--workspace <dir>] [--runtime-root <dir>] \
+                         [--model <provider/model>] [--trust grant|revoke] \
                          [--inspect-conversation <conversation-id>] \
                          [--continue | --session <session-id> [--node <node-id>]] \
                          [--name <text>] [tool/skill options]";
@@ -59,11 +61,14 @@ pub const USAGE: &str = "usage: rustx --models <models.jsonc> --config <rustx.js
 /// # Errors
 ///
 /// Returns a bounded diagnostic for an unknown flag, a missing value, a
-/// missing required path, or a Session request that combines `--continue`
+/// invalid value, or a Session request that combines `--continue`
 /// with `--session`.
+#[allow(clippy::too_many_lines)] // one bounded flag parser, preserving explicit presence
 pub fn parse_arguments(
     arguments: impl IntoIterator<Item = String>,
-) -> Result<LocalRuntimePaths, ArgumentError> {
+) -> Result<LaunchRequest, ArgumentError> {
+    let mut model = None;
+    let mut trust = None;
     let mut models: Option<PathBuf> = None;
     let mut config: Option<PathBuf> = None;
     let mut workspace: Option<PathBuf> = None;
@@ -83,7 +88,9 @@ pub fn parse_arguments(
     let mut arguments = arguments.into_iter();
     while let Some(flag) = arguments.next() {
         match flag.as_str() {
-            "--models"
+            "--model"
+            | "--trust"
+            | "--models"
             | "--config"
             | "--workspace"
             | "--runtime-root"
@@ -98,11 +105,18 @@ pub fn parse_arguments(
                     return Err(ArgumentError::MissingValue { flag });
                 };
                 match flag.as_str() {
+                    "--model" => set_text(&mut model, &value, &flag)?,
+                    "--trust" => set_text(&mut trust, &value, &flag)?,
                     "--models" => set_path(&mut models, value.as_str(), flag.as_str())?,
                     "--config" => set_path(&mut config, value.as_str(), flag.as_str())?,
                     "--workspace" => set_path(&mut workspace, value.as_str(), flag.as_str())?,
                     "--runtime-root" => set_path(&mut runtime_root, value.as_str(), flag.as_str())?,
-                    "--skill" => skill_paths.push(PathBuf::from(value)),
+                    "--skill" => {
+                        if value.is_empty() {
+                            return Err(ArgumentError::InvalidValue { flag });
+                        }
+                        skill_paths.push(PathBuf::from(value));
+                    }
                     "--session" => set_text(&mut session, value.as_str(), flag.as_str())?,
                     "--node" => set_text(&mut node, value.as_str(), flag.as_str())?,
                     "--name" => set_text(&mut session_name, value.as_str(), flag.as_str())?,
@@ -135,9 +149,23 @@ pub fn parse_arguments(
         node,
         session_name.is_some(),
     )?;
-    Ok(LocalRuntimePaths {
-        models: required(models, "--models")?,
-        config: required(config, "--config")?,
+    let trust = match trust.as_deref() {
+        None => None,
+        Some("grant") => Some(TrustAction::Grant),
+        Some("revoke") => Some(TrustAction::Revoke),
+        Some(_) => {
+            return Err(ArgumentError::InvalidValue {
+                flag: "--trust".into(),
+            });
+        }
+    };
+    Ok(LaunchRequest {
+        models,
+        config,
+        workspace,
+        runtime_root,
+        model,
+        trust,
         skill_paths,
         no_skills,
         no_builtin_tools,
@@ -145,9 +173,7 @@ pub fn parse_arguments(
         startup_session,
         session_name,
         tools,
-        exclude_tools: exclude_tools.unwrap_or_default(),
-        workspace: required(workspace, "--workspace")?,
-        runtime_root: required(runtime_root, "--runtime-root")?,
+        exclude_tools,
     })
 }
 
@@ -250,6 +276,9 @@ fn set_path(slot: &mut Option<PathBuf>, value: &str, flag: &str) -> Result<(), A
             flag: flag.to_owned(),
         });
     }
+    if value.is_empty() {
+        return Err(ArgumentError::InvalidValue { flag: flag.into() });
+    }
     *slot = Some(PathBuf::from(value));
     Ok(())
 }
@@ -266,11 +295,6 @@ fn set_names(slot: &mut Option<Vec<String>>, value: &str, flag: &str) -> Result<
         .filter(|name| !name.is_empty())
         .map(str::to_owned)
         .collect::<Vec<_>>();
-    if names.is_empty() {
-        return Err(ArgumentError::InvalidValue {
-            flag: flag.to_owned(),
-        });
-    }
     *slot = Some(names);
     Ok(())
 }
@@ -283,10 +307,6 @@ fn set_bool(slot: &mut bool, flag: &str) -> Result<(), ArgumentError> {
     }
     *slot = true;
     Ok(())
-}
-
-fn required(value: Option<PathBuf>, flag: &'static str) -> Result<PathBuf, ArgumentError> {
-    value.ok_or(ArgumentError::Missing { flag })
 }
 
 /// A bounded startup argument failure.
@@ -306,11 +326,6 @@ pub enum ArgumentError {
     Repeated {
         /// The repeated flag.
         flag: String,
-    },
-    /// A required flag was not supplied.
-    Missing {
-        /// The missing flag.
-        flag: &'static str,
     },
     /// A value was syntactically present but empty or otherwise unusable.
     InvalidValue {
@@ -339,7 +354,6 @@ impl std::fmt::Display for ArgumentError {
             Self::UnknownFlag { flag } => write!(f, "unknown argument {flag:?}"),
             Self::MissingValue { flag } => write!(f, "argument {flag} requires a value"),
             Self::Repeated { flag } => write!(f, "argument {flag} was supplied more than once"),
-            Self::Missing { flag } => write!(f, "missing required argument {flag}"),
             Self::InvalidValue { flag } => write!(f, "argument {flag} requires a non-empty value"),
             Self::Conflicting { first, second } => {
                 write!(f, "arguments {first} and {second} cannot be combined")
@@ -375,12 +389,13 @@ mod tests {
             "/private",
         ]))
         .expect("valid");
-        assert_eq!(paths.models.to_str(), Some("/m.json"));
-        assert_eq!(paths.config.to_str(), Some("/r.json"));
-        assert_eq!(paths.artifacts_root().to_str(), Some("/private/artifacts"));
         assert_eq!(
-            paths.environment_store_root().to_str(),
-            Some("/private/environments")
+            paths.models.as_deref().and_then(std::path::Path::to_str),
+            Some("/m.json")
+        );
+        assert_eq!(
+            paths.config.as_deref().and_then(std::path::Path::to_str),
+            Some("/r.json")
         );
     }
 
@@ -400,10 +415,12 @@ mod tests {
             parse_arguments(args(&["--models", "a", "--models", "b"])).expect_err("repeated"),
             ArgumentError::Repeated { .. }
         ));
-        assert!(matches!(
-            parse_arguments(args(&["--models", "a"])).expect_err("incomplete"),
-            ArgumentError::Missing { .. }
-        ));
+        assert!(
+            parse_arguments(args(&[]))
+                .expect("minimal intent")
+                .models
+                .is_none()
+        );
         // Choosing a Session interactively belongs to the client that can
         // draw a picker; this process only ever receives the choice.
         assert!(matches!(
@@ -671,7 +688,7 @@ mod tests {
         );
         assert_eq!(
             paths.exclude_tools,
-            vec!["bash".to_owned(), "grep".to_owned()]
+            Some(vec!["bash".to_owned(), "grep".to_owned()])
         );
         assert!(paths.no_builtin_tools);
     }

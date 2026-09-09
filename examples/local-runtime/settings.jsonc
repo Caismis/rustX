@@ -1,0 +1,6 @@
+// Minimal host settings: copy to $XDG_CONFIG_HOME/rustx/settings.jsonc,
+// or $HOME/.config/rustx/settings.jsonc when XDG_CONFIG_HOME is unset.
+// Configure the neighboring models.jsonc with your actual provider declaration.
+{
+  "model": {"model": "example/demo-model"},
+}

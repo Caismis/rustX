@@ -37,65 +37,40 @@ production maturity.
 
 ## Quick start
 
-The runtime takes four explicit startup paths; it does not discover its
-runtime/project configuration from the current directory. Configure
-`examples/local-runtime/models.jsonc` and
-`examples/local-runtime/rustx.jsonc` in place, or copy the complete
-`examples/local-runtime/` directory and adjust the paths below.
+Configure your model once in the host configuration directory:
+`$XDG_CONFIG_HOME/rustx`, or `$HOME/.config/rustx` when XDG_CONFIG_HOME is
+unset (Linux and macOS). Put explicit provider/model declarations in
+`models.jsonc` and select one in `settings.jsonc`:
 
-Both files are JSONC: ordinary JSON plus `//` and `/* */` comments and
-trailing commas, so the committed examples explain every field next to the
-value it configures. Nothing else is relaxed — unknown fields, unquoted keys,
-and single-quoted strings still fail startup loudly.
+```jsonc
+{"model": {"model": "example/demo-model"}}
+```
 
-The copyable example requires the Rust toolchain, Node LTS with nvm and
-Corepack/pnpm, and `uv` plus a `python3` interpreter on `PATH` because its
-workspace includes a discovered custom Python tool package.
+Use your declared provider/model identity. The
+[catalog example](examples/local-runtime/models.jsonc) shows the required endpoint,
+credential source, protocol, limits and capabilities; its endpoint is a placeholder.
+The [launch contract](docs/launch-configuration.md) documents all locations,
+field ownership, precedence, path semantics, defaults and trust.
 
-Set the credential referenced by the example catalog, then build the runtime
-and install the locked TUI dependencies:
+Build the runtime and install the reference TUI:
 
 ```sh
-export RUSTX_EXAMPLE_API_KEY='replace-me'
-
 cargo build --bin rustx
-
-nvm install --lts
-nvm use --lts
-corepack enable
 pnpm --dir tui install --frozen-lockfile
+./target/debug/rustx --workspace /path/to/project --trust grant
+pnpm --dir tui start --binary "$PWD/target/debug/rustx" --workspace /path/to/project
 ```
 
-Launch the reference client with the example paths:
+When launched from the project, `--workspace` is unnecessary. A project
+`rustx.jsonc` is optional, and runtime state defaults to the user state directory.
+Native-only startup needs neither Python nor MCP. The
+[advanced resource example](examples/local-runtime/README.md) also demonstrates
+optional managed Python tools and fixed Workflows.
 
-```sh
-pnpm --dir tui start \
-  --binary "$PWD/target/debug/rustx" \
-  --models "$PWD/examples/local-runtime/models.jsonc" \
-  --config "$PWD/examples/local-runtime/rustx.jsonc" \
-  --workspace "$PWD/examples/local-runtime/workspace" \
-  --runtime-root "$PWD/examples/local-runtime/.rustx"
-```
-
-The example endpoint is a placeholder. Replace it with the endpoint for the
-selected provider before making a model request. The full configuration
-contract and custom Python-tool example are in
-[`examples/local-runtime/README.md`](examples/local-runtime/README.md).
-
-Every launch starts on an empty Session. Earlier Sessions are kept and stay
-reachable with `/resume`; add `--continue` to start on the Session the last
-launch left active instead. Sessions are unnamed by default and are listed by
-their first message; `--name "<text>"` names the Session a launch binds, and
-`/name` does the same from inside it.
-
-`--config rustx.jsonc` is the current runtime/project configuration. Durable
-Session state lives separately under `--runtime-root`: it retains Session
-identity/history and the explicitly selected Session model, but never
-resurrects historical MCP, Tool, Skill, context, timezone, environment, or
-other launch-scoped settings. Runtime capability inspection reports available
-Tools separately from active model-visible Tools. The current roadmap is
-#96's configuration and activation foundation, followed by #100 approval/HITL,
-#98 Execution Modes, and #99 finer-grained capability leases.
+Startup begins on a fresh/unused empty Session. Earlier Sessions remain reachable
+through `/resume`; `--continue` and `--session` request explicit selection.
+`--name` only names the selected Session. Failed launch resolution or composition
+cannot publish another active Session.
 
 ## Runtime and reference client
 
@@ -118,12 +93,11 @@ native Read, Write, Edit, Grep, or Glob.
 Project-authored Agent resources use the workspace-owned `.agents/` namespace:
 Skills and Python tools retain their discovery semantics, while Subagents and
 native Workflows are admitted explicitly by `rustx.jsonc`. The configured
-`--runtime-root` (often named `.rustx/`) is runtime-owned/generated state and
+runtime root is runtime-owned/generated state outside the workspace and
 is not a project-resource fallback. `.agents/skills/` is the canonical project
-layout; Skill discovery retains its existing automatic roots, including
-`~/.rustx/skills/`, `~/.agents/skills/`, `<workspace>/.rustx/skills/`, and
-`<workspace>/.agents/skills/`. Retaining those Skill roots does not make
-`.rustx/skills/` the recommended project layout.
+layout; automatic Skill roots are the host configuration directory's `skills/`
+and `<workspace>/.agents/skills/`. Explicit settings and CLI paths are resolved
+by the [launch resolver](docs/launch-configuration.md).
 
 For those native file tools, relative paths resolve from the execution cwd and
 absolute paths are valid host filesystem paths. `.` and `..` are resolved

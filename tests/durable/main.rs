@@ -14,6 +14,8 @@
 #![allow(clippy::too_many_lines)] // deterministic store scenarios stay linear
 
 mod interaction_audit;
+#[path = "../common/launch.rs"]
+mod launch_fixture;
 mod pending_inbound;
 mod publication;
 mod recovery;

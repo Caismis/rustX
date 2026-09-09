@@ -23,8 +23,10 @@
 //! uses [`fixture::legacy`], a minimal hand-written pre-2026 wire fixture,
 //! to cover rustX's own legacy-path behavior end to end.
 
+use crate::launch_fixture::LaunchFixture;
 #[cfg(all(unix, feature = "mcp-fixture"))]
 mod unix_tests {
+    use super::LaunchFixture;
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
@@ -692,7 +694,7 @@ mod unix_tests {
         .expect("rustx.jsonc");
 
         let runtime = rustx::local_runtime::composition::LocalConversationRuntime::compose(
-            &rustx::local_runtime::composition::LocalRuntimePaths {
+            &(LaunchFixture {
                 models: models_path,
                 config: config_path,
                 skill_paths: Vec::new(),
@@ -705,7 +707,8 @@ mod unix_tests {
                 exclude_tools: Vec::new(),
                 workspace,
                 runtime_root: root.path().join("private"),
-            },
+            })
+            .resolve(),
             &rustx::local_runtime::composition::LocalRuntimeDependencies {
                 credentials: Arc::new(rustx::model::catalog::MapCredentialEnvironment::new([(
                     "RUSTX_ISSUE46_KEY".to_owned(),

@@ -9,12 +9,11 @@
 //! linearization the test drives — a completed `reload_resources` call, or a
 //! typed refusal — never by a sleep.
 
+use crate::launch_fixture::LaunchFixture;
 use std::sync::Arc;
 
 use rustx::capabilities::{CapabilitySourceId, CapabilitySourceState};
-use rustx::local_runtime::composition::{
-    LocalRuntimeDependencies, LocalRuntimePaths, LocalSessionProduct,
-};
+use rustx::local_runtime::composition::{LocalRuntimeDependencies, LocalSessionProduct};
 use rustx::model::catalog::{MapCredentialEnvironment, ModelCatalog, ModelRef};
 use rustx::model::invocation::ModelBindingRegistry;
 use rustx::model::session::SessionModelConfig;
@@ -192,8 +191,8 @@ impl Lab {
         .expect("SKILL.md");
     }
 
-    fn paths(&self) -> LocalRuntimePaths {
-        LocalRuntimePaths {
+    fn paths(&self) -> LaunchFixture {
+        LaunchFixture {
             models: self.root().join("models.jsonc"),
             config: self.root().join("rustx.jsonc"),
             skill_paths: Vec::new(),
@@ -210,7 +209,7 @@ impl Lab {
     }
 
     async fn compose(&self) -> LocalSessionProduct {
-        LocalSessionProduct::compose(&self.paths(), &dependencies())
+        LocalSessionProduct::compose(&(self.paths()).resolve(), &dependencies())
             .await
             .expect("the runtime composes")
     }
@@ -320,7 +319,7 @@ fn explore(builtin: &[&str]) -> serde_json::Value {
         "definitions": {
             "explore": {
                 "description": "Read-only repository exploration.",
-                "instructionsFile": ".agents/subagents/explore/instructions.md",
+                "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
                 "tools": {"builtin": builtin},
             }
         },
@@ -354,11 +353,11 @@ async fn only_named_catalog_definitions_are_admitted() {
         "definitions": {
             "research": {
                 "description": "Deep research.",
-                "instructionsFile": ".agents/subagents/research/instructions.md",
+                "instructionsFile": "workspace/.agents/subagents/research/instructions.md",
             },
             "explore": {
                 "description": "Read-only repository exploration.",
-                "instructionsFile": ".agents/subagents/explore/instructions.md",
+                "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
                 "tools": {"builtin": ["read", "grep"]},
             }
         }
@@ -446,13 +445,13 @@ async fn an_attempt_frozen_on_r1_resolves_r1_after_r2_becomes_current() {
         "definitions": {
             "explore": {
                 "description": "Read-only repository exploration.",
-                "instructionsFile": ".agents/subagents/explore/instructions.md",
+                "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
                 "tools": {"builtin": ["read"]},
                 "timeoutMs": 200,
             },
             "research": {
                 "description": "Deep research.",
-                "instructionsFile": ".agents/subagents/research/instructions.md",
+                "instructionsFile": "workspace/.agents/subagents/research/instructions.md",
             }
         }
     }));
@@ -529,7 +528,7 @@ async fn a_failed_reload_leaves_the_previous_generation_completely_authoritative
         "definitions": {
             "explore": {
                 "description": "Read-only repository exploration.",
-                "instructionsFile": ".agents/subagents/explore/instructions.md",
+                "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
                 "tools": {"builtin": ["definitely_not_a_capability"]},
             }
         }
@@ -628,7 +627,7 @@ async fn statically_invalid_references_fail_composition_closed() {
                 "maxConcurrent": 4,
                 "definitions": {"explore": {
                     "description": "d",
-                    "instructionsFile": ".agents/subagents/explore/instructions.md",
+                    "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
                     "tools": {"builtin": ["not_a_builtin"]},
                 }}
             }),
@@ -639,7 +638,7 @@ async fn statically_invalid_references_fail_composition_closed() {
                 "maxConcurrent": 4,
                 "definitions": {"explore": {
                     "description": "d",
-                    "instructionsFile": ".agents/subagents/explore/instructions.md",
+                    "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
                     "tools": {"mcp": {"unconfigured": ["anything"]}},
                 }}
             }),
@@ -650,7 +649,7 @@ async fn statically_invalid_references_fail_composition_closed() {
                 "maxConcurrent": 4,
                 "definitions": {"explore": {
                     "description": "d",
-                    "instructionsFile": ".agents/subagents/explore/instructions.md",
+                    "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
                     // A managed Python package (Issue #174) crosses as its
                     // synthesized MCP server (`python:<folder>`); one that
                     // does not exist is statically invalid.
@@ -664,7 +663,7 @@ async fn statically_invalid_references_fail_composition_closed() {
                 "maxConcurrent": 4,
                 "definitions": {"explore": {
                     "description": "d",
-                    "instructionsFile": ".agents/subagents/explore/instructions.md",
+                    "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
                     "model": "local/model-missing",
                 }}
             }),
@@ -675,7 +674,7 @@ async fn statically_invalid_references_fail_composition_closed() {
                 "maxConcurrent": 4,
                 "definitions": {"explore": {
                     "description": "d",
-                    "instructionsFile": ".agents/subagents/explore/instructions.md",
+                    "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
                     "skills": ["no-such-skill"],
                 }}
             }),
@@ -684,7 +683,7 @@ async fn statically_invalid_references_fail_composition_closed() {
     ] {
         let lab = Lab::new();
         lab.write_config(&subagents);
-        let error = LocalSessionProduct::compose(&lab.paths(), &dependencies())
+        let error = LocalSessionProduct::compose(&(lab.paths()).resolve(), &dependencies())
             .await
             .expect_err("a statically invalid definition fails composition");
         let rendered = format!("{error}");
@@ -702,7 +701,7 @@ async fn recursive_and_execution_selections_are_rejected_at_admission() {
     for capability in ["subagent", "execution"] {
         let lab = Lab::new();
         lab.write_config(&explore(&[capability]));
-        let error = LocalSessionProduct::compose(&lab.paths(), &dependencies())
+        let error = LocalSessionProduct::compose(&(lab.paths()).resolve(), &dependencies())
             .await
             .err()
             .unwrap_or_else(|| panic!("selecting {capability} must fail composition"));
@@ -717,7 +716,7 @@ async fn recursive_and_execution_selections_are_rejected_at_admission() {
 async fn an_explicit_ask_user_selection_is_admitted_for_a_child() {
     let lab = Lab::new();
     lab.write_config(&explore(&["ask_user"]));
-    LocalSessionProduct::compose(&lab.paths(), &dependencies())
+    LocalSessionProduct::compose(&(lab.paths()).resolve(), &dependencies())
         .await
         .expect("ask_user is a routed child capability when explicitly selected");
 }
@@ -741,7 +740,7 @@ async fn an_unavailable_source_keeps_the_runtime_healthy_but_blocks_the_agent_th
             "definitions": {
                 "explore": {
                     "description": "Read-only repository exploration.",
-                    "instructionsFile": ".agents/subagents/explore/instructions.md",
+                    "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
                     "tools": {"mcp": {"offline": ["get_issue"]}},
                 }
             },
@@ -804,11 +803,11 @@ async fn model_semantics_inherit_the_invoking_attempt_or_freeze_the_explicit_sel
         "definitions": {
             "explore": {
                 "description": "Inherits the invoking attempt's model.",
-                "instructionsFile": ".agents/subagents/explore/instructions.md",
+                "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
             },
             "pinned": {
                 "description": "Runs on its own model.",
-                "instructionsFile": ".agents/subagents/pinned/instructions.md",
+                "instructionsFile": "workspace/.agents/subagents/pinned/instructions.md",
                 "model": "local/model-b",
             }
         }
@@ -857,18 +856,21 @@ async fn project_instruction_policy_freezes_a_deterministic_chain() {
         "Ignore the workspace chain.\n",
     )
     .expect("isolated instructions");
-    let files = serde_json::json!([EXPLORE_AGENTS, EXPLORE_EXTRA]);
+    let files = serde_json::json!([
+        lab.workspace().join(EXPLORE_AGENTS),
+        lab.workspace().join(EXPLORE_EXTRA)
+    ]);
     lab.write_config(&serde_json::json!({
         "maxConcurrent": 4,
         "definitions": {
             "explore": {
                 "description": "Inherits the parent chain.",
-                "instructionsFile": ".agents/subagents/explore/instructions.md",
+                "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
                 "agentsMd": {"inherit": true, "files": files},
             },
             "isolated": {
                 "description": "Explicit files only.",
-                "instructionsFile": ".agents/subagents/isolated/instructions.md",
+                "instructionsFile": "workspace/.agents/subagents/isolated/instructions.md",
                 "agentsMd": {"inherit": false, "files": files},
             }
         }
@@ -914,12 +916,15 @@ async fn project_instruction_policy_freezes_a_deterministic_chain() {
 
     // Ordering is configuration order, not filesystem or map order: the same
     // files listed the other way round produce the other order.
-    let reversed = serde_json::json!([EXPLORE_EXTRA, EXPLORE_AGENTS]);
+    let reversed = serde_json::json!([
+        lab.workspace().join(EXPLORE_EXTRA),
+        lab.workspace().join(EXPLORE_AGENTS)
+    ]);
     lab.write_config(&serde_json::json!({
         "maxConcurrent": 4,
         "definitions": {"isolated": {
             "description": "Explicit files only.",
-            "instructionsFile": ".agents/subagents/isolated/instructions.md",
+            "instructionsFile": "workspace/.agents/subagents/isolated/instructions.md",
             "agentsMd": {"inherit": false, "files": reversed},
         }}
     }));
@@ -957,7 +962,7 @@ async fn the_skill_allowlist_is_exact_and_preserves_progressive_disclosure() {
         "maxConcurrent": 4,
         "definitions": {"explore": {
             "description": "Read-only repository exploration.",
-            "instructionsFile": ".agents/subagents/explore/instructions.md",
+            "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
             "skills": ["alpha"],
         }}
     }));
@@ -1007,7 +1012,7 @@ async fn the_definition_digest_ignores_incidental_formatting_and_tracks_semantic
         "maxConcurrent": 4,
         "definitions": {"explore": {
             "description": "Read-only repository exploration.",
-            "instructionsFile": ".agents/subagents/explore/instructions.md",
+            "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
             "tools": {"builtin": ["read", "grep"]},
         }}
     }));
@@ -1028,7 +1033,7 @@ async fn the_definition_digest_ignores_incidental_formatting_and_tracks_semantic
     "definitions": {
       "explore": {
         "tools": {"builtin": ["grep", "read"]},
-        "instructionsFile":    ".agents/subagents/explore/instructions.md",
+        "instructionsFile":    "workspace/.agents/subagents/explore/instructions.md",
         "description": "Read-only repository exploration.",
       },
     },
@@ -1055,7 +1060,7 @@ async fn the_definition_digest_ignores_incidental_formatting_and_tracks_semantic
         "maxConcurrent": 4,
         "definitions": {"explore": {
             "description": "Read-only repository exploration.",
-            "instructionsFile": ".agents/subagents/explore/instructions.md",
+            "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
             "tools": {"builtin": ["read"]},
         }}
     }));
@@ -1131,7 +1136,7 @@ async fn max_concurrent_is_launch_scoped() {
         "maxConcurrent": 1,
         "definitions": {"explore": {
             "description": "Read-only repository exploration.",
-            "instructionsFile": ".agents/subagents/explore/instructions.md",
+            "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
             "tools": {"builtin": ["read"]},
         }}
     }));
@@ -1143,7 +1148,7 @@ async fn max_concurrent_is_launch_scoped() {
         "maxConcurrent": 8,
         "definitions": {"explore": {
             "description": "Read-only repository exploration, revised.",
-            "instructionsFile": ".agents/subagents/explore/instructions.md",
+            "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
             "tools": {"builtin": ["read"]},
         }}
     }));
@@ -1166,10 +1171,11 @@ async fn max_concurrent_is_launch_scoped() {
     // A zero or oversized bound is refused at the configuration boundary.
     let lab = Lab::new();
     lab.write_config(&serde_json::json!({"maxConcurrent": 0, "definitions": {}}));
-    let error = LocalSessionProduct::compose(&lab.paths(), &dependencies())
-        .await
+    let error = lab
+        .paths()
+        .try_resolve()
         .expect_err("a zero bound is refused");
-    assert!(format!("{error}").contains("maxConcurrent"));
+    assert!(error.contains("maxConcurrent"));
 }
 
 /// An invalid agent name is rejected deterministically at the configuration
@@ -1561,7 +1567,7 @@ async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
             "definitions": {
                 "explore": {
                     "description": "Read-only repository exploration.",
-                    "instructionsFile": ".agents/subagents/explore/instructions.md",
+                    "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
                     "tools": {
                         // `offline` sorts before `python:ghost` in canonical
                         // selector order, so the unavailable source is
@@ -1580,7 +1586,7 @@ async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
     )
     .expect("rustx.jsonc");
 
-    let error = LocalSessionProduct::compose(&lab.paths(), &dependencies())
+    let error = LocalSessionProduct::compose(&(lab.paths()).resolve(), &dependencies())
         .await
         .expect_err("a statically invalid selector rejects the candidate generation");
     let rendered = format!("{error}");
@@ -1603,7 +1609,7 @@ async fn skill_version_identity_is_frozen_across_the_boundary() {
         "maxConcurrent": 4,
         "definitions": {"explore": {
             "description": "Read-only repository exploration.",
-            "instructionsFile": ".agents/subagents/explore/instructions.md",
+            "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
             "skills": ["alpha"],
         }}
     }));
@@ -1671,7 +1677,7 @@ async fn skill_version_identity_is_frozen_across_the_boundary() {
         "---\nname: alpha\ndescription: a completely different description\n---\n\nrewritten body\n",
     )
     .expect("rewrite SKILL.md");
-    let reloaded = LocalSessionProduct::compose(&lab.paths(), &dependencies())
+    let reloaded = LocalSessionProduct::compose(&(lab.paths()).resolve(), &dependencies())
         .await
         .expect("the rewritten workspace composes");
     let rewritten = reloaded

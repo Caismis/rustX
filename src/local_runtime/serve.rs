@@ -44,6 +44,8 @@ use super::composition::{
 pub enum ProcessOutcome {
     /// The transport closed cleanly; the process exits with code 0.
     TransportClosed(StdioSessionEnd),
+    /// A host-owned trust operation completed without runtime composition.
+    TrustChanged,
     /// Startup configuration failed; nothing was ever written to stdout.
     StartupFailed(String),
     /// The transport terminated abnormally after serving began.
@@ -55,7 +57,7 @@ impl ProcessOutcome {
     #[must_use]
     pub const fn exit_code(&self) -> i32 {
         match self {
-            Self::TransportClosed(_) => 0,
+            Self::TransportClosed(_) | Self::TrustChanged => 0,
             Self::StartupFailed(_) => 2,
             Self::TransportFailed(_) => 1,
         }
@@ -65,7 +67,7 @@ impl ProcessOutcome {
     #[must_use]
     pub fn diagnostic(&self) -> Option<&str> {
         match self {
-            Self::TransportClosed(_) => None,
+            Self::TransportClosed(_) | Self::TrustChanged => None,
             Self::StartupFailed(detail) | Self::TransportFailed(detail) => Some(detail),
         }
     }
@@ -82,26 +84,43 @@ enum ServingRuntime {
 /// Returns the terminal outcome instead of exiting, so the binary owns the
 /// single exit point and tests can drive the same code path.
 pub async fn serve(arguments: impl IntoIterator<Item = String>) -> ProcessOutcome {
-    let paths = match parse_arguments(arguments) {
+    let request = match parse_arguments(arguments) {
         Ok(paths) => paths,
         Err(error) => return ProcessOutcome::StartupFailed(format!("{error}\n{USAGE}")),
     };
+    let host = match super::launch::HostEnvironment::capture() {
+        Ok(host) => host,
+        Err(error) => return ProcessOutcome::StartupFailed(error),
+    };
+    if let Some(action) = request.trust {
+        return match super::launch::change_trust(&request, &host, action) {
+            Ok(()) => ProcessOutcome::TrustChanged,
+            Err(error) => ProcessOutcome::StartupFailed(error),
+        };
+    }
     // Composition completes — including the initial capability commit —
     // before the transport exists, so a startup failure can never leave a
     // partially initialized protocol server.
-    let runtime = match &paths.startup_session {
-        StartupSession::InspectConversation { conversation_id } => {
-            match LocalConversationInspection::compose(&paths, conversation_id).await {
+    let runtime =
+        if let StartupSession::InspectConversation { conversation_id } = &request.startup_session {
+            let locations = match super::launch::resolve_inspection_locations(&request, &host) {
+                Ok(locations) => locations,
+                Err(error) => return ProcessOutcome::StartupFailed(error),
+            };
+            match LocalConversationInspection::compose(&locations, conversation_id).await {
                 Ok(runtime) => ServingRuntime::Inspection(runtime),
                 Err(error) => return ProcessOutcome::StartupFailed(error.to_string()),
             }
-        }
-        _ => match LocalSessionProduct::compose(&paths, &LocalRuntimeDependencies::default()).await
-        {
-            Ok(runtime) => ServingRuntime::Session(Box::new(runtime)),
-            Err(error) => return ProcessOutcome::StartupFailed(error.to_string()),
-        },
-    };
+        } else {
+            let paths = match super::launch::resolve(&request, &host) {
+                Ok(paths) => paths,
+                Err(error) => return ProcessOutcome::StartupFailed(error),
+            };
+            match LocalSessionProduct::compose(&paths, &LocalRuntimeDependencies::default()).await {
+                Ok(runtime) => ServingRuntime::Session(Box::new(runtime)),
+                Err(error) => return ProcessOutcome::StartupFailed(error.to_string()),
+            }
+        };
     let served = match runtime {
         ServingRuntime::Session(runtime) => serve_stdio_jsonl(runtime.endpoint()).await,
         ServingRuntime::Inspection(runtime) => runtime.serve().await,

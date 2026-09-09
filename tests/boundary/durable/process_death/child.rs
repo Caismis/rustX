@@ -14,6 +14,7 @@
 //!
 //! [`process_death`]: crate::runtime::process_death
 
+use crate::launch_fixture::LaunchFixture;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -24,7 +25,7 @@ use super::super::super::support::model::{FixtureModel, ScriptedAdapterFactory, 
 use crate::conversation::SurfaceRevision;
 use crate::events::types::RuntimeEvent;
 use crate::local_runtime::composition::{
-    HeadlessConversationRuntime, LocalConversationCore, LocalRuntimeDependencies, LocalRuntimePaths,
+    HeadlessConversationRuntime, LocalConversationCore, LocalRuntimeDependencies,
 };
 use crate::local_runtime::config::CurrentRuntimeConfig;
 use crate::local_runtime::session::{SessionCatalog, SessionPersistentState};
@@ -284,8 +285,8 @@ fn terminal_count(seen: &[Seen]) -> usize {
 // ---------------------------------------------------------------------------
 
 /// The explicit startup paths of one child, derived from the parent's lab.
-fn lab_paths(root: &Path) -> LocalRuntimePaths {
-    LocalRuntimePaths {
+fn lab_paths(root: &Path) -> LaunchFixture {
+    LaunchFixture {
         models: root.join("models.jsonc"),
         config: root.join("rustx.jsonc"),
         skill_paths: Vec::new(),
@@ -344,9 +345,8 @@ impl Child {
         lineage: Option<(ConversationId, PathBuf)>,
     ) -> Result<Self, String> {
         let paths = lab_paths(root);
-        let config_bytes = std::fs::read(&paths.config).map_err(|error| error.to_string())?;
-        let runtime_config = CurrentRuntimeConfig::from_jsonc_slice(&config_bytes)
-            .map_err(|error| format!("{error:?}"))?;
+        let launch = paths.try_resolve()?;
+        let runtime_config = launch.config().clone();
         let model = Arc::new(FakeModel::new(scripts));
         let adapter: Arc<dyn crate::model::ModelAdapter> = model.clone();
         let registry = fixture_registry(
@@ -360,7 +360,7 @@ impl Child {
         let (conversation_id, artifacts_root) =
             lineage.unwrap_or_else(|| (ConversationId::new(CONVERSATION), paths.artifacts_root()));
         let core = LocalConversationCore::compose_from_config(
-            &paths,
+            &launch,
             &LocalRuntimeDependencies::default(),
             registry,
             runtime_config.clone(),
@@ -1180,9 +1180,8 @@ async fn scenario_body(root: &Path, scenario: &str) {
             // Composition alone. The runtime is never activated, so accepted
             // inbound can never be adopted by this process.
             let paths = lab_paths(root);
-            let config_bytes = std::fs::read(&paths.config).expect("read the lab runtime config");
-            let runtime_config = CurrentRuntimeConfig::from_jsonc_slice(&config_bytes)
-                .expect("valid runtime config");
+            let launch = paths.resolve();
+            let runtime_config = launch.config().clone();
             let adapter: Arc<dyn crate::model::ModelAdapter> = Arc::new(FakeModel::new(Vec::new()));
             let registry = fixture_registry(
                 &[FixtureModel::text(
@@ -1193,7 +1192,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
             );
             let artifacts_root = paths.artifacts_root();
             let core = LocalConversationCore::compose_from_config(
-                &paths,
+                &launch,
                 &LocalRuntimeDependencies::default(),
                 registry,
                 runtime_config.clone(),

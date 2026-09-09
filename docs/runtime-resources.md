@@ -299,14 +299,12 @@ be defined and admitted, and a Workflow id must be listed in
 runtime-owned/generated state and is not the canonical home for these
 project-authored resources.
 
-`.agents/skills/` is the canonical project layout. Skill discovery retains its
-pre-existing automatic roots `~/.rustx/skills/`, `~/.agents/skills/`,
-`<workspace>/.rustx/skills/`, and `<workspace>/.agents/skills/`; retaining the
-`.rustx/skills/` roots does not make them the canonical project layout.
+Native launch resolves automatic Skill roots to the user configuration
+directory's `skills/` and `<workspace>/.agents/skills/`. Explicit Skill paths
+are layered by the Rust resolver. See [launch configuration](launch-configuration.md).
 
-At runtime creation or explicit reload, applicable directories are traversed
-deterministically from filesystem root to the workspace/cwd. At most one file
-is selected per directory with this precedence:
+After the host grants trust, runtime creation and explicit reload load only
+the resolved workspace's instructions. At most one file is selected with this precedence:
 
 1. `AGENTS.override.md`
 2. `AGENTS.md`
@@ -314,9 +312,9 @@ is selected per directory with this precedence:
 4. `CLAUDE.md`
 5. `CLAUDE.MD`
 
-Selected source paths and UTF-8 contents retain that root-to-leaf order and
-are concatenated deterministically. Discovery never runs during ordinary
-request assembly.
+The selected source path and UTF-8 contents are frozen into the resource
+generation. Unrelated ancestors are outside the workspace trust boundary.
+Discovery never runs during ordinary request assembly.
 
 ## Lifecycle and external edits
 

@@ -1440,10 +1440,11 @@ registry, `CapabilityCoordinator` (prepared and committed before serving),
   semantic conversation coordinator), and one `RuntimeClientHost`
   projection/control adapter over it — and serves its endpoint over the
   Issue #38 stdio/JSONL transport with a protocol-only stdout.
-Model catalog and current runtime configuration are explicit file paths.
+CFG-01 (#232) now supplies one validated `ResolvedLaunch` from bounded discovery,
+explicit-presence layering, host-owned trust and domain defaults before composition.
 
-M10 productizes that established seam. It owns configuration discovery and
-precedence, named profiles, manifest/workspace UX, an interactive config
+Further M10 work productizes that established seam. Beyond CFG-01's bounded
+discovery and precedence, it covers manifest/workspace UX, an interactive config
 editor, durability/recovery UX, and soak testing — **not** the composition
 ownership, which is frozen.
 

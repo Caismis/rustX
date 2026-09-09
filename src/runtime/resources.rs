@@ -539,10 +539,10 @@ impl core::fmt::Display for RuntimeResourceLoadError {
 
 impl std::error::Error for RuntimeResourceLoadError {}
 
-/// Loads Pi-style project context files from `workspace` and every ancestor.
-/// Each directory contributes at most one file using first-match precedence:
+/// Loads project context only from the resolved, trusted workspace boundary.
+/// It contributes at most one file using first-match precedence:
 /// `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`.
-/// The returned order is root-to-leaf and paths are deduplicated.
+/// Unrelated ancestor instructions are outside this workspace's authority.
 ///
 /// # Errors
 ///
@@ -557,20 +557,9 @@ pub fn load_project_context_files(
             workspace.display()
         ))
     })?;
-    let mut directories = workspace
-        .ancestors()
-        .map(Path::to_path_buf)
-        .collect::<Vec<_>>();
-    directories.reverse();
-    let mut seen = BTreeSet::new();
-    let mut files = Vec::new();
-    for directory in directories {
-        if let Some(file) = load_context_file_from_directory(&directory)?
-            && seen.insert(file.path.clone())
-        {
-            files.push(file);
-        }
-    }
+    let files = load_context_file_from_directory(&workspace)?
+        .into_iter()
+        .collect();
     Ok(files)
 }
 
@@ -650,21 +639,14 @@ mod tests {
                         .map(|relative| (relative.to_path_buf(), file.content.clone()))
                 })
                 .collect::<Vec<_>>(),
-            vec![
-                (std::path::PathBuf::new(), "root agents".to_owned()),
-                (
-                    std::path::PathBuf::from("middle"),
-                    "middle agents".to_owned(),
-                ),
-                (
-                    std::path::PathBuf::from("middle/leaf"),
-                    "child override".to_owned(),
-                ),
-            ]
+            vec![(
+                std::path::PathBuf::from("middle/leaf"),
+                "child override".to_owned(),
+            ),]
         );
         assert_eq!(
             concatenate_project_instructions(&files),
-            Some("root agents\n\nmiddle agents\n\nchild override".to_owned())
+            Some("child override".to_owned())
         );
     }
 
@@ -693,7 +675,7 @@ mod tests {
             .filter(|file| file.path.starts_with(&canonical_workspace))
             .map(|file| file.content.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(selected, vec!["override wins", "agents beats claude"]);
+        assert_eq!(selected, vec!["agents beats claude"]);
     }
 
     #[test]

@@ -88,6 +88,13 @@ async function main(argv: readonly string[]): Promise<number> {
   }
 
   let runtime: RuntimeAttachmentHandle;
+  if (parsed.startup.trust !== undefined) {
+    const child = ChildRuntimeProcess.spawn({ binary: parsed.binary, paths: parsed.paths, startup: parsed.startup });
+    child.closeStdin();
+    const exit = await child.wait();
+    process.stderr.write(child.stderrTail().text);
+    return exit.code ?? 1;
+  }
   try {
     runtime = await startRuntime(parsed);
   } catch (error) {

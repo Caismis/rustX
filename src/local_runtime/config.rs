@@ -49,6 +49,7 @@ pub struct CurrentRuntimeConfig {
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,
     /// The agent executed by attempts of this conversation.
+    #[serde(default = "default_agent_id")]
     pub agent_id: AgentId,
     /// The default model used when a brand-new Session is created.
     pub model: SessionModelConfig,
@@ -60,6 +61,7 @@ pub struct CurrentRuntimeConfig {
     #[serde(default)]
     pub agent_status: AgentStatusConfig,
     /// The current runtime context policy.
+    #[serde(default)]
     pub context: ContextPolicyDocument,
     /// The finite runtime-owned deadline policy shared by primary and
     /// summarizer model requests. This is current launch state, never model
@@ -169,7 +171,7 @@ pub struct SubagentDocument {
     /// The bounded model-facing routing description.
     pub description: String,
     /// The child instruction document. Relative paths resolve against the
-    /// canonical workspace root.
+    /// owning configuration document's directory at launch resolution.
     pub instructions_file: PathBuf,
     /// The explicit model this agent runs on. Omit to inherit the invoking
     /// attempt's frozen effective model configuration.
@@ -257,8 +259,8 @@ pub struct SubagentAgentsMdDocument {
     /// prepended to the explicit files.
     pub inherit: bool,
     /// Explicit agent-owned project instruction files, in deterministic
-    /// configured order. Relative paths resolve against the canonical
-    /// workspace root.
+    /// configured order. Relative paths resolve against the owning
+    /// configuration document's directory at launch resolution.
     pub files: Vec<PathBuf>,
 }
 
@@ -451,6 +453,10 @@ fn default_tools() -> Vec<String> {
     .into_iter()
     .map(str::to_owned)
     .collect()
+}
+
+fn default_agent_id() -> AgentId {
+    AgentId::new("rustx")
 }
 
 impl CurrentRuntimeConfig {
@@ -786,7 +792,9 @@ fn validate_unique_workflow_ids(
 
 /// Deserializes the authoritative definitions map without accepting a
 /// duplicate profile key through a parser-specific last-write-wins rule.
-fn deserialize_unique_map<'de, D, V>(deserializer: D) -> Result<BTreeMap<SubagentName, V>, D::Error>
+pub(crate) fn deserialize_unique_map<'de, D, V>(
+    deserializer: D,
+) -> Result<BTreeMap<SubagentName, V>, D::Error>
 where
     D: Deserializer<'de>,
     V: Deserialize<'de>,
@@ -838,6 +846,16 @@ pub struct ContextPolicyDocument {
     /// through the runtime-owned protected max-output field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary_output_cap: Option<u32>,
+}
+
+impl Default for ContextPolicyDocument {
+    fn default() -> Self {
+        Self {
+            reserve_tokens: 1024,
+            keep_recent_tokens: 4096,
+            summary_output_cap: Some(1024),
+        }
+    }
 }
 
 /// The per-tool execution, concurrency, and approval policies of the native
@@ -1008,7 +1026,7 @@ pub struct McpServerDocument {
     /// The explicit stdio child environment.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
-    /// The stdio workspace-relative working directory; absent means the
+    /// The stdio document-relative working directory; absent means the
     /// workspace root. The runtime keeps enforcing that it stays inside the
     /// workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]

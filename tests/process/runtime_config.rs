@@ -1,12 +1,11 @@
 //! Issue #96: current runtime configuration is re-composed on resume while
 //! intentionally Session-local model state survives.
 
+use crate::launch_fixture::LaunchFixture;
 use std::sync::Arc;
 
 use rustx::capabilities::CapabilitySourceId;
-use rustx::local_runtime::composition::{
-    LocalRuntimeDependencies, LocalRuntimeError, LocalRuntimePaths, LocalSessionProduct,
-};
+use rustx::local_runtime::composition::{LocalRuntimeDependencies, LocalSessionProduct};
 use rustx::model::catalog::{MapCredentialEnvironment, ModelRef};
 use rustx::model::session::SessionModelConfig;
 use rustx::runtime::identity::McpServerId;
@@ -48,10 +47,10 @@ const MODELS: &str = r#"{
   }
 }"#;
 
-fn paths(root: &std::path::Path, config: &std::path::Path) -> LocalRuntimePaths {
+fn paths(root: &std::path::Path, config: &std::path::Path) -> LaunchFixture {
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
-    LocalRuntimePaths {
+    LaunchFixture {
         models: root.join("models.jsonc"),
         config: config.to_path_buf(),
         skill_paths: Vec::new(),
@@ -155,7 +154,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     )
     .expect("old project instructions");
 
-    let product = LocalSessionProduct::compose(&startup, &dependencies())
+    let product = LocalSessionProduct::compose(&(startup).resolve(), &dependencies())
         .await
         .expect("initial product");
     assert_eq!(
@@ -206,7 +205,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     )
     .expect("config v2");
 
-    let resumed = LocalSessionProduct::compose(&startup, &dependencies())
+    let resumed = LocalSessionProduct::compose(&(startup).resolve(), &dependencies())
         .await
         .expect("resumed product");
     let runtime = resumed.runtime();
@@ -322,7 +321,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         "unexpected SessionNew response: {new_session:?}"
     );
     drop(resumed);
-    let fresh = LocalSessionProduct::compose(&startup, &dependencies())
+    let fresh = LocalSessionProduct::compose(&(startup).resolve(), &dependencies())
         .await
         .expect("fresh Session after current default change");
     assert_eq!(
@@ -352,7 +351,7 @@ async fn invalid_current_config_is_rejected_even_when_a_catalog_exists() {
     )
     .expect("valid config");
     let startup = paths(root.path(), &config_path);
-    let product = LocalSessionProduct::compose(&startup, &dependencies())
+    let product = LocalSessionProduct::compose(&(startup).resolve(), &dependencies())
         .await
         .expect("valid config creates the catalog");
     drop(product);
@@ -364,11 +363,7 @@ async fn invalid_current_config_is_rejected_even_when_a_catalog_exists() {
         "conversationId": "historical"
     }"#;
     std::fs::write(&config_path, invalid).expect("invalid current config");
-    let result = LocalSessionProduct::compose(&startup, &dependencies()).await;
-    assert!(
-        matches!(result, Err(LocalRuntimeError::RuntimeConfig(_))),
-        "invalid current config must fail before catalog resume: {result:?}"
-    );
+    assert!(startup.try_resolve().unwrap_err().contains("unknown field"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -393,10 +388,12 @@ async fn invalid_first_boot_model_does_not_publish_a_poisoned_session() {
         ),
     )
     .expect("invalid first config");
-    let error = LocalSessionProduct::compose(&startup, &dependencies())
-        .await
-        .expect_err("missing current model must fail before Session publication");
-    assert!(matches!(error, LocalRuntimeError::Model(_)));
+    assert!(
+        startup
+            .try_resolve()
+            .unwrap_err()
+            .contains("unknown catalog model")
+    );
     assert!(
         !root.path().join("runtime/sessions/catalog.json").exists(),
         "a failed first launch must not publish a root Session"
@@ -415,7 +412,7 @@ async fn invalid_first_boot_model_does_not_publish_a_poisoned_session() {
         ),
     )
     .expect("corrected config");
-    let product = LocalSessionProduct::compose(&startup, &dependencies())
+    let product = LocalSessionProduct::compose(&(startup).resolve(), &dependencies())
         .await
         .expect("corrected config must reuse the runtime root");
     assert_eq!(
@@ -482,7 +479,7 @@ async fn commented_configuration_documents_compose_a_runtime() {
     .expect("commented config");
     let startup = paths(root.path(), &config_path);
 
-    let product = LocalSessionProduct::compose(&startup, &dependencies())
+    let product = LocalSessionProduct::compose(&(startup).resolve(), &dependencies())
         .await
         .expect("JSONC configuration documents must compose");
     assert_eq!(
@@ -516,12 +513,11 @@ async fn relaxations_beyond_jsonc_still_fail_composition() {
 }"#,
     )
     .expect("non-JSONC config");
-    let error = LocalSessionProduct::compose(&startup, &dependencies())
-        .await
+    let error = startup
+        .try_resolve()
         .expect_err("unquoted keys and single-quoted strings must fail");
-    assert!(matches!(error, LocalRuntimeError::RuntimeConfig(_)));
     assert!(
-        error.to_string().contains("line 2"),
+        error.clone().contains("line 2"),
         "a syntax failure must report where it was detected: {error}"
     );
 }

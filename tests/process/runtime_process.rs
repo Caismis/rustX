@@ -27,6 +27,111 @@ fn binary() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_BIN_EXE_rustx"))
 }
 
+pub(super) fn grant(root: &std::path::Path, workspace: &std::path::Path) -> std::path::PathBuf {
+    let home = root.join("host");
+    let host = rustx::local_runtime::HostEnvironment::from_paths(
+        workspace.into(),
+        home.clone(),
+        None,
+        None,
+    )
+    .unwrap();
+    rustx::local_runtime::launch::change_trust(
+        &rustx::local_runtime::LaunchRequest {
+            workspace: Some(workspace.into()),
+            ..Default::default()
+        },
+        &host,
+        rustx::local_runtime::TrustAction::Grant,
+    )
+    .unwrap();
+    home
+}
+
+#[test]
+fn minimal_start_uses_host_defaults_without_python_mcp_or_path_flags() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let home = grant(root.path(), &workspace);
+    let config = home.join(".config/rustx");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("models.jsonc"),
+        models_json("http://127.0.0.1:9/v1"),
+    )
+    .unwrap();
+    std::fs::write(
+        config.join("settings.jsonc"),
+        r#"{"model":{"model":"fixture/process-model"}}"#,
+    )
+    .unwrap();
+    let output = std::process::Command::new(binary())
+        .current_dir(&workspace)
+        .env_clear()
+        .env("HOME", &home)
+        .env("PATH", "")
+        .env("RUSTX_PROCESS_TEST_KEY", "fixture")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn untrusted_real_process_never_activates_project_content_or_publishes_a_session() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let sentinel = root.path().join("source-started");
+    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    server.set_nonblocking(true).unwrap();
+    let home = root.path().join("home");
+    let config = home.join(".config/rustx");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("models.jsonc"),
+        models_json(&format!("http://{}/v1", server.local_addr().unwrap())),
+    )
+    .unwrap();
+    std::fs::write(
+        config.join("settings.jsonc"),
+        r#"{"model":{"model":"fixture/process-model"}}"#,
+    )
+    .unwrap();
+    std::fs::write(workspace.join("rustx.jsonc"), serde_json::to_vec(&serde_json::json!({
+        "mcpServers":{"project":{"command":"touch","args":[sentinel]}},
+        "subagents":{"definitions":{"child":{"description":"must not load","instructionsFile":"missing.md"}},"main":["child"]},
+        "workflows":{"definitions":["must_not_load"],"main":["must_not_load"]}
+    })).unwrap()).unwrap();
+    let output = std::process::Command::new(binary())
+        .current_dir(&workspace)
+        .env_clear()
+        .env("HOME", &home)
+        .env("RUSTX_PROCESS_TEST_KEY", "fixture")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--trust grant"));
+    assert!(output.stdout.is_empty());
+    assert!(!sentinel.exists(), "zero external starts");
+    assert!(
+        !home.join(".local/state/rustx/workspaces").exists(),
+        "no Session, child or Workflow state"
+    );
+    assert_eq!(
+        server.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock,
+        "zero model starts"
+    );
+}
+
 /// A catalog pointing at a local fixture server.
 fn models_json(base_url: &str) -> String {
     format!(
@@ -79,6 +184,7 @@ impl Process {
         std::fs::write(root.join("models.jsonc"), models).expect("models.jsonc");
         std::fs::write(root.join("rustx.jsonc"), session).expect("rustx.jsonc");
         let mut command = tokio::process::Command::new(binary());
+        let home = grant(root, &workspace);
         command
             .arg("--models")
             .arg(root.join("models.jsonc"))
@@ -89,6 +195,7 @@ impl Process {
             .arg("--runtime-root")
             .arg(root.join("private"))
             .env_clear()
+            .env("HOME", home)
             .env("PATH", std::env::var("PATH").unwrap_or_default())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -387,6 +494,7 @@ async fn invalid_startup_configuration_never_writes_to_stdout() {
         std::fs::write(root.path().join("models.jsonc"), &models).expect("models.jsonc");
         std::fs::write(root.path().join("rustx.jsonc"), &session).expect("rustx.jsonc");
         let mut command = std::process::Command::new(binary());
+        let home = grant(root.path(), &workspace);
         command
             .arg("--models")
             .arg(root.path().join("models.jsonc"))
@@ -397,6 +505,7 @@ async fn invalid_startup_configuration_never_writes_to_stdout() {
             .arg("--runtime-root")
             .arg(root.path().join("private"))
             .env_clear()
+            .env("HOME", home)
             .env("PATH", std::env::var("PATH").unwrap_or_default())
             .stdin(Stdio::null());
         if let Some(key) = key {
@@ -429,7 +538,6 @@ async fn invalid_startup_configuration_never_writes_to_stdout() {
 #[test]
 fn malformed_arguments_fail_with_usage_on_stderr() {
     for arguments in [
-        vec![],
         vec!["--models".to_owned()],
         vec!["--future".to_owned(), "x".to_owned()],
     ] {
@@ -476,6 +584,7 @@ async fn a_started_process_writes_no_banner() {
         .arg("--runtime-root")
         .arg(root.path().join("private"))
         .env_clear()
+        .env("HOME", grant(root.path(), &workspace))
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("RUSTX_PROCESS_TEST_KEY", "process-secret")
         .stdin(Stdio::piped())

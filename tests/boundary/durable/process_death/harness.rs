@@ -124,7 +124,7 @@ fn runtime_json(read_approval: &str, include_todo: bool) -> String {
             "definitions": {
                 "explore": {
                     "description": "Read-only exploration of the shared workspace.",
-                    "instructionsFile": ".agents/subagents/explore/instructions.md",
+                    "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
                     "tools": {"builtin": ["read"]}
                 }
             },

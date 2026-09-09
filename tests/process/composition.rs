@@ -7,11 +7,10 @@
 //! tool plane in these tests: the assertions run against the real composed
 //! runtime.
 
+use crate::launch_fixture::LaunchFixture;
 use std::sync::Arc;
 
-use rustx::local_runtime::composition::{
-    LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimeError, LocalRuntimePaths,
-};
+use rustx::local_runtime::composition::{LocalConversationRuntime, LocalRuntimeDependencies};
 use rustx::model::ModelProtocol;
 use rustx::model::catalog::MapCredentialEnvironment;
 use rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION;
@@ -54,14 +53,14 @@ const RUNTIME_CONFIG_JSON: &str = r#"{
 
 /// Writes the startup files into a temporary root and returns the explicit
 /// paths.
-fn startup(root: &std::path::Path, models: &str, config: &str) -> LocalRuntimePaths {
+fn startup(root: &std::path::Path, models: &str, config: &str) -> LaunchFixture {
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).expect("workspace");
     let models_path = root.join("models.jsonc");
     let config_path = root.join("rustx.jsonc");
     std::fs::write(&models_path, models).expect("models.jsonc");
     std::fs::write(&config_path, config).expect("rustx.jsonc");
-    LocalRuntimePaths {
+    LaunchFixture {
         models: models_path,
         config: config_path,
         skill_paths: Vec::new(),
@@ -97,7 +96,7 @@ fn dependencies() -> LocalRuntimeDependencies {
 async fn composition_owns_one_conversation_domain() {
     let root = tempfile::tempdir().expect("temp root");
     let paths = startup(root.path(), MODELS_JSON, RUNTIME_CONFIG_JSON);
-    let runtime = LocalConversationRuntime::compose(&paths, &dependencies())
+    let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
         .await
         .expect("composition succeeds");
 
@@ -216,7 +215,7 @@ async fn runtime_private_roots_stay_disjoint_from_the_workspace() {
     assert!(!paths.environment_store_root().starts_with(&paths.workspace));
     assert_ne!(paths.artifacts_root(), paths.environment_store_root());
 
-    let runtime = LocalConversationRuntime::compose(&paths, &dependencies())
+    let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
         .await
         .expect("composition succeeds");
     let workspace_root = runtime.tool_runtime().workspace().root().to_path_buf();
@@ -228,17 +227,11 @@ async fn runtime_private_roots_stay_disjoint_from_the_workspace() {
 
     // Composing with an artifact root *inside* the workspace is rejected by
     // the existing ownership check.
-    let overlapping = LocalRuntimePaths {
+    let overlapping = LaunchFixture {
         runtime_root: paths.workspace.join("private"),
         ..paths
     };
-    let error = LocalConversationRuntime::compose(&overlapping, &dependencies())
-        .await
-        .expect_err("overlapping storage is rejected");
-    assert!(
-        matches!(error, LocalRuntimeError::ToolRuntime { .. }),
-        "{error:?}"
-    );
+    assert!(overlapping.try_resolve().unwrap_err().contains("disjoint"));
 }
 
 /// Every startup configuration failure is surfaced before any runtime exists.
@@ -248,26 +241,16 @@ async fn startup_configuration_failures_are_explicit() {
 
     // A missing catalog file.
     let paths = startup(root.path(), MODELS_JSON, RUNTIME_CONFIG_JSON);
-    let missing = LocalRuntimePaths {
+    let missing = LaunchFixture {
         models: root.path().join("absent.json"),
         ..paths.clone()
     };
-    assert!(matches!(
-        LocalConversationRuntime::compose(&missing, &dependencies())
-            .await
-            .expect_err("a missing catalog fails"),
-        LocalRuntimeError::Io { .. }
-    ));
+    assert!(missing.try_resolve().unwrap_err().contains("cannot read"));
 
     // A catalog without an explicit base URL.
     let no_base = MODELS_JSON.replace("\"baseUrl\": \"https://local.fixture.invalid/v1\",", "");
     let paths = startup(&root.path().join("no-base"), &no_base, RUNTIME_CONFIG_JSON);
-    assert!(matches!(
-        LocalConversationRuntime::compose(&paths, &dependencies())
-            .await
-            .expect_err("a provider without baseUrl fails"),
-        LocalRuntimeError::Catalog(_)
-    ));
+    assert!(paths.try_resolve().unwrap_err().contains("baseUrl"));
 
     // An unresolved environment credential names only the variable.
     let paths = startup(
@@ -276,7 +259,7 @@ async fn startup_configuration_failures_are_explicit() {
         RUNTIME_CONFIG_JSON,
     );
     let error = LocalConversationRuntime::compose(
-        &paths,
+        &(paths).resolve(),
         &LocalRuntimeDependencies {
             credentials: Arc::new(MapCredentialEnvironment::default()),
             ..LocalRuntimeDependencies::default()
@@ -290,12 +273,12 @@ async fn startup_configuration_failures_are_explicit() {
     // A session selecting a model the catalog does not declare.
     let bad_config = RUNTIME_CONFIG_JSON.replace("local/composed-model", "local/absent-model");
     let paths = startup(&root.path().join("bad-model"), MODELS_JSON, &bad_config);
-    assert!(matches!(
-        LocalConversationRuntime::compose(&paths, &dependencies())
-            .await
-            .expect_err("an unknown model fails startup"),
-        LocalRuntimeError::Model(_)
-    ));
+    assert!(
+        paths
+            .try_resolve()
+            .unwrap_err()
+            .contains("unknown catalog model")
+    );
 
     // A current runtime config with an unknown field.
     let bad_config = RUNTIME_CONFIG_JSON.replace(
@@ -303,12 +286,7 @@ async fn startup_configuration_failures_are_explicit() {
         "\"agentId\": \"agent-composed\", \"futureKnob\": true,",
     );
     let paths = startup(&root.path().join("bad-config"), MODELS_JSON, &bad_config);
-    assert!(matches!(
-        LocalConversationRuntime::compose(&paths, &dependencies())
-            .await
-            .expect_err("an unknown session field fails startup"),
-        LocalRuntimeError::RuntimeConfig(_)
-    ));
+    assert!(paths.try_resolve().unwrap_err().contains("unknown field"));
 }
 
 /// The composed runtime serves the real Runtime Client endpoint, and the
@@ -317,7 +295,7 @@ async fn startup_configuration_failures_are_explicit() {
 async fn the_endpoint_speaks_for_the_one_composed_host() {
     let root = tempfile::tempdir().expect("temp root");
     let paths = startup(root.path(), MODELS_JSON, RUNTIME_CONFIG_JSON);
-    let runtime = LocalConversationRuntime::compose(&paths, &dependencies())
+    let runtime = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies())
         .await
         .expect("composition succeeds");
 

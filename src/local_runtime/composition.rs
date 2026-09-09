@@ -2,7 +2,7 @@
 //! #61).
 //!
 //! ```text
-//! explicit startup configuration
+//! resolved launch input (from the Rust launch boundary)
 //!         |
 //!         v
 //! ModelCatalog + CurrentRuntimeConfig + SessionPersistentState
@@ -116,7 +116,7 @@ use crate::capabilities::{
 use crate::context::{AgentStatusEngine, DefaultTokenEstimator, TokenEstimator};
 use crate::durable::{ConversationStoreBinding, SqliteConversationStore};
 use crate::model::catalog::{
-    CredentialEnvironment, ModelCatalog, ModelCatalogError, ProcessCredentialEnvironment,
+    CredentialEnvironment, ModelCatalogError, ProcessCredentialEnvironment,
 };
 use crate::model::invocation::{ModelBindingRegistry, ModelInvocationError};
 use crate::model::session::SessionModelState;
@@ -156,6 +156,7 @@ use crate::tools::types::ToolDefinition;
 use super::config::{
     CurrentRuntimeConfig, CurrentRuntimeConfigError, SubagentsDocument, WorkflowsDocument,
 };
+use super::launch::{LaunchLocations, ResolvedLaunch};
 use super::session::{
     SessionCatalog, SessionError, SessionId, SessionNodeId, SessionNodeOrigin,
     SessionPersistentState,
@@ -204,73 +205,6 @@ pub enum StartupSession {
     },
 }
 
-/// The explicit startup paths of one local runtime process.
-///
-/// There is no discovery and no precedence: every path is given explicitly.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LocalRuntimePaths {
-    /// The model catalog (`models.jsonc`) path.
-    pub models: PathBuf,
-    /// The current runtime/project configuration path. It is read on every
-    /// process start, including Session resume.
-    pub config: PathBuf,
-    /// Repeatable explicit Skill package/root paths from the command line.
-    pub skill_paths: Vec<PathBuf>,
-    /// Disable automatic/default Skill roots while retaining explicit paths.
-    pub no_skills: bool,
-    /// Disable optional native/built-in tools from startup activation;
-    /// mandatory native Read remains active.
-    pub no_builtin_tools: bool,
-    /// Disable every optional Tool while retaining available metadata;
-    /// mandatory native Read remains active.
-    pub no_tools: bool,
-    /// The Session this launch binds. Startup never resumes on its own;
-    /// `--continue` is the explicit request behind
-    /// [`StartupSession::ContinueActive`] and `--session` the one behind
-    /// [`StartupSession::Select`].
-    pub startup_session: StartupSession,
-    /// The display name to give the Session this launch binds, from
-    /// `--name`. A Session is otherwise unnamed and `/resume` shows it by
-    /// its first message; naming one at startup is the same metadata
-    /// operation `/name` performs, moved to the command line.
-    pub session_name: Option<String>,
-    /// Strict startup Tool allowlist, when supplied.
-    pub tools: Option<Vec<String>>,
-    /// Final startup Tool exclusions.
-    pub exclude_tools: Vec<String>,
-    /// The model-visible workspace root.
-    pub workspace: PathBuf,
-    /// The exact runtime-private root from which disjoint private
-    /// subdirectories are derived. Child conversation stores live below its
-    /// stable `subagents/<conversation-id>` semantic directory; child
-    /// execution incarnations remain private and disposable.
-    pub runtime_root: PathBuf,
-}
-
-impl LocalRuntimePaths {
-    /// The runtime-private artifact root.
-    #[must_use]
-    pub fn artifacts_root(&self) -> PathBuf {
-        self.runtime_root.join("artifacts")
-    }
-
-    /// The runtime-private capability environment store root.
-    #[must_use]
-    pub fn environment_store_root(&self) -> PathBuf {
-        self.runtime_root.join("environments")
-    }
-
-    /// The capability environment store of one independent conversation
-    /// lineage. Branches do not share mutable environment materialization.
-    #[must_use]
-    pub fn environment_store_root_for(
-        &self,
-        conversation_id: &crate::runtime::identity::ConversationId,
-    ) -> PathBuf {
-        self.environment_store_root().join(conversation_id.as_str())
-    }
-}
-
 /// The injectable non-model dependencies of composition.
 ///
 /// Model bindings are deliberately not injectable: production constructs the
@@ -307,13 +241,13 @@ impl std::fmt::Debug for LocalRuntimeDependencies {
 }
 
 /// Reload-time resource composition for one local runtime. Command-line
-/// inputs are immutable; `rustx.jsonc` and filesystem resources are read only
+/// inputs are immutable; pinned user/project document slots and resources are read only
 /// when this loader is explicitly invoked by the runtime reload boundary.
 struct LocalRuntimeResourceLoader {
-    paths: LocalRuntimePaths,
+    paths: ResolvedLaunch,
     native_resources: NativeToolResources,
     workflow_runtime: WorkflowRuntime,
-    /// The launch-scoped model authority. Reload re-reads `rustx.jsonc` but
+    /// The launch-scoped model authority. Reload re-reads pinned settings but
     /// not `models.jsonc`, so an agent's explicit model reference is
     /// validated against exactly the catalog this process was launched with.
     models: ModelBindingRegistry,
@@ -321,7 +255,7 @@ struct LocalRuntimeResourceLoader {
 
 impl LocalRuntimeResourceLoader {
     fn new(
-        paths: LocalRuntimePaths,
+        paths: ResolvedLaunch,
         native_resources: NativeToolResources,
         models: ModelBindingRegistry,
         workflow_runtime: WorkflowRuntime,
@@ -342,14 +276,10 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
         capability: &'a CapabilityCoordinator,
     ) -> BoxFuture<'a, Result<PreparedRuntimeResources, RuntimeResourceLoadError>> {
         Box::pin(async move {
-            let config_bytes = std::fs::read(&self.paths.config).map_err(|error| {
-                RuntimeResourceLoadError::new(format!(
-                    "cannot read runtime config {}: {error}",
-                    self.paths.config.display()
-                ))
-            })?;
-            let config = CurrentRuntimeConfig::from_jsonc_slice(&config_bytes)
-                .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
+            let config = self
+                .paths
+                .reload_resource_config()
+                .map_err(RuntimeResourceLoadError::new)?;
             let base_environment = config
                 .tool_environment()
                 .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
@@ -400,26 +330,16 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                     "cannot register reload-time Workflow Tools: {error}"
                 ))
             })?;
-            let workspace_authority =
-                crate::tools::Workspace::new(&workspace).map_err(|error| {
-                    RuntimeResourceLoadError::new(format!(
-                        "cannot resolve reload workspace: {error}"
-                    ))
-                })?;
-            let mut skill_discovery =
-                SkillDiscoveryConfig::default_for_workspace(&workspace_authority);
+            let mut skill_discovery = SkillDiscoveryConfig {
+                automatic_roots: self.paths.skill_roots.clone(),
+                explicit_paths: Vec::new(),
+            };
             if self.paths.no_skills {
                 skill_discovery.automatic_roots.clear();
             }
             skill_discovery.explicit_paths.extend(
                 config
                     .skills
-                    .iter()
-                    .map(|path| resolve_workspace_path(&workspace, path)),
-            );
-            skill_discovery.explicit_paths.extend(
-                self.paths
-                    .skill_paths
                     .iter()
                     .map(|path| resolve_workspace_path(&workspace, path)),
             );
@@ -1140,7 +1060,7 @@ impl std::fmt::Debug for LocalConversationCore {
 }
 
 impl LocalConversationCore {
-    /// Composes the shared semantic runtime from explicit startup paths.
+    /// Composes the shared semantic runtime from validated resolved launch inputs.
     ///
     /// The runtime is left **inactive**: the caller must finish through
     /// [`LocalConversationCore::into_interactive`],
@@ -1156,14 +1076,13 @@ impl LocalConversationCore {
     /// Returns the first composition failure. Every failure happens before
     /// any protocol output exists.
     pub async fn compose(
-        paths: &LocalRuntimePaths,
+        paths: &ResolvedLaunch,
         dependencies: &LocalRuntimeDependencies,
     ) -> Result<Self, LocalRuntimeError> {
         // This low-level path has no SessionCatalog control surface. It uses
         // one deterministic standalone lineage so repeated composition over
         // the same runtime root still recovers the same durable conversation.
-        let config_bytes = read_file(&paths.config)?;
-        let runtime_config = CurrentRuntimeConfig::from_jsonc_slice(&config_bytes)?;
+        let runtime_config = paths.config.as_ref().clone();
         let registry = load_model_registry(paths, dependencies)?;
         Self::compose_from_config(
             paths,
@@ -1184,7 +1103,7 @@ impl LocalConversationCore {
     /// This method never reads or writes `SessionCatalog` state.
     #[allow(clippy::too_many_lines)]
     pub(crate) async fn compose_from_config(
-        paths: &LocalRuntimePaths,
+        paths: &ResolvedLaunch,
         dependencies: &LocalRuntimeDependencies,
         registry: ModelBindingRegistry,
         runtime_config: CurrentRuntimeConfig,
@@ -1326,8 +1245,10 @@ impl LocalConversationCore {
             detail: format!("{error:?}"),
         })?;
 
-        let mut skill_discovery =
-            SkillDiscoveryConfig::default_for_workspace(tool_runtime.workspace());
+        let mut skill_discovery = SkillDiscoveryConfig {
+            automatic_roots: paths.skill_roots.clone(),
+            explicit_paths: Vec::new(),
+        };
         if paths.no_skills {
             skill_discovery.automatic_roots.clear();
         }
@@ -1344,15 +1265,9 @@ impl LocalConversationCore {
                 .iter()
                 .map(|path| resolve_workspace_path(&workspace_root, path)),
         );
-        skill_discovery.explicit_paths.extend(
-            paths
-                .skill_paths
-                .iter()
-                .map(|path| resolve_workspace_path(&workspace_root, path)),
-        );
 
-        // 9. Composition owns CLI/config precedence resolution. The
-        // coordinator receives only this already-resolved activation policy
+        // 9. The resolver supplied launch controls and layered settings. The
+        // coordinator receives the activation policy
         // and applies it to the available capability registrations.
         let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
             conversation_id: tool_runtime.conversation_id().clone(),
@@ -1923,7 +1838,7 @@ impl LocalSessionProduct {
     /// activates the runtime before serving protocol input.
     ///
     /// The startup Session is an empty one unless
-    /// [`LocalRuntimePaths::startup_session`] asks for the catalog's
+    /// [`LaunchLocations::startup_session`] asks for the catalog's
     /// published active selection or names a persisted Session. Whichever
     /// it is, the catalog transition is planned first and committed once,
     /// after composition and host binding have succeeded, so a launch that
@@ -1938,15 +1853,14 @@ impl LocalSessionProduct {
     /// loading, capability composition, runtime recovery, or host binding
     /// fails.
     pub async fn compose(
-        paths: &LocalRuntimePaths,
+        paths: &ResolvedLaunch,
         dependencies: &LocalRuntimeDependencies,
     ) -> Result<Self, LocalRuntimeError> {
         // The current runtime/project configuration and current ModelCatalog
         // are resolved before opening or creating durable Session state. A
         // failed first launch therefore cannot publish an invalid initial
         // Session-local model.
-        let config_bytes = read_file(&paths.config)?;
-        let runtime_config = CurrentRuntimeConfig::from_jsonc_slice(&config_bytes)?;
+        let runtime_config = paths.config.as_ref().clone();
         let registry = load_model_registry(paths, dependencies)?;
         SessionModelState::new(registry.clone(), runtime_config.model.clone())?;
         let state = SessionPersistentState {
@@ -2109,7 +2023,7 @@ impl std::fmt::Debug for LocalConversationRuntime {
 }
 
 impl LocalConversationRuntime {
-    /// Composes the interactive runtime from explicit startup paths.
+    /// Composes the interactive runtime from validated resolved launch inputs.
     ///
     /// The shared semantic composition (see
     /// [`LocalConversationCore::compose`]) is built once, the Runtime
@@ -2121,7 +2035,7 @@ impl LocalConversationRuntime {
     /// Returns the first composition failure. Every failure happens before
     /// any protocol output exists.
     pub async fn compose(
-        paths: &LocalRuntimePaths,
+        paths: &ResolvedLaunch,
         dependencies: &LocalRuntimeDependencies,
     ) -> Result<Self, LocalRuntimeError> {
         LocalConversationCore::compose(paths, dependencies)
@@ -2228,7 +2142,7 @@ impl LocalConversationInspection {
     /// [`LocalRuntimeError::DurableConversation`] when that store cannot be
     /// opened.
     pub async fn compose(
-        paths: &LocalRuntimePaths,
+        paths: &LaunchLocations,
         conversation_id: &ConversationId,
     ) -> Result<Self, LocalRuntimeError> {
         if !is_safe_child_conversation_component(conversation_id) {
@@ -2384,7 +2298,7 @@ impl std::fmt::Debug for HeadlessConversationRuntime {
 }
 
 impl HeadlessConversationRuntime {
-    /// Composes the headless runtime from explicit startup paths.
+    /// Composes the headless runtime from validated resolved launch inputs.
     ///
     /// The shared semantic composition (see
     /// [`LocalConversationCore::compose`]) is built once and activated
@@ -2396,7 +2310,7 @@ impl HeadlessConversationRuntime {
     /// Returns the first composition failure. Every failure happens before
     /// any protocol output exists.
     pub async fn compose(
-        paths: &LocalRuntimePaths,
+        paths: &ResolvedLaunch,
         dependencies: &LocalRuntimeDependencies,
     ) -> Result<Self, LocalRuntimeError> {
         Ok(LocalConversationCore::compose(paths, dependencies)
@@ -2423,24 +2337,15 @@ impl HeadlessConversationRuntime {
     }
 }
 
-fn read_file(path: &Path) -> Result<Vec<u8>, LocalRuntimeError> {
-    std::fs::read(path).map_err(|error| LocalRuntimeError::Io {
-        path: path.to_path_buf(),
-        detail: error.to_string(),
-    })
-}
-
 /// Loads the current model catalog and constructs its resolved binding
 /// authority. This is intentionally a composition concern, not a
 /// `SessionCatalog` concern: callers can validate the current runtime default
 /// before publishing a first durable Session.
 fn load_model_registry(
-    paths: &LocalRuntimePaths,
+    paths: &ResolvedLaunch,
     dependencies: &LocalRuntimeDependencies,
 ) -> Result<ModelBindingRegistry, LocalRuntimeError> {
-    let catalog_bytes = read_file(&paths.models)?;
-    let catalog = ModelCatalog::from_jsonc_slice(&catalog_bytes)?;
-    let resolved = catalog.resolve(dependencies.credentials.as_ref())?;
+    let resolved = paths.models.resolve(dependencies.credentials.as_ref())?;
     Ok(ModelBindingRegistry::new(resolved)?)
 }
 
@@ -3619,7 +3524,7 @@ mod subagent_child_tests {
 
 #[cfg(test)]
 mod conversation_inspection_tests {
-    use super::{LocalConversationInspection, LocalRuntimePaths, StartupSession};
+    use super::{LaunchLocations, LocalConversationInspection, StartupSession};
     use crate::durable::{ConversationStore, SqliteConversationStore};
     use crate::local_runtime::live_inspection::LiveConversationInspectionLease;
     use crate::message::content::TextBlock;
@@ -3654,9 +3559,7 @@ mod conversation_inspection_tests {
             })])
             .expect("child history");
 
-        let paths = LocalRuntimePaths {
-            models: root.path().join("models.jsonc"),
-            config: root.path().join("rustx.jsonc"),
+        let paths = LaunchLocations {
             skill_paths: Vec::new(),
             no_skills: true,
             no_builtin_tools: false,
@@ -3725,9 +3628,7 @@ mod conversation_inspection_tests {
             ),
         )
         .expect("the running child owns its transient liveness lease");
-        let paths = LocalRuntimePaths {
-            models: root.path().join("models.jsonc"),
-            config: root.path().join("rustx.jsonc"),
+        let paths = LaunchLocations {
             skill_paths: Vec::new(),
             no_skills: true,
             no_builtin_tools: false,
@@ -3767,8 +3668,9 @@ mod conversation_inspection_tests {
 mod composition_tests {
     use std::sync::Arc;
 
-    use super::{LocalConversationCore, LocalRuntimeDependencies, LocalRuntimePaths};
+    use super::{LocalConversationCore, LocalRuntimeDependencies};
     use crate::events::types::{AttemptOutcome, RuntimeEvent};
+    use crate::launch_fixture::LaunchFixture;
     use crate::message::content::TextBlock;
     use crate::message::types::{AssistantContentBlock, MessageBlock, UserContentBlock};
     use crate::model::event::ModelEvent;
@@ -3797,8 +3699,8 @@ mod composition_tests {
         tool_id: ToolId,
     }
 
-    fn paths(root: &std::path::Path, workspace: std::path::PathBuf) -> LocalRuntimePaths {
-        LocalRuntimePaths {
+    fn paths(root: &std::path::Path, workspace: std::path::PathBuf) -> LaunchFixture {
+        LaunchFixture {
             models: root.join("models.jsonc"),
             config: root.join("rustx.jsonc"),
             skill_paths: Vec::new(),
@@ -3911,7 +3813,7 @@ mod composition_tests {
                 "definitions": {
                     TEST_AGENT: {
                         "description": "Read the workspace",
-                        "instructionsFile": ".agents/subagents/explore/instructions.md",
+                        "instructionsFile": "workspace/.agents/subagents/explore/instructions.md",
                         "tools": {"builtin": ["read"]},
                     },
                 },
@@ -3921,11 +3823,10 @@ mod composition_tests {
         });
         let config_bytes = serde_json::to_vec_pretty(&config_document).expect("runtime config");
         std::fs::write(root.path().join("rustx.jsonc"), &config_bytes).expect("rustx.jsonc");
-        let runtime_config =
-            super::super::config::CurrentRuntimeConfig::from_jsonc_slice(&config_bytes)
-                .expect("config");
+        let launch = paths(root.path(), workspace).resolve();
+        let runtime_config = launch.config.as_ref().clone();
         let runtime = LocalConversationCore::compose_from_config(
-            &paths(root.path(), workspace),
+            &launch,
             &LocalRuntimeDependencies::default(),
             registry,
             runtime_config.clone(),

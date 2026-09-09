@@ -4048,13 +4048,10 @@ All active skills in one conversation share one Python environment and one Node 
 The M6 implementation (`src/skills`) freezes the Skill plane boundary:
 
 - **Skill roots.** `.agents/skills/` is the canonical project authoring
-  convention. Skill discovery retains its existing automatic roots:
-  `~/.rustx/skills/`, `~/.agents/skills/`,
-  `<workspace>/.rustx/skills/`, and `<workspace>/.agents/skills/`, plus
-  explicit project-config and CLI paths. The retained `.rustx/skills/` roots
-  are discovery behavior, not the canonical Issue #172 project layout.
-  Configured and CLI paths may be relative or otherwise non-canonical;
-  discovery is the one place that normalizes them, so an accepted package
+  convention. The launch resolver supplies the host configuration directory's
+  `skills/` and `<workspace>/.agents/skills/` automatic roots, plus layered
+  explicit paths. It resolves document-relative and CLI-relative paths before
+  discovery. Package validation canonicalizes each admitted package, so it
   always has a canonical absolute UTF-8 root and every consumer of the
   published location resolves the same file. Missing automatic roots are
   empty;
@@ -5394,8 +5391,11 @@ domain.
 ### Layer 8: The local conversation runtime process (Issue #42, Issue #61)
 
 ```text
-explicit startup arguments (--models --config --workspace --runtime-root
-                            [--continue] [--name])
+CLI intent + captured host environment + user-owned project trust
+        |
+bounded launch resolution: explicit layers -> domain defaults -> validation
+        |
+ResolvedLaunch (frozen catalog/config, locations, identity, provenance)
         |
 ModelCatalog + CurrentRuntimeConfig + selected SessionPersistentState
         |
@@ -5796,10 +5796,11 @@ There is deliberately no process-global registry, no second background
 manager, no client-owned tool registration, no tool plugin factory, no second
 coordinator, and no second host.
 
-Configuration is explicit paths only. M10 (#13) owns discovery, precedence,
-profiles, and manifest UX; none of that exists here. Unknown fields are
-rejected everywhere, so a typo fails startup loudly rather than silently
-changing semantics.
+CFG-01 (#232) adds one Rust-owned launch boundary before composition:
+bounded user/project discovery, field authority, explicit-presence layering,
+host trust, defaults and path provenance. See [launch configuration](launch-configuration.md).
+Profiles, includes and generated initialization are not part of this contract.
+Unknown fields are rejected everywhere rather than silently changing semantics.
 
 Both configuration documents — `models.jsonc` and `rustx.jsonc` — are JSONC:
 JSON plus `//` and `/* */` comments and trailing commas. A human owns these
@@ -7192,9 +7193,8 @@ not depend on Pi.
 **Owners.** Each responsibility has exactly one owner:
 
 ```text
-ChildRuntimeProcess     OS process lifecycle only: spawn with the explicit
-                        --models/--config/--workspace/--runtime-root
-                        contract, stdio, a bounded stderr tail, stdin close,
+ChildRuntimeProcess     OS process lifecycle only: forward optional launch
+                        intent to Rust, stdio, a bounded stderr tail, stdin close,
                         wait, bounded fallback termination. It never reads a
                         byte of stdout and never interprets a startup path.
                         The startup Session flag is forwarded, never decided:

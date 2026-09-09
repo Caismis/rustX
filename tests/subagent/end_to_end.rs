@@ -217,7 +217,15 @@ impl Process {
         )
         .expect("explore instructions");
         std::fs::write(root.join("models.jsonc"), models).expect("models.jsonc");
-        std::fs::write(root.join("rustx.jsonc"), session).expect("rustx.jsonc");
+        let mut document: serde_json::Value = serde_json::from_str(session).unwrap();
+        document["subagents"]["definitions"]["explore"]["instructionsFile"] =
+            serde_json::to_value(workspace.join(".agents/subagents/explore/instructions.md"))
+                .unwrap();
+        std::fs::write(
+            root.join("rustx.jsonc"),
+            serde_json::to_vec(&document).unwrap(),
+        )
+        .expect("rustx.jsonc");
         let mut command = tokio::process::Command::new(binary());
         command
             .arg("--models")
@@ -229,6 +237,7 @@ impl Process {
             .arg("--runtime-root")
             .arg(root.join("private"))
             .env_clear()
+            .env("HOME", crate::launch_fixture::grant(root, workspace))
             .env("PATH", std::env::var("PATH").unwrap_or_default())
             .env("RUSTX_SUBAGENT_TEST_KEY", key)
             .stdin(Stdio::piped())

@@ -47,6 +47,13 @@ function readAll(child: ChildRuntimeProcess): Promise<string> {
 }
 
 describe("ChildRuntimeProcess", () => {
+  it("forwards an empty path intent without inventing infrastructure arguments", async () => {
+    const child = ChildRuntimeProcess.spawn({ binary: FAKE_RUNTIME, paths: {}, env: { ...process.env, FAKE_DUMP_ARGV: "1" } });
+    const output = readAll(child);
+    child.closeStdin();
+    await child.wait();
+    assert.deepEqual(JSON.parse((await output).trim()), []);
+  });
   it("passes the explicit startup paths through verbatim", async () => {
     const child = spawn();
     const output = readAll(child);

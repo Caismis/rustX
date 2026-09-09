@@ -223,12 +223,7 @@ fn every_shipped_workflow_is_registered_and_compiles() {
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     }
     for profile in config.subagents.definitions.values() {
-        assert!(
-            examples_root()
-                .join("workspace")
-                .join(&profile.instructions_file)
-                .is_file()
-        );
+        assert!(examples_root().join(&profile.instructions_file).is_file());
     }
 }
 

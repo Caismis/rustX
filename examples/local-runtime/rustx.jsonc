@@ -97,7 +97,7 @@
     //   "command": "npx",
     //   "args": ["-y", "some-mcp-server"],
     //   "env": {"SERVICE_TOKEN": "YOUR_TOKEN"},
-    //   "cwd": "workspace-relative-subdirectory",
+    //   "cwd": "workspace/subdirectory",
     // },
   },
 
@@ -130,7 +130,7 @@
 
   // Additional Skill roots/packages. `.agents/skills/` is the canonical
   // project layout and is discovered automatically. Skill discovery also
-  // retains its existing `.rustx/skills` roots; this example does not rely on
+  // searches host `skills` and workspace `.agents/skills`; this example does not rely on
   // them. Skills are not explicit Workflow-style registrations.
   "skills": [],
 
@@ -149,7 +149,7 @@
     "definitions": {
       "navigator": {
         "description": "Read-only repository navigation and evidence gathering.",
-        "instructionsFile": ".agents/subagents/navigator/instructions.md",
+        "instructionsFile": "workspace/.agents/subagents/navigator/instructions.md",
         // Optional whole-child wall-clock limit, in milliseconds. It covers
         // the complete owned lifecycle (model, tools, and settlement).
         "timeoutMs": 3600000,
@@ -159,24 +159,24 @@
         "skills": ["review-guidance"],
         "agentsMd": {
           "inherit": true,
-          "files": [".agents/subagents/navigator/AGENTS.md"],
+          "files": ["workspace/.agents/subagents/navigator/AGENTS.md"],
         },
       },
       "planner": {
         "description": "Plan the fixed greeting implementation without tool access.",
-        "instructionsFile": ".agents/subagents/planner/instructions.md",
+        "instructionsFile": "workspace/.agents/subagents/planner/instructions.md",
         "tools": {"builtin": []},
         "worktree": {"enabled": true, "requireCleanParent": true},
       },
       "implementer": {
         "description": "Implement greeting.py in the run candidate.",
-        "instructionsFile": ".agents/subagents/implementer/instructions.md",
+        "instructionsFile": "workspace/.agents/subagents/implementer/instructions.md",
         "tools": {"builtin": ["read", "write", "edit", "ask_user"]},
         "worktree": {"enabled": true, "requireCleanParent": true},
       },
       "reviewer": {
         "description": "Review one bounded request and return a concise result.",
-        "instructionsFile": ".agents/subagents/reviewer/instructions.md",
+        "instructionsFile": "workspace/.agents/subagents/reviewer/instructions.md",
         "model": "example/demo-model",
         "tools": {
           "builtin": ["read"],
@@ -184,7 +184,7 @@
         "skills": ["review-guidance"],
         "agentsMd": {
           "inherit": false,
-          "files": [".agents/subagents/reviewer/AGENTS.md"],
+          "files": ["workspace/.agents/subagents/reviewer/AGENTS.md"],
         },
       },
     },
