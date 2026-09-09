@@ -44,6 +44,7 @@ pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 7;
 /// runtime state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct CurrentRuntimeConfig {
     /// The runtime configuration schema version.
     #[serde(default = "default_schema_version")]
@@ -115,6 +116,7 @@ pub struct CurrentRuntimeConfig {
 /// The JSONC representation of the named-subagent plane.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[derive(schemars::JsonSchema)]
 pub struct SubagentsDocument {
     /// The **launch-scoped** per-conversation concurrency bound.
     ///
@@ -149,6 +151,7 @@ impl Default for SubagentsDocument {
 /// The JSONC representation of the Workflow definition and admission plane.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[derive(schemars::JsonSchema)]
 pub struct WorkflowsDocument {
     /// Workflow ids whose YAML files are explicitly registered.
     pub definitions: Vec<WorkflowId>,
@@ -169,6 +172,7 @@ pub const MAX_MAX_CONCURRENT_SUBAGENTS: usize = 64;
 /// nothing else.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct SubagentDocument {
     /// The bounded model-facing routing description.
     pub description: String,
@@ -227,6 +231,7 @@ impl SubagentDocument {
 /// always resolves to the managed package, never to a configured server.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[derive(schemars::JsonSchema)]
 pub struct SubagentToolsDocument {
     /// Built-in/native capabilities, by canonical model-facing name.
     pub builtin: Vec<String>,
@@ -256,6 +261,7 @@ impl SubagentToolsDocument {
 /// The project-instruction policy of one named definition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[derive(schemars::JsonSchema)]
 pub struct SubagentAgentsMdDocument {
     /// Whether the invoking generation's normal project instruction chain is
     /// prepended to the explicit files.
@@ -287,6 +293,7 @@ impl Default for SubagentAgentsMdDocument {
 /// child still receives exactly the committed snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[derive(schemars::JsonSchema)]
 pub struct SubagentWorktreeDocument {
     /// Whether this named definition uses an isolated Git worktree.
     pub enabled: bool,
@@ -337,6 +344,7 @@ impl SubagentWorktreeDocument {
 /// [`Duration`] values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[derive(schemars::JsonSchema)]
 pub struct ModelTimeoutPolicyDocument {
     /// Maximum time to observe the first generation progress.
     pub response_start_timeout_ms: u64,
@@ -386,6 +394,7 @@ impl ModelTimeoutPolicyDocument {
 /// containing only finite [`Duration`] values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[derive(schemars::JsonSchema)]
 pub struct ToolDeadlinePolicyDocument {
     /// The total maximum execution lifetime of one admitted foreground Tool
     /// call, measured from its executor-start frontier. Progress never
@@ -503,6 +512,15 @@ impl CurrentRuntimeConfig {
     ///
     /// Returns the first validation failure.
     pub fn validate(&self) -> Result<(), CurrentRuntimeConfigError> {
+        if self.mcp_servers.len() + self.python_sources.len() > 128
+            || self.subagents.definitions.len() > 128
+            || self.workflows.definitions.len() > 128
+        {
+            return Err(CurrentRuntimeConfigError::Invalid {
+                detail: "configuration supports at most 128 sources, 128 roles, and 128 Workflows"
+                    .into(),
+            });
+        }
         if self.schema_version != CURRENT_RUNTIME_SCHEMA_VERSION {
             return Err(CurrentRuntimeConfigError::UnsupportedSchemaVersion {
                 supported: CURRENT_RUNTIME_SCHEMA_VERSION,
@@ -876,6 +894,7 @@ where
 /// model snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct ContextPolicyDocument {
     /// Tokens permanently reserved out of whichever model window is in
     /// force.
@@ -906,6 +925,7 @@ impl Default for ContextPolicyDocument {
 /// and the registry enforces the intrinsic ones itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[derive(schemars::JsonSchema)]
 pub struct NativeToolPoliciesDocument {
     /// The policy of the native Read tool.
     pub read: NativePolicyOverrideDocument,
@@ -941,15 +961,19 @@ impl NativeToolPoliciesDocument {
 /// Absence never applies the generic external-tool policy to a native tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[derive(schemars::JsonSchema)]
 pub struct NativePolicyOverrideDocument {
     /// Foreground/background ownership override.
     #[serde(deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "ExecutionPolicyDocument")]
     pub execution: Option<ExecutionPolicyDocument>,
     /// In-batch scheduling override.
     #[serde(deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "ConcurrencyPolicyDocument")]
     pub concurrency: Option<ConcurrencyPolicyDocument>,
     /// Tool approval override.
     #[serde(deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "ApprovalPolicyDocument")]
     pub approval: Option<ApprovalPolicyDocument>,
 }
 
@@ -1042,6 +1066,7 @@ mod native_policy_defaults_tests {
 /// One tool invocation policy document.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[derive(schemars::JsonSchema)]
 pub struct InvocationPolicyDocument {
     /// Foreground/background ownership policy.
     pub execution: ExecutionPolicyDocument,
@@ -1066,6 +1091,7 @@ impl InvocationPolicyDocument {
 /// The configurable HITL approval policy of one Tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ApprovalPolicyDocument {
     /// Execute without an approval interaction.
     #[default]
@@ -1088,6 +1114,7 @@ impl ApprovalPolicyDocument {
 /// The configurable execution-ownership policy of one tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ExecutionPolicyDocument {
     /// Attempt-owned execution only.
     #[default]
@@ -1113,6 +1140,7 @@ impl ExecutionPolicyDocument {
 /// The configurable in-batch scheduling policy of one tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ConcurrencyPolicyDocument {
     /// Calls within one batch run one at a time.
     #[default]
@@ -1150,6 +1178,7 @@ impl ConcurrencyPolicyDocument {
 /// `sse`, and no `ws`: rustX has exactly two runtime transports.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct McpServerDocument {
     /// Host-only explicit secret references; ordinary `env` is literal.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1188,6 +1217,7 @@ pub struct McpServerDocument {
 /// The transport an `mcpServers` entry selects explicitly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(schemars::JsonSchema)]
 pub enum McpTransportType {
     /// Streamable HTTP. This is the canonical spelling for a remote server.
     Http,

@@ -2398,6 +2398,10 @@ async fn child_approval_allow_routes_to_child_and_runs_exact_invocation() {
             && *child_conversation_id == child_conversation
     ));
 
+    assert!(
+        parent.model.requests().is_empty(),
+        "routing the pending child approval does not invoke the parent model"
+    );
     let response_result = attachment
         .handle_request_async(
             rustx::runtime_client::RuntimeClientRequest::InteractionRespond {
@@ -2484,9 +2488,10 @@ async fn child_approval_allow_routes_to_child_and_runs_exact_invocation() {
         .expect("child settles");
     assert_eq!(settled.state, SubagentState::Succeeded);
     await_serve(wired.serve).await;
+    let parent_requests = serde_json::to_string(&parent.model.requests()).expect("parent requests");
     assert!(
-        parent.model.requests().is_empty(),
-        "the parent model is not involved in child approval"
+        !parent_requests.contains("approved_tool") && !parent_requests.contains("staging"),
+        "the parent may answer child completion, but never receives child approval facts"
     );
     assert_eq!(
         count_events(&journal(&parent.plane.store), |event| matches!(

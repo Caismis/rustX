@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 /// Managed Python uses the existing `python:<package>` MCP server identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "origin", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum ToolSelector {
     Builtin {
         name: String,
@@ -72,6 +73,20 @@ pub(crate) fn resolve_selector<'a>(
     available: &'a AvailableToolCatalog,
     availability: &CapabilityAvailability,
 ) -> Result<&'a ToolDefinition, ToolSelectionError> {
+    resolve_metadata(
+        selector,
+        available.tools().iter().map(|tool| &tool.definition),
+        availability,
+    )
+}
+
+/// Source-qualified semantic resolution over known definitions. Static callers
+/// carry genuine native metadata and unprepared source facts, never executors.
+pub(crate) fn resolve_metadata<'a>(
+    selector: &ToolSelector,
+    available: impl IntoIterator<Item = &'a ToolDefinition>,
+    availability: &CapabilityAvailability,
+) -> Result<&'a ToolDefinition, ToolSelectionError> {
     if let ToolSelector::Mcp { server_id, .. } = selector {
         let source = CapabilitySourceId::Mcp(server_id.clone());
         let reason = match availability.get(&source) {
@@ -97,9 +112,7 @@ pub(crate) fn resolve_selector<'a>(
         }
     }
     available
-        .tools()
-        .iter()
-        .map(|tool| &tool.definition)
+        .into_iter()
         .find(|definition| match (selector, &definition.origin) {
             (ToolSelector::Builtin { name }, ToolOrigin::Builtin) => definition.name == *name,
             (ToolSelector::Mcp { server_id, name }, ToolOrigin::Mcp { server_id: actual }) => {

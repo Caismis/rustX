@@ -126,7 +126,7 @@ pub(super) fn registration() -> NativeToolRegistration {
         .with_normalizer(AskUserInput::normalize)
 }
 
-fn definition() -> ToolDefinition {
+pub(super) fn definition() -> ToolDefinition {
     ToolDefinition {
         id: crate::runtime::identity::ToolId::new("tool-ask-user"),
         name: ASK_USER_NAME.to_owned(),

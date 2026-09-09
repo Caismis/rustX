@@ -31,16 +31,17 @@ pub(crate) const TOOL_ID: &str = "tool-write";
 
 /// The tool-owned registration of the native Write tool.
 #[must_use]
-pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
-    NativeToolRegistration::new(
-        native_definition::<WriteInput>(
-            TOOL_ID,
-            NAME,
-            "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
-            policy,
-        ),
-        std::sync::Arc::new(WriteTool),
+pub(super) fn definition(policy: ToolInvocationPolicy) -> crate::tools::types::ToolDefinition {
+    native_definition::<WriteInput>(
+        TOOL_ID,
+        NAME,
+        "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+        policy,
     )
+}
+
+pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
+    NativeToolRegistration::new(definition(policy), std::sync::Arc::new(WriteTool))
 }
 
 /// The native Write executor.

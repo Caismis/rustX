@@ -9,6 +9,7 @@ use crate::runtime::interaction::{InteractionOutcome, InteractionResponse};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum WorkflowReviewSubject {
     Plan { value: WorkflowValue },
     Candidate { value: WorkflowValue },

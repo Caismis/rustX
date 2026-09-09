@@ -514,6 +514,9 @@ impl RuntimeResourceLoader for FilesystemRuntimeResourceLoader {
 pub struct RuntimeResourceLoadError {
     /// Bounded diagnostic safe for Runtime Client presentation.
     pub message: String,
+    /// Optional authoritative local document context for offline diagnostics.
+    pub source_file: Option<PathBuf>,
+    pub field_path: Option<String>,
 }
 
 impl RuntimeResourceLoadError {
@@ -529,7 +532,18 @@ impl RuntimeResourceLoadError {
             message.truncate(boundary);
             message.push('…');
         }
-        Self { message }
+        Self {
+            message,
+            source_file: None,
+            field_path: None,
+        }
+    }
+    /// Attach context at the resource owner, without parsing diagnostic text.
+    #[must_use]
+    pub fn at(mut self, file: &Path, field: impl Into<String>) -> Self {
+        self.source_file = Some(file.into());
+        self.field_path = Some(field.into());
+        self
     }
 }
 

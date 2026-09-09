@@ -1,0 +1,385 @@
+{
+  "$defs": {
+    "ChatMaxTokensField": {
+      "description": "Which max-token field spelling a Chat Completions service accepts.\n\nThis is a real structural translation difference between\nOpenAI-compatible services, not a provider wire value: the two spellings\nare mutually exclusive and both are runtime-protected.",
+      "oneOf": [
+        {
+          "const": "max_completion_tokens",
+          "description": "The current `max_completion_tokens` field.",
+          "type": "string"
+        },
+        {
+          "const": "max_tokens",
+          "description": "The legacy `max_tokens` field.",
+          "type": "string"
+        }
+      ]
+    },
+    "ChatReasoningReplay": {
+      "description": "Assistant-message field used to replay canonical reasoning through an\nOpenAI-compatible Chat Completions dialect.",
+      "oneOf": [
+        {
+          "const": "reasoning",
+          "description": "vLLM and `OpenRouter`'s plaintext reasoning field.",
+          "type": "string"
+        },
+        {
+          "const": "reasoning_content",
+          "description": "`DeepSeek` V4, GLM, Qwen, and compatible preserved-thinking APIs.",
+          "type": "string"
+        },
+        {
+          "const": "omit",
+          "description": "Do not replay historical canonical reasoning to the provider.",
+          "type": "string"
+        }
+      ]
+    },
+    "ChatStreamUsage": {
+      "description": "Whether a Chat Completions service supports streaming usage options.",
+      "oneOf": [
+        {
+          "const": "supported",
+          "description": "`stream_options.include_usage` is supported and requested.",
+          "type": "string"
+        },
+        {
+          "const": "unsupported",
+          "description": "The service rejects `stream_options`; the field is omitted.",
+          "type": "string"
+        }
+      ]
+    },
+    "ChatToolProtocol": {
+      "description": "The in-band tool protocol a Chat Completions model speaks.\n\nThis is a real protocol difference between OpenAI-compatible services,\nnot a provider wire value. Most services emit tool calls only through the\nstructured `tool_calls` field. Some model families additionally have a\n*reserved in-band* tool syntax that the serving stack is supposed to parse\nout of the generated text; when that parse fails, the reserved markup\nleaks into ordinary content or reasoning and the request terminates as if\nthe model had simply answered.\n\nDeclaring the dialect is what allows the adapter to recognize such a leak\nas malformed tool intent instead of guessing from arbitrary text. Nothing\nis ever inferred from a provider name or a base URL hostname.",
+      "oneOf": [
+        {
+          "const": "native",
+          "description": "Tool calls exist only as structured `tool_calls`. Generated text is\nnever inspected for tool-protocol markup.",
+          "type": "string"
+        },
+        {
+          "const": "qwen_xml",
+          "description": "The Qwen XML tool dialect (`<tool_call>`, `<function=…>`,\n`<parameter=…>`), as served by vLLM and compatible stacks.",
+          "type": "string"
+        }
+      ]
+    },
+    "CredentialSource": {
+      "description": "The declared source of one provider credential.\n\nThe syntax is exactly two forms and is never extended implicitly: a\nliteral string, or `$ENV_VAR`.",
+      "type": "string"
+    },
+    "Modality": {
+      "description": "One semantic content modality of a model capability set.",
+      "oneOf": [
+        {
+          "const": "text",
+          "description": "Textual content.",
+          "type": "string"
+        },
+        {
+          "const": "image",
+          "description": "Image content.",
+          "type": "string"
+        },
+        {
+          "const": "file",
+          "description": "File/document content.",
+          "type": "string"
+        }
+      ]
+    },
+    "ModelCapabilities": {
+      "additionalProperties": false,
+      "description": "The semantic capability set of a model, an adapter/protocol, or the\nruntime.\n\nModalities are structured sets rather than one boolean per modality, so\nadding a modality never reshapes the contract. The client-visible\ncapability is always an [`intersection`](ModelCapabilities::intersect) of\nthe model claim, the adapter/protocol capability, and the current runtime\ncapability — a raw catalog claim is never advertised.",
+      "properties": {
+        "inputModalities": {
+          "description": "The accepted input modalities.",
+          "items": {
+            "$ref": "#/$defs/Modality"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "outputModalities": {
+          "description": "The produced output modalities.",
+          "items": {
+            "$ref": "#/$defs/Modality"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "reasoning": {
+          "description": "Whether the model semantically supports reasoning.",
+          "type": "boolean"
+        },
+        "toolCalls": {
+          "description": "Whether the model can be given tool definitions and can call them.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "inputModalities",
+        "outputModalities",
+        "toolCalls",
+        "reasoning"
+      ],
+      "type": "object"
+    },
+    "ModelCompat": {
+      "additionalProperties": false,
+      "description": "The bounded structural protocol-translation metadata of one model.\n\nEvery field here corresponds to a translation branch the current\nadapters actually take. There is intentionally no strategy trait, no\nplugin registry, no translator factory, and no JSON-driven\ntransformation, and nothing here is ever inferred from a provider name or\na base URL hostname.",
+      "properties": {
+        "chatMaxTokensField": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatMaxTokensField"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "chatReasoningReplay": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatReasoningReplay"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "chatStreamUsage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatStreamUsage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "chatToolProtocol": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatToolProtocol"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "responsesStorage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResponsesStorageMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "type": "object"
+    },
+    "ModelDocument": {
+      "additionalProperties": false,
+      "description": "One model entry of the catalog document.",
+      "properties": {
+        "capabilities": {
+          "$ref": "#/$defs/ModelCapabilities",
+          "description": "The claimed capabilities."
+        },
+        "compat": {
+          "$ref": "#/$defs/ModelCompat",
+          "default": {},
+          "description": "The bounded structural translation metadata."
+        },
+        "contextWindow": {
+          "description": "The model context window in tokens.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "description": "The model identity within its provider.",
+          "type": "string"
+        },
+        "maxOutputTokens": {
+          "description": "The configured maximum output tokens.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "protocol": {
+          "$ref": "#/$defs/ModelProtocol",
+          "description": "The protocol an adapter must speak."
+        },
+        "reasoning": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The declared reasoning profiles."
+        },
+        "requestParams": {
+          "additionalProperties": true,
+          "default": {},
+          "description": "The model-level default provider request parameters.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "protocol",
+        "contextWindow",
+        "maxOutputTokens",
+        "capabilities"
+      ],
+      "type": "object"
+    },
+    "ModelProtocol": {
+      "description": "The model interaction protocol an adapter must speak.",
+      "oneOf": [
+        {
+          "const": "openai_chat_completions",
+          "description": "`OpenAI` Chat Completions API.",
+          "type": "string"
+        },
+        {
+          "const": "openai_responses",
+          "description": "`OpenAI` Responses API.",
+          "type": "string"
+        },
+        {
+          "const": "anthropic_messages",
+          "description": "`Anthropic` Messages API.",
+          "type": "string"
+        }
+      ]
+    },
+    "ProviderDocument": {
+      "additionalProperties": false,
+      "description": "One provider entry of the catalog document.",
+      "properties": {
+        "apiKey": {
+          "$ref": "#/$defs/CredentialSource",
+          "description": "The mandatory credential source: a literal or `$ENV_VAR`."
+        },
+        "baseUrl": {
+          "description": "The mandatory explicit provider endpoint.",
+          "type": "string"
+        },
+        "models": {
+          "description": "The provider's models.",
+          "items": {
+            "$ref": "#/$defs/ModelDocument"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "baseUrl",
+        "apiKey",
+        "models"
+      ],
+      "type": "object"
+    },
+    "ReasoningConfig": {
+      "additionalProperties": false,
+      "description": "The reasoning configuration of one model.",
+      "properties": {
+        "defaultProfile": {
+          "$ref": "#/$defs/ReasoningProfileId",
+          "description": "The profile selected when the session does not choose one."
+        },
+        "profiles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ReasoningProfile"
+          },
+          "description": "The declared profiles.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "defaultProfile",
+        "profiles"
+      ],
+      "type": "object"
+    },
+    "ReasoningProfile": {
+      "additionalProperties": false,
+      "description": "One declared reasoning profile of a model.",
+      "properties": {
+        "enabled": {
+          "description": "Whether this profile semantically enables reasoning.",
+          "type": "boolean"
+        },
+        "requestParams": {
+          "additionalProperties": true,
+          "default": {},
+          "description": "The exact provider-owned request parameters of this profile.\n\nThe profile owns every top-level key it declares: a session override\nmay not also declare one of them.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "type": "object"
+    },
+    "ReasoningProfileId": {
+      "description": "The identity of one reasoning profile declared by a model.\n\nThe runtime assigns no meaning to the name: `off`, `on`, `low`,\n`thinking-32k`, and `deep` are all just names whose wire behaviour is\nexactly the profile's configured `requestParams`.",
+      "type": "string"
+    },
+    "ResponsesStorageMode": {
+      "description": "How the `OpenAI` Responses protocol operates with provider storage.\n\nThis is continuation *structure*, not a wire value: Stored continues by\n`previous_response_id`, Stateless continues by preserved output items and\nrequires the encrypted-reasoning `include` value.",
+      "oneOf": [
+        {
+          "const": "stored",
+          "description": "Provider-side storage enabled (`store: true`).",
+          "type": "string"
+        },
+        {
+          "const": "stateless",
+          "description": "Zero provider retention (`store: false`).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The `models.jsonc` document shape.\n\nUnknown fields are rejected everywhere: a typo must fail loudly rather\nthan silently changing runtime semantics.",
+  "properties": {
+    "providers": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ProviderDocument"
+      },
+      "description": "The providers, keyed by provider identity. Duplicate keys are\nrejected rather than silently resolved by last-write-wins.",
+      "type": "object"
+    },
+    "schemaVersion": {
+      "default": 1,
+      "description": "The catalog schema version.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "providers"
+  ],
+  "title": "ModelCatalogDocument",
+  "type": "object"
+}

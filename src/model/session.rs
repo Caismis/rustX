@@ -58,6 +58,7 @@ use crate::model::invocation::{
 /// The compaction summary model policy of a session.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum SummaryModelPolicy {
     /// Summary generation follows the admitted attempt's primary model.
     #[default]
@@ -87,6 +88,7 @@ pub enum SummaryModelPolicy {
 /// ambiguous JSON patch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct SessionModelConfig {
     /// The selected catalog model.
     pub model: ModelRef,

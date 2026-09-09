@@ -1,0 +1,701 @@
+{
+  "$defs": {
+    "McpServerId": {
+      "description": "Identifies an MCP server bound to the runtime.",
+      "type": "string"
+    },
+    "SubagentName": {
+      "description": "The canonical typed name of one admitted subagent definition.\n\nThe keyspace is deliberately narrow: lowercase ASCII letters, digits,\n`-`, and `_`, starting with a letter. A name is the model-facing routing\ntoken, the durable ownership identity, and the Runtime Client projection\nidentity, so an ambiguous or shell-shaped spelling is rejected at the\nconfiguration boundary rather than normalized later.",
+      "type": "string"
+    },
+    "ToolSelector": {
+      "description": "Trusted selection syntax shared by Subagent and Workflow authoring.\nManaged Python uses the existing `python:<package>` MCP server identity.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "origin": {
+              "const": "builtin",
+              "type": "string"
+            }
+          },
+          "required": [
+            "origin",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "origin": {
+              "const": "mcp",
+              "type": "string"
+            },
+            "server_id": {
+              "$ref": "#/$defs/McpServerId"
+            }
+          },
+          "required": [
+            "origin",
+            "server_id",
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkflowBlock": {
+      "additionalProperties": false,
+      "description": "A fixed lexical graph shared by root, Parallel branches and Loop bodies.",
+      "properties": {
+        "edges": {
+          "default": [],
+          "description": "Ordinary sequential control-flow edges.",
+          "items": {
+            "$ref": "#/$defs/WorkflowEdgeDefinition"
+          },
+          "type": "array"
+        },
+        "entry": {
+          "description": "The one explicit entry node.",
+          "type": "string"
+        },
+        "input": {
+          "description": "The workflow input JSON Schema."
+        },
+        "nodes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/WorkflowNodeDefinition"
+          },
+          "description": "Stable node definitions keyed by explicit node id.",
+          "type": "object"
+        },
+        "output": {
+          "description": "The workflow output JSON Schema."
+        }
+      },
+      "required": [
+        "input",
+        "output",
+        "entry",
+        "nodes"
+      ],
+      "type": "object"
+    },
+    "WorkflowBranch": {
+      "additionalProperties": false,
+      "description": "One explicit input projection and fixed private Parallel block.",
+      "properties": {
+        "block": {
+          "$ref": "#/$defs/WorkflowBlock",
+          "description": "The child's private graph and contracts."
+        },
+        "input": {
+          "$ref": "#/$defs/WorkflowValue",
+          "description": "Evaluated in the parent scope and checked against the child input schema."
+        }
+      },
+      "required": [
+        "input",
+        "block"
+      ],
+      "type": "object"
+    },
+    "WorkflowEdgeDefinition": {
+      "additionalProperties": false,
+      "description": "One explicit edge in the workflow graph.",
+      "properties": {
+        "from": {
+          "description": "Source node id.",
+          "type": "string"
+        },
+        "port": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkflowPort"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Required Branch/Loop outcome port. Ordinary nodes must omit it."
+        },
+        "to": {
+          "description": "Destination node id.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "WorkflowNodeDefinition": {
+      "description": "One Workflow node in the authoring/domain layer.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Repeat one fixed typed body until its committed result satisfies `until`.",
+          "properties": {
+            "body": {
+              "$ref": "#/$defs/WorkflowBlock"
+            },
+            "carry": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "input": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "max_iterations": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "loop",
+              "type": "string"
+            },
+            "until": {
+              "$ref": "#/$defs/WorkflowPredicate"
+            }
+          },
+          "required": [
+            "type",
+            "input",
+            "body",
+            "until",
+            "carry",
+            "max_iterations"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "context": {
+              "items": {
+                "$ref": "#/$defs/WorkflowValue"
+              },
+              "type": "array"
+            },
+            "subject": {
+              "$ref": "#/$defs/WorkflowReviewSubject"
+            },
+            "type": {
+              "const": "review",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "subject",
+            "context"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One statically selected, explicitly admitted foreground capability.",
+          "properties": {
+            "arguments": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "result": {
+              "$ref": "#/$defs/WorkflowToolResult"
+            },
+            "selector": {
+              "$ref": "#/$defs/ToolSelector"
+            },
+            "type": {
+              "const": "tool",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "selector",
+            "arguments",
+            "result"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One execution of an admitted named Subagent profile.",
+          "properties": {
+            "input": {
+              "additionalProperties": {
+                "$ref": "#/$defs/WorkflowValue"
+              },
+              "default": {},
+              "description": "Explicit input bindings from workflow-local values.",
+              "type": "object"
+            },
+            "output": {
+              "description": "The frozen `AgentRun` output contract."
+            },
+            "profile": {
+              "$ref": "#/$defs/SubagentName",
+              "description": "The native named profile to resolve at `AgentRun` admission."
+            },
+            "task": {
+              "description": "The fixed task instruction for this `AgentRun`.",
+              "type": "string"
+            },
+            "type": {
+              "const": "agent",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "profile",
+            "task",
+            "output"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Deterministic selection from one committed boolean value.",
+          "properties": {
+            "condition": {
+              "$ref": "#/$defs/WorkflowPredicate",
+              "description": "The sole boolean condition binding."
+            },
+            "type": {
+              "const": "branch",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "condition"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A finite keyed set of private lexical blocks.",
+          "properties": {
+            "branches": {
+              "additionalProperties": {
+                "$ref": "#/$defs/WorkflowBranch"
+              },
+              "description": "Branches are keyed by definition identity, not completion order.",
+              "type": "object"
+            },
+            "type": {
+              "const": "parallel",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "branches"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Constructs a value and completes exactly this owning block.",
+          "properties": {
+            "output": {
+              "$ref": "#/$defs/WorkflowValue",
+              "description": "The owning block's declared result."
+            },
+            "type": {
+              "const": "return",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "output"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkflowPort": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "enum": [
+            "true",
+            "false",
+            "satisfied",
+            "exhausted",
+            "next"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "WorkflowPredicate": {
+      "description": "Typed predicates. Equality requires matching scalar types; no coercion.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A boolean value.",
+          "properties": {
+            "type": {
+              "const": "boolean",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/WorkflowValue"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Equal scalar operands of the same static type.",
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "const": "equal",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "left",
+            "right"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Unequal scalar operands of the same static type.",
+          "properties": {
+            "left": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "right": {
+              "$ref": "#/$defs/WorkflowValue"
+            },
+            "type": {
+              "const": "not_equal",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "left",
+            "right"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Boolean negation.",
+          "properties": {
+            "predicate": {
+              "$ref": "#/$defs/WorkflowPredicate"
+            },
+            "type": {
+              "const": "not",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "predicate"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Conjunction of a nonempty fixed list.",
+          "properties": {
+            "predicates": {
+              "items": {
+                "$ref": "#/$defs/WorkflowPredicate"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "and",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "predicates"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Disjunction of a nonempty fixed list.",
+          "properties": {
+            "predicates": {
+              "items": {
+                "$ref": "#/$defs/WorkflowPredicate"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "or",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "predicates"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkflowReviewSubject": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "plan",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/WorkflowValue"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "candidate",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/WorkflowValue"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkflowToolResult": {
+      "description": "Select exactly one native content part, never provider text or log heuristics.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The indexed part must be native structured JSON satisfying this schema.",
+          "properties": {
+            "part": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "schema": true,
+            "type": {
+              "const": "json",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "part",
+            "schema"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The indexed part must be native text; retain it as a typed JSON string.",
+          "properties": {
+            "part": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "part"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkflowValue": {
+      "description": "Closed, explicitly tagged value syntax; no evaluation of expression strings.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "First component is `args` or a local producer; remaining components are fields.",
+          "properties": {
+            "path": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "reference",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Literal JSON, including objects and arrays, never interpreted as syntax.",
+          "properties": {
+            "type": {
+              "const": "literal",
+              "type": "string"
+            },
+            "value": true
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Construct an object atomically.",
+          "properties": {
+            "fields": {
+              "additionalProperties": {
+                "$ref": "#/$defs/WorkflowValue"
+              },
+              "type": "object"
+            },
+            "type": {
+              "const": "object",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "fields"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Construct an array atomically.",
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/WorkflowValue"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "array",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "items"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WorkflowWorkspace": {
+      "additionalProperties": false,
+      "description": "A managed candidate always preserves isolation. Dirty-parent opt-out is\nexplicit and retains the native committed-baseline/overlay semantics.",
+      "properties": {
+        "require_clean_parent": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The canonical YAML/domain representation of one workflow.",
+  "properties": {
+    "block": {
+      "$ref": "#/$defs/WorkflowBlock",
+      "description": "The root lexical execution scope."
+    },
+    "description": {
+      "description": "The model-facing description of the workflow Tool.",
+      "type": "string"
+    },
+    "timeout_ms": {
+      "default": 600000,
+      "description": "Trusted finite total foreground lifetime, including descendant waits.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "tools": {
+      "default": [],
+      "description": "Explicit capability admission, independent of main model exposure.",
+      "items": {
+        "$ref": "#/$defs/ToolSelector"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "workspace": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/WorkflowWorkspace"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Explicit run-scoped candidate acquisition; absent means no Git resource."
+    }
+  },
+  "required": [
+    "description",
+    "block"
+  ],
+  "title": "WorkflowDefinition",
+  "type": "object"
+}

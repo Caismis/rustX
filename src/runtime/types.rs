@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 /// or tool authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ApprovalMode {
     /// Use each Tool's configured approval policy.
     #[default]

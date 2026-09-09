@@ -575,6 +575,11 @@ impl SessionCatalog {
         runtime_root: &Path,
         state: &SessionPersistentState,
     ) -> Result<Self, SessionError> {
+        #[cfg(test)]
+        {
+            super::static_effects::observe(super::static_effects::Effect::Session);
+            super::static_effects::observe(super::static_effects::Effect::State);
+        }
         let root = runtime_root.join("sessions");
         fs::create_dir_all(&root).map_err(|error| SessionError::Io {
             path: root.clone(),

@@ -74,7 +74,7 @@ pub(super) fn registration() -> NativeToolRegistration {
     NativeToolRegistration::new(definition(), std::sync::Arc::new(TodoExecutor))
 }
 
-fn definition() -> ToolDefinition {
+pub(super) fn definition() -> ToolDefinition {
     ToolDefinition {
         id: crate::runtime::identity::ToolId::new(TODO_TOOL_ID),
         name: NAME.to_owned(),

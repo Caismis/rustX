@@ -65,13 +65,17 @@ pub(crate) struct NativeToolRegistration {
 }
 
 impl NativeToolRegistration {
+    pub(super) const fn ordinary_foreground() -> crate::tools::deadline::ForegroundPolicy {
+        crate::tools::deadline::ForegroundPolicy::Leaf
+    }
+
     /// Pairs one canonical definition with its executor and identity
     /// normalization.
     pub(super) fn new(definition: ToolDefinition, executor: Arc<dyn ToolExecutor>) -> Self {
         Self {
             definition,
             executor,
-            foreground: crate::tools::deadline::ForegroundPolicy::Leaf,
+            foreground: Self::ordinary_foreground(),
             normalizer: identity_arguments,
         }
     }

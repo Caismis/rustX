@@ -274,7 +274,7 @@ pub(crate) struct SupervisedInteractiveProcess {
     /// Test-only: the pid of the direct supervisor child (observability for
     /// the direct-reap regression).
     #[cfg(test)]
-    supervisor_child_pid: Option<u32>,
+    pub(crate) supervisor_child_pid: Option<u32>,
 }
 
 #[cfg(unix)]

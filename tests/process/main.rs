@@ -19,6 +19,7 @@ mod launch_fixture;
 
 mod capability_startup;
 mod composition;
+mod configuration_commands;
 mod examples;
 mod runtime_config;
 mod runtime_process;

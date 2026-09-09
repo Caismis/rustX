@@ -1,7 +1,8 @@
 //! One host-owned launch boundary. No provider, Session, or runtime is composed here.
 
+use crate::capabilities::activation::{SourceActivation, SourceEnablement};
+use crate::config_format::read_bounded;
 use std::collections::BTreeMap;
-use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
@@ -11,7 +12,12 @@ use sha2::{Digest, Sha256};
 
 use super::composition::StartupSession;
 use super::config::{CurrentRuntimeConfig, present};
+use super::diagnostics::LaunchFailure;
 use crate::model::catalog::ModelCatalog;
+
+pub(super) const USER_PATH_FIELDS: &[&str] = &["models", "runtimeRoot"];
+pub(super) const HOST_POLICY_FIELDS: &[&str] = &["approvalMode", "nativeTools", "mcpToolPolicies"];
+pub(super) const MCP_SECRET_FIELDS: &[&str] = &["sensitiveEnv", "sensitiveHeaders"];
 
 /// Filesystem locations and controls produced by the launch resolver.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,8 +105,6 @@ pub enum TrustAction {
 /// Captured once; tests supply isolated snapshots without changing process globals.
 #[derive(Debug, Clone)]
 pub struct HostEnvironment {
-    /// Captured host credential authority, never projected or serialized.
-    pub credentials: crate::credentials::CredentialSnapshot,
     pub launch_directory: PathBuf,
     pub config_directory: PathBuf,
     pub state_directory: PathBuf,
@@ -117,14 +121,12 @@ impl HostEnvironment {
             .ok_or("HOME is required to locate user configuration and trust")?;
         let config = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from);
         let state = std::env::var_os("XDG_STATE_HOME").map(PathBuf::from);
-        let mut captured = Self::from_paths(
+        Self::from_paths(
             std::env::current_dir().map_err(|e| e.to_string())?,
             home,
             config,
             state,
-        )?;
-        captured.credentials = crate::credentials::CredentialSnapshot::capture();
-        Ok(captured)
+        )
     }
 
     /// Build an isolated host snapshot from explicit paths.
@@ -146,7 +148,6 @@ impl HostEnvironment {
         }
         // Use the same XDG convention on Linux and macOS; no platform-dependent fallback chain.
         Ok(Self {
-            credentials: crate::credentials::CredentialSnapshot::default(),
             launch_directory,
             config_directory: config.unwrap_or_else(|| home.join(".config")).join("rustx"),
             state_directory: state
@@ -157,7 +158,8 @@ impl HostEnvironment {
 }
 
 /// Values are never included: provenance cannot expose credentials or environment values.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Origin {
     Builtin,
     User { document: PathBuf, base: PathBuf },
@@ -169,6 +171,24 @@ pub enum Origin {
 #[derive(Debug, Clone)]
 pub struct ResolvedLaunch {
     pub(crate) credentials: crate::credentials::CredentialSnapshot,
+    prospective: ProspectiveLaunch,
+}
+
+/// Static next-launch values. This type grants no execution authority and contains
+/// no credential snapshot. Only runtime admission can produce a resolved launch.
+#[derive(Clone)]
+pub struct ProspectiveLaunch {
+    pub(crate) python_local_status:
+        BTreeMap<crate::runtime::identity::McpServerId, PythonLocalStatus>,
+    pub(crate) trusted: bool,
+    pub(crate) workflows: crate::runtime::workflow::WorkflowCatalog,
+    pub(crate) subagents: crate::runtime::subagent::SubagentCatalog,
+    pub(crate) skill_names: Vec<String>,
+    pub(crate) source_activations: BTreeMap<
+        crate::runtime::identity::McpServerId,
+        crate::capabilities::activation::SourceActivation,
+    >,
+    pub(crate) selected_tools: Option<Vec<String>>,
     pub(crate) locations: LaunchLocations,
     pub(crate) config: std::sync::Arc<CurrentRuntimeConfig>,
     pub(crate) models: ModelCatalog,
@@ -182,7 +202,37 @@ pub struct ResolvedLaunch {
     project_resources: Vec<PathBuf>,
 }
 
-impl ResolvedLaunch {
+/// Inert package validation facts, independent of activation and MCP readiness.
+#[derive(Debug, Clone, Copy, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PythonLocalStatus {
+    Valid,
+    Missing,
+    Invalid,
+}
+
+impl ProspectiveLaunch {
+    /// Apply real trust admission before calling the credential owner.
+    ///
+    /// # Errors
+    /// An untrusted workspace never reaches the credential capture callback.
+    #[allow(clippy::unnecessary_debug_formatting)] // escape the actionable shell path
+    pub fn admit(
+        self,
+        credentials: impl FnOnce() -> crate::credentials::CredentialSnapshot,
+    ) -> Result<ResolvedLaunch, String> {
+        if !self.trusted {
+            return Err(format!(
+                "project {} is not trusted; run rustx --workspace {:?} --trust grant (revoke with --trust revoke)",
+                self.workspace.display(),
+                self.workspace
+            ));
+        }
+        Ok(ResolvedLaunch {
+            credentials: credentials(),
+            prospective: self,
+        })
+    }
     /// Recheck physical targets immediately before resource preparation. This
     /// never rereads launch documents and is not an execution filesystem sandbox.
     pub(crate) fn validate_resource_authority(&self) -> Result<(), String> {
@@ -257,6 +307,13 @@ impl ResolvedLaunch {
 }
 
 impl std::ops::Deref for ResolvedLaunch {
+    type Target = ProspectiveLaunch;
+    fn deref(&self) -> &Self::Target {
+        &self.prospective
+    }
+}
+
+impl std::ops::Deref for ProspectiveLaunch {
     type Target = LaunchLocations;
     fn deref(&self) -> &Self::Target {
         &self.locations
@@ -326,6 +383,8 @@ pub fn change_trust(
     host: &HostEnvironment,
     action: TrustAction,
 ) -> Result<(), String> {
+    #[cfg(test)]
+    super::static_effects::observe(super::static_effects::Effect::Trust);
     let (locations, identity) = resolve_locations(request, host)?;
     let root = trust_root(host, &locations.workspace)?;
     let record = root.join(identity);
@@ -399,7 +458,10 @@ pub fn resolve_inspection_locations(
     clippy::missing_panics_doc,
     clippy::unnecessary_debug_formatting
 )] // derived paths always have parents; debug escapes diagnostic paths
-pub fn resolve(request: &LaunchRequest, host: &HostEnvironment) -> Result<ResolvedLaunch, String> {
+pub fn analyze(
+    request: &LaunchRequest,
+    host: &HostEnvironment,
+) -> Result<ProspectiveLaunch, LaunchFailure> {
     let (mut locations, identity) = resolve_locations(request, host)?;
     let launch = canonical_directory(&host.launch_directory)?;
     let user_path = host.config_directory.join("settings.jsonc");
@@ -411,16 +473,9 @@ pub fn resolve(request: &LaunchRequest, host: &HostEnvironment) -> Result<Resolv
     let project = read_layer(&project_path, request.config.is_some(), true)?;
     // Even an empty workspace requires trust: files added before composition or reload
     // must never turn a previously inert launch into project activation.
-    if !trust_root(host, &locations.workspace)?
+    let trusted = trust_root(host, &locations.workspace)?
         .join(&identity)
-        .is_dir()
-    {
-        return Err(format!(
-            "project {} is not trusted; run rustx --workspace {:?} --trust grant (revoke with --trust revoke)",
-            locations.workspace.display(),
-            locations.workspace
-        ));
-    }
+        .is_dir();
     let user_models = user.remove("models");
     let user_selected_catalog = user_models.is_some();
     let models_path = request
@@ -463,8 +518,34 @@ pub fn resolve(request: &LaunchRequest, host: &HostEnvironment) -> Result<Resolv
     {
         return Err("runtimeRoot must be disjoint from the workspace".into());
     }
-    let models =
-        ModelCatalog::from_jsonc_slice(&read_bounded(&models_path)?).map_err(|e| e.to_string())?;
+    let model_bytes = read_bounded(&models_path).map_err(|detail| {
+        let mut error = LaunchFailure::at(
+            Some(models_path.clone()),
+            "$",
+            "model catalog is unavailable",
+            "run rustx init or correct the explicit catalog path",
+            detail,
+        );
+        error.incomplete =
+            request.models.is_none() && !user_selected_catalog && !models_path.exists();
+        error.partial = Some(Box::new(super::diagnostics::PartialProjection::new(
+            &locations,
+            trusted,
+            Value::Null,
+        )));
+        error
+    })?;
+    let model_document = crate::config_format::parse_detailed(&model_bytes)
+        .map_err(|error| LaunchFailure::parse(&models_path, error))?;
+    let models = ModelCatalog::from_document(model_document).map_err(|e| {
+        LaunchFailure::at(
+            Some(models_path.clone()),
+            "providers",
+            "invalid model catalog semantics",
+            "correct explicit model limits, protocol, compatibility, and capabilities",
+            e.to_string(),
+        )
+    })?;
     let documents = vec![
         (
             user_path.clone(),
@@ -529,7 +610,20 @@ pub fn resolve(request: &LaunchRequest, host: &HostEnvironment) -> Result<Resolv
         );
     }
     if !merged.contains_key("model") || merged["model"].get("model").is_none() {
-        return Err("no unambiguous default model selected; set model.model to provider/model in user settings.jsonc or pass --model provider/model".into());
+        let mut error = LaunchFailure::at(
+            Some(user_path.clone()),
+            "model.model",
+            "no unambiguous default model selected",
+            "set model.model in user settings.jsonc or pass --model provider/model",
+            "no unambiguous default model selected".into(),
+        );
+        error.incomplete = true;
+        error.partial = Some(Box::new(super::diagnostics::PartialProjection::new(
+            &locations,
+            trusted,
+            Value::Object(merged),
+        )));
+        return Err(error);
     }
     apply_defaults(&mut merged, &mut provenance);
     let config: CurrentRuntimeConfig =
@@ -543,6 +637,37 @@ pub fn resolve(request: &LaunchRequest, host: &HostEnvironment) -> Result<Resolv
     models
         .model(&config.model.model)
         .map_err(|e| e.to_string())?;
+    let mut budgets = Vec::new();
+    for (selection, layer) in std::iter::once((
+        config.model.selection(),
+        crate::model::invocation::RequestParamsLayer::SessionOverrides,
+    ))
+    .chain(config.model.summary_selection().map(|selection| {
+        (
+            selection,
+            crate::model::invocation::RequestParamsLayer::SummaryOverrides,
+        )
+    })) {
+        let view = crate::model::invocation::analyze_selection(
+            models.model(&selection.model).map_err(|e| e.to_string())?,
+            &selection,
+            layer,
+        )
+        .map_err(|e| e.to_string())?;
+        budgets.push((view.context_window, view.max_output_tokens));
+    }
+    config
+        .context_policy()
+        .validate_budgets(budgets[0], *budgets.last().expect("primary budget"))
+        .map_err(|error| {
+            LaunchFailure::at(
+                Some(user_path.clone()),
+                "context",
+                "context budgets cannot fit the selected models",
+                "correct reserves, recent-history budget, or explicit model limits",
+                error.message,
+            )
+        })?;
     record_default_origins(
         &serde_json::to_value(&config).map_err(|e| e.to_string())?,
         "",
@@ -606,8 +731,237 @@ pub fn resolve(request: &LaunchRequest, host: &HostEnvironment) -> Result<Resolv
             locations.workspace.join(".agents/skills"),
         ]
     };
-    Ok(ResolvedLaunch {
-        credentials: host.credentials.clone(),
+    let workflows = if trusted {
+        super::composition::load_workflow_catalog(
+            &locations.workspace,
+            &config.workflows,
+            &config.subagents.workflow.iter().cloned().collect(),
+        )
+        .map_err(LaunchFailure::resource)?
+    } else {
+        crate::runtime::workflow::WorkflowCatalog::empty()
+    };
+    let subagents = if trusted {
+        super::composition::load_subagent_catalog(&locations.workspace, &config.subagents)
+            .map_err(LaunchFailure::resource)?
+    } else {
+        crate::runtime::subagent::SubagentCatalog::empty()
+    };
+    let workspace =
+        crate::tools::workspace::Workspace::new(&locations.workspace).map_err(|e| e.to_string())?;
+    let skill_packages = if trusted {
+        if !request.no_skills {
+            crate::runtime::resources::validate_project_resource_path(
+                &locations.workspace,
+                &locations.workspace.join(".agents/skills"),
+            )
+            .map_err(LaunchFailure::resource)?;
+        }
+        crate::skills::SkillDiscovery::with_config(
+            &workspace,
+            crate::skills::SkillDiscoveryConfig {
+                automatic_roots: skill_roots.clone(),
+                explicit_paths: config.skills.clone(),
+            },
+        )
+        .discover()
+        .map_err(|e| {
+            LaunchFailure::at(
+                None,
+                "skills",
+                "invalid local Skill package or path",
+                "correct the explicit Skill path and package metadata",
+                e.to_string(),
+            )
+        })?
+    } else {
+        Vec::new()
+    };
+    let skill_names = skill_packages
+        .iter()
+        .map(|package| package.name().to_owned())
+        .collect();
+    let skills = crate::skills::SkillSnapshot::new(
+        skill_packages
+            .into_iter()
+            .map(std::sync::Arc::new)
+            .collect(),
+    );
+    crate::runtime::subagent::SubagentResolver::validate_local_references(
+        &subagents,
+        &skills,
+        |reference| {
+            crate::model::invocation::analyze_selection(
+                models.model(reference).map_err(|e| e.to_string())?,
+                &crate::model::invocation::ModelSelection::of(reference.clone()),
+                crate::model::invocation::RequestParamsLayer::SessionOverrides,
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+        },
+    )
+    .map_err(|(name, error)| {
+        LaunchFailure::at(
+            None,
+            &format!("subagents.definitions.{name}"),
+            "invalid local model or Skill reference",
+            "select a declared model and an available local Skill",
+            error.to_string(),
+        )
+    })?;
+    let main_subagents = if trusted {
+        subagents
+            .admitted(&config.subagents.main.iter().cloned().collect())
+            .map_err(|e| e.to_string())?
+    } else {
+        crate::runtime::subagent::SubagentCatalog::empty()
+    };
+    let native_metadata =
+        crate::tools::native::definitions(config.native_tools.to_policies(), &main_subagents);
+    let native_leaves: std::collections::BTreeSet<_> = native_metadata
+        .iter()
+        .filter(|(_, policy)| *policy == crate::tools::deadline::ForegroundPolicy::Leaf)
+        .map(|(definition, _)| definition.id.clone())
+        .collect();
+    let mut definitions: Vec<_> = native_metadata
+        .into_iter()
+        .map(|(definition, _)| definition)
+        .collect();
+    definitions.extend(
+        workflows
+            .main()
+            .iter()
+            .filter_map(|id| workflows.get(id))
+            .map(|program| crate::tools::native::workflow_definition(program)),
+    );
+    let mut source_activations = BTreeMap::new();
+    for (id, source) in &config.mcp_servers {
+        source_activations.insert(
+            id.clone(),
+            SourceActivation::evaluate(
+                source.enabled.map(|enabled| {
+                    if enabled {
+                        SourceEnablement::Enabled
+                    } else {
+                        SourceEnablement::Disabled
+                    }
+                }),
+                trusted,
+            ),
+        );
+    }
+    for (id, intent) in &config.python_sources {
+        source_activations.insert(
+            id.clone(),
+            SourceActivation::evaluate(Some(*intent), trusted),
+        );
+    }
+    let mut python_local_status = BTreeMap::new();
+    for (id, activation) in &source_activations {
+        if config.python_sources.contains_key(id) && *activation == SourceActivation::Enabled {
+            python_local_status.insert(id.clone(), PythonLocalStatus::Missing);
+        }
+    }
+    if trusted {
+        crate::runtime::resources::validate_project_resource_path(
+            &locations.workspace,
+            &locations.workspace.join(".agents/tools"),
+        )
+        .map_err(LaunchFailure::resource)?;
+        let packages = crate::tools::python::discover_admitted_python_packages(&workspace, |id| {
+            *source_activations
+                .entry(id.clone())
+                .or_insert(SourceActivation::Unconfigured)
+                == SourceActivation::Enabled
+        })
+        .map_err(|e| e.to_string())?;
+        for package in packages {
+            python_local_status.insert(
+                package.server_id,
+                if package.outcome.is_ok() {
+                    PythonLocalStatus::Valid
+                } else {
+                    PythonLocalStatus::Invalid
+                },
+            );
+        }
+    }
+    let availability = source_activations
+        .iter()
+        .map(|(id, activation)| {
+            (
+                crate::capabilities::CapabilitySourceId::Mcp(id.clone()),
+                crate::capabilities::CapabilitySourceState::before_preparation(*activation),
+            )
+        })
+        .collect();
+    for definition in subagents.definitions() {
+        crate::runtime::subagent::resolver::validate_metadata_selectors(
+            definition,
+            &definitions,
+            &availability,
+        )
+        .map_err(|e| {
+            LaunchFailure::at(
+                None,
+                &format!("subagents.definitions.{}.tools", definition.name()),
+                "invalid local Tool reference",
+                "use a known source-qualified Tool selector",
+                e.to_string(),
+            )
+        })?;
+    }
+    workflows
+        .validate_metadata(&definitions, &availability, |definition| {
+            Ok(native_leaves.contains(&definition.id))
+        })
+        .map_err(|e| {
+            LaunchFailure::at(
+                None,
+                "workflows.tools",
+                "invalid Workflow Tool admission",
+                "select a known eligible native leaf or a declared external source",
+                e,
+            )
+        })?;
+    let mut defaults = config.default_tools.clone();
+    defaults.extend(workflows.main().iter().map(ToString::to_string));
+    let online = config
+        .mcp_servers
+        .values()
+        .any(|source| source.enabled == Some(true))
+        || config
+            .python_sources
+            .values()
+            .any(|intent| *intent == crate::capabilities::activation::SourceEnablement::Enabled);
+    let policy = crate::capabilities::ToolActivationPolicy {
+        default_tools: Some(defaults),
+        no_tools: locations.no_tools,
+        no_builtin_tools: locations.no_builtin_tools,
+        tools: locations.tools.clone(),
+        exclude_tools: locations.exclude_tools.clone(),
+    };
+    let selected_tools = if (online || !trusted) && !locations.no_tools {
+        None
+    } else {
+        Some(
+            crate::capabilities::select_definitions(
+                &definitions.iter().collect::<Vec<_>>(),
+                &policy,
+            )?
+            .into_iter()
+            .map(|definition| definition.name.clone())
+            .collect(),
+        )
+    };
+    Ok(ProspectiveLaunch {
+        python_local_status,
+        trusted,
+        workflows,
+        subagents,
+        skill_names,
+        source_activations,
+        selected_tools,
         locations,
         config: std::sync::Arc::new(config),
         models,
@@ -618,6 +972,24 @@ pub fn resolve(request: &LaunchRequest, host: &HostEnvironment) -> Result<Resolv
         model_override: request.model.clone(),
         project_resources,
     })
+}
+
+/// Resolve static launch semantics, then require real host trust before admission.
+///
+/// # Errors
+/// Rejects invalid configuration or an untrusted workspace, without activation.
+pub fn resolve(request: &LaunchRequest, host: &HostEnvironment) -> Result<ResolvedLaunch, String> {
+    analyze(request, host)?.admit(crate::credentials::CredentialSnapshot::capture)
+}
+
+impl std::fmt::Debug for ProspectiveLaunch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProspectiveLaunch")
+            .field("trusted", &self.trusted)
+            .field("configuration", &"<redacted>")
+            .finish_non_exhaustive()
+    }
 }
 
 fn absolute(base: &Path, path: &Path) -> PathBuf {
@@ -668,20 +1040,6 @@ fn discover_workspace(launch: &Path) -> Result<PathBuf, String> {
         }
     }
     Ok(launch.into())
-}
-
-const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
-fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
-    let file =
-        std::fs::File::open(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    let mut bytes = Vec::new();
-    file.take(MAX_CONFIG_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > MAX_CONFIG_BYTES {
-        return Err(format!("{} exceeds 1 MiB", path.display()));
-    }
-    Ok(bytes)
 }
 
 // This finite schema is deliberately not an arbitrary recursive merge framework.
@@ -781,13 +1139,26 @@ fn apply_defaults(target: &mut Map<String, Value>, provenance: &mut BTreeMap<Str
     }
 }
 
-fn read_layer(path: &Path, required: bool, project: bool) -> Result<Map<String, Value>, String> {
+#[allow(clippy::too_many_lines)] // One finite authoring/field-authority boundary.
+fn read_layer(
+    path: &Path,
+    required: bool,
+    project: bool,
+) -> Result<Map<String, Value>, LaunchFailure> {
     if !required && !present_on_disk(path)? {
         return Ok(Map::new());
     }
-    let bytes = read_bounded(path)?;
+    let bytes = read_bounded(path).map_err(|detail| {
+        LaunchFailure::at(
+            Some(path.into()),
+            "$",
+            "selected configuration file is unavailable",
+            "correct the selected path or create the file",
+            detail,
+        )
+    })?;
     let value: Value =
-        crate::config_format::parse(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        crate::config_format::parse_detailed(&bytes).map_err(|e| LaunchFailure::parse(path, e))?;
     let mut object = value
         .as_object()
         .cloned()
@@ -804,20 +1175,29 @@ fn read_layer(path: &Path, required: bool, project: bool) -> Result<Map<String, 
         "workspace",
     ] {
         if object.contains_key(name) && (project || !matches!(name, "models" | "runtimeRoot")) {
-            return Err(format!(
-                "{}: field {name} is forbidden in {} settings (host-owned authority)",
-                path.display(),
-                if project { "project" } else { "user" }
+            return Err(LaunchFailure::at(
+                Some(path.into()),
+                name,
+                "forbidden host-owned project override",
+                "move this field to user-owned configuration",
+                format!(
+                    "{}: field {name} is forbidden in {} settings (host-owned authority)",
+                    path.display(),
+                    if project { "project" } else { "user" }
+                ),
             ));
         }
     }
-    for name in ["models", "runtimeRoot"] {
+    for &name in USER_PATH_FIELDS {
         if let Some(value) = object.get(name)
             && value.as_str().is_none_or(str::is_empty)
         {
-            return Err(format!(
-                "{}: {name} must be a non-empty path",
-                path.display()
+            return Err(LaunchFailure::at(
+                Some(path.into()),
+                name,
+                "path must be non-empty",
+                "supply a non-empty local path",
+                format!("{}: {name} must be a non-empty path", path.display()),
             ));
         }
     }
@@ -826,27 +1206,54 @@ fn read_layer(path: &Path, required: bool, project: bool) -> Result<Map<String, 
     if project {
         if let Some(servers) = object.get("mcpServers").and_then(Value::as_object) {
             for (name, server) in servers {
-                if server.get("sensitiveEnv").is_some() || server.get("sensitiveHeaders").is_some()
+                if MCP_SECRET_FIELDS
+                    .iter()
+                    .any(|field| server.get(*field).is_some())
                 {
-                    return Err(format!(
-                        "mcpServers.{name}: credential references are host-owned; bind the whole source in user settings"
+                    return Err(LaunchFailure::at(
+                        Some(path.into()),
+                        &format!("mcpServers.{name}"),
+                        "credential references are host-owned",
+                        "bind the whole credential-bearing source in user settings",
+                        format!(
+                            "mcpServers.{name}: credential references are host-owned; bind the whole source in user settings"
+                        ),
                     ));
                 }
             }
         }
-        for name in ["approvalMode", "nativeTools", "mcpToolPolicies"] {
+        for &name in HOST_POLICY_FIELDS {
             if object.contains_key(name) {
-                return Err(format!(
-                    "{}: field {name} is forbidden in project settings (host-owned Tool approval authority)",
-                    path.display()
+                return Err(LaunchFailure::at(
+                    Some(path.into()),
+                    name,
+                    "forbidden project Tool approval override",
+                    "move the complete policy object to user settings",
+                    format!(
+                        "{}: field {name} is forbidden in project settings (host-owned Tool approval authority)",
+                        path.display()
+                    ),
                 ));
             }
         }
     }
     // Validate partial syntax independently, so an invalid lower layer cannot be
     // hidden by an upper one. The typed partial document never inserts defaults.
+    let fields: Vec<_> = PartialRuntime::FIELD_NAMES
+        .iter()
+        .map(|name| super::schemas::camel_case(name))
+        .collect();
+    if let Some(unknown) = object.keys().find(|name| !fields.contains(name)) {
+        return Err(LaunchFailure::at(
+            Some(path.into()),
+            unknown,
+            "unknown configuration field",
+            "remove or correct the field name using the authoring schema",
+            format!("{}: unknown field {unknown:?}", path.display()),
+        ));
+    }
     let _: PartialRuntime =
-        crate::config_format::parse(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        crate::config_format::parse_detailed(&bytes).map_err(|e| LaunchFailure::parse(path, e))?;
     Ok(std::mem::take(&mut object))
 }
 
@@ -919,6 +1326,16 @@ macro_rules! partial {
         #[derive(Debug, Deserialize, Serialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct $name { $(#[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")] $field: Option<$ty>),* }
+        impl $name { const FIELD_NAMES: &'static [&'static str] = &[$(stringify!($field)),*]; }
+        impl schemars::JsonSchema for $name {
+            fn schema_name() -> std::borrow::Cow<'static, str> { stringify!($name).into() }
+            fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+                let mut properties = serde_json::Map::new();
+                let mut names = Self::FIELD_NAMES.iter();
+                $(properties.insert(super::schemas::camel_case(names.next().expect("field metadata")), serde_json::to_value(generator.subschema_for::<$ty>()).expect("schema serializes"));)*
+                serde_json::json!({"type":"object", "additionalProperties":false, "properties":properties}).try_into().expect("schema object")
+            }
+        }
     };
 }
 partial!(PartialRuntime {
@@ -940,10 +1357,14 @@ partial!(PartialTimeout {
 });
 partial!(PartialToolDeadline { hard_deadline_ms: u64, idle_liveness_ms: Option<u64> });
 partial!(PartialModel { model: crate::model::catalog::ModelRef, reasoning_profile: Option<crate::model::catalog::ReasoningProfileId>, request_params: crate::model::invocation::RequestParams, max_output_tokens: Option<u32>, summary_model: crate::model::session::SummaryModelPolicy });
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 struct UniqueDefinitions(
     #[serde(deserialize_with = "super::config::deserialize_unique_map")]
     BTreeMap<crate::runtime::subagent::SubagentName, super::config::SubagentDocument>,
 );
 partial!(PartialSubagents { max_concurrent: usize, definitions: UniqueDefinitions, main: Vec<crate::runtime::subagent::SubagentName>, workflow: Vec<crate::runtime::subagent::SubagentName> });
 partial!(PartialWorkflows { definitions: Vec<crate::runtime::workflow::WorkflowId>, main: Vec<crate::runtime::workflow::WorkflowId> });
+
+pub(super) fn authoring_schema() -> Value {
+    serde_json::to_value(schemars::schema_for!(PartialRuntime)).expect("schema serializes")
+}

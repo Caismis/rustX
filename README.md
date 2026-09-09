@@ -37,7 +37,8 @@ production maturity.
 
 ## Quick start
 
-Configure your model once in the host configuration directory:
+Use [`rustx init`](docs/configuration-diagnostics.md#minimal-initialization) with
+explicit provider/model declarations, or author your model once in the host configuration directory:
 `$XDG_CONFIG_HOME/rustx`, or `$HOME/.config/rustx` when XDG_CONFIG_HOME is
 unset (Linux and macOS). Put explicit provider/model declarations in
 `models.jsonc` and select one in `settings.jsonc`:
@@ -47,10 +48,13 @@ unset (Linux and macOS). Put explicit provider/model declarations in
 ```
 
 Use your declared provider/model identity. The
-[catalog example](examples/local-runtime/models.jsonc) shows the required endpoint,
+[minimal catalog example](examples/local-runtime/minimal/models.jsonc) shows the required endpoint,
 credential source, protocol, limits and capabilities; its endpoint is a placeholder.
 The [launch contract](docs/launch-configuration.md) documents all locations,
 field ownership, precedence, path semantics, defaults and trust.
+`rustx config check` diagnoses configuration offline; `rustx config show --sources`
+explains the redacted prospective next launch. Only explicit `doctor --probe`
+may connect or spawn diagnostic targets. See the [command and exit contract](docs/configuration-diagnostics.md).
 
 Build the runtime and install the reference TUI:
 

@@ -207,7 +207,7 @@ pub(crate) fn registration(
 }
 
 /// The canonical schema of the `execution` intrinsic.
-fn definition() -> ToolDefinition {
+pub(super) fn definition() -> ToolDefinition {
     ToolDefinition {
         id: crate::runtime::identity::ToolId::new("tool-execution"),
         name: EXECUTION_TOOL_NAME.to_owned(),

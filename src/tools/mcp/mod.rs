@@ -1278,9 +1278,24 @@ pub(crate) mod test_sync {
     struct PauseState {
         entered: bool,
         released: bool,
+        supervisor_pid: Option<u32>,
     }
 
     impl ConnectOwnershipPause {
+        pub(crate) fn record_process(&self, pid: Option<u32>) {
+            self.state
+                .lock()
+                .expect("connect pause lock")
+                .supervisor_pid = pid;
+        }
+
+        pub(crate) fn supervisor_pid(&self) -> Option<u32> {
+            self.state
+                .lock()
+                .expect("connect pause lock")
+                .supervisor_pid
+        }
+
         /// Called by the connect owner: announces physical ownership and
         /// waits for the test to release it.
         pub(crate) async fn park(&self) {
@@ -2056,6 +2071,10 @@ impl McpServerRuntime {
     /// when the owner was cancelled before the handshake completed.
     #[allow(clippy::too_many_lines)]
     pub(crate) async fn connect_owned(request: OwnedConnect<'_>) -> Result<Arc<Self>, McpError> {
+        #[cfg(test)]
+        crate::local_runtime::static_effects::observe(
+            crate::local_runtime::static_effects::Effect::Connect,
+        );
         let credentials = request.binding.credentials.clone();
         Self::connect_admitted(request)
             .await
@@ -2158,6 +2177,7 @@ impl McpServerRuntime {
                 // no retained runtime behind it.
                 #[cfg(test)]
                 if let Some(pause) = &ownership_pause {
+                    pause.record_process(process.lock().await.supervisor_child_pid);
                     pause.park().await;
                 }
                 let stdout = {

@@ -1435,6 +1435,10 @@ pub(crate) async fn run_supervised_command(
     spec: SupervisedCommandSpec,
     control: Option<RunnerTestControl>,
 ) -> Result<CapturedProcessResult, String> {
+    #[cfg(test)]
+    crate::local_runtime::static_effects::observe(
+        crate::local_runtime::static_effects::Effect::Process,
+    );
     #[cfg(not(test))]
     let _ = control;
     let (mut runner, stdout_pipe, stderr_pipe) =

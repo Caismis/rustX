@@ -475,17 +475,9 @@ async fn a_registered_workflow_rejects_the_obsolete_workspace_rustx_path() {
         workspace,
         runtime_root: root.path().join("private"),
     };
-    let dependencies = LocalRuntimeDependencies {
-        credentials: Some(Arc::new(MapCredentialEnvironment::new([(
-            KEY.to_owned(),
-            "issue83-secret".to_owned(),
-        )]))),
-        ..LocalRuntimeDependencies::default()
-    };
-    let error = LocalConversationCore::compose(&(paths).resolve(), &dependencies)
-        .await
-        .expect_err("the obsolete workspace Workflow path is not a fallback");
-    let detail = error.to_string();
+    let detail = paths.try_resolve().expect_err(
+        "static analysis rejects the obsolete workspace Workflow path without composing a runtime",
+    );
     assert!(
         detail.contains(".agents/workflows/review_pr.yaml"),
         "{detail}"

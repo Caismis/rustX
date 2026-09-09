@@ -242,7 +242,16 @@ pub(crate) fn discover_admitted_python_packages(
     Ok(discovered)
 }
 
+#[cfg(test)]
+thread_local! {
+    // The package parser is synchronous. This owner-local hook counts entry,
+    // including failures before reading bytes; it makes no cross-task claims.
+    pub(crate) static PACKAGE_PARSE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn discover_package(root: &Path, name: &str) -> Result<PythonToolPackage, PythonToolError> {
+    #[cfg(test)]
+    PACKAGE_PARSE_COUNT.with(|count| count.set(count.get() + 1));
     let invalid = |message: String| {
         PythonToolError::InvalidPackage(format!("package {name:?} ({}): {message}", root.display()))
     };
@@ -290,13 +299,30 @@ fn collect_files(root: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>, PythonToolError
         root: &Path,
         current: &Path,
         output: &mut Vec<(PathBuf, Vec<u8>)>,
+        remaining: &mut usize,
+        bytes_left: &mut usize,
+        depth: usize,
     ) -> Result<(), PythonToolError> {
+        if depth > 64 {
+            return Err(PythonToolError::InvalidPackage(
+                "package nesting exceeds 64".into(),
+            ));
+        }
         let mut entries = std::fs::read_dir(current)
             .map_err(io_error)?
+            .take(1025)
             .collect::<Result<Vec<_>, _>>()
             .map_err(io_error)?;
+        if entries.len() > 1024 {
+            return Err(PythonToolError::InvalidPackage(
+                "package directory exceeds 1024 entries".into(),
+            ));
+        }
         entries.sort_by_key(std::fs::DirEntry::file_name);
         for entry in entries {
+            *remaining = remaining.checked_sub(1).ok_or_else(|| {
+                PythonToolError::InvalidPackage("package exceeds 4096 entries".into())
+            })?;
             let path = entry.path();
             let metadata = std::fs::symlink_metadata(&path).map_err(io_error)?;
             if metadata.file_type().is_symlink() {
@@ -306,7 +332,7 @@ fn collect_files(root: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>, PythonToolError
                 )));
             }
             if metadata.is_dir() {
-                walk(root, &path, output)?;
+                walk(root, &path, output, remaining, bytes_left, depth + 1)?;
             } else if metadata.is_file() {
                 let relative = path
                     .strip_prefix(root)
@@ -319,13 +345,25 @@ fn collect_files(root: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>, PythonToolError
                         "package paths must be valid UTF-8".to_owned(),
                     ));
                 }
-                output.push((relative, std::fs::read(&path).map_err(io_error)?));
+                let bytes = crate::config_format::read_bounded(&path)
+                    .map_err(PythonToolError::InvalidPackage)?;
+                *bytes_left = bytes_left.checked_sub(bytes.len()).ok_or_else(|| {
+                    PythonToolError::InvalidPackage("package exceeds 16 MiB".into())
+                })?;
+                output.push((relative, bytes));
             }
         }
         Ok(())
     }
     let mut output = Vec::new();
-    walk(root, root, &mut output)?;
+    walk(
+        root,
+        root,
+        &mut output,
+        &mut 4096,
+        &mut (16 * 1024 * 1024),
+        0,
+    )?;
     output.sort_by(|left, right| left.0.cmp(&right.0));
     Ok(output)
 }
@@ -649,6 +687,10 @@ impl PythonToolStore {
     /// Returns [`PythonToolError::Storage`] if the store directories cannot
     /// be created.
     pub fn new(root: PathBuf) -> Result<Self, PythonToolError> {
+        #[cfg(test)]
+        crate::local_runtime::static_effects::observe(
+            crate::local_runtime::static_effects::Effect::Preparation,
+        );
         Self::establish(&root)?;
         Ok(Self {
             inner: Arc::new(PythonToolStoreInner {

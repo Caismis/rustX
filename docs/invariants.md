@@ -2,6 +2,28 @@
 
 These invariants are architectural constraints. Implementations may change; these rules should change only through an explicit architecture decision.
 
+## Configuration analysis and activation
+
+There is one JSONC parser and one prospective launch semantic path. Runtime
+admission follows static analysis; diagnostics never simulate admission with
+trust grants, credential snapshots, executors or connected-source facts.
+Static configuration checks may read bounded authorized local files but cannot
+execute, prepare, connect, resolve secrets, create Sessions, or write runtime/trust
+state. Host path discovery is not credential materialization.
+
+Initialization publishes only explicitly requested minimal user configuration and
+never overwrites existing files by default, including racing creations. Per-file
+publication does not imply a multi-file transaction.
+
+Configuration show is a redacted prospective next-launch projection from the
+ordinary launch semantics, not a current Session or attempt projection. Schemas
+describe structural authoring shape from native types; semantic admission remains
+in domain validators and the Workflow compiler.
+
+Probes disclose effects before execution, preserve runtime trust/source gates,
+and use existing process/connection cancellation and settlement owners. Cancelling
+a caller is not proof that an owned process or connection has settled.
+
 ## Native invocation ownership
 
 Source-qualified Tool selection belongs to the generic capability plane, and

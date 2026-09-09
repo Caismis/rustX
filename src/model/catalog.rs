@@ -74,6 +74,7 @@ pub struct ModelId(String);
 /// exactly the profile's configured `requestParams`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
+#[derive(schemars::JsonSchema)]
 pub struct ReasoningProfileId(String);
 
 macro_rules! catalog_identity {
@@ -137,7 +138,8 @@ catalog_identity!(ReasoningProfileId, "reasoning profile", true, false);
 /// This is the explicit model-identity domain of the runtime. Concatenated
 /// strings never travel through the runtime in its place: a reference either
 /// resolves to exactly one catalog model or it fails.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, schemars::JsonSchema)]
+#[schemars(with = "String")]
 pub struct ModelRef {
     provider: ProviderId,
     model: ModelId,
@@ -211,7 +213,8 @@ impl<'de> Deserialize<'de> for ModelRef {
 ///
 /// The syntax is exactly two forms and is never extended implicitly: a
 /// literal string, or `$ENV_VAR`.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, schemars::JsonSchema)]
+#[schemars(with = "String")]
 pub enum CredentialSource {
     /// A literal credential written into the catalog file.
     Literal(String),
@@ -346,6 +349,7 @@ impl fmt::Display for ResolvedCredential {
 /// One semantic content modality of a model capability set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum Modality {
     /// Textual content.
     Text,
@@ -365,6 +369,7 @@ pub enum Modality {
 /// capability — a raw catalog claim is never advertised.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct ModelCapabilities {
     /// The accepted input modalities.
     pub input_modalities: BTreeSet<Modality>,
@@ -422,6 +427,7 @@ impl ModelCapabilities {
 /// are mutually exclusive and both are runtime-protected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ChatMaxTokensField {
     /// The current `max_completion_tokens` field.
     #[default]
@@ -448,6 +454,7 @@ impl ChatMaxTokensField {
 /// requires the encrypted-reasoning `include` value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ResponsesStorageMode {
     /// Provider-side storage enabled (`store: true`).
     #[default]
@@ -460,6 +467,7 @@ pub enum ResponsesStorageMode {
 /// OpenAI-compatible Chat Completions dialect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ChatReasoningReplay {
     /// vLLM and `OpenRouter`'s plaintext reasoning field.
     Reasoning,
@@ -496,6 +504,7 @@ impl ChatReasoningReplay {
 /// is ever inferred from a provider name or a base URL hostname.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ChatToolProtocol {
     /// Tool calls exist only as structured `tool_calls`. Generated text is
     /// never inspected for tool-protocol markup.
@@ -525,7 +534,8 @@ impl ChatToolProtocol {
 /// plugin registry, no translator factory, and no JSON-driven
 /// transformation, and nothing here is ever inferred from a provider name or
 /// a base URL hostname.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, schemars::JsonSchema)]
+#[schemars(with = "ModelCompatDocument")]
 pub struct ModelCompat {
     /// Chat Completions: which max-token field spelling is legal.
     pub chat_max_tokens_field: ChatMaxTokensField,
@@ -590,23 +600,24 @@ impl Serialize for ModelCompat {
     }
 }
 
+#[derive(Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ModelCompatDocument {
+    #[serde(default)]
+    chat_max_tokens_field: Option<ChatMaxTokensField>,
+    #[serde(default)]
+    chat_stream_usage: Option<ChatStreamUsage>,
+    #[serde(default)]
+    chat_reasoning_replay: Option<ChatReasoningReplay>,
+    #[serde(default)]
+    chat_tool_protocol: Option<ChatToolProtocol>,
+    #[serde(default)]
+    responses_storage: Option<ResponsesStorageMode>,
+}
+
 impl<'de> Deserialize<'de> for ModelCompat {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        struct Document {
-            #[serde(default)]
-            chat_max_tokens_field: Option<ChatMaxTokensField>,
-            #[serde(default)]
-            chat_stream_usage: Option<ChatStreamUsage>,
-            #[serde(default)]
-            chat_reasoning_replay: Option<ChatReasoningReplay>,
-            #[serde(default)]
-            chat_tool_protocol: Option<ChatToolProtocol>,
-            #[serde(default)]
-            responses_storage: Option<ResponsesStorageMode>,
-        }
-        let document = Document::deserialize(deserializer)?;
+        let document = ModelCompatDocument::deserialize(deserializer)?;
         let explicit_fields = u8::from(document.chat_max_tokens_field.is_some())
             | (u8::from(document.chat_stream_usage.is_some()) << 1)
             | (u8::from(document.chat_reasoning_replay.is_some()) << 2)
@@ -659,6 +670,7 @@ impl ModelCompat {
 /// Whether a Chat Completions service supports streaming usage options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(schemars::JsonSchema)]
 pub enum ChatStreamUsage {
     /// `stream_options.include_usage` is supported and requested.
     #[default]
@@ -670,6 +682,7 @@ pub enum ChatStreamUsage {
 /// One declared reasoning profile of a model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct ReasoningProfile {
     /// Whether this profile semantically enables reasoning.
     pub enabled: bool,
@@ -684,6 +697,7 @@ pub struct ReasoningProfile {
 /// The reasoning configuration of one model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct ReasoningConfig {
     /// The profile selected when the session does not choose one.
     pub default_profile: ReasoningProfileId,
@@ -1059,6 +1073,7 @@ impl CredentialEnvironment for MapCredentialEnvironment {
 /// than silently changing runtime semantics.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct ModelCatalogDocument {
     /// The catalog schema version.
     #[serde(default = "default_schema_version")]
@@ -1076,6 +1091,7 @@ const fn default_schema_version() -> u32 {
 /// One provider entry of the catalog document.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct ProviderDocument {
     /// The mandatory explicit provider endpoint.
     pub base_url: String,
@@ -1088,6 +1104,7 @@ pub struct ProviderDocument {
 /// One model entry of the catalog document.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub struct ModelDocument {
     /// The model identity within its provider.
     pub id: String,

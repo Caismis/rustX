@@ -71,19 +71,29 @@ impl WorkflowCatalog {
         available: &crate::capabilities::AvailableToolCatalog,
         availability: &crate::capabilities::CapabilityAvailability,
     ) -> Result<(), String> {
+        self.validate_metadata(&available.definitions(), availability, |definition| {
+            available.registration(definition).map(|registration| {
+                registration.foreground() == crate::tools::deadline::ForegroundPolicy::Leaf
+            })
+        })
+    }
+
+    pub(crate) fn validate_metadata(
+        &self,
+        available: &[ToolDefinition],
+        availability: &crate::capabilities::CapabilityAvailability,
+        leaf: impl Fn(&ToolDefinition) -> Result<bool, String>,
+    ) -> Result<(), String> {
         for program in self.definitions().values() {
             for selector in &program.tools {
-                match crate::capabilities::selection::resolve_selector(
+                match crate::capabilities::selection::resolve_metadata(
                     selector,
                     available,
                     availability,
                 ) {
                     Ok(selected) => {
                         let definition = selected;
-                        if !eligible(definition)
-                            || available.registration(definition)?.foreground()
-                                != crate::tools::deadline::ForegroundPolicy::Leaf
-                        {
+                        if !eligible(definition) || !leaf(definition)? {
                             return Err(format!(
                                 "Workflow {} selects ineligible leaf {selector}",
                                 program.id()
@@ -465,6 +475,7 @@ fn bounded_status(status: &ToolExecutionStatus) -> ToolExecutionStatus {
 /// Select exactly one native content part, never provider text or log heuristics.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(schemars::JsonSchema)]
 pub enum WorkflowToolResult {
     /// The indexed part must be native structured JSON satisfying this schema.
     Json { part: usize, schema: Value },

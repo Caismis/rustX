@@ -514,20 +514,41 @@ impl SubagentResolver {
             let named = |error: SubagentResolutionError| (definition.name().clone(), error);
             validate_selectors_for_admission(definition, available_tools, availability)
                 .map_err(named)?;
-            resolve_skills(definition, skills).map_err(named)?;
-            if let Some(model) = definition.model() {
-                // Admission validates through the same freeze path an
-                // invocation takes, so a definition can never be admitted
-                // that resolution would later refuse.
-                FrozenModelSpec::freeze(models, &SessionModelConfig::of(model.clone())).map_err(
-                    |error| {
-                        named(SubagentResolutionError::UnknownModel {
-                            model: model.to_string(),
-                            detail: error.to_string(),
-                        })
-                    },
-                )?;
-            }
+            Self::validate_definition_local_references(definition, skills, &mut |model| {
+                FrozenModelSpec::freeze(models, &SessionModelConfig::of(model.clone()))
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            })
+            .map_err(named)?;
+        }
+        Ok(())
+    }
+
+    /// Validate local Skill/model references independently of physical binding.
+    pub(crate) fn validate_local_references(
+        catalog: &SubagentCatalog,
+        skills: &SkillSnapshot,
+        mut model_check: impl FnMut(&crate::model::catalog::ModelRef) -> Result<(), String>,
+    ) -> Result<(), (SubagentName, SubagentResolutionError)> {
+        for definition in catalog.definitions() {
+            let named = |error: SubagentResolutionError| (definition.name().clone(), error);
+            Self::validate_definition_local_references(definition, skills, &mut model_check)
+                .map_err(named)?;
+        }
+        Ok(())
+    }
+
+    fn validate_definition_local_references(
+        definition: &SubagentDefinition,
+        skills: &SkillSnapshot,
+        model_check: &mut impl FnMut(&crate::model::catalog::ModelRef) -> Result<(), String>,
+    ) -> Result<(), SubagentResolutionError> {
+        resolve_skills(definition, skills)?;
+        if let Some(model) = definition.model() {
+            model_check(model).map_err(|detail| SubagentResolutionError::UnknownModel {
+                model: model.to_string(),
+                detail,
+            })?;
         }
         Ok(())
     }
@@ -608,10 +629,29 @@ fn validate_selectors_for_admission(
     available: &AvailableToolCatalog,
     availability: &CapabilityAvailability,
 ) -> Result<(), SubagentResolutionError> {
+    validate_metadata_selectors(definition, &available.definitions(), availability)
+}
+
+pub(crate) fn validate_metadata_selectors(
+    definition: &SubagentDefinition,
+    available: &[crate::tools::types::ToolDefinition],
+    availability: &CapabilityAvailability,
+) -> Result<(), SubagentResolutionError> {
     for selector in definition.tools() {
-        match resolve_selector(selector, available, availability) {
-            Ok(_) | Err(SubagentResolutionError::SourceUnavailable { .. }) => {}
-            Err(error) => return Err(error),
+        match crate::capabilities::selection::resolve_metadata(selector, available, availability) {
+            Ok(selected)
+                if !selected
+                    .id
+                    .as_str()
+                    .starts_with(crate::runtime::workflow::WORKFLOW_TOOL_ID_PREFIX) => {}
+            Err(crate::capabilities::selection::ToolSelectionError::SourceUnavailable {
+                ..
+            }) => {}
+            _ => {
+                return Err(SubagentResolutionError::UnknownCapability {
+                    selector: selector.canonical(),
+                });
+            }
         }
     }
     Ok(())

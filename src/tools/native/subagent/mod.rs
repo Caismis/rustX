@@ -136,7 +136,7 @@ pub(super) fn registration(
 /// An empty catalog produces no definition: capability composition must never
 /// expose a model-facing Tool which every possible invocation is guaranteed
 /// to reject.
-fn definition(catalog: &SubagentCatalog) -> Option<ToolDefinition> {
+pub(super) fn definition(catalog: &SubagentCatalog) -> Option<ToolDefinition> {
     if catalog.is_empty() {
         return None;
     }

@@ -19,6 +19,36 @@
 use jsonc_parser::ParseOptions;
 use jsonc_parser::errors::ParseErrorKind;
 use serde::de::DeserializeOwned;
+use std::io::Read;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::Path;
+
+const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
+pub(crate) fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
+    if !std::fs::metadata(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?
+        .is_file()
+    {
+        return Err(format!("{} must be a regular file", path.display()));
+    }
+    // A regular file replaced by a FIFO between metadata and open must not block.
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
+        return Err(format!("{} must be a regular file", path.display()));
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_CONFIG_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_CONFIG_BYTES {
+        return Err(format!("{} exceeds 1 MiB", path.display()));
+    }
+    Ok(bytes)
+}
 
 /// The accepted configuration dialect: JSON, comments, and trailing commas.
 const OPTIONS: ParseOptions = ParseOptions {
@@ -42,10 +72,57 @@ const OPTIONS: ParseOptions = ParseOptions {
 /// message, because the reported position of a schema failure is the
 /// enclosing container rather than the offending member.
 pub fn parse<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, String> {
-    let text = std::str::from_utf8(bytes).map_err(|error| format!("not valid UTF-8: {error}"))?;
+    parse_detailed(bytes).map_err(|failure| failure.detail)
+}
+
+/// Parser-owned position and classification; callers never parse an error string.
+pub struct ParseFailure {
+    pub line: Option<usize>,
+    pub column: Option<usize>,
+    pub syntax: bool,
+    detail: String,
+}
+
+impl ParseFailure {
+    pub(crate) fn into_detail(self) -> String {
+        self.detail
+    }
+}
+
+impl std::fmt::Debug for ParseFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParseFailure")
+            .field("line", &self.line)
+            .field("column", &self.column)
+            .field("syntax", &self.syntax)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The same JSONC deserializer with structured, safe parser context.
+///
+/// # Errors
+/// Returns syntax location when reliable, otherwise a shape failure.
+pub fn parse_detailed<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, ParseFailure> {
+    let text = std::str::from_utf8(bytes).map_err(|error| ParseFailure {
+        line: None,
+        column: None,
+        syntax: true,
+        detail: format!("not valid UTF-8: {error}"),
+    })?;
     jsonc_parser::parse_to_serde_value(text, &OPTIONS).map_err(|error| match error.kind() {
-        ParseErrorKind::Custom(message) => message.clone(),
-        _ => error.to_string(),
+        ParseErrorKind::Custom(message) => ParseFailure {
+            line: None,
+            column: None,
+            syntax: false,
+            detail: message.clone(),
+        },
+        _ => ParseFailure {
+            line: Some(error.line_display()),
+            column: Some(error.column_display()),
+            syntax: true,
+            detail: error.to_string(),
+        },
     })
 }
 

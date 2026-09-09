@@ -77,14 +77,11 @@ pub(crate) fn validate_names(names: &[String], label: &str) -> Result<(), String
 }
 
 fn resolve_name<'a>(
-    eligible: &[&'a ToolRegistration],
+    eligible: &[&'a ToolDefinition],
     name: &str,
     label: &str,
-) -> Result<&'a ToolRegistration, String> {
-    let mut matches = eligible
-        .iter()
-        .copied()
-        .filter(|entry| entry.definition.name == name);
+) -> Result<&'a ToolDefinition, String> {
+    let mut matches = eligible.iter().copied().filter(|entry| entry.name == name);
     let first = matches
         .next()
         .ok_or_else(|| format!("Tool {label} entry {name:?} is unknown or ineligible"))?;
@@ -190,12 +187,34 @@ pub(crate) fn select_tools(
             .map_err(|error| format!("available Tool selection is invalid: {error}"))?;
     }
     let available_catalog = AvailableToolCatalog::new(available.to_vec());
+    let definitions = available
+        .iter()
+        .map(|registration| &registration.definition)
+        .collect::<Vec<_>>();
+    let selected = select_definitions(&definitions, policy)?;
+    let registrations = selected.into_iter().map(|definition| {
+        available
+            .iter()
+            .find(|registration| std::ptr::eq(&raw const registration.definition, definition))
+            .expect("selected available definition")
+            .clone()
+    });
+    let active = ToolRegistry::from_registrations(registrations)
+        .map_err(|error| format!("active Tool selection is invalid: {error}"))?;
+    Ok((available_catalog, active))
+}
+
+/// Apply the same exact selection rules to known metadata, without executors.
+pub(crate) fn select_definitions<'a>(
+    available: &[&'a ToolDefinition],
+    policy: &ToolActivationPolicy,
+) -> Result<Vec<&'a ToolDefinition>, String> {
     policy.validate()?;
     let eligible = available
         .iter()
+        .copied()
         .filter(|registration| {
-            !policy.no_builtin_tools
-                || !matches!(registration.definition.origin, ToolOrigin::Builtin)
+            !policy.no_builtin_tools || !matches!(registration.origin, ToolOrigin::Builtin)
         })
         .collect::<Vec<_>>();
 
@@ -211,11 +230,11 @@ pub(crate) fn select_tools(
             .iter()
             .copied()
             .filter(|registration| {
-                !matches!(registration.definition.origin, ToolOrigin::Builtin)
+                !matches!(registration.origin, ToolOrigin::Builtin)
                     || policy
                         .default_tools
                         .as_ref()
-                        .is_none_or(|names| names.contains(&registration.definition.name))
+                        .is_none_or(|names| names.contains(&registration.name))
             })
             .collect::<Vec<_>>()
     };
@@ -226,13 +245,11 @@ pub(crate) fn select_tools(
     let excluded = policy
         .exclude_tools
         .iter()
-        .map(|name| resolve_name(&eligible, name, "exclusion").map(|entry| &entry.definition.id))
+        .map(|name| resolve_name(&eligible, name, "exclusion").map(|entry| &entry.id))
         .collect::<Result<BTreeSet<_>, _>>()?;
-    selected.retain(|registration| !excluded.contains(&registration.definition.id));
+    selected.retain(|registration| !excluded.contains(&registration.id));
 
-    let active = ToolRegistry::from_registrations(selected.into_iter().cloned())
-        .map_err(|error| format!("active Tool selection is invalid: {error}"))?;
-    Ok((available_catalog, active))
+    Ok(selected)
 }
 
 #[cfg(test)]

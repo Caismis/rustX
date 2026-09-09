@@ -1,10 +1,15 @@
 # Launch configuration and project trust
 
+The [configuration command contract](configuration-diagnostics.md) defines
+`rustx init`, offline `config check`, prospective `config show --sources`, and
+explicit `doctor --probe`, including output, exit codes and effect guarantees.
+
 `local_runtime::launch::resolve` is the only ordinary launch-resolution boundary.
-It takes `LaunchRequest` and a captured `HostEnvironment`, finds bounded document
-slots, checks their syntax and authority, checks host trust, merges explicitly
-present fields, applies domain defaults, validates launch semantics, and returns
-`ResolvedLaunch` with safe field provenance. Native composition consumes that
+It takes `LaunchRequest` and path-only `HostEnvironment`. Its shared `analyze`
+phase finds bounded document slots, checks syntax/authority, merges explicitly
+present fields, applies domain defaults, validates launch semantics and compiles
+authorized local resources. Runtime admission then requires real host trust before
+capturing credentials and returning `ResolvedLaunch` with safe provenance. Native composition consumes that
 value; it does not reopen model/settings files to resolve startup.
 
 Provider adapters still translate protocols. The composition owner constructs
@@ -27,8 +32,9 @@ Both platforms use the same convention:
 | Project settings | Exactly `<resolved workspace>/rustx.jsonc`, optionally replaced by `--config` |
 | Automatic Skills | `<user configuration directory>/skills`, then `<workspace>/.agents/skills` |
 
-HOME and supplied XDG paths must be absolute. Environment is captured once;
-tests inject snapshots without modifying process-global environment. Missing
+HOME and supplied XDG paths must be absolute. Path discovery does not capture
+credential values. Runtime/probe admission captures credentials through the
+credential owner; tests inject snapshots without modifying process-global environment. Missing
 optional settings are empty layers. A discovered malformed or unknown-field
 document fails. An explicitly selected missing `--config` fails. Configuration
 and catalog reads are limited to 1 MiB each, and retain strict JSONC syntax.
@@ -190,10 +196,12 @@ Instructions from unrelated ancestor directories are not activated.
 
 ## Minimal start and defaults
 
-Create the host `models.jsonc` manually with an explicit provider endpoint,
-credential source, protocol, context window, output limit and capabilities
-(see the [catalog example](../examples/local-runtime/models.jsonc)). Then put
-only this in user `settings.jsonc`, using your declared model reference:
+Use `rustx init` with explicit model/provider declarations (see the
+[minimal initialization contract](configuration-diagnostics.md#minimal-initialization)).
+It creates only user `models.jsonc` and `settings.jsonc`, with no project file,
+implicit capability guesses or raw keys. Manual authoring is also supported;
+the [minimal catalog](../examples/local-runtime/minimal/models.jsonc) shows the
+required declarations. User `settings.jsonc` needs only the selected reference:
 
 ```jsonc
 {"model": {"model": "example/demo-model"}}

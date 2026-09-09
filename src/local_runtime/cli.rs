@@ -48,6 +48,177 @@ use super::composition::StartupSession;
 use super::launch::{LaunchRequest, TrustAction};
 use super::session::{SessionId, SessionNodeId};
 
+const LAUNCH_VALUE_FLAGS: &[&str] = &[
+    "--model",
+    "--trust",
+    "--models",
+    "--config",
+    "--workspace",
+    "--runtime-root",
+    "--skill",
+    "--tools",
+    "--exclude-tools",
+    "--session",
+    "--node",
+    "--name",
+    "--inspect-conversation",
+];
+
+pub const CONFIG_USAGE: &str = "Configuration commands:\n\
+  rustx init --template openai-chat|openai-responses|anthropic|custom\n\
+    --provider <id> --endpoint <url> --credential-env <NAME>\n\
+    --model-id <id> --context-window <tokens> --max-output <tokens>\n\
+    --tool-calls true|false --reasoning true|false [--compat <json-object>] [--json]\n\
+  custom replaces model flags with --model-document <path>.\n\
+  OpenAI templates require explicit --compat; no compatibility is inferred.\n\
+  rustx config check [launch selection/path flags] [--json]\n\
+  rustx config show --sources [launch selection/path flags] [--json]\n\
+  rustx doctor --probe [--prepare] [launch selection/path flags] [--json]\n\
+Diagnostic commands reject Session and trust-change flags.\n\
+Exit: 0 initialization/help complete; 1 probe or output failure; 2 invalid;\n\
+3 incomplete or unresolved readiness. Check/show never resolve credentials,\n\
+spawn, connect, prepare environments, or create Sessions/state.\n\
+Show describes the prospective next launch. Doctor prints an effect plan before\n\
+effects; --prepare explicitly permits managed Python preparation.\n\
+Init creates user models.jsonc and settings.jsonc only, never overwrites files,\n\
+and never grants project trust. Project rustx.jsonc remains optional.";
+
+/// The finite Rust-owned command grammar. Runtime flags have one parser.
+#[derive(Debug)]
+pub enum Command {
+    Launch(LaunchRequest),
+    Help,
+    Check {
+        request: LaunchRequest,
+        json: bool,
+    },
+    Show {
+        request: LaunchRequest,
+        json: bool,
+    },
+    Doctor {
+        request: LaunchRequest,
+        json: bool,
+        prepare: bool,
+    },
+    Init {
+        arguments: Vec<String>,
+        json: bool,
+    },
+}
+
+impl Command {
+    pub(super) const fn json_output(&self) -> bool {
+        match self {
+            Self::Check { json, .. }
+            | Self::Show { json, .. }
+            | Self::Doctor { json, .. }
+            | Self::Init { json, .. } => *json,
+            Self::Launch(_) | Self::Help => false,
+        }
+    }
+}
+
+pub(super) fn diagnostic_json_requested(arguments: &[String]) -> bool {
+    matches!(
+        arguments.first().map(String::as_str),
+        Some("config" | "init" | "doctor")
+    ) && remove_switch(&mut arguments.to_vec(), "--json").unwrap_or(true)
+}
+
+/// Route product commands before runtime admission.
+///
+/// # Errors
+/// Rejects unknown commands, incompatible flags, and malformed launch intent.
+pub fn parse_command(
+    arguments: impl IntoIterator<Item = String>,
+) -> Result<Command, ArgumentError> {
+    let mut arguments: Vec<_> = arguments.into_iter().collect();
+    if arguments == ["--help"] {
+        return Ok(Command::Help);
+    }
+    let Some(first) = arguments.first().cloned() else {
+        return Ok(Command::Launch(LaunchRequest::default()));
+    };
+    if !matches!(first.as_str(), "init" | "config" | "doctor") {
+        return parse_arguments(arguments).map(Command::Launch);
+    }
+    arguments.remove(0);
+    let operation = if first == "config" {
+        if arguments.is_empty() {
+            return Err(ArgumentError::MissingValue {
+                flag: "config".into(),
+            });
+        }
+        let operation = arguments.remove(0);
+        if !matches!(operation.as_str(), "check" | "show") {
+            return Err(ArgumentError::UnknownFlag { flag: operation });
+        }
+        operation
+    } else {
+        first
+    };
+    let json = remove_switch(&mut arguments, "--json")?;
+    if operation == "init" {
+        return Ok(Command::Init { arguments, json });
+    }
+    let prepare = if operation == "doctor" {
+        if !remove_switch(&mut arguments, "--probe")? {
+            return Err(ArgumentError::MissingValue {
+                flag: "doctor --probe".into(),
+            });
+        }
+        remove_switch(&mut arguments, "--prepare")?
+    } else {
+        false
+    };
+    if operation == "show" && !remove_switch(&mut arguments, "--sources")? {
+        return Err(ArgumentError::MissingValue {
+            flag: "config show --sources".into(),
+        });
+    }
+    let request = parse_arguments(arguments)?;
+    if request.trust.is_some()
+        || request.startup_session != StartupSession::Empty
+        || request.session_name.is_some()
+    {
+        return Err(ArgumentError::InvalidValue {
+            flag: "diagnostic commands do not accept trust or Session operations".into(),
+        });
+    }
+    match operation.as_str() {
+        "check" => Ok(Command::Check { request, json }),
+        "show" => Ok(Command::Show { request, json }),
+        "doctor" => Ok(Command::Doctor {
+            request,
+            json,
+            prepare,
+        }),
+        _ => Err(ArgumentError::UnknownFlag { flag: operation }),
+    }
+}
+
+fn remove_switch(arguments: &mut Vec<String>, flag: &str) -> Result<bool, ArgumentError> {
+    let mut count = 0;
+    let mut index = 0;
+    while index < arguments.len() {
+        if arguments[index] == flag {
+            count += 1;
+            arguments.remove(index);
+        } else if LAUNCH_VALUE_FLAGS.contains(&arguments[index].as_str())
+            || super::initialization::VALUE_FLAGS.contains(&arguments[index].as_str())
+        {
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+    if count > 1 {
+        return Err(ArgumentError::Repeated { flag: flag.into() });
+    }
+    Ok(count == 1)
+}
+
 /// The usage text printed to **stderr** for an argument failure.
 pub const USAGE: &str = "usage: rustx [--models <models.jsonc>] [--config <rustx.jsonc>] \
                          [--workspace <dir>] [--runtime-root <dir>] \
@@ -96,19 +267,7 @@ pub fn parse_arguments(
     let mut arguments = arguments.into_iter();
     while let Some(flag) = arguments.next() {
         match flag.as_str() {
-            "--model"
-            | "--trust"
-            | "--models"
-            | "--config"
-            | "--workspace"
-            | "--runtime-root"
-            | "--skill"
-            | "--tools"
-            | "--exclude-tools"
-            | "--session"
-            | "--node"
-            | "--name"
-            | "--inspect-conversation" => {
+            value_flag if LAUNCH_VALUE_FLAGS.contains(&value_flag) => {
                 let Some(value) = arguments.next() else {
                     return Err(ArgumentError::MissingValue { flag });
                 };
@@ -388,6 +547,60 @@ impl std::error::Error for ArgumentError {}
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cfg235_finite_command_grammar_and_switch_values() {
+        use super::{Command, parse_command};
+        let parse = |flags: &[&str]| parse_command(flags.iter().map(ToString::to_string));
+        assert!(matches!(parse(&["--help"]).unwrap(), Command::Help));
+        assert!(matches!(
+            parse(&["config", "check", "--json"]).unwrap(),
+            Command::Check { json: true, .. }
+        ));
+        assert!(matches!(
+            parse(&["config", "show", "--sources"]).unwrap(),
+            Command::Show { json: false, .. }
+        ));
+        assert!(matches!(
+            parse(&["doctor", "--probe", "--prepare", "--json"]).unwrap(),
+            Command::Doctor {
+                prepare: true,
+                json: true,
+                ..
+            }
+        ));
+        for flags in [
+            vec!["config"],
+            vec!["config", "init"],
+            vec!["config", "show"],
+            vec!["doctor"],
+            vec!["config", "check", "--prepare"],
+            vec!["config", "check", "--trust", "grant"],
+            vec!["config", "check", "--continue"],
+            vec!["config", "check", "--name", "x"],
+            vec!["config", "check", "--json", "--json"],
+            vec!["doctor", "--probe", "--probe"],
+        ] {
+            assert!(parse(&flags).is_err(), "{flags:?}");
+        }
+        let Command::Check { request, json } =
+            parse(&["config", "check", "--workspace", "--json"]).unwrap()
+        else {
+            panic!("check")
+        };
+        assert!(!json);
+        assert_eq!(request.workspace, Some("--json".into()));
+        for phrase in [
+            "0 initialization",
+            "1 probe",
+            "2 invalid",
+            "3 incomplete",
+            "prospective next launch",
+            "never overwrites",
+        ] {
+            assert!(super::CONFIG_USAGE.contains(phrase));
+        }
+    }
+
     use super::{ArgumentError, SessionId, SessionNodeId, StartupSession, parse_arguments};
 
     fn args(values: &[&str]) -> Vec<String> {

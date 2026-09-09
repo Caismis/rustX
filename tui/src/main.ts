@@ -41,6 +41,7 @@ import { RuntimeClientAttachment } from "./runtime/attachment.ts";
 import { RustxTuiApp, type RuntimeAttachmentHandle } from "./ui/app.ts";
 import type { TuiArguments } from "./cli.ts";
 import type { RuntimeStartupOptions } from "./runtime/child-process.ts";
+import { configurationCommand, forwardConfigurationCommand } from "./configuration-command.ts";
 
 async function startRuntime(
   parsed: TuiArguments,
@@ -76,6 +77,8 @@ async function startRuntime(
 }
 
 async function main(argv: readonly string[]): Promise<number> {
+  const configuration = configurationCommand(argv);
+  if (configuration !== undefined) return forwardConfigurationCommand(configuration);
   let parsed;
   try {
     parsed = parseArguments(argv);

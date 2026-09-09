@@ -15,6 +15,7 @@ macro_rules! id_type {
         $(#[$doc])*
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         #[serde(transparent)]
+        #[derive(schemars::JsonSchema)]
         pub struct $name(String);
 
         impl $name {
