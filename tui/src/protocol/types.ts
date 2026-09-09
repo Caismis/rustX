@@ -1150,6 +1150,7 @@ export type CapabilitySourceDescriptor = { type: "mcp"; server_id: McpServerId }
 /** The availability of one optional capability source. */
 export type CapabilitySourceStateView =
   | { type: "inactive"; activation: "unconfigured" | "disabled" | "enabled" | "untrusted" }
+  /** Prospective coordinator state before first preparation, not writable intent. */
   | { type: "unprepared" }
   | { type: "ready" }
   | { type: "unavailable"; reason: string };

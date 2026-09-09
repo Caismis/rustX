@@ -64,6 +64,37 @@ impl Fixture {
 }
 
 #[test]
+fn cfg233_configuration_accepts_only_declarative_python_enablement() {
+    for project_layer in [false, true] {
+        for value in ["enabled", "disabled", "untrusted", "unconfigured"] {
+            let f = Fixture::new();
+            let mut document = json!({"pythonSources":{"python:x":value}});
+            if project_layer {
+                f.project(document);
+            } else {
+                document["model"] = json!({"model":"host/one"});
+                f.user(document);
+            }
+            let result = resolve(&f.request, &f.host);
+            assert_eq!(
+                result.is_ok(),
+                matches!(value, "enabled" | "disabled"),
+                "{value}, project={project_layer}: {result:?}"
+            );
+        }
+    }
+    let f = Fixture::new();
+    f.project(json!({"pythonSources":{"python:x":"enabled"}}));
+    f.trust(TrustAction::Revoke);
+    assert!(
+        resolve(&f.request, &f.host)
+            .unwrap_err()
+            .contains("not trusted"),
+        "CFG-01 rejects before a running coordinator could project Untrusted"
+    );
+}
+
+#[test]
 fn cfg233_whole_source_replacement_never_rebinds_host_credentials() {
     let mut f = Fixture::new();
     f.host.credentials = crate::credentials::CredentialSnapshot::new([(
@@ -167,6 +198,48 @@ async fn cfg233_enabled_missing_credentials_and_connection_failures_are_source_l
 }
 
 #[tokio::test]
+async fn cfg233_missing_declared_python_is_visible_in_composed_source_status() {
+    let f = Fixture::new();
+    f.project(json!({"pythonSources":{"python:missing":"enabled", "python:optional":"disabled"}}));
+    let launch = f.resolve();
+    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+        .await
+        .unwrap();
+    let sources = product.runtime().capability().availability();
+    assert!(matches!(
+        sources[&CapabilitySourceId::Mcp(crate::runtime::identity::McpServerId::new(
+            "python:missing"
+        ))],
+        CapabilitySourceState::Unavailable { .. }
+    ));
+    assert_eq!(
+        sources[&CapabilitySourceId::Mcp(crate::runtime::identity::McpServerId::new(
+            "python:optional"
+        ))],
+        CapabilitySourceState::Inactive {
+            activation: crate::capabilities::activation::SourceActivation::Disabled
+        }
+    );
+    let response = product.endpoint().handle_request(
+        crate::runtime_client::RuntimeClientRequest::Initialize {
+            id: crate::runtime_client::RequestId::new(1),
+            protocol_version: crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION,
+        },
+    );
+    let payload = serde_json::to_string(&response).unwrap();
+    assert!(payload.contains("python:missing") && payload.contains("not discovered"));
+    assert!(!f.host.launch_directory.join(".agents/tools").exists());
+    assert!(
+        !launch
+            .environment_store_root()
+            .read_dir()
+            .unwrap()
+            .any(|entry| entry.unwrap().path().join("python-tools").exists())
+    );
+    product.runtime().shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn cfg233_native_composition_keeps_disabled_and_discovered_resources_inert() {
     let mut f = Fixture::new();
     f.request.no_tools = true;
@@ -220,7 +293,10 @@ async fn cfg233_shared_connect_gate_rejects_all_inert_states_without_spawn_or_ne
     let workspace = crate::tools::Workspace::new(&launch.workspace).unwrap();
     for decision in [
         SourceActivation::Disabled,
-        SourceActivation::Untrusted,
+        SourceActivation::evaluate(
+            Some(crate::capabilities::activation::SourceEnablement::Enabled),
+            false,
+        ),
         SourceActivation::Unconfigured,
     ] {
         for (id, mut binding) in launch.config.mcp_bindings().unwrap() {

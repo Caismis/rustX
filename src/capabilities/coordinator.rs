@@ -509,15 +509,18 @@ impl CapabilityCoordinator {
         let mcp_servers = config.mcp_servers;
         let initial_availability = mcp_servers
             .iter()
-            .map(|(id, binding)| {
-                let state = if binding.activation.admit().is_ok() {
-                    CapabilitySourceState::Unprepared
-                } else {
-                    CapabilitySourceState::Inactive {
-                        activation: binding.activation,
-                    }
-                };
-                (CapabilitySourceId::Mcp(id.clone()), state)
+            .map(|(id, binding)| (id, binding.activation))
+            .chain(
+                config
+                    .python_sources
+                    .iter()
+                    .map(|(id, activation)| (id, *activation)),
+            )
+            .map(|(id, activation)| {
+                (
+                    CapabilitySourceId::Mcp(id.clone()),
+                    CapabilitySourceState::before_preparation(activation),
+                )
             })
             .collect();
         let tool_activation = config.tool_activation;
@@ -988,6 +991,21 @@ impl CapabilityCoordinator {
         )>,
         CapabilityPreparationError,
     > {
+        // Establish every declaration before walking directories. Discovery
+        // replaces the prospective missing state only for identities it finds;
+        // absent declarations therefore cannot silently vanish from status.
+        for (id, decision) in activation {
+            let state = if decision.admit().is_ok() {
+                CapabilitySourceState::unavailable(format!(
+                    "{id}: configured managed Python source was not discovered; create .agents/tools/<folder> or disable this source"
+                ))
+            } else {
+                CapabilitySourceState::Inactive {
+                    activation: *decision,
+                }
+            };
+            availability.insert(CapabilitySourceId::Mcp(id.clone()), state);
+        }
         let discovered =
             crate::tools::python::discover_admitted_python_packages(&self.inner.workspace, |id| {
                 let decision = activation.get(id).copied().unwrap_or_default();
@@ -1000,6 +1018,10 @@ impl CapabilityCoordinator {
                     );
                     false
                 } else {
+                    availability.insert(
+                        CapabilitySourceId::Mcp(id.clone()),
+                        CapabilitySourceState::Unprepared,
+                    );
                     true
                 }
             })

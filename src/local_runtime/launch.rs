@@ -926,7 +926,7 @@ partial!(PartialRuntime {
     agent_status: crate::context::AgentStatusConfig, context: PartialContext,
     model_timeout_policy: PartialTimeout, tool_deadline_policy: PartialToolDeadline,
     mcp_servers: BTreeMap<crate::runtime::identity::McpServerId, super::config::McpServerDocument>,
-    python_sources: BTreeMap<crate::runtime::identity::McpServerId, crate::capabilities::activation::SourceActivation>,
+    python_sources: BTreeMap<crate::runtime::identity::McpServerId, crate::capabilities::activation::SourceEnablement>,
     mcp_tool_policies: BTreeMap<crate::runtime::identity::McpServerId, super::config::InvocationPolicyDocument>,
     native_tools: super::config::NativeToolPoliciesDocument, environment: BTreeMap<String, String>,
     default_tools: Vec<String>, skills: Vec<PathBuf>, subagents: PartialSubagents, workflows: PartialWorkflows,

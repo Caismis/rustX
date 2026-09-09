@@ -8497,10 +8497,18 @@ the native freeze. Native ask_user is workspace-independent under WorkspaceUse:
 it never holds a CandidateScope borrow while waiting.
 ## External source activation and credential authority (CFG-02)
 
+Configuration owns only enabled/disabled intent, not effective host states.
+The host derives activation after trust/resource authority evaluation. CFG-01
+rejects untrusted local launches before a coordinator is composed. Declared
+managed Python identities are included in prospective availability even when
+absent; bounded discovery diagnoses missing enabled resources without preparation.
+
 External sources follow inert discovery -> host trust/activation -> frozen
 credential resolution -> existing preparation/connection -> availability ->
 domain admission -> exposure. A Tool selector never grants source activation.
 The coordinator admits preparation; the shared MCP connection owner enforces
 frozen admission on startup/child/reconnect paths. Generation retirement closes
 future reconnect admission but preserves admitted leases and terminal ownership.
+Every admitted connection generation reaches the same service constructor,
+which disables rmcp response caching before semantic operations (PR #244).
 See [the complete source contract](source-activation.md).

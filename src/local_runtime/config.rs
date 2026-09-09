@@ -81,7 +81,7 @@ pub struct CurrentRuntimeConfig {
     pub mcp_servers: BTreeMap<McpServerId, McpServerDocument>,
     /// Explicit managed Python source decisions keyed by `python:<folder>`.
     #[serde(default)]
-    pub python_sources: BTreeMap<McpServerId, crate::capabilities::activation::SourceActivation>,
+    pub python_sources: BTreeMap<McpServerId, crate::capabilities::activation::SourceEnablement>,
     /// The host-owned per-server tool invocation policy overlay; forbidden in project layers.
     ///
     /// Deliberately not part of `mcpServers`: an `mcpServers` entry must stay
@@ -463,6 +463,25 @@ fn default_agent_id() -> AgentId {
 }
 
 impl CurrentRuntimeConfig {
+    /// Normalize source intent after the launch resolver has accepted project
+    /// trust and resource authority. No configuration can author host-only states.
+    #[must_use]
+    pub fn python_activations(
+        &self,
+    ) -> BTreeMap<McpServerId, crate::capabilities::activation::SourceActivation> {
+        self.python_sources
+            .iter()
+            .map(|(id, intent)| {
+                (
+                    id.clone(),
+                    crate::capabilities::activation::SourceActivation::evaluate(
+                        Some(*intent),
+                        true,
+                    ),
+                )
+            })
+            .collect()
+    }
     /// Parses and validates current runtime configuration from JSONC bytes.
     ///
     /// The document is [JSONC](crate::config_format): JSON plus comments and
@@ -1078,12 +1097,17 @@ impl McpServerDocument {
     /// Normalize explicit presence without treating discovery as enablement.
     #[must_use]
     pub fn activation(&self) -> crate::capabilities::activation::SourceActivation {
-        use crate::capabilities::activation::SourceActivation;
-        match self.enabled {
-            Some(true) => SourceActivation::Enabled,
-            Some(false) => SourceActivation::Disabled,
-            None => SourceActivation::Unconfigured,
-        }
+        use crate::capabilities::activation::{SourceActivation, SourceEnablement};
+        SourceActivation::evaluate(
+            self.enabled.map(|enabled| {
+                if enabled {
+                    SourceEnablement::Enabled
+                } else {
+                    SourceEnablement::Disabled
+                }
+            }),
+            true,
+        )
     }
     /// The runtime transport this entry normalizes to.
     ///

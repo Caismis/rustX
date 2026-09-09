@@ -7455,6 +7455,10 @@ Clearing human acceptance removes its exact-candidate constraint, not Tool/works
 An Agent compares native admitted and post-node candidate identities. A -> A emits Unchanged; A -> B emits Cleared even under local acceptance None. The effect survives nested joins, preventing a sibling Replaced(A) from surviving mutation. Agent execution/write capability is not itself a mutation fact.
 ## CFG-02 external sources
 
+- Writable enablement is only enabled/disabled. Host evaluation derives
+  effective activation; unconfigured/untrusted are never configuration input.
+- Every declared Python identity has availability, including missing folders.
+  Missing enabled sources are diagnosed without probes or package-state creation.
 - Discovered, enabled, available, admitted and model-visible are distinct.
 - Disabled/untrusted sources perform zero preparation, probes, installation,
   environment creation, process starts, connection or recovery admission.
@@ -7464,6 +7468,9 @@ An Agent compares native admitted and post-node candidate identities. A -> A emi
   normal projections never serialize resolved bytes or sensitive literals.
 - Retirement closes future reconnect admission, preserving already admitted
   calls and existing generation lease/settlement ownership.
+- Every admitted initial/replacement MCP generation uses the single service
+  constructor with SDK response caching disabled; retirement never bypasses or
+  replaces the committed capability snapshot's semantic cache authority.
 
 The [source activation contract](source-activation.md) specifies configuration,
 ownership frontiers, diagnostics, and native-only startup.

@@ -352,7 +352,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
             .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
             let candidate = capability
                 .prepare_candidate_with_inputs(CapabilityResourceInputs {
-                    python_sources: config.python_sources.clone(),
+                    python_sources: config.python_activations(),
                     base_tool_registry: Arc::new(registry),
                     tool_activation: ToolActivationPolicy {
                         default_tools: Some(default_tools),
@@ -1300,7 +1300,7 @@ impl LocalConversationCore {
         // coordinator receives the activation policy
         // and applies it to the available capability registrations.
         let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
-            python_sources: runtime_config.python_sources.clone(),
+            python_sources: runtime_config.python_activations(),
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: Arc::new(base_registry),

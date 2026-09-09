@@ -1077,7 +1077,8 @@ pub enum CapabilitySourceStateView {
         /// Source activation decision, containing no credential material.
         activation: crate::capabilities::activation::SourceActivation,
     },
-    /// Enabled source not yet prepared.
+    /// Prospective coordinator state before first preparation. Normal Session
+    /// composition completes preparation before publishing this projection.
     Unprepared,
     /// The source initialized; its capabilities are usable.
     Ready,

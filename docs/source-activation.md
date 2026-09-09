@@ -45,13 +45,38 @@ are a named map, `pythonSources`, keyed by exact synthesized source identity:
 }
 ```
 
-An absent Python identity is `unconfigured`. The typed decisions also represent
-`unconfigured` and `untrusted` explicitly; neither grants activation. A newly
+Configuration accepts only `enabled` and `disabled` for Python identities;
+`unconfigured` and `untrusted` are rejected, not normalized. Declarative
+enablement is distinct from effective host-owned activation. An absent Python
+identity derives `unconfigured`; an explicit disable derives `disabled`; an
+enable request derives `enabled` only with accepted host trust/resource authority,
+otherwise `untrusted`. Neither discovery nor capability references alter this
+calculation. A newly
 discovered folder therefore cannot trigger a Python import, package manager
 probe, `uv`, installation, synchronization, environment creation, or MCP spawn.
 Inert Python discovery reads at most 1024 immediate directory entries and does
 not inspect package contents until admission. Enabled package discovery and
 preparation continue through the existing managed-package owner.
+
+Declared identities remain observable even when no corresponding folder exists:
+
+| Declaration / authority | Discovery | Source state after preparation |
+|---|---|---|
+| Enabled, accepted | Present | Ready or unavailable with preparation reason |
+| Enabled, accepted | Missing | Unavailable: configured managed Python source was not discovered |
+| Disabled | Present or missing | Inactive(disabled) |
+| No declaration | Present | Inactive(unconfigured) |
+| Enabled, rejected | Either | Inactive(untrusted) at a host source-evaluation boundary |
+
+The local CFG-01 launch resolver rejects an untrusted project **before runtime
+composition**; it does not publish a running untrusted Session. `Untrusted` is a
+host evaluation result, never document input or a synthetic local launch state.
+The reusable coordinator can retain a host-rejected source as inert status.
+Missing-source diagnostics use only bounded directory discovery: they do not
+open Python storage, probe Python/uv, create package state, or spawn processes.
+Before the first preparation, the coordinator's prospective availability reports
+declared enabled sources as `unprepared` and disabled sources as inactive.
+Normal Session composition waits for that preparation before publication.
 
 ## Trust, layers, and replacement
 
@@ -166,6 +191,12 @@ old healthy connection may finish admitted work, but a stale recovery task may
 not reopen a retired source. New admission uses the published activation state.
 Trust and provider catalog remain launch-scoped; no generic hot activation or
 new recovery supervisor is introduced.
+
+Every initial and replacement MCP generation reaches the same native service
+construction seam, where SDK response caching is disabled before semantic
+operations. Positive `ttlMs` cannot answer a refresh from cache, nor can an error
+be converted into stale cached success. The committed rustX capability snapshot
+remains the only semantic capability cache (PR #244).
 
 Runtime Client protocol 23 projects inactive decisions (`disabled`,
 `unconfigured`, `untrusted`), enabled/unprepared, preparation failure
