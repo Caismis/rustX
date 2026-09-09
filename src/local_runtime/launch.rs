@@ -178,6 +178,8 @@ pub struct ResolvedLaunch {
 /// no credential snapshot. Only runtime admission can produce a resolved launch.
 #[derive(Clone)]
 pub struct ProspectiveLaunch {
+    pub(crate) python_local_status:
+        BTreeMap<crate::runtime::identity::McpServerId, PythonLocalStatus>,
     pub(crate) trusted: bool,
     pub(crate) workflows: crate::runtime::workflow::WorkflowCatalog,
     pub(crate) subagents: crate::runtime::subagent::SubagentCatalog,
@@ -198,6 +200,15 @@ pub struct ProspectiveLaunch {
     model_override: Option<String>,
     /// Project-origin paths retain their authority even after becoming absolute.
     project_resources: Vec<PathBuf>,
+}
+
+/// Inert package validation facts, independent of activation and MCP readiness.
+#[derive(Debug, Clone, Copy, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PythonLocalStatus {
+    Valid,
+    Missing,
+    Invalid,
 }
 
 impl ProspectiveLaunch {
@@ -845,19 +856,35 @@ pub fn analyze(
             SourceActivation::evaluate(Some(*intent), trusted),
         );
     }
+    let mut python_local_status = BTreeMap::new();
+    for (id, activation) in &source_activations {
+        if config.python_sources.contains_key(id) && *activation == SourceActivation::Enabled {
+            python_local_status.insert(id.clone(), PythonLocalStatus::Missing);
+        }
+    }
     if trusted {
         crate::runtime::resources::validate_project_resource_path(
             &locations.workspace,
             &locations.workspace.join(".agents/tools"),
         )
         .map_err(LaunchFailure::resource)?;
-        crate::tools::python::discover_admitted_python_packages(&workspace, |id| {
-            source_activations
+        let packages = crate::tools::python::discover_admitted_python_packages(&workspace, |id| {
+            *source_activations
                 .entry(id.clone())
-                .or_insert(SourceActivation::Unconfigured);
-            false
+                .or_insert(SourceActivation::Unconfigured)
+                == SourceActivation::Enabled
         })
         .map_err(|e| e.to_string())?;
+        for package in packages {
+            python_local_status.insert(
+                package.server_id,
+                if package.outcome.is_ok() {
+                    PythonLocalStatus::Valid
+                } else {
+                    PythonLocalStatus::Invalid
+                },
+            );
+        }
     }
     let availability = source_activations
         .iter()
@@ -928,6 +955,7 @@ pub fn analyze(
         )
     };
     Ok(ProspectiveLaunch {
+        python_local_status,
         trusted,
         workflows,
         subagents,

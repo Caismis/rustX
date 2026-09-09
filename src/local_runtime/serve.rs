@@ -304,6 +304,8 @@ async fn run_configuration_command(command: super::cli::Command) -> i32 {
                     )
                 }) {
                     1
+                } else if report.validity == Validity::Invalid {
+                    2
                 } else {
                     3
                 };

@@ -242,7 +242,16 @@ pub(crate) fn discover_admitted_python_packages(
     Ok(discovered)
 }
 
+#[cfg(test)]
+thread_local! {
+    // The package parser is synchronous. This owner-local hook counts entry,
+    // including failures before reading bytes; it makes no cross-task claims.
+    pub(crate) static PACKAGE_PARSE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn discover_package(root: &Path, name: &str) -> Result<PythonToolPackage, PythonToolError> {
+    #[cfg(test)]
+    PACKAGE_PARSE_COUNT.with(|count| count.set(count.get() + 1));
     let invalid = |message: String| {
         PythonToolError::InvalidPackage(format!("package {name:?} ({}): {message}", root.display()))
     };

@@ -13,6 +13,234 @@ struct Fixture {
     request: LaunchRequest,
 }
 
+fn check_python_package(
+    intent: Option<&str>,
+    trusted: bool,
+    files: Option<(&str, &str)>,
+    expected: Option<PythonLocalStatus>,
+    parses: usize,
+) {
+    let f = Fixture::new();
+    if let Some((server, requirements)) = files {
+        let package = f.host.launch_directory.join(".agents/tools/foo");
+        std::fs::create_dir_all(&package).unwrap();
+        if !server.is_empty() {
+            std::fs::write(package.join("server.py"), server).unwrap();
+        }
+        std::fs::write(package.join("requirements.txt"), requirements).unwrap();
+    }
+    if let Some(intent) = intent {
+        f.project(json!({"pythonSources":{"python:foo":intent}}));
+    }
+    if !trusted {
+        f.trust(TrustAction::Revoke);
+    }
+    for operation in ["config_check", "config_show"] {
+        crate::tools::python::PACKAGE_PARSE_COUNT.with(|count| count.set(0));
+        let ((report, launch), effects) = super::static_effects::measure(|| {
+            super::diagnostics::inspect(operation, &f.request, &f.host)
+        });
+        assert_eq!(effects, [0; 8]);
+        for output in [
+            report.render(false),
+            report.render(true),
+            format!("{report:?}"),
+        ] {
+            assert!(!output.contains("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"));
+        }
+        crate::tools::python::PACKAGE_PARSE_COUNT.with(|count| assert_eq!(count.get(), parses));
+        let launch = launch.expect("optional source failures retain the prospective launch");
+        assert!(!launch.environment_store_root().exists());
+        assert!(!launch.runtime_root.exists());
+        let source = &report.launch.as_ref().unwrap().sources["python:foo"];
+        assert_eq!(source.local_status, expected);
+        let invalid = matches!(
+            expected,
+            Some(PythonLocalStatus::Missing | PythonLocalStatus::Invalid)
+        );
+        assert_eq!(report.exit_code(), if invalid { 2 } else { 3 });
+        assert_eq!(
+            source.readiness,
+            if invalid {
+                "unavailable"
+            } else if expected.is_some() {
+                "unresolved"
+            } else {
+                "inert"
+            }
+        );
+        if invalid {
+            let diagnostic = report
+                .diagnostics
+                .iter()
+                .find(|d| d.path == "pythonSources.python:foo")
+                .unwrap();
+            assert_eq!(diagnostic.category, "invalid");
+            assert_eq!(diagnostic.classification, "error");
+            assert!(diagnostic.file.is_some());
+            assert!(
+                diagnostic
+                    .reason
+                    .contains(if expected == Some(PythonLocalStatus::Missing) {
+                        "not present locally"
+                    } else {
+                        "local package contract"
+                    })
+            );
+            assert!(diagnostic.correction.contains("server.py"));
+            // Static source failure does not become a global runtime admission failure.
+            assert!(
+                launch
+                    .admit(crate::credentials::CredentialSnapshot::default)
+                    .is_ok()
+            );
+        }
+    }
+}
+
+#[test]
+fn cfg235_enabled_python_package_is_locally_validated_without_preparation() {
+    check_python_package(
+        Some("enabled"),
+        true,
+        Some(("# inert server", "")),
+        Some(PythonLocalStatus::Valid),
+        1,
+    );
+}
+#[test]
+fn cfg235_enabled_missing_python_package_is_a_precise_static_source_failure() {
+    check_python_package(
+        Some("enabled"),
+        true,
+        None,
+        Some(PythonLocalStatus::Missing),
+        0,
+    );
+}
+#[test]
+fn cfg235_enabled_malformed_python_package_is_a_precise_static_source_failure() {
+    check_python_package(
+        Some("enabled"),
+        true,
+        Some(("", "")),
+        Some(PythonLocalStatus::Invalid),
+        1,
+    );
+    check_python_package(
+        Some("enabled"),
+        true,
+        Some(("# server", "--index-url RUSTX_SECRET_SENTINEL_DO_NOT_LEAK")),
+        Some(PythonLocalStatus::Invalid),
+        1,
+    );
+}
+#[test]
+fn cfg235_disabled_malformed_python_package_remains_inert() {
+    check_python_package(Some("disabled"), true, Some(("", "invalid")), None, 0);
+}
+#[test]
+fn cfg235_unconfigured_malformed_python_package_remains_inert() {
+    check_python_package(None, true, Some(("", "invalid")), None, 0);
+}
+#[test]
+fn cfg235_untrusted_python_package_contents_are_not_read() {
+    check_python_package(Some("enabled"), false, Some(("", "invalid")), None, 0);
+}
+
+#[test]
+fn cfg235_provider_readiness_is_unresolved_without_credential_lookup() {
+    let f = Fixture::new();
+    let path = f.host.config_directory.join("models.jsonc");
+    let mut model: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for credential in ["$CFG235_UNSET", "RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"] {
+        model["providers"]["host"]["apiKey"] = json!(credential);
+        std::fs::write(&path, serde_json::to_vec(&model).unwrap()).unwrap();
+        for mcp in [false, true] {
+            f.project(if mcp {
+                json!({"mcpServers":{"online":{"enabled":true,"url":"http://127.0.0.1:9/mcp"}}})
+            } else {
+                json!({})
+            });
+            for operation in ["config_check", "config_show"] {
+                let ((report, _), counts) = super::static_effects::measure(|| {
+                    super::diagnostics::inspect(operation, &f.request, &f.host)
+                });
+                assert_eq!(counts, [0; 8]);
+                assert_eq!(report.validity, super::diagnostics::Validity::Valid);
+                assert_eq!(
+                    report.readiness,
+                    Some(super::diagnostics::Readiness::Unresolved)
+                );
+                assert_eq!(report.exit_code(), 3);
+                assert!(
+                    report
+                        .diagnostics
+                        .iter()
+                        .any(|d| d.path == "providers.host" && d.category == "unresolved")
+                );
+                if mcp {
+                    assert!(
+                        report
+                            .diagnostics
+                            .iter()
+                            .any(|d| d.path == "mcpServers.online" && d.category == "unresolved")
+                    );
+                }
+                for output in [
+                    report.render(false),
+                    report.render(true),
+                    format!("{report:?}"),
+                ] {
+                    assert!(!output.contains("RUSTX_SECRET_SENTINEL_DO_NOT_LEAK"));
+                    if credential.starts_with('$') {
+                        assert!(output.contains("CFG235_UNSET"));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn cfg235_python_local_contract_reuses_name_file_and_symlink_validation() {
+    for case in ["missing_requirements", "invalid-name", "symlink"] {
+        let f = Fixture::new();
+        let name = if case == "invalid-name" {
+            "bad--name"
+        } else {
+            "foo"
+        };
+        let id = format!("python:{name}");
+        let package = f.host.launch_directory.join(".agents/tools").join(name);
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(package.join("server.py"), "# inert").unwrap();
+        if case != "missing_requirements" {
+            std::fs::write(package.join("requirements.txt"), "").unwrap();
+        }
+        if case == "symlink" {
+            std::os::unix::fs::symlink("server.py", package.join("linked.py")).unwrap();
+        }
+        f.project(json!({"pythonSources":{id.clone():"enabled"}}));
+        let ((report, launch), effects) = super::static_effects::measure(|| {
+            super::diagnostics::inspect("config_check", &f.request, &f.host)
+        });
+        assert_eq!(effects, [0; 8]);
+        assert_eq!(report.exit_code(), 2, "{case}");
+        assert_eq!(
+            report
+                .launch
+                .as_ref()
+                .unwrap_or_else(|| panic!("{case}: {}", report.render(true)))
+                .sources[&id]
+                .local_status,
+            Some(PythonLocalStatus::Invalid)
+        );
+        assert!(!launch.unwrap().environment_store_root().exists());
+    }
+}
+
 #[test]
 fn cfg235_static_check_show_have_zero_effects_and_redacted_outputs() {
     let f = Fixture::new();
@@ -95,7 +323,7 @@ fn cfg235_projection_has_a_structured_size_bound_without_changing_validity() {
     let f = Fixture::new();
     f.project(json!({"environment":(0..4096).map(|index| (format!("FIELD_{index}"), "RUSTX_SECRET_SENTINEL_DO_NOT_LEAK")).collect::<std::collections::BTreeMap<_,_>>()}));
     let (report, _) = super::diagnostics::inspect("config_show", &f.request, &f.host);
-    assert_eq!(report.exit_code(), 0);
+    assert_eq!(report.exit_code(), 3);
     let output = report.render(true);
     assert!(output.len() < 256 * 1024);
     let value: serde_json::Value = serde_json::from_str(&output).unwrap();
@@ -157,8 +385,10 @@ async fn cfg235_probe_verifies_mcp_without_business_calls_and_respects_inert_sou
         "disabled":{"enabled":false,"command":"must-never-execute"},
         "unconfigured":{"command":"must-never-execute"}
     },"pythonSources":{"python:optional":"enabled"}}));
-    let launch = analyze(&f.request, &f.host).unwrap();
-    let probe_plan = plan(&launch, false);
+    let (report, launch) = super::diagnostics::inspect("doctor", &f.request, &f.host);
+    assert_eq!(report.validity, super::diagnostics::Validity::Invalid);
+    let launch = launch.unwrap();
+    let probe_plan = plan(&launch, true);
     let results = execute(
         &launch,
         &probe_plan,
@@ -343,8 +573,8 @@ fn cfg235_incomplete_missing_explicit_workflow_and_credential_reference_states()
     assert_eq!(counts, [0; 8]);
     assert_eq!(
         report.exit_code(),
-        0,
-        "offline checking never tests credential presence"
+        3,
+        "execution credential and connectivity facts remain unresolved"
     );
     f.request.config = Some("explicit-missing.jsonc".into());
     let (report, _) = super::diagnostics::inspect("config_check", &f.request, &f.host);

@@ -34,7 +34,7 @@ conversation inspection, and Session names. Ordinary startup remains
 
 | Exit | Meaning |
 | --- | --- |
-| 0 | Complete initialization, help, or statically valid and statically ready |
+| 0 | Complete initialization or help (no execution-readiness claim) |
 | 1 | Probe failed/timed out/cancelled, or output failed |
 | 2 | Invalid configuration/arguments, or initialization conflict/publication failure |
 | 3 | Incomplete configuration or unresolved readiness |
@@ -43,13 +43,24 @@ Bare `init` reports missing declarations (3), without prompting or writing.
 Malformed/incomplete explicit initialization arguments return 2. An untrusted
 workspace returns 3 even with a valid native-only configuration. Missing implicit
 model configuration is incomplete; a missing explicitly selected file is invalid.
-Provider connectivity is not part of offline static readiness: exit 0 does not
-claim credentials exist or that any provider is usable. Doctor currently always
-has an unresolved provider result, so returns 3 unless a probe fails (1).
+Validity means local structural/semantic correctness. Readiness means prospective
+execution readiness, not completion of static analysis. Every selected provider
+has unresolved credential/connectivity/compatibility facts, so even a valid
+native-only configuration returns 3. Neither credential values nor environment
+variable presence are read. Literal credentials do not establish connectivity
+either. Doctor currently always
+has an unresolved provider result, so returns 3 unless a probe fails (1) or a
+local static source failure exists (2). Independent sources are still probed;
+a probe failure takes precedence over static invalidity in the final doctor exit.
 
 Human output shows classification, reasons, corrections, and redacted structured
 values. `--json` emits a version-1 object with `operation`, `scope`, `validity`,
 `readiness`, `diagnostics`, `launch`, `partial`, and `initialization` members.
+Validity is `valid`, `invalid`, or `incomplete`. Execution readiness currently
+has only the state `unresolved`: static launch reports cannot establish ready because
+provider execution is unverified. Initialization has `readiness: null`: it
+reports file publication, not next-launch readiness. Invalidity takes exit-code
+precedence (2) over unresolved readiness (3).
 Absent complete values are null, not guessed. Reports carry
 `projection_omitted: false` normally. If the pretty projection
 would exceed 256 KiB, both renderers omit it with a structured `projection_limit`
@@ -151,6 +162,18 @@ Enabled online sources are unresolved until discovery; no schemas or executors
 are fabricated. Untrusted project resources remain unread and unresolved. A
 source probe cannot enable them or grant workspace authority.
 
+Managed-Python identity discovery is inert. Only trusted, explicitly enabled
+packages enter the existing bounded local package validator. Disabled,
+unconfigured, and untrusted packages do not enter that parser or read package
+contents. `local_status` is `valid`, `missing`, or `invalid`, and null when not
+inspected (also null for non-Python sources). Missing or malformed enabled
+packages produce source-specific static errors at `pythonSources.<id>` (exit 2),
+with source readiness `unavailable`. They do not abort shared launch analysis
+or prevent independent doctor targets from being probed. Ordinary runtime
+optional-source failure isolation is unchanged. A locally valid package remains
+runtime `unresolved`: no environment creation, uv/Python process, MCP handshake,
+or Tool discovery occurred. Static package inspection never prepares an environment.
+
 The projection includes the selected model, paths, safe provider metadata,
 resolved config, origins, precedence reasons, source activation/readiness,
 main-model Tool policy/selection and exclusion reasons, registered Workflows and
@@ -234,6 +257,14 @@ tests run in CI's `process` target. No race/zero-effect proof uses sleeps.
 
 | Requirement | Concrete test(s) |
 | --- | --- |
+| Trusted enabled package enters native parser, stays unresolved, no environment store/effects | `cfg235_enabled_python_package_is_locally_validated_without_preparation` |
+| Missing enabled package is a precise static source failure | `cfg235_enabled_missing_python_package_is_a_precise_static_source_failure` |
+| Malformed enabled package is a precise static source failure, redacted | `cfg235_enabled_malformed_python_package_is_a_precise_static_source_failure` |
+| Missing requirements, invalid package name, symlink contract reused | `cfg235_python_local_contract_reuses_name_file_and_symlink_validation` |
+| Disabled malformed content never enters package parser | `cfg235_disabled_malformed_python_package_remains_inert` |
+| Unconfigured malformed content never enters package parser | `cfg235_unconfigured_malformed_python_package_remains_inert` |
+| Untrusted enabled content never enters package parser | `cfg235_untrusted_python_package_contents_are_not_read` |
+| Environment reference/literal credential and provider+MCP: valid, unresolved, exit 3, no credential lookup | `cfg235_provider_readiness_is_unresolved_without_credential_lookup` |
 | Generated minimal config uses real parsing/analysis; optional project; no implicit trust or source preparation | `cfg235_minimal_init_validates_with_real_analysis_without_trust_or_sources` |
 | Native Session startup without four explicit paths or Python/MCP | `cfg235_generated_init_launches_native_session_without_four_paths` |
 | Explicit provider templates, deterministic bytes, no raw key | `cfg235_templates_are_explicit_and_deterministic` |
@@ -251,7 +282,7 @@ tests run in CI's `process` target. No race/zero-effect proof uses sleeps.
 | Exact command grammar, conflicts, repeated switches, flag-valued paths, help/exit text | `cfg235_finite_command_grammar_and_switch_values` |
 | Real binary init/check/show framing, success/invalid/incomplete exits, repeated init, no runtime writes | `cfg235_binary_init_check_show_exit_and_machine_contract` |
 | Plan-before-result framing; mixed skipped/unresolved outcomes without fake success | `cfg235_binary_doctor_discloses_plan_and_preserves_mixed_results` |
-| Verified MCP discovery, disabled/unconfigured skipped, untrusted unavailable, preparation denied, zero business calls | `cfg235_probe_verifies_mcp_without_business_calls_and_respects_inert_sources` |
+| Missing Python source does not block independent verified MCP; disabled/unconfigured skipped, untrusted unavailable, zero business calls | `cfg235_probe_verifies_mcp_without_business_calls_and_respects_inert_sources` |
 | Deadline/cancellation await owner, not a detached waiter | `cfg235_timeout_and_cancel_await_physical_settlement` (oneshot gates) |
 | Real stdio timeout/cancellation reaps supervisor before return | `cfg235_probe_stdio_timeout_and_cancel_reap_owned_process` (ownership pause, injected expiration, waitpid/ESRCH assertions) |
 | Connection close must settle; cancellation during close; failing close is never verified | `cfg235_probe_close_is_awaited_and_failed_close_is_not_verified` (close gates; zero business calls) |

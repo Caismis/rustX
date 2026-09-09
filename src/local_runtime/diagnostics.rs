@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::launch::{HostEnvironment, LaunchRequest, Origin, ProspectiveLaunch};
+use super::launch::{HostEnvironment, LaunchRequest, Origin, ProspectiveLaunch, PythonLocalStatus};
 use crate::capabilities::activation::SourceActivation;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -20,7 +20,7 @@ pub enum Validity {
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Readiness {
-    StaticReady,
+    // CFG-04 has no provider verification operation and cannot establish ready.
     Unresolved,
 }
 
@@ -135,6 +135,8 @@ impl std::error::Error for LaunchFailure {}
 #[derive(Debug, Serialize)]
 pub struct SourceProjection {
     pub activation: SourceActivation,
+    /// None means package contents were not inspected (or this is not Python).
+    pub local_status: Option<super::launch::PythonLocalStatus>,
     pub readiness: &'static str,
     pub reason: &'static str,
 }
@@ -192,7 +194,7 @@ pub struct Report {
     pub operation: &'static str,
     pub scope: &'static str,
     pub validity: Validity,
-    pub readiness: Readiness,
+    pub readiness: Option<Readiness>,
     pub diagnostics: Vec<Diagnostic>,
     pub launch: Option<LaunchProjection>,
     pub partial: Option<Box<PartialProjection>>,
@@ -207,7 +209,11 @@ impl Report {
             operation,
             scope: "prospective_next_launch",
             validity: Validity::Valid,
-            readiness: Readiness::StaticReady,
+            readiness: if operation == "init" {
+                None
+            } else {
+                Some(Readiness::Unresolved)
+            },
             diagnostics: Vec::new(),
             launch: None,
             partial: None,
@@ -241,8 +247,8 @@ impl Report {
     pub(super) fn exit_code(&self) -> i32 {
         match (self.validity, self.readiness) {
             (Validity::Invalid, _) => 2,
-            (Validity::Incomplete, _) | (_, Readiness::Unresolved) => 3,
-            (Validity::Valid, Readiness::StaticReady) => 0,
+            (Validity::Incomplete, _) | (_, Some(Readiness::Unresolved)) => 3,
+            (Validity::Valid, None) => 0,
         }
     }
 
@@ -293,7 +299,7 @@ pub(super) fn inspect(
                 Validity::Invalid
             };
             if failure.incomplete {
-                report.readiness = Readiness::Unresolved;
+                report.readiness = Some(Readiness::Unresolved);
                 failure.diagnostic.category = "incomplete";
                 failure.diagnostic.classification = "warning";
             }
@@ -307,8 +313,18 @@ pub(super) fn inspect(
 #[allow(clippy::too_many_lines)] // One redacted projection, no alternate resolution.
 fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
     let mut report = Report::new(operation);
+    report.diagnostics.push(Diagnostic {
+        classification: "warning",
+        category: "unresolved",
+        file: None,
+        path: format!("providers.{}", launch.config.model.model.provider()),
+        reason: "provider credential availability, endpoint connectivity and model compatibility were not verified".into(),
+        correction: "supply credentials at runtime; static validation does not verify provider execution".into(),
+        line: None,
+        column: None,
+    });
     if !launch.trusted {
-        report.readiness = Readiness::Unresolved;
+        report.readiness = Some(Readiness::Unresolved);
         report.diagnostics.push(Diagnostic {
             classification: "warning",
             category: "unresolved",
@@ -323,9 +339,10 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
     let mut sources = BTreeMap::new();
     for (name, activation) in &launch.source_activations {
         let activation = *activation;
-        let (readiness, reason) = match activation {
+        let local_status = launch.python_local_status.get(name).copied();
+        let (mut readiness, mut reason) = match activation {
             SourceActivation::Enabled => {
-                report.readiness = Readiness::Unresolved;
+                report.readiness = Some(Readiness::Unresolved);
                 (
                     "unresolved",
                     "capabilities require explicit online discovery",
@@ -335,6 +352,19 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
             SourceActivation::Unconfigured => ("inert", "no explicit activation grant; not loaded"),
             SourceActivation::Untrusted => ("inert", "host trust has not admitted this source"),
         };
+        let local_failure = matches!(
+            local_status,
+            Some(PythonLocalStatus::Missing | PythonLocalStatus::Invalid)
+        );
+        if local_failure {
+            report.validity = Validity::Invalid;
+            readiness = "unavailable";
+            reason = if local_status == Some(PythonLocalStatus::Missing) {
+                "enabled managed Python package is not present locally"
+            } else {
+                "enabled managed Python package violates the local package contract"
+            };
+        }
         let path = if launch.config.mcp_servers.contains_key(name) {
             format!("mcpServers.{name}")
         } else {
@@ -350,16 +380,20 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
                 Origin::Builtin | Origin::Cli { .. } => None,
             });
         report.diagnostics.push(Diagnostic {
-            classification: if readiness == "unresolved" {
+            classification: if local_failure {
+                "error"
+            } else if readiness == "unresolved" {
                 "warning"
             } else {
                 "info"
             },
-            category: readiness,
+            category: if local_failure { "invalid" } else { readiness },
             file,
             path,
             reason: reason.into(),
-            correction: match activation {
+            correction: if local_failure {
+                "create or repair .agents/tools/<package>: use a valid package name, regular server.py and requirements.txt, and bounded symlink-free package files; otherwise disable this source"
+            } else { match activation {
                 SourceActivation::Enabled => {
                     "use doctor --probe for explicitly authorized readiness checks"
                 }
@@ -369,7 +403,7 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
                 SourceActivation::Disabled | SourceActivation::Unconfigured => {
                     "leave inert, or explicitly configure enablement after reviewing the source"
                 }
-            }
+            } }
             .into(),
             line: None,
             column: None,
@@ -378,6 +412,7 @@ fn project(operation: &'static str, launch: &ProspectiveLaunch) -> Report {
             name.to_string(),
             SourceProjection {
                 activation,
+                local_status,
                 readiness,
                 reason,
             },

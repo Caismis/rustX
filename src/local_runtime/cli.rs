@@ -75,7 +75,7 @@ pub const CONFIG_USAGE: &str = "Configuration commands:\n\
   rustx config show --sources [launch selection/path flags] [--json]\n\
   rustx doctor --probe [--prepare] [launch selection/path flags] [--json]\n\
 Diagnostic commands reject Session and trust-change flags.\n\
-Exit: 0 statically valid/complete; 1 probe or output failure; 2 invalid;\n\
+Exit: 0 initialization/help complete; 1 probe or output failure; 2 invalid;\n\
 3 incomplete or unresolved readiness. Check/show never resolve credentials,\n\
 spawn, connect, prepare environments, or create Sessions/state.\n\
 Show describes the prospective next launch. Doctor prints an effect plan before\n\
@@ -590,7 +590,7 @@ mod tests {
         assert!(!json);
         assert_eq!(request.workspace, Some("--json".into()));
         for phrase in [
-            "0 statically",
+            "0 initialization",
             "1 probe",
             "2 invalid",
             "3 incomplete",

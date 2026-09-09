@@ -150,7 +150,9 @@ pub(super) fn plan(launch: &ProspectiveLaunch, prepare: bool) -> ProbePlan {
     }
     for (id, intent) in &launch.config.python_sources {
         let activation = SourceActivation::evaluate(Some(*intent), launch.trusted);
-        let admitted = activation.admit().is_ok() && prepare;
+        let admitted = activation.admit().is_ok()
+            && prepare
+            && launch.python_local_status.get(id) == Some(&super::launch::PythonLocalStatus::Valid);
         targets.push(ProbeTarget {
             target: id.to_string(),
             kind: "python",
@@ -221,6 +223,18 @@ pub(super) async fn execute(
         let id = McpServerId::new(&target.target);
         let deadline = tokio::time::Instant::now() + PROBE_TIMEOUT;
         let binding = if target.kind == "python" {
+            if matches!(
+                launch.python_local_status.get(&id),
+                Some(
+                    super::launch::PythonLocalStatus::Missing
+                        | super::launch::PythonLocalStatus::Invalid
+                )
+            ) {
+                result.state = ProbeState::Unavailable;
+                result.reason = "managed package is missing or locally invalid; repair its local package contract before preparation";
+                results.push(result);
+                continue;
+            }
             if !target.prepare_environment {
                 result.state = ProbeState::Unavailable;
                 result.reason = "managed environment preparation requires --prepare";

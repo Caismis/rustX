@@ -64,6 +64,7 @@ fn cfg235_binary_init_check_show_exit_and_machine_contract() {
         "--json",
     ];
     let initialized = report(&run(root.path(), &arguments), 0);
+    assert!(initialized["readiness"].is_null());
     assert_eq!(
         initialized["initialization"]["written"]
             .as_array()
@@ -83,12 +84,14 @@ fn cfg235_binary_init_check_show_exit_and_machine_contract() {
     assert_eq!(untrusted["launch"]["trusted"], false);
     assert!(!root.path().join("home/.local/state").exists());
     assert!(run(root.path(), &["--trust", "grant"]).status.success());
-    let checked = report(&run(root.path(), &["config", "check", "--json"]), 0);
+    let checked = report(&run(root.path(), &["config", "check", "--json"]), 3);
     let shown = report(
         &run(root.path(), &["config", "show", "--sources", "--json"]),
-        0,
+        3,
     );
     assert_eq!(checked["launch"], shown["launch"]);
+    assert_eq!(shown["validity"], "valid");
+    assert_eq!(shown["readiness"], "unresolved");
     assert_eq!(shown["scope"], "prospective_next_launch");
     assert_eq!(shown["launch"]["selected_model"], "local/declared");
     let runtime_root = shown["launch"]["runtime_root"].as_str().unwrap();
@@ -151,4 +154,22 @@ fn cfg235_binary_doctor_discloses_plan_and_preserves_mixed_results() {
     assert_eq!(records[1]["results"][0]["state"], "unresolved");
     assert_eq!(records[1]["results"][1]["state"], "skipped");
     assert!(!root.path().join("home/.local/state").exists());
+
+    assert!(run(root.path(), &["--trust", "grant"]).status.success());
+    std::fs::write(
+        root.path().join("workspace/rustx.jsonc"),
+        r#"{"pythonSources":{"python:missing":"enabled"}}"#,
+    )
+    .unwrap();
+    let output = run(root.path(), &["doctor", "--probe", "--prepare", "--json"]);
+    assert_eq!(output.status.code(), Some(2));
+    let records: Vec<serde_json::Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(records[1]["results"][0]["state"], "unresolved");
+    assert_eq!(records[1]["results"][1]["state"], "unavailable");
+    assert_eq!(records[0]["targets"][1]["prepare_environment"], false);
+    assert!(!root.path().join("workspace/.rustx").exists());
 }
