@@ -3612,3 +3612,119 @@ async fn a_terminal_tool_call_never_dispatches_from_its_stale_outbound_send() {
     runtime.close().await.expect("physical settlement");
     server.shutdown().await;
 }
+
+// ---------------------------------------------------------------------------
+// MCP-01 (Issue #240): the SDK response-cache policy is a property of every
+// connection generation, including one established by bounded reconnection
+// ---------------------------------------------------------------------------
+
+/// Issue #240: a **replacement** connection generation has the SDK response
+/// cache disabled too, because the policy belongs to the one
+/// connection-construction seam every generation is born from rather than to
+/// a recovery branch.
+///
+/// ```text
+/// generation 1 -- call echo --> received, then the server dies
+///              <- OutcomeUnknown
+/// generation 2   established by the bounded reconnect
+///              -- tools/list -->  request #1 reached the server
+///              -- tools/list -->  request #2 reached the server
+/// ```
+///
+/// Every generation of this fixture declares a ten-minute SEP-2549 `ttlMs`
+/// on its catalog, so an SDK response cache on the replacement peer would
+/// answer the second refresh itself and the server would see one request,
+/// not two. The proof is therefore behavioral and observed in the *server
+/// process*: the fixture journals one `list:<generation>` line per
+/// `tools/list` it actually answered, before answering it.
+///
+/// Synchronization: generation 1 journals the accepted call before it exits,
+/// and the replacement is established by the ordinary pre-frontier
+/// `McpConnection::acquire` of the second dispatch — no timing is involved
+/// in either step.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_replacement_connection_generation_keeps_the_sdk_response_cache_disabled() {
+    if recovery::serve_if_recovery_fixture_mode().await {
+        return;
+    }
+    let fixture = common::native_fixture();
+    let control = recovery::RecoveryControl::new(fixture.dir().path());
+    let capability = recovery_capability(
+        &fixture.runtime,
+        "boundary_suites::mcp_recovery::a_replacement_connection_generation_keeps_the_sdk_response_cache_disabled",
+        &control,
+        &recovery::RecoveryScript {
+            die_generations: vec![1],
+            list_ttl_ms: Some(600_000),
+            ..recovery::RecoveryScript::default()
+        },
+    )
+    .await;
+    let server_id = capability.server_id.clone();
+    assert_eq!(
+        control.catalog_requests(1),
+        1,
+        "capability preparation listed the first generation's catalog once"
+    );
+
+    // Generation 1 dies with the request in flight; the next dispatch
+    // establishes the replacement through the ordinary bounded reconnect.
+    let snapshot = capability.coordinator.current_snapshot();
+    let ambiguous = direct_mcp_call(&fixture, &snapshot, recovery::TOOL_ECHO).await;
+    assert!(
+        matches!(ambiguous.status, ToolExecutionStatus::OutcomeUnknown { .. }),
+        "the generation that died leaves its call's external outcome unknown: {:?}",
+        ambiguous.status
+    );
+    wait_for_journal_entry(&control, recovery::JOURNAL_DIED);
+
+    let served = direct_mcp_call(&fixture, &snapshot, recovery::TOOL_ECHO).await;
+    assert!(
+        matches!(served.status, ToolExecutionStatus::Success),
+        "the replacement generation serves the next dispatch: {:?}",
+        served.status
+    );
+    assert!(
+        served
+            .model_facing_projection()
+            .as_text()
+            .contains("generation 2"),
+        "the replacement transport actually served it: {served:?}"
+    );
+    assert_eq!(
+        control.established_generations(),
+        2,
+        "exactly one bounded replacement transport was established"
+    );
+
+    let replacement = capability
+        .coordinator
+        .current_mcp_runtime(&server_id)
+        .expect("the connection published the replacement generation");
+    assert_eq!(
+        control.catalog_requests(2),
+        0,
+        "reconnection itself lists no catalog: the refreshes below are the only ones"
+    );
+    let first = replacement
+        .list_tools()
+        .await
+        .expect("the replacement generation serves its catalog");
+    assert_eq!(
+        control.catalog_requests(2),
+        1,
+        "the first refresh reached the replacement generation"
+    );
+    let second = replacement
+        .list_tools()
+        .await
+        .expect("the replacement generation serves its catalog again");
+    assert_eq!(
+        control.catalog_requests(2),
+        2,
+        "the replacement generation refetched despite the positive ttlMs: no SDK \
+         response cache survived the reconnection"
+    );
+    assert_eq!(first, second, "the peer answered both refreshes itself");
+    drop(capability);
+}
