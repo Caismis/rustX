@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 
 import { visibleWidth } from "@earendil-works/pi-tui";
 
-import { QuestionnaireOverlay } from "../src/ui/components/questionnaire.ts";
+import { QuestionnaireOverlay, readNumberDraft } from "../src/ui/components/questionnaire.ts";
 import type {
   InteractionRequester,
   QuestionnaireResponse,
@@ -881,6 +881,147 @@ describe("QuestionnaireOverlay", () => {
     submitSingle(view);
   });
 
+  it("refuses an inexact whole number however it is spelled", () => {
+    // Every one of these spells the same integer, `2^53 + 1`, which binary64
+    // cannot hold. Checking exactness only when the draft *looks* like a plain
+    // integer let the decimal and exponent forms through, and `Number` then
+    // rounded them to 9007199254740992 — a value the user never typed, which
+    // the runtime could not detect because by then it was exact.
+    const inexact = [
+      "9007199254740993",
+      "9007199254740993.0",
+      "9.007199254740993e15",
+      "90071992547409930e-1",
+      "-9007199254740993",
+      "-9007199254740993.0",
+      "-9.007199254740993e15",
+    ];
+    for (const draft of inexact) {
+      const view = typedOverlay(
+        {
+          questions: [{
+            question: "How much?",
+            header: "Amount",
+            answer: { type: "number" },
+          }],
+        },
+        MCP_REQUESTER,
+        () => {
+          assert.fail(`${draft} must never reach a submission`);
+        },
+      );
+      type(view, draft);
+      assert.match(
+        plainText(view.render(80).join("\n")),
+        /represent exactly/,
+        `${draft} must be refused`,
+      );
+      // Refused at the gate, not merely annotated: `submitSingle` walks to the
+      // review tab and presses Enter, and the `onSubmit` above would fire. The
+      // blocked submission returns focus to the offending question and names
+      // it back on the review surface.
+      submitSingle(view);
+      view.handleInput("\t");
+      assert.match(
+        plainText(view.render(80).join("\n")),
+        /Correct Amount before submitting\./,
+      );
+      // The defect this closes, stated directly: `Number` collapses every one
+      // of these onto 2^53, so a client that converted before checking could
+      // no longer tell which integer the user had typed.
+      assert.equal(
+        Math.abs(Number(draft)),
+        9007199254740992,
+        `${draft} is exactly the class Number silently rounds`,
+      );
+    }
+  });
+
+  it("submits the exact binary64 value a whole-number spelling denotes", () => {
+    // Each spelling denotes a whole number binary64 holds exactly, so the
+    // submitted value is the same mathematical number the user entered — the
+    // point of the exactness gate is that respelling never changes acceptance.
+    const exact: Array<[draft: string, value: number]> = [
+      ["9007199254740991", 9007199254740991],
+      ["9007199254740992", 9007199254740992],
+      ["9007199254740991.0", 9007199254740991],
+      ["9007199254740992.0", 9007199254740992],
+      ["9.007199254740991e15", 9007199254740991],
+      ["9.007199254740992e15", 9007199254740992],
+      ["-9007199254740992", -9007199254740992],
+      ["-9007199254740992.0", -9007199254740992],
+      ["-9.007199254740992e15", -9007199254740992],
+      // Exponent syntax is not itself suspicious: an ordinary integral value
+      // written with it must still submit the integer it denotes.
+      ["1.5e3", 1500],
+      ["1500.0", 1500],
+      ["-2.5e+4", -25000],
+      // Fractional values keep the declared contract: the nearest binary64,
+      // which is what a JSON number means at every stage of the pipeline.
+      ["0.1", 0.1],
+      ["1.5", 1.5],
+      ["-2.75", -2.75],
+      ["1e-6", 1e-6],
+      ["1E-2", 0.01],
+      [".5", 0.5],
+      ["1.", 1],
+    ];
+    for (const [draft, value] of exact) {
+      let submitted: QuestionnaireResponse | undefined;
+      const view = typedOverlay(
+        {
+          questions: [{
+            question: "How much?",
+            header: "Amount",
+            answer: { type: "number" },
+          }],
+        },
+        MCP_REQUESTER,
+        (response) => {
+          submitted = response;
+        },
+      );
+      type(view, draft);
+      submitSingle(view);
+      assert.deepEqual(submitted, {
+        type: "submitted",
+        value: {
+          answers: [{ question_index: 0, answer: { type: "number", value: { value } } }],
+        },
+      }, `${draft} must submit exactly ${value}`);
+    }
+  });
+
+  it("checks the declared bounds only after the value is known to be exact", () => {
+    const bounded: QuestionnaireSpecification = {
+      questions: [{
+        question: "How much?",
+        header: "Amount",
+        answer: { type: "number", minimum: 0, maximum: 9007199254740992 },
+      }],
+    };
+    // 2^53 + 1 rounds *down* into range, so a client that compared the rounded
+    // value against `maximum` would report a value inside the bounds and
+    // submit it. Admissibility to the domain is settled first, so the user is
+    // told the real reason instead.
+    const inexact = typedOverlay(bounded, MCP_REQUESTER, () => {
+      assert.fail("an inexact draft never submits, in range or not");
+    });
+    type(inexact, "9007199254740993.0");
+    const rendered = plainText(inexact.render(80).join("\n"));
+    assert.match(rendered, /represent exactly/);
+    assert.doesNotMatch(rendered, /at most/);
+    submitSingle(inexact);
+
+    // An exact value outside the bounds still gets the range message.
+    const high = typedOverlay(bounded, MCP_REQUESTER, () => {
+      assert.fail("an out-of-range draft never submits");
+    });
+    type(high, "9.007199254740994e15");
+    assert.match(plainText(high.render(80).join("\n")), /at most/);
+    submitSingle(high);
+  });
+
   it("distinguishes an untouched text field from an explicitly empty one", () => {
     const optional: QuestionnaireSpecification = {
       questions: [{
@@ -1067,5 +1208,130 @@ describe("QuestionnaireOverlay", () => {
         }],
       },
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The Number input boundary (Issue #242)
+// ---------------------------------------------------------------------------
+
+describe("readNumberDraft", () => {
+  it("reads the value a decimal spelling denotes, not the value Number() lands on", () => {
+    // The runtime's Number domain is the finite binary64. A *fractional*
+    // decimal means the nearest binary64 — that is what a JSON number means
+    // everywhere. A *whole* decimal names one specific integer, and the one
+    // binary64 cannot hold is refused rather than rounded, on the value and
+    // never on the spelling: `9007199254740993`, `9007199254740993.0` and
+    // `9.007199254740993e15` are one case, decided identically.
+    const cases: Array<[draft: string, expected: number | "malformed" | "not-finite" | "inexact"]> = [
+      // Plain integers, either side of the 2^53 frontier.
+      ["0", 0],
+      ["-0", -0],
+      ["1", 1],
+      ["-1", -1],
+      ["9007199254740991", 9007199254740991],
+      ["9007199254740992", 9007199254740992],
+      ["-9007199254740992", -9007199254740992],
+      ["9007199254740993", "inexact"],
+      ["-9007199254740993", "inexact"],
+      // The same integers written with a decimal point. These are the
+      // spellings a lexical `^-?\d+$` exactness check could not see.
+      ["9007199254740991.0", 9007199254740991],
+      ["9007199254740992.0", 9007199254740992],
+      ["9007199254740993.0", "inexact"],
+      ["-9007199254740993.0", "inexact"],
+      ["9007199254740993.00000", "inexact"],
+      // And with an exponent, in both directions.
+      ["9.007199254740991e15", 9007199254740991],
+      ["9.007199254740992e15", 9007199254740992],
+      ["9.007199254740993e15", "inexact"],
+      ["-9.007199254740993e15", "inexact"],
+      ["90071992547409930e-1", "inexact"],
+      ["900719925474099300e-2", "inexact"],
+      // The rule generalises past 2^53: exactness is the odd part fitting in
+      // 53 bits, so 2^53 + 2 is exact and 2^54 + 1 is not.
+      ["9007199254740994", 9007199254740994],
+      ["9007199254740994.0", 9007199254740994],
+      ["18014398509481984", 18014398509481984],
+      ["18014398509481985", "inexact"],
+      ["-18014398509481985", "inexact"],
+      // Ordinary fractions keep the declared binary64 meaning.
+      ["0.1", 0.1],
+      ["1.5", 1.5],
+      ["-2.75", -2.75],
+      ["1e-6", 1e-6],
+      ["1E-2", 0.01],
+      [".5", 0.5],
+      ["1.", 1],
+      ["-2.5e+4", -25000],
+      // Exponent syntax on an integral value is ordinary, not suspicious.
+      ["1.5e3", 1500],
+      ["1500.0", 1500],
+      ["1e3", 1000],
+      // A fraction that is not whole is never subject to the whole-number
+      // rule, even where its nearest binary64 happens to be an integer.
+      ["9007199254740992.4", 9007199254740992],
+      // Beyond the finite range.
+      ["1e400", "not-finite"],
+      ["-1e400", "not-finite"],
+      // Zero absorbs any exponent, and an underflowing fraction is the
+      // nearest binary64 like every other fraction.
+      ["0e999999999", 0],
+      ["1e-999999999999", 0],
+      // The syntax refused before any of this runs, unchanged by this repair.
+      ["", "malformed"],
+      [".", "malformed"],
+      ["-", "malformed"],
+      ["e3", "malformed"],
+      ["+1", "malformed"],
+      ["1e", "malformed"],
+      ["1.2.3", "malformed"],
+      ["12abc", "malformed"],
+      ["0x10", "malformed"],
+      ["Infinity", "malformed"],
+      ["NaN", "malformed"],
+    ];
+
+    for (const [draft, expected] of cases) {
+      const reading = readNumberDraft(draft);
+      if (typeof expected === "string") {
+        assert.equal(reading.kind, expected, `${JSON.stringify(draft)} must read as ${expected}`);
+        continue;
+      }
+      assert.equal(reading.kind, "value", `${JSON.stringify(draft)} must read as a value`);
+      assert.equal(
+        reading.kind === "value" ? reading.value : undefined,
+        expected,
+        `${JSON.stringify(draft)} must denote ${expected}`,
+      );
+    }
+  });
+
+  it("decides the same integer identically however it is spelled", () => {
+    // The invariant the repair exists for: acceptance is a property of the
+    // number, so no lexical form is a way around the domain.
+    const spellings = (digits: string): string[] => [
+      digits,
+      `${digits}.0`,
+      `${digits}.000`,
+      `${digits}0e-1`,
+      `${digits.slice(0, 1)}.${digits.slice(1)}e${digits.length - 1}`,
+    ];
+    for (const digits of ["9007199254740991", "9007199254740992", "9007199254740994"]) {
+      for (const draft of spellings(digits)) {
+        const reading = readNumberDraft(draft);
+        assert.equal(reading.kind, "value", `${draft} must be accepted like ${digits}`);
+        assert.equal(
+          reading.kind === "value" ? reading.value : undefined,
+          Number(digits),
+          `${draft} must denote ${digits}`,
+        );
+      }
+    }
+    for (const digits of ["9007199254740993", "18014398509481985"]) {
+      for (const draft of [...spellings(digits), ...spellings(`-${digits}`).slice(0, 4)]) {
+        assert.equal(readNumberDraft(draft).kind, "inexact", `${draft} must be refused like ${digits}`);
+      }
+    }
   });
 });
