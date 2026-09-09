@@ -145,7 +145,8 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
     );
     assert_eq!(config.workflows.main, config.workflows.definitions);
 
-    let policies = config.native_tools.to_policies();
+    let host = CurrentRuntimeConfig::from_jsonc_slice(&read_example("settings.jsonc")).unwrap();
+    let policies = host.native_tools.to_policies();
     assert_eq!(policies.read.execution, ToolExecutionPolicy::ForegroundOnly);
     assert_eq!(policies.read.concurrency, ToolConcurrencyPolicy::Parallel);
     assert_eq!(

@@ -276,7 +276,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
         capability: &'a CapabilityCoordinator,
     ) -> BoxFuture<'a, Result<PreparedRuntimeResources, RuntimeResourceLoadError>> {
         Box::pin(async move {
-            let config = self
+            let (config, provenance) = self
                 .paths
                 .reload_resource_config()
                 .map_err(RuntimeResourceLoadError::new)?;
@@ -284,6 +284,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                 .tool_environment()
                 .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
             let workspace = capability.current_snapshot().workspace_root().to_path_buf();
+            let project_context_files = load_project_context_files(&workspace)?;
             // The catalog is built before the base registry, because the
             // `subagent` intrinsic's model-facing description is generated
             // from exactly the catalog this candidate generation admits.
@@ -343,8 +344,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                     .iter()
                     .map(|path| resolve_workspace_path(&workspace, path)),
             );
-            let mcp_servers = config
-                .mcp_bindings()
+            let mcp_servers = mcp_bindings_with_authority(&config, &workspace, &provenance)
                 .map_err(|error| RuntimeResourceLoadError::new(error.to_string()))?;
             let candidate = capability
                 .prepare_candidate_with_inputs(CapabilityResourceInputs {
@@ -368,7 +368,7 @@ impl RuntimeResourceLoader for LocalRuntimeResourceLoader {
                 })?;
             validate_workflow_tool_name_collisions(&candidate, &workflows)?;
             let prepared = PreparedRuntimeResources::new(
-                load_project_context_files(&workspace)?,
+                project_context_files,
                 None,
                 crate::context::ContextAssembly::new(),
                 candidate,
@@ -897,6 +897,7 @@ fn load_workflow_catalog(
     let mut programs = Vec::with_capacity(document.definitions.len());
     for id in &document.definitions {
         let path = workspace_workflow_path(workspace, id);
+        crate::runtime::resources::validate_project_resource_path(workspace, &path)?;
         let bytes = std::fs::read(&path).map_err(|error| {
             RuntimeResourceLoadError::new(format!(
                 "cannot read registered workflow {id} at {}: {error}",
@@ -957,6 +958,23 @@ fn default_tools_with_workflows(
         }
     }
     result
+}
+
+pub(crate) fn mcp_bindings_with_authority(
+    config: &CurrentRuntimeConfig,
+    workspace: &Path,
+    provenance: &std::collections::BTreeMap<String, super::launch::Origin>,
+) -> Result<crate::tools::mcp::McpServerBindings, CurrentRuntimeConfigError> {
+    let mut bindings = config.mcp_bindings()?;
+    for (name, binding) in &mut bindings {
+        if matches!(
+            provenance.get(&format!("mcpServers.{name}")),
+            Some(super::launch::Origin::Project { .. })
+        ) {
+            binding.resource_workspace = Some(workspace.into());
+        }
+    }
+    Ok(bindings)
 }
 
 fn read_resource(
@@ -1115,6 +1133,15 @@ impl LocalConversationCore {
         // caller before any first-Session publication. Validate it here too
         // for direct low-level callers, while the selected durable Session
         // model remains an independent Session-local choice.
+        paths
+            .validate_resource_authority()
+            .map_err(|detail| LocalRuntimeError::Capability { detail })?;
+        let project_context_files =
+            load_project_context_files(&paths.workspace).map_err(|error| {
+                LocalRuntimeError::Capability {
+                    detail: error.to_string(),
+                }
+            })?;
         SessionModelState::new(registry.clone(), runtime_config.model.clone())?;
         let model = SessionModelState::new(registry.clone(), session_state.model.clone())?;
 
@@ -1252,12 +1279,8 @@ impl LocalConversationCore {
         if paths.no_skills {
             skill_discovery.automatic_roots.clear();
         }
-        // Relative Skill paths resolve against the *canonical* Workspace
-        // root, not the raw `--workspace` spelling: `--workspace w` would
-        // otherwise produce a candidate root relative to the process cwd
-        // while every consumer of the published location resolves against
-        // the canonical root. Discovery canonicalizes accepted roots too;
-        // this keeps the input meaningful rather than merely recoverable.
+        // Launch resolution has already rebased paths according to authority.
+        // Package discovery retains its own canonical identity validation.
         let workspace_root = tool_runtime.workspace().root().to_path_buf();
         skill_discovery.explicit_paths.extend(
             runtime_config
@@ -1281,7 +1304,11 @@ impl LocalConversationCore {
                 exclude_tools: paths.exclude_tools.clone(),
             },
             skill_discovery,
-            mcp_servers: runtime_config.mcp_bindings()?,
+            mcp_servers: mcp_bindings_with_authority(
+                &runtime_config,
+                &paths.workspace,
+                &paths.provenance,
+            )?,
             base_environment,
             environment_store_root: paths.environment_store_root_for(&conversation_id),
         })
@@ -1308,11 +1335,7 @@ impl LocalConversationCore {
             }
         })?;
         let prepared = PreparedRuntimeResources::new(
-            load_project_context_files(tool_runtime.workspace().root()).map_err(|error| {
-                LocalRuntimeError::Capability {
-                    detail: error.to_string(),
-                }
-            })?,
+            project_context_files,
             None,
             crate::context::ContextAssembly::new(),
             candidate,
@@ -3166,6 +3189,7 @@ mod subagent_child_tests {
     #[cfg(feature = "mcp-fixture")]
     fn fixture_binding(test_name: &str, prefix: &str) -> crate::tools::mcp::McpServerBinding {
         crate::tools::mcp::McpServerBinding {
+            resource_workspace: None,
             transport: crate::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -3454,6 +3478,7 @@ mod subagent_child_tests {
         child_spec.resolved.materialization.mcp_servers.insert(
             server_id,
             crate::tools::mcp::McpServerBinding {
+                resource_workspace: None,
                 transport: crate::tools::mcp::McpTransportConfig::Stdio {
                     program: "rustx-no-such-mcp-server".to_owned(),
                     args: Vec::new(),
@@ -3821,8 +3846,11 @@ mod composition_tests {
                 "workflow": [],
             },
         });
-        let config_bytes = serde_json::to_vec_pretty(&config_document).expect("runtime config");
-        std::fs::write(root.path().join("rustx.jsonc"), &config_bytes).expect("rustx.jsonc");
+        crate::launch_fixture::write_documents(
+            &root.path().join("rustx.jsonc"),
+            &config_document.to_string(),
+            &["mcpServers"],
+        );
         let launch = paths(root.path(), workspace).resolve();
         let runtime_config = launch.config.as_ref().clone();
         let runtime = LocalConversationCore::compose_from_config(

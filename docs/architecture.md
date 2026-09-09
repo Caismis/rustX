@@ -5802,6 +5802,18 @@ host trust, defaults and path provenance. See [launch configuration](launch-conf
 Profiles, includes and generated initialization are not part of this contract.
 Unknown fields are rejected everywhere rather than silently changing semantics.
 
+Project trust and Tool approval are independent: `approvalMode`, `nativeTools`
+and `mcpToolPolicies` are host-only objects, rejected at the project layer before
+merge. Projects cannot configure execution/concurrency within these objects
+either. Project-origin Skills, Subagent instruction/agentsMd files, and path-valued
+MCP command/cwd must remain inside the canonical trusted workspace, including
+symlink targets. `--config` grants no external-resource authority. The resolved
+launch retains project path authority for pre-composition rechecks; reload checks
+new candidates from the pinned slots and keeps the old generation on rejection.
+Workspace-owned instruction/Workflow reads and automatic resource roots enforce
+the same boundary. User/CLI resources remain independently host-authorized;
+ordinary tool execution is not filesystem-sandboxed by this check.
+
 Both configuration documents — `models.jsonc` and `rustx.jsonc` — are JSONC:
 JSON plus `//` and `/* */` comments and trailing commas. A human owns these
 files, so the format has to carry the reasoning behind a value next to the

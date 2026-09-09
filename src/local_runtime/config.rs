@@ -54,7 +54,7 @@ pub struct CurrentRuntimeConfig {
     /// The default model used when a brand-new Session is created.
     pub model: SessionModelConfig,
     /// The current runtime-wide approval control mode. This is launch
-    /// configuration, never Session history.
+    /// host-only configuration, never project authority or Session history.
     #[serde(default)]
     pub approval_mode: ApprovalMode,
     /// The launch-scoped Agent Status module configuration.
@@ -79,14 +79,14 @@ pub struct CurrentRuntimeConfig {
     /// identity exactly as mainstream MCP clients spell it.
     #[serde(default)]
     pub mcp_servers: BTreeMap<McpServerId, McpServerDocument>,
-    /// The rustX-owned per-server tool invocation policy overlay.
+    /// The host-owned per-server tool invocation policy overlay; forbidden in project layers.
     ///
     /// Deliberately not part of `mcpServers`: an `mcpServers` entry must stay
     /// copy-pasteable from an MCP server's own documentation.
     #[serde(default)]
     pub mcp_tool_policies: BTreeMap<McpServerId, InvocationPolicyDocument>,
     /// The per-tool execution, concurrency, and approval policies of the
-    /// native tool plane.
+    /// native tool plane. This complete object is host-only, including execution/concurrency.
     #[serde(default)]
     pub native_tools: NativeToolPoliciesDocument,
     /// The current base authorized tool environment.
@@ -97,7 +97,7 @@ pub struct CurrentRuntimeConfig {
     /// remains active and available.
     #[serde(default = "default_tools")]
     pub default_tools: Vec<String>,
-    /// Explicit Skill roots or package paths supplied by the project config.
+    /// Explicit Skill roots/packages; launch provenance retains host/project/CLI authority.
     #[serde(default)]
     pub skills: Vec<PathBuf>,
     /// The named subagent definitions and their launch-scoped capacity
@@ -761,6 +761,7 @@ impl CurrentRuntimeConfig {
                 Ok((
                     server_id.clone(),
                     McpServerBinding {
+                        resource_workspace: None,
                         transport,
                         policy: self
                             .mcp_tool_policies

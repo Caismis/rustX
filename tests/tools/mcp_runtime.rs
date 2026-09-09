@@ -76,6 +76,7 @@ mod unix_tests {
         let mut environment = environment;
         environment.insert(fixture::FIXTURE_MODE_ENV.to_owned(), "1".to_owned());
         McpServerBinding {
+            resource_workspace: None,
             transport: McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -308,6 +309,7 @@ mod unix_tests {
         let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
         let server_id = McpServerId::new("legacy-fixture");
         let binding = McpServerBinding {
+            resource_workspace: None,
             transport: McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -481,6 +483,7 @@ mod unix_tests {
         let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
         let server_id = McpServerId::new("legacy-invalid-request");
         let binding = McpServerBinding {
+            resource_workspace: None,
             transport: McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -571,6 +574,7 @@ mod unix_tests {
         let workspace_dir = tempfile::tempdir().expect("workspace");
         let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
         let binding = McpServerBinding {
+            resource_workspace: None,
             transport: McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -687,11 +691,11 @@ mod unix_tests {
         let models_path = root.path().join("models.jsonc");
         let config_path = root.path().join("rustx.jsonc");
         std::fs::write(&models_path, MODELS_JSON).expect("models.jsonc");
-        std::fs::write(
+        crate::launch_fixture::write_documents(
             &config_path,
-            serde_json::to_vec_pretty(&session).expect("session json"),
-        )
-        .expect("rustx.jsonc");
+            &session.to_string(),
+            &["mcpServers", "mcpToolPolicies"],
+        );
 
         let runtime = rustx::local_runtime::composition::LocalConversationRuntime::compose(
             &(LaunchFixture {
@@ -790,6 +794,7 @@ mod unix_tests {
         let runtime = McpServerRuntime::connect(
             &McpServerId::new("http-fixture"),
             &McpServerBinding {
+                resource_workspace: None,
                 transport: McpTransportConfig::StreamableHttp {
                     endpoint: format!("http://{address}/mcp"),
                     headers: BTreeMap::new(),
@@ -841,6 +846,7 @@ mod unix_tests {
         journal: &std::path::Path,
     ) -> McpServerBinding {
         McpServerBinding {
+            resource_workspace: None,
             transport: McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")

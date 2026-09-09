@@ -62,10 +62,12 @@ const PROJECT_INSTRUCTIONS = "# Project\n\nthe workspace instruction file\n";
 const CREDENTIAL_VARIABLE = "RUSTX_TUI_INTEGRATION_KEY";
 const CREDENTIAL_VALUE = "integration-secret";
 
-function spawnTrusted(options: ChildRuntimeProcessOptions): ChildRuntimeProcess {
+function spawnTrusted(options: ChildRuntimeProcessOptions, hostSettings: object = {}): ChildRuntimeProcess {
   assert(options.paths.runtimeRoot && options.paths.workspace);
   const host = `${options.paths.runtimeRoot}-host`;
   const env = { ...options.env, HOME: host, XDG_CONFIG_HOME: join(host, "config"), XDG_STATE_HOME: join(host, "state") };
+  mkdirSync(join(host, "config", "rustx"), { recursive: true });
+  writeFileSync(join(host, "config", "rustx", "settings.jsonc"), JSON.stringify(hostSettings));
   const grant = spawnSync(options.binary, ["--workspace", options.paths.workspace, "--trust", "grant"], { env, encoding: "utf8" });
   assert.equal(grant.status, 0, grant.stderr);
   return ChildRuntimeProcess.spawn({ ...options, env });
@@ -125,9 +127,6 @@ const BEFORE_START_RUNTIME_CONFIG_JSON = JSON.stringify({
   agentId: "agent-tui-before-start",
   model: { model: "fixture/integration-model" },
   context: { reserveTokens: 1024, keepRecentTokens: 8192 },
-  // Requiring approval gives the test a deterministic pre-tool boundary. The
-  // client cancels while the runtime is waiting there, before Bash can start.
-  nativeTools: { bash: { approval: "always" } },
   defaultTools: ["bash"],
 });
 
@@ -556,7 +555,7 @@ describe("real rustx BeforeStart cancellation projection", { skip: SKIP }, () =>
         runtimeRoot: fixture.path("private"),
       },
       env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE },
-    });
+    }, { nativeTools: { bash: { approval: "always" } } });
     const connection = new RuntimeClientConnection({
       input: child.stdout,
       output: child.stdin,

@@ -284,6 +284,11 @@ impl std::fmt::Debug for McpTransportConfig {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpServerBinding {
+    /// Project-origin local resources remain constrained on every connection,
+    /// including reconnection and frozen child materialization. Host bindings
+    /// carry no project restriction. This is not a project-configurable field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_workspace: Option<PathBuf>,
     /// The configured transport.
     pub transport: McpTransportConfig,
     /// One origin-independent policy for all tools from this server.
@@ -294,6 +299,7 @@ impl std::fmt::Debug for McpServerBinding {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("McpServerBinding")
+            .field("resource_workspace", &self.resource_workspace)
             .field("transport", &self.transport)
             .field("policy", &self.policy)
             .finish()
@@ -2025,6 +2031,19 @@ impl McpServerRuntime {
                     return Err(McpError::Configuration(
                         "stdio program must be non-empty".to_owned(),
                     ));
+                }
+                if let Some(root) = &binding.resource_workspace {
+                    if program.contains('/') {
+                        crate::runtime::resources::validate_project_resource_path(
+                            root,
+                            Path::new(program),
+                        )
+                        .map_err(|e| McpError::Configuration(e.to_string()))?;
+                    }
+                    if let Some(path) = cwd {
+                        crate::runtime::resources::validate_project_resource_path(root, path)
+                            .map_err(|e| McpError::Configuration(e.to_string()))?;
+                    }
                 }
                 let cwd = resolve_workspace_cwd(workspace, cwd.as_deref())?;
                 let mut explicit_environment =

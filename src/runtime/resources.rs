@@ -563,6 +563,46 @@ pub fn load_project_context_files(
     Ok(files)
 }
 
+/// Project resource reads follow canonical targets, never lexical prefixes.
+/// Missing resources remain the loader's error; existing ancestors are still
+/// checked so a missing leaf cannot hide an external symlink. No syscall-race
+/// protection is claimed against an actively hostile local OS user.
+pub(crate) fn validate_project_resource_path(
+    workspace: &Path,
+    path: &Path,
+) -> Result<(), RuntimeResourceLoadError> {
+    fn target(path: &Path) -> std::io::Result<PathBuf> {
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => std::fs::canonicalize(path),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let parent = path.parent().ok_or(e)?;
+                let name = path
+                    .file_name()
+                    .ok_or_else(|| std::io::Error::other("invalid resource path"))?;
+                Ok(target(parent)?.join(name))
+            }
+            Err(e) => Err(e),
+        }
+    }
+    // The owner supplies the canonical workspace captured at launch. Do not
+    // recanonicalize that authority: replacing the workspace itself with a
+    // symlink must not transfer its trust to the new target.
+    let resolved = target(path).map_err(|e| {
+        RuntimeResourceLoadError::new(format!(
+            "cannot authorize project resource {}: {e}",
+            path.display()
+        ))
+    })?;
+    if !resolved.starts_with(workspace) {
+        return Err(RuntimeResourceLoadError::new(format!(
+            "project resource {} is outside trusted workspace {}",
+            path.display(),
+            workspace.display()
+        )));
+    }
+    Ok(())
+}
+
 fn load_context_file_from_directory(
     directory: &Path,
 ) -> Result<Option<ProjectContextFile>, RuntimeResourceLoadError> {
@@ -581,6 +621,7 @@ fn load_context_file_from_directory(
         if !metadata.is_file() {
             continue;
         }
+        validate_project_resource_path(directory, &path)?;
         let bytes = std::fs::read(&path).map_err(|error| {
             RuntimeResourceLoadError::new(format!(
                 "cannot read project context file {}: {error}",

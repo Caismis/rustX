@@ -89,7 +89,7 @@ fn config_json(
         serde_json::json!({
             "old": {
                 "type": "stdio",
-                "command": "/definitely/missing-rustx-issue96-mcp"
+                "command": "missing-rustx-issue96-mcp"
             }
         })
     } else {
@@ -131,7 +131,7 @@ fn model(reference: &str) -> SessionModelConfig {
 async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
     let root = tempfile::tempdir().expect("root");
     let config_path = root.path().join("rustx.jsonc");
-    let skills_root = root.path().join("configured-skills");
+    let skills_root = root.path().join("workspace/configured-skills");
     write_skill(&skills_root, "old-skill", "Old current resource");
     std::fs::write(root.path().join("models.jsonc"), MODELS).expect("models");
     std::fs::write(
@@ -334,7 +334,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
 async fn invalid_current_config_is_rejected_even_when_a_catalog_exists() {
     let root = tempfile::tempdir().expect("root");
     let config_path = root.path().join("rustx.jsonc");
-    let skills_root = root.path().join("configured-skills");
+    let skills_root = root.path().join("workspace/configured-skills");
     std::fs::create_dir_all(&skills_root).expect("Skill root");
     std::fs::write(root.path().join("models.jsonc"), MODELS).expect("models");
     std::fs::write(
@@ -370,7 +370,7 @@ async fn invalid_current_config_is_rejected_even_when_a_catalog_exists() {
 async fn invalid_first_boot_model_does_not_publish_a_poisoned_session() {
     let root = tempfile::tempdir().expect("root");
     let config_path = root.path().join("rustx.jsonc");
-    let skills_root = root.path().join("configured-skills");
+    let skills_root = root.path().join("workspace/configured-skills");
     std::fs::create_dir_all(&skills_root).expect("Skill root");
     std::fs::write(root.path().join("models.jsonc"), MODELS).expect("models");
     let startup = paths(root.path(), &config_path);

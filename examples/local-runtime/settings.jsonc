@@ -1,6 +1,18 @@
-// Minimal host settings: copy to $XDG_CONFIG_HOME/rustx/settings.jsonc,
+// Host settings example: copy to $XDG_CONFIG_HOME/rustx/settings.jsonc,
 // or $HOME/.config/rustx/settings.jsonc when XDG_CONFIG_HOME is unset.
 // Configure the neighboring models.jsonc with your actual provider declaration.
 {
   "model": {"model": "example/demo-model"},
+  // Optional host policies; the model selection above alone is sufficient
+  // for minimal startup. Projects cannot declare these policy objects.
+  "approvalMode": "policy",
+  "nativeTools": {
+    "read": {"execution": "foreground_only", "concurrency": "parallel"},
+    "write": {"approval": "always", "execution": "foreground_only", "concurrency": "sequential"},
+    "edit": {"execution": "foreground_only", "concurrency": "sequential"},
+    "glob": {"execution": "foreground_only", "concurrency": "parallel"},
+    "grep": {"execution": "background_only", "concurrency": "parallel"},
+    "bash": {"execution": "model_selectable", "concurrency": "sequential", "approval": "always"},
+  },
+  "mcpToolPolicies": {},
 }

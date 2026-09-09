@@ -36,6 +36,14 @@ pub(super) fn grant(root: &std::path::Path, workspace: &std::path::Path) -> std:
         None,
     )
     .unwrap();
+    if root.join("settings.jsonc").exists() {
+        std::fs::create_dir_all(&host.config_directory).unwrap();
+        std::fs::copy(
+            root.join("settings.jsonc"),
+            host.config_directory.join("settings.jsonc"),
+        )
+        .unwrap();
+    }
     rustx::local_runtime::launch::change_trust(
         &rustx::local_runtime::LaunchRequest {
             workspace: Some(workspace.into()),

@@ -23,8 +23,7 @@
     },
   },
 
-  // Current-launch HITL behavior; this is never restored from Session history.
-  "approvalMode": "policy",
+  // Tool approval and invocation policies belong only in host settings.jsonc.
 
   // Optional Agent Status modules and their launch-scoped environment.
   "agentStatus": {
@@ -49,40 +48,6 @@
     "streamIdleTimeoutMs": 15000,
   },
 
-  // Native tools have independent execution, concurrency, and approval axes.
-  // `model_selectable` makes the model choose foreground/background for Bash;
-  // `always` makes every Bash call require approval in policy mode.
-  // `execution`, `ask_user`, and `todo` are fixed intrinsics and are therefore
-  // intentionally absent from this configurable policy table.
-  "nativeTools": {
-    "read": {
-      "execution": "foreground_only",
-      "concurrency": "parallel",
-    },
-    "write": {
-      "approval": "always",
-      "execution": "foreground_only",
-      "concurrency": "sequential",
-    },
-    "edit": {
-      "execution": "foreground_only",
-      "concurrency": "sequential",
-    },
-    "glob": {
-      "execution": "foreground_only",
-      "concurrency": "parallel",
-    },
-    "grep": {
-      "execution": "background_only",
-      "concurrency": "parallel",
-    },
-    "bash": {
-      "execution": "model_selectable",
-      "concurrency": "sequential",
-      "approval": "always",
-    },
-  },
-
   // The baseline is MCP-free. Uncomment one of these entries when an external
   // service is intentionally part of a local project. Both transport forms
   // stay inside the named server map:
@@ -101,17 +66,8 @@
     // },
   },
 
-  // rustX invocation policy is separate from the transport/server definition.
-  // A declared server with no entry uses foreground-only, sequential,
-  // approval-never defaults. Uncomment the matching entry when adding a
-  // server above.
-  "mcpToolPolicies": {
-    // "http-server": {
-    //   "execution": "foreground_only",
-    //   "concurrency": "parallel",
-    //   "approval": "never",
-    // },
-  },
+  // MCP invocation policy is host-owned: configure mcpToolPolicies in user
+  // settings, never here. Project trust does not grant Tool approval.
 
   // Optional native capabilities active in the main Agent. Fixed intrinsics
   // keep their intrinsic semantics; `subagent` exposes only `subagents.main`.

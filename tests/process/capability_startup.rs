@@ -64,7 +64,7 @@ fn startup(root: &tempfile::TempDir, session: &str) -> (std::path::PathBuf, Laun
     let models_path = canonical.join("models.jsonc");
     let session_path = canonical.join("rustx.jsonc");
     std::fs::write(&models_path, MODELS_JSON).expect("models.jsonc");
-    std::fs::write(&session_path, session).expect("rustx.jsonc");
+    crate::launch_fixture::write_documents(&session_path, session, &["mcpServers"]);
     (
         canonical.clone(),
         LaunchFixture {
@@ -762,7 +762,11 @@ async fn the_process_stays_alive_and_serves_when_optional_capabilities_fail() {
             },
         },
     });
-    std::fs::write(root.path().join("rustx.jsonc"), session.to_string()).expect("rustx.jsonc");
+    crate::launch_fixture::write_documents(
+        &root.path().join("rustx.jsonc"),
+        &session.to_string(),
+        &["mcpServers"],
+    );
 
     let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_rustx"));
     let home = super::runtime_process::grant(root.path(), &workspace);

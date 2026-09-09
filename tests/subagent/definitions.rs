@@ -733,7 +733,7 @@ async fn an_unavailable_source_keeps_the_runtime_healthy_but_blocks_the_agent_th
         "context": {"reserveTokens": 0, "keepRecentTokens": 0},
         "defaultTools": ["read", "subagent"],
         "mcpServers": {
-            "offline": {"type": "stdio", "command": "/definitely/missing-rustx-issue144-mcp"}
+            "offline": {"type": "stdio", "command": "missing-rustx-issue144-mcp"}
         },
         "subagents": {
             "maxConcurrent": 4,
@@ -748,11 +748,7 @@ async fn an_unavailable_source_keeps_the_runtime_healthy_but_blocks_the_agent_th
             "workflow": []
         }
     });
-    std::fs::write(
-        lab.root().join("rustx.jsonc"),
-        serde_json::to_string_pretty(&document).expect("config document"),
-    )
-    .expect("rustx.jsonc");
+    std::fs::write(lab.root().join("rustx.jsonc"), document.to_string()).expect("rustx.jsonc");
 
     // The whole runtime composes: an optional source failure is availability
     // state, not a composition error, and the catalog is still admitted.
@@ -1491,11 +1487,11 @@ async fn a_non_default_builtin_policy_survives_child_materialization_exactly() {
         },
         "subagents": explore(&["grep"]),
     });
-    std::fs::write(
-        lab.root().join("rustx.jsonc"),
-        serde_json::to_string_pretty(&document).expect("config document"),
-    )
-    .expect("rustx.jsonc");
+    crate::launch_fixture::write_documents(
+        &lab.root().join("rustx.jsonc"),
+        &document.to_string(),
+        &["nativeTools"],
+    );
     let product = lab.compose().await;
     let resources = product.runtime().runtime_resources();
 
@@ -1560,7 +1556,7 @@ async fn an_unavailable_source_cannot_hide_a_later_invalid_selector() {
         "context": {"reserveTokens": 0, "keepRecentTokens": 0},
         "defaultTools": ["read", "subagent"],
         "mcpServers": {
-            "offline": {"type": "stdio", "command": "/definitely/missing-rustx-issue144-mcp"}
+            "offline": {"type": "stdio", "command": "missing-rustx-issue144-mcp"}
         },
         "subagents": {
             "maxConcurrent": 4,

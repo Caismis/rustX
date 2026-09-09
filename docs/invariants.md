@@ -2718,6 +2718,19 @@ the launch-boundary policy inheritance.
   The runtime root is disjoint from the workspace and
   remains runtime-owned/generated state and is not a Workflow, Subagent, or
   general project-resource fallback.
+- **Project trust never grants Tool approval authority.** Project settings
+  reject `approvalMode`, `nativeTools`, and `mcpToolPolicies` before merging,
+  including empty objects and execution/concurrency-only policies. These are
+  host/user-owned complete policy objects.
+- **Project resource authority follows provenance, not absolute spelling.**
+  Project-origin Skills, Subagent instruction/agentsMd files and path-valued
+  MCP command/cwd must resolve within the canonical trusted workspace. Traversal,
+  absolute paths, symlink targets and external `--config` cannot widen that
+  authority. Initial preparation rechecks frozen path authority; reload rechecks
+  its candidate from pinned slots. Failed candidates never replace the current
+  generation. Automatic project roots and instruction/Workflow reads follow the
+  same rule. Host/CLI resources and execution paths remain separate authorities;
+  this is not an OS sandbox.
 - **Workflow registration is path-deterministic.** Each id in
   `workflows.definitions` maps to exactly
   `<workspace>/.agents/workflows/<id>.yaml`; the loader never scans that

@@ -65,10 +65,12 @@ higher layer would override them. Unknown fields fail at every schema boundary.
 | --- | --- | --- | --- | --- |
 | Model/provider declarations, endpoint, protocol, limits, capabilities, credential source | Host catalog; `models` chooses path | Forbidden | `--models` selects host catalog | Catalog replacement; no provider inference |
 | Default Session model selection and request policy (`model`) | Yes | Existing host model only | `--model provider/model` | Explicit model-policy members; CLI selects fresh model policy |
-| `agentId`, `approvalMode` | Yes | Yes | — | Scalar replacement |
+| `agentId` | Yes | Yes | — | Scalar replacement |
+| `approvalMode` | Yes | Forbidden | — | Host scalar replacement |
 | `context`, `modelTimeoutPolicy`, `toolDeadlinePolicy`, `agentStatus` | Yes | Yes | — | Explicit members of these finite records |
 | `defaultTools`, `skills` | Yes | Yes | `--tools`, `--exclude-tools`, `--skill`, disable flags | Lists replace; repeated CLI Skill paths form one replacing list |
-| `mcpServers`, `mcpToolPolicies`, `environment`, `nativeTools` | Yes | Yes | — | Named entries replace whole entries; empty map clears |
+| `mcpServers`, `environment` | Yes | Yes | — | Named entries replace whole entries; empty map clears |
+| `nativeTools`, `mcpToolPolicies` | Yes | Forbidden | — | Host-only whole named entries; empty map clears |
 | `subagents.maxConcurrent`, `.main`, `.workflow` | Yes | Yes | — | Scalar/list replacement |
 | `subagents.definitions` | Yes | Yes | — | Same-name definitions replace whole entries; empty map clears |
 | `workflows.definitions`, `.main` | Yes | Yes | — | Lists replace; YAML resources belong to workspace `.agents/workflows` |
@@ -81,6 +83,13 @@ higher layer would override them. Unknown fields fail at every schema boundary.
 Project MCP/resource declarations are permission to use those project-authored
 resources. They cannot replace the model provider catalog or its credentials.
 The independent external-source activation gate belongs to CFG-02.
+
+Project trust is not Tool approval authority. Projects cannot set `approvalMode`
+or any `nativeTools`/`mcpToolPolicies` object, including empty objects or only
+execution/concurrency members. These complete approval-bearing objects are
+host-only; no project policy members are currently permitted. Declarations fail
+before merge, rather than being silently overwritten. User settings retain all
+three invocation-policy axes and runtime-wide approval mode.
 
 Partial documents preserve absence. An absent list/map leaves the preceding
 value. An explicit empty list replaces with no entries; an empty named map
@@ -104,6 +113,45 @@ credentials.
 
 `--config` replaces the one project slot. It neither changes workspace identity
 nor bypasses trust or field authority. There is no legacy explicit-path mode.
+
+### Project resource path authority
+
+Every project-origin local resource path must resolve inside the canonical
+trusted workspace. This applies to `skills`, Subagent `instructionsFile` and
+`agentsMd.files`, MCP `cwd`, and MCP `command` when it contains `/`. Relative
+paths still use their document directory, but neither `..`, an absolute path,
+nor a symlink can grant access to a different workspace/worktree. An external
+`--config` permits inert parsing of that document, not activation of its
+neighboring files. There are no implicit external-resource grants.
+
+The resolver checks each project layer before merge and retains the original
+path spellings as project-authorized paths alongside field provenance. Initial
+composition rechecks their physical targets without reopening configuration.
+Reload checks the newly parsed pinned document layers and rejects the entire
+candidate on authority failure, keeping the previous generation authoritative.
+A corrected document may remove the rejected resource. Existing targets and
+existing ancestors of missing targets are canonicalized at these boundaries;
+dangling symlinks fail. In-workspace symlinks remain permitted where the resource
+domain allows them; Skills and Python packages retain stricter package-symlink
+validation. No protection against an OS user racing individual syscalls is claimed.
+The authority root remains the launch-canonical path: replacing the workspace
+itself with a symlink does not transfer its existing trust to the new target.
+
+Workspace-owned automatic `.agents/tools` and `.agents/skills` roots receive the
+same containment check before resource preparation. Selected project instruction
+files and registered Workflow files are checked at their read boundaries.
+User/CLI-origin explicit resource paths are host authority and are not subject
+to project containment; existing domain validation still applies (including MCP
+cwd rules). Ordinary native tool file arguments, shell/command argument strings,
+and child-worktree overlay paths retain their execution-domain semantics. This
+is automatic resource authority, not a general filesystem or executable sandbox.
+
+Project-origin MCP bindings also retain the original workspace authority in
+their frozen internal binding. Every connect/reconnect rechecks path-valued
+command/cwd before spawning; admitted children retain that same root, not their
+new worktree as a broader authority. The internal binding field cannot be set
+by JSONC. Managed Python interpreter paths are host-materialized execution
+resources; project package roots are checked before materialization.
 
 ## Trust
 

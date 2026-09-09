@@ -799,6 +799,7 @@ impl PreparedPythonPackage {
         environment.insert("FASTMCP_CHECK_FOR_UPDATES".to_owned(), "off".to_owned());
         environment.insert("PYTHONDONTWRITEBYTECODE".to_owned(), "1".to_owned());
         McpServerBinding {
+            resource_workspace: None,
             transport: McpTransportConfig::Stdio {
                 program: program.display().to_string(),
                 args: vec![

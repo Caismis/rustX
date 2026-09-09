@@ -2,6 +2,25 @@
 //! receive the same resolver output; this helper supplies explicit test intent.
 #![allow(dead_code)]
 use rustx::local_runtime::{HostEnvironment, LaunchRequest, ResolvedLaunch, StartupSession};
+use std::path::{Path, PathBuf};
+
+/// Author the two fixture authorities explicitly. Callers name which fixture
+/// members belong to the host; the production resolver never relocates fields.
+pub fn write_documents(config: &Path, source: &str, host_fields: &[&str]) {
+    let mut project: serde_json::Value = rustx::config_format::parse(source.as_bytes()).unwrap();
+    let mut user = serde_json::Map::new();
+    for field in host_fields {
+        if let Some(value) = project.as_object_mut().unwrap().remove(*field) {
+            user.insert((*field).into(), value);
+        }
+    }
+    std::fs::write(
+        config.parent().unwrap().join("settings.jsonc"),
+        serde_json::to_vec(&user).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(config, serde_json::to_vec(&project).unwrap()).unwrap();
+}
 
 pub fn grant(root: &std::path::Path, workspace: &std::path::Path) -> PathBuf {
     let home = root.join("host");
@@ -17,7 +36,6 @@ pub fn grant(root: &std::path::Path, workspace: &std::path::Path) -> PathBuf {
     .unwrap();
     home
 }
-use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct LaunchFixture {
@@ -56,12 +74,14 @@ impl LaunchFixture {
 
     pub fn try_resolve(&self) -> Result<ResolvedLaunch, String> {
         let host = tempfile::tempdir().expect("isolated host");
-        let environment = HostEnvironment::from_paths(
+        let mut environment = HostEnvironment::from_paths(
             std::env::current_dir().unwrap(),
             host.path().into(),
             None,
             None,
         )?;
+        // Tests may author host policies alongside their project document.
+        environment.config_directory = self.config.parent().unwrap().to_path_buf();
         let request = self.request();
         rustx::local_runtime::launch::change_trust(
             &request,

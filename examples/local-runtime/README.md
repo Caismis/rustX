@@ -5,7 +5,7 @@ Ordinary startup uses the [host configuration and trust contract](../../docs/lau
 Copy this directory and replace the provider placeholder to explore optional
 resources. Rust owns discovery, defaults and trust; the TUI forwards intent.
 
-Both configuration files are commented in place. Read them first: this
+The configuration files are commented in place. Read them first: this
 document explains the contracts around them, while the files themselves
 explain each field where it is set, and carry commented-out entries for the
 options the baseline does not enable.
@@ -16,6 +16,7 @@ The intended layout is:
 examples/local-runtime/
 ├── README.md
 ├── models.jsonc
+├── settings.jsonc
 ├── rustx.jsonc
 ├── workspace/
 │   ├── AGENTS.md
@@ -41,7 +42,8 @@ examples/local-runtime/
 | Path | Owner and purpose |
 | --- | --- |
 | `models.jsonc` | The runtime's provider/model authority: endpoint, credential source, model limits, capabilities, opaque request parameters, reasoning profiles, and protocol compatibility. |
-| `rustx.jsonc` | The current runtime/project configuration: default model for new Sessions, context, launch-scoped Agent Status modules/timezone, native-tool policy and activation, MCP sources, Skill roots, and authorized environment. |
+| `settings.jsonc` | Copy to the host configuration directory: user model selection and host-only Tool approval/invocation policies. |
+| `rustx.jsonc` | Project configuration: default model selection, context, Agent Status modules/timezone, tool activation, project MCP sources, contained Skill roots, and tool environment. It cannot set Tool approval/invocation policies. |
 | `workspace/` | The authoritative execution cwd and conventional project/source tree, including Skills and editable custom Python tool packages. Relative native file-tool paths resolve here. This is not a general filesystem sandbox for Read/Write/Edit/Grep/Glob. |
 | `workspace/.agents/skills/*` | Canonical project Skills, automatically discovered through the Skill plane's own semantics; a directory does not register a Workflow or Subagent. |
 | `workspace/.agents/tools/*` | Automatically discovered managed Python tool packages (FastMCP servers); there is no separate registration entry in `rustx.jsonc`. |
@@ -140,6 +142,13 @@ must be changed if the real provider uses a different reasoning parameter.
 
 ## `rustx.jsonc`
 
+All project-origin local resource paths must resolve inside the selected
+workspace, including symlink targets. This includes Skills, Subagent instruction
+and `agentsMd.files`, and path-valued MCP command/cwd. `--config` only chooses
+the project document; it grants no authority to its neighboring resources.
+User/CLI resources retain separate host authority. Reload repeats containment
+checks and rejects the whole candidate on failure.
+
 The baseline runtime config selects `example/demo-model` using the canonical
 `provider/model` identity. `models.jsonc` supplies the available model and its
 defaults; `rustx.jsonc.model` supplies the default for a brand-new Session.
@@ -183,6 +192,11 @@ and a deadline is cancellation intent: the loop cancels the call and awaits
 the executor's physical settlement, bounded by a confirmation window —
 committing `TimedOut` only when terminal settlement is proven, and
 `OutcomeUnknown` when the executor cannot prove it.
+
+Host `settings.jsonc` owns `approvalMode`, `nativeTools`, and `mcpToolPolicies`.
+Project `rustx.jsonc` rejects all three objects, including execution/concurrency
+members. Copy the optional policies from the host settings example if desired;
+project trust never grants Tool approval authority.
 
 `approvalMode` is the current runtime-wide HITL mode. It defaults to `policy`;
 `full_access` suppresses only approval prompts for the current runtime and is
@@ -378,7 +392,7 @@ alias, no `sse`, and no `ws`. An entry that is ambiguous or contradictory
 `command`, an unknown field) fails startup rather than being guessed at.
 
 **Tool policy.** rustX's own invocation policy for a server's tools lives in
-the separate `mcpToolPolicies` map, keyed by the same identity, so an
+the host settings `mcpToolPolicies` map, keyed by the same identity, so an
 `mcpServers` entry stays ordinary MCP configuration:
 
 ```jsonc

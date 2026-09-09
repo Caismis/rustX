@@ -79,7 +79,7 @@ fn startup(root: &std::path::Path, models: &str, config: &str) -> LaunchFixture 
     let models_path = root.join("models.jsonc");
     let config_path = root.join("rustx.jsonc");
     std::fs::write(&models_path, models).expect("models.jsonc");
-    std::fs::write(&config_path, config).expect("rustx.jsonc");
+    crate::launch_fixture::write_documents(&config_path, config, &["nativeTools"]);
     LaunchFixture {
         models: models_path,
         config: config_path,

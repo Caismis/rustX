@@ -442,6 +442,7 @@ async fn a_configured_python_identity_collision_is_an_internal_invariant_violati
     let fixture = fixture_with_servers(std::collections::BTreeMap::from([(
         server_id,
         rustx::tools::mcp::McpServerBinding {
+            resource_workspace: None,
             transport: rustx::tools::mcp::McpTransportConfig::Stdio {
                 program: "/nonexistent/rustx-issue174-configured-server".to_owned(),
                 args: Vec::new(),

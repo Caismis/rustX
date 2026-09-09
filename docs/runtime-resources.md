@@ -1,5 +1,32 @@
 # Runtime resources and executable authority
 
+## Launch authority and resource paths
+
+Project trust permits project resources, never Tool approval policy.
+`approvalMode`, `nativeTools`, and `mcpToolPolicies` belong exclusively to host
+settings, including execution/concurrency members of those policy objects.
+
+Project-origin Skills, Subagent `instructionsFile`/`agentsMd.files`, and
+path-valued MCP `command`/`cwd` must resolve inside the canonical trusted
+workspace. Project instructions, Workflow files and automatic `.agents` resource
+roots obey the same containment boundary. Absolute paths, traversal, symlink
+targets and an external `--config` cannot grant another worktree's authority.
+User/CLI explicit resources retain host authority and their domain validation.
+Native file-tool arguments and command argument strings remain execution
+semantics, not sandboxed paths.
+
+Checks run before initial resource loading and again for reload candidates from
+launch-pinned slots. Symlink changes are re-evaluated against physical targets;
+failed candidates leave the previous generation intact. This does not claim
+race-proof syscall isolation against a hostile local OS user. See the complete
+[launch authority policy](launch-configuration.md#project-resource-path-authority).
+
+Frozen project MCP bindings preserve the original resource workspace through
+child admission and reconnect. The shared connect boundary checks local
+command/cwd targets before every process spawn; it does not rediscover settings.
+
+## Resource ownership
+
 `capabilities::selection` owns `ToolSelector` and exact source-qualified Tool
 resolution. Named Subagents and fixed Workflows consume it directly. Selector
 serialization is unchanged; managed Python remains MCP-origin.

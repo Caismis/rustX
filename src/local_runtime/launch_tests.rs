@@ -315,6 +315,14 @@ fn canonical_symlink_and_real_git_worktree_identities_are_stable_and_separate() 
     change_trust(&f.request, &host, TrustAction::Revoke).unwrap();
     assert!(resolve(&f.request, &host).is_err());
     assert!(resolve(&f.request, &f.host).is_ok(), "revocation is scoped");
+    let outside = host.launch_directory.join("untrusted.md");
+    std::fs::write(&outside, "other worktree").unwrap();
+    f.project(json!({"subagents":{"definitions":{"other":{"description":"other","instructionsFile":outside}}}}));
+    assert!(
+        resolve(&f.request, &f.host)
+            .unwrap_err()
+            .contains("outside trusted workspace")
+    );
 }
 
 #[tokio::test]
@@ -522,6 +530,338 @@ fn duplicate_role_definitions_and_invalid_lower_layer_cannot_be_hidden() {
     );
     f.user(json!({"model":{"model":"host/one"},"context":{"unknown":true}}));
     f.project(json!({"context":{"reserveTokens":7}}));
+    assert!(
+        resolve(&f.request, &f.host)
+            .unwrap_err()
+            .contains("unknown field")
+    );
+}
+
+#[test]
+fn project_trust_never_grants_tool_approval_authority() {
+    let mut f = Fixture::new();
+    let user = json!({"model":{"model":"host/one"},"approvalMode":"full_access",
+        "nativeTools":{"bash":{"approval":"always"}},
+        "mcpServers":{"server":{"command":"fixture"}},
+        "mcpToolPolicies":{"server":{"approval":"always"}}});
+    f.user(user);
+    let host = f.resolve();
+    assert_eq!(
+        host.config.approval_mode,
+        crate::runtime::ApprovalMode::FullAccess
+    );
+    let serialized = serde_json::to_value(host.config()).unwrap();
+    assert_eq!(serialized["nativeTools"]["bash"]["approval"], "always");
+    assert_eq!(
+        serialized["mcpToolPolicies"]["server"]["approval"],
+        "always"
+    );
+    for document in [
+        json!({"approvalMode":"full_access"}),
+        json!({"nativeTools":{"bash":{"approval":"never"}}}),
+        json!({"mcpToolPolicies":{"server":{"approval":"never"}}}),
+        json!({"nativeTools":{}}),
+        json!({"nativeTools":{"bash":{"execution":"background_only"}}}),
+    ] {
+        f.project(document);
+        // Explicit CLI selection cannot mask a forbidden project declaration.
+        f.request.model = Some("host/two".into());
+        for explicit in [false, true] {
+            f.request.config = explicit.then(|| "rustx.jsonc".into());
+            let error = resolve(&f.request, &f.host).unwrap_err();
+            assert!(
+                error.contains("forbidden") && error.contains("approval authority"),
+                "{error}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn project_resource_authority_rejects_every_declared_escape_but_preserves_host_paths() {
+    let mut f = Fixture::new();
+    let other = f.root.path().join("B");
+    std::fs::create_dir(&other).unwrap();
+    let resource = other.join("resource");
+    std::fs::write(&resource, "untrusted B bytes").unwrap();
+    let role = |path: serde_json::Value| json!({"subagents":{"definitions":{"x":{"description":"x","instructionsFile":path}}}});
+    for document in [
+        role(json!("../B/resource")),
+        role(json!(&resource)),
+        json!({"skills":[&other]}),
+        json!({"subagents":{"definitions":{"x":{"description":"x","instructionsFile":"inside.md","agentsMd":{"files":[&resource]}}}}}),
+        json!({"mcpServers":{"x":{"command":&resource}}}),
+        json!({"mcpServers":{"x":{"command":"fixture","cwd":&other}}}),
+    ] {
+        f.project(document);
+        let error = resolve(&f.request, &f.host).unwrap_err();
+        assert!(error.contains("outside trusted workspace"), "{error}");
+    }
+    // An external --config is inert input, not a grant for its neighboring files.
+    std::fs::write(
+        other.join("config.jsonc"),
+        role(json!("resource")).to_string(),
+    )
+    .unwrap();
+    f.request.config = Some(other.join("config.jsonc"));
+    assert!(
+        resolve(&f.request, &f.host)
+            .unwrap_err()
+            .contains("outside trusted workspace")
+    );
+    f.request.config = None;
+    f.project(json!({}));
+    f.user(json!({"model":{"model":"host/one"},"subagents":{"definitions":{"x":{"description":"host","instructionsFile":&resource}}}}));
+    let host = f.resolve();
+    assert!(matches!(
+        host.provenance["subagents.definitions.x"],
+        Origin::User { .. }
+    ));
+    let skill = other.join("outside");
+    std::fs::create_dir(&skill).unwrap();
+    f.request.skill_paths = vec![skill];
+    std::fs::write(
+        f.request.skill_paths[0].join("SKILL.md"),
+        "---\nname: outside\ndescription: Host resource\n---\nHost instructions\n",
+    )
+    .unwrap();
+    assert!(matches!(
+        f.resolve().provenance["skills"],
+        Origin::Cli { .. }
+    ));
+    let product = LocalSessionProduct::compose(&f.resolve(), &LocalRuntimeDependencies::default())
+        .await
+        .unwrap();
+    let resources = product.runtime().runtime_resources();
+    assert_eq!(
+        resources
+            .subagents()
+            .get(&crate::runtime::subagent::SubagentName::parse("x").unwrap())
+            .unwrap()
+            .instructions(),
+        "untrusted B bytes"
+    );
+    assert!(resources.skill_catalog().unwrap().contains("outside"));
+    product.runtime().shutdown().await.unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn project_symlink_escape_is_rechecked_before_composition_and_reload() {
+    let f = Fixture::new();
+    let other = f.root.path().join("B");
+    std::fs::create_dir(&other).unwrap();
+    std::fs::write(other.join("instructions.md"), "B MUST NEVER BE ADMITTED").unwrap();
+    let source = f.host.launch_directory.join("instructions.md");
+    std::fs::write(&source, "trusted A").unwrap();
+    f.project(json!({"subagents":{"definitions":{"x":{"description":"x","instructionsFile":"instructions.md"}}}}));
+    let launch = f.resolve();
+    std::fs::remove_file(&source).unwrap();
+    std::os::unix::fs::symlink(other.join("instructions.md"), &source).unwrap();
+    assert!(
+        resolve(&f.request, &f.host)
+            .unwrap_err()
+            .contains("outside trusted workspace")
+    );
+    assert!(
+        LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("outside trusted workspace")
+    );
+    std::fs::remove_file(&source).unwrap();
+    std::fs::write(&source, "trusted A").unwrap();
+    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+        .await
+        .unwrap();
+    let before = product.runtime().runtime_resources();
+    std::fs::remove_file(&source).unwrap();
+    std::os::unix::fs::symlink(other.join("instructions.md"), &source).unwrap();
+    assert!(
+        product
+            .runtime()
+            .reload_resources()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("outside trusted workspace")
+    );
+    let after = product.runtime().runtime_resources();
+    assert_eq!(before.revision(), after.revision());
+    assert_eq!(before.capability_revision(), after.capability_revision());
+    assert!(std::sync::Arc::ptr_eq(&before, &after));
+    assert_eq!(
+        after
+            .subagents()
+            .get(&crate::runtime::subagent::SubagentName::parse("x").unwrap())
+            .unwrap()
+            .instructions(),
+        "trusted A"
+    );
+    f.project(json!({"subagents":{"definitions":{"x":{"description":"escape","instructionsFile":other.join("instructions.md")}}}}));
+    assert!(
+        product
+            .runtime()
+            .reload_resources()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("outside trusted workspace")
+    );
+    assert_eq!(
+        product.runtime().runtime_resources().revision(),
+        before.revision()
+    );
+    // Removing the offending declaration permits a new candidate: stale launch
+    // paths must not become a second resource-generation authority.
+    f.project(json!({"subagents":{"definitions":{}}}));
+    product.runtime().reload_resources().await.unwrap();
+    product.runtime().shutdown().await.unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn project_directory_symlinks_cannot_authorize_builtin_or_declared_resources() {
+    let f = Fixture::new();
+    let other = f.root.path().join("B");
+    std::fs::create_dir(&other).unwrap();
+    std::fs::write(other.join("file"), "B").unwrap();
+    std::os::unix::fs::symlink(&other, f.host.launch_directory.join("link")).unwrap();
+    for document in [
+        json!({"skills":["link"]}),
+        json!({"subagents":{"definitions":{"x":{"description":"x","instructionsFile":"link/file"}}}}),
+        json!({"mcpServers":{"x":{"command":"link/file"}}}),
+        json!({"mcpServers":{"x":{"command":"fixture","cwd":"link"}}}),
+    ] {
+        f.project(document);
+        assert!(
+            resolve(&f.request, &f.host)
+                .unwrap_err()
+                .contains("outside trusted workspace")
+        );
+    }
+    f.project(json!({}));
+    std::os::unix::fs::symlink(&other, f.host.launch_directory.join(".agents")).unwrap();
+    assert!(
+        f.resolve()
+            .validate_resource_authority()
+            .unwrap_err()
+            .contains("outside trusted workspace")
+    );
+    std::os::unix::fs::symlink(
+        other.join("file"),
+        f.host.launch_directory.join("AGENTS.md"),
+    )
+    .unwrap();
+    assert!(
+        crate::runtime::load_project_context_files(&f.host.launch_directory)
+            .unwrap_err()
+            .to_string()
+            .contains("outside trusted workspace")
+    );
+    std::fs::remove_file(f.host.launch_directory.join(".agents")).unwrap();
+    std::fs::remove_file(f.host.launch_directory.join("AGENTS.md")).unwrap();
+    let launch = f.resolve();
+    std::fs::rename(&f.host.launch_directory, f.root.path().join("retired-A")).unwrap();
+    std::os::unix::fs::symlink(&other, &f.host.launch_directory).unwrap();
+    assert!(
+        launch
+            .validate_resource_authority()
+            .unwrap_err()
+            .contains("outside trusted workspace")
+    );
+    assert!(
+        resolve(&f.request, &f.host)
+            .unwrap_err()
+            .contains("not trusted")
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn workspace_workflow_symlink_rejects_reload_without_reading_external_yaml() {
+    let f = Fixture::new();
+    let launch = f.resolve();
+    let product = LocalSessionProduct::compose(&launch, &LocalRuntimeDependencies::default())
+        .await
+        .unwrap();
+    let before = product.runtime().runtime_resources();
+    let other = f.root.path().join("B.yaml");
+    std::fs::write(&other, "THIS IS NOT YAML: [").unwrap();
+    let directory = f.host.launch_directory.join(".agents/workflows");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::os::unix::fs::symlink(&other, directory.join("escape.yaml")).unwrap();
+    f.project(json!({"workflows":{"definitions":["escape"]}}));
+    let error = product
+        .runtime()
+        .reload_resources()
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("outside trusted workspace"),
+        "authority rejection must precede YAML parsing: {error}"
+    );
+    assert!(std::sync::Arc::ptr_eq(
+        &before,
+        &product.runtime().runtime_resources()
+    ));
+    product.runtime().shutdown().await.unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn frozen_mcp_binding_rechecks_project_authority_on_every_connect() {
+    use crate::tools::mcp::{McpInvalidationState, McpServerBinding, McpServerRuntime};
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let program = f.host.launch_directory.join("server");
+    std::fs::write(&program, "initial project resource").unwrap();
+    f.project(json!({"mcpServers":{"x":{"command":"./server"}}}));
+    let launch = f.resolve();
+    let bindings = super::composition::mcp_bindings_with_authority(
+        launch.config(),
+        &launch.workspace,
+        launch.provenance(),
+    )
+    .unwrap();
+    let id = crate::runtime::identity::McpServerId::new("x");
+    let binding = &bindings[&id];
+    assert_eq!(binding.resource_workspace.as_ref(), Some(&launch.workspace));
+    // The same binding is serialized into admitted child inputs and retained
+    // by reconnect authority; no rediscovery is needed to enforce the root.
+    let frozen: McpServerBinding =
+        serde_json::from_slice(&serde_json::to_vec(binding).unwrap()).unwrap();
+    assert_eq!(&frozen, binding);
+    let other = f.root.path().join("B");
+    std::fs::create_dir(&other).unwrap();
+    let sentinel = other.join("started");
+    std::fs::write(
+        other.join("server"),
+        format!("#!/bin/sh\ntouch '{}'\n", sentinel.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(other.join("server"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::remove_file(&program).unwrap();
+    std::os::unix::fs::symlink(other.join("server"), &program).unwrap();
+    let workspace = crate::tools::workspace::Workspace::new(&launch.workspace).unwrap();
+    for _ in 0..2 {
+        let error = McpServerRuntime::connect(
+            &id,
+            &frozen,
+            &workspace,
+            std::sync::Arc::new(McpInvalidationState::default()),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("outside trusted workspace"),
+            "{error}"
+        );
+        assert!(!sentinel.exists());
+    }
+    f.project(json!({"mcpServers":{"x":{"command":"./server","resourceWorkspace":other}}}));
     assert!(
         resolve(&f.request, &f.host)
             .unwrap_err()

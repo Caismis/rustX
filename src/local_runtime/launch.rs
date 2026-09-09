@@ -173,9 +173,34 @@ pub struct ResolvedLaunch {
     /// Fixed document slots for explicit resource reload; never discovery.
     documents: Vec<(PathBuf, bool, Origin)>,
     model_override: Option<String>,
+    /// Project-origin paths retain their authority even after becoming absolute.
+    project_resources: Vec<PathBuf>,
 }
 
 impl ResolvedLaunch {
+    /// Recheck physical targets immediately before resource preparation. This
+    /// never rereads launch documents and is not an execution filesystem sandbox.
+    pub(crate) fn validate_resource_authority(&self) -> Result<(), String> {
+        for path in &self.project_resources {
+            crate::runtime::resources::validate_project_resource_path(&self.workspace, path)
+                .map_err(|e| e.to_string())?;
+        }
+        self.validate_workspace_resource_roots()
+    }
+
+    pub(crate) fn validate_workspace_resource_roots(&self) -> Result<(), String> {
+        for relative in [".agents/tools", ".agents/skills"] {
+            if relative == ".agents/skills" && self.no_skills {
+                continue;
+            }
+            crate::runtime::resources::validate_project_resource_path(
+                &self.workspace,
+                &self.workspace.join(relative),
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
     /// The immutable validated settings this launch resolved.
     #[must_use]
     pub fn config(&self) -> &CurrentRuntimeConfig {
@@ -196,14 +221,17 @@ impl ResolvedLaunch {
 
     /// The existing resource-generation owner may reread only the slots this
     /// launch authorized. Catalog, workspace, state and trust remain frozen.
-    pub(crate) fn reload_resource_config(&self) -> Result<CurrentRuntimeConfig, String> {
+    pub(crate) fn reload_resource_config(
+        &self,
+    ) -> Result<(CurrentRuntimeConfig, BTreeMap<String, Origin>), String> {
+        self.validate_workspace_resource_roots()?;
         let mut merged = Map::new();
         let mut provenance = BTreeMap::new();
         for (path, required, origin) in &self.documents {
             let mut layer = read_layer(path, *required, matches!(origin, Origin::Project { .. }))?;
             layer.remove("models");
             layer.remove("runtimeRoot");
-            rebase_paths(&mut layer, origin)?;
+            rebase_paths(&mut layer, origin, &self.workspace)?;
             merge_fields(&mut merged, layer, "", origin, &mut provenance);
         }
         if let Some(model) = &self.model_override {
@@ -219,7 +247,7 @@ impl ResolvedLaunch {
         let config: CurrentRuntimeConfig =
             serde_json::from_value(Value::Object(merged)).map_err(|e| e.to_string())?;
         config.validate().map_err(|e| e.to_string())?;
-        Ok(config)
+        Ok((config, provenance))
     }
 }
 
@@ -444,6 +472,7 @@ pub fn resolve(request: &LaunchRequest, host: &HostEnvironment) -> Result<Resolv
     ];
     let mut merged = Map::new();
     let mut provenance = BTreeMap::new();
+    let mut project_resources = Vec::new();
     for (mut layer, origin) in [
         (
             user,
@@ -460,7 +489,7 @@ pub fn resolve(request: &LaunchRequest, host: &HostEnvironment) -> Result<Resolv
             },
         ),
     ] {
-        rebase_paths(&mut layer, &origin)?;
+        project_resources.extend(rebase_paths(&mut layer, &origin, &locations.workspace)?);
         merge_fields(&mut merged, layer, "", &origin, &mut provenance);
     }
     if !request.skill_paths.is_empty() {
@@ -573,6 +602,7 @@ pub fn resolve(request: &LaunchRequest, host: &HostEnvironment) -> Result<Resolv
         skill_roots,
         documents,
         model_override: request.model.clone(),
+        project_resources,
     })
 }
 
@@ -762,6 +792,18 @@ fn read_layer(path: &Path, required: bool, project: bool) -> Result<Map<String, 
             ));
         }
     }
+    // Approval-bearing objects are host-only, including empty objects and
+    // non-approval members. Reject before merging: precedence cannot hide this.
+    if project {
+        for name in ["approvalMode", "nativeTools", "mcpToolPolicies"] {
+            if object.contains_key(name) {
+                return Err(format!(
+                    "{}: field {name} is forbidden in project settings (host-owned Tool approval authority)",
+                    path.display()
+                ));
+            }
+        }
+    }
     // Validate partial syntax independently, so an invalid lower layer cannot be
     // hidden by an upper one. The typed partial document never inserts defaults.
     let _: PartialRuntime =
@@ -769,18 +811,29 @@ fn read_layer(path: &Path, required: bool, project: bool) -> Result<Map<String, 
     Ok(std::mem::take(&mut object))
 }
 
-fn rebase_paths(layer: &mut Map<String, Value>, origin: &Origin) -> Result<(), String> {
-    fn path(value: &mut Value, base: &Path) -> Result<(), String> {
+fn rebase_paths(
+    layer: &mut Map<String, Value>,
+    origin: &Origin,
+    workspace: &Path,
+) -> Result<Vec<PathBuf>, String> {
+    let mut resources = Vec::new();
+    let mut path = |value: &mut Value, base: &Path| -> Result<(), String> {
         let raw = value.as_str().ok_or("path must be a string")?;
         if raw.is_empty() {
             return Err("path must be non-empty".into());
         }
-        *value = serde_json::to_value(absolute(base, Path::new(raw))).map_err(|e| e.to_string())?;
+        let resolved = absolute(base, Path::new(raw));
+        if matches!(origin, Origin::Project { .. }) {
+            crate::runtime::resources::validate_project_resource_path(workspace, &resolved)
+                .map_err(|e| e.to_string())?;
+            resources.push(resolved.clone());
+        }
+        *value = serde_json::to_value(resolved).map_err(|e| e.to_string())?;
         Ok(())
-    }
+    };
     let base = match origin {
         Origin::User { base, .. } | Origin::Project { base, .. } | Origin::Cli { base } => base,
-        Origin::Builtin => return Ok(()),
+        Origin::Builtin => return Ok(resources),
     };
     if let Some(Value::Array(skills)) = layer.get_mut("skills") {
         for skill in skills {
@@ -819,7 +872,7 @@ fn rebase_paths(layer: &mut Map<String, Value>, origin: &Origin) -> Result<(), S
             }
         }
     }
-    Ok(())
+    Ok(resources)
 }
 
 // Option + deserialize_with rejects explicit null for nonnullable fields while

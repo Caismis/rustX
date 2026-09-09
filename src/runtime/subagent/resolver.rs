@@ -981,6 +981,7 @@ mod tests {
         let github = McpServerId::new("github");
         let unrelated = McpServerId::new("filesystem");
         let binding = || crate::tools::mcp::McpServerBinding {
+            resource_workspace: None,
             transport: crate::tools::mcp::McpTransportConfig::Stdio {
                 program: "server".to_owned(),
                 args: Vec::new(),
