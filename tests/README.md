@@ -152,6 +152,11 @@ invariant is a real process boundary.
   multi-select `enum`'s `minItems`/`maxItems` are enforced by the runtime
   before any continuation is dispatched, and an out-of-bound human answer is
   refused while the Interaction stays pending rather than failing the call.
+  A second form declares scalars at the binary64 exact-value frontier — an
+  `integer` whose entire legal answer set lies above the JavaScript
+  safe-integer range, and a `number` bounded at `2^53` — proving that the
+  exact values the runtime validated are the values the server receives, with
+  one step outside either bound refused while the Interaction stays pending.
 - `mcp_mrtr_managed` — the same contract end to end against a real managed
   `FastMCP` 4 child built by a real, network-bound `uv`: one model
   `ToolCall`, a negotiated `2026-07-28` connection, two real `tools/call`

@@ -331,11 +331,20 @@ fn questionnaire_result(
                         }
                         QuestionnaireAnswer::Number(NumberAnswer { value }) => {
                             result["kind"] = serde_json::json!("number");
-                            result["answer"] = serde_json::Value::Number(value);
+                            // `FiniteNumber` cannot be NaN or infinite, so the
+                            // JSON number always exists; the fallback exists
+                            // only to keep this mapping total without a panic.
+                            result["answer"] = value
+                                .to_json_number()
+                                .map_or(serde_json::Value::Null, serde_json::Value::Number);
                         }
                         QuestionnaireAnswer::Integer(IntegerAnswer { value }) => {
                             result["kind"] = serde_json::json!("integer");
-                            result["answer"] = serde_json::json!(value);
+                            // The model-facing result carries the exact whole
+                            // number as a JSON integer: this is a Rust->model
+                            // hop, not the Runtime Client wire, so no binary64
+                            // stage exists to round it.
+                            result["answer"] = serde_json::json!(value.get());
                         }
                         QuestionnaireAnswer::Boolean(BooleanAnswer { value }) => {
                             result["kind"] = serde_json::json!("boolean");

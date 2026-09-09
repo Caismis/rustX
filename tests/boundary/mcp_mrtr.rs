@@ -29,11 +29,12 @@ use crate::runtime::types::{CancellationReason, ConversationLifecycle};
 use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolExecutor};
 use crate::tools::mcp::MCP_MRTR_MAX_ROUNDS;
 use crate::tools::mcp::fixture::{
-    FIXTURE_MODE_ENV, FixtureServer, MRTR_CONFIRM_TOOL, MRTR_MIXED_TOOL, MRTR_MULTI_SELECT_TOOL,
-    MRTR_MULTI_TOOL, MRTR_OBSERVATION_FILE_ENV, MRTR_OVERSIZED_STATE_TOOL, MRTR_PROGRESS_TOOL,
-    MRTR_ROOTS_TOOL, MRTR_ROUNDS_ENV, MRTR_SAMPLING_TOOL, MRTR_SLOW_CONTINUATION_TOOL,
-    MRTR_STATE_ONLY_TOOL, MRTR_TOOLS_ENV, MRTR_TYPED_TOOL, MRTR_UNSUPPORTED_SCHEMA_TOOL,
-    MrtrObservation, TOOL_PREFIX_ENV, fixture_round_state, fixture_spawn_args, mrtr_observations,
+    FIXTURE_MODE_ENV, FixtureServer, MRTR_CONFIRM_TOOL, MRTR_EXACT_LEDGER_RANGE,
+    MRTR_EXACT_SCALARS_TOOL, MRTR_MIXED_TOOL, MRTR_MULTI_SELECT_TOOL, MRTR_MULTI_TOOL,
+    MRTR_OBSERVATION_FILE_ENV, MRTR_OVERSIZED_STATE_TOOL, MRTR_PROGRESS_TOOL, MRTR_ROOTS_TOOL,
+    MRTR_ROUNDS_ENV, MRTR_SAMPLING_TOOL, MRTR_SLOW_CONTINUATION_TOOL, MRTR_STATE_ONLY_TOOL,
+    MRTR_TOOLS_ENV, MRTR_TYPED_TOOL, MRTR_UNSUPPORTED_SCHEMA_TOOL, MrtrObservation,
+    TOOL_PREFIX_ENV, fixture_round_state, fixture_spawn_args, mrtr_observations,
     serve_if_fixture_mode,
 };
 use crate::tools::mcp::{
@@ -852,8 +853,8 @@ async fn a_mixed_typed_form_round_trips_every_supported_scalar_kind() {
     assert_eq!(
         questionnaire.questions[2].answer,
         AnswerSpecification::Integer(crate::events::interaction::IntegerAnswerSpecification {
-            minimum: Some(1),
-            maximum: Some(5),
+            minimum: Some(crate::events::interaction::ExactInteger::new(1)),
+            maximum: Some(crate::events::interaction::ExactInteger::new(5)),
         }),
     );
     assert_eq!(
@@ -936,7 +937,9 @@ fn typed_answers(
                 QuestionnaireAnswerEntry {
                     question_index: 2,
                     answer: QuestionnaireAnswer::Integer(
-                        crate::events::interaction::IntegerAnswer { value: attempts },
+                        crate::events::interaction::IntegerAnswer {
+                            value: crate::events::interaction::ExactInteger::new(attempts),
+                        },
                     ),
                 },
                 QuestionnaireAnswerEntry {
@@ -948,6 +951,117 @@ fn typed_answers(
             ],
         }),
     }
+}
+
+/// The end-to-end proof of the repaired scalar contract against a real MCP
+/// peer: an exact whole number above the JavaScript safe-integer range, and a
+/// number at the binary64 precision frontier, reach the server **unrounded**.
+///
+/// The server declares the bounds, the runtime publishes a typed question, a
+/// Runtime Client response crosses the protocol, the runtime validates it, and
+/// the server echoes back exactly what it received. Every stage is the shipped
+/// one, so nothing here can be true of a mock and false of the product.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exact_scalars_reach_a_real_server_without_rounding() {
+    if serve_if_fixture_mode(FixtureServer::from_env()).await {
+        return;
+    }
+    let harness = Harness::connect(
+        "boundary_suites::mcp_mrtr::exact_scalars_reach_a_real_server_without_rounding",
+        FixtureOptions::default(),
+    )
+    .await;
+    let progress = RecordingProgress::default();
+    let call = harness.invoke(MRTR_EXACT_SCALARS_TOOL, "exact-1", &progress, true);
+    tokio::pin!(call);
+    let request = tokio::select! {
+        result = &mut call => panic!("the call settled before asking: {result:?}"),
+        request = harness.next_pending() => request,
+    };
+    let questionnaire = questionnaire_of(&request);
+    assert_eq!(questionnaire.questions.len(), 2);
+    // The server's own i64 bounds are carried across intact, so the published
+    // question is answerable rather than merely well-formed.
+    assert_eq!(
+        questionnaire.questions[0].answer,
+        AnswerSpecification::Integer(crate::events::interaction::IntegerAnswerSpecification {
+            minimum: Some(crate::events::interaction::ExactInteger::new(
+                MRTR_EXACT_LEDGER_RANGE.0
+            )),
+            maximum: Some(crate::events::interaction::ExactInteger::new(
+                MRTR_EXACT_LEDGER_RANGE.1
+            )),
+        }),
+    );
+    // And the whole published question survives the Runtime Client protocol:
+    // its integer bounds are decimal text, not JavaScript numbers.
+    let projected = serde_json::to_value(&questionnaire).expect("projects");
+    assert_eq!(
+        projected["questions"][0]["answer"]["minimum"],
+        serde_json::json!(MRTR_EXACT_LEDGER_RANGE.0.to_string())
+    );
+
+    // A whole number two above the frontier — the value binary64 cannot hold.
+    let ledger = 9_007_199_254_740_993_i64;
+    let amount = 9_007_199_254_740_992.0_f64;
+    let answers = |ledger: i64, amount: f64| InteractionResponse::Questionnaire {
+        response: QuestionnaireResponse::Submitted(QuestionnaireSubmission {
+            answers: vec![
+                QuestionnaireAnswerEntry {
+                    question_index: 0,
+                    answer: QuestionnaireAnswer::Integer(
+                        crate::events::interaction::IntegerAnswer {
+                            value: crate::events::interaction::ExactInteger::new(ledger),
+                        },
+                    ),
+                },
+                QuestionnaireAnswerEntry {
+                    question_index: 1,
+                    answer: QuestionnaireAnswer::Number(crate::events::interaction::NumberAnswer {
+                        value: crate::events::interaction::FiniteNumber::try_new(amount)
+                            .expect("finite"),
+                    }),
+                },
+            ],
+        }),
+    };
+
+    // One step outside either bound is refused, and the interaction stays
+    // pending: exact comparison, with no rounding to blur the edge.
+    for (ledger, amount) in [
+        (MRTR_EXACT_LEDGER_RANGE.0 - 1, amount),
+        (ledger, 9_007_199_254_740_994.0),
+    ] {
+        assert!(
+            harness
+                .coordinator
+                .respond_async(&request.id, answers(ledger, amount))
+                .await
+                .is_err(),
+            "({ledger}, {amount}) is outside a declared bound"
+        );
+        assert_eq!(harness.coordinator.pending_count(), 1);
+    }
+
+    harness
+        .coordinator
+        .respond_async(&request.id, answers(ledger, amount))
+        .await
+        .expect("the exact answers are accepted");
+    let settled = call.await;
+    assert!(
+        matches!(settled.status, ToolExecutionStatus::Success),
+        "{settled:?}"
+    );
+    let echoed = serde_json::from_str::<serde_json::Value>(&text(&settled)).expect("content JSON");
+    // The integer arrived as an exact JSON integer, not a rounded double.
+    assert_eq!(echoed["ledger"].as_i64(), Some(ledger));
+    assert_eq!(echoed["ledger"].to_string(), ledger.to_string());
+    // And the number arrived as the very binary64 the runtime range-checked.
+    assert_eq!(echoed["amount"].as_f64(), Some(amount));
+    assert_eq!(harness.rounds().len(), 2);
+    assert_eq!(harness.coordinator.pending_count(), 0);
+    harness.shutdown().await;
 }
 
 /// A multi-select `enum` carries its own `minItems`/`maxItems` into the typed

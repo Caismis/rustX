@@ -956,6 +956,36 @@ must still be refused.
   `allow_custom: true`; a bounded MCP `enum` maps onto the same shapes with
   `allow_custom: false`, so a custom answer to an MCP choice is not a legal
   response shape at all.
+- **Each scalar shape names exactly one domain, end to end (Issue #242).** The
+  request bound, the Runtime Client wire form, the authoritative comparison,
+  and the value emitted to a provider are all the *same* domain, so a value
+  rustX validates is always the value rustX emits. `Number` is the finite
+  IEEE-754 binary64 — the domain rmcp's `NumberSchema` bounds (`f64`) and a
+  JSON number already share — and a JSON number binary64 cannot hold exactly
+  is **refused at the wire rather than rounded into range**, whichever way it
+  is spelled — a whole number a JSON integer can spell always crosses the wire
+  as one, so serialization and parsing stay exact inverses and a value the
+  domain can hold can always be read back. That is what makes
+  `9007199254740993` unable to pass a
+  `maximum` of `9007199254740992` and then be emitted unchanged: an
+  arbitrary-precision value compared as an `f64` is two domains, not one.
+  `Integer` is the exact `i64` — the domain rmcp's `IntegerSchema` bounds
+  already are — carried across the Runtime Client protocol as canonical
+  decimal **text**, because a JavaScript number would round every value above
+  `2^53` and leave a published question no client could answer. It is parsed
+  back to `i64` exactly once, by the runtime, which accepts an optional `-`
+  followed by ASCII digits and refuses `1.5`, `1e3`, `+1`, `-`, `NaN`,
+  `Infinity`, `12abc`, and anything outside `i64`.
+- **An omitted Text answer and an explicit `Text("")` are different facts.** A
+  submission may leave a question unanswered, and that is not the same as
+  answering it with the empty string. The empty string is legal whenever the
+  question declares no `min_length` or a `min_length` of `0`, and it reaches a
+  required MCP string property as `{"action": "accept", "content": {"field":
+  ""}}` rather than as the `decline` an omitted required property produces. A
+  positive `min_length` refuses it exactly as it refuses any short answer. A
+  client must therefore carry answer **presence** independently of draft
+  length; inferring it from `length > 0` collapses the two facts and makes an
+  intentional empty answer unsubmittable.
 - **A choice answer names an option index, never a display label.** A label is
   presentation and may be duplicated, reserved, or forged; the canonical
   identity on the wire and in the Event Journal is the zero-based index into
@@ -1143,7 +1173,11 @@ uninvolved and never see `InputRequiredResult`.
   its `minLength`/`maxLength` and a `date`/`date-time`/`uri` `format`
   (`format: "email"` is refused, because rustX has no faithful validator for
   it); `number` and `integer` become `Number`/`Integer` with their
-  `minimum`/`maximum`, and an `integer` never accepts a fractional value;
+  `minimum`/`maximum` translated as the **identity** — rmcp's own bound types,
+  `f64` and `i64`, are exactly the canonical rustX domains, so no bound is
+  widened, narrowed, or unrepresentable, and no MCP integer schema can declare
+  an answer set no Runtime Client could satisfy — and an `integer` never
+  accepts a fractional value;
   `boolean` becomes `Boolean`, whose canonical value is `true`/`false` and
   never a `Yes`/`No` display string; every `enum` shape (single-select,
   multi-select, titled, untitled, and the legacy `enumNames` form) becomes

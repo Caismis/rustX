@@ -36,6 +36,32 @@
 //! display label. A display string is presentation; it can repeat, collide
 //! with a client-reserved row, or be forged, and none of that can change which
 //! value the runtime settles on.
+//!
+//! # The scalar domains
+//!
+//! Each scalar shape names exactly one domain, and that same domain is used by
+//! the request bound, the Runtime Client wire, the authoritative comparison,
+//! and the value finally emitted to a provider. There is no stage that widens
+//! or narrows:
+//!
+//! ```text
+//! Number   finite IEEE-754 binary64      [`FiniteNumber`]
+//!          bound, wire, comparison, emitted value: all binary64.
+//!          A JSON number binary64 cannot hold exactly (`2^53 + 1`) is
+//!          refused at the wire, never rounded into range.
+//!
+//! Integer  exact i64                     [`ExactInteger`]
+//!          carried over the Runtime Client protocol as canonical decimal
+//!          *text*, so a whole number above `2^53` survives a JavaScript
+//!          client unchanged. One authoritative parse: [`ExactInteger::parse`].
+//!
+//! Text     bounded Unicode scalars       [`TextAnswer`]
+//!          an **omitted** answer and an explicit `Text("")` are different
+//!          facts. A questionnaire submission may leave a question
+//!          unanswered; that is not the same as answering it with the empty
+//!          string, which is legal whenever `min_length` is absent or `0` and
+//!          which reaches a provider as a real empty value.
+//! ```
 
 use std::collections::BTreeSet;
 
@@ -233,32 +259,368 @@ pub struct TextAnswerSpecification {
     pub format: Option<TextFormat>,
 }
 
-/// A finite numeric question.
+/// The canonical rustX numeric domain: one finite IEEE-754 binary64 value.
 ///
-/// The bounds are stored as [`serde_json::Number`], which cannot represent NaN
-/// or infinity, so a non-finite bound is unrepresentable rather than merely
-/// rejected.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+/// # Why binary64, and why exactly one domain
+///
+/// MCP types an elicitation `number` bound as a binary64 —
+/// [`rmcp::model::NumberSchema`]'s `minimum` and `maximum` are `Option<f64>` —
+/// and a Runtime Client's JSON number is a binary64 as well. Binary64 is
+/// therefore not a convenience: it is the widest value *every* stage of the
+/// pipeline can hold without rounding, so it is the one domain all of them
+/// share.
+///
+/// ```text
+/// MCP NumberSchema bound (f64)
+///   -> NumberAnswerSpecification bound (FiniteNumber)
+///   -> Runtime Client JSON number (binary64)
+///   -> NumberAnswer value          (FiniteNumber)
+///   -> authoritative range comparison (FiniteNumber)
+///   -> MCP accept.content JSON number (the same FiniteNumber)
+/// ```
+///
+/// No stage holds a wider value than the next one, so there is no widening or
+/// narrowing to hide a mismatch in.
+///
+/// # The precision failure this type exists to make impossible
+///
+/// Storing an answer as an arbitrary [`serde_json::Number`] and *comparing* it
+/// as an `f64` is two domains, not one, and it is unsound above `2^53`:
+/// `9007199254740992` and `9007199254740993` are distinct JSON numbers with
+/// the same `f64`, so an answer could pass a `maximum = 9007199254740992`
+/// check and then be emitted to the server unchanged as `9007199254740993`.
+///
+/// [`FiniteNumber`] closes that by refusing, at the wire boundary, any JSON
+/// number binary64 cannot hold **exactly**: `9007199254740993` is rejected as
+/// unrepresentable rather than silently rounded down into range. What is
+/// validated is thus always bit-identical to what is emitted.
+///
+/// The rule is stated on the **value**, not on the spelling, so it cannot be
+/// evaded by writing the same whole number as `9007199254740993.0`: a whole
+/// number at or past `2^53` that a JSON integer could spell is refused
+/// whichever way it is written, and this type always *writes* such a number as
+/// a JSON integer — the one spelling whose exactness a reader can check. Past
+/// the range a JSON integer can spell there is no exact integer form at all,
+/// so the nearest binary64 is the only meaning such a literal can carry and it
+/// is admitted; that keeps serialization and parsing exact inverses, so a
+/// value this type can hold can always be read back.
+///
+/// Below the frontier every whole number is exact, and a fractional value is
+/// the nearest binary64 — which is what JSON numbers mean everywhere, and the
+/// domain the MCP server's own parse lands in too.
+///
+/// NaN and infinity are unrepresentable by construction, which is what makes
+/// [`Eq`] sound here: every value this type can hold is reflexive.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct FiniteNumber(f64);
+
+impl Eq for FiniteNumber {}
+
+impl FiniteNumber {
+    /// The finite binary64 value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the value is NaN or infinite.
+    pub fn try_new(value: f64) -> Result<Self, String> {
+        if value.is_finite() {
+            Ok(Self(value))
+        } else {
+            Err("the numeric value is not finite".to_owned())
+        }
+    }
+
+    /// The underlying binary64 value, which is the comparison domain.
+    #[must_use]
+    pub fn get(self) -> f64 {
+        self.0
+    }
+
+    /// The exact JSON number for this value.
+    ///
+    /// [`serde_json::Number::from_f64`] returns `None` only for NaN and
+    /// infinity, neither of which this type can hold, so the conversion is
+    /// total in practice. The signature stays honest instead of panicking on
+    /// a branch that cannot be reached.
+    #[must_use]
+    pub fn to_json_number(self) -> Option<serde_json::Number> {
+        serde_json::Number::from_f64(self.0)
+    }
+
+    /// The exactly representable binary64 value of one JSON number.
+    ///
+    /// A JSON integer above `2^53` that binary64 cannot hold exactly is an
+    /// error, never a rounded value: see the type documentation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the JSON number is not finite or is not exactly
+    /// representable in binary64.
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::float_cmp,
+        reason = "each widening is guarded by an exactness proof taken on the integer \
+                  bits first, and the whole-number test is an exact comparison by \
+                  intent — an approximate one would be the very defect being fixed"
+    )]
+    pub fn from_json_number(number: &serde_json::Number) -> Result<Self, String> {
+        let inexact = || {
+            format!(
+                "{number} is not exactly representable as a finite 64-bit binary \
+                 floating-point number"
+            )
+        };
+        if let Some(value) = number.as_u64() {
+            if !is_exact_binary64_whole(value) {
+                return Err(inexact());
+            }
+            return Self::try_new(value as f64);
+        }
+        if let Some(value) = number.as_i64() {
+            if !is_exact_binary64_whole(value.unsigned_abs()) {
+                return Err(inexact());
+            }
+            return Self::try_new(value as f64);
+        }
+        let value = number.as_f64().ok_or_else(inexact)?;
+        // A fractional JSON spelling *is* the nearest binary64 — that is the
+        // declared contract, and the server's own parse lands on the same
+        // value. But the JSON parser has already rounded it, so a spelling
+        // that denotes a **whole** number at or past the precision frontier
+        // can no longer be proven to be the decimal the client wrote:
+        // `9007199254740993.0` and `9007199254740992.0` are the same bits by
+        // the time they arrive. rustX refuses that class rather than assume,
+        // so the failing value has no admitting spelling here either.
+        //
+        // The refusal is scoped to values that *have* a JSON integer spelling,
+        // which is exactly the form this type serializes them in and the form
+        // whose exactness the paths above can check. Beyond that range no
+        // exact integer spelling exists at all, so the nearest binary64 is the
+        // only meaning such a literal can carry, and refusing it would make a
+        // value this type can hold impossible to read back.
+        if integer_spelled(value) && value.abs() >= EXACT_WHOLE_FRONTIER {
+            return Err(inexact());
+        }
+        Self::try_new(value)
+    }
+}
+
+/// `2^53`, the magnitude at which consecutive whole numbers stop being
+/// distinguishable in binary64.
+const EXACT_WHOLE_FRONTIER: f64 = 9_007_199_254_740_992.0;
+/// `-2^63`, the least value a JSON integer can spell.
+const LEAST_SPELLED_INTEGER: f64 = -9_223_372_036_854_775_808.0;
+/// `2^64`, one past the greatest value a JSON integer can spell.
+const PAST_GREATEST_SPELLED_INTEGER: f64 = 18_446_744_073_709_551_616.0;
+
+/// Whether this value has a canonical JSON **integer** spelling.
+///
+/// [`serde_json::Number`] holds a whole number exactly when it fits `i64` or
+/// `u64`, so this predicate is the exact boundary between the two wire forms
+/// [`FiniteNumber`] uses — and it is what makes serialization and
+/// deserialization inverses: a whole number inside this range always crosses
+/// the wire as a JSON integer and always returns through the exact integer
+/// path, while everything else crosses as a JSON float and is never refused
+/// by the frontier rule.
+#[allow(
+    clippy::float_cmp,
+    reason = "an exact whole-number test is the intent; a tolerance would be the defect"
+)]
+fn integer_spelled(value: f64) -> bool {
+    value.fract() == 0.0 && (LEAST_SPELLED_INTEGER..PAST_GREATEST_SPELLED_INTEGER).contains(&value)
+}
+
+impl Serialize for FiniteNumber {
+    /// A whole number serializes as a JSON **integer** whenever one can spell
+    /// it, because that is the only spelling whose exactness a reader can
+    /// check — and this type's own reader refuses a whole number at or past
+    /// the `2^53` frontier written any other way. Everything else serializes
+    /// as a JSON float.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "the cast is guarded by `integer_spelled`, which proves the value is a \
+                  whole number inside the target's exact range"
+    )]
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        if integer_spelled(self.0) {
+            if self.0 < 0.0 {
+                return serializer.serialize_i64(self.0 as i64);
+            }
+            return serializer.serialize_u64(self.0 as u64);
+        }
+        serializer.serialize_f64(self.0)
+    }
+}
+
+/// Whether binary64 holds this whole magnitude exactly.
+///
+/// A whole number is exactly representable iff its significand fits the 53
+/// bits binary64 has — iff the span from its highest set bit down to its
+/// lowest is at most 53 bits wide.
+///
+/// Deciding this on the integer bits is deliberate. The obvious
+/// `value as f64 as u64 == value` round trip is **wrong**, because a narrowing
+/// `as` cast saturates: `u64::MAX` widens to `2^64` and narrows back to
+/// `u64::MAX`, so the inexact value proves itself exact. That is the same
+/// class of silent numeric agreement this whole type exists to prevent.
+const fn is_exact_binary64_whole(magnitude: u64) -> bool {
+    if magnitude == 0 {
+        return true;
+    }
+    let significant = u64::BITS - magnitude.leading_zeros() - magnitude.trailing_zeros();
+    significant <= f64::MANTISSA_DIGITS
+}
+
+impl std::fmt::Display for FiniteNumber {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for FiniteNumber {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let number = serde_json::Number::deserialize(deserializer)?;
+        Self::from_json_number(&number).map_err(serde::de::Error::custom)
+    }
+}
+
+/// The canonical rustX whole-number domain: one exact `i64`, carried across
+/// the Runtime Client protocol as a canonical decimal **string**.
+///
+/// # Why `i64`, and why a string on the wire
+///
+/// MCP types an elicitation `integer` bound as an `i64`
+/// ([`rmcp::model::IntegerSchema`]'s `minimum` and `maximum` are
+/// `Option<i64>`), so `i64` is exactly the domain the protocol hands rustX. No
+/// MCP integer schema can name a bound outside it, which is why refusing an
+/// out-of-domain integer schema is vacuous here rather than missing.
+///
+/// The Runtime Client protocol is the stage that cannot hold that domain: a
+/// JavaScript `number` is a binary64 and loses whole numbers above `2^53`. A
+/// question whose only legal answers are, say, `9007199254740992..=
+/// 9007199254740993` would then be publishable by the runtime and
+/// *unanswerable* by any client — a published question with no faithful
+/// response representation.
+///
+/// So the value crosses the wire as its canonical decimal text and is parsed
+/// back to `i64` exactly once, by the runtime, which stays authoritative:
+///
+/// ```text
+/// MCP IntegerSchema bound (i64)
+///   -> IntegerAnswerSpecification bound (ExactInteger)  "9007199254740993"
+///   -> Runtime Client JSON string                       "9007199254740993"
+///   -> TUI draft, edited as decimal text                 9007199254740993
+///   -> ExactInteger::parse — the one authoritative parse (i64)
+///   -> authoritative range comparison                    (i64)
+///   -> MCP accept.content JSON integer                   9007199254740993
+/// ```
+///
+/// No stage converts through a binary64, so no stage can round.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct ExactInteger(i64);
+
+impl ExactInteger {
+    /// The exact whole number.
+    #[must_use]
+    pub const fn new(value: i64) -> Self {
+        Self(value)
+    }
+
+    /// The underlying `i64`, which is the comparison domain.
+    #[must_use]
+    pub const fn get(self) -> i64 {
+        self.0
+    }
+
+    /// Parses the canonical decimal spelling of a whole number.
+    ///
+    /// This is the **one authoritative parse point** for an integer answer.
+    /// The accepted syntax is an optional `-` followed by one or more ASCII
+    /// digits, and nothing else: `1.5`, `1e3`, `+1`, `-`, `NaN`, `Infinity`,
+    /// and `12abc` are all refused, as is any value outside `i64`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the text is not a decimal integer or names a
+    /// value outside the supported 64-bit range.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let digits = text.strip_prefix('-').unwrap_or(text);
+        if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(format!(
+                "{text:?} is not a decimal integer: write an optional \"-\" followed by digits"
+            ));
+        }
+        text.parse::<i64>()
+            .map(Self)
+            .map_err(|_| format!("{text:?} is outside the supported 64-bit whole-number range"))
+    }
+}
+
+impl From<i64> for ExactInteger {
+    fn from(value: i64) -> Self {
+        Self(value)
+    }
+}
+
+impl std::fmt::Display for ExactInteger {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+impl Serialize for ExactInteger {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // `i64::to_string` is already canonical: no `+`, no leading zeros, and
+        // no `-0`, so one value has exactly one settled spelling.
+        serializer.serialize_str(&self.0.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for ExactInteger {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let text = String::deserialize(deserializer)?;
+        Self::parse(&text).map_err(serde::de::Error::custom)
+    }
+}
+
+/// A finite numeric question over the canonical [`FiniteNumber`] domain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NumberAnswerSpecification {
     /// The inclusive minimum, when the producer declares one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub minimum: Option<serde_json::Number>,
+    pub minimum: Option<FiniteNumber>,
     /// The inclusive maximum, when the producer declares one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum: Option<serde_json::Number>,
+    pub maximum: Option<FiniteNumber>,
 }
 
 /// A whole-number question, semantically distinct from [`NumberAnswerSpecification`].
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+///
+/// The bounds are [`ExactInteger`]s, so they cross the Runtime Client protocol
+/// as decimal text and never through a binary64.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IntegerAnswerSpecification {
     /// The inclusive minimum, when the producer declares one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub minimum: Option<i64>,
+    pub minimum: Option<ExactInteger>,
     /// The inclusive maximum, when the producer declares one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum: Option<i64>,
+    pub maximum: Option<ExactInteger>,
 }
 
 /// A pick-exactly-one question over declared options.
@@ -359,19 +721,27 @@ pub struct TextAnswer {
 }
 
 /// A finite numeric answer, carried as a JSON number rather than a string.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// The value is a [`FiniteNumber`], the same domain the question's bounds and
+/// the emitted MCP content use, so what the runtime validates is bit-identical
+/// to what it sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NumberAnswer {
-    /// The typed value. `serde_json::Number` cannot be NaN or infinite.
-    pub value: serde_json::Number,
+    /// The typed value, exactly representable as a finite binary64.
+    pub value: FiniteNumber,
 }
 
 /// A whole-number answer.
+///
+/// The value is an [`ExactInteger`], which crosses the Runtime Client protocol
+/// as canonical decimal text, so an answer above the binary64 integer frontier
+/// round-trips exactly instead of being rounded by a client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IntegerAnswer {
     /// The typed value.
-    pub value: i64,
+    pub value: ExactInteger,
 }
 
 /// A typed boolean answer.
@@ -575,18 +945,6 @@ fn is_reserved_option_label(label: &str) -> bool {
     RESERVED_OPTION_LABELS.contains(&label)
 }
 
-/// The finite value of a numeric bound or answer.
-///
-/// `serde_json::Number` cannot hold NaN or infinity, but a `u64` above
-/// `2^53` still has no exact `f64`, so the conversion is explicit rather than
-/// assumed.
-fn finite(number: &serde_json::Number) -> Result<f64, String> {
-    number
-        .as_f64()
-        .filter(|value| value.is_finite())
-        .ok_or_else(|| "the numeric value is not finite".to_owned())
-}
-
 fn validate_choice_options(
     options: &[OptionSpecification],
     allow_custom: bool,
@@ -670,10 +1028,11 @@ fn validate_answer_specification(
             Ok(())
         }
         AnswerSpecification::Number(number) => {
-            let minimum = number.minimum.as_ref().map(finite).transpose()?;
-            let maximum = number.maximum.as_ref().map(finite).transpose()?;
-            if let (Some(min), Some(max)) = (minimum, maximum)
-                && min > max
+            // Both bounds are already finite binary64 by construction, so the
+            // only remaining question is whether they describe a satisfiable
+            // interval — compared in that same one domain.
+            if let (Some(min), Some(max)) = (number.minimum, number.maximum)
+                && min.get() > max.get()
             {
                 return Err(format!("{context} minimum exceeds its maximum"));
             }
@@ -681,7 +1040,7 @@ fn validate_answer_specification(
         }
         AnswerSpecification::Integer(integer) => {
             if let (Some(min), Some(max)) = (integer.minimum, integer.maximum)
-                && min > max
+                && min.get() > max.get()
             {
                 return Err(format!("{context} minimum exceeds its maximum"));
             }
@@ -793,29 +1152,34 @@ fn validate_answer(
             Ok(QuestionnaireAnswer::Text(text.clone()))
         }
         (AnswerSpecification::Number(specification), QuestionnaireAnswer::Number(number)) => {
-            let value = finite(&number.value).map_err(|error| out_of_range(&error))?;
-            if let Some(minimum) = &specification.minimum {
-                let minimum = finite(minimum).map_err(|error| out_of_range(&error))?;
-                if value < minimum {
-                    return Err(out_of_range("the number is below its declared minimum"));
-                }
+            // The answer, both bounds, and the value later written into MCP
+            // `accept.content` are all the same `FiniteNumber`. A value that
+            // binary64 cannot hold exactly never reaches here: it is refused
+            // when the response is decoded, not rounded into range.
+            let value = number.value.get();
+            if let Some(minimum) = specification.minimum
+                && value < minimum.get()
+            {
+                return Err(out_of_range("the number is below its declared minimum"));
             }
-            if let Some(maximum) = &specification.maximum {
-                let maximum = finite(maximum).map_err(|error| out_of_range(&error))?;
-                if value > maximum {
-                    return Err(out_of_range("the number is above its declared maximum"));
-                }
+            if let Some(maximum) = specification.maximum
+                && value > maximum.get()
+            {
+                return Err(out_of_range("the number is above its declared maximum"));
             }
-            Ok(QuestionnaireAnswer::Number(number.clone()))
+            Ok(QuestionnaireAnswer::Number(*number))
         }
         (AnswerSpecification::Integer(specification), QuestionnaireAnswer::Integer(integer)) => {
+            // Exact `i64` comparison, on the value the one authoritative parse
+            // point produced. Nothing here has passed through a binary64.
+            let value = integer.value.get();
             if let Some(minimum) = specification.minimum
-                && integer.value < minimum
+                && value < minimum.get()
             {
                 return Err(out_of_range("the integer is below its declared minimum"));
             }
             if let Some(maximum) = specification.maximum
-                && integer.value > maximum
+                && value > maximum.get()
             {
                 return Err(out_of_range("the integer is above its declared maximum"));
             }
@@ -1363,20 +1727,24 @@ mod tests {
         );
 
         let integer = spec(AnswerSpecification::Integer(IntegerAnswerSpecification {
-            minimum: Some(0),
-            maximum: Some(150),
+            minimum: Some(ExactInteger::new(0)),
+            maximum: Some(ExactInteger::new(150)),
         }));
         assert!(
             normalize_questionnaire_response(
                 &integer,
-                &answered(QuestionnaireAnswer::Integer(IntegerAnswer { value: 42 }))
+                &answered(QuestionnaireAnswer::Integer(IntegerAnswer {
+                    value: ExactInteger::new(42)
+                }))
             )
             .is_ok()
         );
         assert!(
             normalize_questionnaire_response(
                 &integer,
-                &answered(QuestionnaireAnswer::Integer(IntegerAnswer { value: 151 }))
+                &answered(QuestionnaireAnswer::Integer(IntegerAnswer {
+                    value: ExactInteger::new(151)
+                }))
             )
             .is_err()
         );
@@ -1393,21 +1761,21 @@ mod tests {
             normalize_questionnaire_response(
                 &integer,
                 &answered(QuestionnaireAnswer::Number(NumberAnswer {
-                    value: serde_json::Number::from_f64(1.5).expect("finite")
+                    value: FiniteNumber::try_new(1.5).expect("finite")
                 }))
             )
             .is_err()
         );
 
         let number = spec(AnswerSpecification::Number(NumberAnswerSpecification {
-            minimum: Some(serde_json::Number::from_f64(-1.5).expect("finite")),
-            maximum: Some(serde_json::Number::from_f64(1.5).expect("finite")),
+            minimum: Some(FiniteNumber::try_new(-1.5).expect("finite")),
+            maximum: Some(FiniteNumber::try_new(1.5).expect("finite")),
         }));
         assert!(
             normalize_questionnaire_response(
                 &number,
                 &answered(QuestionnaireAnswer::Number(NumberAnswer {
-                    value: serde_json::Number::from_f64(1.5).expect("finite")
+                    value: FiniteNumber::try_new(1.5).expect("finite")
                 }))
             )
             .is_ok()
@@ -1416,7 +1784,7 @@ mod tests {
             normalize_questionnaire_response(
                 &number,
                 &answered(QuestionnaireAnswer::Number(NumberAnswer {
-                    value: serde_json::Number::from_f64(1.6).expect("finite")
+                    value: FiniteNumber::try_new(1.6).expect("finite")
                 }))
             )
             .is_err()
@@ -1437,6 +1805,395 @@ mod tests {
                 }])
             );
         }
+    }
+
+    /// One question of the given shape, and one answer to it.
+    fn scalar(answer: AnswerSpecification) -> QuestionnaireSpecification {
+        QuestionnaireSpecification {
+            questions: vec![QuestionSpecification {
+                question: "What value?".to_owned(),
+                header: "Value".to_owned(),
+                answer,
+            }],
+        }
+    }
+
+    fn only(answer: QuestionnaireAnswer) -> QuestionnaireResponse {
+        submitted(vec![QuestionnaireAnswerEntry {
+            question_index: 0,
+            answer,
+        }])
+    }
+
+    /// The single settled answer of an accepted response.
+    fn settled(response: &QuestionnaireResponse) -> QuestionnaireAnswer {
+        match response {
+            QuestionnaireResponse::Submitted(submission) => submission.answers[0].answer.clone(),
+            QuestionnaireResponse::Declined => panic!("expected a submitted response"),
+        }
+    }
+
+    /// The exact JSON spellings around the binary64 integer frontier.
+    const TWO_POW_53_MINUS_1: &str = "9007199254740991";
+    const TWO_POW_53: &str = "9007199254740992";
+    const TWO_POW_53_PLUS_1: &str = "9007199254740993";
+
+    #[test]
+    fn a_number_answer_is_the_finite_binary64_domain_end_to_end() {
+        let number = |value: f64| {
+            QuestionnaireAnswer::Number(NumberAnswer {
+                value: FiniteNumber::try_new(value).expect("finite"),
+            })
+        };
+        let bounded = scalar(AnswerSpecification::Number(NumberAnswerSpecification {
+            minimum: Some(FiniteNumber::try_new(-1.5).expect("finite")),
+            maximum: Some(FiniteNumber::try_new(2.25).expect("finite")),
+        }));
+
+        // Exact bounds, ordinary fractional values, and negatives.
+        for inside in [-1.5, -0.75, 0.0, 1.0, 2.25] {
+            let accepted = normalize_questionnaire_response(&bounded, &only(number(inside)))
+                .unwrap_or_else(|error| panic!("{inside} must be in range: {error}"));
+            // Requirement 6: the accepted answer is the same semantic value,
+            // never a re-derived one.
+            assert_eq!(settled(&accepted), number(inside));
+        }
+        for outside in [
+            -1.500_000_000_000_000_2,
+            2.250_000_000_000_000_4,
+            -100.0,
+            100.0,
+        ] {
+            assert!(
+                normalize_questionnaire_response(&bounded, &only(number(outside))).is_err(),
+                "{outside} is outside the declared range"
+            );
+        }
+        // Only the declared side is bounded when only one bound is declared.
+        let at_least = scalar(AnswerSpecification::Number(NumberAnswerSpecification {
+            minimum: Some(FiniteNumber::try_new(0.0).expect("finite")),
+            maximum: None,
+        }));
+        assert!(normalize_questionnaire_response(&at_least, &only(number(f64::MAX))).is_ok());
+        assert!(normalize_questionnaire_response(&at_least, &only(number(-0.000_1))).is_err());
+
+        // A non-finite value is unconstructible, so it can never be answered.
+        assert!(FiniteNumber::try_new(f64::NAN).is_err());
+        assert!(FiniteNumber::try_new(f64::INFINITY).is_err());
+        assert!(FiniteNumber::try_new(f64::NEG_INFINITY).is_err());
+        // An inverted interval is refused at the specification, before publication.
+        assert!(
+            validate_questionnaire(&scalar(AnswerSpecification::Number(
+                NumberAnswerSpecification {
+                    minimum: Some(FiniteNumber::try_new(1.0).expect("finite")),
+                    maximum: Some(FiniteNumber::try_new(0.0).expect("finite")),
+                }
+            )))
+            .is_err()
+        );
+    }
+
+    /// The precision regression this whole domain exists for.
+    ///
+    /// With an arbitrary-precision answer and an `f64` comparison,
+    /// `9007199254740993` would pass a `maximum` of `9007199254740992` and
+    /// then be emitted unchanged. Here it is refused at the wire, so there is
+    /// no value that rustX can validate and then emit differently.
+    #[test]
+    fn a_number_binary64_cannot_hold_exactly_is_refused_not_rounded() {
+        let decode = |json: &str| -> Result<QuestionnaireAnswer, String> {
+            serde_json::from_str::<QuestionnaireAnswer>(json).map_err(|error| error.to_string())
+        };
+        let answer = |number: &str| format!(r#"{{"type":"number","value":{{"value":{number}}}}}"#);
+
+        // `2^53 - 1` and `2^53` are exact binary64 integers, so they decode.
+        for exact in [TWO_POW_53_MINUS_1, TWO_POW_53] {
+            let decoded = decode(&answer(exact)).unwrap_or_else(|error| panic!("{exact}: {error}"));
+            let QuestionnaireAnswer::Number(number) = decoded else {
+                panic!("expected a number answer");
+            };
+            assert_eq!(number.value.get().to_string(), exact);
+        }
+        // `2^53 + 1` is not, and is refused rather than silently becoming `2^53`.
+        let refused = decode(&answer(TWO_POW_53_PLUS_1)).expect_err("must be refused");
+        assert!(refused.contains("exactly representable"), "{refused}");
+        // The same holds at the negative frontier and at the i64/u64 extremes,
+        // whose exactness is decided by the value itself and not by its width:
+        // `-2^63` is a power of two and survives, `2^63 - 1` and `2^64 - 1` do
+        // not.
+        for inexact in [
+            "-9007199254740993",
+            "9223372036854775807",
+            "18446744073709551615",
+        ] {
+            assert!(
+                decode(&answer(inexact)).is_err(),
+                "{inexact} is not an exact binary64"
+            );
+        }
+        assert!(
+            decode(&answer("-9223372036854775808")).is_ok(),
+            "-2^63 is an exact binary64 and is admitted on its own merit"
+        );
+
+        // A whole number cannot smuggle itself past the frontier by wearing a
+        // fractional spelling either: the JSON parser has already rounded it,
+        // so rustX cannot prove which decimal was written and refuses the
+        // whole class rather than assume one.
+        for spelled_as_fraction in [
+            "9007199254740993.0",
+            "9007199254740992.0",
+            "-9007199254740993.0",
+            "9.007199254740993e15",
+        ] {
+            assert!(
+                decode(&answer(spelled_as_fraction)).is_err(),
+                "{spelled_as_fraction} is a whole number at or past the frontier"
+            );
+        }
+        // The rule is scoped to whole numbers a JSON integer can spell, which
+        // is the form this domain serializes them in. Past that range no exact
+        // integer spelling exists at all, so refusing these would make values
+        // the domain can legitimately hold — an MCP `maximum` of `1e300`, say —
+        // impossible to read back from the wire they were written to.
+        for beyond_any_integer_spelling in ["1e300", "-1e300", "-1e19"] {
+            assert!(
+                decode(&answer(beyond_any_integer_spelling)).is_ok(),
+                "{beyond_any_integer_spelling} has no exact integer spelling to check"
+            );
+        }
+        // Whole numbers below the frontier and ordinary fractions are
+        // unaffected, whichever way they are spelled.
+        for ordinary in [
+            "0",
+            "0.0",
+            "-1.5",
+            "9007199254740991",
+            "9007199254740991.0",
+            "1.5e3",
+        ] {
+            assert!(decode(&answer(ordinary)).is_ok(), "{ordinary}");
+        }
+
+        // And the end-to-end statement: no answer passes a `2^53` maximum and
+        // then settles as a numerically different value.
+        let capped = scalar(AnswerSpecification::Number(NumberAnswerSpecification {
+            minimum: None,
+            maximum: Some(
+                FiniteNumber::from_json_number(
+                    &TWO_POW_53.parse::<serde_json::Number>().expect("number"),
+                )
+                .expect("exact"),
+            ),
+        }));
+        let at_cap = decode(&answer(TWO_POW_53)).expect("exact");
+        let accepted = normalize_questionnaire_response(&capped, &only(at_cap.clone()))
+            .expect("2^53 is at the declared maximum");
+        assert_eq!(settled(&accepted), at_cap);
+        // The value that used to slip through cannot even be spelled as an
+        // answer, so it cannot reach the range check at all.
+        assert!(decode(&answer(TWO_POW_53_PLUS_1)).is_err());
+    }
+
+    /// Every value the canonical `Number` domain can hold must survive its own
+    /// wire form. Serialization and parsing are inverses, so an accepted
+    /// answer or a declared bound can always be read back — from the Event
+    /// Journal, from a reconnecting client, from anywhere.
+    #[test]
+    fn every_representable_number_survives_its_own_wire_form() {
+        for value in [
+            0.0_f64,
+            -0.0,
+            1.0,
+            -1.0,
+            0.1,
+            -2.5,
+            1.0e-300,
+            // Whole numbers a JSON integer can spell, on both sides of the
+            // precision frontier and at the spellable extremes.
+            9_007_199_254_740_991.0,
+            9_007_199_254_740_992.0,
+            -9_007_199_254_740_992.0,
+            9_223_372_036_854_775_808.0,
+            -9_223_372_036_854_775_808.0,
+            // Whole numbers no JSON integer can spell: the frontier rule must
+            // not make these unreadable, or a legal schema bound could be
+            // stored and never loaded again.
+            1.0e300,
+            -1.0e300,
+            -1.0e19,
+            f64::MAX,
+            f64::MIN,
+        ] {
+            let subject = FiniteNumber::try_new(value).expect("finite");
+            let encoded = serde_json::to_string(&subject).expect("encodes");
+            let decoded: FiniteNumber = serde_json::from_str(&encoded)
+                .unwrap_or_else(|error| panic!("{value} encoded as {encoded}: {error}"));
+            assert_eq!(decoded, subject, "{value} encoded as {encoded}");
+            // And the wire form is stable, so a re-encoded value is byte-equal.
+            assert_eq!(serde_json::to_string(&decoded).expect("encodes"), encoded);
+        }
+    }
+
+    #[test]
+    fn an_integer_crosses_the_wire_as_exact_decimal_text() {
+        let integer = |value: i64| {
+            QuestionnaireAnswer::Integer(IntegerAnswer {
+                value: ExactInteger::new(value),
+            })
+        };
+        // The Runtime Client representation is decimal text, so a whole number
+        // above the JavaScript safe-integer range round-trips exactly.
+        for value in [
+            0_i64,
+            42,
+            -5,
+            9_007_199_254_740_993,
+            -9_007_199_254_740_993,
+            i64::MIN,
+            i64::MAX,
+        ] {
+            let encoded = serde_json::to_value(integer(value)).expect("encodes");
+            assert_eq!(
+                encoded["value"]["value"],
+                serde_json::Value::String(value.to_string()),
+                "the wire form is canonical decimal text"
+            );
+            let decoded: QuestionnaireAnswer =
+                serde_json::from_value(encoded).expect("round-trips");
+            assert_eq!(decoded, integer(value), "{value} survived the wire exactly");
+        }
+
+        // The full i64 domain is answerable when the question declares it.
+        let widest = scalar(AnswerSpecification::Integer(IntegerAnswerSpecification {
+            minimum: Some(ExactInteger::new(i64::MIN)),
+            maximum: Some(ExactInteger::new(i64::MAX)),
+        }));
+        for value in [i64::MIN, -1, 0, 9_007_199_254_740_993, i64::MAX] {
+            assert!(normalize_questionnaire_response(&widest, &only(integer(value))).is_ok());
+        }
+
+        // Exact bound comparison outside the JavaScript safe range: one step
+        // out on either side is refused, with no rounding to blur the edge.
+        let frontier = scalar(AnswerSpecification::Integer(IntegerAnswerSpecification {
+            minimum: Some(ExactInteger::new(9_007_199_254_740_992)),
+            maximum: Some(ExactInteger::new(9_007_199_254_740_993)),
+        }));
+        for inside in [9_007_199_254_740_992_i64, 9_007_199_254_740_993] {
+            assert!(normalize_questionnaire_response(&frontier, &only(integer(inside))).is_ok());
+        }
+        for outside in [9_007_199_254_740_991_i64, 9_007_199_254_740_994] {
+            assert!(
+                normalize_questionnaire_response(&frontier, &only(integer(outside))).is_err(),
+                "{outside}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_one_authoritative_integer_parse_refuses_non_decimal_syntax() {
+        for accepted in [
+            "0",
+            "42",
+            "-5",
+            TWO_POW_53_PLUS_1,
+            "-9223372036854775808",
+            "9223372036854775807",
+        ] {
+            let parsed =
+                ExactInteger::parse(accepted).unwrap_or_else(|error| panic!("{accepted}: {error}"));
+            assert_eq!(parsed.to_string(), accepted);
+        }
+        // Fractional, exponential, signed-plus, malformed, and empty syntax.
+        for refused in [
+            "1.5",
+            "1e3",
+            "1E3",
+            "NaN",
+            "Infinity",
+            "+",
+            "-",
+            "+1",
+            "12abc",
+            "",
+            " 1",
+            "1 ",
+            "0x10",
+            "1_000",
+            "１２３",
+        ] {
+            assert!(ExactInteger::parse(refused).is_err(), "{refused:?}");
+        }
+        // Overflow past the 64-bit domain is refused, not truncated.
+        for overflow in [
+            "9223372036854775808",
+            "-9223372036854775809",
+            "1000000000000000000000",
+        ] {
+            let error = ExactInteger::parse(overflow).expect_err("overflow");
+            assert!(error.contains("64-bit"), "{error}");
+        }
+        // The wire refuses the same syntax, and refuses a JSON number outright:
+        // an integer never crosses this protocol as a JavaScript number.
+        assert!(
+            serde_json::from_str::<QuestionnaireAnswer>(
+                r#"{"type":"integer","value":{"value":3}}"#
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<QuestionnaireAnswer>(
+                r#"{"type":"integer","value":{"value":"1.5"}}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn an_explicit_empty_text_answer_is_not_an_omitted_answer() {
+        let text = |min_length: Option<u32>| {
+            scalar(AnswerSpecification::Text(TextAnswerSpecification {
+                min_length,
+                max_length: None,
+                format: None,
+            }))
+        };
+        let empty = QuestionnaireAnswer::Text(TextAnswer {
+            value: String::new(),
+        });
+
+        // An explicit empty string is a legal answer with no minimum, and with
+        // an explicit minimum of zero.
+        for permitted in [None, Some(0)] {
+            let question = text(permitted);
+            let accepted = normalize_questionnaire_response(&question, &only(empty.clone()))
+                .unwrap_or_else(|error| panic!("{permitted:?}: {error}"));
+            assert_eq!(
+                settled(&accepted),
+                empty,
+                "the empty string survives intact"
+            );
+            // And it is a *submission*, not a decline: the two are distinct
+            // terminal responses and an answered question is not an absence.
+            assert!(matches!(accepted, QuestionnaireResponse::Submitted(_)));
+        }
+
+        // A positive minimum refuses it, exactly as it refuses any short answer.
+        assert!(normalize_questionnaire_response(&text(Some(1)), &only(empty.clone())).is_err());
+
+        // Omission is the other fact, and it is not the empty string: the
+        // submission carries no entry for the question at all, which
+        // normalizes to the explicit decline response.
+        let omitted = normalize_questionnaire_response(
+            &text(None),
+            &QuestionnaireResponse::Submitted(QuestionnaireSubmission { answers: vec![] }),
+        )
+        .expect("an empty submission is legal");
+        assert_eq!(omitted, QuestionnaireResponse::Declined);
+        assert_ne!(
+            omitted,
+            normalize_questionnaire_response(&text(None), &only(empty)).expect("legal")
+        );
     }
 
     #[test]

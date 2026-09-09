@@ -554,6 +554,107 @@ Two properties follow, and both are load-bearing:
   answer is refused while the interaction stays pending; it never fails the
   enclosing tool invocation.
 
+###### The scalar domains
+
+Each scalar shape names exactly **one** domain, and that same domain is used by
+the request bound, the Runtime Client wire, the authoritative comparison, and
+the value finally emitted to a provider. No stage widens or narrows, so there
+is nowhere for a validated value and an emitted value to disagree.
+
+**`Number` — the finite IEEE-754 binary64 (`FiniteNumber`).**
+
+MCP types an elicitation `number` bound as a binary64: rmcp's
+`NumberSchema::minimum` and `maximum` are `Option<f64>`. A Runtime Client's
+JSON number is a binary64 too. Binary64 is therefore not a convenience — it is
+the widest value every stage can hold without rounding, which is what makes it
+the one domain all of them can share:
+
+```text
+MCP NumberSchema bound (f64)
+  -> NumberAnswerSpecification bound (FiniteNumber)
+  -> Runtime Client JSON number      (binary64)
+  -> NumberAnswer value              (FiniteNumber)
+  -> authoritative range comparison  (FiniteNumber)
+  -> MCP accept.content JSON number  (the same FiniteNumber)
+```
+
+The rule that makes this faithful rather than merely convenient: **a JSON
+number binary64 cannot hold exactly is refused at the wire, never rounded into
+range.** Storing the answer as an arbitrary-precision `serde_json::Number` and
+comparing it as an `f64` is two domains, not one, and it is unsound above
+`2^53`: `9007199254740992` and `9007199254740993` are distinct JSON numbers
+with the same `f64`, so an answer could pass a `maximum` of `9007199254740992`
+and then be emitted to the server unchanged as `9007199254740993`. Refusing
+`9007199254740993` outright removes the value that made that possible.
+
+The refusal is stated on the **value**, not on the spelling, so it cannot be
+evaded by writing the same whole number as `9007199254740993.0`. A whole number
+a JSON integer can spell always crosses the wire *as* a JSON integer — the one
+spelling whose exactness a reader can check — and is refused at or past the
+frontier however it is written. Past the range a JSON integer can spell there
+is no exact integer form at all, so the nearest binary64 is the only meaning
+such a literal can carry and it is admitted; that keeps serialization and
+parsing exact inverses, so a value the domain can hold can always be read back
+from the Event Journal or a reconnecting client. Below the frontier every whole
+number is exact; a fractional value is the nearest binary64, which is what a
+JSON number means everywhere and is the same value the MCP server's own parse
+lands on. Non-finite values are unrepresentable by construction rather than
+merely rejected.
+
+**`Integer` — the exact `i64` (`ExactInteger`), decimal text on the wire.**
+
+MCP types an elicitation `integer` bound as an `i64`: rmcp's
+`IntegerSchema::minimum` and `maximum` are `Option<i64>`. So `i64` is exactly
+the domain the protocol hands rustX, and no MCP integer schema can name a bound
+outside it — refusing an out-of-domain integer schema is vacuous here by
+construction, not missing.
+
+The stage that *cannot* hold that domain is the Runtime Client protocol, whose
+JavaScript `number` is a binary64 and loses whole numbers above `2^53`. A
+question bounded to `9007199254740992..=9007199254740993` would then be
+publishable by the runtime and unanswerable by any client — a published
+question with no faithful response representation, which the typed interaction
+contract forbids. So the value crosses the wire as canonical decimal **text**
+and is parsed back exactly once, by the runtime:
+
+```text
+MCP IntegerSchema bound (i64)
+  -> IntegerAnswerSpecification bound (ExactInteger)  "9007199254740993"
+  -> Runtime Client JSON string                       "9007199254740993"
+  -> TUI draft, edited as decimal text                 9007199254740993
+  -> ExactInteger::parse — the one authoritative parse (i64)
+  -> authoritative range comparison                    (i64)
+  -> MCP accept.content JSON integer                   9007199254740993
+```
+
+`ExactInteger::parse` accepts an optional `-` followed by ASCII digits and
+nothing else: `1.5`, `1e3`, `+1`, `-`, `NaN`, `Infinity`, and `12abc` are all
+refused, as is any value outside `i64`. A settled value re-serializes from its
+`i64`, so one value always has exactly one canonical spelling. The TUI compares
+drafts with `BigInt`; it never uses `Number` or `Number.isSafeInteger` as the
+semantic representation of an integer, because doing so would round away the
+very values this representation exists to preserve.
+
+**`Text` — an omitted answer and an explicit `Text("")` are different facts.**
+
+A submission may leave a question unanswered; that is not the same as answering
+it with the empty string. For a required MCP string property with
+`minLength: 0`:
+
+```text
+explicit Text("")  -> { "action": "accept", "content": { "field": "" } }
+omitted            -> { "action": "decline" }   (a required property is missing)
+```
+
+The empty string is legal whenever the question declares no `min_length` or a
+`min_length` of `0`, and a positive `min_length` refuses it exactly as it
+refuses any short answer. A client must therefore track answer **presence**
+separately from draft length: the TUI carries an explicit per-question
+committed bit, set by editing the field — typing a character and erasing it is
+an explicit empty answer — or by pressing Enter on it, which commits the draft
+as it stands. An untouched field is never committed, so a blank questionnaire
+still submits nothing.
+
 A response addresses a choice by its **zero-based option index**, never by its
 display label. A label is presentation: it can repeat, collide with a
 client-reserved row, or be forged, and none of that can change which value the
@@ -4178,8 +4279,11 @@ StringSchema   title -> question header, description -> prompt,
                minLength / maxLength     -> Text { min_length, max_length }
                format date|date-time|uri -> Text { format }        validated
                format email              -> REFUSED (no faithful validator)
-NumberSchema   minimum / maximum         -> Number { minimum, maximum }
-IntegerSchema  minimum / maximum         -> Integer { minimum, maximum }
+NumberSchema   minimum / maximum (f64)  -> Number { minimum, maximum }
+                                          finite binary64, the identity
+                                          translation
+IntegerSchema  minimum / maximum (i64)  -> Integer { minimum, maximum }
+                                          exact i64, the identity translation
 BooleanSchema  (no constraints)          -> Boolean
 enum single    enum | oneOf | enumNames  -> SingleChoice { options,
                                               allow_custom: false }
@@ -4530,9 +4634,10 @@ events. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; the two protocols are not mixed.
 
 The current Runtime Client protocol is version 24, adding the typed question
-vocabulary and canonical Questionnaire requester identity (Issue #242) on top
-of version 23, which added distinct source
-activation/unprepared projections. Version 22 added the
+vocabulary, its canonical scalar domains — a finite-binary64 `Number` and an
+`Integer` carried as canonical decimal text — and canonical Questionnaire
+requester identity (Issue #242) on top of version 23, which added distinct
+source activation/unprepared projections. Version 22 added the
 [native Workflow projection and cursor handoff](workflow-run-projection.md).
 Version 21 adds Review and
 Questionnaire invocation correlation. Version 20 adds borrowed

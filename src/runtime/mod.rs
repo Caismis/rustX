@@ -151,8 +151,8 @@ pub use inbound::{
     ConversationInboundMailbox, InboundBatch, InboundItem, InboundSequence, MailboxError,
 };
 pub use interaction::{
-    AnswerSpecification, ApprovalDecision, BooleanAnswer, CustomAnswer, IntegerAnswer,
-    IntegerAnswerSpecification, InteractionKind, InteractionOutcome, InteractionRef,
+    AnswerSpecification, ApprovalDecision, BooleanAnswer, CustomAnswer, ExactInteger, FiniteNumber,
+    IntegerAnswer, IntegerAnswerSpecification, InteractionKind, InteractionOutcome, InteractionRef,
     InteractionRequest, InteractionRequester, InteractionResponse, InteractionSource,
     MultiChoiceSpecification, NumberAnswer, NumberAnswerSpecification, OptionAnswer,
     OptionSpecification, OptionsAnswer, QuestionSpecification, QuestionnaireAnswer,

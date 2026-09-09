@@ -106,6 +106,9 @@ function focusCustom(view: QuestionnaireOverlay, optionCount: number): void {
   }
 }
 
+/** The DEL byte a terminal sends for Backspace. */
+const BACKSPACE = "\u007f";
+
 function submitSingle(view: QuestionnaireOverlay): void {
   view.handleInput("\t");
   view.handleInput("\r");
@@ -727,7 +730,7 @@ describe("QuestionnaireOverlay", () => {
       questions: [{
         question: "How many attempts?",
         header: "Attempts",
-        answer: { type: "integer", minimum: 1, maximum: 5 },
+        answer: { type: "integer", minimum: "1", maximum: "5" },
       }],
     };
     // A fractional value is not an integer: the surface says so concisely and
@@ -766,9 +769,202 @@ describe("QuestionnaireOverlay", () => {
     assert.deepEqual(valid, {
       type: "submitted",
       value: {
-        answers: [{ question_index: 0, answer: { type: "integer", value: { value: 3 } } }],
+        answers: [{ question_index: 0, answer: { type: "integer", value: { value: "3" } } }],
       },
     });
+  });
+
+  it("keeps an exact whole number above the JavaScript safe range", () => {
+    // The entire legal answer set lies above 2^53, so a client that stored the
+    // draft as a JavaScript number could not represent a single valid answer.
+    const ledgerQuestionnaire: QuestionnaireSpecification = {
+      questions: [{
+        question: "Which ledger entry?",
+        header: "Ledger",
+        answer: {
+          type: "integer",
+          minimum: "9007199254740992",
+          maximum: "9223372036854775807",
+        },
+      }],
+    };
+
+    for (const exact of ["9007199254740993", "9223372036854775807"]) {
+      let submitted: QuestionnaireResponse | undefined;
+      const view = typedOverlay(ledgerQuestionnaire, MCP_REQUESTER, (response) => {
+        submitted = response;
+      });
+      type(view, exact);
+      submitSingle(view);
+      assert.deepEqual(submitted, {
+        type: "submitted",
+        value: {
+          answers: [{ question_index: 0, answer: { type: "integer", value: { value: exact } } }],
+        },
+      }, `${exact} must survive the client unchanged`);
+      // The proof that no JavaScript number was ever the authority: `Number`
+      // cannot even hold these values, so a rounded draft would differ here.
+      assert.notEqual(String(Number(exact)), exact);
+    }
+
+    // Bounds are compared exactly at that magnitude, one step out on each side.
+    for (const outside of ["9007199254740991", "9223372036854775808"]) {
+      const view = typedOverlay(ledgerQuestionnaire, MCP_REQUESTER, () => {
+        assert.fail(`${outside} is outside the declared range`);
+      });
+      type(view, outside);
+      submitSingle(view);
+    }
+
+    // Fractional, exponential, signed-plus, and malformed drafts are refused.
+    for (const malformed of ["1.5", "1e3", "+9007199254740993", "12abc", "-"]) {
+      const view = typedOverlay(ledgerQuestionnaire, MCP_REQUESTER, () => {
+        assert.fail(`${malformed} is not a whole number`);
+      });
+      type(view, malformed);
+      assert.match(plainText(view.render(80).join("\n")), /Enter a whole number/);
+      submitSingle(view);
+    }
+
+    // The widest question accepts both 64-bit extremes.
+    const widest: QuestionnaireSpecification = {
+      questions: [{
+        question: "Which offset?",
+        header: "Offset",
+        answer: {
+          type: "integer",
+          minimum: "-9223372036854775808",
+          maximum: "9223372036854775807",
+        },
+      }],
+    };
+    for (const extreme of ["-9223372036854775808", "9223372036854775807"]) {
+      let submitted: QuestionnaireResponse | undefined;
+      const view = typedOverlay(widest, MCP_REQUESTER, (response) => {
+        submitted = response;
+      });
+      type(view, extreme);
+      submitSingle(view);
+      assert.deepEqual(
+        submitted?.type === "submitted" ? submitted.value.answers[0]!.answer : undefined,
+        { type: "integer", value: { value: extreme } },
+      );
+    }
+    // One step past the domain overflows and is refused.
+    const overflow = typedOverlay(widest, MCP_REQUESTER, () => {
+      assert.fail("an out-of-domain integer never submits");
+    });
+    type(overflow, "9223372036854775808");
+    assert.match(plainText(overflow.render(80).join("\n")), /inside the 64-bit range/);
+    submitSingle(overflow);
+  });
+
+  it("refuses a number the runtime could not represent exactly", () => {
+    const view = typedOverlay(
+      {
+        questions: [{
+          question: "How much?",
+          header: "Amount",
+          answer: { type: "number" },
+        }],
+      },
+      MCP_REQUESTER,
+      () => {
+        assert.fail("an inexact number never submits");
+      },
+    );
+    // The runtime's Number domain is the finite binary64, so this whole number
+    // has no exact representation. The client refuses it rather than
+    // submitting the rounded value the user did not type.
+    type(view, "9007199254740993");
+    assert.match(plainText(view.render(80).join("\n")), /represent exactly/);
+    submitSingle(view);
+  });
+
+  it("distinguishes an untouched text field from an explicitly empty one", () => {
+    const optional: QuestionnaireSpecification = {
+      questions: [{
+        question: "Any note for the reviewer?",
+        header: "Note",
+        answer: { type: "text", min_length: 0 },
+      }],
+    };
+
+    // Untouched: the question is simply unanswered, and a questionnaire with
+    // no answers at all is a decline, not an empty-string submission.
+    let untouched: QuestionnaireResponse | undefined;
+    const idle = typedOverlay(optional, MCP_REQUESTER, (response) => {
+      untouched = response;
+    });
+    submitSingle(idle);
+    assert.deepEqual(untouched, { type: "submitted", value: { answers: [] } });
+
+    // Explicitly committed with Enter on the field: a real `Text("")`.
+    let committed: QuestionnaireResponse | undefined;
+    const explicit = typedOverlay(optional, MCP_REQUESTER, (response) => {
+      committed = response;
+    });
+    explicit.handleInput("\r");
+    // The review surface names the committed empty answer rather than showing
+    // the question as unanswered.
+    explicit.handleInput("\t");
+    assert.match(plainText(explicit.render(80).join("\n")), /\(empty\)/);
+    explicit.handleInput("\r");
+    assert.deepEqual(committed, {
+      type: "submitted",
+      value: {
+        answers: [{ question_index: 0, answer: { type: "text", value: { value: "" } } }],
+      },
+    });
+
+    // Typed and then erased is the same explicit empty answer: the user who
+    // cleared their draft answered, they did not un-answer.
+    let erased: QuestionnaireResponse | undefined;
+    const cleared = typedOverlay(optional, MCP_REQUESTER, (response) => {
+      erased = response;
+    });
+    type(cleared, "x");
+    cleared.handleInput(BACKSPACE);
+    submitSingle(cleared);
+    assert.deepEqual(erased, {
+      type: "submitted",
+      value: {
+        answers: [{ question_index: 0, answer: { type: "text", value: { value: "" } } }],
+      },
+    });
+
+    // Non-empty text is unaffected by the presence bit.
+    let typed: QuestionnaireResponse | undefined;
+    const filled = typedOverlay(optional, MCP_REQUESTER, (response) => {
+      typed = response;
+    });
+    type(filled, "looks good");
+    submitSingle(filled);
+    assert.deepEqual(typed, {
+      type: "submitted",
+      value: {
+        answers: [{ question_index: 0, answer: { type: "text", value: { value: "looks good" } } }],
+      },
+    });
+  });
+
+  it("cannot submit an empty text answer below a positive minimum length", () => {
+    const required: QuestionnaireSpecification = {
+      questions: [{
+        question: "What is the ticket id?",
+        header: "Ticket",
+        answer: { type: "text", min_length: 1 },
+      }],
+    };
+    const view = typedOverlay(required, MCP_REQUESTER, () => {
+      assert.fail("an empty answer never submits below a positive minimum");
+    });
+    // Committing the empty field is refused, and the user stays here.
+    view.handleInput("\r");
+    assert.match(plainText(view.render(80).join("\n")), /Enter at least 1 characters\./);
+    submitSingle(view);
+    view.handleInput("\t");
+    assert.match(plainText(view.render(80).join("\n")), /Correct Ticket before submitting\./);
   });
 
   it("submits a boolean as true/false while displaying Yes/No", () => {

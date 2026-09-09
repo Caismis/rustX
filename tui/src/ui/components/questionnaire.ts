@@ -111,6 +111,10 @@ export function selectionBoundsLabel(min: number, max: number): string {
   return `Select ${min}–${max}`;
 }
 
+/** The inclusive bounds of the runtime's canonical `Integer` domain. */
+const I64_MIN = -(2n ** 63n);
+const I64_MAX = 2n ** 63n - 1n;
+
 /**
  * Validates one scalar draft against its declared answer shape.
  *
@@ -145,11 +149,20 @@ export function scalarValidationError(
       return undefined;
     }
     case "number": {
-      if (!/^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(value)) {
+      if (!/^-?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(value)) {
         return "Enter a number.";
       }
       const parsed = Number(value);
       if (!Number.isFinite(parsed)) return "Enter a finite number.";
+      // The runtime's Number domain is the finite binary64, which is exactly
+      // what this `Number` holds — so parsing here changes no value the
+      // runtime would have accepted. The one case where it *would* is a whole
+      // number binary64 cannot hold exactly: the runtime refuses those rather
+      // than rounding them into range, so the client refuses them too instead
+      // of submitting a value the user did not type.
+      if (/^-?\d+$/.test(value) && BigInt(value) !== BigInt(parsed)) {
+        return "Enter a number this runtime can represent exactly.";
+      }
       if (answer.minimum !== undefined && parsed < answer.minimum) {
         return `Enter a number at least ${answer.minimum}.`;
       }
@@ -159,13 +172,20 @@ export function scalarValidationError(
       return undefined;
     }
     case "integer": {
-      if (!/^[+-]?\d+$/.test(value)) return "Enter a whole number.";
-      const parsed = Number(value);
-      if (!Number.isSafeInteger(parsed)) return "Enter a smaller whole number.";
-      if (answer.minimum !== undefined && parsed < answer.minimum) {
+      // Never `Number(...)`: the runtime's Integer domain is the exact i64,
+      // and a JavaScript number would silently round every value above 2^53 —
+      // the whole reason this field crosses the wire as decimal text. The
+      // draft is compared as a `BigInt` and submitted as the user's own
+      // digits; the runtime performs the one authoritative parse.
+      if (!/^-?\d+$/.test(value)) return "Enter a whole number.";
+      const parsed = BigInt(value);
+      if (parsed < I64_MIN || parsed > I64_MAX) {
+        return "Enter a whole number inside the 64-bit range.";
+      }
+      if (answer.minimum !== undefined && parsed < BigInt(answer.minimum)) {
         return `Enter a whole number at least ${answer.minimum}.`;
       }
-      if (answer.maximum !== undefined && parsed > answer.maximum) {
+      if (answer.maximum !== undefined && parsed > BigInt(answer.maximum)) {
         return `Enter a whole number at most ${answer.maximum}.`;
       }
       return undefined;
@@ -263,6 +283,23 @@ export class QuestionnaireOverlay implements PopupContent {
   readonly #inputs: Input[];
   /** Whether the user has interacted with a question at all. */
   readonly #touched: boolean[];
+  /**
+   * Whether the user has explicitly committed this question's scalar field.
+   *
+   * This is the **answer-presence bit**, and it is deliberately independent of
+   * the draft's length. For a text question an omitted answer and an explicit
+   * empty string are different facts: the first says nothing was answered, the
+   * second is a real `Text("")` the runtime accepts whenever `min_length` is
+   * absent or `0`, and which reaches an MCP server as `""` rather than a
+   * decline. Inferring presence from `draft.length > 0` would collapse the two
+   * and make an intentional empty answer unsubmittable.
+   *
+   * It is set by editing the field — typing a character and erasing it again
+   * is an explicit empty answer — and by pressing Enter on the field, which
+   * commits the current draft as it stands. An untouched field is never
+   * committed, so a blank questionnaire still submits nothing.
+   */
+  readonly #committed: boolean[];
   #tab = 0;
   #row = 0;
   #submitting = false;
@@ -286,6 +323,7 @@ export class QuestionnaireOverlay implements PopupContent {
     this.#draft = options.questionnaire.questions.map(() => undefined);
     this.#inputs = options.questionnaire.questions.map(() => new Input());
     this.#touched = options.questionnaire.questions.map(() => false);
+    this.#committed = options.questionnaire.questions.map(() => false);
   }
 
   invalidate(): void {
@@ -390,6 +428,16 @@ export class QuestionnaireOverlay implements PopupContent {
           this.#selected[this.#tab]!.clear();
           this.#changed();
         }
+        return;
+      }
+      if (row.kind === "scalar" && matchesKey(data, Key.enter)) {
+        // Enter commits the field exactly as it stands. That is the one
+        // deterministic way to answer a text question with the empty string
+        // without typing and erasing a character first.
+        this.#committed[this.#tab] = true;
+        this.#touched[this.#tab] = true;
+        this.#notice = undefined;
+        this.#changed();
         return;
       }
       // Delegate every editing path to Pi's established primitive. This
@@ -732,7 +780,15 @@ export class QuestionnaireOverlay implements PopupContent {
     const question = this.questionnaire.questions[index]!;
     const answer = question.answer;
     const draft = this.#draft[index];
-    if (answer.type === "text" || answer.type === "number" || answer.type === "integer") {
+    if (answer.type === "text") {
+      // An uncommitted field is simply unanswered, which is legal. A committed
+      // one is validated as it stands — including the empty string, which a
+      // positive `min_length` must still refuse.
+      if (!this.#committed[index]) return undefined;
+      return scalarValidationError(answer, draft ?? "");
+    }
+    if (answer.type === "number" || answer.type === "integer") {
+      // There is no empty number: an empty draft is an unanswered question.
       if (draft === undefined || draft.length === 0) return undefined;
       return scalarValidationError(answer, draft);
     }
@@ -758,7 +814,11 @@ export class QuestionnaireOverlay implements PopupContent {
     const question = this.questionnaire.questions[index]!;
     const answer = question.answer;
     const draft = this.#draft[index];
-    if (answer.type === "text" || answer.type === "number" || answer.type === "integer") {
+    if (answer.type === "text") {
+      if (!this.#committed[index]) return undefined;
+      return draft === undefined || draft.length === 0 ? "(empty)" : draft;
+    }
+    if (answer.type === "number" || answer.type === "integer") {
       return draft !== undefined && draft.length > 0 ? draft : undefined;
     }
     if (answer.type === "boolean") {
@@ -819,11 +879,20 @@ export class QuestionnaireOverlay implements PopupContent {
     const filled = draft !== undefined && draft.length > 0;
     switch (answer.type) {
       case "text":
-        return filled ? { type: "text", value: { value: draft } } : undefined;
+        // Presence, not length: a committed field answers, even with "".
+        return this.#committed[index]
+          ? { type: "text", value: { value: draft ?? "" } }
+          : undefined;
       case "number":
+        // The runtime's Number domain is the finite binary64 this `Number`
+        // holds, and the draft was already proven exactly representable, so
+        // the parsed value is the one the runtime validates and emits.
         return filled ? { type: "number", value: { value: Number(draft.trim()) } } : undefined;
       case "integer":
-        return filled ? { type: "integer", value: { value: Number(draft.trim()) } } : undefined;
+        // The user's own digits cross the wire. Converting to a JavaScript
+        // number here would round every answer above 2^53 before the runtime
+        // ever performed its authoritative parse.
+        return filled ? { type: "integer", value: { value: draft.trim() } } : undefined;
       case "boolean": {
         const value = this.#boolean[index];
         return value === undefined ? undefined : { type: "boolean", value: { value } };
@@ -863,6 +932,9 @@ export class QuestionnaireOverlay implements PopupContent {
     if (next !== this.#draft[index]) {
       this.#draft[index] = next;
       this.#touched[index] = true;
+      // Editing the field is an explicit answer, including editing it back to
+      // empty: the user who erased their draft answered with "".
+      this.#committed[index] = true;
       if (next !== undefined && custom) this.#selected[index]!.clear();
     }
     // Cursor-only edits do not change the draft but still need a redraw.
@@ -954,8 +1026,8 @@ function scalarPrompt(answer: AnswerSpecification): string {
 
 function boundsSentence(
   noun: string,
-  minimum: number | undefined,
-  maximum: number | undefined,
+  minimum: number | string | undefined,
+  maximum: number | string | undefined,
 ): string | undefined {
   if (minimum !== undefined && maximum !== undefined) {
     return `${noun} between ${minimum} and ${maximum}`;

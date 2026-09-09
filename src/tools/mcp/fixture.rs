@@ -152,6 +152,15 @@ pub const MRTR_UNSUPPORTED_SCHEMA_TOOL: &str = "mrtr_unsupported_schema";
 /// The MRTR guard tool that asks one **mixed typed form**: a bounded `enum`,
 /// a free-form `string`, an `integer`, and a `boolean` in one schema.
 pub const MRTR_TYPED_TOOL: &str = "mrtr_typed";
+/// The MRTR guard tool that asks for scalars at the exact-value frontier.
+///
+/// Its `integer` property's entire legal answer set lies **above** the
+/// JavaScript safe-integer range, and its `number` property's maximum is `2^53`
+/// itself. Together they are the end-to-end proof of the repaired scalar
+/// contract: a real MCP server declares these bounds, a real answer crosses
+/// the Runtime Client protocol, and the value the runtime validated is the
+/// value the server receives — unrounded.
+pub const MRTR_EXACT_SCALARS_TOOL: &str = "mrtr_exact_scalars";
 /// The MRTR guard tool that asks one multi-select `enum` with explicit
 /// `minItems`/`maxItems`.
 pub const MRTR_MULTI_SELECT_TOOL: &str = "mrtr_multi_select";
@@ -433,8 +442,9 @@ impl ConformanceTools {
 
 /// Every SEP-2322 guard tool the fixture publishes when
 /// [`FixtureServer::mrtr_tools`] is set.
-pub const MRTR_TOOLS: [&str; 12] = [
+pub const MRTR_TOOLS: [&str; 13] = [
     MRTR_CONFIRM_TOOL,
+    MRTR_EXACT_SCALARS_TOOL,
     MRTR_MIXED_TOOL,
     MRTR_MULTI_SELECT_TOOL,
     MRTR_MULTI_TOOL,
@@ -456,6 +466,7 @@ pub const MRTR_TOOLS: [&str; 12] = [
 /// `inputResponses` and echoed `requestState` in its own request params.
 struct MrtrTools {
     confirm: String,
+    exact_scalars: String,
     mixed: String,
     multi_select: String,
     multi: String,
@@ -473,6 +484,7 @@ impl MrtrTools {
     fn of(fixture: &FixtureServer) -> Self {
         Self {
             confirm: fixture.tool_name(MRTR_CONFIRM_TOOL),
+            exact_scalars: fixture.tool_name(MRTR_EXACT_SCALARS_TOOL),
             mixed: fixture.tool_name(MRTR_MIXED_TOOL),
             multi_select: fixture.tool_name(MRTR_MULTI_SELECT_TOOL),
             multi: fixture.tool_name(MRTR_MULTI_TOOL),
@@ -490,6 +502,7 @@ impl MrtrTools {
     fn owns(&self, name: &str) -> bool {
         [
             &self.confirm,
+            &self.exact_scalars,
             &self.mixed,
             &self.multi_select,
             &self.multi,
@@ -553,6 +566,47 @@ pub fn mrtr_typed_form_request(message: &str) -> serde_json::Value {
                     "notify": {"type": "boolean"},
                 },
                 "required": ["channel", "operator", "attempts", "notify"],
+            },
+        },
+    })
+}
+
+/// The inclusive bounds of the exact-scalar form's `integer` property.
+///
+/// The whole interval sits above `2^53`, so **every** legal answer is a value
+/// a JavaScript `number` would round. A client that stored the draft as a
+/// number could not submit a single one of them faithfully.
+pub const MRTR_EXACT_LEDGER_RANGE: (i64, i64) = (9_007_199_254_740_992, i64::MAX);
+
+/// One form of scalars at the binary64 exact-value frontier.
+///
+/// The `ledger` integer's legal answers all lie above the JavaScript safe
+/// range, and the `amount` number's maximum is `2^53` — the largest whole
+/// number after which binary64 stops distinguishing consecutive integers.
+#[must_use]
+pub fn mrtr_exact_scalars_request(message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "method": "elicitation/create",
+        "params": {
+            "message": message,
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "ledger": {
+                        "type": "integer",
+                        "title": "Ledger",
+                        "description": "Which ledger entry?",
+                        "minimum": MRTR_EXACT_LEDGER_RANGE.0,
+                        "maximum": MRTR_EXACT_LEDGER_RANGE.1,
+                    },
+                    "amount": {
+                        "type": "number",
+                        "title": "Amount",
+                        "minimum": -1.0e18,
+                        "maximum": 9_007_199_254_740_992.0,
+                    },
+                },
+                "required": ["ledger", "amount"],
             },
         },
     })
@@ -1109,6 +1163,30 @@ async fn mrtr_call(
             .unwrap_or(serde_json::Value::Null);
         // The final result is the exact JSON the client sent, so a test can
         // prove the types on the wire, not merely their rendered text.
+        return Ok(CallToolResult::success(vec![ContentBlock::text(
+            serde_json::to_string(&accepted).unwrap_or_default(),
+        )])
+        .into());
+    }
+    if name == tools.exact_scalars {
+        if round == 1 {
+            return Ok(rmcp::model::InputRequiredResult::new(
+                Some(input_requests(serde_json::json!({
+                    "scalars": mrtr_exact_scalars_request("Post the entry"),
+                }))?),
+                Some(fixture_round_state(round)),
+            )
+            .into());
+        }
+        let accepted = request
+            .input_responses
+            .as_ref()
+            .and_then(|responses| responses.get("scalars"))
+            .and_then(|answer| answer.get("content"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        // Echoed verbatim, so a test proves the exact values that crossed the
+        // wire rather than their rendered text.
         return Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string(&accepted).unwrap_or_default(),
         )])

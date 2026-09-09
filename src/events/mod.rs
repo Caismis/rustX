@@ -61,8 +61,8 @@ impl RuntimeEventSink for RecordingEventSink {
 }
 
 pub use interaction::{
-    AnswerSpecification, BooleanAnswer, CustomAnswer, IntegerAnswer, IntegerAnswerSpecification,
-    InteractionRequester, InteractionSettlement, InteractionSubject,
+    AnswerSpecification, BooleanAnswer, CustomAnswer, ExactInteger, FiniteNumber, IntegerAnswer,
+    IntegerAnswerSpecification, InteractionRequester, InteractionSettlement, InteractionSubject,
     MAX_APPROVAL_DENIAL_REASON_CHARS, MAX_APPROVAL_REQUEST_REASON_CHARS,
     MAX_APPROVAL_TOOL_NAME_CHARS, MAX_CHOICE_OPTIONS, MAX_CUSTOM_ANSWER_CHARS,
     MAX_OPTION_DESCRIPTION_CHARS, MAX_OPTION_LABEL_CHARS, MAX_OPTION_PREVIEW_CHARS,

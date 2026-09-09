@@ -405,8 +405,28 @@ export type TextAnswerSpecification = {
   format?: TextFormat;
 };
 
+/**
+ * A finite-binary64 numeric question.
+ *
+ * The runtime's canonical `Number` domain is the finite IEEE-754 binary64, the
+ * very domain a JavaScript `number` holds, so these bounds are exact here and
+ * a parsed answer loses nothing on the way back. A decimal the runtime cannot
+ * hold exactly — a whole number above `2^53`, say — is refused by the runtime
+ * rather than rounded into range, so a client must not offer one.
+ */
 export type NumberAnswerSpecification = { minimum?: number; maximum?: number };
-export type IntegerAnswerSpecification = { minimum?: number; maximum?: number };
+
+/**
+ * A whole-number question, carried as canonical decimal **strings**.
+ *
+ * The runtime's canonical `Integer` domain is the exact `i64`, which a
+ * JavaScript `number` cannot hold above `2^53`. The bounds and the answer
+ * therefore cross this protocol as decimal text and are parsed exactly once,
+ * by the runtime. A client must compare and edit them as text (`BigInt`, not
+ * `Number`), or it will silently round the very values this representation
+ * exists to preserve.
+ */
+export type IntegerAnswerSpecification = { minimum?: string; maximum?: string };
 
 export type SingleChoiceSpecification = {
   options: OptionSpecification[];
@@ -458,9 +478,19 @@ export type InteractionRequester = {
   origin: ToolOrigin;
 };
 
+/**
+ * A text answer.
+ *
+ * An **omitted** answer and an explicit `{ value: "" }` are different facts:
+ * omitting the entry says the user did not answer, while the empty string is a
+ * real answer, legal whenever the question declares no `min_length` or a
+ * `min_length` of `0`, and delivered to a provider as an empty value. A client
+ * must therefore track answer presence separately from draft length.
+ */
 export type TextAnswer = { value: string };
 export type NumberAnswer = { value: number };
-export type IntegerAnswer = { value: number };
+/** A whole-number answer, as its canonical decimal spelling. */
+export type IntegerAnswer = { value: string };
 export type BooleanAnswer = { value: boolean };
 export type OptionAnswer = { option_index: number };
 export type OptionsAnswer = { option_indices: number[] };

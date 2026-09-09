@@ -67,12 +67,12 @@ use crate::runtime::types::{CancellationReason, ConversationLifecycle, Lifecycle
 use crate::tools::types::{ToolInvocationMode, ToolOrigin};
 
 pub use crate::events::interaction::{
-    AnswerSpecification, BooleanAnswer, CustomAnswer, IntegerAnswer, IntegerAnswerSpecification,
-    InteractionRequester, MultiChoiceSpecification, NumberAnswer, NumberAnswerSpecification,
-    OptionAnswer, OptionSpecification, OptionsAnswer, QuestionSpecification, QuestionnaireAnswer,
-    QuestionnaireAnswerEntry, QuestionnaireDeclined, QuestionnaireResponse,
-    QuestionnaireSpecification, QuestionnaireSubmission, SingleChoiceSpecification, TextAnswer,
-    TextAnswerSpecification, TextFormat,
+    AnswerSpecification, BooleanAnswer, CustomAnswer, ExactInteger, FiniteNumber, IntegerAnswer,
+    IntegerAnswerSpecification, InteractionRequester, MultiChoiceSpecification, NumberAnswer,
+    NumberAnswerSpecification, OptionAnswer, OptionSpecification, OptionsAnswer,
+    QuestionSpecification, QuestionnaireAnswer, QuestionnaireAnswerEntry, QuestionnaireDeclined,
+    QuestionnaireResponse, QuestionnaireSpecification, QuestionnaireSubmission,
+    SingleChoiceSpecification, TextAnswer, TextAnswerSpecification, TextFormat,
 };
 
 /// The bounded native interaction vocabulary of the 0.1 protocol.

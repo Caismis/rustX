@@ -52,8 +52,12 @@
 //!                minLength / maxLength      -> Text { min_length, max_length }
 //!                format date|date-time|uri  -> Text { format }
 //!                format email               -> REFUSED (no faithful validator)
-//! NumberSchema   minimum / maximum          -> Number { minimum, maximum }
-//! IntegerSchema  minimum / maximum          -> Integer { minimum, maximum }
+//! NumberSchema   minimum / maximum (f64)   -> Number { minimum, maximum }
+//!                                               as finite binary64, the
+//!                                               identity translation
+//! IntegerSchema  minimum / maximum (i64)   -> Integer { minimum, maximum }
+//!                                               as exact i64, the identity
+//!                                               translation
 //! BooleanSchema  (no constraints)           -> Boolean
 //! enum (single)  enum | oneOf | enumNames   -> SingleChoice { options,
 //!                                                allow_custom: false }
@@ -106,9 +110,10 @@ use rmcp::model::{
 };
 
 use crate::events::interaction::{
-    AnswerSpecification, MAX_CHOICE_OPTIONS, MAX_OPTION_LABEL_CHARS, MAX_QUESTION_HEADER_CHARS,
-    MAX_QUESTION_TEXT_CHARS, MAX_QUESTIONNAIRE_QUESTIONS, MAX_TEXT_ANSWER_CHARS,
-    MIN_CHOICE_OPTIONS, MultiChoiceSpecification, NumberAnswerSpecification, OptionSpecification,
+    AnswerSpecification, ExactInteger, FiniteNumber, IntegerAnswerSpecification,
+    MAX_CHOICE_OPTIONS, MAX_OPTION_LABEL_CHARS, MAX_QUESTION_HEADER_CHARS, MAX_QUESTION_TEXT_CHARS,
+    MAX_QUESTIONNAIRE_QUESTIONS, MAX_TEXT_ANSWER_CHARS, MIN_CHOICE_OPTIONS,
+    MultiChoiceSpecification, NumberAnswerSpecification, OptionSpecification,
     QuestionSpecification, QuestionnaireAnswer, QuestionnaireResponse, QuestionnaireSpecification,
     SingleChoiceSpecification, TextAnswerSpecification, TextFormat,
 };
@@ -345,11 +350,21 @@ impl PropertySlot {
             (PropertyValues::Text, QuestionnaireAnswer::Text(text)) => {
                 Ok(serde_json::Value::String(text.value.clone()))
             }
-            (PropertyValues::Number, QuestionnaireAnswer::Number(number)) => {
-                Ok(serde_json::Value::Number(number.value.clone()))
-            }
+            // The emitted number is built from the very `FiniteNumber` the
+            // runtime range-checked, so "validated value" and "emitted value"
+            // are the same bits, not two conversions of one decimal spelling.
+            (PropertyValues::Number, QuestionnaireAnswer::Number(number)) => number
+                .value
+                .to_json_number()
+                .map(serde_json::Value::Number)
+                .ok_or_else(|| {
+                    format!(
+                        "the answer to MCP elicitation property {:?} is not a finite number",
+                        self.property
+                    )
+                }),
             (PropertyValues::Integer, QuestionnaireAnswer::Integer(integer)) => {
-                Ok(serde_json::Value::Number(integer.value.into()))
+                Ok(serde_json::Value::Number(integer.value.get().into()))
             }
             (PropertyValues::Boolean, QuestionnaireAnswer::Boolean(boolean)) => {
                 Ok(serde_json::Value::Bool(boolean.value))
@@ -729,16 +744,20 @@ fn translate_property(
             })
         }
         PrimitiveSchemaDefinition::Number(schema) => {
+            // `NumberSchema::minimum`/`maximum` are `f64`, which *is* the
+            // canonical rustX `Number` domain, so the translation is the
+            // identity on every bound MCP can express. The only unusable bound
+            // is a non-finite one, which no answer could satisfy anyway.
             let bound = |value: Option<f64>, name: &str| match value {
                 None => Ok(None),
-                Some(value) => serde_json::Number::from_f64(value)
+                Some(value) => FiniteNumber::try_new(value)
                     .map(Some)
-                    .ok_or_else(|| unsupported(&format!("its {name} is not a finite JSON number"))),
+                    .map_err(|_| unsupported(&format!("its {name} is not a finite number"))),
             };
             let minimum = bound(schema.minimum, "minimum")?;
             let maximum = bound(schema.maximum, "maximum")?;
-            if let (Some(min), Some(max)) = (schema.minimum, schema.maximum)
-                && min > max
+            if let (Some(min), Some(max)) = (minimum, maximum)
+                && min.get() > max.get()
             {
                 return Err(unsupported(
                     "its minimum exceeds its maximum, so no answer could satisfy it",
@@ -752,20 +771,28 @@ fn translate_property(
             })
         }
         PrimitiveSchemaDefinition::Integer(schema) => {
-            if let (Some(min), Some(max)) = (schema.minimum, schema.maximum)
-                && min > max
+            // `IntegerSchema::minimum`/`maximum` are `i64`, which *is* the
+            // canonical rustX `Integer` domain. No MCP integer schema can name
+            // a bound rustX cannot carry, and because the Runtime Client
+            // representation is decimal text rather than a JavaScript number,
+            // no MCP integer schema can name a legal answer set that no client
+            // could submit either. The "refuse a schema no client can satisfy"
+            // rule is therefore vacuous here by construction — the only
+            // unsatisfiable interval is an inverted one.
+            let minimum = schema.minimum.map(ExactInteger::new);
+            let maximum = schema.maximum.map(ExactInteger::new);
+            if let (Some(min), Some(max)) = (minimum, maximum)
+                && min.get() > max.get()
             {
                 return Err(unsupported(
                     "its minimum exceeds its maximum, so no answer could satisfy it",
                 ));
             }
             Ok(TranslatedProperty {
-                answer: AnswerSpecification::Integer(
-                    crate::events::interaction::IntegerAnswerSpecification {
-                        minimum: schema.minimum,
-                        maximum: schema.maximum,
-                    },
-                ),
+                answer: AnswerSpecification::Integer(IntegerAnswerSpecification {
+                    minimum,
+                    maximum,
+                }),
                 values: PropertyValues::Integer,
                 title: schema.title.as_deref().map(str::to_owned),
                 description: schema.description.as_deref().map(str::to_owned),
@@ -1233,15 +1260,17 @@ mod tests {
         assert_eq!(
             plan.questionnaire().questions[0].answer,
             AnswerSpecification::Integer(crate::events::interaction::IntegerAnswerSpecification {
-                minimum: Some(0),
-                maximum: Some(150),
+                minimum: Some(ExactInteger::new(0)),
+                maximum: Some(ExactInteger::new(150)),
             })
         );
         let responses = accepted(
             &plan,
             &submitted(vec![entry(
                 0,
-                QuestionnaireAnswer::Integer(IntegerAnswer { value: 42 }),
+                QuestionnaireAnswer::Integer(IntegerAnswer {
+                    value: ExactInteger::new(42),
+                }),
             )]),
         )
         .expect("responses");
@@ -1256,7 +1285,7 @@ mod tests {
                 &submitted(vec![entry(
                     0,
                     QuestionnaireAnswer::Number(NumberAnswer {
-                        value: serde_json::Number::from_f64(1.5).expect("finite")
+                        value: FiniteNumber::try_new(1.5).expect("finite")
                     }),
                 )]),
             )
@@ -1268,7 +1297,9 @@ mod tests {
                 &plan,
                 &submitted(vec![entry(
                     0,
-                    QuestionnaireAnswer::Integer(IntegerAnswer { value: 151 }),
+                    QuestionnaireAnswer::Integer(IntegerAnswer {
+                        value: ExactInteger::new(151)
+                    }),
                 )]),
             )
             .is_err()
@@ -1284,7 +1315,7 @@ mod tests {
             &submitted(vec![entry(
                 0,
                 QuestionnaireAnswer::Number(NumberAnswer {
-                    value: serde_json::Number::from_f64(0.25).expect("finite"),
+                    value: FiniteNumber::try_new(0.25).expect("finite"),
                 }),
             )]),
         )
@@ -1299,12 +1330,167 @@ mod tests {
                 &submitted(vec![entry(
                     0,
                     QuestionnaireAnswer::Number(NumberAnswer {
-                        value: serde_json::Number::from_f64(1.25).expect("finite")
+                        value: FiniteNumber::try_new(1.25).expect("finite")
                     }),
                 )]),
             )
             .is_err()
         );
+    }
+
+    /// The emitted `accept.content` value is the very value the runtime
+    /// range-checked — for every scalar shape, including the values that used
+    /// to slip through the old `serde_json::Number` / `f64` split.
+    #[test]
+    fn every_accepted_scalar_answer_is_emitted_exactly_as_validated() {
+        // A Number question wide enough to hold the precision frontier.
+        let number_plan = plan_of(&serde_json::json!({
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": "number",
+                    "minimum": -1.0e18,
+                    "maximum": 9_007_199_254_740_992.0,
+                },
+            },
+            "required": ["amount"],
+        }));
+        for value in [
+            0.0_f64,
+            -0.5,
+            0.1,
+            2.5,
+            -1.0e18,
+            9_007_199_254_740_991.0,
+            9_007_199_254_740_992.0,
+        ] {
+            let answer = QuestionnaireAnswer::Number(NumberAnswer {
+                value: FiniteNumber::try_new(value).expect("finite"),
+            });
+            let normalized = normalize_questionnaire_response(
+                number_plan.questionnaire(),
+                &submitted(vec![entry(0, answer.clone())]),
+            )
+            .unwrap_or_else(|error| panic!("{value} must validate: {error}"));
+            // What validation settled on...
+            let QuestionnaireResponse::Submitted(settled) = &normalized else {
+                panic!("expected a submission");
+            };
+            assert_eq!(settled.answers[0].answer, answer);
+            // ...is bit-for-bit what the server is sent.
+            let emitted = number_plan.responses(&normalized).expect("responses");
+            let content = &emitted["ask"]["content"]["amount"];
+            // An *exact* comparison is the assertion: a tolerance here would
+            // hide precisely the divergence this test exists to forbid.
+            #[allow(clippy::float_cmp, reason = "bit-equality is the property under test")]
+            {
+                assert_eq!(
+                    content.as_f64().expect("a JSON number"),
+                    value,
+                    "the validated value and the emitted value are the same number"
+                );
+            }
+        }
+
+        // The `2^53 + 1` failure class: the value cannot even be spelled as an
+        // answer, so it can never be validated against the `2^53` maximum and
+        // then emitted as something else.
+        assert!(
+            serde_json::from_str::<QuestionnaireAnswer>(
+                r#"{"type":"number","value":{"value":9007199254740993}}"#
+            )
+            .is_err()
+        );
+
+        // An Integer question whose entire legal answer set lies above the
+        // JavaScript safe-integer range is publishable *and* answerable,
+        // because the Runtime Client representation is decimal text.
+        let integer_plan = plan_of(&serde_json::json!({
+            "type": "object",
+            "properties": {
+                "ledger": {
+                    "type": "integer",
+                    "minimum": 9_007_199_254_740_992_i64,
+                    "maximum": 9_223_372_036_854_775_807_i64,
+                },
+            },
+            "required": ["ledger"],
+        }));
+        for value in [9_007_199_254_740_992_i64, 9_007_199_254_740_993, i64::MAX] {
+            let answer = QuestionnaireAnswer::Integer(IntegerAnswer {
+                value: ExactInteger::new(value),
+            });
+            // The wire form is the exact decimal text, never a JSON number.
+            let wire = serde_json::to_value(&answer).expect("encodes");
+            assert_eq!(wire["value"]["value"], serde_json::json!(value.to_string()));
+            let decoded: QuestionnaireAnswer = serde_json::from_value(wire).expect("decodes");
+            assert_eq!(decoded, answer);
+
+            let normalized = normalize_questionnaire_response(
+                integer_plan.questionnaire(),
+                &submitted(vec![entry(0, decoded)]),
+            )
+            .unwrap_or_else(|error| panic!("{value} must validate: {error}"));
+            let emitted = integer_plan.responses(&normalized).expect("responses");
+            assert_eq!(
+                emitted["ask"]["content"]["ledger"],
+                serde_json::json!(value),
+                "the exact whole number reaches MCP unrounded"
+            );
+        }
+        // Exact bound comparison at that magnitude, with no rounding to blur it.
+        for outside in [9_007_199_254_740_991_i64, i64::MIN] {
+            assert!(
+                accepted(
+                    &integer_plan,
+                    &submitted(vec![entry(
+                        0,
+                        QuestionnaireAnswer::Integer(IntegerAnswer {
+                            value: ExactInteger::new(outside),
+                        }),
+                    )]),
+                )
+                .is_err(),
+                "{outside}"
+            );
+        }
+    }
+
+    /// An explicit empty string is a real answer, and reaches the server as
+    /// `""` — not as the decline that an *omitted* required property produces.
+    #[test]
+    fn an_explicit_empty_text_answer_accepts_where_an_omission_declines() {
+        let plan = plan_of(&serde_json::json!({
+            "type": "object",
+            "properties": {"note": {"type": "string", "minLength": 0}},
+            "required": ["note"],
+        }));
+        let empty = QuestionnaireAnswer::Text(TextAnswer {
+            value: String::new(),
+        });
+
+        // Answered with the empty string: `accept`, with a real empty value.
+        let answered = accepted(&plan, &submitted(vec![entry(0, empty.clone())])).expect("accepts");
+        assert_eq!(
+            answered["ask"],
+            serde_json::json!({"action": "accept", "content": {"note": ""}})
+        );
+
+        // Not answered at all: the required property is missing, so rustX
+        // declines rather than sending content the server's schema rejects.
+        // The two responses are different facts about the same question.
+        let omitted = accepted(&plan, &submitted(vec![])).expect("declines");
+        assert_eq!(omitted["ask"], serde_json::json!({"action": "decline"}));
+        assert_ne!(answered["ask"], omitted["ask"]);
+
+        // A positive minLength still refuses the empty string, and the refusal
+        // is a rejected interaction response, never an emitted `accept`.
+        let bounded = plan_of(&serde_json::json!({
+            "type": "object",
+            "properties": {"note": {"type": "string", "minLength": 1}},
+            "required": ["note"],
+        }));
+        assert!(accepted(&bounded, &submitted(vec![entry(0, empty)])).is_err());
     }
 
     /// Booleans round-trip as JSON booleans in both directions; `Yes`/`No` is
