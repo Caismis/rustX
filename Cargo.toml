@@ -118,5 +118,6 @@ all = "warn"
 pedantic = "warn"
 
 [dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
 axum = "0.8"
 nix = { version = "0.31.3", features = ["signal", "process", "fs", "dir"] }

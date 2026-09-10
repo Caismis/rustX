@@ -34,7 +34,7 @@
 //!     |                 +--> tasks/update (answers) |  |
 //!     |                 +--> tasks/cancel (best     |  |
 //!     |                 |     effort, on rustX      |  |
-//!     |                 |     cancellation only)    |  |
+//!     |                 |     abandonment)          |  |
 //!     |                 v                           |  |
 //!     |          terminal task state ---------------+--+
 //! ```
@@ -47,8 +47,8 @@
 //!
 //! This module owns the *translation and validation* of the task protocol:
 //! what a task id is allowed to be, which snapshots are self-consistent, how
-//! a server's polling hint becomes a bounded rustX wait, which input requests
-//! are still outstanding, and how a terminal task state becomes evidence the
+//! a server's polling hint becomes a cancellation-aware wait, which input
+//! requests are still outstanding, and how a terminal task state becomes evidence the
 //! existing MCP result projection can settle.
 //!
 //! It owns **no** dispatch. The physical requests, the external-effect
@@ -92,9 +92,9 @@
 //! A task's `ttlMs` says how long the *server* may retain it. rustX already
 //! has exactly one deadline authority — the generic Issue #204 execution
 //! deadline the Agent Loop owns — and this module deliberately introduces no
-//! second one. `pollIntervalMs` is honoured as a *hint*, clamped into a fixed
-//! rustX-owned safety interval so a server can create neither a busy loop nor
-//! a wait that outlives the invocation's own cancellation contract.
+//! second one. `pollIntervalMs` has a 25 ms minimum floor and no maximum
+//! clamp. Every poll, including the first, waits for the server hint; local
+//! cancellation and the outer deadline can interrupt that wait.
 
 use std::collections::BTreeSet;
 use std::time::Duration;
@@ -130,13 +130,6 @@ pub(super) const MCP_TASK_POLL_INTERVAL_DEFAULT: Duration = Duration::from_milli
 /// A server asking for `0` is asking for a busy loop over a network
 /// transport; the floor refuses that without refusing the call.
 pub(crate) const MCP_TASK_POLL_INTERVAL_MIN: Duration = Duration::from_millis(25);
-
-/// The longest wait rustX will honour, whatever the server hints.
-///
-/// The cap is not a deadline — the wait is cancellation-aware and the generic
-/// execution deadline still owns termination — it only stops a server from
-/// making this invocation's next observation arbitrarily distant.
-pub(crate) const MCP_TASK_POLL_INTERVAL_MAX: Duration = Duration::from_secs(30);
 
 /// Why one remote task cannot be driven by rustX.
 ///
@@ -196,7 +189,7 @@ pub(super) struct RemoteTask {
     task_id: String,
     /// The last status the server reported, seeded from `CreateTaskResult`.
     status: TaskStatus,
-    /// The current bounded wait between polls, refreshed from every snapshot.
+    /// The current wait between polls, refreshed from every snapshot.
     poll_interval: Duration,
     /// Every input-request key this task has already been answered for.
     answered: BTreeSet<String>,
@@ -222,21 +215,27 @@ impl RemoteTask {
                 task_id.len()
             )));
         }
-        if let Some(message) = &result.task.status_message
-            && message.len() > MCP_TASK_MAX_STATUS_MESSAGE_BYTES
-        {
-            return Err(McpTaskViolation::new(format!(
-                "the MCP task status message is {} bytes, above the \
-                 {MCP_TASK_MAX_STATUS_MESSAGE_BYTES}-byte rustX bound",
-                message.len()
-            )));
-        }
         Ok(Self {
             task_id,
             status: result.task.status,
-            poll_interval: clamp_poll_interval(result.task.poll_interval_ms),
+            poll_interval: poll_interval(result.task.poll_interval_ms),
             answered: BTreeSet::new(),
         })
+    }
+
+    /// Validate creation metadata after accepting the independently usable id.
+    pub(super) fn validate_creation(result: &CreateTaskResult) -> Result<(), McpTaskViolation> {
+        if result
+            .task
+            .status_message
+            .as_ref()
+            .is_some_and(|message| message.len() > MCP_TASK_MAX_STATUS_MESSAGE_BYTES)
+        {
+            return Err(McpTaskViolation::new(
+                "the MCP task status message exceeds the rustX retention bound",
+            ));
+        }
+        Ok(())
     }
 
     /// The server-assigned task id.
@@ -258,7 +257,7 @@ impl RemoteTask {
         }
     }
 
-    /// The bounded wait before the next poll.
+    /// The wait before the next poll.
     pub(super) const fn poll_interval(&self) -> Duration {
         self.poll_interval
     }
@@ -306,7 +305,7 @@ impl RemoteTask {
             )));
         }
         self.status = task.status;
-        self.poll_interval = clamp_poll_interval(task.poll_interval_ms);
+        self.poll_interval = poll_interval(task.poll_interval_ms);
         match &snapshot.task.payload {
             TaskPayload::Working => Ok(RemoteTaskObservation::Working),
             TaskPayload::InputRequired { input_requests } => self.outstanding(input_requests),
@@ -409,17 +408,38 @@ impl RemoteTask {
     }
 }
 
-/// The bounded rustX wait one server polling hint asks for.
+/// The cancellation-aware rustX wait one server polling hint asks for.
 ///
-/// The hint is honoured inside a fixed safety interval and is never allowed
-/// to become either a busy loop or an unbounded sleep. There is no
-/// configuration surface: this is a runtime safety bound on a server-driven
-/// loop, exactly like the MRTR round bound.
-fn clamp_poll_interval(hint_ms: Option<u64>) -> Duration {
+/// The local floor prevents busy polling. No upper clamp may shorten the
+/// server interval; the invocation cancellation/deadline interrupts the wait.
+pub(super) fn poll_interval(hint_ms: Option<u64>) -> Duration {
     let Some(hint_ms) = hint_ms else {
         return MCP_TASK_POLL_INTERVAL_DEFAULT;
     };
-    Duration::from_millis(hint_ms).clamp(MCP_TASK_POLL_INTERVAL_MIN, MCP_TASK_POLL_INTERVAL_MAX)
+    Duration::from_millis(hint_ms).max(MCP_TASK_POLL_INTERVAL_MIN)
+}
+
+/// Method-specific decoding after the shared physical request owner.
+pub(super) trait TaskResponse: Sized {
+    fn decode(result: rmcp::model::ServerResult) -> Result<Self, String>;
+}
+
+impl TaskResponse for GetTaskResult {
+    fn decode(result: rmcp::model::ServerResult) -> Result<Self, String> {
+        match result {
+            rmcp::model::ServerResult::GetTaskResult(snapshot) => Ok(snapshot),
+            _ => Err("expected GetTaskResult task snapshot".to_owned()),
+        }
+    }
+}
+
+impl TaskResponse for rmcp::model::TaskAckResult {
+    fn decode(result: rmcp::model::ServerResult) -> Result<Self, String> {
+        match result {
+            rmcp::model::ServerResult::TaskAckResult(ack) => Ok(ack),
+            _ => Err("expected TaskAckResult acknowledgement".to_owned()),
+        }
+    }
 }
 
 /// A task id trimmed for a diagnostic, so a hostile id cannot inflate one.
@@ -620,20 +640,46 @@ mod tests {
     }
 
     #[test]
-    fn a_polling_hint_is_honoured_inside_the_fixed_safety_interval() {
-        assert_eq!(clamp_poll_interval(None), MCP_TASK_POLL_INTERVAL_DEFAULT);
-        assert_eq!(clamp_poll_interval(Some(0)), MCP_TASK_POLL_INTERVAL_MIN);
+    fn mcp_tasks_polling_hints_are_never_shortened() {
+        assert_eq!(poll_interval(None), MCP_TASK_POLL_INTERVAL_DEFAULT);
+        assert_eq!(poll_interval(Some(0)), MCP_TASK_POLL_INTERVAL_MIN);
         assert_eq!(
-            clamp_poll_interval(Some(u64::MAX)),
-            MCP_TASK_POLL_INTERVAL_MAX
+            poll_interval(Some(u64::MAX)),
+            Duration::from_millis(u64::MAX)
         );
-        assert_eq!(clamp_poll_interval(Some(1_000)), Duration::from_secs(1));
+        assert_eq!(poll_interval(Some(60_000)), Duration::from_mins(1));
+        assert_eq!(poll_interval(Some(1_000)), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn mcp_tasks_ack_decoder_accepts_only_task_ack() {
+        use rmcp::model::{ServerResult, TaskAckResult};
+        assert!(
+            TaskAckResult::decode(ServerResult::TaskAckResult(TaskAckResult::default())).is_ok()
+        );
+        for unrelated in [
+            ServerResult::CallToolResult(CallToolResult::success(vec![])),
+            ServerResult::CreateTaskResult(seed("task-a")),
+            ServerResult::GetTaskResult(snapshot("task-a", TaskPayload::Working)),
+            ServerResult::InputRequiredResult(
+                serde_json::from_value(
+                    serde_json::json!({"resultType": "input_required", "inputRequests": {}}),
+                )
+                .expect("input result"),
+            ),
+            ServerResult::EmptyResult(rmcp::model::EmptyObject {}),
+        ] {
+            assert!(TaskAckResult::decode(unrelated).is_err());
+        }
     }
 
     #[test]
     fn a_status_message_above_the_retention_bound_is_refused() {
         let mut seed = seed("task-a");
         seed.task.status_message = Some("m".repeat(MCP_TASK_MAX_STATUS_MESSAGE_BYTES + 1));
-        assert!(RemoteTask::create(&seed).is_err());
+        let mut task = RemoteTask::create(&seed).expect("identity remains addressable");
+        assert!(RemoteTask::validate_creation(&seed).is_err());
+        let snapshot = GetTaskResult::new(DetailedTask::new(seed.task, TaskPayload::Working));
+        assert!(task.observe(&snapshot).is_err());
     }
 }

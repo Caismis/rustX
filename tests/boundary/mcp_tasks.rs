@@ -140,6 +140,9 @@ struct FixtureOptions {
     unadvertised: bool,
     /// Narrow the fixture to one legacy MCP revision.
     legacy: bool,
+    wrong_ack: Option<&'static str>,
+    completing_gate: Option<String>,
+    oversized_seed: bool,
 }
 
 /// The per-test model-facing tool-name prefix, derived from the test's path.
@@ -173,6 +176,15 @@ impl Harness {
         }
         if options.legacy {
             environment.insert(PROTOCOL_VERSIONS_ENV.to_owned(), "2025-06-18".to_owned());
+        }
+        if options.oversized_seed {
+            environment.insert("RUSTX_TASK_OVERSIZED_SEED".to_owned(), "1".to_owned());
+        }
+        if let Some(method) = options.wrong_ack {
+            environment.insert("RUSTX_TASK_WRONG_ACK".to_owned(), method.to_owned());
+        }
+        if let Some(address) = options.completing_gate {
+            environment.insert("RUSTX_TASK_COMPLETING_GATE".to_owned(), address);
         }
         let binding = McpServerBinding {
             credentials: crate::credentials::SourceCredentials::default(),
@@ -977,6 +989,7 @@ async fn a_foreign_task_snapshot_fails_without_poisoning_the_server() {
         "one malformed task never poisons an otherwise healthy server: {:?}",
         healthy.status
     );
+    assert_eq!(harness.observed_method(CANCEL_TASK).len(), 1);
     harness.shutdown().await;
 }
 
@@ -1003,6 +1016,7 @@ async fn a_contradictory_input_required_task_fails_deterministically() {
     );
     assert_eq!(harness.coordinator.pending_count(), 0);
     assert!(harness.audit.events().is_empty());
+    assert_eq!(harness.observed_method(CANCEL_TASK).len(), 1);
     harness.shutdown().await;
 }
 
@@ -1031,6 +1045,8 @@ async fn task_sampling_is_refused_without_publishing_anything() {
     assert_eq!(harness.coordinator.pending_count(), 0);
     assert!(harness.audit.events().is_empty());
     assert!(harness.observed_method(UPDATE_TASK).is_empty());
+    assert_eq!(harness.observed_method(CANCEL_TASK).len(), 1);
+    assert!(detail.contains("does not prove the remote task stopped"));
     harness.shutdown().await;
 }
 
@@ -1167,12 +1183,12 @@ async fn cancellation_before_the_update_frontier_dispatches_no_update() {
 /// Cancellation racing the poll that would have completed the task has one
 /// deterministic terminal winner and exactly one published result.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn cancellation_racing_the_completing_poll_has_one_terminal_winner() {
+async fn cancellation_before_completing_poll_frontier_prevents_dispatch() {
     if serve_if_fixture_mode(FixtureServer::from_env()).await {
         return;
     }
     let harness = Harness::connect(
-        "boundary_suites::mcp_tasks::cancellation_racing_the_completing_poll_has_one_terminal_winner",
+        "boundary_suites::mcp_tasks::cancellation_before_completing_poll_frontier_prevents_dispatch",
         FixtureOptions::default(),
     )
     .await;
@@ -1254,6 +1270,10 @@ async fn connection_loss_after_task_creation_never_replays_the_tool_call() {
         harness.observed_method(GET_TASK).len(),
         1,
         "no poll was dispatched after the generation closed"
+    );
+    assert!(
+        harness.observed_method(CANCEL_TASK).is_empty(),
+        "closed generation cannot carry cancellation"
     );
 }
 
@@ -1389,7 +1409,8 @@ async fn a_task_asking_a_detached_execution_for_a_human_fails_honestly() {
     assert!(harness.observed_method(UPDATE_TASK).is_empty());
     // The remote task is still the server's, so rustX asks it to stop and
     // reports an unknown outcome rather than a proven failure of the effect.
-    assert!(harness.observed_method(CANCEL_TASK).is_empty());
+    assert_eq!(harness.observed_method(CANCEL_TASK).len(), 1);
+    assert!(detail.contains("does not prove the remote task stopped"));
     harness.shutdown().await;
 }
 
@@ -1567,4 +1588,137 @@ async fn cancellation_releases_the_in_flight_http_task_request() {
     );
     let _ = runtime.close().await;
     server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tasks_update_rejects_an_unrelated_success() {
+    if serve_if_fixture_mode(FixtureServer::from_env()).await {
+        return;
+    }
+    let harness = Harness::connect(
+        "boundary_suites::mcp_tasks::tasks_update_rejects_an_unrelated_success",
+        FixtureOptions {
+            wrong_ack: Some(UPDATE_TASK),
+            ..FixtureOptions::default()
+        },
+    )
+    .await;
+    let progress = RecordingProgress::default();
+    let call = harness.invoke(TASK_INPUT_TOOL, "wrong-update", &progress, true);
+    tokio::pin!(call);
+    let pending = tokio::select! {
+        result = &mut call => panic!("premature settlement {result:?}"),
+        pending = harness.next_pending() => pending,
+    };
+    harness.answer(&pending, "stable").await;
+    let settled = call.await;
+    assert!(unknown(&settled).contains("expected TaskAckResult"));
+    assert_eq!(harness.observed_method(UPDATE_TASK).len(), 1);
+    assert_eq!(harness.observed_method(GET_TASK).len(), 1);
+    assert_eq!(harness.observed_method(CANCEL_TASK).len(), 1);
+    assert!(harness.runtime.unusable_reason().is_none());
+    harness.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tasks_cancel_rejects_an_unrelated_success() {
+    if serve_if_fixture_mode(FixtureServer::from_env()).await {
+        return;
+    }
+    let harness = Harness::connect(
+        "boundary_suites::mcp_tasks::tasks_cancel_rejects_an_unrelated_success",
+        FixtureOptions {
+            wrong_ack: Some(CANCEL_TASK),
+            ..FixtureOptions::default()
+        },
+    )
+    .await;
+    let progress = RecordingProgress::default();
+    let settled = harness
+        .invoke(TASK_INPUT_TOOL, "wrong-cancel", &progress, false)
+        .await;
+    let detail = unknown(&settled);
+    assert!(detail.contains("produced no acknowledgement"));
+    assert!(!detail.contains("server acknowledged"));
+    assert_eq!(harness.observed_method(CANCEL_TASK).len(), 1);
+    assert_eq!(harness.observed_method(GET_TASK).len(), 1);
+    assert!(harness.runtime.unusable_reason().is_none());
+    harness.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn correlated_completion_after_frontier_outranks_cancellation() {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    if serve_if_fixture_mode(FixtureServer::from_env()).await {
+        return;
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("gate listener");
+    let harness = Harness::connect(
+        "boundary_suites::mcp_tasks::correlated_completion_after_frontier_outranks_cancellation",
+        FixtureOptions {
+            completing_gate: Some(listener.local_addr().expect("address").to_string()),
+            ..FixtureOptions::default()
+        },
+    )
+    .await;
+    // Freeze only the completing request's arbitration. It remains a real
+    // in-flight stdio request, and the ordinary biased response arbitration
+    // runs once both competing facts are observable.
+    let (barrier, _guard) = harness.barrier_from("tasks/get:correlated", 3);
+    let progress = RecordingProgress::default();
+    let call = harness.invoke(TASK_SIMPLE_TOOL, "post-frontier", &progress, true);
+    tokio::pin!(call);
+    let (mut gate, _) = tokio::select! {
+        result = &mut call => panic!("premature settlement {result:?}"),
+        connection = listener.accept() => connection.expect("completing handler"),
+    };
+    assert_eq!(gate.read_u8().await.expect("entered"), 1);
+    assert_eq!(harness.observed_method(GET_TASK).len(), 3);
+    assert!(
+        harness
+            .owner
+            .request_cancel(CancellationReason::UserRequested)
+    );
+    gate.write_all(&[1])
+        .await
+        .expect("release terminal response");
+    barrier.release();
+    let settled = call.await;
+    assert!(matches!(settled.status, ToolExecutionStatus::Success));
+    assert_eq!(text(&settled), "task simple done after 3 polls");
+    assert_eq!(harness.observed_method("tools/call").len(), 1);
+    assert_eq!(harness.observed_method(GET_TASK).len(), 3);
+    assert!(harness.observed_method(UPDATE_TASK).is_empty());
+    assert!(harness.observed_method(CANCEL_TASK).is_empty());
+    assert!(progress.reported().is_empty());
+    harness.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn invalid_creation_metadata_still_cancels_the_trusted_task() {
+    if serve_if_fixture_mode(FixtureServer::from_env()).await {
+        return;
+    }
+    let harness = Harness::connect(
+        "boundary_suites::mcp_tasks::invalid_creation_metadata_still_cancels_the_trusted_task",
+        FixtureOptions {
+            oversized_seed: true,
+            ..FixtureOptions::default()
+        },
+    )
+    .await;
+    let progress = RecordingProgress::default();
+    let settled = harness
+        .invoke(TASK_SIMPLE_TOOL, "oversized-seed", &progress, true)
+        .await;
+    let detail = unknown(&settled);
+    assert!(detail.contains("status message"));
+    assert!(detail.contains("does not prove the remote task stopped"));
+    assert_eq!(harness.observed_method(CANCEL_TASK).len(), 1);
+    assert!(harness.observed_method(GET_TASK).is_empty());
+    assert!(harness.observed_method(UPDATE_TASK).is_empty());
+    assert!(harness.runtime.unusable_reason().is_none());
+    harness.shutdown().await;
 }

@@ -2000,6 +2000,31 @@ pub(crate) mod test_sync {
         }
     }
 
+    /// Freeze the completing poll before arbitration until its correlated
+    /// response is queued. This test-only scheduling hook does not consume or
+    /// classify the response; the existing Issue #205 select remains authoritative.
+    pub(crate) async fn park_task_arbitration(
+        server: &str,
+        handle: &rmcp::service::RequestHandle<rmcp::RoleClient>,
+    ) {
+        const METHOD: &str = "tasks/get:correlated";
+        let Some(barrier) =
+            TASK_REQUEST_BARRIERS.find(|b| b.server == server && b.method == METHOD)
+        else {
+            return;
+        };
+        park_before_task_request(server, METHOD, "in-flight").await;
+        if barrier.arrivals().len() >= barrier.first_held {
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                while handle.rx.is_empty() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("the gated poll queues its correlated response");
+        }
+    }
+
     /// The deterministic MRTR continuation-dispatch barrier (Issue #242).
     ///
     /// It holds one invocation at the exact point between "the typed human
@@ -3632,6 +3657,8 @@ impl McpServerRuntime {
                 reason: context.cancellation.reason(),
             };
         }
+        #[cfg(test)]
+        let is_task_poll = matches!(&request, ClientRequest::GetTaskRequest(_));
         let mut handle = match self
             .peer
             .send_cancellable_request(request, self.invocation_request_options(context))
@@ -3712,6 +3739,10 @@ impl McpServerRuntime {
         // every ordinary request: those are bounded by the invocation's own
         // cancellation and deadline contract, which this adapter neither owns
         // nor duplicates.
+        #[cfg(test)]
+        if is_task_poll {
+            test_sync::park_task_arbitration(self.server_id.as_str(), &handle).await;
+        }
         let bound = ownership.response_bound();
         let response = loop {
             tokio::select! {
@@ -3873,12 +3904,28 @@ impl McpServerRuntime {
                 );
             }
         };
-        // Every exit from the loop below is one of exactly three settlements:
-        // a terminal task state (returned directly), a failure that owes the
-        // server nothing, or a failure that owes it one cooperative
-        // `tasks/cancel`. Keeping the third case out of the loop is what
-        // makes "at most one `tasks/cancel` per invocation" structural.
+        if let Err(violation) = tasks::RemoteTask::validate_creation(created) {
+            return self
+                .abandon_active_task(
+                    task.task_id(),
+                    &violation.diagnostic,
+                    context,
+                    started,
+                    generation,
+                )
+                .await;
+        }
+        // All nonterminal exits converge here: addressable abandonment owes
+        // at most one cooperative cancellation; unreachable peers cannot carry it.
         let failure = loop {
+            // Wait before every poll, including the creation hint.
+            // Cancellation observed here means the next `tasks/get` is never dispatched.
+            if !wait_before_next_poll(task.poll_interval(), context).await {
+                break TaskDriveFailure::Cancelled(
+                    "the rustX execution was cancelled while waiting to poll the MCP task"
+                        .to_owned(),
+                );
+            }
             let observation = match self
                 .observe_remote_task(&mut task, context, generation)
                 .await
@@ -3933,30 +3980,15 @@ impl McpServerRuntime {
                     // next observation may still show the request rustX just
                     // answered. It is deduplicated by the answered-key set,
                     // never by a re-ask and never by a second update.
-                    continue;
                 }
                 tasks::RemoteTaskObservation::Working => {}
             }
-            // The bounded, cancellation-aware wait before the next poll. It
-            // is the task's own **poll dispatch frontier**: cancellation
-            // observed here means the next `tasks/get` is never dispatched.
-            if !wait_before_next_poll(task.poll_interval(), context).await {
-                break TaskDriveFailure::Cancelled(
-                    "the rustX execution was cancelled while waiting to poll the MCP task"
-                        .to_owned(),
-                );
-            }
         };
         match failure {
-            // A deterministic diagnostic about a task that is still the
-            // server's. Nothing rustX asked for stopped it, so there is
-            // nothing to cancel cooperatively.
-            TaskDriveFailure::Unknown(detail) => {
+            TaskDriveFailure::Unreachable(detail) => {
                 self.task_outcome_unknown(task.task_id(), &detail, context, started, generation)
             }
-            // Local cancellation or a deadline won. This is the one path that
-            // owes the server a cooperative `tasks/cancel`.
-            TaskDriveFailure::Cancelled(detail) => {
+            TaskDriveFailure::AbandonAddressable(detail) | TaskDriveFailure::Cancelled(detail) => {
                 self.abandon_active_task(task.task_id(), &detail, context, started, generation)
                     .await
             }
@@ -3977,20 +4009,10 @@ impl McpServerRuntime {
         generation: u64,
     ) -> Result<tasks::RemoteTaskObservation, TaskDriveFailure> {
         let snapshot = match self.poll_remote_task(task, context, generation).await {
-            McpTaskAnswer::Answered(answer) => match *answer {
-                ServerResult::GetTaskResult(snapshot) => snapshot,
-                // Nothing but a `tasks/get` result can answer a `tasks/get`.
-                // A `CreateTaskResult` here would be a second task identity
-                // inside one invocation, and it is refused for the same
-                // reason a mismatched task id is.
-                _ => {
-                    return Err(TaskDriveFailure::Unknown(
-                        "the MCP server answered tasks/get with a result that is not a task \
-                         snapshot"
-                            .to_owned(),
-                    ));
-                }
-            },
+            McpTaskAnswer::Answered(snapshot) => snapshot,
+            McpTaskAnswer::Malformed(detail) => {
+                return Err(TaskDriveFailure::AbandonAddressable(detail));
+            }
             McpTaskAnswer::Cancelled(detail) => {
                 return Err(TaskDriveFailure::Cancelled(format!(
                     "{detail}; last observed status {}",
@@ -3998,7 +4020,7 @@ impl McpServerRuntime {
                 )));
             }
             McpTaskAnswer::Unknown(detail) => {
-                return Err(TaskDriveFailure::Unknown(format!(
+                return Err(TaskDriveFailure::Unreachable(format!(
                     "{detail}; last observed status {}",
                     task.status()
                 )));
@@ -4008,7 +4030,7 @@ impl McpServerRuntime {
         // else: the peer answered, so the transport is healthy and unrelated
         // calls on this generation stay healthy too.
         task.observe(&snapshot)
-            .map_err(|violation| TaskDriveFailure::Unknown(violation.diagnostic))
+            .map_err(|violation| TaskDriveFailure::AbandonAddressable(violation.diagnostic))
     }
 
     /// Dispatches one `tasks/get` for the invocation's remote task.
@@ -4017,7 +4039,7 @@ impl McpServerRuntime {
         task: &tasks::RemoteTask,
         context: &ToolExecutionContext<'_>,
         generation: u64,
-    ) -> McpTaskAnswer {
+    ) -> McpTaskAnswer<rmcp::model::GetTaskResult> {
         let request = ClientRequest::GetTaskRequest(GetTaskRequest::new(GetTaskParams::new(
             task.task_id().to_owned(),
         )));
@@ -4061,7 +4083,8 @@ impl McpServerRuntime {
         // Nothing here builds a settlement: the driver is the single
         // settlement point, so this function reports only *why* the round
         // could not complete.
-        let unsupported = |diagnostic: &str| TaskDriveFailure::Unknown(diagnostic.to_owned());
+        let unsupported =
+            |diagnostic: &str| TaskDriveFailure::AbandonAddressable(diagnostic.to_owned());
         // Cancellation observed before publication: no interaction is created
         // at all, so there is no pending prompt to settle and no waiter to
         // race.
@@ -4157,7 +4180,7 @@ impl McpServerRuntime {
             UpdateTaskParams::new(task_id.clone(), input_responses),
         ));
         match self
-            .dispatch_task_request(
+            .dispatch_task_request::<rmcp::model::TaskAckResult>(
                 dispatch::UPDATE_TASK_METHOD,
                 &task_id,
                 request,
@@ -4172,13 +4195,14 @@ impl McpServerRuntime {
             // that the next snapshot reflects them.
             McpTaskAnswer::Answered(_) => Ok(()),
             McpTaskAnswer::Cancelled(detail) => Err(TaskDriveFailure::Cancelled(detail)),
-            McpTaskAnswer::Unknown(detail) => Err(unsupported(&detail)),
+            McpTaskAnswer::Malformed(detail) => Err(unsupported(&detail)),
+            McpTaskAnswer::Unknown(detail) => Err(TaskDriveFailure::Unreachable(detail)),
         }
     }
 
     /// Dispatches one SEP-2663 task-control request and reduces its physical
     /// outcome to what the task driver can act on.
-    async fn dispatch_task_request(
+    async fn dispatch_task_request<T: tasks::TaskResponse>(
         &self,
         method: &'static str,
         task_id: &str,
@@ -4186,7 +4210,7 @@ impl McpServerRuntime {
         ownership: McpRequestOwnership<'_>,
         context: &ToolExecutionContext<'_>,
         generation: u64,
-    ) -> McpTaskAnswer {
+    ) -> McpTaskAnswer<T> {
         // Test-only: the deterministic task-request dispatch frontier. A
         // regression parks here, decides a cancellation race, and asserts on
         // what the server actually saw.
@@ -4213,30 +4237,46 @@ impl McpServerRuntime {
             McpPhysicalOutcome::Observed {
                 response,
                 cancellation_won,
-                ..
+                terminated_local_request,
             } => match response {
                 McpResponseOutcome::Answered(answered) => match *answered {
-                    Ok(result) => McpTaskAnswer::Answered(Box::new(result)),
+                    Ok(result) => match T::decode(result) {
+                        Ok(result) => McpTaskAnswer::Answered(result),
+                        Err(detail) => McpTaskAnswer::Malformed(format!(
+                            "{method}: malformed response: {detail}"
+                        )),
+                    },
                     // A JSON-RPC error correlated to a task-control request
                     // is a proven answer *to that request* and nothing more:
                     // an expired or unknown task id says the server no longer
                     // has the task, not what the task did.
                     Err(rmcp::service::ServiceError::McpError(error)) => {
-                        McpTaskAnswer::Unknown(format!(
+                        McpTaskAnswer::Malformed(format!(
                             "{method} was answered with a protocol error: {}",
                             bound_error(&error.to_string())
                         ))
                     }
-                    Err(error) => McpTaskAnswer::Unknown(format!(
-                        "{method} produced no correlated remote response: {}",
-                        bound_error(&error.to_string())
-                    )),
+                    Err(error) => {
+                        let detail = format!(
+                            "{method} produced no correlated remote response: {}",
+                            bound_error(&error.to_string())
+                        );
+                        if is_transport_loss(&error) && !terminated_local_request {
+                            self.note_transport_loss(&detail);
+                            McpTaskAnswer::Unknown(detail)
+                        } else if cancellation_won {
+                            McpTaskAnswer::Cancelled(detail)
+                        } else {
+                            McpTaskAnswer::Malformed(detail)
+                        }
+                    }
                 },
                 McpResponseOutcome::ChannelEnded => {
                     let detail = format!("the MCP transport closed during {method}");
                     if cancellation_won {
                         McpTaskAnswer::Cancelled(detail)
                     } else {
+                        self.note_transport_loss(&detail);
                         McpTaskAnswer::Unknown(detail)
                     }
                 }
@@ -4273,6 +4313,24 @@ impl McpServerRuntime {
         started: Instant,
         generation: u64,
     ) -> ToolExecutionResult {
+        if !self.server_tasks {
+            return self.task_outcome_unknown(
+                task_id,
+                &format!("{detail}; no tasks/cancel: Tasks was not negotiated"),
+                context,
+                started,
+                generation,
+            );
+        }
+        if let Some(reason) = self.unusable_reason() {
+            return self.task_outcome_unknown(
+                task_id,
+                &format!("{detail}; no tasks/cancel: {reason}"),
+                context,
+                started,
+                generation,
+            );
+        }
         let request = ClientRequest::CancelTaskRequest(CancelTaskRequest::new(
             CancelTaskParams::new(task_id.to_owned()),
         ));
@@ -4281,7 +4339,7 @@ impl McpServerRuntime {
         // participant is terminated and proven released before this
         // invocation reports.
         let requested = match self
-            .dispatch_task_request(
+            .dispatch_task_request::<rmcp::model::TaskAckResult>(
                 dispatch::CANCEL_TASK_METHOD,
                 task_id,
                 request,
@@ -4295,7 +4353,9 @@ impl McpServerRuntime {
                 "the server acknowledged the cooperative tasks/cancel, which does not prove the \
                  remote task stopped"
             }
-            McpTaskAnswer::Cancelled(_) | McpTaskAnswer::Unknown(_) => {
+            McpTaskAnswer::Cancelled(_)
+            | McpTaskAnswer::Unknown(_)
+            | McpTaskAnswer::Malformed(_) => {
                 "the cooperative tasks/cancel produced no acknowledgement"
             }
         };
@@ -4910,9 +4970,11 @@ enum McpPhysicalOutcome {
 }
 
 /// What one SEP-2663 task-control request produced for the task driver.
-enum McpTaskAnswer {
+enum McpTaskAnswer<T> {
     /// The peer answered this request id with a result.
-    Answered(Box<ServerResult>),
+    Answered(T),
+    /// A correlated response has the wrong method-specific shape or is an error.
+    Malformed(String),
     /// Local cancellation intent decided this request. The remote task is
     /// still the server's, so the driver asks it cooperatively to stop.
     Cancelled(String),
@@ -4923,15 +4985,12 @@ enum McpTaskAnswer {
 
 /// Why one remote task drive ended without a terminal task state.
 ///
-/// The distinction is which settlement the driver owes: `Unknown` is a
-/// deterministic diagnostic about a task that is still the server's and that
-/// nothing rustX did stopped, while `Cancelled` is the one path on which
-/// rustX asked for the stop and therefore owes the server exactly one
-/// cooperative `tasks/cancel`. Neither carries a built result: the driver is
-/// the single settlement point.
+/// The driver alone settles, after at most one cancellation for an addressable task.
 enum TaskDriveFailure {
-    /// A bounded diagnostic; the invocation settles as `OutcomeUnknown`.
-    Unknown(String),
+    /// Local continuation failed but the task remains addressable.
+    AbandonAddressable(String),
+    /// Transport or generation cannot carry further traffic.
+    Unreachable(String),
     /// Local cancellation or a deadline decided it.
     Cancelled(String),
 }
@@ -5087,7 +5146,7 @@ fn drain_remote_progress(
     }
 }
 
-/// The bounded, cancellation-aware wait between two `tasks/get` polls.
+/// The cancellation-aware wait before every `tasks/get` poll.
 ///
 /// Returns `false` when local cancellation won the wait, which is the task's
 /// **poll dispatch frontier**: the next `tasks/get` is then never dispatched.
@@ -5104,7 +5163,12 @@ async fn wait_before_next_poll(
     tokio::select! {
         biased;
         () = context.cancellation.cancelled() => false,
-        () = tokio::time::sleep(interval) => true,
+        () = async {
+            match tokio::time::Instant::now().checked_add(interval) {
+                Some(deadline) => tokio::time::sleep_until(deadline).await,
+                None => std::future::pending().await,
+            }
+        } => true,
     }
 }
 
@@ -7381,6 +7445,38 @@ mod tests {
             runtime.tool_output(),
             runtime.environment(),
         )
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn mcp_tasks_poll_wait_preserves_hints_and_is_interruptible() {
+        use futures_util::FutureExt as _;
+        use std::time::Duration;
+        let (_directory, runtime) = runtime("task-clock");
+        let context = context(&runtime, None, &NoProgress);
+        for (hint, millis) in [
+            (None, 500),
+            (Some(0), 25),
+            (Some(500), 500),
+            (Some(60_000), 60_000),
+        ] {
+            let wait = super::wait_before_next_poll(super::tasks::poll_interval(hint), &context);
+            tokio::pin!(wait);
+            assert!(wait.as_mut().now_or_never().is_none());
+            tokio::time::advance(Duration::from_millis(millis - 1)).await;
+            assert!(wait.as_mut().now_or_never().is_none());
+            tokio::time::advance(Duration::from_millis(1)).await;
+            assert!(wait.await);
+        }
+        let signal = CancellationSignal::new();
+        let mut context = context;
+        context.cancellation =
+            ExecutionCancellation::detached(signal.clone(), CancellationReason::UserRequested);
+        let wait =
+            super::wait_before_next_poll(super::tasks::poll_interval(Some(u64::MAX)), &context);
+        tokio::pin!(wait);
+        assert!(wait.as_mut().now_or_never().is_none());
+        signal.cancel();
+        assert!(!wait.await);
     }
 
     fn image_block(bytes: usize) -> ContentBlock {

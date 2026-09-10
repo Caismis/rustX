@@ -169,9 +169,21 @@ answers any `input_required` through the same `QuestionnaireRequester` and
 reaches a terminal protocol state. Tasks are advertised per request on every
 `2026-07-28` invocation; elicitation is advertised separately, only where the
 invocation can settle it. After a task exists no `tools/call` is ever sent
-again, polling waits are bounded and cancellation-aware, and every outcome
+again, polling waits honor the server hint with a 25 ms floor, no maximum
+clamp, and a 500 ms default, starting with the first poll. Waits are
+cancellation-aware, and every outcome
 other than the task's own terminal state is `OutcomeUnknown` — a cooperative
 `tasks/cancel` is remote control, never proof that the remote effect stopped.
+
+rustX stops driving an addressable active task only after at most one
+best-effort `tasks/cancel`. Missing Interaction authority, unsupported input,
+local continuation failures, and method/result mismatches follow this rule.
+A closed, failed, or poisoned generation and an invalid/untrusted task id
+cannot carry a cancellation; rustX settles without replay or resumption.
+`tasks/update` and `tasks/cancel` accept exactly rmcp 3.2.0's `TaskAckResult`
+(`resultType: "complete"`, optional `_meta`, no other fields). An unrelated
+successful result is a method/result mismatch, not an ACK or connection
+poison. Even a valid cancellation ACK leaves the task outcome unknown.
 
 Each requested schema is translated into the provider-independent typed
 question vocabulary (`Text`, `Number`, `Integer`, `Boolean`, `SingleChoice`,

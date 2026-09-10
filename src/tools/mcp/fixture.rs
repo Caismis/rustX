@@ -1580,7 +1580,7 @@ pub fn fixture_tool_named(name: &str) -> Tool {
 
 /// Serves one fixture over stdio until the client closes the transport.
 pub async fn serve_stdio(fixture: FixtureServer) {
-    let server = fixture
+    let server = tasks::TaskReviewPeer(fixture)
         .serve(rmcp::transport::stdio())
         .await
         .expect("fixture server");

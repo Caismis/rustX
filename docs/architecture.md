@@ -4485,14 +4485,24 @@ capabilities. The server side of the contract is kept too: a peer that did not
 advertise the extension in its negotiated capabilities does not acquire the
 right to answer with a `CreateTaskResult`, and one that does is refused.
 
+The polling and ACK contracts follow the current
+[2026-07-28 Tasks specification](https://github.com/modelcontextprotocol/ext-tasks/blob/main/specification/2026-07-28/tasks.md)
+and the resolved rmcp 3.2.0 `model/task.rs`. Creation carries the same
+polling hint as later snapshots, with no first-poll exception. rmcp's
+convenience update/cancel helpers also accept `EmptyResult`; rustX uses the
+strict negotiated `TaskAckResult` through its existing request owner.
+
 **The polling owner is the operation future, not a task.** `tasks/get` runs in
 the same `ToolExecutionHandle::settled_by_operation` future as everything
 else. Nothing is spawned and no timer outlives the invocation, so termination
 stays with the existing cancellation signal and the generic Issue #204
-deadline. `pollIntervalMs` is honoured as a hint clamped into a fixed
-rustX-owned interval (25 ms – 30 s, defaulting to 500 ms), and the wait
-between polls is a `select!` on the invocation's own cancellation signal, so a
+deadline. `pollIntervalMs` uses a 25 ms minimum floor with no maximum
+clamp (default 500 ms). Every poll, including the first after creation and
+the next after an update, honors the hint. The wait is a `select!` on the invocation's own cancellation signal, so a
 server can create neither a busy loop nor a wait that defeats cancellation.
+Timer construction uses checked instant arithmetic; an unrepresentable next
+instant leaves the wait pending until local cancellation/deadline, never
+causing an earlier poll.
 `ttlMs` is read as the server's retention metadata and never as a second local
 deadline. Polling is transport activity: another `tasks/get` is **not**
 reported as Tool progress, so no liveness is fabricated.
@@ -4536,6 +4546,16 @@ the acknowledgement is not evidence — and settles. Two mechanisms stay
 distinct: `notifications/cancelled` cancels one in-flight JSON-RPC request and
 says nothing about the task, while `tasks/cancel` signals intent about the
 task and still does not prove the remote effect stopped.
+
+rustX stops driving an addressable active task only after at most one
+best-effort `tasks/cancel`. Missing Interaction authority, unsupported input,
+local continuation failures, and method/result mismatches follow this rule.
+A closed, failed, or poisoned generation and an invalid/untrusted task id
+cannot carry a cancellation; rustX settles without replay or resumption.
+`tasks/update` and `tasks/cancel` accept exactly rmcp 3.2.0's `TaskAckResult`
+(`resultType: "complete"`, optional `_meta`, no other fields). An unrelated
+successful result is a method/result mismatch, not an ACK or connection
+poison. Even a valid cancellation ACK leaves the task outcome unknown.
 
 **Effect certainty after materialization.** A `CreateTaskResult` *is* remote
 work in progress, so every outcome other than the task's own terminal state

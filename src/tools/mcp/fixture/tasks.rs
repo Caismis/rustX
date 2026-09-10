@@ -548,3 +548,61 @@ pub fn advertised(capabilities: Option<rmcp::model::ClientCapabilities>) -> (boo
 pub fn observation_file() -> Option<PathBuf> {
     std::env::var_os(TASK_OBSERVATION_FILE_ENV).map(PathBuf::from)
 }
+
+/// A narrow method/result mismatch and completing-response gate around the
+/// official fixture. All ordinary requests still use rmcp's handler.
+pub struct TaskReviewPeer(pub super::FixtureServer);
+
+impl rmcp::service::Service<rmcp::RoleServer> for TaskReviewPeer {
+    async fn handle_request(
+        &self,
+        request: rmcp::model::ClientRequest,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ServerResult, rmcp::ErrorData> {
+        use rmcp::model::{ClientRequest, ServerResult};
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let method = match &request {
+            ClientRequest::UpdateTaskRequest(_) => UPDATE_TASK,
+            ClientRequest::CancelTaskRequest(_) => CANCEL_TASK,
+            _ => "",
+        };
+        let mut result = self.0.handle_request(request, context).await?;
+        if std::env::var_os("RUSTX_TASK_OVERSIZED_SEED").is_some()
+            && let ServerResult::CreateTaskResult(created) = &mut result
+        {
+            created.task.status_message = Some("m".repeat(1025));
+        }
+        if std::env::var("RUSTX_TASK_WRONG_ACK").is_ok_and(|wrong| wrong == method) {
+            return Ok(ServerResult::CallToolResult(CallToolResult::success(
+                vec![],
+            )));
+        }
+        if matches!(&result, ServerResult::GetTaskResult(snapshot)
+            if matches!(snapshot.task.payload, TaskPayload::Completed { .. }))
+            && let Ok(address) = std::env::var("RUSTX_TASK_COMPLETING_GATE")
+        {
+            let mut gate = tokio::net::TcpStream::connect(address).await.expect("gate");
+            gate.write_all(&[1]).await.expect("handler entered");
+            gate.read_u8().await.expect("release completing response");
+        }
+        Ok(result)
+    }
+
+    async fn handle_notification(
+        &self,
+        notification: rmcp::model::ClientNotification,
+        context: rmcp::service::NotificationContext<rmcp::RoleServer>,
+    ) -> Result<(), rmcp::ErrorData> {
+        self.0.handle_notification(notification, context).await
+    }
+
+    fn get_info(&self) -> rmcp::model::ServerInfo {
+        rmcp::service::Service::get_info(&self.0)
+    }
+
+    fn supported_protocol_versions(
+        &self,
+    ) -> std::borrow::Cow<'static, [rmcp::model::ProtocolVersion]> {
+        rmcp::service::Service::supported_protocol_versions(&self.0)
+    }
+}

@@ -1326,7 +1326,8 @@ RemoteTaskActive
   no timer that outlives the invocation, and no second deadline authority.
   Termination is the existing contract's: the invocation's cancellation
   signal and the generic Issue #204 deadline. `pollIntervalMs` is honoured as
-  a hint clamped to `[25 ms, 30 s]` (default 500 ms); `ttlMs` is remote
+  a hint with a 25 ms minimum floor and no maximum clamp (default 500 ms),
+  including the first poll and polls after updates; `ttlMs` is remote
   retention metadata and is never treated as a local deadline. Another
   `tasks/get` is transport activity, never fabricated Tool progress.
 - **One dispatch owner for four methods.** `tools/call`, `tasks/get`,
@@ -1351,11 +1352,22 @@ RemoteTaskActive
   and a repeat then publishes no second interaction and sends no second
   update, while a genuinely new key in the same snapshot is still processed.
   The set is bounded at 32 distinct keys per task.
-- **`tasks/cancel` is remote control, never remote evidence.** It is sent at
-  most once per invocation, only when local cancellation or a deadline won,
-  and its acknowledgement never becomes a proven `Cancelled` or a proven
-  no-effect. It is also distinct from `notifications/cancelled`, which
-  cancels one in-flight JSON-RPC request and says nothing about the task.
+- **Addressable abandonment owes cooperative cancellation.** rustX attempts
+  at most one best-effort `tasks/cancel` when it stops driving an addressable
+  active task: missing Interaction authority, unsupported input, local
+  policy/representation failure, malformed task responses, cancellation, or
+  deadline. A closed, failed, or poisoned generation, an unnegotiated Tasks
+  extension, or an invalid/untrusted task id cannot carry this cancellation.
+  Settlement never replays or resumes the task.
+- **Task methods require their own result types.** `tasks/get` accepts only
+  `GetTaskResult`; `tasks/update` and `tasks/cancel` accept exactly rmcp
+  3.2.0's `TaskAckResult` (`resultType: "complete"`, optional `_meta`, no other
+  fields). An unrelated successful result is a method/result mismatch, not
+  an ACK or connection poison.
+- **`tasks/cancel` is remote control, never remote evidence.** Even a valid
+  ACK leaves the task outcome unknown; it never proves `Cancelled` or
+  no-effect. It is distinct from `notifications/cancelled`, which cancels
+  one in-flight JSON-RPC request and says nothing about the task.
 - **After materialization, only a terminal task state is provable.** Every
   other outcome — cancellation, transport loss, a JSON-RPC error answering a
   task request, a malformed or self-contradictory snapshot — settles as
