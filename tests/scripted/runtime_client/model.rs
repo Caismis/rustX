@@ -164,7 +164,7 @@ async fn the_initialize_snapshot_carries_the_redacted_session_model() {
         panic!("initialize returns the initial snapshot");
     };
 
-    let model = &snapshot.model;
+    let model = snapshot.model.as_ref().unwrap();
     assert_eq!(model.configured.model, model_ref("alpha/model-a"));
     assert_eq!(
         model.effective.protocol,
@@ -354,7 +354,7 @@ async fn a_valid_update_publishes_exactly_one_coherent_change() {
 
     // The snapshot folds to the same value.
     let (snapshot, _) = host.snapshot().expect("snapshot");
-    assert_eq!(snapshot.model, model);
+    assert_eq!(snapshot.model, Some(model));
     let serialized = serde_json::to_string(&events).expect("events serialize");
     assert!(!serialized.contains(FIXTURE_SECRET));
 }
@@ -462,8 +462,11 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
     );
 
     let (snapshot, _) = host.snapshot().expect("snapshot");
-    assert_eq!(snapshot.model.configured, selected);
-    assert_eq!(snapshot.model.summary, SummaryModelView::Explicit(summary));
+    assert_eq!(snapshot.model.as_ref().unwrap().configured, selected);
+    assert_eq!(
+        snapshot.model.as_ref().unwrap().summary,
+        SummaryModelView::Explicit(summary)
+    );
 }
 
 /// Runtime Client model projections preserve always-on reasoning as enabled
@@ -530,9 +533,15 @@ async fn a_reconnecting_client_recovers_model_state_from_the_snapshot() {
     let RuntimeClientResult::Initialized { snapshot, .. } = result else {
         panic!("initialize returns the snapshot");
     };
-    assert_eq!(snapshot.model.configured, desired);
-    assert_eq!(snapshot.model.effective.max_output_tokens, 777);
-    assert_eq!(snapshot.model.effective.context_window, 32_000);
+    assert_eq!(snapshot.model.as_ref().unwrap().configured, desired);
+    assert_eq!(
+        snapshot.model.as_ref().unwrap().effective.max_output_tokens,
+        777
+    );
+    assert_eq!(
+        snapshot.model.as_ref().unwrap().effective.context_window,
+        32_000
+    );
 }
 
 /// The attempt read model carries the model the attempt was admitted with for
@@ -573,14 +582,20 @@ async fn the_attempt_view_reports_the_model_it_was_admitted_with() {
     );
 
     let (snapshot, _) = host.snapshot().expect("snapshot");
-    assert_eq!(snapshot.model.configured.model, model_ref("beta/model-b"));
+    assert_eq!(
+        snapshot.model.as_ref().unwrap().configured.model,
+        model_ref("beta/model-b")
+    );
     let attempt = snapshot.attempt.as_ref().expect("the latest attempt");
     assert_eq!(
-        attempt.model.primary.model,
+        attempt.model.as_ref().unwrap().primary.model,
         model_ref("alpha/model-a"),
         "the settled attempt still reports the model it ran with"
     );
-    assert_eq!(attempt.model.summary, SummaryModelView::Session);
+    assert_eq!(
+        attempt.model.as_ref().unwrap().summary,
+        SummaryModelView::Session
+    );
 }
 
 /// The incremental A -> B invariant, proven from the event stream alone.
@@ -637,7 +652,8 @@ async fn attempt_started_freezes_the_model_across_a_mid_attempt_switch() {
     .await;
     let Some(RuntimeClientEvent::AttemptStarted {
         attempt_id: first_attempt,
-        model: first_model,
+        model: Some(first_model),
+        ..
     }) = observed.last().map(|event| event.event.clone())
     else {
         panic!("the first attempt started");
@@ -688,11 +704,14 @@ async fn attempt_started_freezes_the_model_across_a_mid_attempt_switch() {
     let attempt = during.attempt.as_ref().expect("the running attempt");
     assert_eq!(attempt.attempt_id, first_attempt);
     assert_eq!(
-        attempt.model.primary.model,
+        attempt.model.as_ref().unwrap().primary.model,
         model_ref("alpha/model-a"),
         "desired session model = B, active attempt model = A"
     );
-    assert_eq!(during.model.configured.model, model_ref("beta/model-b"));
+    assert_eq!(
+        during.model.as_ref().unwrap().configured.model,
+        model_ref("beta/model-b")
+    );
 
     release.send_replace(true);
     let settled = receive_until(&subscription, |event| {
@@ -720,7 +739,8 @@ async fn attempt_started_freezes_the_model_across_a_mid_attempt_switch() {
     .await;
     let Some(RuntimeClientEvent::AttemptStarted {
         attempt_id: second_attempt,
-        model: second_model,
+        model: Some(second_model),
+        ..
     }) = next.last().map(|event| event.event.clone())
     else {
         panic!("the second attempt started");

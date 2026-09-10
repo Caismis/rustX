@@ -96,6 +96,7 @@ pub mod endpoint;
 pub mod event;
 pub mod host;
 pub mod projection;
+pub mod settings;
 pub mod snapshot;
 pub mod transport;
 pub mod types;

@@ -390,7 +390,13 @@ async fn native_new_resume_name_and_quiescence_are_product_operations() {
         panic!("resumed runtime must initialize: {initialized:?}");
     };
     assert_eq!(
-        snapshot.model.configured.model.to_string(),
+        snapshot
+            .model
+            .as_ref()
+            .unwrap()
+            .configured
+            .model
+            .to_string(),
         "local/test-model",
         "a new Session uses the current runtime default, not the previous Session choice"
     );

@@ -203,6 +203,7 @@ fn publish_with_writer(
     }
     for (index, (target, bytes)) in targets.iter().zip(documents).enumerate() {
         let mut write = || -> std::io::Result<()> {
+            let _lock = super::settings::lock_document(target)?;
             let mut staged = tempfile::NamedTempFile::new_in(directory)?;
             write_staged(index, staged.as_file_mut(), bytes)?;
             staged.as_file().sync_all()?;
@@ -254,7 +255,7 @@ mod tests {
             std::fs::read(root.path().join("models.jsonc")).unwrap(),
             b"models"
         );
-        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 2);
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 4); // two persistent writer locks
     }
 
     #[tokio::test]
@@ -462,6 +463,6 @@ mod tests {
         );
         assert!(!root.path().join("settings.jsonc").exists());
         assert!(result.failed.is_some());
-        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 3);
     }
 }

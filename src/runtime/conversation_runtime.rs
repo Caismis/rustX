@@ -2703,9 +2703,6 @@ impl RuntimeInner {
         // compares this against the terminals it has observed to prove it
         // has seen every attempt an accepted steer could have opened.
         state.admitted_attempts = state.admitted_attempts.saturating_add(1);
-        self.observe(ConversationObservation::AttemptAdmitted {
-            attempt_id: attempt_id.clone(),
-        });
         // The attempt model snapshot is taken at exactly this admission
         // linearization boundary, under the same lock that publishes the
         // attempt. A `model_set` that linearizes before this point is
@@ -2737,9 +2734,11 @@ impl RuntimeInner {
         let lease = self
             .capability
             .acquire_attempt_lease_for(resources.capability().clone());
-        self.observe(ConversationObservation::AttemptModelFrozen {
+        self.observe(ConversationObservation::AttemptAdmitted {
             attempt_id: attempt_id.clone(),
             model: Box::new(model.view()),
+            resource_revision: resources.revision(),
+            approval_mode,
         });
         // The attempt **task** is a runtime-owned operation in its own
         // right, distinct from the current-attempt slot it settles into
@@ -3380,6 +3379,16 @@ impl ConversationRuntime {
             .lock()
             .expect("coordinator probe lock poisoned") = Some(probe);
         Ok(runtime)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_admission_gate(&self, gate: Arc<Gate>) {
+        self.inner
+            .probe
+            .lock()
+            .expect("probe lock")
+            .get_or_insert_with(CoordinatorProbe::default)
+            .admission_gate = Some(gate);
     }
 
     /// The conversation identity of this runtime.
@@ -4534,6 +4543,10 @@ impl ConversationRuntime {
                 model: Box::new(view.clone()),
             });
         Ok(view)
+    }
+
+    pub(crate) fn model_is_frozen(&self) -> bool {
+        self.inner.lock_state().model.registry().is_none()
     }
 
     /// The authoritative session model view.
@@ -14000,7 +14013,9 @@ mod tests {
         let attempt_id = observations
             .iter()
             .find_map(|observation| match observation {
-                ConversationObservation::AttemptAdmitted { attempt_id } => Some(attempt_id.clone()),
+                ConversationObservation::AttemptAdmitted { attempt_id, .. } => {
+                    Some(attempt_id.clone())
+                }
                 _ => None,
             })
             .expect("the admitted attempt identity");

@@ -256,7 +256,7 @@ The command-to-surface classification is:
 | `/name` | inspection of the active Session's name, as transient feedback |
 | `/name <text>`, `/model <provider/model>` | control with transient result |
 | `/cancel`, `/compact`, `/approval` | control with transient acceptance/validation result |
-| `/reasoning`, `/expand` | preference |
+| `/show-reasoning`, `/expand` | preference |
 | `/quit` | quit |
 | invalid, unknown, or empty-result command feedback | transient |
 
@@ -345,7 +345,7 @@ does not implement a parallel Session system.
   progress and completion remain authoritative Runtime Client facts.
 - `/approval <policy|full_access>` — request the runtime ApprovalMode.
 - `/debug` — show bounded presentation and protocol diagnostics.
-- `/reasoning [on|off]` — change the display preference for model reasoning;
+- `/show-reasoning [on|off]` — change the display preference for model reasoning;
   it does not change runtime model configuration.
 - `/expand [latest|all|none|<tool-call-id>|background <execution-id>|interaction <conversation-id>::<interaction-id>]` —
   expand or collapse display detail without re-executing or re-fetching.
@@ -371,7 +371,7 @@ mode change. The TUI never
 edits displayed Tool arguments, suppresses pending prompts, auto-answers them,
 or keeps a local outcome.
 
-`/reasoning [on|off]` and `/expand [latest|all|none|<tool-call-id>|background
+`/show-reasoning [on|off]` and `/expand [latest|all|none|<tool-call-id>|background
 <exec-id>|interaction <conversation-id>::<interaction-id>]` are the two commands that touch
 nothing but the screen. They send no request, and they are also bound to keys:
 
@@ -786,7 +786,7 @@ no reasoning scale is invented for a capable model that declares no profiles.
 The TUI consumes only canonical Runtime Client reasoning blocks. Provider
 spellings such as `reasoning` and `reasoning_content` never enter the
 TypeScript protocol or presentation layer. Whether reasoning is *drawn* is a
-client preference (`/reasoning`, `ctrl+t`); when hidden it collapses to a
+client preference (`/show-reasoning`, `ctrl+t`); when hidden it collapses to a
 `Thinking…` marker rather than becoming assistant text. What rustX *asks a
 provider for* is `SessionModelConfig.reasoningProfile` / `reasoningEnabled`,
 which only `model_set` changes.
@@ -825,3 +825,21 @@ been built; set `RUSTX_BINARY` to point elsewhere.
 See [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md).
 `@earendil-works/pi-tui@0.82.1` is consumed as a published MIT dependency; no
 Pi source is copied into this repository.
+
+### Effective settings and explicit defaults
+
+`/settings` distinguishes captured launch sources, active Session selection,
+effective/pending approval, current resources and frozen attempt facts. It uses the
+native snapshot; reconnect replaces the view without replaying controls.
+
+Use `/model profile <id|default>` for generation-time reasoning, and
+`/show-reasoning on|off` for display only. `/reasoning` is no longer a command.
+
+`/defaults user` reads the declared user document and its revision. Then
+`/save-default user model <revision>` explicitly saves the selected model/profile,
+or `/save-default user approval <revision>` saves effective approval. These Rust-owned
+writes affect future launches and leave the live Session unchanged. Stale revisions
+are rejected; reread and review before retrying. `/model` does not save defaults.
+
+`/reload` requires quiescence and publishes resources only, not startup settings.
+See [the complete source/lifetime matrix and write guarantee](../docs/effective-settings.md).

@@ -85,7 +85,7 @@ describe("presentation projection", () => {
       state.capabilities.skills?.[0]?.location,
       ".agents/skills/review/SKILL.md",
     );
-    assert.equal(state.sessionModel.configured.model, "alpha/model-a");
+    assert.equal(state.sessionModel!.configured.model, "alpha/model-a");
     assert.equal(state.attempt, undefined);
   });
 
@@ -466,6 +466,7 @@ describe("presentation projection", () => {
           attempt_id: "a1",
           phase: { type: "running" },
           turn: 1,
+          execution_settings: null,
           model: attemptModel("alpha/model-a"),
           in_flight: {
             message_id: "m9",
@@ -497,11 +498,11 @@ describe("presentation projection", () => {
 
   it("carries the frozen attempt model straight off attempt_started", () => {
     const state = fold(initial(), [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
     ]);
 
     assert.equal(state.attempt?.attemptId, "a1");
-    assert.equal(state.attempt?.model.primary.model, "alpha/model-a");
+    assert.equal(state.attempt?.model!.primary.model, "alpha/model-a");
     assert.equal(state.attempt?.phase.type, "running");
   });
 
@@ -513,7 +514,7 @@ describe("presentation projection", () => {
       details: { cached_input_tokens: 2 },
     };
     const incremental = fold(initial(), [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       { type: "attempt_turn_updated", attempt_id: "a1", turn: 1 },
       { type: "attempt_turn_updated", attempt_id: "a1", turn: 2 },
       { type: "attempt_usage_updated", attempt_id: "a1", usage },
@@ -529,6 +530,7 @@ describe("presentation projection", () => {
           phase: { type: "running" },
           turn: 2,
           last_usage: usage,
+          execution_settings: null,
           model: attemptModel("alpha/model-a"),
         },
       }),
@@ -540,7 +542,7 @@ describe("presentation projection", () => {
 
   it("accumulates streaming text, reasoning, and refusal as distinct kinds", () => {
     const state = fold(initial(), [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       { type: "assistant_message_started", attempt_id: "a1", message_id: "m1" },
       {
         type: "assistant_reasoning_delta",
@@ -595,7 +597,7 @@ describe("presentation projection", () => {
 
   it("keeps block identity from block_index, not from arrival order", () => {
     const state = fold(initial(), [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       { type: "assistant_message_started", attempt_id: "a1", message_id: "m1" },
       // Interleaved blocks: index 1 opens before index 0 finishes.
       { type: "assistant_text_delta", attempt_id: "a1", message_id: "m1", block_index: 0, delta: "A" },
@@ -614,7 +616,7 @@ describe("presentation projection", () => {
 
   it("replaces the streaming message with the committed one", () => {
     const state = fold(initial(), [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       { type: "assistant_message_started", attempt_id: "a1", message_id: "m1" },
       { type: "assistant_text_delta", attempt_id: "a1", message_id: "m1", block_index: 0, delta: "hi" },
       {
@@ -654,7 +656,7 @@ describe("presentation projection", () => {
 
   it("tracks foreground tool lifecycle by logical call identity", () => {
     const state = fold(initial(), [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       {
         type: "tool_execution_started",
         attempt_id: "a1",
@@ -685,7 +687,7 @@ describe("presentation projection", () => {
 
   it("keeps parallel foreground calls on their own identities", () => {
     const state = fold(initial(), [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       { type: "tool_execution_started", attempt_id: "a1", tool_call_id: "c1", tool_id: "t1" },
       { type: "tool_execution_started", attempt_id: "a1", tool_call_id: "c2", tool_id: "t2" },
       // The second call settles first; the first must not be corrupted.
@@ -709,7 +711,7 @@ describe("presentation projection", () => {
 
   it("routes detached progress to background, not to the foreground list", () => {
     const state = fold(initial(), [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       {
         type: "tool_execution_progress",
         attempt_id: "a1",
@@ -725,7 +727,7 @@ describe("presentation projection", () => {
 
   it("keeps background executions alive independently of the transcript", () => {
     let state = fold(initial(), [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       {
         type: "background_execution_updated",
         execution: backgroundExecution("exec-1", "running"),
@@ -770,7 +772,7 @@ describe("presentation projection", () => {
     });
     const message = toolMessage("m2", "c1", "tool-bash", result);
     const assembled = fold(initial(), [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       {
         type: "tool_call_started",
         attempt_id: "a1",
@@ -909,7 +911,7 @@ describe("presentation projection", () => {
       rendered: "## Status\ncurrent time: 2026-08-14",
     });
     const state = fold(initial(), [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       { type: "agent_status_composed", attempt_id: "a1", turn: 1, status },
     ]);
 
@@ -927,7 +929,7 @@ describe("presentation projection", () => {
       },
     });
     const state = fold(initial(), [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       { type: "agent_status_composed", attempt_id: "a1", turn: 1, status },
     ]);
 
@@ -947,7 +949,7 @@ describe("presentation projection", () => {
       },
     });
     const state = fold(initial(), [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       { type: "agent_status_composed", attempt_id: "a1", turn: 1, status },
     ]);
 
@@ -983,7 +985,7 @@ describe("presentation projection", () => {
       rendered: "## Todo\n- Review the boundary",
     });
     const state = fold(initial(), [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       { type: "agent_status_composed", attempt_id: "a1", turn: 2, status },
     ]);
 
@@ -1002,14 +1004,14 @@ describe("presentation projection", () => {
       opportunities: { fresh_inbound: { target_message_id: "m2" } },
     });
     const state = fold(initial(), [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       { type: "agent_status_composed", attempt_id: "a1", turn: 1, status: first },
       {
         type: "attempt_settled",
         attempt_id: "a1",
         outcome: { type: "completed", finish_reason: { type: "stop" } },
       },
-      { type: "attempt_started", attempt_id: "a2", model: attemptModel("alpha/model-a") },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a2", model: attemptModel("alpha/model-a") },
       { type: "agent_status_composed", attempt_id: "a2", turn: 1, status: second },
     ]);
 
@@ -1028,7 +1030,7 @@ describe("presentation projection", () => {
       opportunities: { fresh_inbound: { target_message_id: "m1" } },
     });
     const state = fold(initial(), [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       { type: "agent_status_composed", attempt_id: "a1", turn: 1, status },
       { type: "agent_status_composed", attempt_id: "a1", turn: 1, status },
     ]);
@@ -1045,7 +1047,7 @@ describe("presentation projection", () => {
       status_message_id: "status-2",
     });
     const folded = fold(initial(), [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       { type: "agent_status_composed", attempt_id: "a1", turn: 1, status: first },
       { type: "agent_status_composed", attempt_id: "a1", turn: 2, status: second },
     ]);
@@ -1075,7 +1077,7 @@ describe("presentation projection", () => {
 
   it("marks runtime drain without inventing a settlement event", () => {
     const state = fold(initial(), [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       { type: "runtime_shutdown" },
     ]);
 
@@ -1112,7 +1114,7 @@ describe("presentation projection", () => {
 
     for (const outcome of outcomes) {
       const state = fold(initial(), [
-        { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+        { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
         { type: "attempt_settled", attempt_id: "a1", outcome },
       ]);
       assert.deepEqual(
@@ -1290,7 +1292,7 @@ describe("presentation projection", () => {
     // Drive a rich incremental sequence, then prove the same authoritative
     // snapshot yields the same meaningful state without any of that history.
     const streamed = fold(initial(), [
-      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "attempt_started", execution_settings: null, attempt_id: "a1", model: attemptModel("alpha/model-a") },
       { type: "assistant_message_started", attempt_id: "a1", message_id: "m2" },
       { type: "assistant_text_delta", attempt_id: "a1", message_id: "m2", block_index: 0, delta: "hi" },
       {
@@ -1316,6 +1318,7 @@ describe("presentation projection", () => {
             outcome: { type: "completed", finish_reason: { type: "stop" } },
           },
           turn: 1,
+          execution_settings: null,
           model: attemptModel("alpha/model-a"),
         },
       }),
@@ -1324,6 +1327,6 @@ describe("presentation projection", () => {
 
     assert.equal(repaired.transcript.length, streamed.transcript.length);
     assert.deepEqual(repaired.attempt?.phase, streamed.attempt?.phase);
-    assert.equal(repaired.attempt?.model.primary.model, "alpha/model-a");
+    assert.equal(repaired.attempt?.model!.primary.model, "alpha/model-a");
   });
 });

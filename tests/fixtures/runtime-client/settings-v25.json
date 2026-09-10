@@ -1,0 +1,39 @@
+{
+  "request": {
+    "method": "default_save",
+    "id": 238,
+    "scope": "user",
+    "expected_revision": "sha256:reviewed-document",
+    "value": {
+      "field": "model_selection",
+      "selection": { "model": "local/model-b", "reasoning_profile": "off" }
+    }
+  },
+  "result": {
+    "type": "default_saved",
+    "result": {
+      "scope": "user",
+      "document": "/isolated/config/rustx/settings.jsonc",
+      "revision": "sha256:published-document",
+      "changed": {
+        "field": "model_selection",
+        "selection": { "model": "local/model-b", "reasoning_profile": "off" }
+      },
+      "live_unchanged": true,
+      "applies_at": "next_launch"
+    }
+  },
+  "admitted": {
+    "resource_revision": 7,
+    "approval_mode": "policy"
+  },
+  "lifetimes": {
+    "launch": "launch_capture",
+    "model": "next_admission",
+    "approval": "safe_boundary",
+    "resources": "resource_publication",
+    "attempt": "frozen_admission",
+    "presentation": "client_local",
+    "saved_defaults": "next_launch"
+  }
+}

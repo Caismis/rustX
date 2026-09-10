@@ -21,6 +21,7 @@ import {
 import { renderFooter, workingStatus } from "../src/ui/components/status.ts";
 import { renderTranscript } from "../src/ui/components/transcript.ts";
 import {
+  withReasoningVisible,
   withExpandedBackgroundExecutions,
   withExpandedInteractions,
   withExpandedToolCalls,
@@ -80,6 +81,7 @@ function representative(): RuntimeClientSnapshot {
       attempt_id: "attempt-1",
       turn: 3,
       last_usage: { input_tokens: 12_500, output_tokens: 840, total_tokens: 13_340 },
+      execution_settings: null,
       model: attemptModel("alpha/model-a"),
       in_flight: {
         message_id: "m4",
@@ -214,6 +216,19 @@ describe("snapshot reconstruction", () => {
       replaceFromSnapshot(representative(), runtimeCursor(42)),
       "expanding never writes back into runtime state",
     );
+  });
+
+  it("CFG238 reasoning visibility changes rendering without touching model, tools or canonical history", () => {
+    const native = representative();
+    const state = replaceFromSnapshot(native, runtimeCursor(42));
+    const before = structuredClone(state);
+    const visible = renderTranscript(state, withReasoningVisible(prefs(), true)).map(blockText).join("\n");
+    const hidden = renderTranscript(state, withReasoningVisible(prefs(), false)).map(blockText).join("\n");
+    assert.notEqual(visible, hidden);
+    assert.match(visible, /I should run cargo test/);
+    assert.ok(!hidden.includes("I should run cargo test"));
+    assert.deepEqual(state, before);
+    assert.deepEqual(state, replaceFromSnapshot(native, runtimeCursor(42)));
   });
 
   it("carries no semantic state in a display preference", () => {

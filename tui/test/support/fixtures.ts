@@ -252,6 +252,9 @@ export function snapshot(
       })),
     };
   return {
+    launch_settings: null,
+    settings_evidence: "live_session",
+    settings_lifetimes: { launch: "launch_capture", model: "next_admission", approval: "safe_boundary", resources: "resource_publication", attempt: "frozen_admission", presentation: "client_local", saved_defaults: "next_launch" },
     workflows: { revision: 0, runs: [], omitted_runs: 0 },
     conversation_id: "conv-test",
     shutting_down: false,
@@ -514,6 +517,7 @@ export function attemptView(
     attempt_id: "a1",
     phase: { type: "running" },
     turn: 1,
+    execution_settings: null,
     model: attemptModel("alpha/model-a"),
     foreground: [],
     ...overrides,

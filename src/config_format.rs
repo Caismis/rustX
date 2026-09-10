@@ -14,7 +14,8 @@
 //! the surface syntax the deserializer reads.
 //!
 //! Runtime-owned generated state under `runtime-root` is deliberately not
-//! affected: nothing writes JSONC, and generated documents stay strict JSON.
+//! affected: generated state stays strict JSON. The bounded user-default writer
+//! edits JSONC through this parser's CST while retaining the serde-owned schema.
 
 use jsonc_parser::ParseOptions;
 use jsonc_parser::errors::ParseErrorKind;
@@ -51,7 +52,7 @@ pub(crate) fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 /// The accepted configuration dialect: JSON, comments, and trailing commas.
-const OPTIONS: ParseOptions = ParseOptions {
+pub(crate) const OPTIONS: ParseOptions = ParseOptions {
     allow_comments: true,
     allow_trailing_commas: true,
     allow_loose_object_property_names: false,

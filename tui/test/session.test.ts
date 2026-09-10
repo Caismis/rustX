@@ -250,12 +250,12 @@ describe("RuntimeClientAttachment", () => {
 
     // A stale replay of an event the snapshot already describes.
     peer.emit(5, {
-      type: "attempt_started",
+      type: "attempt_started", execution_settings: null,
       attempt_id: "stale",
       model: attemptModel("alpha/model-a"),
     });
     peer.emit(6, {
-      type: "attempt_started",
+      type: "attempt_started", execution_settings: null,
       attempt_id: "fresh",
       model: attemptModel("alpha/model-a"),
     });
@@ -283,7 +283,7 @@ describe("RuntimeClientAttachment", () => {
 
     // The runtime publishes before answering subscribe_events.
     peer.emit(1, {
-      type: "attempt_started",
+      type: "attempt_started", execution_settings: null,
       attempt_id: "a1",
       model: attemptModel("alpha/model-a"),
     });
@@ -306,6 +306,7 @@ describe("RuntimeClientAttachment", () => {
           attempt_id: "a1",
           phase: { type: "running" },
           turn: 0,
+          execution_settings: null,
           model: attemptModel("alpha/model-a"),
         },
       }),
@@ -343,6 +344,7 @@ describe("RuntimeClientAttachment", () => {
           phase: { type: "running" },
           turn: 2,
           last_usage: usage,
+          execution_settings: null,
           model: attemptModel("alpha/model-a"),
         },
       }),
@@ -362,7 +364,7 @@ describe("RuntimeClientAttachment", () => {
 
     // Observe a little incremental state, then lose trust in it.
     peer.emit(1, {
-      type: "attempt_started",
+      type: "attempt_started", execution_settings: null,
       attempt_id: "a1",
       model: attemptModel("alpha/model-a"),
     });
@@ -403,7 +405,7 @@ describe("RuntimeClientAttachment", () => {
     // replay of what the UI thought had happened.
     assert.equal(session.state?.transcript.length, 2);
     assert.equal(session.state?.capabilities.revision, 11);
-    assert.equal(session.state?.sessionModel.configured.model, "beta/model-b");
+    assert.equal(session.state?.sessionModel!.configured.model, "beta/model-b");
     assert.equal(
       session.state?.attempt,
       undefined,
@@ -490,6 +492,7 @@ describe("RuntimeClientAttachment", () => {
           attempt_id: "a1",
           phase: { type: "settled", outcome },
           turn: 1,
+          execution_settings: null,
           model: attemptModel("alpha/model-a"),
         },
       }),
@@ -509,6 +512,7 @@ describe("RuntimeClientAttachment", () => {
           attempt_id: "a1",
           phase: { type: "running" },
           turn: 1,
+          execution_settings: null,
           model: attemptModel("alpha/model-a"),
         },
       }),

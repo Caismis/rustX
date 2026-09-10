@@ -1016,7 +1016,7 @@ export class RustxTuiApp {
   #showModelSelector(models: CatalogModelView[], lease: PresentationLease): void {
     if (!this.#isCurrentPresentationLease(lease)) return;
     const state = lease.session.state;
-    if (state === undefined) {
+    if (state === undefined || state.sessionModel === null) {
       return;
     }
     const selector = new ModelSelector({

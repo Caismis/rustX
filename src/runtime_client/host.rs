@@ -129,6 +129,7 @@ use super::projection::{RuntimeClientProjection, SubscriberPoll, background_view
 use super::snapshot::{
     RuntimeClientTranscriptCursor, RuntimeClientTranscriptPage, transcript_page_view,
 };
+use super::types::RuntimeClientRequest;
 use super::types::{
     AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientCursor, RuntimeClientError,
     RuntimeClientProtocolEvent, RuntimeClientResult, RuntimeClientSessionRequest,
@@ -136,12 +137,8 @@ use super::types::{
 use crate::durable::{
     ConversationStore, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT, TRANSCRIPT_PAGE_LIMIT_MAX,
 };
-use crate::model::catalog::{ModelCapabilities, ModelCatalogView, ModelRef};
-use crate::model::invocation::ModelInvocationView;
-use crate::model::session::{
-    SessionModelConfig, SessionModelView, SummaryModelPolicy, SummaryModelView,
-};
-use crate::model::types::ModelProtocol;
+use crate::model::catalog::ModelCatalogView;
+use crate::model::session::SessionModelConfig;
 use crate::model::{ModelRequest, RequestIdentity};
 use crate::runtime::conversation_runtime::{
     CancelAttemptError, ConversationRuntime, InboundAdmissionError, ManualCompactionError,
@@ -345,6 +342,7 @@ pub(crate) struct ClientInner {
     /// Optional native product Session owner. Low-level conversation hosts
     /// intentionally leave this absent; the local product installs exactly
     /// one supervisor here.
+    defaults: Option<Arc<dyn super::settings::DefaultSettingsStore>>,
     session_control: Option<Arc<dyn RuntimeClientSessionControl>>,
     /// The one projection synchronization boundary.
     state: Mutex<ClientState>,
@@ -1069,7 +1067,9 @@ impl ClientInner {
         let state = self.lock_state();
         let snapshot = state.projection.snapshot_ref_checked()?;
         Ok(RuntimeClientResult::Model {
-            model: Box::new(snapshot.model.clone()),
+            model: Box::new(snapshot.model.clone().ok_or_else(|| RuntimeClientError::InvalidState {
+                message: "active Session model is unavailable for historical inspection; use retained Request Snapshot evidence".into(),
+            })?),
         })
     }
 
@@ -1097,6 +1097,33 @@ impl ClientInner {
     /// while the runtime is not yet activated, and
     /// [`RuntimeClientError::ProjectionExhausted`] when the observation
     /// stream is over.
+    pub(crate) async fn defaults_request(
+        &self,
+        request: RuntimeClientRequest,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_writable_runtime()?;
+        let store = self
+            .defaults
+            .as_ref()
+            .ok_or_else(|| RuntimeClientError::InvalidState {
+                message: "this runtime has no user-default write authority".into(),
+            })?;
+        match request {
+            RuntimeClientRequest::DefaultsRead { scope, .. } => Ok(RuntimeClientResult::Defaults {
+                document: store.read(scope).await?,
+            }),
+            RuntimeClientRequest::DefaultSave {
+                scope,
+                expected_revision,
+                value,
+                ..
+            } => Ok(RuntimeClientResult::DefaultSaved {
+                result: store.save(scope, expected_revision, value).await?,
+            }),
+            _ => unreachable!("bounded settings request"),
+        }
+    }
+
     pub(crate) fn model_set(
         &self,
         config: SessionModelConfig,
@@ -1415,88 +1442,6 @@ impl ClientInner {
     }
 }
 
-/// Rebuilds the redacted session-model view needed by the ordinary Runtime
-/// Client snapshot from the newest durable Request Snapshot. A completed or
-/// failed child may no longer have a live model catalog, so the historical
-/// request invocation is the only honest model authority available to an
-/// inspector. Conversations with no started model request receive a
-/// deliberately inert display model.
-fn durable_model_view(
-    store: &dyn ConversationStore,
-) -> Result<SessionModelView, HostConstructionError> {
-    const REQUEST_SNAPSHOT_PAGE_LIMIT: usize = 256;
-
-    let mut latest = None;
-    let mut after_sequence = None;
-    loop {
-        let page = store
-            .read_request_snapshots(after_sequence, REQUEST_SNAPSHOT_PAGE_LIMIT)
-            .map_err(|error| HostConstructionError::Durable(error.to_string()))?;
-        let next_sequence = page.next_sequence;
-        latest = page.snapshots.into_iter().last().or(latest);
-        if next_sequence.is_none() || next_sequence == after_sequence {
-            break;
-        }
-        after_sequence = next_sequence;
-    }
-
-    let Some(snapshot) = latest else {
-        let model = ModelRef::parse("inspection/durable")
-            .expect("the fixed durable inspection model reference is valid");
-        let capabilities = ModelCapabilities::text_only(false, false);
-        let invocation = ModelInvocationView {
-            model: model.clone(),
-            protocol: ModelProtocol::OpenAiChatCompletions,
-            context_window: 0,
-            model_max_output_tokens: 0,
-            max_output_tokens: 0,
-            reasoning_profile: None,
-            reasoning_enabled: false,
-            request_params: serde_json::Map::new(),
-            capabilities: capabilities.clone(),
-            declared_capabilities: capabilities,
-        };
-        return Ok(SessionModelView {
-            configured: SessionModelConfig::of(model),
-            effective: invocation,
-            summary: SummaryModelView::Session,
-        });
-    };
-
-    // Request Snapshots intentionally persist the provider-facing model
-    // identifier, not the catalog's provider-qualified ModelRef. A child
-    // inspector has no live catalog to recover that qualification from, so
-    // retain the historical invocation values while using the inert display
-    // identity already used for conversations with no request history.
-    let model = ModelRef::parse(&snapshot.invocation.model).unwrap_or_else(|_| {
-        ModelRef::parse("inspection/durable")
-            .expect("the fixed durable inspection model reference is valid")
-    });
-    let invocation = ModelInvocationView {
-        model: model.clone(),
-        protocol: snapshot.invocation.protocol,
-        context_window: snapshot.context_window_tokens,
-        model_max_output_tokens: snapshot.invocation.max_output_tokens,
-        max_output_tokens: snapshot.invocation.max_output_tokens,
-        reasoning_profile: snapshot.reasoning_profile.clone(),
-        reasoning_enabled: snapshot.reasoning_enabled,
-        request_params: snapshot.invocation.request_params.clone(),
-        capabilities: snapshot.invocation.capabilities.clone(),
-        declared_capabilities: snapshot.invocation.capabilities.clone(),
-    };
-    Ok(SessionModelView {
-        configured: SessionModelConfig {
-            model,
-            reasoning_profile: snapshot.reasoning_profile,
-            request_params: snapshot.invocation.request_params,
-            max_output_tokens: Some(snapshot.invocation.max_output_tokens),
-            summary_model: SummaryModelPolicy::Session,
-        },
-        effective: invocation,
-        summary: SummaryModelView::Session,
-    })
-}
-
 /// Builds the ordinary Runtime Client projection from one conversation's
 /// durable authorities. Durable journal facts update the read model only;
 /// they do not become live Runtime Client events or consume the live cursor
@@ -1520,7 +1465,6 @@ fn durable_projection(
     let transcript = store
         .load_transcript_page(None, TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT)
         .map_err(|error| HostConstructionError::Durable(error.to_string()))?;
-    let model = durable_model_view(store)?;
     let capabilities = super::snapshot::CapabilityView {
         revision: crate::runtime::identity::CapabilityRevision::new(0),
         tools: Vec::new(),
@@ -1529,7 +1473,8 @@ fn durable_projection(
         sources: Vec::new(),
     };
     let mut projection =
-        RuntimeClientProjection::new(conversation_id, messages, capabilities, model, replay_limit);
+        RuntimeClientProjection::new(conversation_id, messages, capabilities, None, replay_limit);
+    projection.set_settings_evidence(super::settings::SettingsEvidence::HistoricalPartial);
     projection.set_transcript_page(
         transcript_page_view(transcript).map_err(HostConstructionError::Durable)?,
     );
@@ -1647,7 +1592,7 @@ impl RuntimeClientHost {
     /// headless observation bridge already exists over the runtime, or
     /// [`HostConstructionError::Durable`] when native durable bootstrap fails.
     pub fn new(config: RuntimeClientHostConfig) -> Result<Self, HostConstructionError> {
-        Self::construct(config, None)
+        Self::construct(config, None, None, None)
     }
 
     /// Creates a read-only Runtime Client host over a known conversation's
@@ -1693,6 +1638,7 @@ impl RuntimeClientHost {
             read_only: true,
             replay_limit,
             session_control: None,
+            defaults: None,
             state: Mutex::new(ClientState {
                 projection,
                 control_attachment: None,
@@ -1720,12 +1666,24 @@ impl RuntimeClientHost {
         config: RuntimeClientHostConfig,
         session_control: Arc<dyn RuntimeClientSessionControl>,
     ) -> Result<Self, HostConstructionError> {
-        Self::construct(config, Some(session_control))
+        Self::construct(config, Some(session_control), None, None)
+    }
+
+    /// Local composition supplies immutable resolver facts and its bounded disk writer.
+    pub(crate) fn new_with_settings(
+        config: RuntimeClientHostConfig,
+        session_control: Option<Arc<dyn RuntimeClientSessionControl>>,
+        launch: Option<super::settings::LaunchSettings>,
+        defaults: Option<Arc<dyn super::settings::DefaultSettingsStore>>,
+    ) -> Result<Self, HostConstructionError> {
+        Self::construct(config, session_control, launch, defaults)
     }
 
     fn construct(
         config: RuntimeClientHostConfig,
         session_control: Option<Arc<dyn RuntimeClientSessionControl>>,
+        launch: Option<super::settings::LaunchSettings>,
+        defaults: Option<Arc<dyn super::settings::DefaultSettingsStore>>,
     ) -> Result<Self, HostConstructionError> {
         // ---- Ownership commit: the one-time binding claim. ----
         //
@@ -1786,10 +1744,14 @@ impl RuntimeClientHost {
             seed.conversation_id.clone(),
             seed.messages.clone(),
             super::projection::capability_view(&seed.capabilities, &seed.capability_availability),
-            seed.model.clone(),
+            Some(seed.model.clone()),
             replay_limit,
         );
         projection.bootstrap(&seed);
+        projection.set_launch_settings(launch);
+        if config.runtime.model_is_frozen() {
+            projection.set_settings_evidence(super::settings::SettingsEvidence::FrozenChild);
+        }
         let inner = Arc::new(ClientInner {
             conversation_id: seed.conversation_id,
             agent_id: config.runtime.agent_id().clone(),
@@ -1798,6 +1760,7 @@ impl RuntimeClientHost {
             read_only: false,
             replay_limit,
             session_control,
+            defaults,
             state: Mutex::new(ClientState {
                 projection,
                 control_attachment: None,
@@ -8981,6 +8944,8 @@ mod tests {
         assert!(
             snapshot
                 .model
+                .as_ref()
+                .unwrap()
                 .configured
                 .request_params
                 .get("early")
@@ -9118,7 +9083,13 @@ mod tests {
 
         let (snapshot, _cursor) = host.snapshot().expect("snapshot");
         assert_eq!(
-            snapshot.model.configured.request_params.get("after-cut"),
+            snapshot
+                .model
+                .as_ref()
+                .unwrap()
+                .configured
+                .request_params
+                .get("after-cut"),
             Some(&serde_json::json!("changed")),
             "the post-cut transition must be visible in the projection"
         );

@@ -171,13 +171,15 @@ pub enum Origin {
 #[derive(Debug, Clone)]
 pub struct ResolvedLaunch {
     pub(crate) credentials: crate::credentials::CredentialSnapshot,
-    prospective: ProspectiveLaunch,
+    prospective: Box<ProspectiveLaunch>,
 }
 
 /// Static next-launch values. This type grants no execution authority and contains
 /// no credential snapshot. Only runtime admission can produce a resolved launch.
 #[derive(Clone)]
 pub struct ProspectiveLaunch {
+    pub(crate) request: LaunchRequest,
+    pub(crate) host: HostEnvironment,
     pub(crate) python_local_status:
         BTreeMap<crate::runtime::identity::McpServerId, PythonLocalStatus>,
     pub(crate) trusted: bool,
@@ -206,7 +208,6 @@ pub struct ProspectiveLaunch {
     pub(crate) skill_roots: Vec<PathBuf>,
     /// Fixed document slots for explicit resource reload; never discovery.
     documents: Vec<(PathBuf, bool, Origin)>,
-    model_override: Option<String>,
     /// Project-origin paths retain their authority even after becoming absolute.
     project_resources: Vec<PathBuf>,
 }
@@ -239,7 +240,7 @@ impl ProspectiveLaunch {
         }
         Ok(ResolvedLaunch {
             credentials: credentials(),
-            prospective: self,
+            prospective: Box::new(self),
         })
     }
     /// Recheck physical targets immediately before resource preparation. This
@@ -274,6 +275,40 @@ impl ProspectiveLaunch {
         }
         Ok(())
     }
+    pub(crate) fn settings_view(&self) -> crate::runtime_client::settings::LaunchSettings {
+        use crate::runtime_client::settings::{LaunchSettings, ModelDefault, SettingOrigin};
+        let origin = |field: &str| match self.provenance.get(field) {
+            Some(Origin::User { document, .. }) => SettingOrigin::User {
+                document: document.display().to_string(),
+            },
+            Some(Origin::Project { document, .. }) => SettingOrigin::Project {
+                document: document.display().to_string(),
+            },
+            Some(Origin::Cli { .. }) => SettingOrigin::Cli,
+            _ => SettingOrigin::Builtin,
+        };
+        LaunchSettings {
+            model: ModelDefault {
+                model: self.config.model.model.clone(),
+                reasoning_profile: self.config.model.reasoning_profile.clone(),
+            },
+            model_origin: origin("model.model"),
+            reasoning_origin: origin("model.reasoningProfile"),
+            approval_mode: self.config.approval_mode,
+            approval_origin: origin("approvalMode"),
+            runtime_root_origin: origin("runtimeRoot"),
+            tool_selection_origin: if self.no_tools
+                || self.no_builtin_tools
+                || self.tools.is_some()
+                || self.request.exclude_tools.is_some()
+            {
+                SettingOrigin::Cli
+            } else {
+                origin("defaultTools")
+            },
+        }
+    }
+
     /// The immutable validated settings this launch resolved.
     #[must_use]
     pub fn config(&self) -> &CurrentRuntimeConfig {
@@ -302,19 +337,23 @@ impl ProspectiveLaunch {
         let mut provenance = BTreeMap::new();
         for (path, required, origin) in &self.documents {
             let mut layer = read_layer(path, *required, matches!(origin, Origin::Project { .. }))?;
-            layer.remove("models");
-            layer.remove("runtimeRoot");
+            // Reload owns only resource inputs. Startup/Session defaults remain
+            // the launch capture, even when disk defaults have since changed.
+            layer.retain(|field, _| resource_field(field));
             rebase_paths(&mut layer, origin, &self.workspace)?;
             merge_fields(&mut merged, layer, "", origin, &mut provenance);
-        }
-        if let Some(model) = &self.model_override {
-            merged.insert("model".into(), serde_json::json!({"model":model}));
         }
         if !self.skill_paths.is_empty() {
             merged.insert(
                 "skills".into(),
                 serde_json::to_value(&self.skill_paths).map_err(|e| e.to_string())?,
             );
+        }
+        let captured = serde_json::to_value(self.config.as_ref()).map_err(|e| e.to_string())?;
+        for (field, value) in captured.as_object().expect("runtime config object") {
+            if !resource_field(field) {
+                merged.insert(field.clone(), value.clone());
+            }
         }
         apply_defaults(&mut merged, &mut provenance);
         let config: CurrentRuntimeConfig =
@@ -480,6 +519,15 @@ pub fn analyze(
     request: &LaunchRequest,
     host: &HostEnvironment,
 ) -> Result<ProspectiveLaunch, LaunchFailure> {
+    analyze_with_user(request, host, None)
+}
+
+#[allow(clippy::too_many_lines)] // The single shared launch resolver.
+pub(super) fn analyze_with_user(
+    request: &LaunchRequest,
+    host: &HostEnvironment,
+    candidate: Option<&[u8]>,
+) -> Result<ProspectiveLaunch, LaunchFailure> {
     let (mut locations, identity) = resolve_locations(request, host)?;
     let launch = canonical_directory(&host.launch_directory)?;
     let user_path = host.config_directory.join("settings.jsonc");
@@ -487,7 +535,10 @@ pub fn analyze(
         || locations.workspace.join("rustx.jsonc"),
         |p| absolute(&launch, p),
     );
-    let mut user = read_layer(&user_path, false, false)?;
+    let mut user = match candidate {
+        Some(bytes) => parse_layer(&user_path, bytes, false)?,
+        None => read_layer(&user_path, false, false)?,
+    };
     let project = read_layer(&project_path, request.config.is_some(), true)?;
     // Even an empty workspace requires trust: files added before composition or reload
     // must never turn a previously inert launch into project activation.
@@ -985,6 +1036,8 @@ pub fn analyze(
         )
     };
     Ok(ProspectiveLaunch {
+        request: request.clone(),
+        host: host.clone(),
         workflow_dependencies: std::sync::Arc::new(workflow_dependencies),
         python_local_status,
         trusted,
@@ -1002,7 +1055,6 @@ pub fn analyze(
         identity,
         skill_roots,
         documents,
-        model_override: request.model.clone(),
         project_resources,
     })
 }
@@ -1073,6 +1125,22 @@ fn discover_workspace(launch: &Path) -> Result<PathBuf, String> {
         }
     }
     Ok(launch.into())
+}
+
+// The finite reload ownership vocabulary. Startup fields are captured separately.
+fn resource_field(field: &str) -> bool {
+    matches!(
+        field,
+        "mcpServers"
+            | "pythonSources"
+            | "mcpToolPolicies"
+            | "nativeTools"
+            | "environment"
+            | "defaultTools"
+            | "skills"
+            | "subagents"
+            | "workflows"
+    )
 }
 
 // This finite schema is deliberately not an arbitrary recursive merge framework.
@@ -1185,8 +1253,17 @@ fn read_layer(
             detail,
         )
     })?;
+    parse_layer(path, &bytes, project)
+}
+
+#[allow(clippy::too_many_lines)]
+fn parse_layer(
+    path: &Path,
+    bytes: &[u8],
+    project: bool,
+) -> Result<Map<String, Value>, LaunchFailure> {
     let value: Value =
-        crate::config_format::parse_detailed(&bytes).map_err(|e| LaunchFailure::parse(path, e))?;
+        crate::config_format::parse_detailed(bytes).map_err(|e| LaunchFailure::parse(path, e))?;
     let mut object = value
         .as_object()
         .cloned()
@@ -1281,7 +1358,7 @@ fn read_layer(
         ));
     }
     let parsed: PartialRuntime =
-        crate::config_format::parse_detailed(&bytes).map_err(|e| LaunchFailure::parse(path, e))?;
+        crate::config_format::parse_detailed(bytes).map_err(|e| LaunchFailure::parse(path, e))?;
     if let Some(version) = parsed.schema_version
         && version != super::config::CURRENT_RUNTIME_SCHEMA_VERSION
     {

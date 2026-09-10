@@ -342,6 +342,18 @@ export class RuntimeClientAttachment {
     return result.catalog;
   }
 
+  async defaultsRead(): Promise<import("../protocol/types.ts").DefaultDocument> {
+    const result = await this.#connection.request({ method: "defaults_read", scope: "user" });
+    if (result.type !== "defaults") throw new Error(`defaults_read returned ${result.type}`);
+    return result.document;
+  }
+
+  async defaultSave(expected: string, value: import("../protocol/types.ts").DefaultValue): Promise<import("../protocol/types.ts").SaveDefaultResult> {
+    const result = await this.#connection.request({ method: "default_save", scope: "user", expected_revision: expected, value });
+    if (result.type !== "default_saved") throw new Error(`default_save returned ${result.type}`);
+    return result.result;
+  }
+
   async modelGet(): Promise<SessionModelView> {
     const result = await this.#connection.request({ method: "model_get" });
     if (result.type !== "model") {
