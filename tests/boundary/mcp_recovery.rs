@@ -3162,39 +3162,41 @@ async fn successful_streamable_http_requests_leave_no_request_lifecycle_state() 
     let echo = server.control.echo();
     let executor = rustx::tools::mcp::McpToolExecutor::new(Arc::clone(&runtime), echo.clone());
 
+    let release = runtime.hold_http_release("tools/call");
     for index in 0..32 {
-        let result = tokio::time::timeout(
-            Duration::from_mins(1),
-            direct_executor_call(&fixture, &executor, &echo, index),
-        )
-        .await
-        .expect("anti-hang guard: an answered HTTP call settles");
+        let call = direct_executor_call(&fixture, &executor, &echo, index);
+        tokio::pin!(call);
+        if index == 0 {
+            tokio::select! {
+                result = &mut call => panic!("response settled before HTTP release: {result:?}; {:?}", runtime.http_request_states()),
+                () = release.wait_held_and_observed() => {}
+            }
+            assert_eq!(
+                runtime.http_request_states(),
+                vec![(
+                    release.request_id(),
+                    Some("tools/call".to_owned()),
+                    "HttpOwned".to_owned(),
+                    true
+                )]
+            );
+            assert!(futures_util::FutureExt::now_or_never(call.as_mut()).is_none());
+            release.release();
+        }
+        let result = tokio::time::timeout(Duration::from_mins(1), &mut call)
+            .await
+            .expect("anti-hang guard: an answered HTTP call settles");
         assert!(
             matches!(result.status, ToolExecutionStatus::Success),
             "call {index} is an ordinary success: {:?}",
             result.status
         );
-        // Each completed exchange returns the registry to empty **on its
-        // own**, with the connection still open, so nothing from an earlier
-        // call can survive into a later one: the bound is the in-flight
-        // request count, never the count of requests this generation has
-        // served. This is level-triggered on a monotone condition — the
-        // executor does not await rmcp releasing its outbound send, which is
-        // the one part of the exchange that can still be settling when the
-        // canonical result arrives — rather than asserted at an instant
-        // nothing orders.
-        tokio::time::timeout(Duration::from_mins(1), async {
-            while runtime.outstanding_http_requests() != 0 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap_or_else(|_| {
-            panic!(
-                "anti-hang guard: call {index} forgets its own lifecycle state (observed {})",
-                runtime.outstanding_http_requests()
-            )
-        });
+        assert_eq!(
+            runtime.outstanding_http_requests(),
+            0,
+            "call {index} must forget its exact request before settlement: {:?}",
+            runtime.http_request_states()
+        );
     }
     // ...and it is still empty after the last one, with the connection open:
     // close is not allowed to be the thing that cleans up.

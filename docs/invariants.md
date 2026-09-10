@@ -4291,6 +4291,14 @@ remote control plane            local ownership plane
   poll the inner send drops it **unpolled** when a termination landed in
   between. Cancelling a token that a future dispatch *would* observe is
   intent, never evidence.
+- **A correlated response does not prove local HTTP release.** rmcp 3.2.0
+  forwards a POST SSE response before draining and dropping its response
+  body. `dispatch_owned_request` retains admission and awaits the exact
+  request's release latch before returning, including for successful
+  `tools/call` and Tasks ACKs. Cancellation and the existing absolute
+  control-request bound cover release cleanup too; the captured response
+  retains its arbitration authority. Standalone GET activity is
+  connection-owned and is not part of this request-local wait.
 - **Request lifecycle authority is created once per request id per connection
   generation and may only move toward terminality. It is never resurrected.**
   An entry is removed only once every participant is terminal, so a late

@@ -1516,6 +1516,7 @@ async fn cancellation_releases_the_in_flight_http_task_request() {
     )
     .await
     .expect("the HTTP fixture connects");
+    let cancel_release = runtime.hold_http_release(CANCEL_TASK);
     let tool_runtime = ConversationToolRuntime::new(
         ConversationId::new("tasks-http"),
         workspace_root,
@@ -1557,14 +1558,42 @@ async fn cancellation_releases_the_in_flight_http_task_request() {
         result = &mut call => panic!("the call settled before polling: {result:?}"),
         () = server.control.wait_task_gets(1) => {}
     }
+    let poll = runtime
+        .http_request_states()
+        .into_iter()
+        .find(|(_, method, _, _)| method.as_deref() == Some(GET_TASK))
+        .expect("in-flight poll identity");
+    assert_eq!(poll.2, "HttpOwned");
     assert!(
         owner.request_cancel(CancellationReason::RuntimeShutdown),
         "cancellation is requested while the poll is in flight"
     );
-    // Both facts are awaited together: the invocation settles, and the server
-    // observes the client disconnect that proves rustX terminated the poll's
-    // own local HTTP participant.
-    let (settled, ()) = tokio::join!(&mut call, server.control.wait_terminated(1));
+    tokio::select! {
+        result = &mut call => panic!("settled before cancel HTTP release: {result:?}; outstanding {:?}", runtime.http_request_states()),
+        () = cancel_release.wait_held_and_observed() => {}
+    }
+    server.control.wait_terminated(1).await;
+    let cancel_id = cancel_release.request_id();
+    assert_ne!(poll.0, cancel_id);
+    assert_eq!(
+        runtime.http_request_states(),
+        vec![(
+            cancel_id.clone(),
+            Some(CANCEL_TASK.to_owned()),
+            "HttpOwned".to_owned(),
+            true
+        )]
+    );
+    eprintln!(
+        "poll {:?} released; cancel {cancel_id:?} ACK observed, HttpOwned and admitted",
+        poll.0
+    );
+    assert!(
+        futures_util::FutureExt::now_or_never(call.as_mut()).is_none(),
+        "ACK is not local release"
+    );
+    cancel_release.release();
+    let settled = call.await;
     let detail = unknown(&settled);
     assert!(
         detail.contains("does not prove the remote task stopped"),

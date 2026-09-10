@@ -2988,6 +2988,27 @@ impl McpServerRuntime {
             .map_or(0, |ownership| ownership.outstanding_requests())
     }
 
+    #[cfg(test)]
+    pub(crate) fn hold_http_release(
+        &self,
+        method: &'static str,
+    ) -> Arc<streamable_http::HttpReleaseProbe> {
+        self.request_ownership
+            .as_ref()
+            .expect("HTTP transport")
+            .hold_http_release(method)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn http_request_states(
+        &self,
+    ) -> Vec<(rmcp::model::RequestId, Option<String>, String, bool)> {
+        self.request_ownership
+            .as_ref()
+            .expect("HTTP transport")
+            .request_states()
+    }
+
     /// Current progress cardinality, including pre-admission tombstones.
     #[cfg(test)]
     pub(crate) fn tracked_progress_requests(&self) -> usize {
@@ -3743,7 +3764,11 @@ impl McpServerRuntime {
         if is_task_poll {
             test_sync::park_task_arbitration(self.server_id.as_str(), &handle).await;
         }
-        let bound = ownership.response_bound();
+        // One absolute bound covers both the acknowledgement wait and its
+        // request-local release; observing an ACK does not restart the bound.
+        let bound = ownership
+            .response_bound()
+            .map(|duration| tokio::time::Instant::now() + duration);
         let response = loop {
             tokio::select! {
                 biased;
@@ -3775,7 +3800,7 @@ impl McpServerRuntime {
                 // rather than allowed to hold this invocation open.
                 () = async {
                     match bound {
-                        Some(bound) => tokio::time::sleep(bound).await,
+                        Some(bound) => tokio::time::sleep_until(bound).await,
                         None => std::future::pending().await,
                     }
                 } => {
@@ -3805,6 +3830,47 @@ impl McpServerRuntime {
                 }
             }
         };
+        #[cfg(test)]
+        if let Some(ownership) = &self.request_ownership {
+            ownership.note_response_observed(&handle.id);
+        }
+        // An error already observed before cleanup is independent transport
+        // evidence. Later local termination must not explain it away.
+        match &response {
+            Ok(Err(error)) if is_transport_loss(error) => {
+                self.note_transport_loss(&error.to_string());
+            }
+            Err(_) => self.note_transport_loss(
+                "the MCP response channel ended without a correlated response",
+            ),
+            _ => {}
+        }
+        let mut terminated_local_request = false;
+        // rmcp makes a correlated POST response visible before its SSE tail
+        // drain drops our HTTP guard. Retain admission and await the exact
+        // request's release proof before returning any physical outcome.
+        // The response has already won arbitration; cleanup cannot replace it.
+        if let Some(admission) = admission.as_ref() {
+            tokio::select! {
+                biased;
+                () = admission.released() => {},
+                () = context.cancellation.cancelled(), if ownership.arbitrated_by_cancellation() => {
+                    let termination = admission.terminate();
+                    terminated_local_request = termination.terminated_local_request();
+                    termination.settled().await;
+                }
+                () = async {
+                    match bound {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    let termination = admission.terminate();
+                    terminated_local_request = termination.terminated_local_request();
+                    termination.settled().await;
+                }
+            }
+        }
         // A correlated response winning the biased arbitration must not
         // silently discard liveness evidence the peer already delivered on
         // the same ordered transport: those notifications genuinely arrived
@@ -3820,12 +3886,12 @@ impl McpServerRuntime {
         // this the request's terminal forget point.
         drop(progress_lease);
         // A response that won the biased arbitration on its own is a pure
-        // response-plane outcome: this call never terminated its own
-        // transport-level request, so any transport-class failure here is
-        // genuine evidence about the connection generation.
+        // response-plane outcome. Any transport error was captured before
+        // release cleanup, so that cleanup cannot explain away the error as
+        // self-inflicted or change the established arbitration facts.
         McpPhysicalOutcome::Observed {
             response: McpResponseOutcome::observed(response),
-            terminated_local_request: false,
+            terminated_local_request,
             cancellation_won: false,
         }
     }
