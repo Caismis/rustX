@@ -2508,6 +2508,11 @@ async fn parallel_untouched_sibling_cannot_resurrect_consumed_acceptance() {
 }
 
 #[tokio::test]
+async fn parallel_unchanged_agent_preserves_incoming_acceptance_with_eintr() {
+    parallel_acceptance_case("inspect_eintr", false, true).await;
+}
+
+#[tokio::test]
 async fn parallel_unchanged_agent_preserves_incoming_acceptance() {
     parallel_acceptance_case("inspect", false, true).await;
 }
@@ -2524,6 +2529,8 @@ async fn nested_parallel_composes_replacement_relative_to_each_entry() {
 
 #[allow(clippy::too_many_lines)]
 async fn parallel_acceptance_case(mode: &str, nested: bool, idle_last: bool) {
+    let inject_eintr = mode == "inspect_eintr";
+    let mode = if inject_eintr { "inspect" } else { mode };
     let plane = workflow_test_plane(1);
     initialize(&plane);
     let mut initial = stage_workflow_child(&plane);
@@ -2642,6 +2649,13 @@ async fn parallel_acceptance_case(mode: &str, nested: bool, idle_last: bool) {
         if mode != "inspect" {
             std::fs::write(path.join("candidate"), b"B").unwrap();
         }
+        if inject_eintr {
+            plane
+                .registry
+                .workspace_manager()
+                .candidate_interrupt
+                .arm("stat", b"candidate");
+        }
         writer
             .send_result(
                 crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
@@ -2690,6 +2704,17 @@ async fn parallel_acceptance_case(mode: &str, nested: bool, idle_last: bool) {
     }
     let result = task.await.unwrap();
     let events = plane.store.read_events(None, 256).unwrap().events;
+    if inject_eintr {
+        plane
+            .registry
+            .workspace_manager()
+            .candidate_interrupt
+            .assert_retried();
+        assert!(events.iter().any(|event| matches!(&event.event,
+            RuntimeEvent::WorkflowWorkspaceSettled { workspace, candidate, .. }
+            if workspace.unresolved_reason().is_none() && candidate.as_ref() == Some(&expected_a)
+        )));
+    }
     if mode == "clear" {
         expected = events
             .iter()

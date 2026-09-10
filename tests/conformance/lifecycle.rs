@@ -163,37 +163,58 @@ async fn interactive_and_headless_share_one_semantic_composition() {
     let paths = startup(root.path(), MODELS_JSON, RUNTIME_CONFIG_JSON);
     let dependencies = dependencies();
 
-    let interactive = LocalConversationRuntime::compose(&(paths).resolve(), &dependencies)
-        .await
-        .expect("the interactive composition succeeds");
-    assert!(interactive.runtime().is_activated());
+    let interactive_paths = paths.resolve();
+    // Semantic shutdown drains execution, but the host's projection worker can
+    // still hold a temporary strong reference while folding its last event.
+    // Join this fixture's executor before asserting that *all* owners of the
+    // OS controller lock have exited. This is a teardown barrier, not a retry
+    // of composition or a scheduling delay.
+    let interactive_projection = tokio::task::spawn_blocking(move || {
+        let executor = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .enable_all()
+            .build()
+            .unwrap();
+        let projection = executor.block_on(async {
+            let interactive =
+                LocalConversationRuntime::compose(&interactive_paths, &self::dependencies())
+                    .await
+                    .expect("the interactive composition succeeds");
+            assert!(interactive.runtime().is_activated());
 
-    // The semantic composition resolves identically on both paths.
-    let interactive_projection = semantic_projection(
-        interactive.runtime().conversation_id(),
-        interactive.runtime().agent_id(),
-        interactive.runtime().model_view(),
-        interactive.runtime().context_config().policy,
-        interactive.tool_runtime(),
-        interactive.capability(),
-    );
-    assert!(
-        interactive.tool_runtime().is_runtime_client_bound(),
-        "the interactive runtime bound its Runtime Client"
-    );
-    // The interactive runtime's protocol surface still speaks for the same
-    // conversation.
-    let (attachment, result) = interactive
-        .host()
-        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
-        .expect("attach");
-    assert!(matches!(
-        result,
-        rustx::runtime_client::types::RuntimeClientResult::Initialized { .. }
-    ));
-    interactive.runtime().shutdown().await.unwrap();
-    drop(attachment);
-    drop(interactive);
+            // The semantic composition resolves identically on both paths.
+            let projection = semantic_projection(
+                interactive.runtime().conversation_id(),
+                interactive.runtime().agent_id(),
+                interactive.runtime().model_view(),
+                interactive.runtime().context_config().policy,
+                interactive.tool_runtime(),
+                interactive.capability(),
+            );
+            assert!(
+                interactive.tool_runtime().is_runtime_client_bound(),
+                "the interactive runtime bound its Runtime Client"
+            );
+            // The interactive runtime's protocol surface still speaks for the same
+            // conversation.
+            let (attachment, result) = interactive
+                .host()
+                .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
+                .expect("attach");
+            assert!(matches!(
+                result,
+                rustx::runtime_client::types::RuntimeClientResult::Initialized { .. }
+            ));
+            interactive.runtime().shutdown().await.unwrap();
+            drop(attachment);
+            drop(interactive);
+            projection
+        });
+        drop(executor);
+        projection
+    })
+    .await
+    .unwrap();
     let headless = HeadlessConversationRuntime::compose(&(paths).resolve(), &dependencies)
         .await
         .expect("the headless composition succeeds after the first owner releases storage");

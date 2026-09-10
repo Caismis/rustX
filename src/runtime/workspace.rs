@@ -53,6 +53,8 @@ use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::SubagentId;
 
 mod candidate;
+mod git_output;
+mod observation;
 mod retained_candidate;
 pub(crate) use candidate::{CandidateFreeze, CandidateScope, WorkspaceAccess, WorkspaceUse};
 pub use candidate::{CandidateRecoveryGuard, CandidateReference};
@@ -936,6 +938,8 @@ pub struct WorkspaceManager {
     /// authority; this lock only supplies the in-process linearization.
     disposal_lock: Arc<tokio::sync::Mutex<()>>,
     #[cfg(test)]
+    pub(crate) candidate_interrupt: Arc<candidate::InspectionInterrupt>,
+    #[cfg(test)]
     acquisition_hook: Option<std::sync::Arc<WorkspaceAcquireHook>>,
     #[cfg(test)]
     overlay_source_hook: Option<std::sync::Arc<WorkspaceOverlaySourceHook>>,
@@ -962,6 +966,8 @@ impl WorkspaceManager {
             parent_logical_workspace: parent_workspace.as_ref().to_path_buf(),
             runtime_root: runtime_root.as_ref().to_path_buf(),
             disposal_lock: Arc::new(tokio::sync::Mutex::new(())),
+            #[cfg(test)]
+            candidate_interrupt: Arc::default(),
             #[cfg(test)]
             acquisition_hook: None,
             #[cfg(test)]
@@ -1294,11 +1300,12 @@ impl WorkspaceManager {
             }
         }
         let recorded_source =
-            std::fs::canonicalize(&worktree.source_repository_root).map_err(|error| {
-                mismatch(format!(
-                    "recorded source repository is unavailable: {error}"
-                ))
-            })?;
+            observation::retry_io(|| std::fs::canonicalize(&worktree.source_repository_root))
+                .map_err(|error| {
+                    mismatch(format!(
+                        "recorded source repository is unavailable: {error}"
+                    ))
+                })?;
         let current_source = self
             .git_text(
                 &worktree.source_repository_root,
@@ -1311,11 +1318,12 @@ impl WorkspaceManager {
                     "current source repository identity is unavailable: {error}"
                 ))
             })?;
-        let current_source = std::fs::canonicalize(current_source).map_err(|error| {
-            mismatch(format!(
-                "current source repository identity is invalid: {error}"
-            ))
-        })?;
+        let current_source = observation::retry_io(|| std::fs::canonicalize(&current_source))
+            .map_err(|error| {
+                mismatch(format!(
+                    "current source repository identity is invalid: {error}"
+                ))
+            })?;
         if current_source != recorded_source {
             return Err(mismatch(
                 "the recorded source repository is not the current Git repository",
@@ -1441,11 +1449,12 @@ impl WorkspaceManager {
         }
 
         let recorded_source =
-            std::fs::canonicalize(&worktree.source_repository_root).map_err(|error| {
-                mismatch(format!(
-                    "recorded source repository is unavailable: {error}"
-                ))
-            })?;
+            observation::retry_io(|| std::fs::canonicalize(&worktree.source_repository_root))
+                .map_err(|error| {
+                    mismatch(format!(
+                        "recorded source repository is unavailable: {error}"
+                    ))
+                })?;
         let current_source = self
             .git_text(
                 &worktree.source_repository_root,
@@ -1458,11 +1467,12 @@ impl WorkspaceManager {
                     "current source repository identity is unavailable: {error}"
                 ))
             })?;
-        let current_source = std::fs::canonicalize(current_source).map_err(|error| {
-            mismatch(format!(
-                "current source repository identity is invalid: {error}"
-            ))
-        })?;
+        let current_source = observation::retry_io(|| std::fs::canonicalize(&current_source))
+            .map_err(|error| {
+                mismatch(format!(
+                    "current source repository identity is invalid: {error}"
+                ))
+            })?;
         if current_source != recorded_source {
             return Err(mismatch(
                 "the recorded source repository is not the current Git repository",
@@ -1481,17 +1491,19 @@ impl WorkspaceManager {
                     "the recorded physical path is not a Git worktree: {error}"
                 ))
             })?;
-        let physical_top = std::fs::canonicalize(physical_top).map_err(|error| {
-            mismatch(format!(
-                "the current physical worktree identity is invalid: {error}"
-            ))
-        })?;
-        let recorded_physical =
-            std::fs::canonicalize(&worktree.physical_worktree_root).map_err(|error| {
+        let physical_top =
+            observation::retry_io(|| std::fs::canonicalize(&physical_top)).map_err(|error| {
                 mismatch(format!(
-                    "the recorded physical worktree is unavailable: {error}"
+                    "the current physical worktree identity is invalid: {error}"
                 ))
             })?;
+        let recorded_physical =
+            observation::retry_io(|| std::fs::canonicalize(&worktree.physical_worktree_root))
+                .map_err(|error| {
+                    mismatch(format!(
+                        "the recorded physical worktree is unavailable: {error}"
+                    ))
+                })?;
         if physical_top != recorded_physical {
             return Err(mismatch(
                 "the recorded physical path resolves to a different Git worktree",
@@ -1588,17 +1600,19 @@ impl WorkspaceManager {
                     "the unresolved physical path is not a Git worktree: {error}"
                 ))
             })?;
-        let physical_top = std::fs::canonicalize(physical_top).map_err(|error| {
-            mismatch(format!(
-                "the current unresolved worktree identity is invalid: {error}"
-            ))
-        })?;
-        let recorded_physical =
-            std::fs::canonicalize(&worktree.physical_worktree_root).map_err(|error| {
+        let physical_top =
+            observation::retry_io(|| std::fs::canonicalize(&physical_top)).map_err(|error| {
                 mismatch(format!(
-                    "the unresolved physical worktree is unavailable: {error}"
+                    "the current unresolved worktree identity is invalid: {error}"
                 ))
             })?;
+        let recorded_physical =
+            observation::retry_io(|| std::fs::canonicalize(&worktree.physical_worktree_root))
+                .map_err(|error| {
+                    mismatch(format!(
+                        "the unresolved physical worktree is unavailable: {error}"
+                    ))
+                })?;
         if physical_top != recorded_physical {
             return Err(mismatch(
                 "the unresolved physical path resolves to a different Git worktree",
@@ -1817,17 +1831,16 @@ impl WorkspaceManager {
             )
             .await?;
         let source_repository_root =
-            std::fs::canonicalize(source_repository_root).map_err(|error| {
-                WorkspaceAcquireError::InvalidSnapshot {
+            observation::retry_io(|| std::fs::canonicalize(&source_repository_root)).map_err(
+                |error| WorkspaceAcquireError::InvalidSnapshot {
                     detail: format!("cannot canonicalize the source repository root: {error}"),
-                }
-            })?;
+                },
+            )?;
         let canonical_parent_logical_workspace =
-            std::fs::canonicalize(&self.parent_logical_workspace).map_err(|error| {
-                WorkspaceAcquireError::InvalidSnapshot {
+            observation::retry_io(|| std::fs::canonicalize(&self.parent_logical_workspace))
+                .map_err(|error| WorkspaceAcquireError::InvalidSnapshot {
                     detail: format!("cannot canonicalize the parent logical workspace: {error}"),
-                }
-            })?;
+                })?;
         let repository_relative_workspace = canonical_parent_logical_workspace
             .strip_prefix(&source_repository_root)
             .map_err(|_| WorkspaceAcquireError::InvalidSnapshot {
@@ -2447,7 +2460,14 @@ impl WorkspaceManager {
         // process has exited. Keep the child in a dedicated waiter instead;
         // cancellation kills its private process group and awaits that same
         // waiter before any workspace settlement can inspect or remove paths.
-        let mut wait_handle = tokio::spawn(async move { child.wait_with_output().await });
+        let mut wait_handle = tokio::spawn(async move {
+            git_output::collect(
+                child,
+                #[cfg(test)]
+                &git_output::Faults::default(),
+            )
+            .await
+        });
         let wait_result = if let Some(cancellation) = cancellation {
             tokio::select! {
                 biased;
@@ -3037,7 +3057,7 @@ fn git_sync_detail(output: &std::process::Output) -> String {
 }
 
 fn path_is_occupied(path: &Path) -> bool {
-    std::fs::symlink_metadata(path).is_ok()
+    observation::retry_io(|| std::fs::symlink_metadata(path)).is_ok()
 }
 
 /// Reads the securely acquired source objects into the immutable, bounded
@@ -3115,11 +3135,13 @@ fn open_stable_directory(path: &Path) -> std::io::Result<std::fs::File> {
             ));
         }
         let mut current = std::fs::File::from(
-            open(
-                Path::new("/"),
-                OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
-                Mode::empty(),
-            )
+            observation::retry_nix(|| {
+                open(
+                    Path::new("/"),
+                    OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+                    Mode::empty(),
+                )
+            })
             .map_err(std::io::Error::from)?,
         );
         for component in path.components() {
@@ -3150,7 +3172,7 @@ fn open_stable_directory(path: &Path) -> std::io::Result<std::fs::File> {
 /// macOS `/var`; the child worktree itself is still traversed without
 /// symlinks from this retained handle.
 fn open_stable_runtime_worktrees(runtime_root: &Path) -> std::io::Result<std::fs::File> {
-    let canonical_runtime_root = std::fs::canonicalize(runtime_root)?;
+    let canonical_runtime_root = observation::retry_io(|| std::fs::canonicalize(runtime_root))?;
     let runtime = open_stable_directory(&canonical_runtime_root)?;
     #[cfg(unix)]
     {
@@ -3202,7 +3224,7 @@ fn open_directory_relative(
     root: &std::fs::File,
     relative_path: &Path,
 ) -> std::io::Result<std::fs::File> {
-    let mut current = root.try_clone()?;
+    let mut current = observation::retry_io(|| root.try_clone())?;
     for component in relative_path.components() {
         let std::path::Component::Normal(name) = component else {
             return Err(std::io::Error::new(
@@ -3232,7 +3254,7 @@ fn open_overlay_source(
                 "overlay source path has no file component",
             ));
         };
-        let mut current = workspace.try_clone()?;
+        let mut current = observation::retry_io(|| workspace.try_clone())?;
         let mut final_component = first;
         for component in components {
             let std::path::Component::Normal(name) = final_component else {
@@ -3250,12 +3272,14 @@ fn open_overlay_source(
                 "overlay source path contains a non-normal component",
             ));
         };
-        let fd = openat(
-            &current,
-            name,
-            OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC | OFlag::O_NONBLOCK,
-            Mode::empty(),
-        )
+        let fd = observation::retry_nix(|| {
+            openat(
+                &current,
+                name,
+                OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC | OFlag::O_NONBLOCK,
+                Mode::empty(),
+            )
+        })
         .map_err(std::io::Error::from)?;
         Ok(std::fs::File::from(fd))
     }
@@ -3274,20 +3298,22 @@ fn open_directory_at(
     directory: &std::fs::File,
     name: &std::ffi::OsStr,
 ) -> std::io::Result<std::fs::File> {
-    let fd = openat(
-        directory,
-        name,
-        // `O_NOFOLLOW` rejects a symlink on the component itself. Open
-        // without `O_DIRECTORY` so platforms that report a symlink plus
-        // `O_DIRECTORY` as `ENOTDIR` preserve the distinct symlink error;
-        // `O_NONBLOCK` prevents an unexpected FIFO from blocking before the
-        // descriptor metadata is checked below.
-        OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC | OFlag::O_NONBLOCK,
-        Mode::empty(),
-    )
+    let fd = observation::retry_nix(|| {
+        openat(
+            directory,
+            name,
+            // `O_NOFOLLOW` rejects a symlink on the component itself. Open
+            // without `O_DIRECTORY` so platforms that report a symlink plus
+            // `O_DIRECTORY` as `ENOTDIR` preserve the distinct symlink error;
+            // `O_NONBLOCK` prevents an unexpected FIFO from blocking before the
+            // descriptor metadata is checked below.
+            OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC | OFlag::O_NONBLOCK,
+            Mode::empty(),
+        )
+    })
     .map_err(std::io::Error::from)?;
     let opened = std::fs::File::from(fd);
-    if !opened.metadata()?.is_dir() {
+    if !observation::retry_io(|| opened.metadata())?.is_dir() {
         return Err(std::io::Error::new(
             ErrorKind::NotADirectory,
             "opened component is not a directory",
@@ -3778,10 +3804,9 @@ fn paths_refer_to_same_worktree(actual: Option<&Path>, expected: Option<&Path>) 
         return actual == expected;
     };
     actual == expected
-        || actual
-            .canonicalize()
+        || observation::retry_io(|| actual.canonicalize())
             .ok()
-            .zip(expected.canonicalize().ok())
+            .zip(observation::retry_io(|| expected.canonicalize()).ok())
             .is_some_and(|(actual, expected)| actual == expected)
 }
 
