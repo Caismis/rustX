@@ -516,10 +516,16 @@ pub struct ConversationContextConfig {
     pub policy: SessionContextPolicy,
     /// The deterministic token estimator.
     pub estimator: Arc<dyn TokenEstimator>,
-    /// The launch-scoped Agent Status engine template. Each admitted attempt
-    /// constructs a fresh engine from it, retaining the configured clock/module
+    /// The launch-scoped Agent Status engine template, present exactly when
+    /// this composition's frozen native Agent Extension set contains the
+    /// Agent Status extension (Issue #256). Each admitted attempt constructs
+    /// a fresh engine from it, retaining the configured clock/module
     /// semantics while keeping quarantine state attempt-local.
-    pub status_engine: AgentStatusEngine,
+    ///
+    /// `None` is the whole representation of "this runtime composes no Agent
+    /// Status": nothing else in the Agent Loop, Tool Plane, cancellation, or
+    /// durability path consults the extension set.
+    pub status_engine: Option<AgentStatusEngine>,
 }
 
 /// The construction-time configuration of one conversation runtime.
@@ -1689,7 +1695,10 @@ impl RuntimeInner {
         ContextRuntime::for_attempt_with_assembly(
             self.context.policy,
             Arc::clone(&self.context.estimator),
-            self.context.status_engine.for_attempt(),
+            self.context
+                .status_engine
+                .as_ref()
+                .map(AgentStatusEngine::for_attempt),
             assembly,
             model,
             model_timeout_policy,
@@ -5836,6 +5845,7 @@ mod tests {
             project_instructions: Vec::new(),
             materialization:
                 crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
+            extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         }
     }
 
@@ -6322,7 +6332,7 @@ mod tests {
             context: ConversationContextConfig {
                 policy: options.policy,
                 estimator: options.estimator,
-                status_engine: options.status_engine,
+                status_engine: Some(options.status_engine),
             },
             tool_runtime,
             resources,
@@ -6429,7 +6439,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator,
-                status_engine: AgentStatusEngine::default(),
+                status_engine: Some(AgentStatusEngine::default()),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -6503,7 +6513,6 @@ mod tests {
                     model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                     tool_deadline_policy:
                         crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
-                    agent_status: crate::context::AgentStatusConfig::default(),
                     context: crate::context::SessionContextPolicy {
                         reserve_tokens: 0,
                         keep_recent_tokens: 0,
@@ -6532,7 +6541,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator: Arc::new(DefaultTokenEstimator),
-                status_engine: AgentStatusEngine::default(),
+                status_engine: Some(AgentStatusEngine::default()),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -6617,7 +6626,6 @@ mod tests {
                     model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                     tool_deadline_policy:
                         crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
-                    agent_status: crate::context::AgentStatusConfig::default(),
                     context: crate::context::SessionContextPolicy {
                         reserve_tokens: 0,
                         keep_recent_tokens: 0,
@@ -6646,7 +6654,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator: Arc::new(DefaultTokenEstimator),
-                status_engine: AgentStatusEngine::default(),
+                status_engine: Some(AgentStatusEngine::default()),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -10381,7 +10389,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator: Arc::new(DefaultTokenEstimator),
-                status_engine: AgentStatusEngine::default(),
+                status_engine: Some(AgentStatusEngine::default()),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -10445,7 +10453,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator: Arc::new(DefaultTokenEstimator),
-                status_engine: AgentStatusEngine::default(),
+                status_engine: Some(AgentStatusEngine::default()),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -14197,7 +14205,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator: Arc::new(DefaultTokenEstimator),
-                status_engine: AgentStatusEngine::default(),
+                status_engine: Some(AgentStatusEngine::default()),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -14990,7 +14998,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator: Arc::new(DefaultTokenEstimator),
-                status_engine: AgentStatusEngine::default(),
+                status_engine: Some(AgentStatusEngine::default()),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -16615,7 +16623,7 @@ mod tests {
                             summary_output_cap: None,
                         },
                         estimator: Arc::new(DefaultTokenEstimator),
-                        status_engine: AgentStatusEngine::default(),
+                        status_engine: Some(AgentStatusEngine::default()),
                     },
                     tool_runtime: self.tool_runtime.clone(),
                     capability: self.capability.clone(),
@@ -16723,7 +16731,7 @@ mod tests {
                             summary_output_cap: None,
                         },
                         estimator: Arc::new(DefaultTokenEstimator),
-                        status_engine: AgentStatusEngine::default(),
+                        status_engine: Some(AgentStatusEngine::default()),
                     },
                     tool_runtime: self.tool_runtime.clone(),
                     capability: self.capability.clone(),
@@ -16862,7 +16870,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator,
-                status_engine: AgentStatusEngine::default(),
+                status_engine: Some(AgentStatusEngine::default()),
             },
             tool_runtime,
             resources: test_resources(&coordinator),

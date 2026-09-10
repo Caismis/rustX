@@ -242,7 +242,10 @@ fn context_runtime(model: &Arc<FakeModel>) -> ContextRuntime {
             summary_output_cap: None,
         },
         Arc::new(DefaultTokenEstimator),
-        AgentStatusEngine::new(AgentStatusConfig::default(), Arc::new(FixedStatusClock)),
+        Some(AgentStatusEngine::new(
+            AgentStatusConfig::default(),
+            Arc::new(FixedStatusClock),
+        )),
         &snapshot,
         rustx::model::ModelTimeoutPolicy::default(),
         support::default_monotonic_clock(),

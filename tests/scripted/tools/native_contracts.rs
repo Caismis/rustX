@@ -559,7 +559,7 @@ fn native_context_runtime(model: &Arc<support::fake::FakeModel>) -> rustx::conte
             summary_output_cap: None,
         },
         Arc::new(rustx::context::DefaultTokenEstimator),
-        rustx::context::AgentStatusEngine::default(),
+        Some(rustx::context::AgentStatusEngine::default()),
         &support::attempt_model(model.clone(), "native-contract-model"),
         rustx::model::ModelTimeoutPolicy::default(),
         support::default_monotonic_clock(),
@@ -587,6 +587,7 @@ fn selection_registry(fixture: &common::NativeFixture) -> rustx::tools::executor
             files: vec![],
         },
         rustx::runtime::workspace::WorkspacePolicy::default(),
+        rustx::extensions::NativeAgentExtensionsDocument::default().resolve(),
     )
     .unwrap()])
     .unwrap();

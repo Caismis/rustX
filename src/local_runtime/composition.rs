@@ -113,7 +113,7 @@ use crate::capabilities::{
     CapabilityCoordinator, CapabilityCoordinatorConfig, CapabilityResourceInputs,
     ToolActivationPolicy,
 };
-use crate::context::{AgentStatusEngine, DefaultTokenEstimator, TokenEstimator};
+use crate::context::{DefaultTokenEstimator, TokenEstimator};
 use crate::durable::{ConversationStoreBinding, SqliteConversationStore};
 use crate::model::catalog::{CredentialEnvironment, ModelCatalogError};
 use crate::model::invocation::{ModelBindingRegistry, ModelInvocationError};
@@ -1075,6 +1075,18 @@ impl LocalConversationCore {
         // same inheritance: one generic policy for the parent runtime and
         // every subagent child, carried through the typed child spec.
         let tool_deadline_policy = runtime_config.tool_deadline_policy()?;
+        // The root Agent's native Agent Extension composition freeze point
+        // (Issue #256). It is resolved once, here, from this launch's
+        // already-resolved configuration document. Nothing downstream reads
+        // `runtime_config.extensions` again, and resource reload publishes a
+        // new `RuntimeResourceSnapshot` that deliberately cannot reach this
+        // value: a running ConversationRuntime executes against the
+        // composition frozen for its launch.
+        //
+        // It is deliberately *not* handed to the subagent spawn plan: root
+        // and named-role extension sets are independently authored, and a
+        // child's set is frozen by the resolver from its own definition.
+        let extensions = runtime_config.extension_composition();
         let subagents = crate::runtime::subagent::SubagentRegistry::new(
             crate::runtime::subagent::SubagentRegistryConfig {
                 conversation_id: tool_runtime.conversation_id().clone(),
@@ -1099,7 +1111,6 @@ impl LocalConversationCore {
                     runtime_root: paths.runtime_root.clone(),
                     model_timeout_policy,
                     tool_deadline_policy,
-                    agent_status: runtime_config.agent_status.clone(),
                     context: runtime_config.context_policy(),
                 },
                 workspace: WorkspaceManager::new(
@@ -1266,10 +1277,10 @@ impl LocalConversationCore {
             context: ConversationContextConfig {
                 policy: runtime_config.context_policy(),
                 estimator: Arc::clone(&dependencies.estimator),
-                status_engine: AgentStatusEngine::new(
-                    runtime_config.agent_status.clone(),
-                    Arc::new(crate::context::SystemClock),
-                ),
+                // The root Agent's frozen native Agent Extension composition
+                // is materialized here, once, and never again (Issue #256).
+                status_engine: extensions
+                    .agent_status_engine(Arc::new(crate::context::SystemClock)),
             },
             tool_runtime: tool_runtime.clone(),
             capability: capability.clone(),
@@ -1548,10 +1559,14 @@ impl LocalConversationCore {
             context: ConversationContextConfig {
                 policy: spec.context,
                 estimator: Arc::clone(&dependencies.estimator),
-                status_engine: AgentStatusEngine::new(
-                    spec.agent_status.clone(),
-                    Arc::new(crate::context::SystemClock),
-                ),
+                // The child materializes exactly the extension composition
+                // its invoking generation froze into `ResolvedSubagentSpec`
+                // (Issue #256). No host, project, or role document is read
+                // on this path, so nothing here can widen or reinterpret it.
+                status_engine: spec
+                    .resolved
+                    .extensions
+                    .agent_status_engine(Arc::new(crate::context::SystemClock)),
             },
             tool_runtime: tool_runtime.clone(),
             capability: capability.clone(),
@@ -2497,6 +2512,22 @@ mod subagent_child_tests {
         project_instructions: Vec<ProjectContextFile>,
         skills: Vec<crate::runtime::subagent::ResolvedSubagentSkill>,
     ) -> SubagentChildSpec {
+        spec_with_extensions(
+            root,
+            tools,
+            project_instructions,
+            skills,
+            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+        )
+    }
+
+    fn spec_with_extensions(
+        root: &std::path::Path,
+        tools: Vec<ResolvedSubagentTool>,
+        project_instructions: Vec<ProjectContextFile>,
+        skills: Vec<crate::runtime::subagent::ResolvedSubagentSkill>,
+        extensions: crate::extensions::NativeAgentExtensions,
+    ) -> SubagentChildSpec {
         SubagentChildSpec {
             protocol_version: SUBAGENT_IPC_VERSION,
             subagent_id: SubagentId::new("conv-parent-subagent-1"),
@@ -2518,11 +2549,11 @@ mod subagent_child_tests {
                 project_instructions,
                 materialization:
                     crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
+                extensions,
             },
             approval_mode: crate::runtime::ApprovalMode::Policy,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
-            agent_status: crate::context::AgentStatusConfig::default(),
             context: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -2554,6 +2585,88 @@ mod subagent_child_tests {
         )
         .expect("SKILL.md");
         dir
+    }
+
+    /// Issue #256 regression 9: child materialization never rereads host,
+    /// project, or root configuration to widen or reinterpret its native
+    /// Agent Extension set.
+    ///
+    /// The lab's workspace carries a `rustx.jsonc` that enables the Agent
+    /// Status extension with a distinctive timezone. A child whose invoking
+    /// generation froze *no* extension composes no status engine, and a
+    /// child whose invoking generation froze a *different* Agent Status
+    /// configuration composes exactly that one. Neither observes the
+    /// document on disk.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ext256_child_materialization_never_rereads_configuration_for_its_extension_set() {
+        let dir = lab();
+        std::fs::write(
+            dir.path().join("workspace/rustx.jsonc"),
+            serde_json::json!({
+                "schemaVersion": 8,
+                "agentId": "agent-host",
+                "model": {"model": "local/model-a"},
+                "context": {"reserveTokens": 0, "keepRecentTokens": 0},
+                "extensions": {"agentStatus": {
+                    "enabled": true,
+                    "time": {"enabled": true, "timezone": "America/New_York"}
+                }}
+            })
+            .to_string(),
+        )
+        .expect("an ambient host configuration a rereading child would observe");
+
+        let empty = LocalConversationCore::compose_subagent_child(
+            &spec_with_extensions(
+                dir.path(),
+                vec![builtin("read")],
+                Vec::new(),
+                Vec::new(),
+                crate::extensions::NativeAgentExtensions::none(),
+            ),
+            &dependencies(),
+            &ChildPreparation::detached(),
+        )
+        .await
+        .expect("the child composes");
+        assert!(
+            empty.runtime().context_config().status_engine.is_none(),
+            "a child frozen with no extension cannot acquire one from the \
+             configuration document beside it"
+        );
+
+        let frozen = serde_json::from_value::<crate::extensions::NativeAgentExtensionsDocument>(
+            serde_json::json!({"agentStatus": {"time": {"timezone": "Asia/Shanghai"}}}),
+        )
+        .expect("role extension document")
+        .resolve();
+        let composed = LocalConversationCore::compose_subagent_child(
+            &spec_with_extensions(
+                dir.path(),
+                vec![builtin("read")],
+                Vec::new(),
+                Vec::new(),
+                frozen.clone(),
+            ),
+            &dependencies(),
+            &ChildPreparation::detached(),
+        )
+        .await
+        .expect("the child composes");
+        assert_eq!(
+            composed
+                .runtime()
+                .context_config()
+                .status_engine
+                .as_ref()
+                .expect("the frozen extension is materialized")
+                .config(),
+            frozen
+                .agent_status()
+                .expect("the frozen composition carries Agent Status"),
+            "the child materializes exactly the frozen decision, never the \
+             configuration document's"
+        );
     }
 
     /// Issue #144: a child observes only what its invoking generation froze.

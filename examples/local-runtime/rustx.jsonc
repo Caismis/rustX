@@ -25,14 +25,20 @@
 
   // Tool approval and invocation policies belong only in host settings.jsonc.
 
-  // Optional Agent Status modules and their launch-scoped environment.
-  "agentStatus": {
-    "time": {
+  // The closed launch-scoped Native Agent Extension composition. This is the
+  // single surface for optional Agent augmentation; ordinary execution
+  // capabilities remain `defaultTools`/`--tools`. It is frozen at composition
+  // and never changed by resource reload.
+  "extensions": {
+    "agentStatus": {
       "enabled": true,
-      "timezone": "Asia/Tokyo",
-    },
-    "background": {
-      "enabled": true,
+      "time": {
+        "enabled": true,
+        "timezone": "Asia/Tokyo",
+      },
+      "background": {
+        "enabled": true,
+      },
     },
   },
 

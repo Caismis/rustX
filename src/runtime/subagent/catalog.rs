@@ -200,7 +200,7 @@ pub struct SubagentDefinitionDigest(String);
 /// It is part of the hashed preimage: a later milestone that admits a new
 /// behavior-affecting field bumps this constant, so two framings can never
 /// collide into the same digest.
-pub const SUBAGENT_DEFINITION_DIGEST_VERSION: &str = "rustx-subagent-definition-v3";
+pub const SUBAGENT_DEFINITION_DIGEST_VERSION: &str = "rustx-subagent-definition-v4";
 
 impl SubagentDefinitionDigest {
     /// The stable textual form `sha256:<64 lowercase hex characters>`.
@@ -320,6 +320,7 @@ pub struct SubagentDefinition {
     skills: Vec<String>,
     project_instructions: SubagentProjectInstructionPolicy,
     workspace_policy: crate::runtime::workspace::WorkspacePolicy,
+    extensions: crate::extensions::NativeAgentExtensions,
     digest: SubagentDefinitionDigest,
 }
 
@@ -348,6 +349,7 @@ impl SubagentDefinition {
         skills: Vec<String>,
         project_instructions: SubagentProjectInstructionPolicy,
         workspace_policy: crate::runtime::workspace::WorkspacePolicy,
+        extensions: crate::extensions::NativeAgentExtensions,
     ) -> Result<Self, SubagentDefinitionError> {
         if description.trim().is_empty() {
             return Err(SubagentDefinitionError::EmptyDescription { agent: name });
@@ -420,6 +422,7 @@ impl SubagentDefinition {
             &skills,
             &project_instructions,
             workspace_policy,
+            &extensions,
         );
         Ok(Self {
             name,
@@ -432,6 +435,7 @@ impl SubagentDefinition {
             skills,
             project_instructions,
             workspace_policy,
+            extensions,
             digest,
         })
     }
@@ -495,6 +499,15 @@ impl SubagentDefinition {
     #[must_use]
     pub const fn workspace_policy(&self) -> crate::runtime::workspace::WorkspacePolicy {
         self.workspace_policy
+    }
+
+    /// The frozen native Agent Extension composition this role authored.
+    ///
+    /// Independently authored per role: the invoking root Agent's own
+    /// extension configuration is not an input here and cannot widen it.
+    #[must_use]
+    pub const fn extensions(&self) -> &crate::extensions::NativeAgentExtensions {
+        &self.extensions
     }
 
     /// The deterministic semantic identity of this definition.
@@ -769,6 +782,7 @@ fn compute_digest(
     skills: &[String],
     project_instructions: &SubagentProjectInstructionPolicy,
     workspace_policy: crate::runtime::workspace::WorkspacePolicy,
+    extensions: &crate::extensions::NativeAgentExtensions,
 ) -> SubagentDefinitionDigest {
     let mut hasher = Sha256::new();
     hasher.update(SUBAGENT_DEFINITION_DIGEST_VERSION.as_bytes());
@@ -832,6 +846,10 @@ fn compute_digest(
         } => format!("git_worktree:require_clean_parent={require_clean_parent}"),
     };
     field(&mut hasher, "workspace_policy", &workspace);
+    // The role's native Agent Extension composition is part of its semantic
+    // identity: two roles that differ only in Agent Status settings are
+    // different definitions and must resolve to different frozen children.
+    field(&mut hasher, "extensions", &extensions.digest_framing());
     SubagentDefinitionDigest(format!("sha256:{:x}", hasher.finalize()))
 }
 
@@ -882,6 +900,7 @@ mod tests {
             skills,
             policy(),
             WorkspacePolicy::SharedWorkspace,
+            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         )
     }
 
@@ -1030,6 +1049,7 @@ mod tests {
                 files: Vec::new(),
             },
             WorkspacePolicy::SharedWorkspace,
+            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         )
         .expect("definition");
         let with_file = SubagentDefinition::new(
@@ -1049,6 +1069,7 @@ mod tests {
                 }],
             },
             WorkspacePolicy::SharedWorkspace,
+            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         )
         .expect("definition");
         let changed_content = SubagentDefinition::new(
@@ -1068,6 +1089,7 @@ mod tests {
                 }],
             },
             WorkspacePolicy::SharedWorkspace,
+            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         )
         .expect("definition");
         let changed_instructions = SubagentDefinition::new(
@@ -1081,6 +1103,7 @@ mod tests {
             Vec::new(),
             policy(),
             WorkspacePolicy::SharedWorkspace,
+            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         )
         .expect("definition");
         let isolated = SubagentDefinition::new(
@@ -1097,6 +1120,7 @@ mod tests {
             WorkspacePolicy::GitWorktree {
                 require_clean_parent: true,
             },
+            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         )
         .expect("definition");
         let mut digests = vec![
@@ -1125,6 +1149,7 @@ mod tests {
             Vec::new(),
             policy(),
             WorkspacePolicy::SharedWorkspace,
+            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         )
         .expect("definition");
         let there = SubagentDefinition::new(
@@ -1138,6 +1163,7 @@ mod tests {
             Vec::new(),
             policy(),
             WorkspacePolicy::SharedWorkspace,
+            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         )
         .expect("definition");
         assert_eq!(
@@ -1179,6 +1205,7 @@ mod tests {
             Vec::new(),
             policy(),
             WorkspacePolicy::SharedWorkspace,
+            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         )
         .expect("definition");
         assert_eq!(with_deadline.execution_deadline(), Some(deadline));

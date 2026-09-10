@@ -3202,7 +3202,7 @@ mod tests {
             )
             .expect("valid test context engine"),
             Arc::new(FakeContextSummarizer::new(Vec::new())),
-            AgentStatusEngine::default(),
+            Some(AgentStatusEngine::default()),
             CompactionBudgets::new(1, 1, 1_000_000),
         )
     }
@@ -3646,7 +3646,7 @@ mod tests {
         let runtime = ContextRuntime::with_scripted_summarizer(
             engine,
             Arc::new(FakeContextSummarizer::new(vec![summary_step])),
-            AgentStatusEngine::default(),
+            Some(AgentStatusEngine::default()),
             CompactionBudgets::new(1, 1, 1_000_000),
         );
         let tool_runtime = crate::scripted_suites::common::tool_runtime("projection-order");

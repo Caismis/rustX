@@ -1,8 +1,66 @@
 {
   "$defs": {
+    "AgentStatusExtensionDocument": {
+      "additionalProperties": false,
+      "description": "The authored Agent Status extension.\n\n`enabled` composes the extension in or out of the runtime as a whole;\n`time` and `background` remain the two bounded status contributors, with\nexactly the semantics they had before the migration.",
+      "properties": {
+        "background": {
+          "$ref": "#/$defs/BackgroundStatusConfig",
+          "default": {
+            "enabled": true
+          },
+          "description": "The Background contributor configuration."
+        },
+        "enabled": {
+          "default": true,
+          "description": "Whether this composition includes the Agent Status extension at all.\n\nWith `false` the runtime composes no status engine: the Agent Loop\nemits no Agent Status and is otherwise a completely ordinary\n`ConversationRuntime`.",
+          "type": "boolean"
+        },
+        "time": {
+          "$ref": "#/$defs/TimeStatusConfig",
+          "default": {
+            "enabled": true
+          },
+          "description": "The Time contributor configuration."
+        }
+      },
+      "type": "object"
+    },
+    "BackgroundStatusConfig": {
+      "additionalProperties": false,
+      "description": "Configuration of the bounded Background status contributor.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Whether Background participates in an available Agent Status opportunity.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "ModelRef": {
       "description": "A fully qualified catalog model reference: `provider-id/model-id`.\n\nThe first `/` separates the provider from the model. The model ID itself\nmay contain additional `/` characters, as is common for Hugging Face\nidentities such as `Qwen/Qwen3`, but no model-ID segment may be empty.\n\nThis is the explicit model-identity domain of the runtime. Concatenated\nstrings never travel through the runtime in its place: a reference either\nresolves to exactly one catalog model or it fails.",
       "type": "string"
+    },
+    "NativeAgentExtensionsDocument": {
+      "additionalProperties": false,
+      "description": "The closed authored composition surface of native Agent Extensions.\n\nEvery member is a concrete named extension. The map-like spelling in\nJSONC (`\"extensions\": { \"agentStatus\": { ... } }`) is a *closed* record,\nnot an open registry: an unknown extension name is rejected by the\nsurrounding strict serde boundary exactly like any other unknown field.",
+      "properties": {
+        "agentStatus": {
+          "$ref": "#/$defs/AgentStatusExtensionDocument",
+          "default": {
+            "background": {
+              "enabled": true
+            },
+            "enabled": true,
+            "time": {
+              "enabled": true
+            }
+          },
+          "description": "The Agent Status extension: optional provider-independent runtime\ncontext for an already-established model step."
+        }
+      },
+      "type": "object"
     },
     "SubagentAgentsMdDocument": {
       "additionalProperties": false,
@@ -66,6 +124,25 @@
         }
       },
       "type": "object"
+    },
+    "TimeStatusConfig": {
+      "additionalProperties": false,
+      "description": "Configuration of the bounded Time status contributor.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Whether Time participates in an available Agent Status opportunity.",
+          "type": "boolean"
+        },
+        "timezone": {
+          "description": "The optional IANA timezone used only by Time presentation.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -83,6 +160,21 @@
     "description": {
       "description": "The bounded model-facing routing description.",
       "type": "string"
+    },
+    "extensions": {
+      "$ref": "#/$defs/NativeAgentExtensionsDocument",
+      "default": {
+        "agentStatus": {
+          "background": {
+            "enabled": true
+          },
+          "enabled": true,
+          "time": {
+            "enabled": true
+          }
+        }
+      },
+      "description": "The closed **Native Agent Extension** composition of this named role\n(Issue #256).\n\nIndependently authored: a role never inherits the root Agent's\nextension set, and an omitted value means this role's own built-in\ndefaults, never the invoking runtime's configuration."
     },
     "model": {
       "anyOf": [

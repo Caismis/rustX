@@ -282,6 +282,16 @@ pub struct ResolvedSubagentSpec {
     /// The frozen physical materialization plane of the selected external
     /// capabilities (Issue #145).
     pub materialization: ResolvedSubagentMaterialization,
+    /// The frozen **native Agent Extension composition** of this child
+    /// (Issue #256).
+    ///
+    /// It comes from the named definition alone. The invoking root Agent's
+    /// own extension configuration is not an input to resolution and is not
+    /// even in scope here, so a child can never implicitly inherit or be
+    /// widened by it. The child process materializes exactly this value and
+    /// rereads no configuration document, role file, or later resource
+    /// generation to reinterpret which extensions it owns.
+    pub extensions: crate::extensions::NativeAgentExtensions,
 }
 
 impl ResolvedSubagentSpec {
@@ -487,6 +497,7 @@ impl SubagentResolver {
             skills,
             project_instructions,
             materialization,
+            extensions: definition.extensions().clone(),
         })
     }
 
@@ -950,6 +961,7 @@ mod tests {
                 files: Vec::new(),
             },
             WorkspacePolicy::SharedWorkspace,
+            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         )
         .expect("definition")
     }
@@ -1208,6 +1220,7 @@ mod tests {
                     files: Vec::new(),
                 },
                 WorkspacePolicy::SharedWorkspace,
+                crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
             )
             .expect("definition"),
             SubagentDefinition::new(
@@ -1224,6 +1237,7 @@ mod tests {
                     files: Vec::new(),
                 },
                 WorkspacePolicy::SharedWorkspace,
+                crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
             )
             .expect("definition"),
         ])

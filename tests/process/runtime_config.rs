@@ -100,9 +100,12 @@ fn config_json(
         "schemaVersion": 8,
         "agentId": "agent-issue96",
         "model": {"model": model},
-        "agentStatus": {
-            "time": {"enabled": true, "timezone": timezone},
-            "background": {"enabled": true}
+        "extensions": {
+            "agentStatus": {
+                "enabled": true,
+                "time": {"enabled": true, "timezone": timezone},
+                "background": {"enabled": true}
+            }
         },
         "context": {"reserveTokens": reserve_tokens, "keepRecentTokens": 4096},
         "defaultTools": default_tools,
@@ -224,6 +227,8 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         runtime
             .context_config()
             .status_engine
+            .as_ref()
+            .expect("the next launch composes the Agent Status extension")
             .config()
             .time
             .timezone,
@@ -515,4 +520,188 @@ async fn relaxations_beyond_jsonc_still_fail_composition() {
         error.clone().contains("line 2"),
         "a syntax failure must report where it was detected: {error}"
     );
+}
+
+/// Writes a launch document whose only variable is the closed native Agent
+/// Extension composition.
+fn extension_config(enabled: bool, timezone: &str) -> String {
+    serde_json::json!({
+        "schemaVersion": 8,
+        "agentId": "agent-ext256",
+        "model": {"model": "local/model-a"},
+        "context": {"reserveTokens": 11, "keepRecentTokens": 4096},
+        "defaultTools": ["read"],
+        "extensions": {
+            "agentStatus": {
+                "enabled": enabled,
+                "time": {"enabled": true, "timezone": timezone},
+                "background": {"enabled": true}
+            }
+        }
+    })
+    .to_string()
+}
+
+fn composed_timezone(runtime: &rustx::runtime::ConversationRuntime) -> Option<chrono_tz::Tz> {
+    runtime
+        .context_config()
+        .status_engine
+        .as_ref()
+        .expect("the Agent Status extension is composed")
+        .config()
+        .time
+        .timezone
+}
+
+/// Issue #256 regressions 4 and 5.
+///
+/// The native Agent Extension composition is **launch-scoped**. A resource
+/// reload republishes a whole new `RuntimeResourceSnapshot` — proven here by
+/// the advanced revision — and still cannot install, remove, or reconfigure
+/// the Agent Status extension of the already-composed runtime. Only the next
+/// launch resolves the current document through the ordinary resolver, and
+/// that restart preserves the existing Session history byte for byte.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)]
+async fn ext256_reload_cannot_recompose_extensions_but_the_next_launch_does() {
+    let root = tempfile::tempdir().expect("root");
+    let config_path = root.path().join("rustx.jsonc");
+    std::fs::write(root.path().join("models.jsonc"), MODELS).expect("models");
+    std::fs::write(&config_path, extension_config(true, "UTC")).expect("config v1");
+    let startup = paths(root.path(), &config_path);
+
+    let product = LocalSessionProduct::compose(&(startup).resolve(), &dependencies())
+        .await
+        .expect("initial product");
+    let runtime = product.runtime();
+    assert_eq!(composed_timezone(runtime), Some(chrono_tz::UTC));
+    let r1 = runtime.runtime_resources().revision();
+
+    // The on-disk document now disables the extension entirely and changes
+    // its contributor configuration.
+    std::fs::write(&config_path, extension_config(false, "Asia/Shanghai")).expect("config v2");
+    runtime
+        .reload_resources()
+        .await
+        .expect("the resource generation republishes");
+    let r2 = runtime.runtime_resources().revision();
+    assert!(
+        r2.get() > r1.get(),
+        "the reload really did publish a new resource generation"
+    );
+    assert_eq!(
+        composed_timezone(runtime),
+        Some(chrono_tz::UTC),
+        "reload cannot uninstall or reconfigure a launch-scoped extension"
+    );
+
+    // Durable Session work, so the restart below has history to preserve.
+    // The attempt against the unreachable provider fails and settles itself.
+    let endpoint = product.endpoint();
+    let initialized = endpoint.handle_request(RuntimeClientRequest::Initialize {
+        id: RequestId::new(1),
+        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
+    });
+    assert!(matches!(
+        initialized.result,
+        Some(RuntimeClientResult::Initialized { .. })
+    ));
+    let submitted = endpoint
+        .handle_request_async(RuntimeClientRequest::SubmitInbound {
+            id: RequestId::new(2),
+            content: vec![rustx::message::types::UserContentBlock::Text(
+                rustx::message::content::TextBlock {
+                    text: "extension-scoped work".to_owned(),
+                },
+            )],
+        })
+        .await;
+    assert!(
+        matches!(
+            submitted.result,
+            Some(RuntimeClientResult::InboundAccepted { .. })
+        ),
+        "unexpected SubmitInbound response: {submitted:?}"
+    );
+    // Shutting the runtime down settles the in-flight attempt, so the
+    // pre-restart transcript is read at a quiescent, fully linearized point
+    // rather than racing the attempt's own durable publication.
+    product
+        .runtime()
+        .shutdown()
+        .await
+        .expect("the runtime shuts down");
+    let before = session_messages(&endpoint, 3);
+    assert!(
+        !before.is_empty(),
+        "the Session owns durable history before the restart"
+    );
+    drop(product);
+
+    // Restart/resume is a new launch: it resolves the *current* document
+    // through the existing resolver, binding the Session the catalog
+    // publishes as active.
+    let mut restart = paths(root.path(), &config_path);
+    restart.startup_session = rustx::local_runtime::StartupSession::ContinueActive;
+    let resumed = LocalSessionProduct::compose(&(restart).resolve(), &dependencies())
+        .await
+        .expect("resumed product");
+    assert!(
+        resumed.runtime().context_config().status_engine.is_none(),
+        "the next launch composes the current extension set"
+    );
+    let resumed_endpoint = resumed.endpoint();
+    let resumed_initialized = resumed_endpoint.handle_request(RuntimeClientRequest::Initialize {
+        id: RequestId::new(4),
+        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
+    });
+    assert!(matches!(
+        resumed_initialized.result,
+        Some(RuntimeClientResult::Initialized { .. })
+    ));
+    assert_eq!(
+        session_messages(&resumed_endpoint, 5),
+        before,
+        "an extension configuration change rewrites no canonical Session history"
+    );
+    drop(resumed);
+
+    // The symmetric direction: a launch that composes nothing cannot have
+    // the extension installed into it by a reload.
+    std::fs::write(&config_path, extension_config(false, "UTC")).expect("config v3");
+    let empty = LocalSessionProduct::compose(&(startup).resolve(), &dependencies())
+        .await
+        .expect("empty-extension product");
+    assert!(empty.runtime().context_config().status_engine.is_none());
+    std::fs::write(&config_path, extension_config(true, "Asia/Shanghai")).expect("config v4");
+    empty
+        .runtime()
+        .reload_resources()
+        .await
+        .expect("the resource generation republishes");
+    assert!(
+        empty.runtime().context_config().status_engine.is_none(),
+        "reload cannot install a launch-scoped extension into a composed runtime"
+    );
+}
+
+/// The canonical Session messages the Runtime Client projects for the
+/// currently selected Session.
+fn session_messages(
+    endpoint: &rustx::runtime_client::RuntimeClientEndpoint,
+    request_id: u64,
+) -> Vec<String> {
+    let response = endpoint.handle_request(RuntimeClientRequest::TranscriptPageGet {
+        id: RequestId::new(request_id),
+        before_cursor: None,
+        limit: 64,
+    });
+    match response.result {
+        Some(RuntimeClientResult::TranscriptPage { page }) => page
+            .entries
+            .iter()
+            .map(|entry| serde_json::to_string(&entry.item).expect("transcript item JSON"))
+            .collect(),
+        other => panic!("transcript_page_get returned an unexpected result: {other:?}"),
+    }
 }

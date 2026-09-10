@@ -96,7 +96,7 @@ fn context_runtime(model: &Arc<support::fake::FakeModel>) -> rustx::context::Con
             summary_output_cap: None,
         },
         Arc::new(rustx::context::DefaultTokenEstimator),
-        rustx::context::AgentStatusEngine::default(),
+        Some(rustx::context::AgentStatusEngine::default()),
         &support::attempt_model(model.clone(), "todo-transaction-model"),
         rustx::model::ModelTimeoutPolicy::default(),
         crate::scripted_suites::support::default_monotonic_clock(),

@@ -93,7 +93,7 @@ fn runtime() -> ContextRuntime {
     ContextRuntime::with_scripted_summarizer(
         engine,
         Arc::new(FakeContextSummarizer::new(Vec::<FakeSummaryStep>::new())),
-        AgentStatusEngine::default(),
+        Some(AgentStatusEngine::default()),
         CompactionBudgets::new(1, 1, 1_000_000),
     )
 }
@@ -257,7 +257,7 @@ async fn runtime_with_manual_clock(
                     summary_output_cap: None,
                 },
                 estimator: Arc::new(DefaultTokenEstimator),
-                status_engine: AgentStatusEngine::default(),
+                status_engine: Some(AgentStatusEngine::default()),
             },
             tool_runtime,
             capability,

@@ -3191,7 +3191,6 @@ mod tests {
                 model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                 tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
                 ),
-                agent_status: crate::context::AgentStatusConfig::default(),
                 context: SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -3270,6 +3269,7 @@ mod tests {
                 files: Vec::new(),
             },
             workspace_policy,
+            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         )
         .expect("workflow test subagent definition");
         let catalog = crate::runtime::subagent::SubagentCatalog::new([definition])

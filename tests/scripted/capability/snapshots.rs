@@ -1739,7 +1739,7 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
             summary_output_cap: None,
         },
         Arc::new(rustx::context::DefaultTokenEstimator),
-        rustx::context::AgentStatusEngine::default(),
+        Some(rustx::context::AgentStatusEngine::default()),
         &request.model,
         rustx::model::ModelTimeoutPolicy::default(),
         support::default_monotonic_clock(),

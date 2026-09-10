@@ -2295,6 +2295,14 @@ impl<'a> AgentExecution<'a> {
             )
             .await?;
         }
+        // The pending fresh inbound turn's canonical consistency is an
+        // Agent Loop contract, checked before and independently of the
+        // launch's native Agent Extension composition (Issue #256): an
+        // inconsistent execution state must fail the same way whether or
+        // not this runtime composes Agent Status.
+        if let Err(error) = self.validate_pending_fresh_inbound() {
+            return Err(Self::context_failure_terminal(&error));
+        }
         let status_generation = match self.compose_status() {
             Ok(status) => status,
             Err(error) => return Err(Self::context_failure_terminal(&error)),
@@ -2562,6 +2570,34 @@ impl<'a> AgentExecution<'a> {
         Ok(())
     }
 
+    /// Validates the pending fresh inbound turn against canonical history.
+    ///
+    /// This is an ordinary Agent Loop contract, not an extension concern:
+    /// the referenced messages must exist in the active Surface, be inbound
+    /// User messages, carry persisted timestamps, and appear in canonical
+    /// order. It is deliberately checked outside
+    /// [`Self::compose_status`] so an inconsistent execution state fails
+    /// identically whether or not this launch composed the Agent Status
+    /// extension (Issue #256).
+    ///
+    /// # Errors
+    ///
+    /// Returns a `MalformedHistory` context error naming the violation.
+    fn validate_pending_fresh_inbound(&self) -> Result<(), ContextError> {
+        let Some(fresh) = self.pending_fresh_inbound.as_ref() else {
+            return Ok(());
+        };
+        let active = self.conversation.active_messages().map_err(|error| {
+            ContextError::new(ContextErrorKind::MalformedHistory, error.to_string())
+        })?;
+        fresh.validate_against(&active).map_err(|error| {
+            ContextError::new(
+                ContextErrorKind::MalformedHistory,
+                format!("pending fresh inbound turn is inconsistent: {error}"),
+            )
+        })
+    }
+
     /// Prepares the Agent Status generation of the pending delivery
     /// opportunity.
     ///
@@ -2586,6 +2622,15 @@ impl<'a> AgentExecution<'a> {
         if fresh.is_none() && pending_post_tool_batch.is_none() {
             return Ok(None);
         }
+        // The one Agent Loop seam of the launch's frozen native Agent
+        // Extension composition (Issue #256). With the Agent Status
+        // extension absent this attempt owns no status engine, so there is
+        // no generation and no surface freeze — and every other admission,
+        // cancellation, tool, settlement, and terminal path below runs
+        // exactly as it does with the extension present.
+        let Some(status_engine) = self.context_runtime.status_engine.as_mut() else {
+            return Ok(None);
+        };
         // The placement fact travels with the opportunity that carries it and
         // is never recomputed here: this method runs after the batch commit
         // that froze it, and unrelated durable activity may already have
@@ -2600,19 +2645,6 @@ impl<'a> AgentExecution<'a> {
         let surface = AgentStatusSurfaceView::from_snapshot(frozen).map_err(|error| {
             ContextError::new(ContextErrorKind::MalformedHistory, error.to_string())
         })?;
-        let active = surface
-            .messages()
-            .iter()
-            .map(|message| message.message.clone())
-            .collect::<Vec<_>>();
-        if let Some(fresh) = &fresh {
-            fresh.validate_against(&active).map_err(|error| {
-                ContextError::new(
-                    ContextErrorKind::MalformedHistory,
-                    format!("pending fresh inbound turn is inconsistent: {error}"),
-                )
-            })?;
-        }
         let opportunities = AgentStatusOpportunitySet {
             fresh_inbound: fresh.map(|fresh| FreshInboundStatusOpportunity {
                 target_message_id: fresh.last_message_id().clone(),
@@ -2622,9 +2654,7 @@ impl<'a> AgentExecution<'a> {
         let emission_lookup = ConversationAgentStatusEmissionLookup {
             store: self.store.as_ref(),
         };
-        Ok(self
-            .context_runtime
-            .status_engine
+        Ok(status_engine
             .prepare_with_inputs(
                 &opportunities,
                 &surface,
@@ -7002,7 +7032,7 @@ mod tests {
                 summary_output_cap: None,
             },
             Arc::new(crate::context::DefaultTokenEstimator),
-            crate::context::AgentStatusEngine::default(),
+            Some(crate::context::AgentStatusEngine::default()),
             &request(adapter).model,
             crate::model::ModelTimeoutPolicy::default(),
             crate::scripted_suites::support::default_monotonic_clock(),
@@ -8430,7 +8460,7 @@ mod tests {
                 summary_output_cap: None,
             },
             Arc::new(crate::context::DefaultTokenEstimator),
-            crate::context::AgentStatusEngine::default(),
+            Some(crate::context::AgentStatusEngine::default()),
             assembly,
             &request.model,
             crate::model::ModelTimeoutPolicy::default(),
@@ -8732,7 +8762,7 @@ mod tests {
                 summary_output_cap: None,
             },
             Arc::new(crate::context::DefaultTokenEstimator),
-            crate::context::AgentStatusEngine::default(),
+            Some(crate::context::AgentStatusEngine::default()),
             assembly,
             &request.model,
             crate::model::ModelTimeoutPolicy::default(),
@@ -8843,7 +8873,7 @@ mod tests {
                 summary_output_cap: None,
             },
             Arc::new(crate::context::DefaultTokenEstimator),
-            crate::context::AgentStatusEngine::default(),
+            Some(crate::context::AgentStatusEngine::default()),
             &request_dyn(adapter).model,
             crate::model::ModelTimeoutPolicy::default(),
             crate::scripted_suites::support::default_monotonic_clock(),
@@ -8885,7 +8915,7 @@ mod tests {
                 summary_output_cap: None,
             },
             Arc::new(crate::context::DefaultTokenEstimator),
-            crate::context::AgentStatusEngine::default(),
+            Some(crate::context::AgentStatusEngine::default()),
             assembly,
             &request.model,
             crate::model::ModelTimeoutPolicy::default(),

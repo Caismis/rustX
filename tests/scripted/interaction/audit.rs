@@ -377,7 +377,7 @@ fn context_runtime(model: &Arc<FakeModel>) -> ContextRuntime {
             summary_output_cap: None,
         },
         Arc::new(DefaultTokenEstimator),
-        rustx::context::AgentStatusEngine::default(),
+        Some(rustx::context::AgentStatusEngine::default()),
         ContextAssembly::new(),
         &support::attempt_model(model.clone(), "fake-model"),
         rustx::model::ModelTimeoutPolicy::default(),
