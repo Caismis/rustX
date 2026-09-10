@@ -51,7 +51,13 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 30. Version 30 adds concrete Loop
+The SQLite schema is development schema version 31. Version 31 freezes Issue
+#242's provider-independent typed Questionnaire interaction audit: a requested
+subject carries canonical requester identity and a typed `AnswerSpecification`
+per question, and a settled submission carries typed scalar answers addressing
+choices by option index rather than by authored label. A version-30 journal can
+hold the obsolete choice-only payload, so it is refused at store open rather
+than decoded under the new vocabulary. Version 30 adds concrete Loop
 iteration admission/settlement and satisfied/exhausted exit facts. Existing
 Runtime Client 21 and child IPC 19 identity vectors represent nested iterations.
 Version 29 adds native Review

@@ -79,8 +79,12 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 30 is the only accepted schema; version 29 and every older
-development schema fail explicitly at open and are not migrated. Version 10
+schema version 31 is the only accepted schema; version 30 and every older
+development schema fail explicitly at open and are not migrated. Version 31
+freezes the Issue #242 typed Questionnaire interaction audit — canonical
+requester identity, typed answer specifications, and option-index answers — so
+a version-30 journal's obsolete choice-only Questionnaire payload is rejected
+at open rather than reinterpreted. Version 10
 froze the structured Questionnaire interaction audit vocabulary introduced by
 Issue #126. Version 11 froze the structured Agent Status generation
 descriptor introduced by Issue #131. Version 12 added the complete

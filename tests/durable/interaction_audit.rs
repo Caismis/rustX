@@ -1664,23 +1664,40 @@ fn settlements_retain_the_exact_decision_by_value() {
 /// The interaction audit changed the durable event vocabulary incompatibly, so
 /// the store schema version was bumped and an older development database is
 /// rejected outright. There is no migration and no compatibility layer.
+///
+/// Issue #242 is the latest such change: the typed Questionnaire vocabulary
+/// replaced the choice-only request shape and the label-addressed answers, and
+/// added canonical requester identity, so the **immediately preceding**
+/// version is refused as flatly as a long-obsolete one. The rejection is by
+/// version at open; no obsolete audit row is ever handed to the typed decoder.
 #[test]
 fn an_older_development_database_is_rejected() {
-    let durable = Durable::new();
-    {
-        let store = durable.open();
-        store.initialize(&[]).expect("initialize");
-    }
-    let connection = rusqlite_open(&durable.path);
-    connection
-        .execute("UPDATE rustx_store SET schema_version=6 WHERE id=1", [])
-        .expect("downgrade the stored schema version");
-    drop(connection);
+    for stored_version in [6, rustx::durable::sqlite::SQLITE_SCHEMA_VERSION - 1] {
+        let durable = Durable::new();
+        {
+            let store = durable.open();
+            store.initialize(&[]).expect("initialize");
+        }
+        let connection = rusqlite_open(&durable.path);
+        connection
+            .execute(
+                "UPDATE rustx_store SET schema_version=?1 WHERE id=1",
+                [stored_version],
+            )
+            .expect("downgrade the stored schema version");
+        drop(connection);
 
-    assert!(matches!(
-        SqliteConversationStore::open(conversation_id(), &durable.path),
-        Err(ConversationStoreError::SchemaVersionMismatch { stored: 6, .. })
-    ));
+        let refused = SqliteConversationStore::open(conversation_id(), &durable.path);
+        assert!(
+            matches!(
+                refused,
+                Err(ConversationStoreError::SchemaVersionMismatch { stored, expected })
+                    if stored == stored_version
+                        && expected == rustx::durable::sqlite::SQLITE_SCHEMA_VERSION
+            ),
+            "schema {stored_version} must be refused at open: {refused:?}"
+        );
+    }
 }
 
 fn rusqlite_open(path: &std::path::Path) -> rusqlite::Connection {
