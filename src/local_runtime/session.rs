@@ -465,6 +465,7 @@ fn active_lineage_of(
 /// The native durable `SessionCatalog` and graph authority.
 #[derive(Debug, Clone)]
 pub struct SessionCatalog {
+    product: crate::runtime::local_storage::ProductRoot,
     root: PathBuf,
     path: PathBuf,
     document: CatalogDocument,
@@ -491,10 +492,7 @@ impl SessionCatalog {
         &self,
         id: &SessionId,
     ) -> std::io::Result<super::session_deletion::SessionDeletionPreflight> {
-        super::session_deletion::SessionDeletionPreflight::acquire(
-            self.root.parent().expect("catalog root"),
-            id,
-        )
+        super::session_deletion::SessionDeletionPreflight::acquire(self.product.root(), id)
     }
 
     fn inspect_store(
@@ -502,12 +500,13 @@ impl SessionCatalog {
         id: ConversationId,
         path: &Path,
     ) -> Result<SqliteConversationStore, ConversationStoreError> {
-        use crate::runtime::local_storage::{ConversationAccess, ProductRoot};
-        let access = ProductRoot::existing(self.root.parent().expect("catalog root"))
-            .and_then(|root| {
-                ConversationAccess::existing(&root, path.parent().expect("allocation"))
-            })
+        use crate::runtime::local_storage::ConversationAccess;
+        self.product
+            .confined(path)
             .map_err(|e| ConversationStoreError::Storage(e.to_string()))?;
+        let access =
+            ConversationAccess::existing(&self.product, path.parent().expect("allocation"))
+                .map_err(|e| ConversationStoreError::Storage(e.to_string()))?;
         SqliteConversationStore::open_existing(id, path)
             .map(|store| store.with_lifecycle(std::sync::Arc::new(access)))
     }
@@ -629,6 +628,7 @@ impl SessionCatalog {
             })?;
         validate_document(&document)?;
         Ok(Some(Self {
+            product: guard.clone(),
             root,
             path,
             document,
@@ -698,7 +698,19 @@ impl SessionCatalog {
             super::static_effects::observe(super::static_effects::Effect::Session);
             super::static_effects::observe(super::static_effects::Effect::State);
         }
-        let root = runtime_root.join("sessions");
+        let product =
+            crate::runtime::local_storage::ProductRoot::create(runtime_root).map_err(|error| {
+                SessionError::Io {
+                    path: runtime_root.to_path_buf(),
+                    detail: error.to_string(),
+                }
+            })?;
+        let root = product
+            .confined(&product.root().join("sessions"))
+            .map_err(|error| SessionError::Io {
+                path: product.root().to_path_buf(),
+                detail: error.to_string(),
+            })?;
         fs::create_dir_all(&root).map_err(|error| SessionError::Io {
             path: root.clone(),
             detail: error.to_string(),
@@ -718,6 +730,7 @@ impl SessionCatalog {
         let conversation_id = ConversationId::new("conversation-1");
         let database_path = conversation_database_path(&root, &session_id, &conversation_id);
         initialize_database(
+            &product,
             &database_path,
             &conversation_id,
             &LineageSeed::history(Vec::new()),
@@ -752,6 +765,7 @@ impl SessionCatalog {
             sessions,
         };
         Ok(Self {
+            product,
             root,
             path,
             document,
@@ -1291,7 +1305,7 @@ impl SessionCatalog {
             node_ordinal = node_ordinal.saturating_add(1);
         };
         let seed = lineage_cut(&conversation_id, source, Some(message_id))?;
-        initialize_database(&database_path, &conversation_id, &seed)?;
+        initialize_database(&self.product, &database_path, &conversation_id, &seed)?;
         Ok((
             PreparedLineage {
                 session_id: session_id.clone(),
@@ -1313,7 +1327,7 @@ impl SessionCatalog {
         seed: &LineageSeed,
     ) -> Result<PreparedLineage, SessionError> {
         let database_path = conversation_database_path(&self.root, &session_id, &conversation_id);
-        initialize_database(&database_path, &conversation_id, seed)?;
+        initialize_database(&self.product, &database_path, &conversation_id, seed)?;
         Ok(PreparedLineage {
             session_id,
             node_id,
@@ -1635,13 +1649,8 @@ impl SessionCatalog {
     }
 
     fn persist(&self, document: &CatalogDocument) -> Result<(), SessionError> {
-        let root = crate::runtime::local_storage::ProductRoot::existing(
-            self.root.parent().expect("catalog product root"),
-        )
-        .map_err(|e| SessionError::Catalog {
-            detail: e.to_string(),
-        })?;
-        let _mutation = root
+        let _mutation = self
+            .product
             .ownership_mutation()
             .map_err(|e| SessionError::Catalog {
                 detail: e.to_string(),
@@ -2179,10 +2188,15 @@ fn conversation_database_path(
 }
 
 fn initialize_database(
+    product: &crate::runtime::local_storage::ProductRoot,
     path: &Path,
     conversation_id: &ConversationId,
     seed: &LineageSeed,
 ) -> Result<(), SessionError> {
+    product.confined(path).map_err(|error| SessionError::Io {
+        path: path.to_path_buf(),
+        detail: error.to_string(),
+    })?;
     let parent = path.parent().ok_or_else(|| SessionError::Io {
         path: path.to_path_buf(),
         detail: "conversation database has no parent".to_owned(),

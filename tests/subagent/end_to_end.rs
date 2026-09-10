@@ -732,9 +732,27 @@ async fn an_isolated_real_child_preserves_the_repository_subdirectory_boundary()
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines)]
 async fn a_subagent_child_runs_end_to_end_through_the_real_process_stack() {
+    Box::pin(subagent_process_stack(false)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn alias_product_root_child_startup_and_historical_inspection_share_authority() {
+    Box::pin(subagent_process_stack(true)).await;
+}
+
+#[allow(clippy::too_many_lines)]
+async fn subagent_process_stack(alias_root: bool) {
     let server =
         crate::common::FixtureServer::start_with_body(|_attempt, _head, body| route(body)).await;
     let root = tempfile::tempdir().expect("temp root");
+    if alias_root {
+        std::fs::create_dir(root.path().join("canonical-product")).unwrap();
+        std::os::unix::fs::symlink(
+            root.path().join("canonical-product"),
+            root.path().join("private"),
+        )
+        .unwrap();
+    }
     let models = models_json(&server.url("/v1"));
     let mut process = Process::spawn(root.path(), &models, SESSION_JSON, "subagent-secret");
 

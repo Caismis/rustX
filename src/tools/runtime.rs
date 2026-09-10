@@ -367,6 +367,19 @@ impl ConversationToolRuntime {
     ) -> Result<Self, ConversationRuntimeError> {
         let workspace =
             Workspace::new(&config.workspace_root).map_err(ConversationRuntimeError::Workspace)?;
+        if let Some(root) = &config.lifecycle {
+            for path in [
+                config.artifacts_dir.clone(),
+                config.artifacts_dir.join("conversation.sqlite"),
+                config.artifacts_dir.join("tool-output"),
+            ] {
+                root.confined(&path).map_err(|error| {
+                    ConversationRuntimeError::Artifacts(ArtifactError::RootUnavailable(
+                        error.to_string(),
+                    ))
+                })?;
+            }
+        }
         let artifacts_root = prepare_artifact_root(&config.artifacts_dir)
             .map_err(ConversationRuntimeError::Artifacts)?;
         validate_disjoint_storage(workspace.root(), &artifacts_root)?;

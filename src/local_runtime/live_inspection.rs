@@ -39,14 +39,24 @@ pub(crate) struct LiveConversationInspectionLease {
 
 impl LiveConversationInspectionLease {
     /// Acquires the child-owned liveness lease at the identity-derived path.
-    pub(crate) fn acquire(root: &Path, path: &Path) -> std::io::Result<Self> {
+    pub(crate) fn acquire(
+        root: &Path,
+        conversation_id: &crate::runtime::identity::ConversationId,
+    ) -> std::io::Result<Self> {
         let root = crate::runtime::local_storage::ProductRoot::existing(root)?;
+        if !crate::runtime::subagent::is_safe_child_conversation_component(conversation_id) {
+            return Err(std::io::Error::other("invalid child Conversation identity"));
+        }
+        let path = crate::runtime::subagent::child_conversation_inspection_liveness_path(
+            root.root(),
+            conversation_id,
+        );
         let lifecycle = crate::runtime::local_storage::ConversationAccess::existing(
             &root,
             path.parent()
                 .ok_or_else(|| std::io::Error::other("missing child allocation"))?,
         )?;
-        let path = lifecycle.confined(path)?;
+        let path = lifecycle.confined(&path)?;
         let file = OpenOptions::new()
             .create(true)
             .truncate(false)

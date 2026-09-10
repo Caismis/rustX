@@ -1086,6 +1086,8 @@ pub(crate) struct CoordinatorProbe {
     /// While the park holds, the failing execution has provably not crossed
     /// its abandoned settlement boundary.
     pub(crate) background_failure_gate: Option<Arc<Gate>>,
+    /// Parks after runtime degradation, before the registry publishes abandonment.
+    pub(crate) subagent_failure_published_gate: Option<Arc<Gate>>,
     /// Installed into the **next** admitted attempt's execution: the M9b
     /// model-turn start-boundary pause (Issue #12). `take`n by the next
     /// `run_attempt`, so it arms exactly one attempt.
@@ -1121,6 +1123,11 @@ struct GateState {
 
 #[cfg(test)]
 impl Gate {
+    /// Scope the parked worker to the test, including assertion unwinding.
+    pub(crate) fn arm_scoped(self: &Arc<Self>) -> GateRelease {
+        self.arm();
+        GateRelease(self.clone())
+    }
     /// Signals that the boundary was entered; when armed, parks until
     /// [`Gate::release`]. An unarmed gate never blocks.
     pub(crate) fn enter(&self) {
@@ -1163,6 +1170,15 @@ impl Gate {
         let mut state = self.state.lock().expect("coordinator probe lock poisoned");
         state.proceed = true;
         self.condvar.notify_all();
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct GateRelease(Arc<Gate>);
+#[cfg(test)]
+impl Drop for GateRelease {
+    fn drop(&mut self) {
+        self.0.release();
     }
 }
 
@@ -2864,6 +2880,18 @@ impl crate::runtime::subagent::SubagentDurabilityFailureSink for SubagentFailure
             DurableOperation::SubagentTerminalPublication,
             format!("subagent {subagent_id}: {diagnostic}"),
         );
+        drop(state);
+        #[cfg(test)]
+        let gate = inner
+            .probe
+            .lock()
+            .expect("probe lock")
+            .as_ref()
+            .and_then(|probe| probe.subagent_failure_published_gate.clone());
+        #[cfg(test)]
+        if let Some(gate) = gate {
+            gate.enter();
+        }
     }
 }
 
@@ -6534,7 +6562,10 @@ mod tests {
                 monotonic_clock: Arc::new(crate::runtime::ManualMonotonicClock::new()),
                 spawn: crate::runtime::subagent::SubagentSpawnPlan {
                     program: std::path::PathBuf::from("/nonexistent/rustx"),
-                    runtime_root: dir.path().join("subagents"),
+                    product_root: crate::runtime::local_storage::ProductRoot::create(
+                        &dir.path().join("subagents"),
+                    )
+                    .expect("product root"),
                     model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                     tool_deadline_policy:
                         crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
@@ -6647,7 +6678,10 @@ mod tests {
                 monotonic_clock: Arc::new(crate::runtime::ManualMonotonicClock::new()),
                 spawn: crate::runtime::subagent::SubagentSpawnPlan {
                     program: std::path::PathBuf::from("/nonexistent/rustx"),
-                    runtime_root: dir.path().join("subagents"),
+                    product_root: crate::runtime::local_storage::ProductRoot::create(
+                        &dir.path().join("subagents"),
+                    )
+                    .expect("product root"),
                     model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                     tool_deadline_policy:
                         crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
@@ -8117,6 +8151,7 @@ mod tests {
             attempt_exit_gate: None,
             parent_guidance_seal_gate: None,
             background_failure_gate: None,
+            subagent_failure_published_gate: None,
         }))
         .await;
         gate.arm();
@@ -11446,6 +11481,7 @@ mod tests {
             attempt_exit_gate: None,
             parent_guidance_seal_gate: None,
             background_failure_gate: None,
+            subagent_failure_published_gate: None,
         }))
         .await;
         gate.arm();
@@ -11532,6 +11568,7 @@ mod tests {
             attempt_exit_gate: None,
             parent_guidance_seal_gate: None,
             background_failure_gate: None,
+            subagent_failure_published_gate: None,
         }))
         .await;
         // Freeze admission so the worker cannot adopt the pre-shutdown item.
@@ -12416,7 +12453,7 @@ mod tests {
             .install_observation_bridge(pending.clone())
             .expect("bridge");
         runtime.activate();
-        admission_gate.arm();
+        let _admission_release = admission_gate.arm_scoped();
         runtime
             .submit_inbound(text_content("hold admission worker"))
             .expect("hold inbound");
@@ -12529,6 +12566,16 @@ mod tests {
                 .expect("delegate frame"),
             Some(crate::runtime::subagent::ipc::ParentFrame::Delegate(_))
         ));
+        let publication_gate = Arc::new(super::Gate::default());
+        let _publication_release = publication_gate.arm_scoped();
+        runtime
+            .inner
+            .probe
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .subagent_failure_published_gate = Some(publication_gate.clone());
         store.arm_fail_accept_times(3);
         crate::runtime::subagent::ipc::write_child_frame(
             &mut peer,
@@ -12562,9 +12609,27 @@ mod tests {
             1,
             "exhaustion degrades the runtime once"
         );
-        let unresolved = subagents
-            .snapshot(&accepted.subagent_id)
-            .expect("second snapshot");
+        tokio::task::spawn_blocking({
+            let gate = publication_gate.clone();
+            move || gate.wait_entered()
+        })
+        .await
+        .unwrap();
+        assert!(
+            !subagents
+                .snapshot(&accepted.subagent_id)
+                .unwrap()
+                .publication_abandoned,
+            "runtime health publication precedes registry settlement"
+        );
+        let settled = subagents.wait_until_settled(&accepted.subagent_id);
+        tokio::pin!(settled);
+        assert!(
+            futures_util::poll!(&mut settled).is_pending(),
+            "health observation alone cannot complete terminal settlement"
+        );
+        publication_gate.release();
+        let unresolved = settled.await.expect("second settlement");
         assert_eq!(
             unresolved.state,
             crate::runtime::subagent::SubagentState::PublishingTerminal
@@ -12635,7 +12700,7 @@ mod tests {
             .install_observation_bridge(pending.clone())
             .expect("bridge");
         runtime.activate();
-        admission_gate.arm();
+        let _admission_release = admission_gate.arm_scoped();
         runtime
             .submit_inbound(text_content("hold admission worker"))
             .expect("hold inbound");
@@ -12778,8 +12843,9 @@ mod tests {
         assert_eq!(snapshots.len(), 1, "only the owned child remains");
         assert_eq!(snapshots[0].subagent_id, owned.subagent_id);
         let unresolved = subagents
-            .snapshot(&owned.subagent_id)
-            .expect("owned snapshot");
+            .wait_until_settled(&owned.subagent_id)
+            .await
+            .expect("owned settlement");
         assert_eq!(
             unresolved.state,
             crate::runtime::subagent::SubagentState::PublishingTerminal
@@ -15496,6 +15562,7 @@ mod tests {
             vec![one_turn_script()],
             Some(CoordinatorProbe {
                 background_failure_gate: Some(background_failure_gate.clone()),
+                subagent_failure_published_gate: None,
                 drain_linearization: Some(drain_linearization.clone()),
                 drain_supervision: Some(drain_supervision.clone()),
                 ..CoordinatorProbe::default()

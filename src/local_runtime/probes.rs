@@ -257,19 +257,23 @@ pub(super) async fn execute(
                 results.push(result);
                 continue;
             };
+            let prepare_store = || {
+                let product =
+                    crate::runtime::local_storage::ProductRoot::create(&launch.runtime_root)
+                        .map_err(|error| error.to_string())?;
+                let path = product
+                    .confined(&product.root().join("environments/python-tools"))
+                    .map_err(|error| error.to_string())?;
+                crate::tools::python::PythonToolStore::new(path).map_err(|error| error.to_string())
+            };
             #[cfg(test)]
-            let store = plan.hooks.python_store.clone().map_or_else(
-                || {
-                    crate::tools::python::PythonToolStore::new(
-                        launch.environment_store_root().join("python-tools"),
-                    )
-                },
-                Ok,
-            );
+            let store = plan
+                .hooks
+                .python_store
+                .clone()
+                .map_or_else(prepare_store, Ok);
             #[cfg(not(test))]
-            let store = crate::tools::python::PythonToolStore::new(
-                launch.environment_store_root().join("python-tools"),
-            );
+            let store = prepare_store();
             let Ok(store) = store else {
                 result.state = ProbeState::Failed;
                 result.reason = "managed environment store could not be opened";

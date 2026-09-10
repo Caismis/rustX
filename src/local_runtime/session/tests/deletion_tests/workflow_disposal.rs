@@ -79,9 +79,10 @@ async fn disposal_race(preflight_first: bool, bind_store: bool) {
     std::fs::write(source.path().join("source"), "baseline").unwrap();
     git(source.path(), &["add", "."]);
     git(source.path(), &["commit", "-m", "baseline"]);
-    let mut manager =
-        WorkspaceManager::new(std::fs::canonicalize(source.path()).unwrap(), root.path())
-            .with_local_lifecycle(access);
+    let mut manager = WorkspaceManager::for_local_conversation(
+        std::fs::canonicalize(source.path()).unwrap(),
+        access,
+    );
     let hook = Arc::new(WorkspaceDisposalHook::new());
     manager.install_disposal_hook(hook.clone());
     let mut node = crate::runtime::workflow::test_instance("disposal", "write");

@@ -62,7 +62,8 @@ pub(crate) fn subagent_plane_for(conversation: &str) -> SubagentPlane {
         monotonic_clock: Arc::new(rustx::runtime::ManualMonotonicClock::new()),
         spawn: SubagentSpawnPlan {
             program: std::path::PathBuf::from("/nonexistent/rustx"),
-            runtime_root: runtime_root.clone(),
+            product_root: crate::runtime::local_storage::ProductRoot::create(&runtime_root.clone())
+                .expect("product root"),
             model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: rustx::context::SessionContextPolicy {

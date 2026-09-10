@@ -98,8 +98,7 @@ use crate::runtime::subagent::ipc::{
     SUBAGENT_IPC_VERSION, SubagentChildSpec, read_parent_frame, write_child_frame,
 };
 use crate::runtime::subagent::{
-    MAX_RESULT_CONTENT_BYTES, bound_utf8, child_conversation_inspection_liveness_path,
-    child_conversation_inspection_socket_path,
+    MAX_RESULT_CONTENT_BYTES, bound_utf8, child_conversation_inspection_socket_path,
 };
 
 use super::composition::{ChildPreparation, LocalConversationCore, LocalRuntimeDependencies};
@@ -308,21 +307,9 @@ async fn run_child(
         .map_err(|error| ChildExit::Startup(error.to_string()))?;
     let runtime = interactive.runtime().clone();
     let host = interactive.host().clone();
-    let semantic_root = spec.runtime_root.parent().ok_or_else(|| {
-        ChildExit::Startup(format!(
-            "physical child runtime root {} has no stable semantic parent",
-            spec.runtime_root.display()
-        ))
-    })?;
-    let parent_runtime_root = semantic_root
-        .parent()
-        .and_then(std::path::Path::parent)
-        .ok_or_else(|| {
-            ChildExit::Startup(format!(
-                "stable child semantic root {} has no parent runtime root",
-                semantic_root.display()
-            ))
-        })?;
+    let product = crate::runtime::local_storage::ProductRoot::existing(&spec.product_root)
+        .map_err(|e| ChildExit::Startup(e.to_string()))?;
+    let parent_runtime_root = product.root();
     // This lease is disposable process-routing state, not a durable
     // conversation fact. It lets an inspector distinguish a live child whose
     // optional endpoint failed from a child whose runtime is already gone.
@@ -331,10 +318,7 @@ async fn run_child(
     // the existing bounded Diagnostic frame.
     let live_lease = match LiveConversationInspectionLease::acquire(
         &spec.product_root,
-        &child_conversation_inspection_liveness_path(
-            parent_runtime_root,
-            &spec.child_conversation_id,
-        ),
+        &spec.child_conversation_id,
     ) {
         Ok(lease) => Some(lease),
         Err(error) => {
@@ -1634,11 +1618,16 @@ mod tests {
     /// composition's own settlement checks are what must hold: the
     /// composition must never be publishable as `Ready`.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // complete child composition and ownership fixture
     async fn a_step_completing_after_cancellation_never_publishes_ready() {
         let dir = tempfile::tempdir().expect("temp root");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        let runtime_root = dir.path().join("child");
+        let runtime_root = dir
+            .path()
+            .join("subagents/conv-1-subagent-1/incarnation-test");
+        std::fs::create_dir_all(&runtime_root).unwrap();
+        let runtime_root = runtime_root.canonicalize().unwrap();
         let spec = SubagentChildSpec {
             protocol_version: SUBAGENT_IPC_VERSION,
             product_root: dir.path().to_path_buf(),
@@ -1677,7 +1666,7 @@ mod tests {
             workspace_snapshot: crate::runtime::workspace::WorkspaceSnapshot::shared(
                 workspace.clone(),
             ),
-            runtime_root: runtime_root.clone(),
+            incarnation: "incarnation-test".to_owned(),
             terminal: crate::runtime::subagent::ipc::ChildTerminalMode::Normal,
         };
         std::fs::create_dir_all(

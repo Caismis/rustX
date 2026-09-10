@@ -5540,6 +5540,7 @@ mod tests {
                 attempt_exit_gate: None,
                 parent_guidance_seal_gate: None,
                 background_failure_gate: None,
+                subagent_failure_published_gate: None,
             },
         )
         .await;
@@ -5632,6 +5633,7 @@ mod tests {
                 attempt_exit_gate: None,
                 parent_guidance_seal_gate: None,
                 background_failure_gate: None,
+                subagent_failure_published_gate: None,
             },
         )
         .await;
@@ -6260,6 +6262,7 @@ mod tests {
                 attempt_exit_gate: None,
                 parent_guidance_seal_gate: None,
                 background_failure_gate: None,
+                subagent_failure_published_gate: None,
             },
         )
         .await;
@@ -6351,6 +6354,7 @@ mod tests {
                 attempt_exit_gate: None,
                 parent_guidance_seal_gate: None,
                 background_failure_gate: None,
+                subagent_failure_published_gate: None,
             },
         )
         .await;
@@ -6586,6 +6590,7 @@ mod tests {
                 attempt_exit_gate: None,
                 parent_guidance_seal_gate: None,
                 background_failure_gate: None,
+                subagent_failure_published_gate: None,
             },
         )
         .await;
@@ -8707,6 +8712,7 @@ mod tests {
                 attempt_exit_gate: None,
                 parent_guidance_seal_gate: None,
                 background_failure_gate: None,
+                subagent_failure_published_gate: None,
             }),
         )
         .await;
@@ -8970,6 +8976,7 @@ mod tests {
                 attempt_exit_gate: None,
                 parent_guidance_seal_gate: None,
                 background_failure_gate: None,
+                subagent_failure_published_gate: None,
             }),
         )
         .await;

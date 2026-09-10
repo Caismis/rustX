@@ -54,13 +54,14 @@ pub struct LaunchLocations {
 }
 
 impl LaunchLocations {
-    /// The runtime-private artifact root.
+    /// Prospective artifact location for diagnostics; native allocation must
+    /// derive from admitted `ProductRoot`, not from these launch spellings.
     #[must_use]
     pub fn artifacts_root(&self) -> PathBuf {
         self.runtime_root.join("artifacts")
     }
 
-    /// The runtime-private capability environment store root.
+    /// Prospective environment location; this does not grant storage authority.
     #[must_use]
     pub fn environment_store_root(&self) -> PathBuf {
         self.runtime_root.join("environments")

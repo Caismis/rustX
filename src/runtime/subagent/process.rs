@@ -101,7 +101,7 @@ pub struct SubagentSpawnPlan {
     /// incarnation directory below
     /// `subagents/<semantic_subagent_id>/`, and only that directory is ever
     /// given to the child as mutable authority.
-    pub runtime_root: std::path::PathBuf,
+    pub product_root: crate::runtime::local_storage::ProductRoot,
     /// The parent runtime's frozen model timeout policy, inherited by every
     /// child unchanged (Issue #138).
     pub model_timeout_policy: crate::model::ModelTimeoutPolicy,
@@ -125,7 +125,7 @@ impl SubagentSpawnPlan {
         subagent_id: &SubagentId,
     ) -> Result<PhysicalChildRuntimeRoot, SpawnError> {
         PhysicalChildRuntimeRoot::allocate(
-            &self.runtime_root,
+            &self.product_root,
             &ConversationId::new(subagent_id.as_str()),
         )
     }
@@ -159,10 +159,7 @@ impl SubagentSpawnPlan {
     ) -> SubagentChildSpec {
         SubagentChildSpec {
             protocol_version: super::ipc::SUBAGENT_IPC_VERSION,
-            product_root: self
-                .runtime_root
-                .canonicalize()
-                .expect("allocated product root"),
+            product_root: self.product_root.root().to_path_buf(),
             subagent_id: subagent_id.clone(),
             child_conversation_id: child_conversation_id.clone(),
             child_agent_id: child_agent_id.clone(),
@@ -173,7 +170,13 @@ impl SubagentSpawnPlan {
             tool_deadline_policy: self.tool_deadline_policy,
             context: self.context,
             workspace_snapshot: workspace.snapshot().clone(),
-            runtime_root: runtime_root.path().to_path_buf(),
+            incarnation: runtime_root
+                .path()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned(),
             terminal: match terminal {
                 SubagentTerminalMode::Normal => ChildTerminalMode::Normal,
                 SubagentTerminalMode::WorkflowOutput { output_schema, .. } => {
@@ -203,7 +206,10 @@ pub(crate) struct PhysicalChildRuntimeRoot {
 impl PhysicalChildRuntimeRoot {
     /// Creates the semantic grouping directory and exclusively creates one
     /// fresh incarnation directory beneath it.
-    fn allocate(parent: &Path, conversation_id: &ConversationId) -> Result<Self, SpawnError> {
+    fn allocate(
+        product: &crate::runtime::local_storage::ProductRoot,
+        conversation_id: &ConversationId,
+    ) -> Result<Self, SpawnError> {
         if !super::is_safe_child_conversation_component(conversation_id) {
             return Err(SpawnError::WorkspaceSetup {
                 detail: format!(
@@ -212,10 +218,16 @@ impl PhysicalChildRuntimeRoot {
                 ),
             });
         }
+        let parent = product.root();
         let semantic_root = super::child_conversation_store_path(parent, conversation_id)
             .parent()
             .expect("a child conversation database has a semantic parent")
             .to_path_buf();
+        product
+            .confined(&semantic_root)
+            .map_err(|error| SpawnError::WorkspaceSetup {
+                detail: error.to_string(),
+            })?;
         let durable_store = super::child_conversation_store_path(parent, conversation_id);
         for path in [
             durable_store.clone(),
@@ -524,9 +536,9 @@ pub(crate) async fn spawn_staged(
             discard_unstaged_resources(runtime_root, workspace, SpawnError::Cancelled).await,
         );
     }
-    if spec.runtime_root.as_path() != runtime_root.path() {
+    if spec.runtime_root().as_deref().ok() != Some(runtime_root.path()) {
         let owned_path = runtime_root.path().display().to_string();
-        let specified_path = spec.runtime_root.display().to_string();
+        let specified_path = format!("{:?}", spec.runtime_root());
         return Err(
             discard_unstaged_resources(
                 runtime_root,
@@ -2020,10 +2032,11 @@ mod tests {
         }
     }
 
-    fn allocation_plan(runtime_root: PathBuf) -> SubagentSpawnPlan {
+    fn allocation_plan(runtime_root: impl AsRef<Path>) -> SubagentSpawnPlan {
         SubagentSpawnPlan {
             program: PathBuf::from("/nonexistent/rustx"),
-            runtime_root,
+            product_root: crate::runtime::local_storage::ProductRoot::create(runtime_root.as_ref())
+                .expect("product root"),
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: SessionContextPolicy {
@@ -2574,7 +2587,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("lab");
         let plan = super::SubagentSpawnPlan {
             program: dir.path().join("no-such-rustx"),
-            runtime_root: dir.path().join("runtime"),
+            product_root: crate::runtime::local_storage::ProductRoot::create(
+                &dir.path().join("runtime"),
+            )
+            .expect("product root"),
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: crate::context::SessionContextPolicy {
@@ -2620,13 +2636,20 @@ mod tests {
             workspace_snapshot: crate::runtime::workspace::WorkspaceSnapshot::shared(
                 dir.path().join("workspace"),
             ),
-            runtime_root: dir.path().join("runtime"),
+            incarnation: "incarnation-test".to_owned(),
             terminal: crate::runtime::subagent::ipc::ChildTerminalMode::Normal,
         };
         let runtime_root = plan
             .allocate_child_runtime_root(&spec.subagent_id)
             .expect("a physical incarnation root");
-        spec.runtime_root = runtime_root.path().to_path_buf();
+        spec.product_root = plan.product_root.root().to_path_buf();
+        spec.incarnation = runtime_root
+            .path()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
         assert!(
             matches!(
                 spawn_staged(
@@ -2664,7 +2687,8 @@ mod tests {
         let plan = allocation_plan(runtime_root);
         let semantic_id = SubagentId::new("conv-1-subagent-1");
         let semantic_root = plan
-            .runtime_root
+            .product_root
+            .root()
             .join("subagents")
             .join(semantic_id.as_str());
         let stale_root = semantic_root.join("incarnation-crashed-earlier");
@@ -2710,7 +2734,7 @@ mod tests {
             .allocate_child_runtime_root(&subagent_id)
             .expect("first physical incarnation");
         let durable_path = crate::runtime::subagent::child_conversation_store_path(
-            &plan.runtime_root,
+            plan.product_root.root(),
             &ConversationId::new(subagent_id.as_str()),
         );
         std::fs::write(&durable_path, b"durable child state").expect("durable marker");
@@ -2740,7 +2764,7 @@ mod tests {
             .expect("physical child incarnation");
         let physical_path = runtime_root.path().to_path_buf();
         let durable_path = crate::runtime::subagent::child_conversation_store_path(
-            &plan.runtime_root,
+            plan.product_root.root(),
             &conversation_id,
         );
         assert_eq!(

@@ -299,7 +299,8 @@ async fn child_fixture_at(
 fn test_spawn_plan(runtime_root: &std::path::Path) -> SubagentSpawnPlan {
     SubagentSpawnPlan {
         program: std::path::PathBuf::from("/nonexistent/rustx"),
-        runtime_root: runtime_root.to_path_buf(),
+        product_root: crate::runtime::local_storage::ProductRoot::create(runtime_root)
+            .expect("product root"),
         // The frozen policies every child launch inherits (Issues #138/#204).
         model_timeout_policy: inherited_policy(),
         tool_deadline_policy: inherited_tool_deadline_policy(),
@@ -1054,7 +1055,7 @@ async fn the_child_spec_carries_the_frozen_timeout_policy() {
     let workspace_path = dir.path().join("parent-workspace");
     std::fs::create_dir_all(&workspace_path).expect("parent workspace");
     let workspace =
-        rustx::runtime::workspace::WorkspaceManager::new(&workspace_path, &plan.runtime_root)
+        rustx::runtime::workspace::WorkspaceManager::new(&workspace_path, plan.product_root.root())
             .acquire(
                 rustx::runtime::workspace::WorkspacePolicy::SharedWorkspace,
                 &subagent_id,

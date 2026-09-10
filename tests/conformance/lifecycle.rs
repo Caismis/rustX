@@ -412,6 +412,8 @@ async fn active_session_a_executes_while_historical_b_preflight_retains_authorit
         &emulator_models_json(&emulator),
         &emulator_session_json(),
     );
+    std::fs::create_dir_all(root.path().join("canonical-product")).unwrap();
+    std::os::unix::fs::symlink(root.path().join("canonical-product"), &paths.runtime_root).unwrap();
     let historical = LocalSessionProduct::compose(&paths.clone().resolve(), &dependencies())
         .await
         .unwrap();

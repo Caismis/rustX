@@ -12,6 +12,13 @@ pub struct ProductRoot {
     root: PathBuf,
 }
 impl ProductRoot {
+    /// Establish canonical identity at explicit startup, creating the product root.
+    /// # Errors
+    /// Returns filesystem errors without weakening private-path confinement.
+    pub fn create(root: &Path) -> io::Result<Self> {
+        std::fs::create_dir_all(root)?;
+        Self::existing(root)
+    }
     /// Resolve existing native product state without creating anything.
     /// # Errors
     /// Missing roots and filesystem errors are returned.
@@ -87,8 +94,7 @@ impl ProductController {
     /// # Errors
     /// Another controller or invalid storage returns an error.
     pub fn acquire(root: &Path) -> io::Result<Self> {
-        std::fs::create_dir_all(root)?;
-        let root = ProductRoot::existing(root)?;
+        let root = ProductRoot::create(root)?;
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -290,7 +296,10 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = ProductRoot::existing(directory.path()).unwrap();
         std::fs::create_dir(root.root().join("conversation-b")).unwrap();
-        let mut process = owner(root.root(), "controller");
+        let alias_dir = tempfile::tempdir().unwrap();
+        let alias = alias_dir.path().join("alias");
+        std::os::unix::fs::symlink(root.root(), &alias).unwrap();
+        let mut process = owner(&alias, "controller");
         assert_eq!(
             ProductController::acquire(root.root()).unwrap_err().kind(),
             io::ErrorKind::WouldBlock
@@ -314,5 +323,34 @@ mod tests {
         std::os::unix::fs::symlink("/tmp", root.root().join("escape")).unwrap();
         assert!(root.confined(&root.root().join("escape/unknown")).is_err());
         assert!(root.confined(&root.root().join("../outside")).is_err());
+    }
+    #[test]
+    fn native_private_storage_rejects_symlinks_before_creating_stores() {
+        use crate::runtime::identity::ConversationId;
+        use crate::tools::runtime::{ConversationRuntimeConfig, ConversationToolRuntime};
+        for leaf in [
+            "artifacts",
+            "artifacts/conversation.sqlite",
+            "artifacts/tool-output",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let product = ProductRoot::create(&directory.path().join("product")).unwrap();
+            let allocation = product.root().join("conversation");
+            std::fs::create_dir(&allocation).unwrap();
+            let access = Arc::new(ConversationAccess::existing(&product, &allocation).unwrap());
+            let external = directory.path().join("external");
+            std::fs::create_dir(&external).unwrap();
+            let path = allocation.join(leaf);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(&external, &path).unwrap();
+            let mut config =
+                ConversationRuntimeConfig::new(&external, allocation.join("artifacts"));
+            config.lifecycle = Some(access);
+            assert!(
+                ConversationToolRuntime::from_config(ConversationId::new("conversation"), config)
+                    .is_err()
+            );
+            assert_eq!(std::fs::read_dir(&external).unwrap().count(), 0);
+        }
     }
 }

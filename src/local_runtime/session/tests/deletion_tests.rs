@@ -278,7 +278,7 @@ fn deletion_live_inspection_blocks_and_stale_marker_is_reusable() {
     );
     let lease = crate::local_runtime::live_inspection::LiveConversationInspectionLease::acquire(
         directory.path(),
-        &path,
+        &id,
     )
     .unwrap();
     assert_eq!(
@@ -295,7 +295,7 @@ fn deletion_live_inspection_blocks_and_stale_marker_is_reusable() {
     drop(SessionDeletionPreflight::acquire(directory.path(), &session).unwrap());
     let _next = crate::local_runtime::live_inspection::LiveConversationInspectionLease::acquire(
         directory.path(),
-        &path,
+        &id,
     )
     .unwrap();
 }
@@ -750,7 +750,7 @@ fn deletion_target_child_access_blocks_but_unrelated_child_access_does_not() {
     let identity = ProductRoot::existing(root.path()).unwrap();
     let _unrelated = ConversationAccess::existing(
         &identity,
-        crate::runtime::subagent::child_conversation_store_path(root.path(), &unrelated)
+        crate::runtime::subagent::child_conversation_store_path(identity.root(), &unrelated)
             .parent()
             .unwrap(),
     )
@@ -758,7 +758,7 @@ fn deletion_target_child_access_blocks_but_unrelated_child_access_does_not() {
     assert!(SessionDeletionPreflight::acquire(root.path(), &target).is_ok());
     let target_access = ConversationAccess::existing(
         &identity,
-        crate::runtime::subagent::child_conversation_store_path(root.path(), &target_child)
+        crate::runtime::subagent::child_conversation_store_path(identity.root(), &target_child)
             .parent()
             .unwrap(),
     )
@@ -987,4 +987,53 @@ fn deletion_cross_process_target_child_unrelated_child_and_destructive_conflict(
             "kernel authority is released after process death"
         );
     }
+}
+
+#[test]
+fn deletion_alias_startup_authors_one_canonical_session_allocation() {
+    use crate::runtime::local_storage::{ConversationAccess, ProductController, ProductRoot};
+    let directory = tempfile::tempdir().unwrap();
+    let real = directory.path().join("product");
+    std::fs::create_dir(&real).unwrap();
+    let alias = directory.path().join("alias");
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    let controller = ProductController::acquire(&alias).unwrap();
+    let identity = ProductRoot::existing(&real).unwrap();
+    assert_eq!(controller.root(), identity.root());
+    assert_eq!(
+        ProductController::acquire(&real).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    let catalog = SessionCatalog::create(&alias, &state()).unwrap();
+    assert_eq!(catalog.root, identity.root().join("sessions"));
+    let (session, node, _) = catalog.active_lineage().unwrap();
+    let database = catalog.database_path(&session, &node.conversation_id);
+    assert!(database.starts_with(identity.root()));
+    let access = ConversationAccess::existing(&identity, database.parent().unwrap()).unwrap();
+    assert_eq!(
+        SessionDeletionPreflight::acquire(&alias, &session)
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    drop(access);
+    let preflight = SessionDeletionPreflight::acquire(&alias, &session).unwrap();
+    assert_eq!(preflight.conversations()[0].database, database);
+    assert!(
+        ConversationAccess::existing(
+            &ProductRoot::existing(&alias).unwrap(),
+            database.parent().unwrap()
+        )
+        .is_err()
+    );
+    let revision = *preflight.ownership_revision();
+    drop(preflight);
+    assert_eq!(
+        *SessionDeletionPreflight::acquire(&real, &session)
+            .unwrap()
+            .ownership_revision(),
+        revision
+    );
+    drop(controller);
+    assert!(ProductController::acquire(&real).is_ok());
 }

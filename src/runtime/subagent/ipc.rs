@@ -94,7 +94,9 @@ use crate::runtime::workspace::WorkspaceSnapshot;
 /// longer any inheritance channel between them on this transport.
 /// Version 21 adds the canonical product-root identity for child lifecycle
 /// participation (Issue #254), alongside the version 20 extension composition.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 21;
+/// Version 22 removes the independent absolute child runtime path: the child
+/// derives its private allocation from product identity, `ConversationId` and incarnation.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 22;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -190,16 +192,47 @@ pub(crate) struct SubagentChildSpec {
     /// facts separately carry the physical checkout root, repository-relative
     /// scope, exact committed base, and runtime-created ref.
     pub workspace_snapshot: WorkspaceSnapshot,
-    /// The exact spawn-incarnation-private mutable runtime root (artifacts,
-    /// diagnostics, Skills, and private Python state). It is never the stable
-    /// semantic `SubagentId` grouping path.
-    pub runtime_root: PathBuf,
+    /// The name of the already-reserved private incarnation beneath the child's
+    /// identity-derived allocation. Never an absolute path or a grouping path.
+    pub incarnation: String,
     /// Canonical product lifecycle domain, independent of child execution allocation.
     pub product_root: PathBuf,
     /// The child terminal protocol. Workflow-owned children receive a
     /// frozen `workflow_output` schema; ordinary named subagents use the
     /// normal parent-inbound answer protocol.
     pub terminal: ChildTerminalMode,
+}
+
+impl SubagentChildSpec {
+    /// Resolve the identity-derived, already allocated child incarnation.
+    /// The wire never grants an independently authored absolute private path.
+    pub(crate) fn runtime_root(&self) -> std::io::Result<PathBuf> {
+        let root = crate::runtime::local_storage::ProductRoot::existing(&self.product_root)?;
+        if !super::is_safe_child_conversation_component(&self.child_conversation_id)
+            || self.subagent_id.as_str() != self.child_conversation_id.as_str()
+            || !self.incarnation.starts_with("incarnation-")
+            || self.incarnation.len() <= "incarnation-".len()
+            || !self
+                .incarnation
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+        {
+            return Err(std::io::Error::other("invalid child allocation identity"));
+        }
+        let allocation =
+            super::child_conversation_store_path(root.root(), &self.child_conversation_id)
+                .parent()
+                .unwrap()
+                .join(&self.incarnation);
+        let path = root.confined(&allocation)?;
+        if !path.is_dir() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "missing child incarnation",
+            ));
+        }
+        Ok(path)
+    }
 }
 
 /// The child-side terminal protocol selected by the parent registry.
@@ -1073,11 +1106,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    #[allow(clippy::too_many_lines)] // one complete typed protocol round-trip
-    async fn typed_frames_round_trip() {
-        let (mut parent, mut child) = pair();
-        let spec = SubagentChildSpec {
+    fn allocation_spec() -> SubagentChildSpec {
+        SubagentChildSpec {
             protocol_version: SUBAGENT_IPC_VERSION,
             subagent_id: SubagentId::new("conv-1-subagent-1"),
             child_conversation_id: ConversationId::new("conv-1-subagent-1"),
@@ -1093,10 +1123,55 @@ mod tests {
                 summary_output_cap: None,
             },
             workspace_snapshot: WorkspaceSnapshot::shared(PathBuf::from("/tmp/ws")),
-            runtime_root: PathBuf::from("/tmp/rr"),
+            incarnation: "incarnation-test".to_owned(),
             product_root: PathBuf::from("/tmp"),
             terminal: ChildTerminalMode::Normal,
-        };
+        }
+    }
+
+    #[test]
+    fn child_allocation_identity_converges_aliases_and_rejects_substitution() {
+        let directory = tempfile::tempdir().unwrap();
+        let real = directory.path().join("product");
+        let root = crate::runtime::local_storage::ProductRoot::create(&real).unwrap();
+        let alias = directory.path().join("alias");
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+        let mut spec = allocation_spec();
+        spec.product_root = alias;
+        let expected = root
+            .root()
+            .join("subagents/conv-1-subagent-1/incarnation-test");
+        assert!(
+            spec.runtime_root().is_err(),
+            "missing incarnations grant no authority"
+        );
+        assert!(!expected.exists());
+        std::fs::create_dir_all(&expected).unwrap();
+        assert_eq!(spec.runtime_root().unwrap(), expected);
+        spec.product_root = root.root().to_path_buf();
+        assert_eq!(spec.runtime_root().unwrap(), expected);
+        spec.incarnation = "../outside".to_owned();
+        assert!(spec.runtime_root().is_err());
+        spec.incarnation = "incarnation-substituted".to_owned();
+        std::os::unix::fs::symlink(
+            directory.path(),
+            expected.parent().unwrap().join(&spec.incarnation),
+        )
+        .unwrap();
+        assert!(spec.runtime_root().is_err());
+        spec.incarnation = "incarnation-test".to_owned();
+        spec.child_conversation_id = ConversationId::new("foreign-child");
+        assert!(
+            spec.runtime_root().is_err(),
+            "the delegated identity cannot be substituted"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // one complete typed protocol round-trip
+    async fn typed_frames_round_trip() {
+        let (mut parent, mut child) = pair();
+        let spec = allocation_spec();
         write_parent_frame(&mut parent, &ParentFrame::Hello(Box::new(spec.clone())))
             .await
             .expect("write hello");

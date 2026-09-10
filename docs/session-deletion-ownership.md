@@ -35,6 +35,25 @@ traverses provenance, scans directories for ownership, or performs deletion.
 Catalog-wide unique ownership is checked; ambiguity, cycles, missing stores and
 unsafe identities fail closed. The Session graph stays above linear stores.
 
+### Canonical allocation authority
+
+Canonical `ProductRoot` is the sole authority for rustX-owned product storage
+paths. Runtime-owned allocations derive within that canonical domain; separately
+authored absolute path spellings are not storage identities. Startup resolves
+aliases before catalog creation, Conversation allocation, or child staging.
+Management resolves existing product identity without creating missing state.
+`confined()` still rejects escapes and symlinks below that root; it does not
+canonicalize arbitrary caller-authored private paths into authority.
+
+`SubagentSpawnPlan` retains `ProductRoot`. Child IPC version 22 carries its canonical
+root, the child Conversation identity, and a validated incarnation name. It carries
+no second absolute runtime root. The child derives
+`subagents/<ConversationId>/<incarnation>/` and requires that exact private
+allocation to exist. Artifacts, output, Skills and child-private environments
+are derived beneath it; the stable database and inspection sidecars derive from
+the Conversation identity. Native `WorkspaceManager::for_local_conversation`
+derives its workspace allocation from the composed Conversation access.
+
 ### Four separate responsibilities
 
 - `ProductRoot` establishes canonical identity with `canonicalize` and an
@@ -231,7 +250,7 @@ known graph lineages and typed child ownership, opening existing stores with
 read/write authority to recover journals before any read-only Session selection.
 `recover_existing` requires and retains the product writer guard and never uses
 SQLite CREATE flags. This recovery is not part of management or preflight. There is no migration or
-compatibility reader. Child IPC **20 -> 21** (after integrating Issue #256) adds explicit product-root identity.
+compatibility reader. Child IPC **20 -> 22** (after integrating Issue #256) carries canonical product identity and an incarnation name instead of an independent absolute child runtime path. Obsolete wire shapes are rejected.
 
 Authoritative layout:
 

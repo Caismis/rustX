@@ -985,12 +985,13 @@ impl WorkspaceManager {
     /// obtained from catalog-owned storage without activating a Conversation.
     /// Embedded managers created with `new` need no local Session authority.
     #[must_use]
-    pub fn with_local_lifecycle(
-        mut self,
+    pub fn for_local_conversation(
+        parent_workspace: impl AsRef<Path>,
         access: Arc<crate::runtime::local_storage::ConversationAccess>,
     ) -> Self {
-        self.local_lifecycle = Some(access);
-        self
+        let mut manager = Self::new(parent_workspace, access.root().join("workspaces"));
+        manager.local_lifecycle = Some(access);
+        manager
     }
 
     /// Re-proves the complete ownership relationship of one retained
@@ -1891,6 +1892,13 @@ impl WorkspaceManager {
         let token = deterministic_worktree_name(owner_id);
         let branch = format!("rustx/workspace/{token}");
         let physical_worktree_root = self.runtime_root.join("worktrees").join(token);
+        if let Some(root) = &self.local_lifecycle {
+            root.confined(&physical_worktree_root)
+                .map_err(|error| WorkspaceAcquireError::Git {
+                    operation: "validate native worktree allocation".to_owned(),
+                    detail: error.to_string(),
+                })?;
+        }
         if path_is_occupied(&physical_worktree_root)
             || self.branch_exists(&branch, cancellation).await?
         {

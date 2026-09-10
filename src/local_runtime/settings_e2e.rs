@@ -123,6 +123,9 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
         &support::model::ScriptedAdapterFactory::new(fake.clone() as Arc<dyn ModelAdapter>),
     )
     .unwrap();
+    let controller = Arc::new(
+        crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root).unwrap(),
+    );
     let core = super::composition::LocalConversationCore::compose_from_config(
         &launch,
         &super::LocalRuntimeDependencies::default(),
@@ -132,11 +135,8 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
             model: launch.config().model.clone(),
         },
         crate::runtime::identity::ConversationId::new("cfg238"),
-        launch.artifacts_root(),
-        std::sync::Arc::new(
-            crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root)
-                .unwrap(),
-        ),
+        controller.root().join("artifacts"),
+        controller,
     )
     .await
     .unwrap();
