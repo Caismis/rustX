@@ -1861,7 +1861,10 @@ before restart.
   linearization point — under the mailbox's running-commit section — freezes
   one timestamp, writes the durable `SubagentOwnershipCommitted` fact, and
   opens the `subagent:{id}` lifecycle. The record's `started_at` uses that
-  same timestamp.
+  same timestamp. The fact carries the frozen
+  `(agent, definition_digest, profile_digest)` identity, so both the source
+  definition a child started with and its effective execution profile are
+  durable execution facts.
 - **Start-vs-cancel has exactly one arbitration boundary.** The registry
   mutex linearizes child start-gate release against explicit cancellation:
   the command-handle install, the lifecycle read, and the synchronous
@@ -2906,13 +2909,27 @@ after ChildGuidanceOutcome::Accepted:
   Issue #234's exact-selection and visibility rules are unchanged — and an
   extension-provided model Tool is governed by effective extension composition
   rather than removed by the ordinary `tools` allowlist.
-- **Extension authorization is configuration-exact, not name-based.** For
-  Agent Status: an absent extension is always authorized (removal is
-  narrowing); a present one is authorized only when the role's or the invoking
-  Agent's own composition holds it, each contributor may be switched off but
-  never on, and `time.timezone` must be absent or exactly the authority's. Root
-  extension composition is therefore legitimate authority for an explicit
-  authorized override, and never implicit child inheritance.
+- **Extension authorization is configuration-exact, not name-based, and the
+  union is taken per behavior-affecting contributor.** A composition is not a
+  set of identities, so "the role authorizes the whole composition **or** the
+  invoking Agent does" is strictly narrower than a union and would refuse a
+  request whose contributors are each legitimately held. For Agent Status:
+  an absent extension is always authorized (removal is narrowing); composing
+  the extension at all requires that some source composes it, because composing
+  it composes the always-on Todo contributor; a requested `time.enabled` or
+  `background.enabled` requires that some source composes Agent Status with
+  that same contributor enabled; a contributor set to `false` requires no
+  authority. So a role holding UTC Time with Background off and an invoking
+  Agent holding Background with Time off together authorize a child with both
+  on, with nothing manufactured. Root extension composition is therefore
+  legitimate authority for an explicit authorized override, and never implicit
+  child inheritance.
+- **Timezone authority is decided on effective execution semantics.** Time
+  renders UTC for an absent `time.timezone`, so an omitted zone is a request
+  for UTC and needs an authority that itself renders UTC; a role rendering
+  `Asia/Shanghai` does not cover it, and absence is never a wildcard. A
+  disabled Time contributor creates no timezone authority requirement at all,
+  because nothing will execute.
 - **A Workflow Agent node's override is trusted static program data.** It is
   validated at compilation and again during resource-generation preparation
   against the Workflow's admitted generation and the applicable resource
@@ -2958,20 +2975,60 @@ after ChildGuidanceOutcome::Accepted:
 
 - **`SubagentDefinitionDigest` identifies the source definition;
   `ResolvedSubagentSpec::profile_digest()` identifies the effective child
-  execution profile.** Materially different effective tools, Skills, or
-  extensions change it; equivalent effective profiles — no override, and an
+  execution profile.** They are separate identities and neither is derived from
+  the other. Materially different effective tools, Skills, or extensions change
+  the profile digest; equivalent effective profiles — no override, and an
   override restating the defaults — produce the same value, and equivalent
   authorized Tool and Workflow inputs agree.
+- **The digest identifies the semantic final frozen execution profile, not its
+  authoring history, and no behavior-affecting frozen field may be omitted.**
+  Source-definition-only provenance is therefore outside the preimage: the
+  definition digest itself, and with it the role's routing description (which
+  never executes) and any default Tool/Skill/extension selection that the
+  invocation replaced completely (which stops existing before the child is
+  frozen). Every behavior-affecting field those summarize is framed directly,
+  as its final frozen value. So two definitions differing only in routing prose
+  or in replaced-away defaults produce one profile digest, while any change to
+  the final frozen contract changes it.
+- **A frozen model invocation is framed by one shared helper, so the primary
+  and an explicit summary invocation are identified equally completely.**
+  Model reference, protocol, context window, model and effective output
+  budgets, reasoning profile and semantics, effective request parameters,
+  effective and declared capabilities, and compat are all in the preimage for
+  both. The summary policy still distinguishes "follows the session primary"
+  from an explicit invocation. `FrozenModelSpec::configured` is excluded: it
+  records what was *asked for*, while the resolved invocations are the
+  authority.
+- **Provider binding and credential material are excluded, and the exclusion is
+  a contract.** Rotating a credential or repointing an endpoint at the same
+  model leaves the identity unchanged, on the primary invocation and on an
+  explicit summary alike.
+- **Values whose serialization carries authoring shape are framed by their
+  effective semantics instead.** An omitted `time.timezone` frames as the UTC
+  it renders, and `ModelCompat` is framed by its five translation decisions
+  rather than through a serializer that emits a field only when the catalog
+  spelled it out. In both cases two values that behave identically are one
+  effective profile. The *source-definition* digest keeps the authored
+  spelling, because it identifies the source document rather than the
+  behavior.
 - **It is derived from the frozen contract, not stored beside it.** Every input
   is already part of the frozen specification, so the identity is frozen
   exactly as strongly as the contract while no second stored copy can drift
   from the specification it labels; the child recomputes the same value from
   the same frozen bytes.
-- **The framing is versioned and explicit about what it excludes.**
-  Semantically unordered collections are canonically normalized and meaningful
-  order is preserved. Execution identities, timestamps, temporary staging
-  paths, Skill source roots, raw payload formatting, and provider binding or
-  credential material are all outside the preimage.
+- **The framing is versioned** (`rustx-subagent-profile-v2`). Semantically
+  unordered collections are canonically normalized and meaningful order is
+  preserved. Execution identities, timestamps, temporary staging paths, Skill
+  source roots, and raw payload formatting are all outside the preimage.
+- **Once `SubagentOwnershipCommitted` exists, both `definition_digest` and
+  `profile_digest` are durable execution facts and survive restart unchanged.**
+  The ownership commit writes both from the frozen specification. Recovery
+  restores exactly the committed values and never recomputes either from the
+  current role definition or the current resource generation, so a reload that
+  redefines the same agent name cannot relabel an already-committed child, and
+  terminal settlement never alters them. Workflow-owned and normal children
+  preserve them identically. Only the digests are persisted; the effective
+  Tool, Skill, and extension bodies they summarize are not.
 - **The digest is never an authorization token.** It is identity and
   diagnostic/recovery correlation over an already-authorized contract. Runtime
   Client projects it beside `definition_digest` as a bounded, redacted

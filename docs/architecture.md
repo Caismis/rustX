@@ -1211,9 +1211,13 @@ extension never adds a Tool to the model-facing registry by itself.
   Issue #258). Root and named-role compositions remain independently authored:
   the root's composition is never *inherited*, and participates only as one
   half of an explicit delegation ceiling — a child composes an extension
-  because a role authored it or because an entitled caller asked for it. Role
-  extension settings participate in `SubagentDefinitionDigest`; the effective
-  composition participates in `ResolvedSubagentSpec::profile_digest()`.
+  because a role authored it or because an entitled caller asked for it. That
+  ceiling is a union taken per behavior-affecting contributor, and timezone
+  authority is decided on the zone that will actually render (absent means
+  UTC), never on whether `time.timezone` was written. Role extension settings
+  participate in `SubagentDefinitionDigest` as authored; the effective
+  composition participates in `ResolvedSubagentSpec::profile_digest()` by its
+  effective semantics.
   `LocalConversationCore::compose_subagent_child` materializes
   `spec.resolved.extensions` and rereads no configuration document, role file,
   or later resource generation.
@@ -6711,7 +6715,11 @@ re-derive any of it. Three representations carry that weight:
 `prepare` validates the bounded task/context and stages a real child through
 its typed Hello/Ready handshake. The one ownership commit freezes one start
 timestamp, durably writes `SubagentOwnershipCommitted`, and creates the
-logical Running record. Start-vs-cancel has exactly one arbitration
+logical Running record. That fact carries the frozen
+`(agent, definition_digest, profile_digest)` identity: the source definition
+the child started with *and* its effective execution profile (Issue #258) are
+both durable execution facts, so recovery restores them rather than recomputing
+either from the current catalog. Start-vs-cancel has exactly one arbitration
 boundary: the registry mutex covers the command-handle install, the
 lifecycle read, and the synchronous start-gate release in one critical
 section. Cancellation committed first resolves the gate cancelled — the

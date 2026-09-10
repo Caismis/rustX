@@ -302,46 +302,93 @@ pub struct ResolvedSubagentSpec {
 /// The deterministic semantic identity of one **effective** child execution
 /// profile (Issue #258).
 ///
+/// # The rule the framing obeys
+///
+/// > The digest identifies the semantic final frozen execution profile, not
+/// > its authoring history, and no behavior-affecting frozen field may be
+/// > omitted.
+///
+/// Both halves are load-bearing, and they are why this is not
+/// [`SubagentDefinitionDigest`]:
+///
+/// ```text
+/// definition_digest  identity of the SOURCE named definition
+///                    (its routing description, its DEFAULT tool/Skill/
+///                    extension selections, its authored spellings)
+///
+/// profile_digest     identity of the FINAL FROZEN effective child
+///                    execution contract, after replacement
+/// ```
+///
+/// A default that an invocation completely replaced is authoring history and
+/// must not survive into this identity; a routing description never executes
+/// at all. So `definition_digest` is deliberately **not** in this preimage,
+/// even though [`ResolvedSubagentSpec`] carries it as independent source
+/// provenance. Every behavior-affecting field it summarizes — instructions,
+/// deadline, workspace policy, project instruction chain, the effective tool
+/// and Skill selections, the effective extension composition — is framed here
+/// directly, as its final frozen value.
+///
 /// # What the framing covers
 ///
 /// ```text
-/// agent name
-/// source definition digest
-/// frozen model decision      model ref, protocol, context window,
-///                            model/effective output budget, reasoning
-///                            profile and semantics, effective + declared
-///                            capabilities, compat, effective request params
-/// instructions
-/// project instruction chain  path AND content, in order
-/// workspace policy
-/// execution deadline
+/// agent name                 the named role identity the child runs as
+/// instructions               the exact child instruction document
+/// execution deadline         the frozen whole-lifecycle bound
+/// workspace policy           shared workspace vs Git worktree + its flag
+/// frozen model decision      the complete non-binding semantics of the
+///                            primary invocation (see
+///                            `frame_frozen_model_invocation`)
+/// frozen summary policy      "follows the session primary" vs an explicit
+///                            invocation framed by the SAME helper, so an
+///                            explicit summary model is framed exactly as
+///                            completely as the primary one
 /// effective tools            origin, exact ToolId, model-facing name, and
 ///                            the cross-process MCP identity where one exists
 /// effective Skills           exact SkillId + SkillVersionId binding and the
 ///                            model-visible name
-/// effective extensions       the closed composition's canonical framing
+/// project instruction chain  path AND content, in order
 /// materialization plane      exactly the external source identities the
-///                            effective selection requires
+///                            effective selection requires. The bindings
+///                            behind them are physical (transport, resource
+///                            root) or secret (credentials); the one part
+///                            that IS behavior — the invocation policy each
+///                            server imposes on its tools — is already framed
+///                            exactly, through each MCP tool's cross-process
+///                            identity above
+/// effective extensions       the closed composition's EFFECTIVE framing,
+///                            so an omitted timezone frames as the UTC it
+///                            actually renders
 /// ```
 ///
 /// # What the framing deliberately excludes
 ///
 /// ```text
+/// source-definition-only     definition_digest, and with it the role's
+///   provenance               routing description and its replaced-away
+///                            default tool/Skill/extension selections
+/// desired model config       FrozenModelSpec::configured is the descriptive
+///                            record of what was ASKED for; the resolved
+///                            invocations are the authority and are framed
+/// provider binding material  provider id, endpoint, credential source, and
+///                            any admitted credential value
 /// execution identities       SubagentId, conversation/agent ids, tool call id
 /// timestamps                 nothing time-derived enters the preimage
 /// physical paths             the staging root, the Skill source root, the
-///                            child's remapped Skill locations
+///                            child's remapped Skill locations, the MCP
+///                            server's physical launch plane
 /// raw payload formatting     the override JSON's key order, whitespace,
 ///                            duplicate entries, or whether an override was
 ///                            written at all
-/// provider binding material  endpoints and credential sources
 /// ```
 ///
 /// Excluding the raw payload is the whole point: the digest names the
 /// *profile*, so a caller cannot make two identical children look different
 /// by respelling their request, and cannot make two different children look
 /// identical either. Excluding provider binding material keeps credential
-/// data out of the preimage of a value the runtime projects.
+/// data out of the preimage of a value the runtime projects and durably
+/// commits — and it is a real exclusion, not an omission: rotating a key or
+/// repointing an endpoint leaves the identity unchanged.
 ///
 /// Collections that carry no meaning in their order — the Tool and Skill
 /// selections — are already canonically ordered and deduplicated before they
@@ -356,13 +403,32 @@ pub struct SubagentExecutionProfileDigest(String);
 /// It is part of the hashed preimage, exactly like the definition digest's
 /// version: a later milestone that admits a new profile-defining field bumps
 /// this constant so two framings can never collide into one digest.
-pub const SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION: &str = "rustx-subagent-profile-v1";
+///
+/// `v2` corrected `v1`, which folded `definition_digest` into the preimage —
+/// making an *effective* profile identity depend on source-definition-only
+/// provenance — and framed an explicit summary invocation far less completely
+/// than the primary one.
+pub const SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION: &str = "rustx-subagent-profile-v2";
 
 impl SubagentExecutionProfileDigest {
     /// The stable textual form `sha256:<64 lowercase hex characters>`.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Restores this identity from the durable ownership fact that committed
+    /// it.
+    ///
+    /// This is the **only** way to obtain a profile digest without a frozen
+    /// [`ResolvedSubagentSpec`] in hand, and it exists so recovery can restore
+    /// what a child actually started with. Recovery must never recompute the
+    /// value: the role definition and the resource generation are both mutable
+    /// and may have changed since the commit, so recomputation would silently
+    /// relabel an already-running child.
+    #[must_use]
+    pub fn from_committed_fact(committed: String) -> Self {
+        Self(committed)
     }
 }
 
@@ -408,7 +474,6 @@ impl ResolvedSubagentSpec {
     pub fn profile_digest(&self) -> SubagentExecutionProfileDigest {
         compute_profile_digest(&ProfileFraming {
             agent: &self.agent,
-            definition_digest: &self.definition_digest,
             execution_deadline: self.execution_deadline,
             workspace_policy: self.workspace_policy,
             instructions: &self.instructions,
@@ -499,9 +564,11 @@ pub enum SubagentResolutionError {
     /// may not delegate.
     ///
     /// Naming an extension is not permission to configure it arbitrarily, so
-    /// this also covers a configuration the caller's own authority does not
-    /// hold — a contributor switched on that neither the role nor the
-    /// invoking Agent switched on, or a timezone neither one renders.
+    /// this also covers a configuration no authority source holds — a
+    /// contributor switched on that neither the role nor the invoking Agent
+    /// switched on, or a timezone neither one *effectively renders*. The
+    /// detail names the first uncovered contributor, not the whole
+    /// composition, because the ceiling is a per-contributor union.
     UnauthorizedExtension {
         /// The offending extension.
         extension: String,
@@ -1042,10 +1109,17 @@ fn role_skill_authority(
 /// allowed[d] = authorized_role_baseline[d] ∪ invoking_agent_frozen_authority[d]
 /// ```
 ///
-/// Three properties of this function are the whole point:
+/// Four properties of this function are the whole point:
 ///
 /// - it runs **per dimension**. Tools, Skills, and extensions are separate
 ///   authorization domains, and holding one never implies holding another;
+/// - it is a real **union**, taken at each dimension's own semantic
+///   granularity. Tools and Skills are sets of exact identities, so their
+///   union is a set union. An extension composition is not a set, so its
+///   union is taken per behavior-affecting contributor by
+///   [`crate::extensions::authorize_delegated_extensions`] — a request whose
+///   contributors are independently covered by the role and by the invoking
+///   Agent is authorized, and nothing is manufactured from neither;
 /// - it compares **exact native identities**, never model-facing names or
 ///   role prose, so a same-named capability from another source cannot
 ///   substitute for an authorized one;
@@ -1101,19 +1175,22 @@ fn authorize_delegation(
             }
         }
     }
-    if invocation.extensions.is_some()
-        && !definition.extensions().authorizes(extensions)
-        && !invoking.extensions.authorizes(extensions)
-    {
-        // The refusal names what was actually requested. Reaching this branch
-        // means the requested composition is non-empty, because removing an
-        // extension is narrowing and is authorized unconditionally.
-        return Err(SubagentResolutionError::UnauthorizedExtension {
-            extension: crate::extensions::composed_extension_names(extensions).join(", "),
-            detail: "neither this agent's own composition nor the invoking agent's composition \
-                     authorizes the requested extension configuration"
-                .to_owned(),
-        });
+    if invocation.extensions.is_some() {
+        // The two sources are combined by the extension vocabulary's own
+        // owner, per behavior-affecting contributor. A whole-composition
+        // "role authorizes it OR the parent authorizes it" is strictly
+        // narrower than the union this contract specifies: it refuses a
+        // request whose contributors are each legitimately held, only
+        // because no single source holds all of them at once.
+        crate::extensions::authorize_delegated_extensions(
+            definition.extensions(),
+            &invoking.extensions,
+            extensions,
+        )
+        .map_err(|refusal| SubagentResolutionError::UnauthorizedExtension {
+            extension: refusal.extension.to_owned(),
+            detail: refusal.detail,
+        })?;
     }
     Ok(())
 }
@@ -1349,7 +1426,6 @@ fn resolve_project_instructions(
 /// nothing that is not a field of this struct can be.
 struct ProfileFraming<'a> {
     agent: &'a SubagentName,
-    definition_digest: &'a SubagentDefinitionDigest,
     execution_deadline: Option<SubagentExecutionDeadline>,
     workspace_policy: WorkspacePolicy,
     instructions: &'a str,
@@ -1373,11 +1449,6 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
     hasher.update(SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION.as_bytes());
     hasher.update(b"\n");
     field(&mut hasher, "agent", framing.agent.as_str());
-    field(
-        &mut hasher,
-        "definition_digest",
-        framing.definition_digest.as_str(),
-    );
     field(&mut hasher, "instructions", framing.instructions);
     match framing.execution_deadline {
         None => field(&mut hasher, "execution_deadline", "\u{0}absent"),
@@ -1394,66 +1465,24 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
         } => format!("git_worktree:require_clean_parent={require_clean_parent}"),
     };
     field(&mut hasher, "workspace_policy", &workspace);
-    // The frozen model *decision*, never the provider binding: an endpoint
-    // and a credential source are physical materialization inputs, and a
-    // digest the runtime projects must not take credential material into its
-    // preimage or change when a key rotates.
-    let primary = &framing.model.primary;
-    field(&mut hasher, "model", &primary.model.to_string());
-    field(
-        &mut hasher,
-        "model_protocol",
-        &format!("{:?}", primary.protocol),
-    );
-    field(
-        &mut hasher,
-        "model_context_window",
-        &primary.context_window.to_string(),
-    );
-    field(
-        &mut hasher,
-        "model_max_output_tokens",
-        &primary.model_max_output_tokens.to_string(),
-    );
-    field(
-        &mut hasher,
-        "effective_max_output_tokens",
-        &primary.max_output_tokens.to_string(),
-    );
-    match &primary.reasoning_profile {
-        None => field(&mut hasher, "reasoning_profile", "\u{0}absent"),
-        Some(profile) => field(&mut hasher, "reasoning_profile", profile.as_str()),
+    // The frozen model *decision*, never the provider binding. `configured`
+    // is excluded with it: it is the descriptive record of what was asked
+    // for, and the resolved invocations below are the authority.
+    frame_frozen_model_invocation(&mut hasher, "model", &framing.model.primary);
+    // The summary policy is two distinct facts — "summaries follow the
+    // session primary" and "summaries use this separately frozen
+    // invocation" — and the explicit one is framed by the SAME helper as the
+    // primary, so no behavior-affecting summary field can be dropped from
+    // the identity while the equivalent primary field is kept.
+    match &framing.model.summary {
+        crate::model::frozen::FrozenSummaryModel::Session => {
+            field(&mut hasher, "model_summary", "session");
+        }
+        crate::model::frozen::FrozenSummaryModel::Explicit(invocation) => {
+            field(&mut hasher, "model_summary", "explicit");
+            frame_frozen_model_invocation(&mut hasher, "model_summary", invocation);
+        }
     }
-    field(
-        &mut hasher,
-        "reasoning_enabled",
-        &primary.reasoning_enabled.to_string(),
-    );
-    field(
-        &mut hasher,
-        "model_capabilities",
-        &canonical_json(&primary.capabilities),
-    );
-    field(
-        &mut hasher,
-        "model_declared_capabilities",
-        &canonical_json(&primary.declared_capabilities),
-    );
-    field(
-        &mut hasher,
-        "model_compat",
-        &canonical_json(&primary.compat),
-    );
-    field(
-        &mut hasher,
-        "model_request_params",
-        &canonical_json(&primary.request_params),
-    );
-    field(
-        &mut hasher,
-        "model_summary",
-        &canonical_summary(&framing.model.summary),
-    );
     // Tool and Skill selections are semantically unordered and arrive
     // canonically ordered and deduplicated, so the framing preserves that
     // order without imposing a second one.
@@ -1529,9 +1558,126 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
     field(
         &mut hasher,
         "extensions",
-        &framing.extensions.digest_framing(),
+        &framing.extensions.effective_digest_framing(),
     );
     SubagentExecutionProfileDigest(format!("sha256:{:x}", hasher.finalize()))
+}
+
+/// Frames the complete **non-binding semantics** of one frozen model
+/// invocation under `prefix`.
+///
+/// One helper, used for both the primary invocation and an explicit summary
+/// invocation, is the contract: the two are the same kind of frozen decision,
+/// and framing them by two hand-written field lists is exactly how a summary
+/// model ends up identified by three fields while the primary is identified
+/// by eleven. Adding a semantic field to [`FrozenModelInvocation`] is a
+/// single edit here that reaches both.
+///
+/// Everything [`FrozenModelInvocation`] freezes is framed except
+/// `binding` — the provider id, endpoint, declared credential source, and the
+/// in-process admitted credential. That exclusion is the deliberate
+/// security/identity contract: a digest the runtime projects and durably
+/// commits must not take credential material into its preimage, and must not
+/// change when a key rotates or an endpoint is repointed at the same model.
+fn frame_frozen_model_invocation(
+    hasher: &mut Sha256,
+    prefix: &str,
+    invocation: &crate::model::frozen::FrozenModelInvocation,
+) {
+    // Destructured so a new semantic field of the frozen invocation cannot be
+    // added without deciding whether it belongs in the identity.
+    let crate::model::frozen::FrozenModelInvocation {
+        binding: _,
+        model,
+        protocol,
+        context_window,
+        model_max_output_tokens,
+        max_output_tokens,
+        reasoning_profile,
+        reasoning_enabled,
+        request_params,
+        capabilities,
+        declared_capabilities,
+        compat,
+    } = invocation;
+    let key = |suffix: &str| format!("{prefix}.{suffix}");
+    field(hasher, &key("model"), &model.to_string());
+    field(hasher, &key("protocol"), &format!("{protocol:?}"));
+    field(hasher, &key("context_window"), &context_window.to_string());
+    field(
+        hasher,
+        &key("model_max_output_tokens"),
+        &model_max_output_tokens.to_string(),
+    );
+    field(
+        hasher,
+        &key("effective_max_output_tokens"),
+        &max_output_tokens.to_string(),
+    );
+    match reasoning_profile {
+        // An absent profile and a profile named "absent" are different
+        // decisions, so absence is framed with a spelling no id can carry.
+        None => field(hasher, &key("reasoning_profile"), "\u{0}absent"),
+        Some(profile) => field(hasher, &key("reasoning_profile"), profile.as_str()),
+    }
+    field(
+        hasher,
+        &key("reasoning_enabled"),
+        &reasoning_enabled.to_string(),
+    );
+    field(
+        hasher,
+        &key("request_params"),
+        &canonical_json(request_params),
+    );
+    field(hasher, &key("capabilities"), &canonical_json(capabilities));
+    field(
+        hasher,
+        &key("declared_capabilities"),
+        &canonical_json(declared_capabilities),
+    );
+    // Framed field by field rather than through `canonical_json`. `ModelCompat`
+    // serializes in its *authoring* shape — a translation field is emitted only
+    // when the catalog spelled it out — so an authored value equal to its own
+    // default and an omitted one serialize differently while behaving
+    // identically. Its `PartialEq` already says which five values are the
+    // semantics; the framing says exactly the same thing.
+    let crate::model::catalog::ModelCompat {
+        chat_max_tokens_field,
+        chat_stream_usage,
+        chat_reasoning_replay,
+        chat_tool_protocol,
+        responses_storage,
+        explicit_fields: _,
+    } = compat;
+    field(
+        hasher,
+        &key("compat.chat_max_tokens_field"),
+        &format!("{chat_max_tokens_field:?}"),
+    );
+    field(
+        hasher,
+        &key("compat.chat_stream_usage"),
+        &format!("{chat_stream_usage:?}"),
+    );
+    match chat_reasoning_replay {
+        None => field(hasher, &key("compat.chat_reasoning_replay"), "\u{0}absent"),
+        Some(replay) => field(
+            hasher,
+            &key("compat.chat_reasoning_replay"),
+            &format!("{replay:?}"),
+        ),
+    }
+    field(
+        hasher,
+        &key("compat.chat_tool_protocol"),
+        &format!("{chat_tool_protocol:?}"),
+    );
+    field(
+        hasher,
+        &key("compat.responses_storage"),
+        &format!("{responses_storage:?}"),
+    );
 }
 
 /// Serializes one value into a key-ordered canonical JSON text.
@@ -1559,17 +1705,6 @@ fn canonical_json<T: Serialize>(value: &T) -> String {
         |_| "\u{0}unserializable".to_owned(),
         |value| sort(value).to_string(),
     )
-}
-
-/// Frames the frozen summary-model policy without its provider binding.
-fn canonical_summary(summary: &crate::model::frozen::FrozenSummaryModel) -> String {
-    match summary {
-        crate::model::frozen::FrozenSummaryModel::Session => "session".to_owned(),
-        crate::model::frozen::FrozenSummaryModel::Explicit(invocation) => format!(
-            "explicit:{}:{:?}:{}",
-            invocation.model, invocation.protocol, invocation.max_output_tokens
-        ),
-    }
 }
 
 fn field(hasher: &mut Sha256, key: &str, value: &str) {
@@ -2308,6 +2443,140 @@ mod tests {
         ));
     }
 
+    /// The extension half of the ceiling is a real **union**, taken at the
+    /// vocabulary's own granularity — not "one source authorizes the whole
+    /// composition".
+    ///
+    /// The role renders UTC Time with Background off; the invoking Agent has
+    /// Time off and Background on. Neither authorizes the combined request by
+    /// itself, and together they authorize it exactly, with nothing
+    /// manufactured.
+    #[test]
+    fn sub258_extension_authority_is_the_union_of_role_and_invoking_contributors() {
+        let available = available();
+        let compose = |time: bool, background: bool| {
+            crate::extensions::NativeAgentExtensions::with_agent_status(
+                crate::context::AgentStatusConfig {
+                    time: crate::context::TimeStatusConfig {
+                        enabled: time,
+                        timezone: None,
+                    },
+                    background: crate::context::BackgroundStatusConfig {
+                        enabled: background,
+                    },
+                },
+            )
+        };
+        let request = |value: serde_json::Value| super::SubagentInvocationOverride {
+            extensions: Some(
+                serde_json::from_value::<crate::extensions::NativeAgentExtensionSelection>(value)
+                    .expect("selection parses"),
+            ),
+            ..super::SubagentInvocationOverride::default()
+        };
+        let both_on = request(serde_json::json!({
+            "agentStatus": {"time": {"enabled": true}, "background": {"enabled": true}}
+        }));
+
+        let time_role = role_with(Vec::new(), compose(true, false));
+        let background_parent =
+            super::InvokingAgentAuthority::from_identities([], [], compose(false, true));
+
+        assert!(
+            matches!(
+                authorize(
+                    &both_on,
+                    &time_role,
+                    &available,
+                    &super::InvokingAgentAuthority::none()
+                ),
+                Err(SubagentResolutionError::UnauthorizedExtension { .. })
+            ),
+            "the role alone holds no Background"
+        );
+        assert!(
+            matches!(
+                authorize(
+                    &both_on,
+                    &role_with(Vec::new(), crate::extensions::NativeAgentExtensions::none()),
+                    &available,
+                    &background_parent
+                ),
+                Err(SubagentResolutionError::UnauthorizedExtension { .. })
+            ),
+            "the invoking Agent alone holds no Time"
+        );
+        assert_eq!(
+            authorize(&both_on, &time_role, &available, &background_parent),
+            Ok(()),
+            "independently authorized contributors from both sources combine"
+        );
+    }
+
+    /// Tools, Skills, and extensions stay three separate authorization
+    /// domains: holding one never authorizes another, and an extension
+    /// composition is never satisfiable out of tool or Skill authority.
+    #[test]
+    fn sub258_the_three_authorization_domains_stay_independent() {
+        let available = available();
+        let status = crate::extensions::NativeAgentExtensions::with_agent_status(
+            crate::context::AgentStatusConfig::default(),
+        );
+        // A caller holding every tool the generation knows, and nothing else.
+        let tool_rich_parent = super::InvokingAgentAuthority::from_identities(
+            available
+                .definitions()
+                .into_iter()
+                .map(|definition| definition.id),
+            [],
+            crate::extensions::NativeAgentExtensions::none(),
+        );
+        let bare_role = role_with(Vec::new(), crate::extensions::NativeAgentExtensions::none());
+
+        // Tool authority does not become extension authority.
+        let extension_request = super::SubagentInvocationOverride {
+            extensions: Some(crate::extensions::NativeAgentExtensionSelection::of(
+                &status,
+            )),
+            ..super::SubagentInvocationOverride::default()
+        };
+        assert!(matches!(
+            authorize(
+                &extension_request,
+                &bare_role,
+                &available,
+                &tool_rich_parent
+            ),
+            Err(SubagentResolutionError::UnauthorizedExtension { .. })
+        ));
+
+        // ...and extension authority does not become tool authority.
+        let extension_rich_parent =
+            super::InvokingAgentAuthority::from_identities([], [], status.clone());
+        assert!(matches!(
+            authorize(
+                &requested_tools(&["grep"]),
+                &bare_role,
+                &available,
+                &extension_rich_parent
+            ),
+            Err(SubagentResolutionError::UnauthorizedTool { .. })
+        ));
+
+        // The same caller that cannot delegate the extension can still
+        // delegate the tools it actually holds, so the refusal above is a
+        // domain fact and not an inert path that refuses everything.
+        assert_eq!(
+            authorize(
+                &requested_tools(&["grep"]),
+                &bare_role,
+                &available,
+                &tool_rich_parent
+            ),
+            Ok(())
+        );
+    }
+
     /// The whole closed extension vocabulary is supported in one-shot child
     /// scope today. The assertion is deliberately exhaustive so that adding a
     /// member without deciding its scope is caught here rather than in
@@ -2459,5 +2728,403 @@ mod tests {
             resolve_tools(&definition, &available(), &availability),
             Err(SubagentResolutionError::SourceUnavailable { .. })
         ));
+    }
+
+    // ---------------------------------------------------------------
+    // Issue #258: the effective execution-profile digest.
+    //
+    // These are spec-level: they build a complete frozen contract and change
+    // exactly one field at a time, which is the only way to prove that a
+    // behavior-affecting field is in the preimage and a non-semantic one is
+    // not. The role-level equivalences (a replaced-away default, an override
+    // restating the defaults, the Tool and Workflow paths agreeing) are
+    // proven against real composed generations in tests/subagent/overrides.rs.
+    // ---------------------------------------------------------------
+
+    use super::{FrozenModelSpec, ResolvedSubagentSpec, SessionModelConfig};
+    use crate::runtime::ProjectContextFile;
+    use crate::runtime::subagent::catalog::SubagentExecutionDeadline;
+
+    fn frozen_invocation() -> crate::model::frozen::FrozenModelInvocation {
+        crate::model::frozen::FrozenModelInvocation {
+            binding: crate::model::frozen::FrozenProviderBinding {
+                resolved_credential: None,
+                provider: crate::model::catalog::ProviderId::new("local"),
+                base_url: "http://127.0.0.1:9/v1".to_owned(),
+                credential: crate::model::catalog::CredentialSource::Environment(
+                    "RUSTX_TEST_KEY".to_owned(),
+                ),
+            },
+            model: crate::model::catalog::ModelRef::parse("local/model-a").expect("model"),
+            protocol: crate::model::types::ModelProtocol::OpenAiChatCompletions,
+            context_window: 128_000,
+            model_max_output_tokens: 4096,
+            max_output_tokens: 512,
+            reasoning_profile: None,
+            reasoning_enabled: false,
+            request_params: crate::model::invocation::RequestParams::new(),
+            capabilities: crate::model::catalog::ModelCapabilities::text_only(true, false),
+            declared_capabilities: crate::model::catalog::ModelCapabilities::text_only(true, true),
+            compat: crate::model::catalog::ModelCompat::default(),
+        }
+    }
+
+    fn frozen_spec() -> ResolvedSubagentSpec {
+        let definition = role_with(Vec::new(), crate::extensions::NativeAgentExtensions::none());
+        ResolvedSubagentSpec {
+            agent: definition.name().clone(),
+            definition_digest: definition.digest().clone(),
+            execution_deadline: None,
+            workspace_policy: WorkspacePolicy::SharedWorkspace,
+            instructions: "instructions".to_owned(),
+            model: FrozenModelSpec {
+                configured: SessionModelConfig::of(
+                    crate::model::catalog::ModelRef::parse("local/model-a").expect("model"),
+                ),
+                primary: frozen_invocation(),
+                summary: crate::model::frozen::FrozenSummaryModel::Session,
+            },
+            tools: Vec::new(),
+            skills: Vec::new(),
+            project_instructions: Vec::new(),
+            materialization: super::ResolvedSubagentMaterialization::default(),
+            extensions: crate::extensions::NativeAgentExtensions::none(),
+        }
+    }
+
+    /// The profile digest identifies the **effective execution profile**, so
+    /// source-definition-only provenance must not reach its preimage.
+    ///
+    /// `definition_digest` carries the role's routing description and its
+    /// default tool/Skill/extension selections — things that either never
+    /// execute, or that an override may have replaced entirely. It stays on
+    /// the frozen contract as independent provenance and stays out of the
+    /// effective identity.
+    #[test]
+    fn sub258_the_profile_digest_is_independent_of_the_source_definition_digest() {
+        let spec = frozen_spec();
+        let other_definition = SubagentDefinition::new(
+            spec.agent.clone(),
+            // A completely different routing description, and defaults that
+            // an override would have replaced away.
+            "An entirely different routing description.".to_owned(),
+            "instructions".to_owned(),
+            std::path::PathBuf::from("/w/reviewer.md"),
+            None,
+            None,
+            vec![ToolSelector::Builtin {
+                name: "read".to_owned(),
+            }],
+            vec!["some-skill".to_owned()],
+            SubagentProjectInstructionPolicy {
+                inherit: true,
+                files: Vec::new(),
+            },
+            WorkspacePolicy::SharedWorkspace,
+            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
+        )
+        .expect("definition");
+
+        let mut relabelled = spec.clone();
+        relabelled.definition_digest = other_definition.digest().clone();
+        assert_ne!(
+            spec.definition_digest, relabelled.definition_digest,
+            "the two source definitions really are different"
+        );
+        assert_eq!(
+            spec.profile_digest(),
+            relabelled.profile_digest(),
+            "one effective execution contract is one effective profile identity"
+        );
+    }
+
+    /// Every behavior-affecting field of the frozen contract is in the
+    /// preimage. One mutation per profile, all distinct.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one field-by-field framing matrix
+    fn sub258_every_behavior_affecting_frozen_field_changes_the_profile_digest() {
+        let base = frozen_spec();
+        let mut variants = vec![base.clone()];
+
+        let mut renamed = base.clone();
+        renamed.agent = SubagentName::parse("auditor").expect("name");
+        variants.push(renamed);
+
+        let mut reinstructed = base.clone();
+        reinstructed.instructions = "different instructions".to_owned();
+        variants.push(reinstructed);
+
+        let mut deadlined = base.clone();
+        deadlined.execution_deadline =
+            Some(SubagentExecutionDeadline::from_millis(60_000).expect("deadline"));
+        variants.push(deadlined);
+
+        let mut worktree = base.clone();
+        worktree.workspace_policy = WorkspacePolicy::GitWorktree {
+            require_clean_parent: true,
+        };
+        variants.push(worktree);
+
+        let mut dirty_worktree = base.clone();
+        dirty_worktree.workspace_policy = WorkspacePolicy::GitWorktree {
+            require_clean_parent: false,
+        };
+        variants.push(dirty_worktree);
+
+        let mut with_tool = base.clone();
+        with_tool.tools = vec![ResolvedSubagentTool::Builtin {
+            tool_id: ToolId::new("tool-read"),
+            name: "read".to_owned(),
+            definition: tool("read", ToolOrigin::Builtin),
+        }];
+        variants.push(with_tool);
+
+        let mut guided = base.clone();
+        guided.project_instructions = vec![ProjectContextFile {
+            path: std::path::PathBuf::from("/w/AGENTS.md"),
+            content: "guidance".to_owned(),
+        }];
+        variants.push(guided);
+
+        let mut reguided = base.clone();
+        reguided.project_instructions = vec![ProjectContextFile {
+            path: std::path::PathBuf::from("/w/AGENTS.md"),
+            content: "different guidance".to_owned(),
+        }];
+        variants.push(reguided);
+
+        let mut composed = base.clone();
+        composed.extensions = crate::extensions::NativeAgentExtensionsDocument::default().resolve();
+        variants.push(composed);
+
+        assert_distinct(&variants, "every behavior-affecting frozen field");
+    }
+
+    /// An **explicit** summary invocation is framed exactly as completely as
+    /// the primary one.
+    ///
+    /// The v1 framing reduced it to model + protocol + effective output
+    /// budget, so two children whose summarization behaved materially
+    /// differently collided into one identity. The shared
+    /// `frame_frozen_model_invocation` closes that by construction; this
+    /// proves it category by category.
+    #[test]
+    fn sub258_every_explicit_summary_model_field_changes_the_profile_digest() {
+        let base = frozen_spec();
+        let explicit = |mutate: &dyn Fn(&mut crate::model::frozen::FrozenModelInvocation)| {
+            let mut invocation = frozen_invocation();
+            mutate(&mut invocation);
+            let mut spec = base.clone();
+            spec.model.summary =
+                crate::model::frozen::FrozenSummaryModel::Explicit(Box::new(invocation));
+            spec
+        };
+
+        let mut variants = vec![
+            // "follows the session primary" and "an explicit invocation that
+            // happens to equal the primary" are two different policies.
+            base.clone(),
+            explicit(&|_| {}),
+            explicit(&|invocation| {
+                invocation.model =
+                    crate::model::catalog::ModelRef::parse("local/model-b").expect("model");
+            }),
+            explicit(&|invocation| {
+                invocation.protocol = crate::model::types::ModelProtocol::OpenAiResponses;
+            }),
+            explicit(&|invocation| invocation.context_window = 64_000),
+            explicit(&|invocation| invocation.model_max_output_tokens = 8192),
+            explicit(&|invocation| invocation.max_output_tokens = 256),
+            explicit(&|invocation| {
+                invocation.reasoning_profile =
+                    Some(crate::model::catalog::ReasoningProfileId::new("low"));
+            }),
+            explicit(&|invocation| {
+                invocation.reasoning_profile =
+                    Some(crate::model::catalog::ReasoningProfileId::new("high"));
+            }),
+            explicit(&|invocation| invocation.reasoning_enabled = true),
+            explicit(&|invocation| {
+                invocation
+                    .request_params
+                    .insert("temperature".to_owned(), serde_json::json!(0.2));
+            }),
+            explicit(&|invocation| {
+                invocation.capabilities =
+                    crate::model::catalog::ModelCapabilities::text_only(false, false);
+            }),
+            explicit(&|invocation| {
+                invocation.declared_capabilities =
+                    crate::model::catalog::ModelCapabilities::text_only(false, false);
+            }),
+            explicit(&|invocation| {
+                invocation.compat.chat_reasoning_replay =
+                    Some(crate::model::catalog::ChatReasoningReplay::Omit);
+            }),
+            explicit(&|invocation| {
+                invocation.compat.chat_stream_usage =
+                    crate::model::catalog::ChatStreamUsage::Unsupported;
+            }),
+        ];
+        // The same mutations on the PRIMARY invocation must also each change
+        // the identity, so the shared helper is proven on both users.
+        let primary_mutations: [&dyn Fn(&mut crate::model::frozen::FrozenModelInvocation); 7] = [
+            &|invocation| invocation.context_window = 32_000,
+            &|invocation| invocation.model_max_output_tokens = 1024,
+            &|invocation| invocation.max_output_tokens = 128,
+            &|invocation| invocation.reasoning_enabled = true,
+            &|invocation| {
+                invocation
+                    .request_params
+                    .insert("top_p".to_owned(), serde_json::json!(0.9));
+            },
+            &|invocation| {
+                invocation.capabilities =
+                    crate::model::catalog::ModelCapabilities::text_only(false, true);
+            },
+            &|invocation| {
+                invocation.compat.chat_stream_usage =
+                    crate::model::catalog::ChatStreamUsage::Unsupported;
+            },
+        ];
+        for mutate in primary_mutations {
+            let mut spec = base.clone();
+            mutate(&mut spec.model.primary);
+            variants.push(spec);
+        }
+
+        assert_distinct(&variants, "every framed frozen model field");
+    }
+
+    /// Provider binding and credential material are excluded, and that
+    /// exclusion is a real contract rather than an omission: rotating a
+    /// credential or repointing an endpoint at the same model leaves the
+    /// identity unchanged, on the primary and on an explicit summary alike.
+    ///
+    /// `FrozenModelSpec::configured` is excluded with them: it is the
+    /// descriptive record of what was *asked for*, while the resolved
+    /// invocations are the authority the child executes.
+    #[test]
+    fn sub258_provider_binding_and_desired_configuration_stay_out_of_the_digest() {
+        let base = frozen_spec();
+        let identity = base.profile_digest();
+
+        let rebind = |invocation: &mut crate::model::frozen::FrozenModelInvocation| {
+            invocation.binding.provider = crate::model::catalog::ProviderId::new("elsewhere");
+            invocation.binding.base_url = "https://example.invalid/v1".to_owned();
+            invocation.binding.credential =
+                crate::model::catalog::CredentialSource::Literal("a-rotated-secret".to_owned());
+            invocation.binding.resolved_credential = Some(
+                crate::model::catalog::ResolvedCredential::new("a-rotated-secret".to_owned()),
+            );
+        };
+
+        let mut rebound = base.clone();
+        rebind(&mut rebound.model.primary);
+        assert_eq!(
+            rebound.profile_digest(),
+            identity,
+            "the primary provider binding is not part of the effective identity"
+        );
+
+        let mut explicit_summary = base.clone();
+        explicit_summary.model.summary =
+            crate::model::frozen::FrozenSummaryModel::Explicit(Box::new(frozen_invocation()));
+        let explicit_identity = explicit_summary.profile_digest();
+        let mut rebound_summary = explicit_summary.clone();
+        if let crate::model::frozen::FrozenSummaryModel::Explicit(invocation) =
+            &mut rebound_summary.model.summary
+        {
+            rebind(invocation);
+        }
+        assert_eq!(
+            rebound_summary.profile_digest(),
+            explicit_identity,
+            "an explicit summary's provider binding is excluded exactly like the primary's"
+        );
+
+        let mut reconfigured = base.clone();
+        reconfigured.model.configured.max_output_tokens = Some(64);
+        reconfigured
+            .model
+            .configured
+            .request_params
+            .insert("temperature".to_owned(), serde_json::json!(1.5));
+        assert_eq!(
+            reconfigured.profile_digest(),
+            identity,
+            "the desired configuration is projection detail; the resolved invocation is authority"
+        );
+    }
+
+    /// `ModelCompat` serializes in its authoring shape — a translation field
+    /// appears only when the catalog spelled it out — so the framing must not
+    /// go through that serializer.
+    ///
+    /// Two compats that are semantically equal, one of which authored a value
+    /// equal to its own default, must be one effective profile; two that
+    /// differ in any of the five translation decisions must not.
+    #[test]
+    fn sub258_compat_framing_follows_its_semantics_not_its_authored_shape() {
+        let base = frozen_spec();
+        let mut authored_default = base.clone();
+        authored_default.model.primary.compat = serde_json::from_value(serde_json::json!({
+            "chatStreamUsage": crate::model::catalog::ChatStreamUsage::default(),
+        }))
+        .expect("an explicitly authored default compat");
+        assert_eq!(
+            authored_default.model.primary.compat, base.model.primary.compat,
+            "the two compats really are semantically equal"
+        );
+        assert_ne!(
+            serde_json::to_value(authored_default.model.primary.compat).expect("encode"),
+            serde_json::to_value(base.model.primary.compat).expect("encode"),
+            "...and they really do serialize differently, which is the trap"
+        );
+        assert_eq!(
+            authored_default.profile_digest(),
+            base.profile_digest(),
+            "one effective translation behavior is one effective profile"
+        );
+
+        let mut differing = base.clone();
+        differing.model.primary.compat.responses_storage =
+            crate::model::catalog::ResponsesStorageMode::Stateless;
+        assert_ne!(
+            differing.profile_digest(),
+            base.profile_digest(),
+            "a different translation decision is a different effective profile"
+        );
+    }
+
+    /// The framing is versioned, and the version is in the preimage.
+    #[test]
+    fn sub258_the_profile_framing_is_versioned() {
+        assert_eq!(
+            super::SUBAGENT_EXECUTION_PROFILE_DIGEST_VERSION,
+            "rustx-subagent-profile-v2",
+            "the corrected framing is not the v1 one it replaced"
+        );
+        assert!(
+            frozen_spec()
+                .profile_digest()
+                .as_str()
+                .starts_with("sha256:")
+        );
+    }
+
+    fn assert_distinct(specs: &[ResolvedSubagentSpec], what: &str) {
+        let digests: Vec<_> = specs
+            .iter()
+            .map(|spec| spec.profile_digest().as_str().to_owned())
+            .collect();
+        let mut unique = digests.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            digests.len(),
+            "{what} must change the effective profile identity"
+        );
     }
 }

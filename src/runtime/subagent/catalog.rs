@@ -849,7 +849,11 @@ fn compute_digest(
     // The role's native Agent Extension composition is part of its semantic
     // identity: two roles that differ only in Agent Status settings are
     // different definitions and must resolve to different frozen children.
-    field(&mut hasher, "extensions", &extensions.digest_framing());
+    field(
+        &mut hasher,
+        "extensions",
+        &extensions.authored_digest_framing(),
+    );
     SubagentDefinitionDigest(format!("sha256:{:x}", hasher.finalize()))
 }
 

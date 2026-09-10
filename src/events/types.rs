@@ -598,6 +598,25 @@ pub enum RuntimeEvent {
         /// already-committed child bound to the definition it actually
         /// started with.
         definition_digest: String,
+        /// The deterministic **effective execution profile** digest frozen at
+        /// start (Issue #258).
+        ///
+        /// The definition digest alone is not the child's identity either: a
+        /// named role is the child's *default* profile, and an authorized
+        /// invocation override may replace its tools, Skills, or extensions
+        /// for exactly this child. Two children of one role with materially
+        /// different effective profiles share a `definition_digest` and differ
+        /// here.
+        ///
+        /// It is committed with ownership, so it is a durable execution fact:
+        /// recovery restores exactly this value and never recomputes it from
+        /// the current role definition or the current resource generation,
+        /// both of which may have changed since the child started.
+        ///
+        /// Correlation only. No admission, resolution, or execution decision
+        /// reads it, and the effective Tool/Skill/extension bodies it
+        /// summarizes are deliberately not persisted alongside it.
+        profile_digest: String,
         /// The terminal domain that owns this child. This is frozen at
         /// admission so restart recovery can preserve the native terminal
         /// boundary without consulting current configuration.

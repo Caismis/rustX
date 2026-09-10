@@ -300,11 +300,25 @@ it rewrites no canonical Session history to match a changed extension set.
 
 The root Agent's composition comes from this document. A named Subagent's comes
 from its own canonical role frontmatter (see
-[canonical named Subagent resources](subagent-resources.md)). A child never
-implicitly inherits the root's set: the resolver that freezes a child reads the
-definition and the invoking generation's authority only, so the root value is
-not an input. A role that declares no `extensions` composes its own built-in
-defaults, never the root's configuration.
+[canonical named Subagent resources](subagent-resources.md)). A role that
+declares no `extensions` composes its own built-in defaults, never the root's
+configuration.
+
+A child never *implicitly inherits* the root's set. Since Issue #258 the
+invoking Agent's frozen root composition does reach the resolver, but strictly
+as **delegation authority** for an explicit invocation override:
+
+```text
+role default composition ------------------> effective child composition
+invocation override (explicit) ------------> effective child composition
+invoking Agent's frozen root composition --> AUTHORITY ONLY
+                                             (may this caller ask for it)
+```
+
+So a child composes an extension for exactly two reasons: its definition
+authored it, or an entitled caller explicitly asked for it and every requested
+contributor was covered. Only the effective authorized composition enters
+`ResolvedSubagentSpec`.
 
 The invoking generation freezes the child's effective extension set into
 `ResolvedSubagentSpec` before process staging and durable ownership commit, and

@@ -483,15 +483,27 @@ pub(crate) fn subagent_ownership_event_id(subagent_id: &SubagentId) -> EventId {
 ///
 /// The fact carries exactly the identity a restart needs — the subagent,
 /// the child agent/conversation it owns, the delegating tool call, and the
-/// frozen `(agent, definition_digest)` identity — never the delegated task
-/// content, the process id, or any other process-local state. Its event
-/// identity is the canonical [`subagent_ownership_event_id`] of the
+/// frozen `(agent, definition_digest, profile_digest)` identity — never the
+/// delegated task content, the process id, or any other process-local state.
+/// Its event identity is the canonical [`subagent_ownership_event_id`] of the
 /// embedded `SubagentId`.
 ///
-/// The digest is what makes the fact self-describing across a reload: a
-/// later generation that redefines the same agent name cannot make an
-/// already-committed child appear to have the new definition, because the
-/// durable fact names the exact definition the child started with.
+/// The two digests are what make the fact self-describing across a reload,
+/// and they are separate identities:
+///
+/// ```text
+/// definition_digest  the SOURCE definition the child started with, so a
+///                    later generation that redefines the same agent name
+///                    cannot make an already-committed child appear to have
+///                    the new definition
+/// profile_digest     the EFFECTIVE execution profile the child started
+///                    with, so two children of one role that an authorized
+///                    invocation override specialized differently stay
+///                    distinguishable after a restart
+/// ```
+///
+/// Both are committed here, at the ownership boundary, from the frozen
+/// specification. Neither is ever reconstructed from current resources.
 #[allow(clippy::too_many_arguments)] // one durable fact, one construction boundary
 pub(crate) fn ownership_event(
     conversation_id: &ConversationId,
@@ -501,6 +513,7 @@ pub(crate) fn ownership_event(
     tool_call_id: &ToolCallId,
     agent: &SubagentName,
     definition_digest: &SubagentDefinitionDigest,
+    profile_digest: &resolver::SubagentExecutionProfileDigest,
     ownership: SubagentOwnershipKind,
     workspace: &WorkspaceSnapshot,
     timestamp: DateTime<Utc>,
@@ -520,6 +533,7 @@ pub(crate) fn ownership_event(
             tool_call_id: tool_call_id.clone(),
             agent: agent.as_str().to_owned(),
             definition_digest: definition_digest.as_str().to_owned(),
+            profile_digest: profile_digest.as_str().to_owned(),
             ownership,
             workspace: workspace.clone(),
         },

@@ -461,6 +461,9 @@ export function subagent(
     child_conversation_id: "conv-1-subagent-1",
     agent,
     definition_digest: definitionDigest,
+    // The effective execution-profile identity is always projected, on live
+    // and recovery-projected children alike (Issue #258).
+    profile_digest: `${definitionDigest}-profile`,
     state,
     observation: subagentObservation(),
     started_at: "2026-09-02T10:00:00Z",

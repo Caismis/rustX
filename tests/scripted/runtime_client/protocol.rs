@@ -394,7 +394,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
         matches!(
             host.attach(16),
             Err(RuntimeClientError::UnsupportedProtocolVersion {
-                supported: 26,
+                supported: 27,
                 requested: 16,
             })
         ),
@@ -403,7 +403,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         host.attach(24),
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 26,
+            supported: 27,
             requested: 24,
         })
     ));
@@ -411,20 +411,30 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         incompatible,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 26,
-            requested: 27,
+            supported: 27,
+            requested: 28,
         })
     ));
-    // v25 is the immediately previous contract: it carries no
-    // `effective_extensions` projection and no
-    // `settings_lifetimes.extensions` boundary (Issue #256). It is refused
-    // rather than served a snapshot whose settings sections it would
-    // misread; there is no v25 -> v26 conversion.
+    // v26 is the immediately previous contract: its projected subagents carry
+    // only `definition_digest` and no effective execution-profile identity
+    // (Issue #258). It is refused rather than served a projection with the
+    // new field removed; there is no v26 -> v27 conversion.
+    let pre_profile_digest = host.attach(26);
+    assert!(matches!(
+        pre_profile_digest,
+        Err(RuntimeClientError::UnsupportedProtocolVersion {
+            supported: 27,
+            requested: 26,
+        })
+    ));
+    // v25 additionally predates the `effective_extensions` projection and the
+    // `settings_lifetimes.extensions` boundary (Issue #256), and is refused
+    // for the same reason.
     let pre_effective_extensions = host.attach(25);
     assert!(matches!(
         pre_effective_extensions,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 26,
+            supported: 27,
             requested: 25,
         })
     ));
@@ -432,7 +442,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         old_protocol,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 26,
+            supported: 27,
             requested: 7,
         })
     ));
@@ -446,7 +456,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         interrupted_status,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 26,
+            supported: 27,
             requested: 15,
         })
     ));
@@ -459,7 +469,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_disposal,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 26,
+            supported: 27,
             requested: 14,
         })
     ));
@@ -472,7 +482,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         latest_only_status,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 26,
+            supported: 27,
             requested: 13,
         })
     ));
@@ -482,7 +492,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         profile_shaped,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 26,
+            supported: 27,
             requested: 6,
         })
     ));
@@ -494,7 +504,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_workspace_boundary,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 26,
+            supported: 27,
             requested: 12,
         })
     ));

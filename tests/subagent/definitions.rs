@@ -1272,8 +1272,9 @@ fn invalid_agent_names_are_rejected_deterministically() {
     assert_eq!(agent("deep-research_2").as_str(), "deep-research_2");
 }
 
-/// The committed durable ownership fact carries `(agent, definition_digest)`
-/// and survives a round trip through the real durable authority unchanged.
+/// The committed durable ownership fact carries
+/// `(agent, definition_digest, profile_digest)` and survives a round trip
+/// through the real durable authority unchanged.
 #[test]
 fn the_committed_identity_survives_a_durable_round_trip() {
     use rustx::durable::{ConversationStore, SqliteConversationStore};
@@ -1305,6 +1306,7 @@ fn the_committed_identity_survives_a_durable_round_trip() {
             tool_call_id: ToolCallId::new("call-sub"),
             agent: "explore".to_owned(),
             definition_digest: "sha256:d1".to_owned(),
+            profile_digest: "sha256:profile".to_owned(),
             ownership: rustx::events::types::SubagentOwnershipKind::Normal,
             workspace: rustx::runtime::workspace::WorkspaceSnapshot::shared(
                 std::path::PathBuf::from("<shared-workspace>"),
@@ -1322,12 +1324,26 @@ fn the_committed_identity_survives_a_durable_round_trip() {
             RuntimeEvent::SubagentOwnershipCommitted {
                 agent,
                 definition_digest,
+                profile_digest,
                 ..
-            } => Some((agent.clone(), definition_digest.clone())),
+            } => Some((
+                agent.clone(),
+                definition_digest.clone(),
+                profile_digest.clone(),
+            )),
             _ => None,
         })
         .expect("the ownership fact round-trips");
-    assert_eq!(fact, ("explore".to_owned(), "sha256:d1".to_owned()));
+    assert_eq!(
+        fact,
+        (
+            "explore".to_owned(),
+            "sha256:d1".to_owned(),
+            "sha256:profile".to_owned()
+        ),
+        "both the source-definition identity and the effective execution-profile identity are \
+         durable facts"
+    );
 }
 
 /// The Runtime Client projection of a subagent carries the named-agent
@@ -1347,7 +1363,7 @@ fn the_runtime_client_projection_carries_the_named_identity() {
         tool_call_id: ToolCallId::new("call-1"),
         agent: "explore".to_owned(),
         definition_digest: "sha256:d1".to_owned(),
-        profile_digest: Some("sha256:p1".to_owned()),
+        profile_digest: "sha256:p1".to_owned(),
         workspace: rustx::runtime::workspace::WorkspaceSnapshot::shared(std::path::PathBuf::from(
             "<shared-workspace>",
         )),

@@ -2004,6 +2004,7 @@ fn audited_proposals_reject_all_dependent_tool_transitions_atomically() {
                 tool_call_id: call_id,
                 agent: "profile".to_owned(),
                 definition_digest: "sha256:definition".to_owned(),
+                profile_digest: "sha256:profile".to_owned(),
                 ownership: rustx::events::types::SubagentOwnershipKind::Normal,
                 workspace: rustx::runtime::workspace::WorkspaceSnapshot::shared(
                     std::path::PathBuf::from("<shared-workspace>"),

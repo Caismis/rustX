@@ -83,6 +83,12 @@ and named-Subagent extensions are separate compositions, and a child never
 implicitly inherits the root's set. A role that omits `extensions` composes the
 built-in defaults, not whatever the invoking runtime happens to run with.
 
+The invoking Agent's own frozen composition does reach the resolver, but only
+as **delegation authority** for an explicit invocation override — never as an
+inheritance source. A child composes an extension for exactly two reasons: its
+definition authored it, or an entitled caller asked for it. See
+[Delegation authority](#delegation-authority).
+
 A named role is the **default** child execution profile, not the final one. One
 invocation may replace `tools`, `skills`, and `extensions` for exactly that
 child; see [Invocation-scoped overrides](#invocation-scoped-overrides). Every
@@ -185,10 +191,36 @@ For the main model:
 - tools, Skills, and extensions are separate authorization domains. Holding one
   never implies holding another, and a dimension the caller did not override is
   never judged against the parent's registry at all;
-- extensions are authorized *by configuration*, not by name. A requested
-  Agent Status composition is authorized only when the role's or the invoking
-  Agent's own composition already holds it: each contributor may be switched
-  **off** but never on, and `time.timezone` must match exactly or be absent.
+- extensions are authorized *by configuration*, not by name, and the union is
+  taken at that granularity. A composition is not a set of identities, so
+  "the role authorizes the whole composition **or** the invoking Agent does"
+  would be strictly narrower than a union: it refuses a request whose
+  contributors are each legitimately held, only because no single source holds
+  all of them at once. Each behavior-affecting contributor is authorized
+  independently instead:
+
+  ```text
+  Agent Status composed at all  some source composes Agent Status
+                                (composing it composes the always-on Todo
+                                 contributor, so it is never a free wrapper)
+  time.enabled = true           some source composes Agent Status with Time
+                                enabled AND the same EFFECTIVE timezone
+  background.enabled = true     some source composes Agent Status with
+                                Background enabled
+  a contributor set to false    narrowing; needs no authority at all
+  extensions omitted entirely   narrowing; needs no authority at all
+  ```
+
+  So a role holding UTC Time with Background off, and an invoking Agent holding
+  Background with Time off, together authorize a child with both on — Time from
+  the role, Background from the invoking Agent, nothing manufactured.
+
+  Timezone authority is decided on the zone the child would **render**, never
+  on whether `time.timezone` was written. An omitted zone renders UTC, so it is
+  a request for UTC and needs an authority that itself renders UTC; a role
+  rendering `Asia/Shanghai` does not cover it. Treating absence as
+  "unspecified" would have made it a wildcard that manufactured UTC out of any
+  timezone authority at all.
 
 A Workflow Agent node's override is compiled program data. It is validated at
 compilation and again during resource-generation preparation, and it is not
@@ -323,41 +355,109 @@ because a caller asked for it and was entitled to.
 
 ### Effective execution-profile identity
 
-`SubagentDefinitionDigest` continues to identify the **source definition**. It
-no longer uniquely identifies one child once overrides exist, so
-`ResolvedSubagentSpec::profile_digest()` is the deterministic identity of the
-**effective execution profile**. It is derived from the frozen contract rather
-than stored beside it, so it is frozen exactly as strongly as the contract and
-cannot disagree with the specification it labels; the child recomputes the same
-value from the same frozen bytes.
-
-The versioned canonical framing covers:
+The two digests are **separate identities** and neither is derived from the
+other:
 
 ```text
-agent name, source definition digest, instructions
+SubagentDefinitionDigest              identity of the SOURCE named definition
+                                      (its routing description, its DEFAULT
+                                      tool/Skill/extension selections, its
+                                      authored spellings)
+
+ResolvedSubagentSpec::profile_digest  identity of the FINAL FROZEN effective
+                                      child execution contract, after
+                                      replacement
+```
+
+`SubagentDefinitionDigest` continues to identify the source definition, and no
+longer uniquely identifies one child once overrides exist. The profile digest
+obeys one rule:
+
+> The digest identifies the semantic final frozen execution profile, not its
+> authoring history, and no behavior-affecting frozen field may be omitted.
+
+So the source definition digest is deliberately **not** part of the profile
+preimage. A routing description never executes; a default Tool, Skill, or
+extension selection that an invocation replaced completely stops existing
+before the child is frozen. Both would otherwise split one effective profile
+into two identities. Every behavior-affecting field the definition digest
+summarizes is framed directly instead, as its final frozen value.
+
+The identity is derived from the frozen contract rather than stored beside it,
+so it is frozen exactly as strongly as the contract and cannot disagree with
+the specification it labels; the child recomputes the same value from the same
+frozen bytes. The invoking attempt also commits it durably with child
+ownership, so it survives a restart unchanged (see
+[Durable execution identity](#durable-execution-identity)).
+
+The versioned canonical framing (`rustx-subagent-profile-v2`) covers:
+
+```text
+agent name, instructions, workspace policy, execution deadline
 frozen model decision   model reference, protocol, context window,
                         model and effective output budgets, reasoning profile
                         and semantics, effective and declared capabilities,
-                        compat, effective request parameters, summary policy
+                        compat, effective request parameters
+frozen summary policy   "follows the session primary", or an explicit
+                        invocation framed by the SAME helper as the primary,
+                        so a summary model is identified exactly as
+                        completely as the primary one
 project instruction chain   path AND content, in order
-workspace policy, execution deadline
 effective tools         origin, exact ToolId, model-facing name, and the
                         cross-process MCP identity where one exists
 effective Skills        exact SkillId + SkillVersionId and the visible name
-effective extensions    the closed composition's canonical framing
-materialization plane   exactly the external source identities required
+materialization plane   exactly the external source identities required. The
+                        bindings behind them are physical (transport, resource
+                        root) or secret (credentials); the one behavior they
+                        carry — the invocation policy a server imposes on its
+                        tools — is already framed exactly, through each MCP
+                        tool's cross-process identity above
+effective extensions    the closed composition's EFFECTIVE framing, so an
+                        omitted timezone frames as the UTC it renders
 ```
 
-and deliberately excludes:
+Values whose serialization carries authoring shape are framed by their
+effective semantics rather than through that serializer: an omitted
+`time.timezone` frames as the UTC it renders, and `ModelCompat` frames its five
+translation decisions rather than only the ones a catalog spelled out. Two
+values that behave identically are one effective profile.
+
+The framing deliberately excludes:
 
 ```text
+source-definition-only  the definition digest, and with it the role's routing
+  provenance            description and its replaced-away defaults
+desired model config    FrozenModelSpec::configured records what was ASKED
+                        for; the resolved invocations are the authority
+provider binding        provider identity, endpoints, credential sources, and
+                        any admitted credential value
 execution identities    SubagentId, conversation/agent ids, tool call id
 timestamps              nothing time-derived enters the preimage
 physical paths          staging roots, Skill source roots, remapped locations
 raw payload formatting  the override's key order, whitespace, duplicates, or
                         whether an override was written at all
-provider binding        endpoints and credential material
 ```
+
+The provider-binding exclusion is a contract, not an omission: rotating a
+credential or repointing an endpoint at the same model leaves the identity
+unchanged, on the primary invocation and on an explicit summary alike.
+
+### Durable execution identity
+
+> Once `SubagentOwnershipCommitted` exists, both the source
+> `definition_digest` and the effective `profile_digest` are durable execution
+> facts and survive restart unchanged.
+
+The ownership commit is the one boundary that writes them, from the frozen
+`ResolvedSubagentSpec`. Recovery restores exactly the committed values and
+never recomputes either from the current role definition or the current
+resource generation: both are mutable, and a reload that redefines the same
+agent name must not relabel an already-committed child. Runtime Client projects
+both beside each other for a live child and a recovery-projected one alike.
+
+Only the digests are persisted. The effective Tool, Skill, and extension bodies
+they summarize are deliberately not durable: the digest is the bounded
+correlation fact.
 
 Excluding the raw payload is the point: two invocations that produce the same
 effective profile — no override, and an override restating the defaults — share

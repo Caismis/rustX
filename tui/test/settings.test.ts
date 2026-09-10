@@ -8,7 +8,9 @@ import { agentStatus, attemptModel, attemptView, runtimeCursor, sessionModel, sn
 
 it("CFG238 shares the native protocol fixture and explicit lifetimes", () => {
   const fixture: { request: RuntimeClientRequest; result: RuntimeClientResult; lifetimes: SettingsLifetimes } = JSON.parse(readFileSync(new URL("../../tests/fixtures/runtime-client/settings-v26.json", import.meta.url), "utf8"));
-  assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 26);
+  // The fixture is named for the version that introduced its shape; v27 added
+  // the subagent `profile_digest` and left the settings contract untouched.
+  assert.equal(RUNTIME_CLIENT_PROTOCOL_VERSION, 27);
   assert.equal(fixture.request.method, "default_save");
   if (fixture.request.method === "default_save") {
     assert.equal(fixture.request.scope, "user");

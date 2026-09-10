@@ -855,13 +855,14 @@ pub struct RuntimeClientSubagent {
     /// It distinguishes two children of one named agent that an authorized
     /// invocation override specialized differently — the same
     /// `definition_digest`, different effective tools, Skills, or extensions.
-    /// `None` for a recovery-projected record.
+    /// It is committed with durable ownership, so it survives a restart
+    /// unchanged and a recovery-projected child reports the same value a live
+    /// one does.
     ///
     /// It is a bounded correlation identity and nothing more: no effective
     /// selection, prompt, Skill body, or materialization detail is projected
     /// with it, and no authority decision reads it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub profile_digest: Option<String>,
+    pub profile_digest: String,
     /// The authoritative lifecycle state.
     pub state: crate::runtime::subagent::SubagentState,
     /// The bounded terminal failure/cancellation diagnostic, once known.

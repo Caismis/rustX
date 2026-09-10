@@ -708,7 +708,9 @@ async fn sub258_skill_delegation_follows_frozen_model_visible_authority() {
     );
 
     // An extension refusal names exactly what was requested, derived from the
-    // requested composition rather than written out at the call site.
+    // closed vocabulary rather than written out at the call site, and its
+    // detail names the first uncovered contributor rather than the whole
+    // composition — the ceiling is a per-contributor union.
     let bare = Lab::new();
     bare.write_config(
         &serde_json::json!({
@@ -723,22 +725,44 @@ async fn sub258_skill_delegation_follows_frozen_model_visible_authority() {
     );
     let bare_product = bare.compose().await;
     let bare_resources = bare_product.runtime().runtime_resources();
+    let refused = delegate(
+        &bare_resources,
+        "reviewer",
+        Some(&parse_override(
+            serde_json::json!({"extensions": {"agentStatus": {"enabled": true}}}),
+        )),
+        &parent_of(&bare_resources),
+    )
+    .expect_err("neither the role nor this caller composes Agent Status");
+    let SubagentResolutionError::UnauthorizedExtension { extension, detail } = &refused else {
+        panic!("an unauthorized extension is its own failure class: {refused:?}");
+    };
+    assert_eq!(extension, "agentStatus", "the refusal names the extension");
     assert_eq!(
+        detail, "neither authority composes the Agent Status extension at all",
+        "the refusal names the contributor no authority source covers"
+    );
+
+    // The same caller and the same role authorize the request as soon as one
+    // legitimate source holds it, so the refusal above is an authority
+    // verdict rather than a path that refuses every extension.
+    let entitled = parent_with_extensions(
+        &bare_resources,
+        rustx::extensions::NativeAgentExtensionsDocument::default().resolve(),
+    );
+    assert!(
         delegate(
             &bare_resources,
             "reviewer",
             Some(&parse_override(
-                serde_json::json!({"extensions": {"agentStatus": {"enabled": true}}})
+                serde_json::json!({"extensions": {"agentStatus": {"enabled": true}}}),
             )),
-            &parent_of(&bare_resources),
-        ),
-        Err(SubagentResolutionError::UnauthorizedExtension {
-            extension: "agentStatus".to_owned(),
-            detail: "neither this agent's own composition nor the invoking agent's composition \
-                     authorizes the requested extension configuration"
-                .to_owned(),
-        }),
-        "the refusal names the requested extension"
+            &entitled,
+        )
+        .expect("the caller's own composition authorizes it")
+        .extensions
+        .agent_status()
+        .is_some()
     );
 
     // Selecting a Skill grants no Tool: the effective tool set is exactly the
@@ -1276,6 +1300,108 @@ async fn sub258_the_effective_profile_digest_follows_its_documented_contract() {
             .expect("encode")
             .contains("test-only-secret"),
         "no credential material rides in the frozen specification"
+    );
+}
+
+/// The two identities are **separate**: `definition_digest` names the source
+/// definition, `profile_digest` names the final frozen execution contract.
+///
+/// So a change to the source definition that leaves the effective contract
+/// semantically identical must move the first and leave the second alone.
+/// Three such changes are proven here against real published generations:
+/// the role's routing description (which never executes at all), and a
+/// default Tool/Skill/extension selection that the invocation replaces
+/// completely (which stops existing before the child is frozen).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sub258_replaced_defaults_and_routing_prose_do_not_change_the_profile_digest() {
+    let lab = Lab::new();
+    lab.write_skill("review-guidance", "How to review", "guidance body");
+    lab.write_skill("security-review", "How to review security", "security body");
+    lab.write_config(&reviewer_roles(), &["read", "grep", "subagent"], &[]);
+    let product = lab.compose().await;
+
+    // Every dimension the two definitions differ in is replaced by this one
+    // request, so the effective contract is identical on both sides.
+    let requested = parse_override(serde_json::json!({
+        "tools": {"builtin": ["read"]},
+        "skills": ["review-guidance"],
+        "extensions": {"agentStatus": {"enabled": true}},
+    }));
+
+    let r1 = product.runtime().runtime_resources();
+    // The caller holds Agent Status itself, so the extension dimension stays
+    // authorized across both generations regardless of the role's default.
+    let r1_parent = parent_with_extensions(
+        &r1,
+        rustx::extensions::NativeAgentExtensionsDocument::default().resolve(),
+    );
+    let before = delegate(&r1, "reviewer", Some(&requested), &r1_parent).expect("R1 resolution");
+
+    // R2 rewrites the role's routing prose and every default the request
+    // replaces. Nothing else about the role changes.
+    lab.write_config(
+        &serde_json::json!({
+            "reviewer": {
+                "description": "An entirely different routing description.",
+                "tools": {"builtin": ["grep"]},
+                "skills": ["security-review"],
+                "extensions": {"agentStatus": {"enabled": false}},
+            }
+        }),
+        &["read", "grep", "subagent"],
+        &[],
+    );
+    product
+        .runtime()
+        .reload_resources()
+        .await
+        .expect("R2 publishes");
+    let r2 = product.runtime().runtime_resources();
+    let r2_parent = parent_with_extensions(
+        &r2,
+        rustx::extensions::NativeAgentExtensionsDocument::default().resolve(),
+    );
+    let after = delegate(&r2, "reviewer", Some(&requested), &r2_parent).expect("R2 resolution");
+
+    assert_ne!(
+        before.definition_digest, after.definition_digest,
+        "the source definitions really did change"
+    );
+    assert_eq!(
+        tool_names(&before),
+        tool_names(&after),
+        "the effective tools are identical"
+    );
+    assert_eq!(skill_names(&before), skill_names(&after));
+    assert_eq!(before.extensions, after.extensions);
+    assert_eq!(
+        before.profile_digest(),
+        after.profile_digest(),
+        "one effective execution contract is one effective profile identity, however the \
+         source definition it came from was respelled"
+    );
+
+    // ...and the separation is not vacuous: a change that reaches the
+    // effective contract still moves the profile identity.
+    let narrowed = delegate(
+        &r2,
+        "reviewer",
+        Some(&parse_override(serde_json::json!({
+            "tools": {"builtin": ["grep"]},
+            "skills": ["review-guidance"],
+            "extensions": {"agentStatus": {"enabled": true}},
+        }))),
+        &r2_parent,
+    )
+    .expect("resolution");
+    assert_ne!(
+        narrowed.profile_digest(),
+        after.profile_digest(),
+        "a materially different effective profile still has its own identity"
+    );
+    assert_eq!(
+        narrowed.definition_digest, after.definition_digest,
+        "...while both children still name the same source definition"
     );
 }
 

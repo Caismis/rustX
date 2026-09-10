@@ -109,7 +109,7 @@
           "type": "boolean"
         },
         "timezone": {
-          "description": "The optional IANA timezone used only by Time presentation.",
+          "description": "The optional IANA timezone used only by Time presentation. Omitting it\nrenders UTC.",
           "type": [
             "string",
             "null"

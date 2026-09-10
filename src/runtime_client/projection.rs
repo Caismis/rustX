@@ -5521,7 +5521,7 @@ mod tests {
                 tool_call_id: ToolCallId::new("call-1"),
                 agent: "explore".to_owned(),
                 definition_digest: "sha256:d1".to_owned(),
-                profile_digest: None,
+                profile_digest: "sha256:p1".to_owned(),
                 workspace: WorkspaceSnapshot::shared(std::path::PathBuf::from(
                     "<shared-workspace>",
                 )),
