@@ -234,6 +234,11 @@ impl RuntimeClientProjection {
             snapshot: RuntimeClientSnapshot {
                 settings_evidence: super::settings::SettingsEvidence::LiveSession,
                 launch_settings: None,
+                // Absent until the host installs the attached runtime's own
+                // frozen composition. A projection with no runtime behind it
+                // — durable historical inspection — keeps it absent rather
+                // than reconstructing one.
+                effective_extensions: None,
                 settings_lifetimes: super::settings::SettingsLifetimes::default(),
                 workflows: crate::runtime::workflow::read_model::WorkflowSnapshot::default(),
                 conversation_id,
@@ -306,11 +311,30 @@ impl RuntimeClientProjection {
         if evidence == super::settings::SettingsEvidence::FrozenChild {
             self.snapshot.settings_lifetimes.model =
                 super::settings::SettingsBoundary::FrozenAdmission;
+            // A child's extension composition is not a launch capture: it is
+            // the execution profile its invoking generation resolved and
+            // froze into `ResolvedSubagentSpec`.
+            self.snapshot.settings_lifetimes.extensions =
+                super::settings::SettingsBoundary::FrozenAdmission;
         }
     }
 
     pub(crate) fn set_launch_settings(&mut self, launch: Option<super::settings::LaunchSettings>) {
         self.snapshot.launch_settings = launch;
+    }
+
+    /// Installs the frozen effective native Agent Extension composition of
+    /// the attached Agent runtime (Issue #256).
+    ///
+    /// The host calls this once, at construction, from
+    /// [`ConversationRuntime::native_extensions`](crate::runtime::ConversationRuntime::native_extensions).
+    /// There is no later mutation seam: the projected composition changes
+    /// only when the runtime behind the projection is a different one.
+    pub(crate) fn set_effective_extensions(
+        &mut self,
+        extensions: super::settings::EffectiveNativeAgentExtensions,
+    ) {
+        self.snapshot.effective_extensions = Some(extensions);
     }
 
     pub(crate) fn bootstrap(
@@ -3202,7 +3226,7 @@ mod tests {
             )
             .expect("valid test context engine"),
             Arc::new(FakeContextSummarizer::new(Vec::new())),
-            AgentStatusEngine::default(),
+            Some(AgentStatusEngine::default()),
             CompactionBudgets::new(1, 1, 1_000_000),
         )
     }
@@ -3646,7 +3670,7 @@ mod tests {
         let runtime = ContextRuntime::with_scripted_summarizer(
             engine,
             Arc::new(FakeContextSummarizer::new(vec![summary_step])),
-            AgentStatusEngine::default(),
+            Some(AgentStatusEngine::default()),
             CompactionBudgets::new(1, 1, 1_000_000),
         );
         let tool_runtime = crate::scripted_suites::common::tool_runtime("projection-order");

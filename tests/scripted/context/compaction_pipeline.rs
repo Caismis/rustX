@@ -416,7 +416,10 @@ fn runtime(window: u64, summarizer: Arc<FakeContextSummarizer>) -> ContextRuntim
     ContextRuntime::with_scripted_summarizer(
         engine(window),
         summarizer,
-        AgentStatusEngine::new(AgentStatusConfig::default(), Arc::new(FixedClock)),
+        Some(AgentStatusEngine::new(
+            AgentStatusConfig::default(),
+            Arc::new(FixedClock),
+        )),
         CompactionBudgets::new(1, 1, 1_000_000),
     )
 }

@@ -93,7 +93,7 @@ fn runtime(model: &Arc<FakeModel>) -> rustx::context::ContextRuntime {
             summary_output_cap: None,
         },
         estimator,
-        rustx::context::AgentStatusEngine::default(),
+        Some(rustx::context::AgentStatusEngine::default()),
         &snapshot,
         rustx::model::ModelTimeoutPolicy::default(),
         support::default_monotonic_clock(),
@@ -118,7 +118,7 @@ fn compacting_runtime() -> ContextRuntime {
         Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
             "summary".to_owned(),
         )])),
-        AgentStatusEngine::default(),
+        Some(AgentStatusEngine::default()),
         CompactionBudgets::new(1, 1, 1_000_000),
     )
 }

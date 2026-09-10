@@ -564,7 +564,11 @@ published.
 ## Historical observations and lineage
 
 Agent Status is an optional runtime-sourced canonical User context fact for a
-successful primary model-turn start. One finite opportunity set may contain
+successful primary model-turn start. It is a launch-scoped Native Agent
+Extension (Issue #256): whether a runtime composes it at all is decided once,
+at composition, from the `extensions` document, and a resource reload can
+neither install nor remove it. With the extension absent, the runtime is
+ordinary in every other respect and emits no status at all. One finite opportunity set may contain
 FreshInbound, PostToolBatch, or both; a complete settled tool batch marks the
 attempt-local PostToolBatch member only after canonical ToolResult settlement,
 and never creates a model turn. Multiple status messages may remain in their

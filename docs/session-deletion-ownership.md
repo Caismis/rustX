@@ -208,7 +208,7 @@ known graph lineages and typed child ownership, opening existing stores with
 read/write authority to recover journals before any read-only Session selection.
 `recover_existing` requires and retains the product writer guard and never uses
 SQLite CREATE flags. This recovery is not part of management or preflight. There is no migration or
-compatibility reader. Child IPC **19 -> 20** adds explicit product-root identity.
+compatibility reader. Child IPC **20 -> 21** (after integrating Issue #256) adds explicit product-root identity.
 
 Authoritative layout:
 

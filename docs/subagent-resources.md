@@ -58,6 +58,13 @@ agentsMd:
 worktree:
   enabled: true
   requireCleanParent: true
+extensions:
+  agentStatus:
+    enabled: true
+    time:
+      enabled: false
+    background:
+      enabled: true
 ---
 You are the review subagent. Return evidence for the requested review.
 ```
@@ -92,6 +99,14 @@ schema is [subagent.schema.json](../schemas/subagent.schema.json).
 | `agentsMd.files` | Ordered supplemental guidance paths; default empty, at most eight. They are distinct project instructions, never the primary role body. |
 | `worktree.enabled` | Boolean, default false. |
 | `worktree.requireCleanParent` | Boolean, default true; applies when Git isolation is enabled. |
+| `extensions.agentStatus` | This role's own closed [Native Agent Extension](launch-configuration.md#native-agent-extensions) composition: `enabled` (default true), `time.enabled`/`time.timezone`, `background.enabled`. Omission means this role's built-in defaults, never the invoking root Agent's configuration. |
+
+Role extension composition is **independently authored**: root Agent extensions
+and named-Subagent extensions are separate compositions, and a child never
+implicitly inherits the root's set. A role that omits `extensions` composes the
+built-in defaults, not whatever the invoking runtime happens to run with. There
+is no invocation-time extension override: the model chooses which named agent
+runs and nothing else.
 
 No role field overrides host-owned approval policy, external-source enablement,
 credentials, tool execution policies, model capabilities, or Workflow ownership.
@@ -162,14 +177,21 @@ authoritative. There is no additional registry, executor, epoch, or publisher.
 `SubagentResolver::resolve` freezes `ResolvedSubagentSpec` from the invoking
 generation during native preflight, before process staging and durable ownership
 commit. It contains instructions, complete model authority, exact Tool policy,
-Skill identities, project guidance, workspace policy, and deadline. A specification
+Skill identities, project guidance, workspace policy, deadline, and the role's
+frozen native Agent Extension composition. A specification
 frozen from R1 retains R1 after R2 publishes; a later resolution receives R2.
+Resolution reads the definition and the invoking generation's authority only:
+the root Agent's `extensions` document is not an input, so it cannot widen,
+narrow, or reinterpret a child's extension set.
 Normal reload still obeys the existing runtime quiescence requirements.
 
 Child composition and `FrozenSubagentResourceLoader` consume this frozen native
 specification. Workspace/Git worktree acquisition supplies physical workspace
 ownership only. It never restarts launch resolution, reads role roots, walks an
-AGENTS.md chain, discovers Skills, or widens MCP/Python/Tool authority. Skill bodies
+AGENTS.md chain, discovers Skills, or widens MCP/Python/Tool authority. The child
+materializes the frozen extension composition exactly as it materializes every
+other frozen decision: it never rereads `rustx.jsonc`, host or project
+configuration, or role files to reinterpret which extensions it owns. Skill bodies
 retain their established progressive-disclosure semantics.
 
 Schema 8 removes inline role payloads and `instructionsFile`; older runtime

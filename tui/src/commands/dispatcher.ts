@@ -1037,9 +1037,61 @@ function boundaryLabel(boundary: import("../protocol/types.ts").SettingsBoundary
   return labels[boundary];
 }
 
+/**
+ * Render the attached Agent's frozen native Agent Extension composition
+ * (Issue #256).
+ *
+ * Three states are deliberately distinct here, because they are distinct
+ * native facts:
+ *
+ * - `effectiveExtensions === null` — the runtime published no authoritative
+ *   composition to project (historical-only inspection). Nothing is filled
+ *   in from disk configuration or built-in defaults;
+ * - `agent_status === null` — the extension is not part of this Agent's
+ *   composition at all;
+ * - `agent_status` present — the extension is composed, and its frozen
+ *   contributor configuration is shown as the runtime froze it.
+ *
+ * Enablement is read from this projection alone: the `statuses` window says
+ * what was composed for a step, and an enabled extension with no eligible
+ * contribution yet is still enabled.
+ */
+function renderExtensions(state: PresentationState): string[] {
+  const effective = state.effectiveExtensions;
+  if (effective === null) {
+    // No composition exists, so no boundary is claimed for one either.
+    return [
+      "### Native Agent Extensions (evidence unavailable)",
+      "- no effective extension composition exists for historical-only inspection",
+    ];
+  }
+  const heading = `### Native Agent Extensions (${lifetime(state, "extensions")})`;
+  const status = effective.agent_status;
+  if (status === null) {
+    return [heading, "- Agent Status: disabled (not composed for this Agent)", extensionNote(state)];
+  }
+  return [
+    heading,
+    "- Agent Status: enabled",
+    `  - Time: ${status.time.enabled ? "enabled" : "disabled"}`,
+    `  - timezone: ${status.time.timezone ?? "none configured"}`,
+    `  - Background: ${status.background.enabled ? "enabled" : "disabled"}`,
+    extensionNote(state),
+  ];
+}
+
+/** The lifetime this composition actually has, in the reader's terms. */
+function extensionNote(state: PresentationState): string {
+  return state.settingsEvidence === "frozen_child"
+    ? "This is the child execution profile its invoking generation resolved and froze; a later role or resource publication does not change it."
+    : "Frozen for this launch: /reload republishes resources and never recomposes extensions, while a restart resolves the current document and may compose a different set. `rustx config show --sources` describes that prospective next launch, not this composition.";
+}
+
 /** Render only native facts; never consult disk or reconstruct old requests. */
 export function renderSettings(state: PresentationState): string {
-  if (state.settingsEvidence === "historical_partial") return renderModel(state);
+  if (state.settingsEvidence === "historical_partial") {
+    return [renderModel(state), ...renderExtensions(state)].join("\n");
+  }
 
   const launch = state.launchSettings;
   const source = (value: import("../protocol/types.ts").SettingOrigin) =>
@@ -1063,6 +1115,7 @@ export function renderSettings(state: PresentationState): string {
     `- published revision: ${state.resources.revision}; capability revision: ${state.capabilities.revision}`,
     renderTools(state),
     renderSkills(state),
+    ...renderExtensions(state),
     `### Admitted execution (${lifetime(state, "attempt")})`,
     `- model: ${state.attempt?.model?.primary.model ?? "unavailable / no admitted attempt"}`,
     `- resource revision: ${admitted?.resource_revision ?? "unavailable"}`,

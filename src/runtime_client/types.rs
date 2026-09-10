@@ -298,7 +298,15 @@ pub enum RuntimeClientSessionRequest {
 /// compatibility shim, no dual questionnaire mode, and no fallback parser.
 /// Version 25 adds captured launch facts, explicit lifetimes, bounded user-default
 /// operations, and nullable historical model/admission evidence. No v24 decoding.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 25;
+/// Version 26 adds `effective_extensions`: the frozen effective native Agent
+/// Extension composition of the attached Agent runtime, plus its
+/// `settings_lifetimes.extensions` boundary (Issue #256). It is a closed
+/// typed record — one named member per native extension — projected from the
+/// composition the runtime already materialized, never a reread of authoring
+/// configuration and never inferred from Agent Status observations. It is
+/// absent only for historical-only durable inspection. No v25 decoding, and
+/// no legacy top-level `agent_status` configuration form.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 26;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1285,7 +1293,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 25);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 26);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

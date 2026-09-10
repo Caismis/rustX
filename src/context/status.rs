@@ -86,11 +86,15 @@ pub const BACKGROUND_REMINDER_MESSAGE_INTERVAL: usize = 8;
 
 const DEFAULT_ENABLED: bool = true;
 
-/// Launch-scoped Agent Status configuration.
+/// The frozen contributor configuration of a composed Agent Status extension.
 ///
-/// Omitting `agentStatus` or either nested module enables both built-in
-/// modules. Unknown fields remain rejected by the surrounding strict serde
-/// boundary.
+/// This value exists only when the owning composition's
+/// [`NativeAgentExtensions`](crate::extensions::NativeAgentExtensions)
+/// contains the Agent Status extension: "the extension is absent" is
+/// represented by that composition, never by a configuration with everything
+/// switched off. The authored surface is
+/// [`AgentStatusExtensionDocument`](crate::extensions::AgentStatusExtensionDocument),
+/// under the closed launch-scoped `extensions` record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 #[derive(schemars::JsonSchema)]
@@ -103,7 +107,7 @@ pub struct AgentStatusConfig {
     pub background: BackgroundStatusConfig,
 }
 
-/// Launch-scoped configuration for the Time status module.
+/// Configuration of the bounded Time status contributor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 #[derive(schemars::JsonSchema)]
@@ -126,7 +130,7 @@ impl Default for TimeStatusConfig {
     }
 }
 
-/// Launch-scoped configuration for the Background status module.
+/// Configuration of the bounded Background status contributor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 #[derive(schemars::JsonSchema)]

@@ -131,7 +131,7 @@ fn runtime(summarizer_steps: Vec<FakeSummaryStep>) -> ContextRuntime {
     ContextRuntime::with_scripted_summarizer(
         engine,
         Arc::new(FakeContextSummarizer::new(summarizer_steps)),
-        AgentStatusEngine::default(),
+        Some(AgentStatusEngine::default()),
         CompactionBudgets::new(1, 1, 1_000_000),
     )
 }
@@ -149,7 +149,7 @@ fn compacting_runtime(summarizer_steps: Vec<FakeSummaryStep>) -> ContextRuntime 
     ContextRuntime::with_scripted_summarizer(
         engine,
         Arc::new(FakeContextSummarizer::new(summarizer_steps)),
-        AgentStatusEngine::default(),
+        Some(AgentStatusEngine::default()),
         CompactionBudgets::new(1, 1, 1_000_000),
     )
 }
@@ -837,7 +837,7 @@ async fn transient_retry_does_not_regenerate_status_or_contributors() {
     let runtime = ContextRuntime::with_scripted_summarizer_and_assembly(
         context_engine,
         Arc::new(FakeContextSummarizer::new(Vec::new())),
-        status_engine,
+        Some(status_engine),
         assembly,
         CompactionBudgets::new(1, 1, 1_000_000),
     );

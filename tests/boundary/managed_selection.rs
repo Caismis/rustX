@@ -169,7 +169,7 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
                 summary_output_cap: None,
             },
             Arc::new(rustx::context::DefaultTokenEstimator),
-            rustx::context::AgentStatusEngine::default(),
+            Some(rustx::context::AgentStatusEngine::default()),
             &model_snapshot,
             rustx::model::ModelTimeoutPolicy::default(),
             support::default_monotonic_clock(),

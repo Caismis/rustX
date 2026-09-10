@@ -47,7 +47,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::context::{AgentStatusConfig, SessionContextPolicy};
+use crate::context::SessionContextPolicy;
 use crate::model::deadline::ModelTimeoutPolicy;
 use crate::runtime::identity::{AgentId, ConversationId, ProcessUnitId, SubagentId};
 use crate::runtime::types::{ApprovalMode, CancellationReason};
@@ -87,7 +87,14 @@ use crate::runtime::workspace::WorkspaceSnapshot;
 /// The current version adds typed native deadline interruption to interaction
 /// outcomes and durable approval settlement, without fabricating user intent.
 /// Version 19 carries Review and required Questionnaire invocation correlation.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 20;
+/// Version 20 removes the inherited launch-scoped Agent Status configuration
+/// from the child specification and carries the child's own frozen native
+/// Agent Extension composition inside `resolved` instead (Issue #256): root
+/// and named-role extension sets are independently authored, so there is no
+/// longer any inheritance channel between them on this transport.
+/// Version 21 adds the canonical product-root identity for child lifecycle
+/// participation (Issue #254), alongside the version 20 extension composition.
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 21;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -176,8 +183,6 @@ pub(crate) struct SubagentChildSpec {
     /// inherited by the child unchanged (Issue #204): the child applies it
     /// to the hard/idle deadlines of its own foreground Tool executions.
     pub tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy,
-    /// The launch-scoped Agent Status configuration of the child.
-    pub agent_status: AgentStatusConfig,
     /// The session context policy of the child.
     pub context: SessionContextPolicy,
     /// The authoritative logical project workspace and runtime-owned
@@ -964,6 +969,7 @@ mod tests {
                 .into_iter()
                 .collect(),
             },
+            extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         }
     }
 
@@ -1081,7 +1087,6 @@ mod tests {
             approval_mode: ApprovalMode::FullAccess,
             model_timeout_policy: ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
-            agent_status: AgentStatusConfig::default(),
             context: SessionContextPolicy {
                 reserve_tokens: 1,
                 keep_recent_tokens: 2,

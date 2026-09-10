@@ -278,13 +278,20 @@ allocates IDs once, commits each accepted message through
 ConversationState::commit, and records the accepted ContextGeneration.
 Contributors cannot select provenance or identity.
 
+Agent Status is a **Native Agent Extension** (Issue #256): it is optional,
+composed for a launch through the closed `extensions` surface, and absent
+entirely when that composition omits it. Composition ownership does not change
+admission ownership — Context Assembly remains the request-time owner, and
+Agent Status never becomes a second Context Engine, message authority, or
+admission path.
+
 Agent Status remains structured runtime-owned data before rendering. At the
 single primary-model-step preparation boundary, the Agent Loop freezes one
 finite Pre-Status Surface view by copying the active Surface identities and
 hydrating only those identities from the Message Ledger. It samples the clock
 once and captures one immutable authoritative Background registry snapshot and
 one committed Todo snapshot; the closed, rustX-owned Time, Background, and Todo
-modules then evaluate those shared inputs once against one finite
+contributors then evaluate those shared inputs once against one finite
 `AgentStatusOpportunitySet`. FreshInbound and PostToolBatch are independent
 members of that set and may coexist; neither opportunity makes a module
 contribute automatically.

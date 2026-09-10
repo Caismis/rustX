@@ -99,7 +99,7 @@ fn runtime(model: &Arc<FakeModel>) -> rustx::context::ContextRuntime {
             summary_output_cap: None,
         },
         estimator,
-        rustx::context::AgentStatusEngine::default(),
+        Some(rustx::context::AgentStatusEngine::default()),
         &snapshot,
         rustx::model::ModelTimeoutPolicy::default(),
         support::default_monotonic_clock(),

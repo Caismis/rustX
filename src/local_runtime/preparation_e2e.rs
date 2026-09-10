@@ -159,7 +159,6 @@ impl Lab {
                 model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                 tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
                 ),
-                agent_status: crate::context::AgentStatusConfig::default(),
                 context: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -215,6 +214,7 @@ impl Lab {
                 project_instructions: Vec::new(),
                 materialization:
                     crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
+                extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
             },
             approval_mode: crate::runtime::ApprovalMode::Policy,
             task: "inspect the repository".to_owned(),

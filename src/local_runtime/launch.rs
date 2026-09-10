@@ -1126,9 +1126,10 @@ fn record(path: &str) -> bool {
             | "context"
             | "modelTimeoutPolicy"
             | "toolDeadlinePolicy"
-            | "agentStatus"
-            | "agentStatus.time"
-            | "agentStatus.background"
+            | "extensions"
+            | "extensions.agentStatus"
+            | "extensions.agentStatus.time"
+            | "extensions.agentStatus.background"
             | "subagents"
             | "workflows"
     )
@@ -1450,7 +1451,7 @@ partial!(PartialRuntime {
     models: PathBuf, runtime_root: PathBuf,
     schema_version: u32, agent_id: crate::runtime::identity::AgentId,
     model: PartialModel, approval_mode: crate::runtime::ApprovalMode,
-    agent_status: crate::context::AgentStatusConfig, context: PartialContext,
+    extensions: crate::extensions::NativeAgentExtensionsDocument, context: PartialContext,
     model_timeout_policy: PartialTimeout, tool_deadline_policy: PartialToolDeadline,
     mcp_servers: BTreeMap<crate::runtime::identity::McpServerId, super::config::McpServerDocument>,
     python_sources: BTreeMap<crate::runtime::identity::McpServerId, crate::capabilities::activation::SourceEnablement>,

@@ -394,7 +394,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
         matches!(
             host.attach(16),
             Err(RuntimeClientError::UnsupportedProtocolVersion {
-                supported: 25,
+                supported: 26,
                 requested: 16,
             })
         ),
@@ -403,7 +403,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         host.attach(24),
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 25,
+            supported: 26,
             requested: 24,
         })
     ));
@@ -411,15 +411,28 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         incompatible,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 25,
-            requested: 26,
+            supported: 26,
+            requested: 27,
+        })
+    ));
+    // v25 is the immediately previous contract: it carries no
+    // `effective_extensions` projection and no
+    // `settings_lifetimes.extensions` boundary (Issue #256). It is refused
+    // rather than served a snapshot whose settings sections it would
+    // misread; there is no v25 -> v26 conversion.
+    let pre_effective_extensions = host.attach(25);
+    assert!(matches!(
+        pre_effective_extensions,
+        Err(RuntimeClientError::UnsupportedProtocolVersion {
+            supported: 26,
+            requested: 25,
         })
     ));
     let old_protocol = host.attach(7);
     assert!(matches!(
         old_protocol,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 25,
+            supported: 26,
             requested: 7,
         })
     ));
@@ -433,7 +446,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         interrupted_status,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 25,
+            supported: 26,
             requested: 15,
         })
     ));
@@ -446,7 +459,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_disposal,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 25,
+            supported: 26,
             requested: 14,
         })
     ));
@@ -459,7 +472,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         latest_only_status,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 25,
+            supported: 26,
             requested: 13,
         })
     ));
@@ -469,7 +482,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         profile_shaped,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 25,
+            supported: 26,
             requested: 6,
         })
     ));
@@ -481,7 +494,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
     assert!(matches!(
         pre_workspace_boundary,
         Err(RuntimeClientError::UnsupportedProtocolVersion {
-            supported: 25,
+            supported: 26,
             requested: 12,
         })
     ));

@@ -62,7 +62,12 @@
  */
 // Version 25: captured launch/lifetime metadata, explicit default documents,
 // frozen admission resource/policy evidence, and unavailable historical models.
-export const RUNTIME_CLIENT_PROTOCOL_VERSION = 25;
+// Version 26: `effective_extensions` — the frozen effective native Agent
+// Extension composition of the attached Agent runtime — plus its
+// `settings_lifetimes.extensions` boundary (Issue #256). The runtime projects
+// the composition it already materialized; this client only renders it. There
+// is no v25 decoding and no legacy top-level `agent_status` configuration form.
+export const RUNTIME_CLIENT_PROTOCOL_VERSION = 26;
 
 // ---------------------------------------------------------------------------
 // Identities
@@ -1403,7 +1408,41 @@ export type DefaultTarget = "model_selection" | "approval_mode";
 export interface SettingsLifetimes {
   launch: SettingsBoundary; model: SettingsBoundary; approval: SettingsBoundary;
   resources: SettingsBoundary; attempt: SettingsBoundary; presentation: SettingsBoundary; saved_defaults: SettingsBoundary;
+  /**
+   * The boundary of the effective native Agent Extension composition:
+   * `launch_capture` for a root Agent, `frozen_admission` for a frozen child.
+   */
+  extensions: SettingsBoundary;
 }
+
+/**
+ * The frozen effective native Agent Extension composition of the attached
+ * Agent runtime (Issue #256).
+ *
+ * A closed record with one named member per native extension, exactly
+ * mirroring `src/runtime_client/settings.rs`. The runtime projects the
+ * composition it is already executing against; nothing here resolves,
+ * defaults, or reconstructs one, and nothing infers it from the `statuses`
+ * window — an enabled extension with no composed status for this step is
+ * still enabled.
+ *
+ * `agent_status: null` means the extension is **not part of this Agent's
+ * composition**. That is a different fact from a composed extension whose
+ * two contributors are both disabled.
+ */
+export interface EffectiveNativeAgentExtensions {
+  agent_status: EffectiveAgentStatusExtension | null;
+}
+export interface EffectiveAgentStatusExtension {
+  time: EffectiveTimeStatus;
+  background: EffectiveBackgroundStatus;
+}
+export interface EffectiveTimeStatus {
+  enabled: boolean;
+  /** The IANA timezone frozen for this composition. `null` is "none configured", not UTC. */
+  timezone: string | null;
+}
+export interface EffectiveBackgroundStatus { enabled: boolean }
 export interface AdmittedSettings { resource_revision: number; approval_mode: ApprovalMode }
 export type DefaultScope = "user";
 export type DefaultValue = { field: "model_selection"; selection: ModelDefault } | { field: "approval_mode"; mode: ApprovalMode };
@@ -1418,6 +1457,13 @@ export interface SaveDefaultResult {
 export interface RuntimeClientSnapshot {
   settings_evidence: "live_session" | "frozen_child" | "historical_partial";
   launch_settings: LaunchSettings | null;
+  /**
+   * The attached Agent runtime's own frozen extension composition, or `null`
+   * when no authoritative Agent composition is available to project
+   * (historical-only durable inspection). It is never filled in from disk
+   * configuration or built-in defaults.
+   */
+  effective_extensions: EffectiveNativeAgentExtensions | null;
   settings_lifetimes: SettingsLifetimes;
   workflows: WorkflowSnapshot;
   conversation_id: ConversationId;
