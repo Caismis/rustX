@@ -74,7 +74,10 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
     )
     .unwrap();
     let user_path = host.config_directory.join("settings.jsonc");
-    let settings = "{\n // future default A; retain this comment\n \"model\":{\"model\":\"local/a\"},\n \"environment\":{\"PRIVATE\":\"SECRET_SENTINEL\"}\n}\n";
+    // The launch also authors a distinctive native Agent Extension
+    // composition (Issue #256): every contributor field is non-default, so a
+    // projection that substituted built-in defaults could not pass below.
+    let settings = "{\n // future default A; retain this comment\n \"model\":{\"model\":\"local/a\"},\n \"extensions\":{\"agentStatus\":{\"time\":{\"timezone\":\"Asia/Shanghai\"},\"background\":{\"enabled\":false}}},\n \"environment\":{\"PRIVATE\":\"SECRET_SENTINEL\"}\n}\n";
     std::fs::write(&user_path, settings).unwrap();
     let request = super::launch::LaunchRequest::default();
     super::launch::change_trust(&request, &host, super::launch::TrustAction::Grant).unwrap();
@@ -158,6 +161,32 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
             .to_string(),
         "local/a"
     );
+    // Issue #256: the frozen effective extension composition of this exact
+    // launch, projected through the ordinary Runtime Client snapshot.
+    let frozen_extensions = crate::runtime_client::settings::EffectiveNativeAgentExtensions {
+        agent_status: Some(
+            crate::runtime_client::settings::EffectiveAgentStatusExtension {
+                time: crate::runtime_client::settings::EffectiveTimeStatus {
+                    enabled: true,
+                    timezone: Some(chrono_tz::Asia::Shanghai),
+                },
+                background: crate::runtime_client::settings::EffectiveBackgroundStatus {
+                    enabled: false,
+                },
+            },
+        ),
+    };
+    assert_eq!(
+        client_projection.effective_extensions,
+        Some(frozen_extensions.clone())
+    );
+    assert_eq!(
+        client_projection.settings_lifetimes.extensions,
+        SettingsBoundary::LaunchCapture
+    );
+    // Regression 3: the extension is composed and *no* Agent Status has been
+    // composed for any step yet. Enablement never comes from observations.
+    assert!(client_projection.statuses.is_empty());
     let subscription = attachment
         .subscribe_events(crate::runtime_client::RuntimeClientCursor::new(0))
         .unwrap();
@@ -317,6 +346,18 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
         before.settings_lifetimes.model,
         SettingsBoundary::NextAdmission
     );
+    // Regression 3, the other direction: real Agent Status observations now
+    // exist, and the effective-extension projection is bit-identical to the
+    // one taken before any of them did.
+    assert!(
+        !before.statuses.is_empty(),
+        "the composed Agent Status window really did fill"
+    );
+    assert_eq!(
+        before.effective_extensions,
+        Some(frozen_extensions.clone()),
+        "composing statuses neither installs nor reconfigures an extension"
+    );
     assert!(matches!(
         runtime.reload_resources().await,
         Err(crate::runtime::conversation_runtime::RuntimeResourceReloadError::Busy { .. })
@@ -360,6 +401,13 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
         panic!("initialized")
     };
     assert_eq!(snapshot, before_reconnect);
+    // Regression 12: reconnect reconstructs the identical authoritative
+    // effective-extension view. It is read from the same runtime-owned
+    // projection, so nothing was rereplayed and no document was reopened.
+    assert_eq!(
+        snapshot.effective_extensions,
+        Some(frozen_extensions.clone())
+    );
     assert_eq!(fake.requests(), vec![frozen_request.clone()]);
     assert_eq!(
         result.revision,
@@ -429,6 +477,13 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
     assert_eq!(published.resource_revision, r1.next());
     let (after_reload, _) = local.host().snapshot().unwrap();
     assert_eq!(after_reload.resources.revision, published.resource_revision);
+    // Regression 4: a *successful* resource publication advanced the
+    // revision and left the effective extension composition untouched.
+    assert_eq!(
+        after_reload.effective_extensions,
+        Some(frozen_extensions.clone()),
+        "resource publication never recomposes a launch-scoped extension set"
+    );
     assert_eq!(
         after_reload.attempt.as_ref().unwrap().model,
         before.attempt.as_ref().unwrap().model
@@ -449,7 +504,19 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
         after_failure.resources.revision,
         published.resource_revision
     );
-    std::fs::write(workspace.join("rustx.jsonc"), "{}").unwrap();
+    // A project document that disables the extension entirely, deliberately
+    // left in place for the failed reload path and the fresh resolution at
+    // the end of this test.
+    std::fs::write(
+        workspace.join("rustx.jsonc"),
+        "{\"extensions\":{\"agentStatus\":{\"enabled\":false}}}",
+    )
+    .unwrap();
+    assert_eq!(
+        local.host().snapshot().unwrap().0.effective_extensions,
+        Some(frozen_extensions.clone()),
+        "an edit to the document on disk cannot reach the running composition"
+    );
     runtime
         .submit_inbound(vec![crate::message::types::UserContentBlock::Text(
             crate::message::content::TextBlock {
@@ -495,6 +562,14 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
         .unwrap()
         .admit(|| launch.credentials.clone())
         .unwrap();
+    // The prospective next launch is the other configuration surface, and it
+    // legitimately disagrees: it reads the edited document and would compose
+    // no Agent Status at all, while the runtime above kept projecting the
+    // composition it was actually running.
+    assert!(
+        next_launch.config().extension_composition().is_empty(),
+        "the prospective next launch reads the edited extension configuration"
+    );
     assert_eq!(next_launch.config().model.model, b.model);
     assert_eq!(
         next_launch.config().model.reasoning_profile,

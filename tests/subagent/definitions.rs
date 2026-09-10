@@ -22,6 +22,7 @@ use rustx::runtime::subagent::{
     ResolvedSubagentSpec, ResolvedSubagentTool, SubagentDefinitionDigest, SubagentName,
     SubagentResolutionError, SubagentResolver,
 };
+use rustx::runtime_client::settings::EffectiveNativeAgentExtensions;
 
 const KEY_ENV: &str = "RUSTX_ISSUE144_KEY";
 const EXPLORE_AGENTS: &str = ".agents/subagents/explore/AGENTS.md";
@@ -1771,4 +1772,356 @@ async fn skill_version_identity_is_frozen_across_the_boundary() {
         over_the_wire.skills[0].catalog_entry.description, "the first skill",
         "and its frozen metadata is not reinterpreted either"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #256: independently authored native Agent Extension compositions
+// ---------------------------------------------------------------------------
+
+/// Writes a launch document whose root declares its own extension
+/// composition, alongside the named roles.
+fn write_config_with_root_extensions(
+    lab: &Lab,
+    subagents: &serde_json::Value,
+    root_extensions: &serde_json::Value,
+) {
+    let mut subagents = subagents.clone();
+    let definition_names = subagents
+        .get("roles")
+        .and_then(serde_json::Value::as_object)
+        .map(|definitions| {
+            definitions
+                .keys()
+                .map(|name| serde_json::Value::String(name.clone()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if let Some(document) = subagents.as_object_mut() {
+        document
+            .entry("main".to_owned())
+            .or_insert_with(|| serde_json::Value::Array(definition_names.clone()));
+        document
+            .entry("workflow".to_owned())
+            .or_insert_with(|| serde_json::Value::Array(definition_names));
+    }
+    crate::launch_fixture::write_roles(&lab.workspace(), &mut subagents);
+    let document = serde_json::json!({
+        "schemaVersion": 8,
+        "agentId": "agent-issue256",
+        "model": {"model": "local/model-a"},
+        "context": {"reserveTokens": 0, "keepRecentTokens": 0},
+        "defaultTools": ["read", "subagent"],
+        "extensions": root_extensions.clone(),
+        "subagents": subagents,
+    });
+    std::fs::write(
+        lab.root().join("rustx.jsonc"),
+        serde_json::to_string_pretty(&document).expect("config document"),
+    )
+    .expect("rustx.jsonc");
+}
+
+fn frozen_extensions(
+    resources: &RuntimeResourceSnapshot,
+    name: &str,
+) -> rustx::extensions::NativeAgentExtensions {
+    SubagentResolver::resolve(
+        resources,
+        &agent(name),
+        &inherited_model(),
+        &model_registry(),
+    )
+    .expect("the generation resolves the role")
+    .extensions
+}
+
+/// Issue #256 regression 6.
+///
+/// Root Agent extensions and named-Subagent extensions are independently
+/// authored compositions. The root here declares a distinctive Agent Status
+/// configuration; neither a role that declares its own, nor a role that
+/// declares none, is widened by it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ext256_root_extension_configuration_never_reaches_a_named_role() {
+    let lab = Lab::new();
+    write_config_with_root_extensions(
+        &lab,
+        &serde_json::json!({"roles": {
+            "explore": {
+                "description": "Declares its own composition.",
+                "tools": {"builtin": ["read"]},
+                "extensions": {"agentStatus": {"time": {"enabled": false}}},
+            },
+            "research": {
+                "description": "Declares no composition at all.",
+                "tools": {"builtin": ["read"]},
+            },
+        }}),
+        &serde_json::json!({"agentStatus": {
+            "enabled": true,
+            "time": {"enabled": true, "timezone": "America/New_York"},
+            "background": {"enabled": false}
+        }}),
+    );
+    let product = lab.compose().await;
+    let runtime = product.runtime();
+    let resources = runtime.runtime_resources();
+
+    // The root composed exactly what the root document declared.
+    let root = runtime
+        .context_config()
+        .status_engine
+        .as_ref()
+        .expect("the root composes its declared Agent Status extension")
+        .config()
+        .clone();
+    assert_eq!(root.time.timezone, Some(chrono_tz::America::New_York));
+    assert!(!root.background.enabled);
+
+    // The declaring role composed exactly what *it* declared.
+    let declared = frozen_extensions(&resources, "explore");
+    let declared = declared
+        .agent_status()
+        .expect("the role declares Agent Status");
+    assert!(!declared.time.enabled, "the role's own Time decision wins");
+    assert_eq!(
+        declared.time.timezone, None,
+        "the root's timezone never reaches the child"
+    );
+    assert!(
+        declared.background.enabled,
+        "the root's disabled Background never narrows the child either"
+    );
+
+    // The silent role composed the built-in defaults, not the root's.
+    let silent_frozen = frozen_extensions(&resources, "research");
+    let silent = silent_frozen
+        .agent_status()
+        .expect("an omitted role composition is the role's own default");
+    assert!(silent.time.enabled);
+    assert_eq!(silent.time.timezone, None);
+    assert!(silent.background.enabled);
+
+    // Issue #256 regression 8: root extension configuration cannot leak
+    // into a child's Runtime Client projection. The root and each child
+    // project different values, and neither child's projection carries the
+    // root's timezone or its disabled Background.
+    let root_projection = EffectiveNativeAgentExtensions::project(&runtime.native_extensions());
+    assert_eq!(
+        root_projection
+            .agent_status
+            .expect("the root composes Agent Status")
+            .time
+            .timezone,
+        Some(chrono_tz::America::New_York)
+    );
+    for child in [
+        frozen_extensions(&resources, "explore"),
+        silent_frozen.clone(),
+    ] {
+        let projected = EffectiveNativeAgentExtensions::project(&child);
+        assert_ne!(
+            projected, root_projection,
+            "a child projection is never the root's composition"
+        );
+        let status = projected.agent_status.expect("the child composes one");
+        assert_eq!(
+            status.time.timezone, None,
+            "the root's frozen timezone never appears in a child projection"
+        );
+        assert!(
+            status.background.enabled,
+            "nor does the root's disabled Background"
+        );
+    }
+
+    product.runtime().shutdown().await.unwrap();
+}
+
+/// Issue #256 regression 7: two role definitions that differ only in their
+/// Agent Status extension settings are semantically different definitions —
+/// different digests and different frozen child specifications.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ext256_extension_settings_are_part_of_a_role_identity() {
+    let lab = Lab::new();
+    lab.write_config(&serde_json::json!({"roles": {
+        "explore": {
+            "description": "Same in every respect but its extensions.",
+            "tools": {"builtin": ["read"]},
+            "extensions": {"agentStatus": {"time": {"timezone": "Asia/Shanghai"}}},
+        },
+        "research": {
+            "description": "Same in every respect but its extensions.",
+            "tools": {"builtin": ["read"]},
+            "extensions": {"agentStatus": {"enabled": false}},
+        },
+        "pinned": {
+            "description": "Same in every respect but its extensions.",
+            "tools": {"builtin": ["read"]},
+            "extensions": {"agentStatus": {"time": {"timezone": "America/New_York"}}},
+        },
+    }}));
+    let product = lab.compose().await;
+    let resources = product.runtime().runtime_resources();
+
+    let shanghai = frozen_extensions(&resources, "explore");
+    let absent = frozen_extensions(&resources, "research");
+    let new_york = frozen_extensions(&resources, "pinned");
+    assert_eq!(
+        shanghai
+            .agent_status()
+            .expect("composed")
+            .time
+            .timezone
+            .map(|zone| zone.name().to_owned()),
+        Some("Asia/Shanghai".to_owned())
+    );
+    assert!(
+        absent.is_empty(),
+        "a role may compose no native Agent Extension at all"
+    );
+    assert_eq!(
+        new_york
+            .agent_status()
+            .expect("composed")
+            .time
+            .timezone
+            .map(|zone| zone.name().to_owned()),
+        Some("America/New_York".to_owned())
+    );
+    assert_ne!(shanghai, absent);
+    assert_ne!(shanghai, new_york);
+
+    // Extension settings participate in the role's semantic identity: the
+    // three definitions differ *only* by them, and their digests differ.
+    let mut digests = vec![
+        digest_of(&resources, "explore"),
+        digest_of(&resources, "research"),
+        digest_of(&resources, "pinned"),
+    ];
+    digests.sort();
+    digests.dedup();
+    assert_eq!(
+        digests.len(),
+        3,
+        "an extension-only difference is a semantic difference"
+    );
+
+    product.runtime().shutdown().await.unwrap();
+}
+
+/// Issue #256 regression 8: a child resolved from R1 keeps its R1 extension
+/// semantics after R2 publishes different Agent Status settings.
+///
+/// The interleaving is decided by two explicit channels: the resolving task
+/// hands its frozen specification back the instant resolution completes, and
+/// parks until this test has published R2 through the real
+/// `reload_resources` boundary. Nothing waits on a clock.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ext256_a_child_frozen_on_r1_keeps_r1_extensions_after_r2_publishes() {
+    let lab = Lab::new();
+    lab.write_config(&serde_json::json!({"roles": {"explore": {
+        "description": "R1",
+        "tools": {"builtin": ["read"]},
+        "extensions": {"agentStatus": {
+            "enabled": true,
+            "time": {"enabled": true, "timezone": "Asia/Shanghai"},
+            "background": {"enabled": true}
+        }},
+    }}}));
+    let product = lab.compose().await;
+    let r1 = product.runtime().runtime_resources();
+    let r1_digest = digest_of(&r1, "explore");
+
+    let (admitted_tx, admitted_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let child = tokio::spawn(async move {
+        let frozen = SubagentResolver::resolve(
+            &r1,
+            &agent("explore"),
+            &inherited_model(),
+            &model_registry(),
+        )
+        .expect("R1 resolves");
+        admitted_tx.send(frozen.clone()).expect("hand back R1");
+        release_rx.await.expect("R2 has published");
+        // The frozen decision crosses its real serialization contract, the
+        // same way it reaches a child process.
+        serde_json::from_slice::<ResolvedSubagentSpec>(
+            &serde_json::to_vec(&frozen).expect("encode"),
+        )
+        .expect("decode")
+    });
+    let frozen = admitted_rx.await.expect("R1 froze before R2");
+
+    // R2 changes the role's extension composition entirely.
+    lab.write_config(&serde_json::json!({"roles": {"explore": {
+        "description": "R1",
+        "tools": {"builtin": ["read"]},
+        "extensions": {"agentStatus": {"enabled": false}},
+    }}}));
+    product
+        .runtime()
+        .reload_resources()
+        .await
+        .expect("R2 publishes");
+    let r2 = product.runtime().runtime_resources();
+    assert!(r2.revision().get() > 1);
+    let next = SubagentResolver::resolve(
+        &r2,
+        &agent("explore"),
+        &inherited_model(),
+        &model_registry(),
+    )
+    .expect("R2 resolves");
+    release_tx.send(()).expect("release the parked resolution");
+    let retained = child.await.expect("resolution task");
+
+    assert_eq!(retained, frozen, "the frozen decision is unchanged by R2");
+    let agent_status = retained
+        .extensions
+        .agent_status()
+        .expect("R1 composed Agent Status");
+    assert_eq!(
+        agent_status.time.timezone,
+        Some(chrono_tz::Asia::Shanghai),
+        "the R1-resolved child keeps its R1 extension semantics"
+    );
+    assert!(agent_status.background.enabled);
+    assert_eq!(
+        retained.definition_digest, r1_digest,
+        "the committed child keeps the R1 semantic identity it started with"
+    );
+    assert!(
+        next.extensions.is_empty(),
+        "R2 is authoritative for children resolved after it"
+    );
+    assert_ne!(next.definition_digest, r1_digest);
+
+    // Issue #256 regression 7: the Runtime Client effective-extension
+    // projection of that committed child is R1's, taken after R2 published.
+    // The projection has exactly one input — the frozen specification the
+    // child carries — so a child staged from `retained` reports R1 while a
+    // child staged from `next` reports absence.
+    let projected = EffectiveNativeAgentExtensions::project(&retained.extensions);
+    assert_eq!(
+        projected
+            .agent_status
+            .expect("R1 composed Agent Status")
+            .time
+            .timezone,
+        Some(chrono_tz::Asia::Shanghai),
+        "the projection of a frozen child is its own R1 composition"
+    );
+    assert_eq!(
+        EffectiveNativeAgentExtensions::project(&next.extensions),
+        EffectiveNativeAgentExtensions { agent_status: None },
+        "and a child frozen on R2 projects R2's composition, not R1's"
+    );
+    assert_ne!(
+        EffectiveNativeAgentExtensions::project(&retained.extensions),
+        EffectiveNativeAgentExtensions::project(&next.extensions)
+    );
+
+    product.runtime().shutdown().await.unwrap();
 }

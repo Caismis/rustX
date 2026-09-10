@@ -248,7 +248,7 @@ async fn child_fixture_at(
                     summary_output_cap: None,
                 },
                 estimator: Arc::new(rustx::context::DefaultTokenEstimator),
-                status_engine: rustx::context::AgentStatusEngine::default(),
+                status_engine: Some(rustx::context::AgentStatusEngine::default()),
             },
             tool_runtime: tool_runtime.clone(),
             capability: capability.clone(),
@@ -303,7 +303,6 @@ fn test_spawn_plan(runtime_root: &std::path::Path) -> SubagentSpawnPlan {
         // The frozen policies every child launch inherits (Issues #138/#204).
         model_timeout_policy: inherited_policy(),
         tool_deadline_policy: inherited_tool_deadline_policy(),
-        agent_status: rustx::context::AgentStatusConfig::default(),
         context: rustx::context::SessionContextPolicy {
             reserve_tokens: 0,
             keep_recent_tokens: 0,
@@ -335,6 +334,7 @@ fn resolved_child_spec(agent: &str) -> ResolvedSubagentSpec {
         project_instructions: Vec::new(),
         materialization:
             rustx::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
+        extensions: rustx::extensions::NativeAgentExtensionsDocument::default().resolve(),
     }
 }
 
@@ -521,7 +521,7 @@ async fn compose_parent_runtime_plane(
                 summary_output_cap: None,
             },
             estimator: Arc::new(rustx::context::DefaultTokenEstimator),
-            status_engine: rustx::context::AgentStatusEngine::default(),
+            status_engine: Some(rustx::context::AgentStatusEngine::default()),
         },
         tool_runtime: tool_runtime.clone(),
         capability: capability.clone(),

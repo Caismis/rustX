@@ -188,10 +188,10 @@ fn runtime_with(
     ContextRuntime::with_scripted_summarizer(
         engine(window, reserve, keep_recent, estimator),
         Arc::new(summarizer),
-        rustx::context::AgentStatusEngine::new(
+        Some(rustx::context::AgentStatusEngine::new(
             rustx::context::AgentStatusConfig::default(),
             Arc::new(FixedClock(fixed_time())),
-        ),
+        )),
         CompactionBudgets::new(1, 1, 1_000_000),
     )
 }
@@ -207,10 +207,10 @@ fn runtime_with_assembly(
     ContextRuntime::with_scripted_summarizer_and_assembly(
         engine(window, reserve, keep_recent, estimator),
         Arc::new(summarizer),
-        rustx::context::AgentStatusEngine::new(
+        Some(rustx::context::AgentStatusEngine::new(
             rustx::context::AgentStatusConfig::default(),
             Arc::new(FixedClock(fixed_time())),
-        ),
+        )),
         assembly,
         CompactionBudgets::new(1, 1, 1_000_000),
     )
@@ -560,7 +560,7 @@ async fn proactive_compaction_accounts_for_frozen_extension_system_sections() {
     let runtime = ContextRuntime::with_scripted_summarizer_and_assembly(
         engine(250, 0, 100, weighted(100, 10, 0)),
         summarizer.clone(),
-        rustx::context::AgentStatusEngine::default(),
+        Some(rustx::context::AgentStatusEngine::default()),
         assembly,
         CompactionBudgets::new(1, 1, 1_000_000),
     );
@@ -2116,7 +2116,7 @@ async fn summary_model_cannot_fit_leaves_execution_uncommitted() {
     let runtime = ContextRuntime::with_scripted_summarizer(
         engine(500, 0, 0, weighted(10, 10, 0)),
         summarizer.clone(),
-        rustx::context::AgentStatusEngine::default(),
+        Some(rustx::context::AgentStatusEngine::default()),
         CompactionBudgets::new(1, 1, 9),
     );
     let tool_runtime = common::tool_runtime("conv-1");
@@ -2194,7 +2194,7 @@ async fn a_rejected_summary_request_replans_against_a_smaller_budget() {
     let runtime = ContextRuntime::with_scripted_summarizer(
         engine(500, 0, 5, weighted(100, 10, 0)),
         summarizer.clone(),
-        rustx::context::AgentStatusEngine::default(),
+        Some(rustx::context::AgentStatusEngine::default()),
         CompactionBudgets::new(1, 1, 1_000_000),
     );
     let tool_runtime = common::tool_runtime("conv-1");
@@ -2282,7 +2282,7 @@ async fn failing_status_module_is_quarantined_not_preparation_failure() {
             rustx::context::ContextRuntime::with_scripted_summarizer(
                 engine(10_000_000, 0, 0, weighted(10, 10, 10)),
                 Arc::new(FakeContextSummarizer::new(Vec::new())),
-                status_engine,
+                Some(status_engine),
                 CompactionBudgets::new(1, 1, 1_000_000),
             ),
             &tool_runtime,
@@ -2777,7 +2777,7 @@ async fn model_backed_summarizer_does_not_contaminate_the_execution() {
             summary_output_cap: None,
         },
         weighted(100, 10, 0),
-        rustx::context::AgentStatusEngine::default(),
+        Some(rustx::context::AgentStatusEngine::default()),
         &snapshot,
         rustx::model::ModelTimeoutPolicy::default(),
         support::default_monotonic_clock(),

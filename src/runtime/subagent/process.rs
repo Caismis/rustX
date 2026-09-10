@@ -38,7 +38,7 @@ use std::time::Duration;
 
 use tokio::io::AsyncWriteExt;
 
-use crate::context::{AgentStatusConfig, SessionContextPolicy};
+use crate::context::SessionContextPolicy;
 use crate::runtime::identity::{ConversationId, SubagentId};
 use crate::runtime::interaction::{InteractionRef, InteractionResponse, RoutedInteractionError};
 use crate::runtime::types::CancellationReason;
@@ -108,8 +108,6 @@ pub struct SubagentSpawnPlan {
     /// The parent runtime's frozen tool execution-liveness policy, inherited
     /// by every child unchanged (Issue #204).
     pub tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy,
-    /// The launch-scoped Agent Status configuration inherited by the child.
-    pub agent_status: AgentStatusConfig,
     /// The session context policy inherited by the child.
     pub context: SessionContextPolicy,
 }
@@ -137,8 +135,11 @@ impl SubagentSpawnPlan {
     /// The spawn plan contributes only launch-scoped physical locations and
     /// inherited launch policy. Every semantic decision — agent identity,
     /// instructions, the resolved model invocation, capabilities, Skills,
-    /// project instructions — comes from the already-frozen
-    /// [`ResolvedSubagentSpec`] the invoking attempt's generation produced.
+    /// project instructions, native Agent Extension composition — comes from
+    /// the already-frozen [`ResolvedSubagentSpec`] the invoking attempt's
+    /// generation produced. The plan carries no extension configuration of
+    /// its own: root and child extension sets are independently authored, so
+    /// there is no inheritance channel for one to travel through.
     /// The plan deliberately carries no model catalog path: a child that
     /// could open one could observe a catalog edit the parent never
     /// authorized.
@@ -166,7 +167,6 @@ impl SubagentSpawnPlan {
             approval_mode,
             model_timeout_policy: self.model_timeout_policy,
             tool_deadline_policy: self.tool_deadline_policy,
-            agent_status: self.agent_status.clone(),
             context: self.context,
             workspace_snapshot: workspace.snapshot().clone(),
             runtime_root: runtime_root.path().to_path_buf(),
@@ -1962,7 +1962,7 @@ mod tests {
         PhysicalChildRuntimeRoot, PhysicalOutcome, StagedChild, SubagentSpawnPlan, settle_nested,
         spawn_staged,
     };
-    use crate::context::{AgentStatusConfig, SessionContextPolicy};
+    use crate::context::SessionContextPolicy;
     use crate::runtime::cancellation::CancellationSignal;
     use crate::runtime::identity::{ConversationId, ProcessUnitId, SubagentId};
     use crate::runtime::subagent::anchors::RetainedProcessUnits;
@@ -2022,7 +2022,6 @@ mod tests {
             runtime_root,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
-            agent_status: AgentStatusConfig::default(),
             context: SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -2574,7 +2573,6 @@ mod tests {
             runtime_root: dir.path().join("runtime"),
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
-            agent_status: crate::context::AgentStatusConfig::default(),
             context: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -2604,11 +2602,11 @@ mod tests {
                 project_instructions: Vec::new(),
                 materialization:
                     crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
+                extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
             },
             approval_mode: crate::runtime::ApprovalMode::Policy,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
-            agent_status: crate::context::AgentStatusConfig::default(),
             context: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,

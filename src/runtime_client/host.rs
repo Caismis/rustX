@@ -1499,6 +1499,12 @@ fn durable_projection(
     let mut projection =
         RuntimeClientProjection::new(conversation_id, messages, capabilities, None, replay_limit);
     projection.set_settings_evidence(super::settings::SettingsEvidence::HistoricalPartial);
+    // No runtime stands behind a durable projection, so there is no
+    // authoritative Agent composition to project: `effective_extensions`
+    // stays absent (Issue #256). It is deliberately *not* reconstructed from
+    // the configuration document on disk today, from built-in defaults, or
+    // from the Agent Status observations this journal replay does install —
+    // historical evidence stays honest about what it cannot know.
     projection.set_transcript_page(
         transcript_page_view(transcript).map_err(HostConstructionError::Durable)?,
     );
@@ -1773,6 +1779,18 @@ impl RuntimeClientHost {
         );
         projection.bootstrap(&seed);
         projection.set_launch_settings(launch);
+        // The effective native Agent Extension composition of the runtime
+        // this host is bound to (Issue #256). It is read from the runtime's
+        // own materialized extension owners, so a root host projects the
+        // composition frozen at `LocalConversationCore::compose` and a
+        // subagent-child host projects the one its `ResolvedSubagentSpec`
+        // carried — with no configuration document, resource generation, or
+        // Agent Status observation anywhere on the path.
+        projection.set_effective_extensions(
+            super::settings::EffectiveNativeAgentExtensions::project(
+                &config.runtime.native_extensions(),
+            ),
+        );
         if config.runtime.model_is_frozen() {
             projection.set_settings_evidence(super::settings::SettingsEvidence::FrozenChild);
         }
@@ -2830,7 +2848,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator,
-                status_engine,
+                status_engine: Some(status_engine),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -2913,7 +2931,7 @@ mod tests {
                         summary_output_cap: None,
                     },
                     estimator,
-                    status_engine: status_engine(),
+                    status_engine: Some(status_engine()),
                 },
                 tool_runtime,
                 resources: test_resources(&coordinator),
@@ -3361,6 +3379,89 @@ mod tests {
                 }
             }
         ));
+        attachment.detach();
+    }
+
+    /// Issue #256 regression 9: historical-only inspection reports no
+    /// effective native Agent Extension composition, and never fabricates
+    /// one.
+    ///
+    /// There is no live Agent behind a durable projection, so there is no
+    /// authoritative composition to project. The history seeded here
+    /// deliberately *does* contain Agent Status evidence — a canonical Agent
+    /// Status context message, with its durable generation identity, exactly
+    /// as a runtime that once ran the extension would have left behind.
+    /// That evidence is not allowed to become extension configuration: it
+    /// describes a step that happened, not the composition of an Agent that
+    /// is running now. Neither is today's configuration document, which
+    /// describes a prospective next launch.
+    #[test]
+    fn ext256_historical_inspection_reports_no_effective_extension_composition() {
+        let conversation_id = ConversationId::new("conversation-historical-extensions");
+        let store = Arc::new(
+            SqliteConversationStore::in_memory(conversation_id.clone()).expect("durable store"),
+        );
+        let user = MessageBlock::User(inbound_text(
+            "historical-user",
+            "this turn is only durable history now",
+        ));
+        // Canonical Agent Status evidence in the very history being
+        // inspected: a projection that inferred the extension set from what
+        // it can see would report the extension as composed here.
+        let mut status = inbound_text("historical-status", "<system-reminder>\n</system-reminder>");
+        status.source = UserSource::Runtime;
+        status.kind = crate::message::types::InboundKind::Context(
+            crate::message::types::ContextKind::AgentStatus(
+                crate::message::types::AgentStatusGenerationMetadata::new(
+                    chrono::DateTime::parse_from_rfc3339("2026-08-07T12:00:00Z")
+                        .expect("fixed status timestamp")
+                        .with_timezone(&chrono::Utc),
+                    [crate::context::AgentStatusModuleId::Time],
+                )
+                .expect("canonical Agent Status membership"),
+            ),
+        );
+        store
+            .initialize(&[user.clone(), MessageBlock::User(status)])
+            .expect("durable seed");
+        let attempt_id = AttemptId::new("historical-attempt");
+        store
+            .append_event(durable_event(
+                &conversation_id,
+                "historical-attempt-started",
+                &attempt_id,
+                crate::events::types::RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt_id.clone(),
+                },
+            ))
+            .expect("attempt start");
+
+        let host = RuntimeClientHost::new_durable(store, None).expect("inspection host");
+        let (attachment, initialized) = host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .expect("durable attach");
+        let RuntimeClientResult::Initialized { snapshot, .. } = initialized else {
+            panic!("durable attach must initialize");
+        };
+        assert_eq!(
+            snapshot.settings_evidence,
+            crate::runtime_client::settings::SettingsEvidence::HistoricalPartial
+        );
+        assert_eq!(
+            snapshot.effective_extensions, None,
+            "unavailable evidence is reported as unavailable, not reconstructed"
+        );
+        assert_eq!(snapshot.launch_settings, None);
+        assert_eq!(
+            snapshot.messages.len(),
+            2,
+            "the Agent Status evidence really is in the inspected history"
+        );
+
+        // A durable resync is the other read path into this projection, and
+        // it must stay just as honest.
+        let (resynced, _) = host.snapshot().expect("durable resync");
+        assert_eq!(resynced.effective_extensions, None);
         attachment.detach();
     }
 
@@ -6760,7 +6861,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator,
-                status_engine: status_engine(),
+                status_engine: Some(status_engine()),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -6847,7 +6948,7 @@ mod tests {
                         summary_output_cap: None,
                     },
                     estimator,
-                    status_engine: status_engine(),
+                    status_engine: Some(status_engine()),
                 },
                 tool_runtime,
                 resources: test_resources(&coordinator),
@@ -6959,7 +7060,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator,
-                status_engine: status_engine(),
+                status_engine: Some(status_engine()),
             },
             tool_runtime,
             resources: test_resources(&coordinator),
@@ -8188,7 +8289,7 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator: Arc::new(DefaultTokenEstimator),
-                status_engine: status_engine(),
+                status_engine: Some(status_engine()),
             },
             tool_runtime: fixture.tool_runtime.clone(),
             resources: test_resources(&fixture.coordinator),

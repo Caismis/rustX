@@ -253,8 +253,12 @@ export function snapshot(
     };
   return {
     launch_settings: null,
+    // The runtime always projects its own composition for a live or frozen
+    // Agent; the default fixture is the ordinary composed Agent Status
+    // extension with no explicit timezone.
+    effective_extensions: { agent_status: { time: { enabled: true, timezone: null }, background: { enabled: true } } },
     settings_evidence: "live_session",
-    settings_lifetimes: { launch: "launch_capture", model: "next_admission", approval: "safe_boundary", resources: "resource_publication", attempt: "frozen_admission", presentation: "client_local", saved_defaults: "next_launch" },
+    settings_lifetimes: { launch: "launch_capture", model: "next_admission", approval: "safe_boundary", resources: "resource_publication", attempt: "frozen_admission", presentation: "client_local", saved_defaults: "next_launch", extensions: "launch_capture" },
     workflows: { revision: 0, runs: [], omitted_runs: 0 },
     conversation_id: "conv-test",
     shutting_down: false,

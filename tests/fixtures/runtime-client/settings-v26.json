@@ -34,6 +34,44 @@
     "resources": "resource_publication",
     "attempt": "frozen_admission",
     "presentation": "client_local",
-    "saved_defaults": "next_launch"
+    "saved_defaults": "next_launch",
+    "extensions": "launch_capture"
+  },
+  "effective_extensions": {
+    "composed": {
+      "agent_status": {
+        "time": {
+          "enabled": true,
+          "timezone": "Asia/Shanghai"
+        },
+        "background": {
+          "enabled": true
+        }
+      }
+    },
+    "contributors_disabled": {
+      "agent_status": {
+        "time": {
+          "enabled": false,
+          "timezone": null
+        },
+        "background": {
+          "enabled": false
+        }
+      }
+    },
+    "not_composed": {
+      "agent_status": null
+    }
+  },
+  "child_lifetimes": {
+    "launch": "launch_capture",
+    "model": "frozen_admission",
+    "approval": "safe_boundary",
+    "resources": "resource_publication",
+    "attempt": "frozen_admission",
+    "presentation": "client_local",
+    "saved_defaults": "next_launch",
+    "extensions": "frozen_admission"
   }
 }

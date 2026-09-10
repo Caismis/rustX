@@ -27,8 +27,12 @@
 //! No provider SDK or wire type exists in this module: Context Assembly settles
 //! trusted semantic context, the engine projects the Surface, and adapters
 //! receive the final Effective System Prompt.
-//! [`ContextRuntime`] bundles the engine, the summary service, and the
-//! attempt-owned Agent Status engine for `AgentExecution`. The conversation
+//! [`ContextRuntime`] bundles the engine, the summary service, and — when the
+//! launch's frozen native Agent Extension composition contains the Agent
+//! Status extension (Issue #256) — the attempt-owned Agent Status engine for
+//! `AgentExecution`. Composition ownership moved to
+//! [`crate::extensions`]; request-time admission ownership did not: Context
+//! Assembly remains the only path that admits an Agent Status contribution. The conversation
 //! runtime supplies the admitted model timeout policy and shared monotonic
 //! clock when it constructs this bundle; the context plane does not own or
 //! recreate either execution primitive.
@@ -100,9 +104,11 @@ pub struct ContextRuntime {
     pub(crate) engine: ContextEngine,
     /// The provider-neutral summary service.
     pub(crate) summarizer: Arc<dyn ContextSummarizer>,
-    /// The attempt-owned closed Agent Status engine. It contains the
-    /// compile-time module set and attempt-scoped quarantine state.
-    pub(crate) status_engine: AgentStatusEngine,
+    /// The attempt-owned closed Agent Status engine, present exactly when
+    /// the launch's frozen native Agent Extension composition contains the
+    /// Agent Status extension (Issue #256). It contains the compile-time
+    /// module set and attempt-scoped quarantine state.
+    pub(crate) status_engine: Option<AgentStatusEngine>,
     /// The one rustX-owned finite context-assembly contract. Extensions only
     /// receive immutable invocation snapshots through this value.
     pub(crate) assembly: ContextAssembly,
@@ -124,7 +130,7 @@ impl ContextRuntime {
     pub(crate) fn for_attempt(
         policy: SessionContextPolicy,
         estimator: Arc<dyn TokenEstimator>,
-        status_engine: AgentStatusEngine,
+        status_engine: Option<AgentStatusEngine>,
         model: &AttemptModelSnapshot,
         model_timeout_policy: ModelTimeoutPolicy,
         monotonic_clock: Arc<dyn MonotonicClock>,
@@ -150,7 +156,7 @@ impl ContextRuntime {
     pub(crate) fn for_attempt_with_assembly(
         policy: SessionContextPolicy,
         estimator: Arc<dyn TokenEstimator>,
-        status_engine: AgentStatusEngine,
+        status_engine: Option<AgentStatusEngine>,
         assembly: ContextAssembly,
         model: &AttemptModelSnapshot,
         model_timeout_policy: ModelTimeoutPolicy,
@@ -247,7 +253,7 @@ impl ContextRuntime {
     pub(crate) fn with_scripted_summarizer(
         engine: ContextEngine,
         summarizer: Arc<dyn ContextSummarizer>,
-        status_engine: AgentStatusEngine,
+        status_engine: Option<AgentStatusEngine>,
         compaction_budgets: CompactionBudgets,
     ) -> Self {
         Self::with_scripted_summarizer_and_assembly(
@@ -264,7 +270,7 @@ impl ContextRuntime {
     pub(crate) fn with_scripted_summarizer_and_assembly(
         engine: ContextEngine,
         summarizer: Arc<dyn ContextSummarizer>,
-        status_engine: AgentStatusEngine,
+        status_engine: Option<AgentStatusEngine>,
         assembly: ContextAssembly,
         compaction_budgets: CompactionBudgets,
     ) -> Self {

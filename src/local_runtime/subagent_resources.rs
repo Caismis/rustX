@@ -216,6 +216,11 @@ pub(crate) fn load(
                     files,
                 },
                 agent.worktree.to_policy(),
+                // The role's own closed extension composition, frozen into
+                // its immutable definition and its semantic digest
+                // (Issue #256). The invoking runtime's root extension
+                // configuration is not an input here.
+                agent.extensions.resolve(),
             )
             .map_err(|e| error(e.to_string()))?,
         );
@@ -320,6 +325,13 @@ mod tests {
             "---\ndescription: x\ninclude: other.md\n---\nbody",
             "---\ndescription: x\nmetadata: {}\n---\nbody",
             "---\ndescription: x\ntools: {unknown: []}\n---\nbody",
+            // Issue #256: the closed extension surface is strict in role
+            // frontmatter too — an unknown extension name and an unknown
+            // knob inside a known extension both fail.
+            "---\ndescription: x\nextensions: {todo: {enabled: true}}\n---\nbody",
+            "---\ndescription: x\nextensions: {agentStatus: {future: true}}\n---\nbody",
+            "---\ndescription: x\nextensions: {agentStatus: {time: {future: true}}}\n---\nbody",
+            "---\ndescription: x\nextensions: {agentStatus: {enabled: 'true'}}\n---\nbody",
             "---\ndescription: x\ntools: {builtin: ['']}\n---\nbody",
             "---\ndescription: x\ntools: {mcp: {'': [read]}}\n---\nbody",
             "---\ndescription: x\ntools: {mcp: {disabled: [' ']}}\n---\nbody",
@@ -374,7 +386,7 @@ mod tests {
         let roles = workspace.join(".agents/subagents");
         std::fs::write(workspace.join("guidance.md"), "Supplemental").unwrap();
         let path = roles.join("reviewer.md");
-        std::fs::write(&path, "---\ndescription: Review one request\nmodel: example/demo-model\ntimeoutMs: 3600000\ntools:\n  builtin: [read]\n  mcp:\n    service: [lookup]\nskills: [review-guidance]\nagentsMd:\n  inherit: false\n  files: [guidance.md]\nworktree:\n  enabled: true\n  requireCleanParent: true\n---\nYou are the reviewer.\n").unwrap();
+        std::fs::write(&path, "---\ndescription: Review one request\nmodel: example/demo-model\ntimeoutMs: 3600000\ntools:\n  builtin: [read]\n  mcp:\n    service: [lookup]\nskills: [review-guidance]\nagentsMd:\n  inherit: false\n  files: [guidance.md]\nworktree:\n  enabled: true\n  requireCleanParent: true\nextensions:\n  agentStatus:\n    enabled: true\n    time:\n      enabled: false\n    background:\n      enabled: true\n---\nYou are the reviewer.\n").unwrap();
         let name = SubagentName::parse("reviewer").unwrap();
         let document = SubagentsDocument {
             definitions: vec![name.clone()],
@@ -396,6 +408,14 @@ mod tests {
                 require_clean_parent: true
             }
         );
+        // Issue #256: the role's own closed native Agent Extension
+        // composition is frozen into its immutable definition.
+        let extensions = role
+            .extensions()
+            .agent_status()
+            .expect("the role composes Agent Status");
+        assert!(!extensions.time.enabled);
+        assert!(extensions.background.enabled);
         assert_eq!(sources[&name].selected, path);
         std::fs::write(path, "changed invalid resource").unwrap();
         assert_eq!(role.instructions(), "You are the reviewer.\n");

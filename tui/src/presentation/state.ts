@@ -179,6 +179,15 @@ export interface PresentationState {
   /** The session's *desired* model configuration. */
   sessionModel: SessionModelView | null;
   launchSettings: import("../protocol/types.ts").LaunchSettings | null;
+  /**
+   * The attached Agent runtime's frozen native Agent Extension composition.
+   *
+   * `null` means the runtime published no authoritative composition to
+   * project (historical-only inspection), not "no extensions". The
+   * distinction between an absent extension and a disabled contributor lives
+   * inside the value itself.
+   */
+  effectiveExtensions: import("../protocol/types.ts").EffectiveNativeAgentExtensions | null;
   settingsLifetimes: import("../protocol/types.ts").SettingsLifetimes | null;
   /** True once runtime drain begins; shutdown responses complete at quiescence. */
   runtimeShutdown: boolean;

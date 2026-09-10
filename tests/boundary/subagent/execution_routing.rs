@@ -61,6 +61,7 @@ fn resolved(agent: &str) -> ResolvedSubagentSpec {
         project_instructions: Vec::new(),
         materialization:
             crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
+        extensions: rustx::extensions::NativeAgentExtensionsDocument::default().resolve(),
     }
 }
 

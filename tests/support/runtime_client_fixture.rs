@@ -326,7 +326,7 @@ impl RuntimeClientFixtureBuilder {
             context: ConversationContextConfig {
                 policy: self.context_policy,
                 estimator,
-                status_engine: self.status_engine,
+                status_engine: Some(self.status_engine),
             },
             tool_runtime,
             resources: Arc::new(rustx::runtime::RuntimeResourceSnapshot::new(

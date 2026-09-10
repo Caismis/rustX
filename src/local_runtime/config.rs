@@ -2,9 +2,12 @@
 //!
 //! This is deliberately a current-runtime input, never durable Session state.
 //! It is read for every process start, including resume, so changing MCP,
-//! Skill, Tool, environment, context, Agent Status, or agent settings takes
-//! effect without rewriting the Session catalog. Resource reload does not
-//! reread this launch-scoped document.
+//! Skill, Tool, environment, context, native Agent Extension, or agent
+//! settings takes effect without rewriting the Session catalog. Resource
+//! reload does not reread this launch-scoped document, which is exactly why
+//! the native Agent Extension composition it declares is launch-scoped: a
+//! running `ConversationRuntime` executes against the composition frozen for
+//! its launch (Issue #256).
 //!
 //! Unknown fields are rejected everywhere. A typo must fail startup loudly
 //! rather than silently changing runtime semantics.
@@ -16,7 +19,8 @@ use std::time::Duration;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::capabilities::selection::ToolSelector;
-use crate::context::{AgentStatusConfig, SessionContextPolicy};
+use crate::context::SessionContextPolicy;
+use crate::extensions::{NativeAgentExtensions, NativeAgentExtensionsDocument};
 use crate::model::catalog::ModelRef;
 use crate::model::deadline::{
     DEFAULT_RESPONSE_START_TIMEOUT, DEFAULT_STREAM_IDLE_TIMEOUT, ModelTimeoutPolicy,
@@ -57,9 +61,15 @@ pub struct CurrentRuntimeConfig {
     /// host-only configuration, never project authority or Session history.
     #[serde(default)]
     pub approval_mode: ApprovalMode,
-    /// The launch-scoped Agent Status module configuration.
+    /// The closed launch-scoped **Native Agent Extension** composition of
+    /// the root Agent (Issue #256).
+    ///
+    /// This is the single surface for optional Agent augmentation. It is
+    /// read once, at composition, and deliberately never republished by
+    /// resource reload: a running `ConversationRuntime` executes against the
+    /// extension composition frozen for its launch.
     #[serde(default)]
-    pub agent_status: AgentStatusConfig,
+    pub extensions: NativeAgentExtensionsDocument,
     /// The current runtime context policy.
     #[serde(default)]
     pub context: ContextPolicyDocument,
@@ -192,6 +202,14 @@ pub struct SubagentDocument {
     /// The bounded project-workspace policy of this agent.
     #[serde(default)]
     pub worktree: SubagentWorktreeDocument,
+    /// The closed **Native Agent Extension** composition of this named role
+    /// (Issue #256).
+    ///
+    /// Independently authored: a role never inherits the root Agent's
+    /// extension set, and an omitted value means this role's own built-in
+    /// defaults, never the invoking runtime's configuration.
+    #[serde(default)]
+    pub extensions: NativeAgentExtensionsDocument,
 }
 
 impl SubagentDocument {
@@ -647,6 +665,17 @@ impl CurrentRuntimeConfig {
     #[must_use]
     pub const fn context_policy(&self) -> SessionContextPolicy {
         self.context.to_policy()
+    }
+
+    /// Freezes the root Agent's native Agent Extension composition for this
+    /// launch (Issue #256).
+    ///
+    /// Composition calls this exactly once. The returned value is the whole
+    /// extension authority of the composed root `ConversationRuntime`: no
+    /// later resource generation, reload, or configuration edit reaches it.
+    #[must_use]
+    pub fn extension_composition(&self) -> NativeAgentExtensions {
+        self.extensions.resolve()
     }
 
     /// The validated finite model request deadline policy for this runtime.
@@ -1333,9 +1362,9 @@ mod tests {
         let config = CurrentRuntimeConfig::from_jsonc_slice(MINIMAL.as_bytes()).expect("valid");
         assert_eq!(config.approval_mode, crate::runtime::ApprovalMode::Policy);
         assert_eq!(config.context_policy().reserve_tokens, 1024);
-        assert!(config.agent_status.time.enabled);
-        assert!(config.agent_status.background.enabled);
-        assert_eq!(config.agent_status.time.timezone, None);
+        assert!(config.extensions.agent_status.time.enabled);
+        assert!(config.extensions.agent_status.background.enabled);
+        assert_eq!(config.extensions.agent_status.time.timezone, None);
         assert_eq!(
             config.model_timeout_policy,
             ModelTimeoutPolicyDocument::default()
@@ -1664,19 +1693,86 @@ mod tests {
         ));
     }
 
-    /// The strongly typed Agent Status subtree keeps the global strict-field
-    /// contract: unknown module knobs fail at launch rather than being
-    /// ignored.
+    /// Issue #256 regression 3: the obsolete top-level `agentStatus`
+    /// contract is *rejected*, not silently accepted, quietly relocated, or
+    /// warned about. There is no alias, no fallback parse, and no
+    /// compatibility mode: the strict-field boundary is the whole mechanism.
     #[test]
-    fn unknown_agent_status_fields_are_rejected() {
-        let json = MINIMAL.replace(
+    fn ext256_the_obsolete_top_level_agent_status_contract_is_rejected() {
+        for obsolete in [
+            r#""agentStatus": {}"#,
+            r#""agentStatus": {"time": {"enabled": false}}"#,
+            r#""agentStatus": {"time": {"timezone": "Asia/Shanghai"}, "background": {"enabled": true}}"#,
+        ] {
+            let json = MINIMAL.replace(
+                r#""agentId": "agent-a""#,
+                &format!(r#""agentId": "agent-a", {obsolete}"#),
+            );
+            let error =
+                CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect_err("must fail");
+            assert!(
+                matches!(error, CurrentRuntimeConfigError::Syntax { .. }),
+                "the obsolete contract must fail loudly: {error}"
+            );
+            assert!(
+                error.to_string().contains("agentStatus"),
+                "the failure names the offending obsolete field: {error}"
+            );
+        }
+    }
+
+    /// The closed extension surface keeps the global strict-field contract:
+    /// an unknown *extension name* and an unknown knob inside a known
+    /// extension both fail at launch rather than being ignored.
+    #[test]
+    fn ext256_unknown_extension_names_and_fields_are_rejected() {
+        for unknown in [
+            r#""extensions": {"todo": {"enabled": true}}"#,
+            r#""extensions": {"goal": {}}"#,
+            r#""extensions": {"agentStatus": {"future": true}}"#,
+            r#""extensions": {"agentStatus": {"time": {"future": true}}}"#,
+            r#""extensions": {"agentStatus": {"background": {"future": true}}}"#,
+        ] {
+            let json = MINIMAL.replace(
+                r#""agentId": "agent-a""#,
+                &format!(r#""agentId": "agent-a", {unknown}"#),
+            );
+            assert!(
+                matches!(
+                    CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect_err("must fail"),
+                    CurrentRuntimeConfigError::Syntax { .. }
+                ),
+                "accepted {unknown}"
+            );
+        }
+    }
+
+    /// The closed extension surface composes exactly what it declares, and
+    /// `enabled: false` removes the extension from the frozen composition
+    /// rather than leaving a disabled one behind.
+    #[test]
+    fn ext256_the_extension_surface_freezes_the_declared_composition() {
+        let enabled = MINIMAL.replace(
             r#""agentId": "agent-a""#,
-            r#""agentId": "agent-a", "agentStatus": {"time": {"future": true}}""#,
+            r#""agentId": "agent-a", "extensions": {"agentStatus": {"time": {"timezone": "Asia/Shanghai"}, "background": {"enabled": false}}}"#,
         );
-        assert!(matches!(
-            CurrentRuntimeConfig::from_jsonc_slice(json.as_bytes()).expect_err("must fail"),
-            CurrentRuntimeConfigError::Syntax { .. }
-        ));
+        let config = CurrentRuntimeConfig::from_jsonc_slice(enabled.as_bytes()).expect("valid");
+        let composition = config.extension_composition();
+        let agent_status = composition
+            .agent_status()
+            .expect("the declared Agent Status extension is composed");
+        assert_eq!(agent_status.time.timezone, Some(chrono_tz::Asia::Shanghai));
+        assert!(!agent_status.background.enabled);
+
+        let disabled = MINIMAL.replace(
+            r#""agentId": "agent-a""#,
+            r#""agentId": "agent-a", "extensions": {"agentStatus": {"enabled": false}}"#,
+        );
+        let config = CurrentRuntimeConfig::from_jsonc_slice(disabled.as_bytes()).expect("valid");
+        assert!(
+            config.extension_composition().is_empty(),
+            "a disabled extension leaves an empty composition, not a disabled one"
+        );
     }
 
     /// An unsupported schema version fails.

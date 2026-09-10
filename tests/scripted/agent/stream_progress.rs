@@ -134,7 +134,7 @@ fn context_runtime() -> ContextRuntime {
     ContextRuntime::with_scripted_summarizer(
         engine,
         Arc::new(FakeContextSummarizer::new(Vec::<FakeSummaryStep>::new())),
-        AgentStatusEngine::default(),
+        Some(AgentStatusEngine::default()),
         CompactionBudgets::new(1, 1, 1_000_000),
     )
 }

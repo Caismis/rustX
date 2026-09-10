@@ -10,6 +10,10 @@ use rustx::model::catalog::{MapCredentialEnvironment, ModelRef};
 use rustx::model::session::SessionModelConfig;
 use rustx::runtime::identity::McpServerId;
 use rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION;
+use rustx::runtime_client::settings::{
+    EffectiveAgentStatusExtension, EffectiveBackgroundStatus, EffectiveNativeAgentExtensions,
+    EffectiveTimeStatus, SettingsBoundary,
+};
 use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClientResult};
 
 const MODELS: &str = r#"{
@@ -100,9 +104,12 @@ fn config_json(
         "schemaVersion": 8,
         "agentId": "agent-issue96",
         "model": {"model": model},
-        "agentStatus": {
-            "time": {"enabled": true, "timezone": timezone},
-            "background": {"enabled": true}
+        "extensions": {
+            "agentStatus": {
+                "enabled": true,
+                "time": {"enabled": true, "timezone": timezone},
+                "background": {"enabled": true}
+            }
         },
         "context": {"reserveTokens": reserve_tokens, "keepRecentTokens": 4096},
         "defaultTools": default_tools,
@@ -224,6 +231,8 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         runtime
             .context_config()
             .status_engine
+            .as_ref()
+            .expect("the next launch composes the Agent Status extension")
             .config()
             .time
             .timezone,
@@ -515,4 +524,406 @@ async fn relaxations_beyond_jsonc_still_fail_composition() {
         error.clone().contains("line 2"),
         "a syntax failure must report where it was detected: {error}"
     );
+}
+
+/// Writes a launch document whose only variable is the closed native Agent
+/// Extension composition.
+fn extension_config(enabled: bool, timezone: &str) -> String {
+    serde_json::json!({
+        "schemaVersion": 8,
+        "agentId": "agent-ext256",
+        "model": {"model": "local/model-a"},
+        "context": {"reserveTokens": 11, "keepRecentTokens": 4096},
+        "defaultTools": ["read"],
+        "extensions": {
+            "agentStatus": {
+                "enabled": enabled,
+                "time": {"enabled": true, "timezone": timezone},
+                "background": {"enabled": true}
+            }
+        }
+    })
+    .to_string()
+}
+
+/// Attaches one `LocalSessionProduct` endpoint and returns the
+/// effective-extension projection its `initialize` snapshot carries.
+fn attached_projection(
+    endpoint: &rustx::runtime_client::RuntimeClientEndpoint,
+    request_id: u64,
+) -> Option<EffectiveNativeAgentExtensions> {
+    let response = endpoint.handle_request(RuntimeClientRequest::Initialize {
+        id: RequestId::new(request_id),
+        protocol_version: RUNTIME_CLIENT_PROTOCOL_VERSION,
+    });
+    match response.result {
+        Some(RuntimeClientResult::Initialized { snapshot, .. }) => snapshot.effective_extensions,
+        other => panic!("initialize returned an unexpected result: {other:?}"),
+    }
+}
+
+/// Re-reads the projection over an already-attached endpoint. This is the
+/// ordinary client read path, so it also proves that nothing about asking
+/// again re-resolves the composition.
+fn product_projection(
+    endpoint: &rustx::runtime_client::RuntimeClientEndpoint,
+    request_id: u64,
+) -> Option<EffectiveNativeAgentExtensions> {
+    let response = endpoint.handle_request(RuntimeClientRequest::SnapshotGet {
+        id: RequestId::new(request_id),
+    });
+    match response.result {
+        Some(RuntimeClientResult::Snapshot { snapshot, .. }) => snapshot.effective_extensions,
+        other => panic!("snapshot_get returned an unexpected result: {other:?}"),
+    }
+}
+
+fn composed_timezone(runtime: &rustx::runtime::ConversationRuntime) -> Option<chrono_tz::Tz> {
+    runtime
+        .context_config()
+        .status_engine
+        .as_ref()
+        .expect("the Agent Status extension is composed")
+        .config()
+        .time
+        .timezone
+}
+
+/// Issue #256 regressions 4 and 5.
+///
+/// The native Agent Extension composition is **launch-scoped**. A resource
+/// reload republishes a whole new `RuntimeResourceSnapshot` — proven here by
+/// the advanced revision — and still cannot install, remove, or reconfigure
+/// the Agent Status extension of the already-composed runtime. Only the next
+/// launch resolves the current document through the ordinary resolver, and
+/// that restart preserves the existing Session history byte for byte.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)]
+async fn ext256_reload_cannot_recompose_extensions_but_the_next_launch_does() {
+    let root = tempfile::tempdir().expect("root");
+    let config_path = root.path().join("rustx.jsonc");
+    std::fs::write(root.path().join("models.jsonc"), MODELS).expect("models");
+    std::fs::write(&config_path, extension_config(true, "UTC")).expect("config v1");
+    let startup = paths(root.path(), &config_path);
+
+    let product = LocalSessionProduct::compose(&(startup).resolve(), &dependencies())
+        .await
+        .expect("initial product");
+    let runtime = product.runtime();
+    assert_eq!(composed_timezone(runtime), Some(chrono_tz::UTC));
+    let r1 = runtime.runtime_resources().revision();
+    let endpoint = product.endpoint();
+    // The Runtime Client projection of that same launch-frozen composition.
+    assert_eq!(
+        attached_projection(&endpoint, 1),
+        Some(composed(true, Some(chrono_tz::UTC), true))
+    );
+
+    // The on-disk document now disables the extension entirely and changes
+    // its contributor configuration.
+    std::fs::write(&config_path, extension_config(false, "Asia/Shanghai")).expect("config v2");
+    runtime
+        .reload_resources()
+        .await
+        .expect("the resource generation republishes");
+    let r2 = runtime.runtime_resources().revision();
+    assert!(
+        r2.get() > r1.get(),
+        "the reload really did publish a new resource generation"
+    );
+    assert_eq!(
+        composed_timezone(runtime),
+        Some(chrono_tz::UTC),
+        "reload cannot uninstall or reconfigure a launch-scoped extension"
+    );
+    // Regression 4: a published resource generation does not change the
+    // existing live effective-extension projection either. The projection
+    // has no reload seam at all — it is installed once, from the runtime.
+    assert_eq!(
+        product_projection(&endpoint, 100),
+        Some(composed(true, Some(chrono_tz::UTC), true)),
+        "publishing R2 cannot change an already-composed effective projection"
+    );
+
+    // Durable Session work, so the restart below has history to preserve.
+    // The attempt against the unreachable provider fails and settles itself.
+    let submitted = endpoint
+        .handle_request_async(RuntimeClientRequest::SubmitInbound {
+            id: RequestId::new(2),
+            content: vec![rustx::message::types::UserContentBlock::Text(
+                rustx::message::content::TextBlock {
+                    text: "extension-scoped work".to_owned(),
+                },
+            )],
+        })
+        .await;
+    assert!(
+        matches!(
+            submitted.result,
+            Some(RuntimeClientResult::InboundAccepted { .. })
+        ),
+        "unexpected SubmitInbound response: {submitted:?}"
+    );
+    // Shutting the runtime down settles the in-flight attempt, so the
+    // pre-restart transcript is read at a quiescent, fully linearized point
+    // rather than racing the attempt's own durable publication.
+    product
+        .runtime()
+        .shutdown()
+        .await
+        .expect("the runtime shuts down");
+    let before = session_messages(&endpoint, 3);
+    assert!(
+        !before.is_empty(),
+        "the Session owns durable history before the restart"
+    );
+    drop(product);
+
+    // Restart/resume is a new launch: it resolves the *current* document
+    // through the existing resolver, binding the Session the catalog
+    // publishes as active.
+    let mut restart = paths(root.path(), &config_path);
+    restart.startup_session = rustx::local_runtime::StartupSession::ContinueActive;
+    let resumed = LocalSessionProduct::compose(&(restart).resolve(), &dependencies())
+        .await
+        .expect("resumed product");
+    assert!(
+        resumed.runtime().context_config().status_engine.is_none(),
+        "the next launch composes the current extension set"
+    );
+    let resumed_endpoint = resumed.endpoint();
+    // Regression 5: restart/recompose is what changes the projection, and it
+    // reports the *new* launch's composition, not the retired one.
+    assert_eq!(
+        attached_projection(&resumed_endpoint, 4),
+        Some(uncomposed()),
+        "the restarted launch projects its own extension composition"
+    );
+    assert_eq!(
+        session_messages(&resumed_endpoint, 5),
+        before,
+        "an extension configuration change rewrites no canonical Session history"
+    );
+    drop(resumed);
+
+    // The symmetric direction: a launch that composes nothing cannot have
+    // the extension installed into it by a reload.
+    std::fs::write(&config_path, extension_config(false, "UTC")).expect("config v3");
+    let empty = LocalSessionProduct::compose(&(startup).resolve(), &dependencies())
+        .await
+        .expect("empty-extension product");
+    assert!(empty.runtime().context_config().status_engine.is_none());
+    std::fs::write(&config_path, extension_config(true, "Asia/Shanghai")).expect("config v4");
+    empty
+        .runtime()
+        .reload_resources()
+        .await
+        .expect("the resource generation republishes");
+    assert!(
+        empty.runtime().context_config().status_engine.is_none(),
+        "reload cannot install a launch-scoped extension into a composed runtime"
+    );
+    assert_eq!(
+        attached_projection(&empty.endpoint(), 6),
+        Some(uncomposed()),
+        "and cannot install one into the effective projection either"
+    );
+}
+
+/// The canonical Session messages the Runtime Client projects for the
+/// currently selected Session.
+fn session_messages(
+    endpoint: &rustx::runtime_client::RuntimeClientEndpoint,
+    request_id: u64,
+) -> Vec<String> {
+    let response = endpoint.handle_request(RuntimeClientRequest::TranscriptPageGet {
+        id: RequestId::new(request_id),
+        before_cursor: None,
+        limit: 64,
+    });
+    match response.result {
+        Some(RuntimeClientResult::TranscriptPage { page }) => page
+            .entries
+            .iter()
+            .map(|entry| serde_json::to_string(&entry.item).expect("transcript item JSON"))
+            .collect(),
+        other => panic!("transcript_page_get returned an unexpected result: {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Issue #256: the Runtime Client effective-extension projection of a root
+// Agent runtime.
+// ---------------------------------------------------------------------------
+
+/// The frozen effective native Agent Extension composition the Runtime Client
+/// projects for one live root runtime.
+///
+/// This reads the authoritative host snapshot, which is the only external
+/// read model of the projection. It is deliberately *not* derived from
+/// `runtime().native_extensions()` here: the point of these regressions is
+/// that the wire projection agrees with the runtime, so both sides are read
+/// independently and compared.
+fn projected_extensions(
+    runtime: &rustx::local_runtime::composition::LocalConversationRuntime,
+) -> Option<EffectiveNativeAgentExtensions> {
+    runtime
+        .host()
+        .snapshot()
+        .expect("the host projects its snapshot")
+        .0
+        .effective_extensions
+}
+
+fn composed(
+    time: bool,
+    timezone: Option<chrono_tz::Tz>,
+    background: bool,
+) -> EffectiveNativeAgentExtensions {
+    EffectiveNativeAgentExtensions {
+        agent_status: Some(EffectiveAgentStatusExtension {
+            time: EffectiveTimeStatus {
+                enabled: time,
+                timezone,
+            },
+            background: EffectiveBackgroundStatus {
+                enabled: background,
+            },
+        }),
+    }
+}
+
+/// The composition with no native Agent Extension at all.
+fn uncomposed() -> EffectiveNativeAgentExtensions {
+    EffectiveNativeAgentExtensions { agent_status: None }
+}
+
+/// Issue #256 regressions 1, 2 and 3, plus the deliberate disagreement with
+/// `config show --sources`.
+///
+/// A live root runtime projects the exact composition it froze at
+/// `LocalConversationCore::compose`: the Time enablement, the frozen IANA
+/// timezone, and the Background enablement, as authored — not defaults, and
+/// not today's disk. A launch that composes no Agent Status projects
+/// `agent_status = None` unambiguously, which is a different value from a
+/// composed extension with both contributors switched off.
+///
+/// Enablement is never inferred from Agent Status observations: this runtime
+/// has emitted none at all — its composed-status window is provably empty —
+/// and the extension still reports as composed.
+///
+/// Finally, editing the document after launch makes the two configuration
+/// surfaces disagree, and that disagreement is the contract: a fresh
+/// prospective resolution (the authority behind `config show --sources`)
+/// sees the new document while the attached runtime keeps projecting the
+/// composition it is actually running.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition() {
+    let root = tempfile::tempdir().expect("root");
+    let config_path = root.path().join("rustx.jsonc");
+    std::fs::write(root.path().join("models.jsonc"), MODELS).expect("models");
+    // Every contributor field is deliberately non-default, so a projection
+    // that quietly substituted built-in defaults could not pass.
+    std::fs::write(
+        &config_path,
+        serde_json::json!({
+            "schemaVersion": 8,
+            "agentId": "agent-ext256",
+            "model": {"model": "local/model-a"},
+            "context": {"reserveTokens": 11, "keepRecentTokens": 4096},
+            "defaultTools": ["read"],
+            "extensions": {"agentStatus": {
+                "enabled": true,
+                "time": {"enabled": true, "timezone": "Asia/Shanghai"},
+                "background": {"enabled": false}
+            }}
+        })
+        .to_string(),
+    )
+    .expect("config v1");
+    let fixture = paths(root.path(), &config_path);
+
+    let live = rustx::local_runtime::composition::LocalConversationRuntime::compose(
+        &(fixture).resolve(),
+        &dependencies(),
+    )
+    .await
+    .expect("interactive composition");
+
+    let (snapshot, _) = live.host().snapshot().expect("snapshot");
+    assert_eq!(
+        snapshot.effective_extensions,
+        Some(composed(true, Some(chrono_tz::Asia::Shanghai), false)),
+        "the projection is the exact frozen composition, contributor by contributor"
+    );
+    // One source of truth: the wire projection and the runtime's own frozen
+    // composition are the same value, not two independently maintained ones.
+    assert_eq!(
+        snapshot.effective_extensions,
+        Some(EffectiveNativeAgentExtensions::project(
+            &live.runtime().native_extensions()
+        )),
+    );
+    // A root composition is launch-frozen, and the lifetime says so.
+    assert_eq!(
+        snapshot.settings_lifetimes.extensions,
+        SettingsBoundary::LaunchCapture
+    );
+    assert_eq!(
+        snapshot.settings_evidence,
+        rustx::runtime_client::settings::SettingsEvidence::LiveSession
+    );
+    // Regression 3: no Agent Status observation exists anywhere in this
+    // runtime, and the extension is still reported as composed. Enablement
+    // is a composition fact, not an observation fact.
+    assert!(
+        snapshot.statuses.is_empty(),
+        "no status has been composed for any step yet"
+    );
+
+    // The deliberate divergence with the prospective configuration surface.
+    std::fs::write(
+        &config_path,
+        serde_json::json!({
+            "schemaVersion": 8,
+            "agentId": "agent-ext256",
+            "model": {"model": "local/model-a"},
+            "context": {"reserveTokens": 11, "keepRecentTokens": 4096},
+            "defaultTools": ["read"],
+            "extensions": {"agentStatus": {"enabled": false}}
+        })
+        .to_string(),
+    )
+    .expect("config v2");
+    let prospective = paths(root.path(), &config_path).resolve();
+    assert!(
+        prospective.config().extension_composition().is_empty(),
+        "a fresh prospective resolution reads the edited document"
+    );
+    assert_eq!(
+        projected_extensions(&live),
+        Some(composed(true, Some(chrono_tz::Asia::Shanghai), false)),
+        "the attached runtime keeps projecting the composition it runs, not the \
+         one a next launch would compose"
+    );
+    live.runtime().shutdown().await.expect("shutdown");
+    drop(live);
+
+    // Regression 2: a launch that composes no Agent Status projects absence
+    // unambiguously, and absence is not "present with everything off".
+    let empty = rustx::local_runtime::composition::LocalConversationRuntime::compose(
+        &paths(root.path(), &config_path).resolve(),
+        &dependencies(),
+    )
+    .await
+    .expect("interactive composition");
+    let projected = projected_extensions(&empty).expect("a live runtime always projects one");
+    assert_eq!(projected, uncomposed());
+    assert!(projected.agent_status.is_none());
+    assert_ne!(
+        projected,
+        composed(false, None, false),
+        "an absent extension is a different fact from a fully disabled one"
+    );
+    empty.runtime().shutdown().await.expect("shutdown");
 }

@@ -109,7 +109,7 @@ fn try_config(
                 summary_output_cap: None,
             },
             estimator,
-            status_engine: AgentStatusEngine::default(),
+            status_engine: Some(AgentStatusEngine::default()),
         },
         tool_runtime: runtime,
         resources: Arc::new(rustx::runtime::RuntimeResourceSnapshot::new(

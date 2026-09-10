@@ -11,6 +11,7 @@ pub mod context;
 pub mod conversation;
 pub mod durable;
 pub mod events;
+pub mod extensions;
 pub mod local_runtime;
 pub mod message;
 pub mod model;

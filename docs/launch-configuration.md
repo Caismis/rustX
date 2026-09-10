@@ -81,7 +81,7 @@ higher layer would override them. Unknown fields fail at every schema boundary.
 | Default Session model selection and request policy (`model`) | Yes | Existing host model only | `--model provider/model` | Explicit model-policy members; CLI selects fresh model policy |
 | `agentId` | Yes | Yes | — | Scalar replacement |
 | `approvalMode` | Yes | Forbidden | — | Host scalar replacement |
-| `context`, `modelTimeoutPolicy`, `toolDeadlinePolicy`, `agentStatus` | Yes | Yes | — | Explicit members of these finite records |
+| `context`, `modelTimeoutPolicy`, `toolDeadlinePolicy`, `extensions` | Yes | Yes | — | Explicit members of these finite records |
 | `defaultTools`, `skills` | Yes | Yes | `--tools`, `--exclude-tools`, `--skill`, disable flags | Lists replace; repeated CLI Skill paths form one replacing list |
 | `mcpServers`, `environment` | Yes | Yes | — | Named entries replace whole entries; empty map clears |
 | `nativeTools`, `mcpToolPolicies` | Yes | Forbidden | — | Host-only whole named entries; empty map clears |
@@ -234,7 +234,107 @@ project `.agents/tools` packages remain optional discovered resources.
 
 Model response-start/stream-idle deadlines remain 30,000/15,000 ms. Foreground
 tool execution retains its 120,000 ms hard deadline and no idle-liveness window.
-Agent Status time/background modules remain enabled, with no configured timezone.
+The default native Agent Extension composition contains the Agent Status
+extension with its Time and Background contributors enabled and no configured
+timezone.
+
+## Native Agent Extensions
+
+`extensions` is the single **closed, launch-scoped** configuration surface for
+optional Agent augmentation:
+
+```jsonc
+{
+  "extensions": {
+    "agentStatus": {
+      "enabled": true,
+      "time": { "enabled": true, "timezone": "Asia/Shanghai" },
+      "background": { "enabled": true }
+    }
+  }
+}
+```
+
+A Native Agent Extension is optional Agent behavior or context that belongs to
+one concrete Agent/Conversation composition. Agent Status is the first
+extension migrated under this boundary; Todo and Goal are later, separate
+issues and are **not** part of it today. The obsolete top-level `agentStatus`
+field is removed outright: there is no alias, no fallback parse, no
+deprecation warning, and no compatibility mode — an obsolete document fails the
+ordinary strict-field boundary, naming the offending field.
+
+The record is *closed*, not an open registry. Its members are typed Rust fields,
+so an unknown extension name (`extensions.todo`) and an unknown knob inside a
+known extension (`extensions.agentStatus.future`) both fail at launch exactly
+like any other unknown field. rustX deliberately provides no generic plugin or
+runtime-hook system: there is no dynamic registration, no lifecycle trait, no
+event-hook registry, no arbitrary model-request mutation, and no
+JavaScript/TypeScript/WASM or third-party extension loading. An extension may
+contribute behavior only through an existing native owner — the Tool Plane for
+tools, Context Assembly for request-time context, `ConversationRuntime` for
+runtime coordination, the Runtime Client for projection. Adding one means adding
+a typed member and wiring it through its real owner.
+
+Extensions and ordinary tools are separate concepts. `extensions` never selects,
+enables, or filters execution capabilities; `defaultTools`, `--tools`, and
+`--exclude-tools` remain the only tool-selection authority, and enabling an
+extension never adds a Tool to the model-facing registry by itself.
+
+### Launch-scoped lifetime
+
+> A running `ConversationRuntime` executes against the native extension
+> composition frozen for that launch.
+
+The document is read once, at composition, through the ordinary launch
+resolver, and frozen into the composed runtime. `extensions` is therefore not a
+reload-owned field: an explicit resource reload republishes a whole new
+`RuntimeResourceSnapshot` and still cannot install, remove, or reconfigure an
+extension inside an already-composed runtime. Restart/resume is a *new* launch —
+it resolves the current document through the same resolver and applies it — and
+it rewrites no canonical Session history to match a changed extension set.
+
+### Root and child compositions
+
+> Root Agent extensions and named-Subagent extensions are independently
+> authored compositions.
+
+The root Agent's composition comes from this document. A named Subagent's comes
+from its own canonical role frontmatter (see
+[canonical named Subagent resources](subagent-resources.md)). A child never
+implicitly inherits the root's set: the resolver that freezes a child reads the
+definition and the invoking generation's authority only, so the root value is
+not an input. A role that declares no `extensions` composes its own built-in
+defaults, never the root's configuration.
+
+The invoking generation freezes the child's effective extension set into
+`ResolvedSubagentSpec` before process staging and durable ownership commit, and
+extension settings participate in the role's semantic digest. The child process
+materializes that frozen decision and never rereads `rustx.jsonc`, host or
+project configuration, role files, or a later resource generation to
+reinterpret which extensions it owns.
+
+Disabling an extension composes an ordinary runtime with that behavior absent.
+`"extensions": { "agentStatus": { "enabled": false } }` leaves the Agent Loop,
+tool admission and selection, tool execution, cancellation, attempt settlement,
+terminal events, canonical history, and provider-independent messages exactly
+as they are with the extension present; the only difference is that no Agent
+Status is composed or emitted.
+
+### Inspecting what an Agent is actually running with
+
+This document is the **prospective** authority: `rustx config show --sources`
+reports what a next launch would resolve from it, and from which authored
+layer. It is deliberately not a report of the running Agent.
+
+For the running Agent, `/settings` renders the frozen effective composition the
+attached runtime projects — `RuntimeClientSnapshot.effective_extensions` — for
+a root Agent and for a Subagent child alike. That projection is read from the
+composition the runtime already materialized; asking for it opens no
+configuration file and consults no resource generation. Editing this document
+after launch therefore makes the two views disagree, and that disagreement is
+the point: one describes the next launch, the other describes the Agent that is
+running. See [effective settings and configuration
+lifetimes](effective-settings.md) for the full ownership matrix.
 
 ## Session publication and frozen execution
 

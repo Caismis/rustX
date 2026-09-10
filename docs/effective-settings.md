@@ -23,6 +23,7 @@ it does not refresh or replace the live snapshot.
 | Runtime root, model catalog/bindings, host startup policy | Launch resolver/composition | Host-owned paths and allowed CLI inputs | Restart required | Explicit authoring | Not reapplied; loader retains captured startup values | Re-resolved |
 | Saved primary model/profile or approval default | Rust `UserDefaults` document writer | Explicit `user` scope: `$XDG_CONFIG_HOME/rustx/settings.jsonc` (or `$HOME/.config/rustx/settings.jsonc`) | Same-directory rename publishes one validated document | Only the explicitly selected fields | Does not replace Session model or approval | Can affect a future launch; project/CLI precedence still applies |
 | Attempt model, resource revision, approval mode | Native admission | Actual frozen model/resource/policy snapshots | Frozen together at admission; never live-mutated | Retained execution/request evidence only | Retained admitted facts unchanged | No reconstruction from new defaults |
+| Effective native Agent Extension composition (Agent Status) | The composed `ConversationRuntime` itself; frozen at `LocalConversationCore::compose` (root) or in `ResolvedSubagentSpec.extensions` (child) | The launch's `extensions` document (root) or the named role's own `extensions` (child) | Immutable for the life of the Agent; there is no live setter and no install/uninstall | Authoring files only | Unchanged — reload republishes resources and cannot recompose extensions | New launch resolves the current document and may compose a different set |
 | Child model/profile/capabilities and compiled/admitted Workflow program/inputs | Existing Subagent and Workflow admission owners | Parent-frozen native specifications and compiled program | Immutable for admitted execution; no rediscovery in child workspace | Existing native evidence only | Already admitted specifications unchanged | No replay or automatic resume |
 | Show reasoning, expansion | TUI presentation preferences | Client-local preference | Immediate rendering change | Not saved through native settings API | No effect | Client presentation only |
 
@@ -47,7 +48,8 @@ persisted Session-local model selection.
   selection, tool invocation or canonical history changes. `/reasoning` is unknown;
   there is no compatibility alias.
 - `/settings` shows captured sources, Session selection, effective/pending approval,
-  actual published resource revision, tools/Skills, and frozen attempt facts.
+  actual published resource revision, tools/Skills, the attached Agent's frozen
+  native Agent Extension composition, and frozen attempt facts.
 - `/defaults user` shows only the permitted saved fields, target document and its
   content revision. It does not resolve layers or claim the values win precedence.
 - `/save-default user model <revision>` writes exactly `model.model` and
@@ -101,6 +103,60 @@ authored documents; malformed JSONC cannot be ignored by resource loading.
   from that snapshot, then subscribes after the cursor. No cached settings are
   restored as semantics, and no model/approval/save/reload operation is replayed.
 
+## Effective native Agent Extensions (Issue #256)
+
+The two configuration surfaces answer different questions, and both answers are
+correct at once:
+
+| Surface | Question it answers |
+| --- | --- |
+| `rustx config show --sources` | What extension configuration would a **next launch** resolve, and from which authored layer? |
+| `/settings` | Which native Agent Extension composition is the **attached Agent** actually running with? |
+
+`/settings` renders `RuntimeClientSnapshot.effective_extensions`, which the
+runtime projects from the composition it already materialized
+(`ConversationRuntime::native_extensions()`). Reading it opens no configuration
+file, resolves no layer, and consults no resource generation. So editing
+`rustx.jsonc` after launch makes the two views disagree — and that disagreement
+is the contract, not a bug: the live view keeps describing the Agent that is
+running.
+
+- **Root launch freeze.** The root composition is resolved once, in
+  `LocalConversationCore::compose`, and the projection is installed once, when
+  the Runtime Client host binds over that runtime. Its lifetime is
+  `launch_capture`.
+- **Child resolved-spec freeze.** A child's composition is the one its invoking
+  generation froze into `ResolvedSubagentSpec.extensions`, before staging and
+  the durable ownership commit. The child's own Runtime Client host projects
+  exactly that value, so a child frozen under resource generation R1 keeps
+  reporting R1 after R2 publishes, and root extension configuration cannot
+  reach it. Its lifetime is `frozen_admission` under `frozen_child` evidence.
+- **Resource reload does not recompose extensions.** `/reload` publishes a new
+  `RuntimeResourceSnapshot`; `extensions` is not a reload-owned field, and the
+  projection has no reload seam at all.
+- **Restart may change them.** A new launch resolves the current document
+  through the ordinary resolver. That is the only way a root Agent's
+  composition changes, and it rewrites no canonical Session history.
+- **Observations are not extension-configuration authority.** The `statuses`
+  window says what was composed for a step. An extension that is enabled but
+  has produced no eligible contribution yet still projects as composed, and a
+  composed status never implies an extension is present.
+- **Historical partial evidence is not reconstructed.** Durable-only inspection
+  has no live Agent, so `effective_extensions` is `null`. It is never filled in
+  from today's document, built-in defaults, or the latest runtime
+  configuration, even when the inspected history itself contains canonical
+  Agent Status messages.
+
+Absence is represented once, and precisely: `agent_status: null` means the
+extension is not part of this composition, which is a different fact from a
+composed extension whose Time and Background contributors are both disabled.
+`timezone: null` means no explicit timezone was configured — not UTC. The
+projection is a closed typed record with one member per native extension; it
+carries no prompts, registries, extension internals, secrets, or arbitrary
+configuration documents, and it is not a generic configuration read/write
+surface.
+
+Protocol 26 adds `effective_extensions` and `settings_lifetimes.extensions`.
 Protocol 25 extends the existing snapshot with `launch_settings`,
 `settings_lifetimes`, and `settings_evidence`. Canonical model, policy and resource
 sections remain the only live value projections. Attempt `model` and
@@ -196,6 +252,23 @@ A → B → A edit is indistinguishable from unchanged content by design.
 | `cfg238_invalid_candidate_and_staged_failure_preserve_old_document` | Invalid native profile, plus injected errors at `Staged`, `Validated`, `FinalChecked`; no publication |
 | `cfg238_duplicate_keys_and_symlinks_are_refused` | Unsupported document/authority forms; bytes retained and diagnostics redacted |
 | `cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_reconnect` | Init/check/composition, disk A, admission-gated C/on, later Session B/off, actual scripted provider requests, approval pending, separate save, busy/success/failed reload, detach/attach equality, fresh launch/Session observes saved B |
+
+Issue #256 effective-extension regressions:
+
+| Test | Boundary/evidence |
+| --- | --- |
+| `ext256_a_live_root_projects_its_frozen_effective_extension_composition` | A live root projects its exact frozen Time/timezone/Background composition and, separately, `agent_status = None`; the composed-status window is provably empty while the extension reports as composed; a fresh prospective resolution of the edited document disagrees with the live projection |
+| `ext256_reload_cannot_recompose_extensions_but_the_next_launch_does` | A published resource generation changes neither the composed runtime nor its projection, in both directions; restart projects the new launch's composition and preserves canonical Session history |
+| `cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_reconnect` | Live E2E: the launch-authored composition is projected exactly; real Agent Status observations appear without changing it; a successful reload leaves it unchanged; reconnect reconstructs the identical view; the prospective next launch reads the edited document |
+| `ext256_a_child_projects_only_its_frozen_extension_composition` | A child's own Runtime Client host projects its frozen `ResolvedSubagentSpec.extensions` while a conflicting root-shaped document sits beside it, including after the spec crosses its real serialization contract; `frozen_child` evidence and the `frozen_admission` extension lifetime |
+| `ext256_a_child_frozen_on_r1_keeps_r1_extensions_after_r2_publishes` | The projection of the committed R1 child after a real `reload_resources` publication of R2, and R2's own different projection |
+| `ext256_root_extension_configuration_never_reaches_a_named_role` | Root and child projections differ; the root's frozen timezone and disabled Background appear in no child projection |
+| `ext256_historical_inspection_reports_no_effective_extension_composition` | Durable-only inspection reports `null` on both the attach and resync read paths, while the inspected history itself carries canonical Agent Status evidence |
+| `ext256_effective_extension_protocol_fixture_round_trips_exactly` / `EXT256 shares the native effective-extension protocol fixture exactly` | The Rust and TypeScript halves of `tests/fixtures/runtime-client/settings-v26.json` agree on all three semantic states and both lifetimes |
+| `ext256_materialized_owners_recover_the_exact_frozen_composition` | The projection source is the materialization: every semantic composition round-trips through its materialized owners unchanged |
+| `EXT256 /settings distinguishes absent, composed, and timezone-configured Agent Status` | Rendering separates absent, composed, contributors-disabled, configured timezone and none, and root from frozen child |
+| `EXT256 /settings never infers extension enablement from Agent Status observations` | Enabled with an empty status window renders enabled; absent with a composed status renders absent |
+| `EXT256 reconnect reconstructs the same effective-extension view` | A fresh projection of the same snapshot is identical; an unattached client has no composition |
 
 Repair regressions additionally cover:
 - `cfg238_staged_model_preserved_output_budget_is_validated`: a valid A/4096 user

@@ -337,6 +337,7 @@ mod tests {
                     files: Vec::new(),
                 },
                 WorkspacePolicy::SharedWorkspace,
+                crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
             )
             .expect("definition"),
             SubagentDefinition::new(
@@ -353,6 +354,7 @@ mod tests {
                     files: Vec::new(),
                 },
                 WorkspacePolicy::SharedWorkspace,
+                crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
             )
             .expect("definition"),
         ])
@@ -575,7 +577,6 @@ mod tests {
                 model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                 tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
                 ),
-                agent_status: crate::context::AgentStatusConfig::default(),
                 context: SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -604,6 +605,7 @@ mod tests {
             WorkspacePolicy::GitWorktree {
                 require_clean_parent: true,
             },
+            crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
         )
         .expect("definition");
 

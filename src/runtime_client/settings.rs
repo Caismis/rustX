@@ -93,6 +93,92 @@ pub struct LaunchSettings {
     pub tool_selection_origin: SettingOrigin,
 }
 
+/// The frozen effective native Agent Extension composition of the Agent
+/// runtime this snapshot projects (Issue #256).
+///
+/// This is a **projection of the attached runtime's own composition**, never
+/// a reread of authoring configuration. It is closed and typed — one named
+/// member per native extension — so the vocabulary grows only when a native
+/// extension is deliberately added to it. There is no map, no
+/// `serde_json::Value`, no plugin descriptor, and no dynamic registry view.
+///
+/// Two different nullabilities meet on this path and must not be confused:
+///
+/// - the snapshot's `effective_extensions` is `None` when there is no
+///   authoritative Agent composition to project at all — historical-only
+///   durable inspection. It is never filled from disk, built-in defaults,
+///   or the latest runtime configuration;
+/// - `agent_status` inside it is `None` when the extension is **not part of
+///   this Agent's composition**. That is a different fact from "composed,
+///   with both contributors switched off", which is
+///   `Some(EffectiveAgentStatusExtension { time: disabled, background:
+///   disabled })`.
+///
+/// It is also independent of whether any Agent Status was actually composed
+/// for a step: a runtime with the extension enabled and no eligible status
+/// contribution yet still reports `Some(..)`. Observations describe steps;
+/// this describes the composition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectiveNativeAgentExtensions {
+    /// The composed Agent Status extension, or `None` when this Agent
+    /// composes no Agent Status at all.
+    pub agent_status: Option<EffectiveAgentStatusExtension>,
+}
+
+/// The frozen contributor configuration of a composed Agent Status extension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectiveAgentStatusExtension {
+    pub time: EffectiveTimeStatus,
+    pub background: EffectiveBackgroundStatus,
+}
+
+/// The frozen Time contributor of a composed Agent Status extension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectiveTimeStatus {
+    pub enabled: bool,
+    /// The IANA timezone frozen for this composition, or `None` when none was
+    /// configured. `None` is "no explicit timezone", not "UTC".
+    pub timezone: Option<chrono_tz::Tz>,
+}
+
+/// The frozen Background contributor of a composed Agent Status extension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectiveBackgroundStatus {
+    pub enabled: bool,
+}
+
+impl EffectiveNativeAgentExtensions {
+    /// Projects one frozen composition into the Runtime Client vocabulary.
+    ///
+    /// The input is always the composition an Agent runtime is already
+    /// executing against — for a root, the value frozen at
+    /// `LocalConversationCore::compose`; for a child, the value its invoking
+    /// generation froze into `ResolvedSubagentSpec::extensions`. This
+    /// function performs a total, information-preserving translation and
+    /// makes no decision of its own: it does not resolve, default, widen,
+    /// narrow, or validate extension scope.
+    #[must_use]
+    pub fn project(frozen: &crate::extensions::NativeAgentExtensions) -> Self {
+        Self {
+            agent_status: frozen
+                .agent_status()
+                .map(|config| EffectiveAgentStatusExtension {
+                    time: EffectiveTimeStatus {
+                        enabled: config.time.enabled,
+                        timezone: config.time.timezone,
+                    },
+                    background: EffectiveBackgroundStatus {
+                        enabled: config.background.enabled,
+                    },
+                }),
+        }
+    }
+}
+
 /// Metadata names canonical sections rather than maintaining another copy of live state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -104,6 +190,17 @@ pub struct SettingsLifetimes {
     pub attempt: SettingsBoundary,
     pub presentation: SettingsBoundary,
     pub saved_defaults: SettingsBoundary,
+    /// The application boundary of the effective native Agent Extension
+    /// composition (Issue #256).
+    ///
+    /// A root Agent's composition is launch-frozen, so this is
+    /// [`SettingsBoundary::LaunchCapture`]: only a restart can produce a
+    /// different one, and a resource reload never does. A Subagent child's
+    /// composition is the frozen execution profile its invoking generation
+    /// resolved, so a `frozen_child` snapshot reports
+    /// [`SettingsBoundary::FrozenAdmission`] instead — the same vocabulary
+    /// the frozen child model already uses.
+    pub extensions: SettingsBoundary,
 }
 impl Default for SettingsLifetimes {
     fn default() -> Self {
@@ -115,6 +212,7 @@ impl Default for SettingsLifetimes {
             attempt: SettingsBoundary::FrozenAdmission,
             presentation: SettingsBoundary::ClientLocal,
             saved_defaults: SettingsBoundary::NextLaunch,
+            extensions: SettingsBoundary::LaunchCapture,
         }
     }
 }
@@ -147,7 +245,10 @@ pub enum SettingsEvidence {
     LiveSession,
     FrozenChild,
     /// No live Session model is available. Retained requests have their own evidence.
-    /// Approval/resource availability and launch provenance are unavailable.
+    /// Approval/resource availability, launch provenance, and the effective
+    /// native Agent Extension composition are unavailable: this evidence
+    /// class reports them absent rather than reconstructing them from the
+    /// configuration that happens to be on disk today.
     HistoricalPartial,
 }
 
@@ -159,7 +260,7 @@ mod tests {
     #[test]
     fn cfg238_protocol_fixture_and_finite_write_vocabulary() {
         let fixture: serde_json::Value = serde_json::from_str(include_str!(
-            "../../tests/fixtures/runtime-client/settings-v25.json"
+            "../../tests/fixtures/runtime-client/settings-v26.json"
         ))
         .unwrap();
         let request: RuntimeClientRequest =
@@ -186,5 +287,90 @@ mod tests {
         let mut invalid = fixture["request"].clone();
         invalid["value"] = serde_json::json!({"api_key":"SECRET_SENTINEL"});
         assert!(serde_json::from_value::<RuntimeClientRequest>(invalid).is_err());
+    }
+
+    /// Issue #256 regression 10 (Rust half): the shared protocol fixture is
+    /// the one wire definition of the effective-extension projection, and
+    /// the Rust types encode and decode it byte-exactly. The TypeScript half
+    /// reads the same file (`tui/test/settings.test.ts`).
+    ///
+    /// The fixture carries all three semantically distinct states on
+    /// purpose: composed with an explicit timezone, composed with both
+    /// contributors off and no timezone, and not composed at all.
+    #[test]
+    fn ext256_effective_extension_protocol_fixture_round_trips_exactly() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/runtime-client/settings-v26.json"
+        ))
+        .unwrap();
+        let extensions = &fixture["effective_extensions"];
+        for state in ["composed", "contributors_disabled", "not_composed"] {
+            let wire = extensions[state].clone();
+            let decoded: EffectiveNativeAgentExtensions =
+                serde_json::from_value(wire.clone()).expect(state);
+            assert_eq!(serde_json::to_value(&decoded).unwrap(), wire, "{state}");
+        }
+
+        // The three states are semantically distinct values, not spellings
+        // of one another: "not composed" is never "composed and idle".
+        let composed: EffectiveNativeAgentExtensions =
+            serde_json::from_value(extensions["composed"].clone()).unwrap();
+        let disabled: EffectiveNativeAgentExtensions =
+            serde_json::from_value(extensions["contributors_disabled"].clone()).unwrap();
+        let absent: EffectiveNativeAgentExtensions =
+            serde_json::from_value(extensions["not_composed"].clone()).unwrap();
+        assert_ne!(composed, disabled);
+        assert_ne!(disabled, absent);
+        assert!(absent.agent_status.is_none());
+        assert!(disabled.agent_status.is_some());
+
+        // The projection is a total translation of the frozen composition,
+        // and the frozen composition is the only input it has.
+        let frozen = serde_json::from_value::<crate::extensions::NativeAgentExtensionsDocument>(
+            serde_json::json!({"agentStatus": {
+                "enabled": true,
+                "time": {"enabled": true, "timezone": "Asia/Shanghai"},
+                "background": {"enabled": true}
+            }}),
+        )
+        .unwrap()
+        .resolve();
+        assert_eq!(EffectiveNativeAgentExtensions::project(&frozen), composed);
+        assert_eq!(
+            EffectiveNativeAgentExtensions::project(
+                &crate::extensions::NativeAgentExtensions::none()
+            ),
+            absent
+        );
+
+        // Root and frozen-child lifetimes use the existing vocabulary.
+        assert_eq!(
+            serde_json::to_value(SettingsLifetimes::default()).unwrap()["extensions"],
+            fixture["lifetimes"]["extensions"]
+        );
+        let child = SettingsLifetimes {
+            model: SettingsBoundary::FrozenAdmission,
+            extensions: SettingsBoundary::FrozenAdmission,
+            ..SettingsLifetimes::default()
+        };
+        assert_eq!(
+            serde_json::to_value(&child).unwrap(),
+            fixture["child_lifetimes"]
+        );
+
+        // The closed record rejects an unknown extension name and an
+        // unknown contributor field: the vocabulary grows only in Rust.
+        for invalid in [
+            serde_json::json!({"agent_status": null, "todo": {"enabled": true}}),
+            serde_json::json!({"agent_status": {
+                "time": {"enabled": true, "timezone": null, "future": true},
+                "background": {"enabled": true}
+            }}),
+        ] {
+            assert!(
+                serde_json::from_value::<EffectiveNativeAgentExtensions>(invalid.clone()).is_err(),
+                "accepted {invalid}"
+            );
+        }
     }
 }

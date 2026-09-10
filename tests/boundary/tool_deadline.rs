@@ -136,7 +136,7 @@ async fn issue204_bash_hard_deadline_settles_proven_timed_out() {
             summary_output_cap: None,
         },
         Arc::new(rustx::context::DefaultTokenEstimator),
-        rustx::context::AgentStatusEngine::default(),
+        Some(rustx::context::AgentStatusEngine::default()),
         &snapshot,
         rustx::model::ModelTimeoutPolicy::default(),
         clock.clone(),
