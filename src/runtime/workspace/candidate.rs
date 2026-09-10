@@ -859,7 +859,23 @@ mod tests {
         let access = fixture.access(&scope).await;
         assert_eq!(access.finish(true).await.unwrap(), expected);
         if link {
-            let file = super::super::open_stable_directory(&root).unwrap();
+            // Reproduce a system-root alias on Linux too. Only the existing
+            // runtime-allocation opener may resolve it; descriptor traversal
+            // itself still refuses symlinks.
+            let aliases = tempfile::tempdir().unwrap();
+            let runtime_alias = aliases.path().join("runtime");
+            symlink(fixture.runtime.path(), &runtime_alias).unwrap();
+            let aliased_root = runtime_alias
+                .join("worktrees")
+                .join(root.file_name().unwrap());
+            assert!(super::super::open_stable_directory(&aliased_root).is_err());
+            let allocation = super::super::open_stable_runtime_worktrees(&runtime_alias).unwrap();
+            let file = super::super::open_stable_child_logical_workspace(
+                &allocation,
+                &aliased_root,
+                Path::new(""),
+            )
+            .unwrap();
             let mut hash = Sha256::new();
             hash_path(
                 &file,
