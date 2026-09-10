@@ -21,6 +21,13 @@ allocations exclusively in sorted identity order. A live unrelated Session and
 its Runtime Client remain usable; actual target runtime/child/inspection/private
 writer access blocks exclusivity. Ordinary activity does not hold the ownership
 freeze. Guards release through drop or OS process death; aliases share identity.
+Workflow workspace disposal retains ownership-mutation authority from before
+reading disposal facts through durable Started, physical removal and settlement,
+including retries. `WorkflowWorkspaceDisposalStarted` is the destructive
+admission boundary: a retained ownership snapshot excludes it. Conversely, an
+admitted disposal excludes new ownership snapshots until it finishes. Neither
+operation can cross the other's conflicting boundary. Started alone does not
+change the semantic blocker revision.
 The semantic revision hashes only target membership, owned allocations and
 final workspace-blocker state, never raw catalog bytes or execution history.
 Management reads never create missing stores or directories. See

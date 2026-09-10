@@ -168,6 +168,11 @@ impl WorkspaceManager {
         run: &WorkflowRunId,
     ) -> Result<WorkspaceDisposalSettlement, WorkspaceDisposalError> {
         let _disposal = self.disposal_lock.lock().await;
+        // Event commits alone release authority too early. Retain it through
+        // physical removal and settlement, also when retrying a durable intent.
+        let _ownership = store
+            .workspace_disposal_authority()
+            .map_err(|error| mismatch(error.to_string()))?;
         let owner = WorkspaceOwner::Workflow(run.clone());
         self.require_released(&owner)?;
         let facts = read_facts(store, run)?;

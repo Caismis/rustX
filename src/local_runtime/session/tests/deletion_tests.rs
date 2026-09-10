@@ -1,4 +1,5 @@
 mod borrowed_workspace;
+mod workflow_disposal;
 
 use super::*;
 use crate::local_runtime::session_deletion::SessionDeletionPreflight;

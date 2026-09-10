@@ -106,8 +106,10 @@ impl ProductController {
 pub(crate) struct OwnershipSnapshot {
     _lock: Flock<File>,
 }
+/// OS-backed participation in local ownership transitions. Workspace disposal
+/// retains this authority through physical mutation and durable settlement.
 #[derive(Debug)]
-pub(crate) struct OwnershipMutation {
+pub struct OwnershipMutation {
     _lock: Flock<File>,
 }
 

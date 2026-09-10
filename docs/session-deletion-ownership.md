@@ -50,8 +50,10 @@ unsafe identities fail closed. The Session graph stays above linear stores.
   acquire the same allocation access before touching private state.
 - `OwnershipSnapshot` exclusively locks the canonical product-root directory
   against **ownership transitions only**. Catalog publication and typed durable
-  child/workspace ownership or disposal transactions take short compatible
-  `OwnershipMutation` guards. Ordinary user/model/assistant/tool execution facts
+  child/workspace ownership transactions take compatible `OwnershipMutation`
+  guards. Explicit Workflow disposal retains its guard across physical cleanup
+  and durable settlement, rather than just individual event commits. Ordinary
+  user/model/assistant/tool execution facts
   do not take this root lock. Target `ConversationExclusion` guards provide the
   separate exclusive private-resource access authority.
 
@@ -86,6 +88,33 @@ Ownership-changing work is serialized for the bounded preflight lifetime;
 unrelated ordinary execution continues. Preview callers must drop the snapshot
 before awaiting human confirmation. A later operation reacquires and compares
 the semantic token under fresh authority; #255 owns that product workflow.
+
+Workflow disposal first takes its process-local disposal mutex, then obtains
+`ConversationStore::workspace_disposal_authority` before reading retained facts.
+For native SQLite stores this retains `OwnershipMutation` from the attached
+`ConversationAccess` through `WorkflowWorkspaceDisposalStarted`, physical Git
+worktree/branch removal and `WorkflowWorkspaceDisposalSettled`. Every retry takes
+this authority even when Started is already durable. Nested event commits take
+compatible shared mutation guards; no lock upgrade is involved.
+
+`WorkflowWorkspaceDisposalStarted` is the durable destructive admission boundary
+and independently participates in event-level ownership exclusion, like the
+subagent disposal Started event. If preflight wins the ownership freeze first,
+disposal fails admission without publishing Started or touching Git; retry after
+snapshot release can proceed. If disposal wins first, preflight returns
+`WouldBlock` throughout physical cleanup and settlement. Guard drop (including
+error return) or OS process death releases live authority. The store's ordinary
+Conversation access also remains alive for the complete call. Recovery of a
+previous interrupted disposal still uses existing durable intent and settlement
+semantics; this adds no recovery transaction or deletion state machine.
+
+Started alone does not change the final blocker semantics and is not added to
+`ownership_revision` or the preflight blocker projection. The spanning exclusion
+prevents observation of an in-flight live disposal; settled physical/disposal
+state remains the revision authority. The real WorkspaceManager path is covered
+by `deletion_preflight_first_excludes_workflow_destructive_admission_until_release`
+and `deletion_workflow_disposal_first_excludes_preflight_through_physical_settlement`,
+using barriers before removal and between worktree and branch removal.
 
 A live product controlling A can call `LocalSessionSupervisor::deletion_preflight`
 for historical B without switching, detaching or restarting A. A's controller

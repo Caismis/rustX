@@ -1206,6 +1206,13 @@ pub trait ConversationStore: Send + Sync + 'static {
     /// The conversation this store is the durable inbound authority of.
     fn conversation_id(&self) -> &ConversationId;
 
+    /// Retains local ownership-mutation authority across explicit workspace
+    /// disposal, including physical cleanup and durable settlement. Embedded
+    /// stores without a local product lifecycle return `None`.
+    fn workspace_disposal_authority(
+        &self,
+    ) -> Result<Option<crate::runtime::local_storage::OwnershipMutation>, ConversationStoreError>;
+
     /// Accepts one inbound item durably.
     ///
     /// # Errors

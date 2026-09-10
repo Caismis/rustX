@@ -353,6 +353,7 @@ impl SqliteConversationStore {
                 | RuntimeEvent::SubagentWorkspaceDisposalSettled { .. }
                 | RuntimeEvent::WorkflowWorkspaceOwned { .. }
                 | RuntimeEvent::WorkflowWorkspaceSettled { .. }
+                | RuntimeEvent::WorkflowWorkspaceDisposalStarted { .. }
                 | RuntimeEvent::WorkflowWorkspaceDisposalSettled { .. }
         ) {
             self.lifecycle
@@ -971,6 +972,20 @@ impl SqliteConversationStore {
 }
 
 impl ConversationStore for SqliteConversationStore {
+    fn workspace_disposal_authority(
+        &self,
+    ) -> Result<Option<crate::runtime::local_storage::OwnershipMutation>, ConversationStoreError>
+    {
+        self.lifecycle
+            .as_ref()
+            .map(|access| {
+                access
+                    .ownership_mutation()
+                    .map_err(|e| storage(e.to_string()))
+            })
+            .transpose()
+    }
+
     fn conversation_id(&self) -> &ConversationId {
         &self.conversation_id
     }
