@@ -1623,11 +1623,6 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp root");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        let runtime_root = dir
-            .path()
-            .join("subagents/conv-1-subagent-1/incarnation-test");
-        std::fs::create_dir_all(&runtime_root).unwrap();
-        let runtime_root = runtime_root.canonicalize().unwrap();
         let spec = SubagentChildSpec {
             protocol_version: SUBAGENT_IPC_VERSION,
             product_root: dir.path().to_path_buf(),
@@ -1669,15 +1664,17 @@ mod tests {
             incarnation: "incarnation-test".to_owned(),
             terminal: crate::runtime::subagent::ipc::ChildTerminalMode::Normal,
         };
-        std::fs::create_dir_all(
-            crate::runtime::subagent::child_conversation_store_path(
-                &spec.product_root,
-                &spec.child_conversation_id,
-            )
-            .parent()
-            .unwrap(),
+        let product =
+            crate::runtime::local_storage::ProductRoot::existing(&spec.product_root).unwrap();
+        let allocation = crate::runtime::subagent::child_conversation_store_path(
+            product.root(),
+            &spec.child_conversation_id,
         )
-        .unwrap();
+        .parent()
+        .unwrap()
+        .join(&spec.incarnation);
+        std::fs::create_dir_all(&allocation).unwrap();
+        let runtime_root = spec.runtime_root().unwrap();
         let gate = crate::local_runtime::composition::arm_test_preparation_gate(&runtime_root);
 
         let (parent, child) = tokio::net::UnixStream::pair().expect("control pair");
@@ -1685,13 +1682,17 @@ mod tests {
             tokio::net::UnixStream::pair().expect("observation pair");
         let mut dispatcher = ChildControlDispatcher::start(child, observation_child);
         let handle = dispatcher.handle();
-        let composed = tokio::spawn(async move {
+        let mut composed = tokio::spawn(async move {
             let outcome = Box::pin(compose_cancellably(&mut dispatcher, &handle, &spec)).await;
             (outcome, dispatcher)
         });
 
         // 1. The child is provably inside external preparation.
-        gate.entered().await;
+        tokio::select! {
+            () = gate.entered() => {},
+            result = &mut composed => panic!("composition exited before preparation gate: {:?}",
+                result.map(|(outcome, _)| outcome.map(|core| core.is_some()))),
+        }
 
         // 2. The parent's Cancel frame is written...
         let (mut parent_read, mut parent_write) = parent.into_split();
