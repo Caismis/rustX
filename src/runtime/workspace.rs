@@ -926,6 +926,8 @@ impl std::error::Error for WorkspaceAcquireError {}
 /// The one physical workspace manager for named Subagents and Workflow runs.
 #[derive(Debug, Clone)]
 pub struct WorkspaceManager {
+    /// Composed by the local runtime, never obtained from durable storage.
+    local_lifecycle: Option<Arc<crate::runtime::local_storage::ConversationAccess>>,
     active: Arc<std::sync::Mutex<BTreeSet<String>>>,
     parent_logical_workspace: PathBuf,
     runtime_root: PathBuf,
@@ -955,6 +957,7 @@ impl WorkspaceManager {
     #[must_use]
     pub fn new(parent_workspace: impl AsRef<Path>, runtime_root: impl AsRef<Path>) -> Self {
         Self {
+            local_lifecycle: None,
             active: Arc::default(),
             parent_logical_workspace: parent_workspace.as_ref().to_path_buf(),
             runtime_root: runtime_root.as_ref().to_path_buf(),
@@ -974,6 +977,20 @@ impl WorkspaceManager {
             #[cfg(test)]
             disposal_hook: None,
         }
+    }
+
+    /// Binds native local workspace lifecycle to the owning Conversation's
+    /// existing allocation access. Clones retain that access independently of
+    /// the runtime and durable store. Historical management can supply access
+    /// obtained from catalog-owned storage without activating a Conversation.
+    /// Embedded managers created with `new` need no local Session authority.
+    #[must_use]
+    pub fn with_local_lifecycle(
+        mut self,
+        access: Arc<crate::runtime::local_storage::ConversationAccess>,
+    ) -> Self {
+        self.local_lifecycle = Some(access);
+        self
     }
 
     /// Re-proves the complete ownership relationship of one retained

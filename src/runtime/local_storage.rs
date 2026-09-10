@@ -109,7 +109,7 @@ pub(crate) struct OwnershipSnapshot {
 /// OS-backed participation in local ownership transitions. Workspace disposal
 /// retains this authority through physical mutation and durable settlement.
 #[derive(Debug)]
-pub struct OwnershipMutation {
+pub(crate) struct OwnershipMutation {
     _lock: Flock<File>,
 }
 

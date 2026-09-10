@@ -29,16 +29,21 @@ fn git(root: &std::path::Path, args: &[&str]) -> String {
 
 #[tokio::test]
 async fn deletion_preflight_first_excludes_workflow_destructive_admission_until_release() {
-    disposal_race(true).await;
+    disposal_race(true, true).await;
 }
 
 #[tokio::test]
 async fn deletion_workflow_disposal_first_excludes_preflight_through_physical_settlement() {
-    disposal_race(false).await;
+    disposal_race(false, true).await;
+}
+
+#[tokio::test]
+async fn deletion_workspace_owner_excludes_preflight_without_store_lifecycle() {
+    disposal_race(false, false).await;
 }
 
 #[allow(clippy::too_many_lines)]
-async fn disposal_race(preflight_first: bool) {
+async fn disposal_race(preflight_first: bool, bind_store: bool) {
     let (root, mut catalog, _) = open_catalog();
     let (conversation, session, _) = append_history(&catalog, &source_history());
     let store = store_for(&catalog, &session, &conversation);
@@ -47,6 +52,11 @@ async fn disposal_race(preflight_first: bool) {
     catalog
         .publish_session(&other, SessionNodeOrigin::New)
         .unwrap();
+    assert_ne!(
+        catalog.active_lineage().unwrap().0,
+        session,
+        "the manager binds a historical Conversation, not the active selection"
+    );
     let identity = ProductRoot::existing(root.path()).unwrap();
     let access = ConversationAccess::existing(
         &identity,
@@ -56,14 +66,22 @@ async fn disposal_race(preflight_first: bool) {
             .unwrap(),
     )
     .unwrap();
-    let store = Arc::new(store.with_lifecycle(Arc::new(access)));
+    let access = Arc::new(access);
+    let store = Arc::new(if bind_store {
+        store.with_lifecycle(access.clone())
+    } else {
+        // A semantic store supplies no OS authority to its caller. The local
+        // workspace owner must still exclude preflight through physical cleanup.
+        store
+    });
     let source = tempfile::tempdir().unwrap();
     git(source.path(), &["init"]);
     std::fs::write(source.path().join("source"), "baseline").unwrap();
     git(source.path(), &["add", "."]);
     git(source.path(), &["commit", "-m", "baseline"]);
     let mut manager =
-        WorkspaceManager::new(std::fs::canonicalize(source.path()).unwrap(), root.path());
+        WorkspaceManager::new(std::fs::canonicalize(source.path()).unwrap(), root.path())
+            .with_local_lifecycle(access);
     let hook = Arc::new(WorkspaceDisposalHook::new());
     manager.install_disposal_hook(hook.clone());
     let mut node = crate::runtime::workflow::test_instance("disposal", "write");
@@ -202,6 +220,7 @@ async fn disposal_race(preflight_first: bool) {
     hook.release().await;
     hook.wait_until_worktree_removed().await;
     assert!(!checkout.exists());
+    assert_eq!(git(source.path(), &["rev-parse", &branch]), branch_head);
     assert_eq!(
         SessionDeletionPreflight::acquire(root.path(), &other.session_id)
             .unwrap_err()

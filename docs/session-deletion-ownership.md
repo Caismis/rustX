@@ -89,13 +89,33 @@ unrelated ordinary execution continues. Preview callers must drop the snapshot
 before awaiting human confirmation. A later operation reacquires and compares
 the semantic token under fresh authority; #255 owns that product workflow.
 
-Workflow disposal first takes its process-local disposal mutex, then obtains
-`ConversationStore::workspace_disposal_authority` before reading retained facts.
-For native SQLite stores this retains `OwnershipMutation` from the attached
-`ConversationAccess` through `WorkflowWorkspaceDisposalStarted`, physical Git
-worktree/branch removal and `WorkflowWorkspaceDisposalSettled`. Every retry takes
-this authority even when Started is already durable. Nested event commits take
-compatible shared mutation guards; no lock upgrade is involved.
+`WorkspaceManager` owns physical workspace lifecycle and its optional local
+`Arc<ConversationAccess>`. Local Conversation composition binds the same access
+to the manager and the concrete SQLite store. The manager takes its process-local
+disposal mutex, then acquires `OwnershipMutation` from its own local access before
+reading retained facts. It retains authority through the durable Started commit,
+physical worktree removal, branch compare-delete and durable Settled commit.
+Every retry takes this authority even when Started is already durable. SQLite
+transaction locks are acquired only after lifecycle authority; nested event
+commits take compatible shared mutation guards. All OS acquisitions remain
+nonblocking, so there is no SQLite/lifecycle wait cycle or lock upgrade.
+
+`ConversationStore` contains only backend-independent durable semantic operations.
+It returns no local OS lifecycle authority. Concrete `SqliteConversationStore`
+retains its composed access internally to exclude individual ownership-sensitive
+transactions, including Started; this complements the manager's spanning guard.
+Synchronization wraps durable operations, rather than being supplied by them.
+
+The production manager is composed with the native parent Conversation and shared
+by its subagent registry and Workflow execution. Child composition currently
+creates no WorkspaceManager or nested subagent/Workflow registry; its physical
+workspace use remains parent-owned. Embedded/headless fixture managers can use
+`WorkspaceManager::new` without local Session coordination. Native management
+uses `with_local_lifecycle` with `ConversationAccess::existing` for the selected
+catalog-owned allocation and canonical `ProductRoot`. This existing-only binding
+works for historical Conversations without activating or switching their runtime
+and without reading synchronization authority from a durable backend or workspace
+path. The disposal race fixtures use this historical-management binding.
 
 `WorkflowWorkspaceDisposalStarted` is the durable destructive admission boundary
 and independently participates in event-level ownership exclusion, like the
@@ -115,6 +135,9 @@ state remains the revision authority. The real WorkspaceManager path is covered
 by `deletion_preflight_first_excludes_workflow_destructive_admission_until_release`
 and `deletion_workflow_disposal_first_excludes_preflight_through_physical_settlement`,
 using barriers before removal and between worktree and branch removal.
+`deletion_workspace_owner_excludes_preflight_without_store_lifecycle` additionally
+proves the local manager supplies spanning authority when its semantic store has
+no local lifecycle binding; no fake lock capability is implemented by the store.
 
 A live product controlling A can call `LocalSessionSupervisor::deletion_preflight`
 for historical B without switching, detaching or restarting A. A's controller

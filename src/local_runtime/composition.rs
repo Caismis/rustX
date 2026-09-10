@@ -1037,12 +1037,13 @@ impl LocalConversationCore {
             &paths.workspace,
             artifacts_root.clone(),
         );
-        tool_runtime_config.lifecycle = Some(Arc::new(
+        let conversation_access = Arc::new(
             crate::runtime::local_storage::ConversationAccess::start(lifecycle, &artifacts_root)
                 .map_err(|e| LocalRuntimeError::ToolRuntime {
                     detail: e.to_string(),
                 })?,
-        ));
+        );
+        tool_runtime_config.lifecycle = Some(conversation_access.clone());
         tool_runtime_config.environment = Some(base_environment.clone());
         let tool_runtime =
             ConversationToolRuntime::from_config(conversation_id.clone(), tool_runtime_config)
@@ -1129,7 +1130,8 @@ impl LocalConversationCore {
                 workspace: WorkspaceManager::new(
                     tool_runtime.workspace().root(),
                     paths.runtime_root.join("workspaces"),
-                ),
+                )
+                .with_local_lifecycle(conversation_access),
                 // Launch-scoped: capacity belongs to the live registry, and
                 // resource reload deliberately never resizes it.
                 max_active: runtime_config.subagents.max_concurrent,
