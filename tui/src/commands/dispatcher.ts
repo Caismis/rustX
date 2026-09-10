@@ -216,15 +216,12 @@ export class CommandDispatcher {
           ].join("\n"));
         }
         case "/save-default": {
-          if (state.sessionModel === null) return transient("error", "no active Session default selection");
           const [scope, field, revision, extra] = argument.split(/\s+/);
           if (scope !== "user" || !["model", "approval"].includes(field ?? "") || !revision || extra)
             return transient("error", "usage: /save-default user <model|approval> <revision>; read /defaults user first");
-          const value: import("../protocol/types.ts").DefaultValue = field === "model"
-            ? { field: "model_selection", selection: { model: state.sessionModel!.configured.model, reasoning_profile: state.sessionModel!.configured.reasoningProfile ?? null } }
-            : { field: "approval_mode", mode: state.effectiveApprovalMode };
-          const saved = await session.defaultSave(revision, value);
-          return transient("info", `Saved ${field} to ${saved.document}; revision ${saved.revision}. Live Session unchanged; applies to a future launch, subject to project/CLI precedence.`);
+          const target = field === "model" ? "model_selection" : "approval_mode";
+          const saved = await session.defaultSave(revision, target);
+          return transient("info", `Saved ${field} to ${saved.document}; revision ${saved.revision}. Live Session unchanged; applies at ${boundaryLabel(saved.applies_at)}, subject to project/CLI precedence.`);
         }
         case "/model":
           return await this.#model(session, state, argument);
@@ -784,7 +781,7 @@ export function renderModel(state: PresentationState): string {
     return "Historical evidence is partial. Active Session model, approval, resources, and launch sources are unavailable. Consult retained Request Snapshots for request-specific evidence.";
   }
   const lines = [
-    state.settingsEvidence === "frozen_child" ? "### Parent-frozen child model (immutable)" : "### Session model",
+    `### ${state.settingsEvidence === "frozen_child" ? "Parent-provided child" : "Session"} model (${lifetime(state, "model")})`,
     `- configured: \`${session.configured.model}\``,
     `- effective: \`${session.effective.model}\` via ${session.effective.protocol}`,
     `- context window: ${session.effective.contextWindow}`,
@@ -828,7 +825,7 @@ export function renderModel(state: PresentationState): string {
   if (attempt !== undefined) {
     lines.push(
       "",
-      "### Active attempt model (frozen at admission)",
+      `### Active attempt model (${lifetime(state, "attempt")})`,
       `- attempt: \`${attempt.attemptId}\` (${attempt.phase.type})`,
       `- model: \`${attempt.model?.primary.model ?? "unavailable"}\``,
       `- reasoning: ${(attempt.model ? describeReasoning(attempt.model.primary) : "unavailable")}`,
@@ -1022,6 +1019,22 @@ function contextDiagnosticsLines(state: PresentationState): string[] {
   ];
 }
 
+function lifetime(state: PresentationState, field: keyof import("../protocol/types.ts").SettingsLifetimes): string {
+  const boundary = state.settingsLifetimes?.[field];
+  if (boundary === undefined) return "lifetime unavailable";
+  return boundaryLabel(boundary);
+}
+
+function boundaryLabel(boundary: import("../protocol/types.ts").SettingsBoundary): string {
+  const labels: Record<import("../protocol/types.ts").SettingsBoundary, string> = {
+    launch_capture: "launch capture", next_admission: "next eligible admission",
+    safe_boundary: "safe boundary", resource_publication: "resource publication",
+    frozen_admission: "frozen at admission", client_local: "immediate, client-local",
+    next_launch: "future launch",
+  };
+  return labels[boundary];
+}
+
 /** Render only native facts; never consult disk or reconstruct old requests. */
 export function renderSettings(state: PresentationState): string {
   if (state.settingsEvidence === "historical_partial") return renderModel(state);
@@ -1031,7 +1044,7 @@ export function renderSettings(state: PresentationState): string {
     "document" in value ? `${value.kind}: ${value.document}` : value.kind;
   const admitted = state.attempt?.executionSettings;
   return [
-    "### Launch capture (immutable; disk may now differ)",
+    `### Launch capture (${lifetime(state, "launch")}; disk may now differ)`,
     ...(launch ? [
       `- model: ${launch.model.model}; source ${source(launch.model_origin)}`,
       `- reasoning profile: ${launch.model.reasoning_profile ?? "model default"}; source ${source(launch.reasoning_origin)}`,
@@ -1039,23 +1052,23 @@ export function renderSettings(state: PresentationState): string {
       `- launch ordinary tool selection source: ${source(launch.tool_selection_origin)}`,
       `- runtime root source: ${source(launch.runtime_root_origin)}; restart required`,
     ] : ["- launch provenance unavailable"]),
-    state.settingsEvidence === "frozen_child" ? "### Frozen child selection (immutable)" : "### Active Session selection (next eligible admission)",
+    `### ${state.settingsEvidence === "frozen_child" ? "Child" : "Active Session"} selection (${lifetime(state, "model")})`,
     renderModel(state),
-    "### Runtime policy (safe boundary)",
+    `### Runtime policy (${lifetime(state, "approval")})`,
     `- effective approval: ${state.effectiveApprovalMode}`,
     `- pending approval: ${state.pendingApprovalMode ?? "none"}`,
-    "### Current resource generation (subsequent admission)",
+    `### Current resource generation (${lifetime(state, "resources")})`,
     `- published revision: ${state.resources.revision}; capability revision: ${state.capabilities.revision}`,
     renderTools(state),
     renderSkills(state),
-    "### Admitted execution (frozen)",
+    `### Admitted execution (${lifetime(state, "attempt")})`,
     `- model: ${state.attempt?.model?.primary.model ?? "unavailable / no admitted attempt"}`,
     `- resource revision: ${admitted?.resource_revision ?? "unavailable"}`,
     `- approval: ${admitted?.approval_mode ?? "unavailable"}`,
     "Child profiles/capabilities and admitted Workflow programs remain frozen; missing historical evidence is never filled from current state.",
-    "### Presentation (immediate, client-local)",
+    `### Presentation (${lifetime(state, "presentation")})`,
     "/show-reasoning on|off changes rendering only. /model profile changes generation-time reasoning.",
-    "### Future defaults (separate disk authority)",
+    `### Defaults (${lifetime(state, "saved_defaults")}; separate disk authority)`,
     "Read /defaults user, then explicitly /save-default user model|approval <revision>. Live selections do not save defaults automatically.",
     "/reload publishes resources only; it is not startup settings hot reload. Reconnect repairs this view without replaying controls.",
   ].join("\n");

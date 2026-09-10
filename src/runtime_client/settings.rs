@@ -20,7 +20,16 @@ pub enum DefaultScope {
     User,
 }
 
-/// Explicit field target and values, independent of live runtime choices.
+/// The native setting to capture at the save operation boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DefaultTarget {
+    ModelSelection,
+    ApprovalMode,
+}
+
+/// Already-captured finite mutation for the disk writer and published result.
+/// Clients request a `DefaultTarget`; they never supply this as a save input.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "field", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DefaultValue {
@@ -168,18 +177,14 @@ mod tests {
         let _: AdmittedSettings = serde_json::from_value(fixture["admitted"].clone()).unwrap();
         for (field, value) in [
             ("scope", serde_json::json!("project")),
-            (
-                "value",
-                serde_json::json!({"field":"arbitrary.path","value":"SECRET_SENTINEL"}),
-            ),
+            ("target", serde_json::json!("arbitrary.path")),
         ] {
             let mut invalid = fixture["request"].clone();
             invalid[field] = value;
             assert!(serde_json::from_value::<RuntimeClientRequest>(invalid).is_err());
         }
         let mut invalid = fixture["request"].clone();
-        invalid["value"]["selection"]["requestParams"] =
-            serde_json::json!({"api_key":"SECRET_SENTINEL"});
+        invalid["value"] = serde_json::json!({"api_key":"SECRET_SENTINEL"});
         assert!(serde_json::from_value::<RuntimeClientRequest>(invalid).is_err());
     }
 }

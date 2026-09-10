@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { it } from "node:test";
 import { renderSettings } from "../src/commands/dispatcher.ts";
-import { replaceFromSnapshot } from "../src/presentation/projection.ts";
+import { emptyPresentationState, replaceFromSnapshot } from "../src/presentation/projection.ts";
 import { RUNTIME_CLIENT_PROTOCOL_VERSION, type RuntimeClientRequest, type RuntimeClientResult, type SettingsLifetimes } from "../src/protocol/types.ts";
 import { attemptModel, attemptView, runtimeCursor, sessionModel, snapshot } from "./support/fixtures.ts";
 
@@ -12,7 +12,7 @@ it("CFG238 shares the native protocol fixture and explicit lifetimes", () => {
   assert.equal(fixture.request.method, "default_save");
   if (fixture.request.method === "default_save") {
     assert.equal(fixture.request.scope, "user");
-    assert.deepEqual(fixture.request.value, { field: "model_selection", selection: { model: "local/model-b", reasoning_profile: "off" } });
+    assert.deepEqual(fixture.request.target, "model_selection");
   }
   assert.equal(fixture.result.type, "default_saved");
   assert.deepEqual(fixture.lifetimes, snapshot().settings_lifetimes);
@@ -42,4 +42,19 @@ it("CFG238 historical settings remain explicitly unavailable", () => {
   assert.match(rendered, /partial/);
   assert.match(rendered, /unavailable/);
   assert.ok(!rendered.includes("inspection/durable"));
+});
+
+it("CFG238 renders every lifetime from the supplied native field, with no unattached defaults", () => {
+  const empty = emptyPresentationState(sessionModel("local/a"));
+  assert.equal(empty.settingsLifetimes, null);
+  const native = snapshot({ settings_lifetimes: {
+    launch: "safe_boundary", model: "client_local", approval: "next_launch",
+    resources: "frozen_admission", attempt: "resource_publication",
+    presentation: "next_admission", saved_defaults: "launch_capture",
+  } });
+  const state = replaceFromSnapshot(native, runtimeCursor(1));
+  assert.deepEqual(state.settingsLifetimes, native.settings_lifetimes);
+  const rendered = renderSettings(state);
+  for (const expected of ["Launch capture (safe boundary", "selection (immediate, client-local)", "Runtime policy (future launch)", "resource generation (frozen at admission)", "Admitted execution (resource publication)", "Presentation (next eligible admission)", "Defaults (launch capture"])
+    assert.ok(rendered.includes(expected), expected);
 });

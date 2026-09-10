@@ -5,7 +5,7 @@ use crate::model::invocation::ModelBindingRegistry;
 use crate::model::session::SessionModelConfig;
 use crate::model::{ModelAdapter, ModelEvent, ModelFinishReason};
 use crate::runtime::conversation_runtime::Gate;
-use crate::runtime_client::settings::{DefaultScope, DefaultValue, ModelDefault, SettingsBoundary};
+use crate::runtime_client::settings::{DefaultScope, DefaultTarget, SettingsBoundary};
 use crate::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClientResult};
 use crate::runtime_client::{RUNTIME_CLIENT_PROTOCOL_VERSION, RuntimeClientEvent};
 use crate::scripted_suites::support;
@@ -137,10 +137,27 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
     core.runtime().install_admission_gate(gate.clone());
     let local = core.into_interactive().unwrap();
     let runtime = local.runtime();
-    let (attachment, _) = local
+    let (attachment, initialized) = local
         .host()
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .unwrap();
+    let RuntimeClientResult::Initialized {
+        snapshot: client_projection,
+        ..
+    } = initialized
+    else {
+        panic!("initialized")
+    };
+    assert_eq!(
+        client_projection
+            .model
+            .as_ref()
+            .unwrap()
+            .configured
+            .model
+            .to_string(),
+        "local/a"
+    );
     let subscription = attachment
         .subscribe_events(crate::runtime_client::RuntimeClientCursor::new(0))
         .unwrap();
@@ -169,10 +186,99 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
     let frozen_request = fake.requests()[0].clone();
     let mut b = SessionModelConfig::of(ModelRef::parse("local/b").unwrap());
     b.reasoning_profile = Some(crate::model::catalog::ReasoningProfileId::parse("off").unwrap());
-    runtime.model_set(b.clone()).unwrap(); // AFTER admission
+    // Drain older observations, then prevent B's observation from being published.
+    local.host().snapshot().unwrap();
+    let probe = crate::runtime_client::test_sync::ProjectionProbe::default();
+    local.host().install_projection_probe(probe.clone());
+    probe.arm_publish();
+    let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
+        id: RequestId::new(238),
+        config: Box::new(b.clone()),
+    });
+    let Some(RuntimeClientResult::ModelSet { model }) = response.result else {
+        panic!("model response")
+    };
+    assert_eq!(model.configured, b);
+    let waiting = probe.clone();
+    tokio::task::spawn_blocking(move || waiting.wait_publish_entered())
+        .await
+        .unwrap();
+    assert_eq!(runtime.model_view().configured, b);
+    // No event can reach/fold into the client's A projection at this cut.
+    assert_eq!(
+        client_projection
+            .model
+            .as_ref()
+            .unwrap()
+            .configured
+            .model
+            .to_string(),
+        "local/a"
+    );
     runtime
         .approval_mode_set(crate::runtime::ApprovalMode::FullAccess)
         .unwrap();
+    // Disk read is separate, and doesn't replace the captured launch or live view.
+    let read = attachment
+        .handle_request_async(RuntimeClientRequest::DefaultsRead {
+            id: RequestId::new(1),
+            scope: DefaultScope::User,
+        })
+        .await;
+    let Some(RuntimeClientResult::Defaults { document }) = read.result else {
+        panic!("{read:?}")
+    };
+    assert_eq!(document.model.unwrap().model.to_string(), "local/a");
+    let saved = attachment
+        .handle_request_async(RuntimeClientRequest::DefaultSave {
+            id: RequestId::new(2),
+            scope: DefaultScope::User,
+            expected_revision: document.revision,
+            target: DefaultTarget::ModelSelection,
+        })
+        .await;
+    let Some(RuntimeClientResult::DefaultSaved { result }) = saved.result else {
+        panic!("{saved:?}")
+    };
+    assert!(result.live_unchanged);
+    assert_eq!(runtime.model_view().configured, b);
+    assert_eq!(
+        std::fs::read_to_string(&user_path)
+            .unwrap()
+            .matches("retain this comment")
+            .count(),
+        1
+    );
+    assert!(
+        !serde_json::to_string(&result)
+            .unwrap()
+            .contains("SECRET_SENTINEL")
+    );
+    probe.release_publish();
+    // Saving approval captures desired FullAccess while this attempt retains Policy.
+    let approval_saved = attachment
+        .handle_request_async(RuntimeClientRequest::DefaultSave {
+            id: RequestId::new(239),
+            scope: DefaultScope::User,
+            expected_revision: result.revision.clone(),
+            target: DefaultTarget::ApprovalMode,
+        })
+        .await;
+    let Some(RuntimeClientResult::DefaultSaved { result }) = approval_saved.result else {
+        panic!("approval save")
+    };
+    let disk: serde_json::Value =
+        crate::config_format::parse(&std::fs::read(&user_path).unwrap()).unwrap();
+    assert_eq!(disk["model"]["model"], "local/b");
+    assert_eq!(disk["approvalMode"], "full_access");
+    assert_eq!(
+        runtime.approval_mode_state().effective,
+        crate::runtime::ApprovalMode::Policy
+    );
+    assert_eq!(
+        runtime.approval_mode_state().desired,
+        crate::runtime::ApprovalMode::FullAccess
+    );
     let (before, _) = local.host().snapshot().unwrap();
     assert_eq!(
         before
@@ -211,54 +317,41 @@ async fn cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_recon
         before.settings_lifetimes.model,
         SettingsBoundary::NextAdmission
     );
-    // Disk read is separate, and doesn't replace the captured launch or live view.
-    let read = attachment
-        .handle_request_async(RuntimeClientRequest::DefaultsRead {
-            id: RequestId::new(1),
-            scope: DefaultScope::User,
-        })
-        .await;
-    let Some(RuntimeClientResult::Defaults { document }) = read.result else {
-        panic!("{read:?}")
-    };
-    assert_eq!(document.model.unwrap().model.to_string(), "local/a");
-    let saved = attachment
-        .handle_request_async(RuntimeClientRequest::DefaultSave {
-            id: RequestId::new(2),
-            scope: DefaultScope::User,
-            expected_revision: document.revision,
-            value: DefaultValue::ModelSelection {
-                selection: ModelDefault {
-                    model: b.model.clone(),
-                    reasoning_profile: b.reasoning_profile.clone(),
-                },
-            },
-        })
-        .await;
-    let Some(RuntimeClientResult::DefaultSaved { result }) = saved.result else {
-        panic!("{saved:?}")
-    };
-    assert!(result.live_unchanged);
-    assert_eq!(runtime.model_view().configured, b);
-    assert_eq!(
-        std::fs::read_to_string(&user_path)
-            .unwrap()
-            .matches("retain this comment")
-            .count(),
-        1
-    );
-    assert!(
-        !serde_json::to_string(&result)
-            .unwrap()
-            .contains("SECRET_SENTINEL")
-    );
     assert!(matches!(
         runtime.reload_resources().await,
         Err(crate::runtime::conversation_runtime::RuntimeResourceReloadError::Busy { .. })
     ));
     let (before_reconnect, _) = local.host().snapshot().unwrap();
     assert_eq!(before_reconnect.resources.revision, r1);
+    let (observer, _) = local
+        .host()
+        .attach_read_only(RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .unwrap();
+    let refused = observer
+        .handle_request_async(RuntimeClientRequest::DefaultSave {
+            id: RequestId::new(240),
+            scope: DefaultScope::User,
+            expected_revision: result.revision.clone(),
+            target: DefaultTarget::ApprovalMode,
+        })
+        .await;
+    assert!(matches!(
+        refused.error,
+        Some(crate::runtime_client::RuntimeClientError::InvalidState { .. })
+    ));
     attachment.detach();
+    let refused = attachment
+        .handle_request_async(RuntimeClientRequest::DefaultSave {
+            id: RequestId::new(241),
+            scope: DefaultScope::User,
+            expected_revision: result.revision.clone(),
+            target: DefaultTarget::ModelSelection,
+        })
+        .await;
+    assert!(matches!(
+        refused.error,
+        Some(crate::runtime_client::RuntimeClientError::NotAttached)
+    ));
     let (reconnected, initialized) = local
         .host()
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)

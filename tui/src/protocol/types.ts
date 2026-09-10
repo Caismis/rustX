@@ -1399,6 +1399,7 @@ export interface LaunchSettings {
   runtime_root_origin: SettingOrigin;
   tool_selection_origin: SettingOrigin;
 }
+export type DefaultTarget = "model_selection" | "approval_mode";
 export interface SettingsLifetimes {
   launch: SettingsBoundary; model: SettingsBoundary; approval: SettingsBoundary;
   resources: SettingsBoundary; attempt: SettingsBoundary; presentation: SettingsBoundary; saved_defaults: SettingsBoundary;
@@ -1858,7 +1859,7 @@ export type RuntimeClientRequest =
   | { method: "capability_get"; id: RequestId }
   | { method: "model_catalog_get"; id: RequestId }
   | { method: "defaults_read"; id: RequestId; scope: DefaultScope }
-  | { method: "default_save"; id: RequestId; scope: DefaultScope; expected_revision: string; value: DefaultValue }
+  | { method: "default_save"; id: RequestId; scope: DefaultScope; expected_revision: string; target: DefaultTarget }
   | { method: "model_get"; id: RequestId }
   | { method: "model_set"; id: RequestId; config: SessionModelConfig }
   | { method: "approval_mode_set"; id: RequestId; mode: ApprovalMode }

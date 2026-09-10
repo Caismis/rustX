@@ -1073,6 +1073,57 @@ impl ClientInner {
         })
     }
 
+    /// Captures the requested native setting, then delegates a separate disk write.
+    /// The selected model or desired approval mode is read under the coordinator
+    /// lock before awaiting the writer; projection delivery is not part of this cut.
+    /// Existing attachment and Session fences apply before the capture.
+    pub(crate) async fn defaults_request(
+        &self,
+        request: RuntimeClientRequest,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.ensure_writable_runtime()?;
+        let store = self
+            .defaults
+            .as_ref()
+            .ok_or_else(|| RuntimeClientError::InvalidState {
+                message: "this runtime has no user-default write authority".into(),
+            })?;
+        match request {
+            RuntimeClientRequest::DefaultsRead { scope, .. } => Ok(RuntimeClientResult::Defaults {
+                document: store.read(scope).await?,
+            }),
+            RuntimeClientRequest::DefaultSave {
+                scope,
+                expected_revision,
+                target,
+                ..
+            } => {
+                use super::settings::{DefaultTarget, DefaultValue, ModelDefault};
+                let runtime = self.runtime.as_ref().expect("writable runtime checked");
+                // Capture one native owner under its coordinator lock. No projection
+                // read, observation drain, or disk operation participates in this cut.
+                let value = match target {
+                    DefaultTarget::ModelSelection => {
+                        let config = runtime.model_view().configured;
+                        DefaultValue::ModelSelection {
+                            selection: ModelDefault {
+                                model: config.model,
+                                reasoning_profile: config.reasoning_profile,
+                            },
+                        }
+                    }
+                    DefaultTarget::ApprovalMode => DefaultValue::ApprovalMode {
+                        mode: runtime.approval_mode_state().desired,
+                    },
+                };
+                Ok(RuntimeClientResult::DefaultSaved {
+                    result: store.save(scope, expected_revision, value).await?,
+                })
+            }
+            _ => unreachable!("bounded settings request"),
+        }
+    }
+
     /// Replaces the authoritative session model configuration through the
     /// conversation runtime.
     ///
@@ -1097,33 +1148,6 @@ impl ClientInner {
     /// while the runtime is not yet activated, and
     /// [`RuntimeClientError::ProjectionExhausted`] when the observation
     /// stream is over.
-    pub(crate) async fn defaults_request(
-        &self,
-        request: RuntimeClientRequest,
-    ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.ensure_writable_runtime()?;
-        let store = self
-            .defaults
-            .as_ref()
-            .ok_or_else(|| RuntimeClientError::InvalidState {
-                message: "this runtime has no user-default write authority".into(),
-            })?;
-        match request {
-            RuntimeClientRequest::DefaultsRead { scope, .. } => Ok(RuntimeClientResult::Defaults {
-                document: store.read(scope).await?,
-            }),
-            RuntimeClientRequest::DefaultSave {
-                scope,
-                expected_revision,
-                value,
-                ..
-            } => Ok(RuntimeClientResult::DefaultSaved {
-                result: store.save(scope, expected_revision, value).await?,
-            }),
-            _ => unreachable!("bounded settings request"),
-        }
-    }
-
     pub(crate) fn model_set(
         &self,
         config: SessionModelConfig,
@@ -1800,6 +1824,16 @@ impl RuntimeClientHost {
             .projection
             .install_probe(probe);
         Ok(host)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_projection_probe(&self, probe: super::test_sync::ProjectionProbe) {
+        self.inner
+            .state
+            .lock()
+            .expect("host lock")
+            .projection
+            .install_probe(probe);
     }
 
     /// The conversation identity of this host.
@@ -3406,6 +3440,39 @@ mod tests {
         });
         assert_eq!(response.id.get(), 1, "request ids are attachment-scoped");
         assert!(response.error.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cfg238_default_save_requires_native_write_authority() {
+        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+        let (control, _) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let request = || RuntimeClientRequest::DefaultSave {
+            id: super::super::types::RequestId::new(238),
+            scope: super::super::settings::DefaultScope::User,
+            expected_revision: "missing".into(),
+            target: super::super::settings::DefaultTarget::ModelSelection,
+        };
+        // Low-level and frozen-child compositions do not install a disk writer.
+        assert!(
+            matches!(control.handle_request_async(request()).await.error,
+            Some(RuntimeClientError::InvalidState { message }) if message == "this runtime has no user-default write authority")
+        );
+        let (observer, _) = fixture
+            .host
+            .attach_read_only(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        assert!(
+            matches!(observer.handle_request_async(request()).await.error,
+            Some(RuntimeClientError::InvalidState { message }) if message == "conversation inspection is read-only")
+        );
+        control.detach();
+        assert!(matches!(
+            control.handle_request_async(request()).await.error,
+            Some(RuntimeClientError::NotAttached)
+        ));
     }
 
     /// Read-only inspection attachments share the live projection without

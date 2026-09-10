@@ -102,7 +102,7 @@ pub mod transport;
 pub mod types;
 
 #[cfg(test)]
-mod test_sync;
+pub(crate) mod test_sync;
 
 pub use attachment::RuntimeAttachment;
 pub use endpoint::RuntimeClientEndpoint;

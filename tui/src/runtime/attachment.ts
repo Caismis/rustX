@@ -348,8 +348,8 @@ export class RuntimeClientAttachment {
     return result.document;
   }
 
-  async defaultSave(expected: string, value: import("../protocol/types.ts").DefaultValue): Promise<import("../protocol/types.ts").SaveDefaultResult> {
-    const result = await this.#connection.request({ method: "default_save", scope: "user", expected_revision: expected, value });
+  async defaultSave(expected: string, target: import("../protocol/types.ts").DefaultTarget): Promise<import("../protocol/types.ts").SaveDefaultResult> {
+    const result = await this.#connection.request({ method: "default_save", scope: "user", expected_revision: expected, target });
     if (result.type !== "default_saved") throw new Error(`default_save returned ${result.type}`);
     return result.result;
   }

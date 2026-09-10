@@ -841,16 +841,30 @@ describe("CommandDispatcher", () => {
     if (request?.method !== "default_save") throw new Error("default save");
     assert.equal(request.scope, "user");
     assert.equal(request.expected_revision, "sha256:reviewed");
-    assert.deepEqual(request.value, { field: "model_selection", selection: {
-      model: before?.sessionModel?.configured.model,
-      reasoning_profile: before?.sessionModel?.configured.reasoningProfile ?? null,
-    }});
-    peer.respond(3, { type: "default_saved", result: { scope: "user", document: "/config/settings.jsonc", revision: "sha256:new", changed: request.value, live_unchanged: true, applies_at: "next_launch" } });
+    assert.equal(request.target, "model_selection");
+    assert.ok(!("value" in request));
+    peer.respond(3, { type: "default_saved", result: { scope: "user", document: "/config/settings.jsonc", revision: "sha256:new", changed: { field: "model_selection", selection: { model: "alpha/model-b", reasoning_profile: null } }, live_unchanged: true, applies_at: "next_launch" } });
     const result = await command;
     assert.equal(result.kind, "transient");
     if (result.kind === "transient") assert.match(result.text, /Live Session unchanged/);
     assert.deepEqual(session.state, before);
     assert.equal(peer.requests.length, 3);
+  });
+
+  it("CFG238 save after model response never consumes the lagging A projection", async () => {
+    const { peer, session, dispatcher } = await harness(snapshot({ model: sessionModel("alpha/model-a") }));
+    const setting = session.modelSet(sessionModel("alpha/model-b").configured);
+    await peer.awaitRequests(3);
+    peer.respond(3, { type: "model_set", model: sessionModel("alpha/model-b") });
+    await setting;
+    // Deliberately deliver no SessionModelChanged notification.
+    assert.equal(session.state?.sessionModel?.configured.model, "alpha/model-a");
+    const saving = dispatcher.submit("/save-default user model sha256:reviewed");
+    await peer.awaitRequests(4);
+    assert.deepEqual(peer.requests[3], { method: "default_save", id: 4, scope: "user", expected_revision: "sha256:reviewed", target: "model_selection" });
+    peer.respond(4, { type: "default_saved", result: { scope: "user", document: "/config/settings.jsonc", revision: "sha256:B", changed: { field: "model_selection", selection: { model: "alpha/model-b", reasoning_profile: null } }, live_unchanged: true, applies_at: "next_launch" } });
+    await saving;
+    assert.equal(session.state?.sessionModel?.configured.model, "alpha/model-a");
   });
 
   it("rejects an unusable /show-reasoning argument instead of guessing", async () => {

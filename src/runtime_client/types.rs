@@ -532,7 +532,7 @@ pub enum RuntimeClientRequest {
         id: RequestId,
         scope: super::settings::DefaultScope,
         expected_revision: String,
-        value: super::settings::DefaultValue,
+        target: super::settings::DefaultTarget,
     },
     /// Request a runtime `ApprovalMode` transition.
     ApprovalModeSet {

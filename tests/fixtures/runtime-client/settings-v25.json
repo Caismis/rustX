@@ -4,10 +4,7 @@
     "id": 238,
     "scope": "user",
     "expected_revision": "sha256:reviewed-document",
-    "value": {
-      "field": "model_selection",
-      "selection": { "model": "local/model-b", "reasoning_profile": "off" }
-    }
+    "target": "model_selection"
   },
   "result": {
     "type": "default_saved",
@@ -17,7 +14,10 @@
       "revision": "sha256:published-document",
       "changed": {
         "field": "model_selection",
-        "selection": { "model": "local/model-b", "reasoning_profile": "off" }
+        "selection": {
+          "model": "local/model-b",
+          "reasoning_profile": "off"
+        }
       },
       "live_unchanged": true,
       "applies_at": "next_launch"

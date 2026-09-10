@@ -179,7 +179,7 @@ export interface PresentationState {
   /** The session's *desired* model configuration. */
   sessionModel: SessionModelView | null;
   launchSettings: import("../protocol/types.ts").LaunchSettings | null;
-  settingsLifetimes: import("../protocol/types.ts").SettingsLifetimes;
+  settingsLifetimes: import("../protocol/types.ts").SettingsLifetimes | null;
   /** True once runtime drain begins; shutdown responses complete at quiescence. */
   runtimeShutdown: boolean;
   /**

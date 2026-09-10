@@ -519,15 +519,6 @@ pub fn analyze(
     request: &LaunchRequest,
     host: &HostEnvironment,
 ) -> Result<ProspectiveLaunch, LaunchFailure> {
-    analyze_with_user(request, host, None)
-}
-
-#[allow(clippy::too_many_lines)] // The single shared launch resolver.
-pub(super) fn analyze_with_user(
-    request: &LaunchRequest,
-    host: &HostEnvironment,
-    candidate: Option<&[u8]>,
-) -> Result<ProspectiveLaunch, LaunchFailure> {
     let (mut locations, identity) = resolve_locations(request, host)?;
     let launch = canonical_directory(&host.launch_directory)?;
     let user_path = host.config_directory.join("settings.jsonc");
@@ -535,10 +526,7 @@ pub(super) fn analyze_with_user(
         || locations.workspace.join("rustx.jsonc"),
         |p| absolute(&launch, p),
     );
-    let mut user = match candidate {
-        Some(bytes) => parse_layer(&user_path, bytes, false)?,
-        None => read_layer(&user_path, false, false)?,
-    };
+    let mut user = read_layer(&user_path, false, false)?;
     let project = read_layer(&project_path, request.config.is_some(), true)?;
     // Even an empty workspace requires trust: files added before composition or reload
     // must never turn a previously inert launch into project activation.
@@ -1257,7 +1245,7 @@ fn read_layer(
 }
 
 #[allow(clippy::too_many_lines)]
-fn parse_layer(
+pub(super) fn parse_layer(
     path: &Path,
     bytes: &[u8],
     project: bool,

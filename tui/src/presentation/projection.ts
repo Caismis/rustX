@@ -73,7 +73,7 @@ export function emptyPresentationState(
     sessionModel,
     launchSettings: null,
     settingsEvidence: "live_session",
-    settingsLifetimes: { launch: "launch_capture", model: "next_admission", approval: "safe_boundary", resources: "resource_publication", attempt: "frozen_admission", presentation: "client_local", saved_defaults: "next_launch" },
+    settingsLifetimes: null,
     todos: undefined,
     runtimeShutdown: false,
     effectiveApprovalMode: "policy",

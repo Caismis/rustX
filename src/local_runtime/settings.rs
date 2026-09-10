@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use jsonc_parser::cst::{CstInputValue, CstObject, CstRootNode};
 use sha2::{Digest, Sha256};
 
-use super::launch::{HostEnvironment, LaunchRequest, ResolvedLaunch};
+use super::launch::ResolvedLaunch;
 use crate::runtime_client::settings::{
     DefaultDocument, DefaultScope, DefaultSettingsStore, DefaultValue, ModelDefault,
     SaveDefaultResult, SettingsBoundary, SettingsFuture,
@@ -20,8 +20,8 @@ use crate::runtime_client::types::RuntimeClientError;
 
 #[derive(Clone)]
 pub(crate) struct UserDefaults {
-    host: HostEnvironment,
-    request: LaunchRequest,
+    directory: PathBuf,
+    models: crate::model::catalog::ModelCatalog,
 }
 
 fn failure(message: &str) -> RuntimeClientError {
@@ -41,7 +41,7 @@ fn save_worker_failure(_: impl std::fmt::Debug) -> RuntimeClientError {
 }
 fn invalid(_: impl std::fmt::Debug) -> RuntimeClientError {
     failure(
-        "invalid default candidate; run rustx config check and correct the selected model/profile or document before saving",
+        "invalid user default document or model/profile; correct the target document or selection before saving",
     )
 }
 
@@ -183,12 +183,12 @@ enum Frontier {
 impl UserDefaults {
     pub(crate) fn new(paths: &ResolvedLaunch) -> Self {
         Self {
-            host: paths.host.clone(),
-            request: paths.request.clone(),
+            directory: paths.host.config_directory.clone(),
+            models: paths.models.clone(),
         }
     }
     fn target(&self) -> PathBuf {
-        self.host.config_directory.join("settings.jsonc")
+        self.directory.join("settings.jsonc")
     }
     fn read_sync(&self, scope: DefaultScope) -> Result<DefaultDocument, RuntimeClientError> {
         let path = self.target();
@@ -246,7 +246,7 @@ impl UserDefaults {
         frontier(Frontier::BeforeLock)?;
         // Parent must already exist (init owns directory creation). Canonicalize
         // it so aliases share a lock; target symlinks are explicitly refused.
-        let parent = std::fs::canonicalize(&self.host.config_directory).map_err(io_failure)?;
+        let parent = std::fs::canonicalize(&self.directory).map_err(io_failure)?;
         let target = parent.join(target.file_name().ok_or_else(|| invalid(()))?);
         let _lock = lock_document(&target).map_err(io_failure)?;
         frontier(Frontier::Locked)?;
@@ -267,22 +267,16 @@ impl UserDefaults {
         staged.as_file().sync_all().map_err(io_failure)?;
         frontier(Frontier::Staged)?;
         let bytes = crate::config_format::read_bounded(staged.path()).map_err(io_failure)?;
-        // Validate the actual staged bytes through the same resolver. Clearing the
-        // CLI model override makes a candidate visible to validation; project model
-        // selection still obeys the real precedence. Also validate the user selection
-        // independently, so a project override cannot mask an invalid saved profile.
-        let mut request = self.request.clone();
-        request.model = None;
-        let resolved = super::launch::analyze_with_user(&request, &self.host, Some(&bytes))
-            .map_err(invalid)?;
+        // Reuse the canonical user-layer schema/ownership parser. This validates
+        // the document, not readiness of any mutable project or resource files.
+        super::launch::parse_layer(&target, &bytes, false).map_err(invalid)?;
         if let DefaultValue::ModelSelection { selection } = &value {
-            let mut config = resolved.config.model.clone();
-            config.model = selection.model.clone();
+            let mut config = crate::model::session::SessionModelConfig::of(selection.model.clone());
             config
                 .reasoning_profile
                 .clone_from(&selection.reasoning_profile);
             crate::model::invocation::analyze_selection(
-                resolved.models.model(&config.model).map_err(invalid)?,
+                self.models.model(&config.model).map_err(invalid)?,
                 &config.selection(),
                 crate::model::invocation::RequestParamsLayer::SessionOverrides,
             )
@@ -331,6 +325,7 @@ impl DefaultSettingsStore for UserDefaults {
 
 #[cfg(test)]
 mod tests {
+    use super::super::launch::{HostEnvironment, LaunchRequest};
     use super::*;
     use std::sync::{Arc, Barrier, mpsc};
 
@@ -355,7 +350,11 @@ mod tests {
             super::super::launch::TrustAction::Grant,
         )
         .unwrap();
-        (root, UserDefaults { host, request })
+        let launch = super::super::launch::analyze(&request, &host)
+            .unwrap()
+            .admit(|| crate::credentials::CredentialSnapshot::new([]))
+            .unwrap();
+        (root, UserDefaults::new(&launch))
     }
     fn approval() -> DefaultValue {
         DefaultValue::ApprovalMode {
@@ -372,6 +371,117 @@ mod tests {
     }
     fn current(owner: &UserDefaults) -> String {
         owner.read_sync(DefaultScope::User).unwrap().revision
+    }
+
+    fn project_fixture() -> (tempfile::TempDir, UserDefaults, PathBuf) {
+        let (root, _) = fixture();
+        let workspace = root.path().join("workspace");
+        let project = workspace.join("project.jsonc");
+        std::fs::write(&project, br#"{"model":{"model":"example/demo-model"}}"#).unwrap();
+        let host =
+            HostEnvironment::from_paths(workspace.clone(), root.path().join("home"), None, None)
+                .unwrap();
+        let request = LaunchRequest {
+            workspace: Some(workspace),
+            config: Some(project.clone()),
+            ..LaunchRequest::default()
+        };
+        let launch = super::super::launch::analyze(&request, &host)
+            .unwrap()
+            .admit(|| crate::credentials::CredentialSnapshot::new([]))
+            .unwrap();
+        (root, UserDefaults::new(&launch), project)
+    }
+
+    #[test]
+    fn cfg238_user_write_does_not_reopen_mutable_project_or_catalog() {
+        for delete in [false, true] {
+            let (_root, owner, project) = project_fixture();
+            let expected = current(&owner);
+            if delete {
+                std::fs::remove_file(&project).unwrap();
+            } else {
+                std::fs::write(&project, b"broken project SECRET_SENTINEL").unwrap();
+            }
+            // Domain authority is the captured catalog, not a newly loaded file.
+            std::fs::remove_file(owner.directory.join("models.jsonc")).unwrap();
+            let result = owner
+                .save_sync(DefaultScope::User, &expected, selected())
+                .unwrap();
+            assert_eq!(current(&owner), result.revision);
+            if delete {
+                assert!(!project.exists());
+            } else {
+                assert_eq!(
+                    std::fs::read(&project).unwrap(),
+                    b"broken project SECRET_SENTINEL"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cfg238_project_override_cannot_mask_invalid_saved_selection() {
+        let (_root, owner, project) = project_fixture();
+        let before = std::fs::read(owner.target()).unwrap();
+        let project_before = std::fs::read(&project).unwrap();
+        for (model, profile) in [
+            ("example/missing", None),
+            ("example/demo-model", Some("missing-profile")),
+        ] {
+            let value = DefaultValue::ModelSelection {
+                selection: ModelDefault {
+                    model: crate::model::catalog::ModelRef::parse(model).unwrap(),
+                    reasoning_profile: profile
+                        .map(|p| crate::model::catalog::ReasoningProfileId::parse(p).unwrap()),
+                },
+            };
+            let mut validated = false;
+            let result = owner.save_at(DefaultScope::User, &current(&owner), value, |point| {
+                if point == Frontier::Validated {
+                    validated = true;
+                }
+                Ok(())
+            });
+            assert!(result.is_err());
+            assert!(
+                !validated,
+                "native target analysis must fail before validation frontier"
+            );
+            assert_eq!(std::fs::read(owner.target()).unwrap(), before);
+            assert_eq!(std::fs::read(&project).unwrap(), project_before);
+        }
+    }
+
+    #[test]
+    fn cfg238_user_layer_schema_and_ownership_still_gate_publication() {
+        let (_root, owner) = fixture();
+        for invalid in [
+            br#"{"unknown":true}"#.as_slice(),
+            br#"{"workspace":"/forbidden"}"#,
+            br#"{"context":{"unexpected":true}}"#,
+            br#"{"model":{"model":"example/demo-model","maxOutputTokens":"wrong-type"}}"#,
+        ] {
+            std::fs::write(owner.target(), invalid).unwrap();
+            let mut validated = false;
+            assert!(
+                owner
+                    .save_at(
+                        DefaultScope::User,
+                        &revision(Some(invalid)),
+                        approval(),
+                        |point| {
+                            if point == Frontier::Validated {
+                                validated = true;
+                            }
+                            Ok(())
+                        }
+                    )
+                    .is_err()
+            );
+            assert!(!validated);
+            assert_eq!(std::fs::read(owner.target()).unwrap(), invalid);
+        }
     }
 
     #[test]

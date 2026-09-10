@@ -49,10 +49,14 @@ persisted Session-local model selection.
 - `/defaults user` shows only the permitted saved fields, target document and its
   content revision. It does not resolve layers or claim the values win precedence.
 - `/save-default user model <revision>` writes exactly `model.model` and
-  `model.reasoningProfile` from the displayed Session selection. A cleared profile
+  `model.reasoningProfile` from the current native Session selection, captured by Rust
+  under the coordinator lock at the save operation. The TUI sends only a target,
+  never a value from its asynchronous projection cache. A cleared profile
   is written as `null`, preserving its nearby comments.
 - `/save-default user approval <revision>` writes exactly `approvalMode` from the
-  effective runtime mode. Pending desired values are never implicitly saved.
+  authoritative desired runtime mode, captured under the coordinator lock. An
+  active attempt can still retain a different frozen effective mode; for example,
+  desired `full_access` is saved while current work remains on `policy`.
 
 Read `/defaults user`, review the document/revision, then pass that revision to the
 explicit save command. A normal model/profile/approval command never saves defaults.
@@ -106,6 +110,19 @@ marks unavailable live state; request-specific history remains in its existing
 Request Snapshot/History authority. Frozen child model authority is labelled
 `frozen_child`, not a mutable Session selector.
 
+`SettingsLifetimes` is authored by Rust and installed exactly from the native
+snapshot. Unattached TUI state has no lifetime matrix (`null`). `/settings` uses
+each category's supplied boundary; its only mapping is enum-to-English rendering.
+No model-set or approval response repairs semantic TUI state: only native snapshot
+and event reconstruction do that.
+
+A save has two distinct boundaries: native selection capture under the coordinator
+lock, then disk publication under the file lock. A later native control can change
+live selection while that captured save is pending; no disk/live transaction is
+claimed. Existing attachment read-only/detached checks and the native Session
+replacement fence run before capture. Historical and frozen-child hosts have no
+default-writer authority.
+
 ## Configuration write guarantee
 
 The expected revision is SHA-256 of the exact document bytes, including comments
@@ -124,12 +141,20 @@ a freshly serialized whole JSON document. No secret-bearing configuration is
 returned in results, diagnostics, or debug formatting.
 
 The writer stages in the target directory, preserves existing permissions, syncs
-the staged file, and validates those bytes through the real launch resolver with
-the original document base/ownership rules. Selected model/profile values also pass
-native catalog analysis independently of project precedence, so a project override
-cannot hide an invalid selection. Validation is offline and never resolves credentials
-or starts model/process/Session work. It then rereads the target for a **final
-fingerprint check**, and only then renames the candidate over it.
+the staged file, and validates those bytes with the **same canonical JSONC parser,
+user-layer serde schema and field-ownership checks** used by launch. This proves
+user-document validity, not full launch readiness in a mutable project. The writer
+retains only the target directory and captured model catalog: it does not retain a
+LaunchRequest, reopen project configuration, resolve trust, reload the catalog, or
+inspect resource files. Full prospective launch readiness remains the job of
+`rustx config check`, `rustx config show --sources`, and normal launch resolution.
+
+The targeted model/profile passes the existing native `analyze_selection` path
+directly against that captured catalog, independently of project precedence. A
+valid project model cannot hide an invalid saved model/profile. Validation is
+offline and never resolves credentials or starts provider, process, or Session work.
+The writer then rereads the target for a **final fingerprint check**, and only then
+renames the candidate over it.
 
 Every failure before publication leaves the previous document authoritative (unless
 an external editor itself changed it). A detected conflict is never knowingly
@@ -159,6 +184,23 @@ A → B → A edit is indistinguishable from unchanged content by design.
 | `cfg238_duplicate_keys_and_symlinks_are_refused` | Unsupported document/authority forms; bytes retained and diagnostics redacted |
 | `cfg238_dogfood_distinct_owners_admission_requests_reload_save_and_reconnect` | Init/check/composition, disk A, admission-gated C/on, later Session B/off, actual scripted provider requests, approval pending, separate save, busy/success/failed reload, detach/attach equality, fresh launch/Session observes saved B |
 
+Repair regressions additionally cover:
+- `cfg238_user_write_does_not_reopen_mutable_project_or_catalog`: launch through an
+  explicit project document, then delete/corrupt it and remove the catalog file;
+  user save still succeeds and never modifies the project.
+- `cfg238_project_override_cannot_mask_invalid_saved_selection`: valid project
+  selection cannot mask an invalid saved model/profile; validation never reaches
+  the `Validated` frontier and both documents retain their prior bytes.
+- `cfg238_user_layer_schema_and_ownership_still_gate_publication`: unknown fields,
+  forbidden authority, and incorrect nested shapes/types fail before publication.
+- The dogfooding test parks the projection publish gate after native B commits and
+  its model-set response returns. The client still holds A; target-only save writes
+  B before that gate is released. Desired FullAccess is saved while admitted Policy
+  still requires approval; subsequent admission uses the reconciled policy.
+- TUI scripted-peer coverage delivers the B response without its event, keeps A in
+  presentation state, and proves save sends only `target`. A separate test changes
+  every supplied native lifetime and checks each rendered section follows it.
+
 Existing native approval, Subagent/Workflow admission and resource publication
 suites remain the execution proofs; this feature does not replace those owners or
 create a second conformance framework. CI runs the filesystem writer tests on
@@ -166,7 +208,7 @@ Linux and macOS; local Linux validation does not imply local macOS execution.
 
 Saved selections do not persist `--models` or a catalog path. A future launch must
 use a catalog containing that model/profile. The writer validates against the
-captured launch inputs and current prospective document semantics; it does not
+captured catalog and the canonical user-document schema; it does not
 silently redirect the user's model catalog.
 
 Additional owner evidence retained in the full suites:
