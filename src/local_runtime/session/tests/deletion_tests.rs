@@ -148,8 +148,13 @@ fn deletion_tree_membership_excludes_independent_fork_clone_and_shared_resources
         expected
     );
     assert!(preflight.conversations().iter().all(|c| {
-        c.private_root
-            .starts_with(directory.path().join("sessions").join(session.as_str()))
+        c.private_root.starts_with(
+            catalog
+                .product
+                .root()
+                .join("sessions")
+                .join(session.as_str()),
+        )
     }));
     assert!(SessionDeletionPreflight::acquire(directory.path(), &session).is_err());
     let revision = *preflight.ownership_revision();

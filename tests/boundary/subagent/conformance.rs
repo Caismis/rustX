@@ -399,8 +399,11 @@ struct ParentPlane {
 /// A standalone registry plane: no parent runtime adopts the terminal
 /// inbound, so the parent's pending batch stays directly observable.
 fn standalone_parent_plane(dir: &tempfile::TempDir, conversation: &str) -> ParentPlane {
-    let runtime_root = dir.path().join("parent-runtime");
-    std::fs::create_dir_all(&runtime_root).expect("parent runtime root");
+    // Keep the canonical socket pathname within Unix sockaddr_un limits.
+    // The fixture uses the same canonical authority as native composition.
+    let product = rustx::runtime::local_storage::ProductRoot::create(&dir.path().join("p"))
+        .expect("parent product root");
+    let runtime_root = product.root().to_path_buf();
     let conversation_id = ConversationId::new(conversation);
     let store = Arc::new(
         rustx::durable::SqliteConversationStore::in_memory(conversation_id.clone())
