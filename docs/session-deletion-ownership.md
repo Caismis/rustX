@@ -326,3 +326,5 @@ the engine: even a read-only journal-mode query on a WAL database can create
 sidecars. `deletion_wal_metadata_is_rejected_before_sqlite_can_create_sidecars`
 proves rejection of this obsolete/tampered format without adding any file or
 changing database bytes. This is a format refusal, not a legacy reader.
+
+Existing-only Surface-head validation runs in one SQLite read transaction. The head, checkpoint, and immutable operation history therefore come from the same committed snapshot even while another connection performs ordinary execution. The transaction neither creates storage nor recovers journals; it ends when the bounded read returns.

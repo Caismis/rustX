@@ -289,6 +289,8 @@ pub struct SqliteConversationStore {
     #[cfg(test)]
     pub(crate) fail_accept_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
+    head_read_probe: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(test)]
     pub(crate) fail_adopt_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
     #[cfg(test)]
@@ -522,6 +524,8 @@ impl SqliteConversationStore {
             conversation_id,
             conn: Arc::new(Mutex::new(connection)),
             lifecycle: None,
+            #[cfg(test)]
+            head_read_probe: Mutex::new(None),
             #[cfg(test)]
             fail_accept_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
@@ -1383,7 +1387,18 @@ impl ConversationStore for SqliteConversationStore {
 
     fn load_head(&self) -> Result<DurableConversationHead, ConversationStoreError> {
         let connection = self.lock()?;
-        load_head(&connection)
+        // A second connection may append ordinary execution while management
+        // reads. Validate the head, checkpoint and operation history in one
+        // read snapshot, not across independently committed query snapshots.
+        let transaction = connection
+            .unchecked_transaction()
+            .map_err(|error| storage(format!("begin head read snapshot: {error}")))?;
+        #[cfg(test)]
+        if let Some(probe) = self.head_read_probe.lock().unwrap().take() {
+            read_surface_head(&transaction)?;
+            probe();
+        }
+        load_head(&transaction)
     }
 
     fn load_messages(
@@ -8657,6 +8672,45 @@ mod tests {
             capabilities: ModelCapabilities::text_only(true, true),
             compat: ModelCompat::default(),
         }
+    }
+
+    #[test]
+    fn existing_management_head_read_excludes_cross_connection_commit_until_snapshot_ends() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("conversation.sqlite");
+        let id = ConversationId::new("management-read-snapshot");
+        let writer = SqliteConversationStore::open(id.clone(), &path).unwrap();
+        let reader = SqliteConversationStore::open_existing(id, &path).unwrap();
+        let competing = Connection::open(&path).unwrap();
+        competing.busy_timeout(std::time::Duration::ZERO).unwrap();
+        *reader.head_read_probe.lock().unwrap() = Some(Box::new(move || {
+            let transaction = competing.unchecked_transaction().unwrap();
+            transaction
+                .execute(
+                    "UPDATE rustx_store SET next_inbound_sequence=next_inbound_sequence+1",
+                    [],
+                )
+                .unwrap();
+            let error = transaction.commit().unwrap_err();
+            assert_eq!(
+                error.sqlite_error_code(),
+                Some(rusqlite::ErrorCode::DatabaseBusy)
+            );
+        }));
+        assert_eq!(reader.load_head().unwrap(), writer.load_head().unwrap());
+        let accepted = writer.accept_inbound(draft("after snapshot")).unwrap();
+        writer
+            .adopt_pending_batch(
+                accepted.sequence,
+                crate::durable::inbox::inbound_adoption_event(
+                    writer.conversation_id(),
+                    None,
+                    vec![accepted.message_id],
+                ),
+            )
+            .unwrap();
+        assert_eq!(reader.load_head().unwrap(), writer.load_head().unwrap());
+        assert_eq!(reader.load_head().unwrap().active_message_ids.len(), 1);
     }
 
     #[test]
